@@ -1,0 +1,37 @@
+{
+  "name": "claude-sessions",
+  "version": "1.0.0",
+  "description": "Manage Claude Code sessions running in WSL2 from a Windows desktop app",
+  "main": "app/main.js",
+  "author": "Dylan Hays",
+  "private": true,
+  "scripts": {
+    "bridge": "node bridge/server.js",
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "electron": "^31.2.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.claudesessions.desktop",
+    "productName": "ClaudeSessions",
+    "files": [
+      "app/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "runAfterFinish": true
+    }
+  }
+}

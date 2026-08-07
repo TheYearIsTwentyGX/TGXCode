@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self'">
+<title>Claude Sessions</title>
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+
+<div class="app">
+
+  <header class="bar">
+    <span class="wordmark"><b>◆</b> Claude Sessions</span>
+
+    <label class="bar-search">
+      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.6"/>
+        <path d="M10.5 10.5 14 14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+      <input id="search" type="search" placeholder="Filter sessions" autocomplete="off"
+             aria-label="Filter sessions">
+    </label>
+
+    <span class="bar-spacer"></span>
+
+    <button id="db-status" class="db-status" data-up="false" type="button"
+            title="DevBrowser connection">
+      <span class="led"></span><span id="db-label">DevBrowser</span>
+    </button>
+  </header>
+
+  <nav class="rail" aria-label="Sessions">
+    <div class="rail-head">
+      <button id="btn-new" class="btn-new" type="button">
+        <svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path d="M8 2.5v11M2.5 8h11" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        New session
+      </button>
+    </div>
+    <div id="rail" class="rail-scroll"></div>
+  </nav>
+
+  <main class="main">
+    <div id="conv" class="conv" hidden>
+      <div class="conv-head">
+        <h1 id="conv-title" class="conv-title"></h1>
+        <div id="conv-sub" class="conv-sub"></div>
+        <div id="channels" class="channels"></div>
+      </div>
+
+      <div id="scroll" class="scroll">
+        <div id="log" class="log"></div>
+      </div>
+
+      <div class="composer">
+        <div class="composer-inner">
+          <div id="status-line" class="status-line" data-state="idle">
+            <span class="led"></span>
+            <span id="status-text">Ready</span>
+            <button id="btn-stop" class="btn-stop" type="button" hidden>Stop</button>
+          </div>
+
+          <div class="input-row">
+            <textarea id="input" rows="1" placeholder="Send a message to this session…"
+                      aria-label="Message"></textarea>
+            <button id="btn-send" class="btn-send" type="button" disabled>Send</button>
+          </div>
+
+          <div class="opts">
+            <label for="model">Model</label>
+            <select id="model" aria-label="Model">
+              <option value="">inherit</option>
+              <option value="opus">opus</option>
+              <option value="sonnet">sonnet</option>
+              <option value="haiku">haiku</option>
+              <option value="fable">fable</option>
+            </select>
+            <label for="perm">Permissions</label>
+            <select id="perm" aria-label="Permission mode">
+              <option value="acceptEdits">acceptEdits</option>
+              <option value="auto">auto</option>
+              <option value="plan">plan</option>
+              <option value="dontAsk">dontAsk</option>
+              <option value="bypassPermissions">bypassPermissions</option>
+            </select>
+            <span class="hint">Ctrl+Enter to send</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="placeholder" class="empty">
+      <h2>No session selected</h2>
+      <p>Pick a session from the board, or start a new one. Sessions running in a
+         terminal show up here too, and stream as they go.</p>
+    </div>
+  </main>
+
+</div>
+
+<!-- New session -->
+<div id="new-scrim" class="scrim" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="new-title">
+    <div class="modal-head">
+      <span id="new-title">Start a session</span>
+      <button class="modal-close" data-close type="button" aria-label="Close">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label for="new-cwd">Working directory</label>
+        <input id="new-cwd" type="text" spellcheck="false">
+        <div class="note">The agent runs here. Recent projects are listed below.</div>
+      </div>
+      <div class="field">
+        <label>Recent projects</label>
+        <div id="new-picker" class="picker"></div>
+      </div>
+      <div class="field">
+        <label for="new-prompt">First message</label>
+        <textarea id="new-prompt" placeholder="What should this session do?"></textarea>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <div class="opts" style="margin: 0">
+      <label for="new-model">Model</label>
+      <select id="new-model">
+        <option value="">inherit</option>
+        <option value="opus">opus</option>
+        <option value="sonnet">sonnet</option>
+        <option value="haiku">haiku</option>
+        <option value="fable">fable</option>
+      </select>
+      </div>
+      <span class="spacer"></span>
+      <button class="btn" data-close type="button">Cancel</button>
+      <button id="new-go" class="btn primary" type="button">Start</button>
+    </div>
+  </div>
+</div>
+
+<div id="toasts" class="toasts" aria-live="polite"></div>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>
