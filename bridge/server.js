@@ -17,13 +17,16 @@ const { randomUUID } = require('crypto');
 const cfg = require('./config');
 const { SessionIndex } = require('./sessions');
 const { RunnerPool, PERMISSION_MODES } = require('./runner');
+const { Flags } = require('./flags');
 const devbrowser = require('./devbrowser');
 const devservers = require('./devservers');
+const { openInExplorer } = require('./explorer');
 
 const WEB_DIR = path.join(__dirname, '..', 'web');
 const CLIENT_HEADER = 'x-claude-sessions-client';
 
-const index = new SessionIndex();
+const flags = new Flags();
+const index = new SessionIndex(flags);
 const pool = new RunnerPool();
 
 /** @type {Map<string, {res: http.ServerResponse, subs: Map<string, {offset:number, watcher:any}>}>} */
@@ -171,6 +174,13 @@ async function api(req, res, url, pathname) {
     }
 
     if (pathname === '/api/shutdown' && req.method === 'POST') {
+        // Only honour a shutdown aimed at this exact process. Without it, an app
+        // window closing could take down a bridge somebody else started — say one
+        // running in a terminal for frontend work.
+        const want = url.searchParams.get('pid');
+        if (want && Number(want) !== process.pid) {
+            return send(res, 409, { error: 'not the bridge you started', pid: process.pid });
+        }
         if (pool.busyCount > 0) {
             return send(res, 409, { error: 'a turn is still running', busy: pool.busyCount });
         }
@@ -289,6 +299,29 @@ async function api(req, res, url, pathname) {
             const r = pool.get(sessionId);
             if (!r) return send(res, 404, { error: 'no live process for this session' });
             return send(res, 200, { ok: r.stop() });
+        }
+
+        if (tail === 'flags' && req.method === 'POST') {
+            const summary = index.summary(sessionId);
+            if (!summary) return send(res, 404, { error: 'session not found' });
+            const body = await readJson(req);
+            const next = flags.set(sessionId, {
+                pinned: typeof body.pinned === 'boolean' ? body.pinned : undefined,
+                archived: typeof body.archived === 'boolean' ? body.archived : undefined,
+            });
+            broadcast('sessions-changed', { at: Date.now() });
+            return send(res, 200, { ok: true, sessionId, ...next });
+        }
+
+        // Show the session's working directory in Windows File Explorer.
+        if (tail === 'reveal' && req.method === 'POST') {
+            const summary = index.summary(sessionId);
+            if (!summary) return send(res, 404, { error: 'session not found' });
+            // The worktree is where the work is; fall back to the project root.
+            const dir = (summary.cwd && fs.existsSync(summary.cwd)) ? summary.cwd
+                : summary.projectCwd;
+            const out = await openInExplorer(dir);
+            return send(res, out.ok ? 200 : 502, { ...out, dir });
         }
     }
 

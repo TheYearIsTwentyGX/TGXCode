@@ -197,18 +197,85 @@ a:hover { text-decoration: underline; }
 .group-head .count { margin-left: auto; color: var(--text-4); font-variant-numeric: tabular-nums; }
 .group-head .live { color: var(--green); }
 
-.strip {
-    position: relative;
-    display: block;
+/* The archive disclosure is a group heading you can click. */
+.archive-head {
     width: 100%;
-    text-align: left;
-    padding: 9px 14px 10px;
+    border-radius: var(--pill);
+    padding: 10px 16px;
+    margin-top: 10px;
+    transition: background var(--t-fast) var(--ease);
+}
+.archive-head:hover { background: var(--s2); color: var(--text-2); }
+.archive-head .twist {
+    display: grid;
+    place-items: center;
+    margin-left: -4px;
+    color: var(--text-4);
+    transition: transform var(--t-fast) var(--ease);
+}
+.archive-head[aria-expanded="true"] .twist { transform: rotate(90deg); }
+
+/* An archived row reads as set aside, without being hard to read. */
+.strip[data-archived="true"] .strip-title { color: var(--text-3); }
+
+.strip {
+    /* --row-bg lets the action overlay fade into whatever the row is sitting on. */
+    --row-bg: var(--bg);
+    position: relative;
+    display: flex;
+    align-items: center;
+    width: 100%;
     border-radius: var(--pill);
     transition: background var(--t-fast) var(--ease);
 }
-.strip:hover { background: var(--s2); }
-.strip[aria-current="true"] { background: var(--blue-cont); }
-.strip[aria-current="true"]:hover { background: #26406c; }
+.strip:hover { background: var(--s2); --row-bg: var(--s2); }
+.strip[aria-current="true"] { background: var(--blue-cont); --row-bg: var(--blue-cont); }
+.strip[aria-current="true"]:hover { background: #26406c; --row-bg: #26406c; }
+
+.strip-main {
+    flex: 1;
+    min-width: 0;
+    text-align: left;
+    padding: 9px 14px 10px;
+    border-radius: var(--pill);
+}
+
+/* Pin and archive stay out of the way until the row is hovered — except a pin,
+   which is a state worth seeing at a glance. They float over the row rather
+   than sitting in the flow, so the title and meta keep the full width. */
+.strip-actions {
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    align-items: center;
+    gap: 1px;
+    padding-left: 26px;
+    background: linear-gradient(90deg, transparent, var(--row-bg) 24px);
+    border-radius: var(--pill);
+    opacity: 0;
+    transition: opacity var(--t-fast) var(--ease);
+}
+.strip:hover .strip-actions,
+.strip:focus-within .strip-actions,
+.strip[data-pinned="true"] .strip-actions { opacity: 1; }
+
+/* A pinned row shows its buttons all the time, so give the text room rather than
+   letting the overlay sit on top of it. */
+.strip[data-pinned="true"] .strip-main { padding-right: 62px; }
+
+.mini {
+    display: grid;
+    place-items: center;
+    width: 27px; height: 27px;
+    border-radius: 50%;
+    color: var(--text-4);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.mini:hover { background: var(--s4); color: var(--text); }
+.mini.on { color: var(--blue); }
+.strip[aria-current="true"] .mini:hover { background: #30507f; }
 
 /* State reads as a small dot before the title, not a slab edge. */
 .strip-title {
@@ -298,7 +365,15 @@ a:hover { text-decoration: underline; }
     padding: 18px 28px 0;
 }
 
+.conv-title-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+}
+
 .conv-title {
+    flex: 1;
+    min-width: 0;
     margin: 0;
     font-size: 20px;
     font-weight: 400;
@@ -306,6 +381,26 @@ a:hover { text-decoration: underline; }
     color: var(--text);
     letter-spacing: -0.003em;
 }
+
+.conv-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex: none;
+    margin-top: -4px;
+}
+
+.icon-btn {
+    display: grid;
+    place-items: center;
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    color: var(--text-3);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.icon-btn:hover { background: var(--s3); color: var(--text); }
+.icon-btn.on { color: var(--blue); }
+.icon-btn:disabled { opacity: 0.4; cursor: default; background: none; }
 
 .conv-sub {
     display: flex;
@@ -804,12 +899,15 @@ a:hover { text-decoration: underline; }
 
 .input-row textarea {
     flex: 1;
-    min-height: 26px;
+    /* 22 line + 8 padding top and bottom = 38, the height of the Send button, so
+       a single line sits on the button's centre line. Growing past one line keeps
+       the button pinned to the bottom via the row's align-items. */
+    min-height: 38px;
     max-height: 220px;
     resize: none;
     font-size: 14px;
-    line-height: 1.6;
-    padding: 2px 0;
+    line-height: 22px;
+    padding: 8px 0;
     overflow-y: auto;
 }
 .input-row textarea::placeholder { color: var(--text-3); }

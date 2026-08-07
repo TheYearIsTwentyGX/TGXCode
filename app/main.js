@@ -30,6 +30,7 @@ const DEFAULTS = {
 
 let mainWindow = null;
 let bridgeStartedByUs = false;
+let bridgePid = null;   // the pid this app started, so we only shut that one down
 
 // ── config ───────────────────────────────────────────────────────────────
 
@@ -70,32 +71,52 @@ function ping(timeout = 1200) {
     });
 }
 
+// Where the bridge's own output goes, as a shell expression evaluated in WSL.
+const LOG_DIR = '"${XDG_CACHE_HOME:-$HOME/.cache}/claude-sessions"';
+const LOG_FILE = `${LOG_DIR}/bridge.log`;
+
+/**
+ * Start the bridge without leaving a console window on screen.
+ *
+ * The obvious approach — spawning wsl.exe with `detached: true` so the bridge
+ * outlives this app — is exactly what puts a console on the user's desktop:
+ * Windows always gives a detached child its own console, and `windowsHide` is
+ * ignored in that case.
+ *
+ * So detach on the Linux side instead. `setsid` reparents the bridge away from
+ * the wsl.exe relay, the relay exits immediately, and this stays an ordinary
+ * hidden child process. The bridge still survives closing the window, and
+ * anything it prints goes to a log we can read back if it fails to come up.
+ */
 function startBridge(cfg) {
     const args = [];
     if (cfg.distro) args.push('-d', cfg.distro);
+
     // launch.sh finds a node first: a login shell does not read ~/.bashrc, which
     // is where nvm puts itself, so plain `node` is not on PATH here.
-    args.push('bash', '-lc',
-        `cd ${shellQuote(cfg.bridgeDir)} && exec bash bridge/launch.sh`);
+    const script = [
+        `cd ${shellQuote(cfg.bridgeDir)} || exit 1`,
+        `mkdir -p ${LOG_DIR}`,
+        `setsid nohup bash bridge/launch.sh >${LOG_FILE} 2>&1 </dev/null &`,
+        'exit 0',
+    ].join('\n');
+    args.push('bash', '-lc', script);
 
-    // Detached so a long agent turn survives closing this window.
-    const child = spawn('wsl.exe', args, {
-        detached: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        windowsHide: true,
-    });
-
-    let stderr = '';
-    child.stderr.on('data', (d) => {
-        stderr = (stderr + d).slice(-3000);
-        process.stderr.write(`[bridge] ${d}`);
-    });
-    child.stdout.on('data', (d) => process.stdout.write(`[bridge] ${d}`));
-    child.on('error', (err) => { stderr += `\n${err.message}`; });
-    child.unref();
+    const child = spawn('wsl.exe', args, { stdio: 'ignore', windowsHide: true });
+    child.on('error', (err) => console.error(`[claude-sessions] ${err.message}`));
 
     bridgeStartedByUs = true;
-    return () => stderr;
+}
+
+/** The bridge's own output, for when it never answers. */
+function readBridgeLog(cfg) {
+    return new Promise((resolve) => {
+        const args = [];
+        if (cfg.distro) args.push('-d', cfg.distro);
+        args.push('bash', '-lc', `tail -n 40 ${LOG_FILE} 2>/dev/null`);
+        execFile('wsl.exe', args, { windowsHide: true, timeout: 8000 },
+            (err, stdout) => resolve(String(stdout || '').trim()));
+    });
 }
 
 /** Quote a path for bash, keeping a leading ~ expandable. */
@@ -113,22 +134,25 @@ async function ensureBridge(cfg, onStatus) {
     if (health) return { ok: true, health, started: false };
 
     onStatus('Starting the bridge inside WSL…');
-    const readStderr = startBridge(cfg);
+    startBridge(cfg);
 
     // A cold index of a few hundred transcripts takes about a second; allow more.
     const deadline = Date.now() + 40_000;
     while (Date.now() < deadline) {
         await new Promise(r => setTimeout(r, 600));
         health = await ping();
-        if (health) return { ok: true, health, started: true };
+        if (health) {
+            bridgePid = health.pid || null;
+            return { ok: true, health, started: true };
+        }
     }
-    return { ok: false, error: readStderr() || 'The bridge did not start in time.' };
+    return { ok: false, error: await readBridgeLog(cfg) || 'The bridge did not start in time.' };
 }
 
 async function stopBridgeIfIdle() {
-    if (!bridgeStartedByUs) return;
+    if (!bridgeStartedByUs || !bridgePid) return;
     await new Promise((resolve) => {
-        const req = http.request(`${ORIGIN}/api/shutdown`, {
+        const req = http.request(`${ORIGIN}/api/shutdown?pid=${bridgePid}`, {
             method: 'POST',
             headers: { 'X-Claude-Sessions-Client': '1', 'Content-Length': '0' },
             timeout: 1500,
@@ -182,6 +206,7 @@ function createWindow() {
         minHeight: 520,
         backgroundColor: '#131314',
         title: 'Claude Sessions',
+        icon: path.join(__dirname, 'icon.ico'),
         autoHideMenuBar: true,
         webPreferences: {
             nodeIntegration: false,
@@ -253,9 +278,9 @@ app.whenReady().then(async () => {
 
     if (!result.ok) {
         setStatus('The bridge would not start.',
-            `Tried: wsl.exe ${cfg.distro ? `-d ${cfg.distro} ` : ''}bash -lc `
-            + `"cd ${cfg.bridgeDir} && exec node bridge/server.js"\n\n`
-            + `${result.error}\n\n`
+            `Tried to run bridge/launch.sh in ${cfg.bridgeDir}`
+            + `${cfg.distro ? ` on WSL distro ${cfg.distro}` : ''}.\n\n`
+            + `Output from ~/.cache/claude-sessions/bridge.log:\n${result.error}\n\n`
             + `Check that the path exists inside WSL and that node is on PATH there. `
             + `Set a different location in config.json next to this app, or in `
             + `${path.join(app.getPath('userData'), 'config.json')}:\n`

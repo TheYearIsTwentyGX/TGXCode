@@ -8,6 +8,7 @@
   "scripts": {
     "bridge": "node bridge/server.js",
     "start": "electron .",
+    "icon": "node app/make-icon.js --preview",
     "dist": "electron-builder"
   },
   "dependencies": {},
@@ -23,6 +24,7 @@
       "package.json"
     ],
     "win": {
+      "icon": "app/icon.ico",
       "target": [
         "nsis"
       ]

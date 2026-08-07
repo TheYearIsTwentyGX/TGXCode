@@ -24,8 +24,10 @@ const CACHE_VERSION = 4;
 const ACTIVE_WINDOW_MS = 90_000;
 
 class SessionIndex extends EventEmitter {
-    constructor() {
+    /** @param {import('./flags').Flags} [flags] user pin/archive state */
+    constructor(flags = null) {
         super();
+        this.flags = flags;
         /** @type {Map<string, {file, dir, size, mtimeMs, meta}>} keyed by sessionId */
         this.sessions = new Map();
         this.watchers = [];
@@ -99,6 +101,8 @@ class SessionIndex extends EventEmitter {
         for (const id of [...this.sessions.keys()]) {
             if (!seen.has(id)) { this.sessions.delete(id); changed++; }
         }
+        // Don't accumulate pins and archives for transcripts that are long gone.
+        if (this.flags) this.flags.prune(new Set(this.sessions.keys()));
 
         if (changed) { this._scheduleSave(); this.emit('changed'); }
         return { scanned, changed };
@@ -189,8 +193,11 @@ class SessionIndex extends EventEmitter {
 
     _summary(rec, now = Date.now()) {
         const m = rec.meta;
+        const flags = this.flags ? this.flags.get(m.sessionId) : { pinned: false, archived: false };
         return {
             sessionId: m.sessionId,
+            pinned: flags.pinned,
+            archived: flags.archived,
             title: m.title,
             titleSource: m.titleSource,
             cwd: m.cwd,

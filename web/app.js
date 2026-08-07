@@ -37,6 +37,9 @@ const state = {
     runner: null,
     channels: [],
     pinned: true,           // stick to the bottom as new events arrive
+    archiveOpen: (() => {
+        try { return localStorage.getItem('archiveOpen') === '1'; } catch { return false; }
+    })(),
 };
 
 const $ = (id) => document.getElementById(id);
@@ -44,14 +47,19 @@ const dom = {};
 for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-sub',
     'channels', 'scroll', 'log', 'status-line', 'status-text', 'btn-stop', 'input',
     'btn-send', 'model', 'perm', 'btn-new', 'db-status', 'db-label', 'toasts',
+    'btn-pin', 'btn-folder', 'btn-archive',
     'new-scrim', 'new-cwd', 'new-picker', 'new-prompt', 'new-model', 'new-go']) {
     dom[id.replace(/-(\w)/g, (_, c) => c.toUpperCase())] = $(id);
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────
 
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
 function el(tag, attrs, ...kids) {
-    const n = document.createElement(tag);
+    // createElement('svg') yields an unknown HTML element that never renders.
+    const n = tag === 'svg' ? document.createElementNS(SVG_NS, 'svg')
+        : document.createElement(tag);
     for (const [k, v] of Object.entries(attrs || {})) {
         if (v === null || v === undefined || v === false) continue;
         if (k === 'class') n.className = v;
@@ -120,14 +128,30 @@ async function loadSessions() {
     }
 }
 
-function renderRail() {
-    const groups = new Map();
-    for (const s of state.sessions) {
-        const key = s.projectName || 'unknown';
-        if (!groups.has(key)) groups.set(key, []);
-        groups.get(key).push(s);
-    }
+const ICON = {
+    pin: '<path d="M9 3h6l-.7 5.2 3 2.6V13H6.7v-2.2l3-2.6L9 3Z" stroke="currentColor" '
+        + 'stroke-width="1.8" stroke-linejoin="round"/><path d="M12 13v8" stroke="currentColor" '
+        + 'stroke-width="1.8" stroke-linecap="round"/>',
+    archive: '<path d="M3.5 6.2h17V9h-17V6.2Z" stroke="currentColor" stroke-width="1.8" '
+        + 'stroke-linejoin="round"/><path d="M5 9v9.3h14V9" stroke="currentColor" '
+        + 'stroke-width="1.8" stroke-linejoin="round"/><path d="M10 12.5h4" stroke="currentColor" '
+        + 'stroke-width="1.8" stroke-linecap="round"/>',
+    unarchive: '<path d="M12 19V9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>'
+        + '<path d="m8.5 12.5 3.5-3.5 3.5 3.5" stroke="currentColor" stroke-width="1.8" '
+        + 'stroke-linecap="round" stroke-linejoin="round"/><path d="M4.5 5.5h15" '
+        + 'stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+    caret: '<path d="m9 6 6 6-6 6" stroke="currentColor" stroke-width="2" '
+        + 'stroke-linecap="round" stroke-linejoin="round"/>',
+};
 
+function icon(name, size = 15) {
+    return el('svg', {
+        width: size, height: size, viewBox: '0 0 24 24', fill: 'none',
+        'aria-hidden': 'true', html: ICON[name],
+    });
+}
+
+function renderRail() {
     dom.rail.replaceChildren();
 
     if (!state.sessions.length) {
@@ -136,39 +160,116 @@ function renderRail() {
         return;
     }
 
+    const pinned = state.sessions.filter(s => s.pinned);
+    const archived = state.sessions.filter(s => s.archived);
+    const rest = state.sessions.filter(s => !s.pinned && !s.archived);
+
+    // Pinned first, across every project — that is the point of pinning.
+    if (pinned.length) {
+        dom.rail.append(groupHead('Pinned', pinned));
+        for (const s of pinned) dom.rail.append(strip(s));
+    }
+
+    const groups = new Map();
+    for (const s of rest) {
+        const key = s.projectName || 'unknown';
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(s);
+    }
     for (const [project, list] of groups) {
-        const live = list.filter(s => s.active || (s.runner && s.runner.state === 'busy')).length;
-        dom.rail.append(el('div', { class: 'group-head' },
-            el('span', {}, project),
-            live ? el('span', { class: 'live' }, `${live} live`) : null,
-            el('span', { class: 'count' }, String(list.length)),
-        ));
+        dom.rail.append(groupHead(project, list));
         for (const s of list) dom.rail.append(strip(s));
     }
+
+    if (archived.length) {
+        // Collapsed by default, but a filter that matches archived sessions
+        // should not silently hide its own results.
+        const open = state.archiveOpen || Boolean(state.query);
+        dom.rail.append(el('button', {
+            class: 'group-head archive-head',
+            type: 'button',
+            'aria-expanded': String(open),
+            onclick: () => { state.archiveOpen = !open; saveArchiveOpen(); renderRail(); },
+        },
+            el('span', { class: 'twist' }, icon('caret', 13)),
+            el('span', {}, 'Archived'),
+            el('span', { class: 'count' }, String(archived.length)),
+        ));
+        if (open) for (const s of archived) dom.rail.append(strip(s));
+    }
+}
+
+function groupHead(label, list) {
+    const live = list.filter(s => s.active || (s.runner && s.runner.state === 'busy')).length;
+    return el('div', { class: 'group-head' },
+        el('span', {}, label),
+        live ? el('span', { class: 'live' }, `${live} live`) : null,
+        el('span', { class: 'count' }, String(list.length)),
+    );
 }
 
 function strip(s) {
     const running = s.runner && (s.runner.state === 'busy' || s.runner.state === 'starting');
-    const node = el('button', {
+    const current = state.current && state.current.sessionId === s.sessionId;
+
+    // A row, not a button: it holds its own pin and archive controls, and
+    // nesting buttons is not allowed.
+    return el('div', {
         class: 'strip',
-        type: 'button',
         'data-id': s.sessionId,
         'data-state': running ? 'running' : (s.active ? 'active' : 'idle'),
-        'aria-current': state.current && state.current.sessionId === s.sessionId ? 'true' : null,
-        onclick: () => openSession(s.sessionId),
+        'data-pinned': String(!!s.pinned),
+        'data-archived': String(!!s.archived),
+        'aria-current': current ? 'true' : null,
     },
-        el('span', { class: 'strip-title' }, s.title),
-        el('span', { class: 'strip-meta' },
-            s.worktree ? el('span', { class: 'wt' }, s.worktree.name) : null,
-            s.worktree ? el('span', { class: 'dot' }, '·') : null,
-            el('span', {}, ago(s.lastTs)),
-            el('span', { class: 'dot' }, '·'),
-            el('span', {}, `${s.userMessages} ${s.userMessages === 1 ? 'turn' : 'turns'}`),
-            running ? el('span', { class: 'dot' }, '·') : null,
-            running ? el('span', { class: 'pulse' }, clip(s.runner.activity || 'Working', 22)) : null,
+        el('button', {
+            class: 'strip-main', type: 'button',
+            onclick: () => openSession(s.sessionId),
+        },
+            el('span', { class: 'strip-title' }, s.title),
+            el('span', { class: 'strip-meta' },
+                s.worktree ? el('span', { class: 'wt' }, s.worktree.name) : null,
+                s.worktree ? el('span', { class: 'dot' }, '·') : null,
+                el('span', {}, ago(s.lastTs)),
+                el('span', { class: 'dot' }, '·'),
+                el('span', {}, `${s.userMessages} ${s.userMessages === 1 ? 'turn' : 'turns'}`),
+                running ? el('span', { class: 'dot' }, '·') : null,
+                running ? el('span', { class: 'pulse' }, clip(s.runner.activity || 'Working', 22)) : null,
+            ),
+        ),
+        el('div', { class: 'strip-actions' },
+            el('button', {
+                class: 'mini' + (s.pinned ? ' on' : ''), type: 'button',
+                title: s.pinned ? 'Unpin' : 'Pin to the top',
+                'aria-pressed': String(!!s.pinned),
+                onclick: (e) => { e.stopPropagation(); setFlags(s, { pinned: !s.pinned }); },
+            }, icon('pin')),
+            el('button', {
+                class: 'mini', type: 'button',
+                title: s.archived ? 'Restore from archive' : 'Archive',
+                onclick: (e) => { e.stopPropagation(); setFlags(s, { archived: !s.archived }); },
+            }, icon(s.archived ? 'unarchive' : 'archive')),
         ),
     );
-    return node;
+}
+
+/** Toggle pin/archive, updating in place so the rail doesn't jump under the cursor. */
+async function setFlags(summary, change) {
+    try {
+        const r = await post(`/api/sessions/${summary.sessionId}/flags`, change);
+        Object.assign(summary, { pinned: r.pinned, archived: r.archived });
+        if (state.current && state.current.sessionId === summary.sessionId) {
+            Object.assign(state.current, { pinned: r.pinned, archived: r.archived });
+            renderHeaderActions();
+        }
+        renderRail();
+    } catch (err) {
+        toast(`Could not update the session: ${err.message}`, 'error');
+    }
+}
+
+function saveArchiveOpen() {
+    try { localStorage.setItem('archiveOpen', state.archiveOpen ? '1' : '0'); } catch { /* private mode */ }
 }
 
 // ── conversation ─────────────────────────────────────────────────────────
@@ -230,6 +331,18 @@ function renderHeader() {
     bits.push(el('span', { class: 'cwd', title: s.cwd }, clip(s.cwd, 42)));
 
     dom.convSub.replaceChildren(...bits);
+    renderHeaderActions();
+}
+
+function renderHeaderActions() {
+    const s = state.current;
+    if (!s) return;
+    dom.btnPin.classList.toggle('on', !!s.pinned);
+    dom.btnPin.setAttribute('aria-pressed', String(!!s.pinned));
+    dom.btnPin.title = s.pinned ? 'Unpin this session' : 'Pin this session to the top';
+    dom.btnArchive.classList.toggle('on', !!s.archived);
+    dom.btnArchive.title = s.archived ? 'Restore from archive' : 'Archive this session';
+    dom.btnFolder.title = `Show ${s.cwd} in File Explorer`;
 }
 
 function appendEvents(events, animate) {
@@ -726,7 +839,8 @@ function scrollToEnd(instant) {
 
 function autoGrow() {
     dom.input.style.height = 'auto';
-    dom.input.style.height = Math.min(220, dom.input.scrollHeight) + 'px';
+    // Never below the button height, so an empty composer stays centred.
+    dom.input.style.height = Math.max(38, Math.min(220, dom.input.scrollHeight)) + 'px';
 }
 
 async function sendMessage() {
@@ -818,6 +932,26 @@ dom.search.addEventListener('input', debounce(() => {
 
 dom.btnSend.addEventListener('click', sendMessage);
 dom.btnNew.addEventListener('click', openNew);
+
+dom.btnPin.addEventListener('click', () => {
+    if (state.current) setFlags(state.current, { pinned: !state.current.pinned });
+});
+
+dom.btnArchive.addEventListener('click', () => {
+    if (state.current) setFlags(state.current, { archived: !state.current.archived });
+});
+
+dom.btnFolder.addEventListener('click', async () => {
+    if (!state.current) return;
+    dom.btnFolder.disabled = true;
+    try {
+        await post(`/api/sessions/${state.current.sessionId}/reveal`, {});
+    } catch (err) {
+        toast(`Could not open the folder: ${err.message}`, 'error');
+    } finally {
+        dom.btnFolder.disabled = false;
+    }
+});
 dom.newGo.addEventListener('click', startNew);
 dom.dbStatus.addEventListener('click', refreshDevBrowser);
 
