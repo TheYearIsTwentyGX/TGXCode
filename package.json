@@ -6,8 +6,9 @@
   "author": "Dylan Hays",
   "private": true,
   "scripts": {
+    "start": "node scripts/start.js",
     "bridge": "node bridge/server.js",
-    "start": "electron .",
+    "build": "node scripts/build.js",
     "icon": "node app/make-icon.js --preview",
     "dist": "electron-builder"
   },

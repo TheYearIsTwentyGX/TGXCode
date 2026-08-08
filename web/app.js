@@ -280,7 +280,9 @@ function strip(s) {
             el('span', { class: 'strip-meta' },
                 s.worktree ? el('span', { class: 'wt' }, s.worktree.name) : null,
                 s.worktree ? el('span', { class: 'dot' }, '·') : null,
-                el('span', {}, ago(s.lastTs)),
+                // The time the list is ordered by, so the order reads as sorted.
+                el('span', { title: `You last wrote here ${ago(s.lastUserTs || s.lastTs)} ago` },
+                    ago(s.lastUserTs || s.lastTs)),
                 el('span', { class: 'dot' }, '·'),
                 el('span', {}, `${s.userMessages} ${s.userMessages === 1 ? 'turn' : 'turns'}`),
                 running ? el('span', { class: 'dot' }, '·') : null,

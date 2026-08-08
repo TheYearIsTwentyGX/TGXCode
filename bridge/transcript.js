@@ -88,6 +88,7 @@ function scanMeta(filePath) {
         toolCalls: 0,
         firstTs: null,
         lastTs: null,
+        lastUserTs: null,
         worktree: null,
         pr: null,
         bytes: text.length,
@@ -122,6 +123,10 @@ function scanMeta(filePath) {
                 if (line.includes('"type":"tool_result"')) continue;
                 if (line.includes('"isMeta":true')) continue;
                 meta.userMessages++;
+                // When *you* last spoke. The session list sorts on this rather
+                // than on file activity, so rows don't reshuffle every time an
+                // agent writes a line.
+                if (ts) meta.lastUserTs = ts;
                 if (!meta.firstPrompt) {
                     const parsed = safeParse(line);
                     const t = parsed ? userText(parsed) : null;

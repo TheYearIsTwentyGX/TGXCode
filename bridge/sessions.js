@@ -18,7 +18,7 @@ const { scanMeta, parseLines, buildEvents, readSubagentIndex,
 const CACHE_FILE = path.join(CACHE_DIR, 'index.json');
 // Bump whenever scanMeta's output shape or derivation changes, so a stale cache
 // is discarded rather than silently serving metadata from the old rules.
-const CACHE_VERSION = 5;
+const CACHE_VERSION = 6;
 
 // A transcript touched this recently is treated as live.
 const ACTIVE_WINDOW_MS = 90_000;
@@ -187,7 +187,10 @@ class SessionIndex extends EventEmitter {
             out.push(this._summary(rec, now));
         }
 
-        out.sort((a, b) => b.mtimeMs - a.mtimeMs);
+        // Ordered by when the user last spoke, not by file activity. Sorting on
+        // activity meant a working agent kept bumping its session to the top and
+        // shuffling everything else beneath the cursor.
+        out.sort((a, b) => sortKey(b) - sortKey(a));
         return out.slice(0, limit);
     }
 
@@ -214,6 +217,7 @@ class SessionIndex extends EventEmitter {
             toolCalls: m.toolCalls,
             firstTs: m.firstTs,
             lastTs: m.lastTs,
+            lastUserTs: m.lastUserTs,
             lastPrompt: m.lastPrompt || m.firstPrompt,
             bytes: rec.size,
             mtimeMs: rec.mtimeMs,
@@ -331,6 +335,15 @@ class SessionIndex extends EventEmitter {
     note(sessionId) {
         this._scheduleRescan();
     }
+}
+
+/**
+ * Position in the session list: the user's last message, falling back to the
+ * transcript's own timestamps for sessions that somehow have no user turn.
+ */
+function sortKey(s) {
+    const ts = s.lastUserTs || s.firstTs || s.lastTs;
+    return ts ? Date.parse(ts) : s.mtimeMs;
 }
 
 /** A readable label for a project directory. */

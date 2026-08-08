@@ -49,6 +49,23 @@ This works because WSL runs with `networkingMode=mirrored` here, so `127.0.0.1`
 is the same loopback on both sides — no port proxy, no firewall rule. It is the
 same trick DevBrowser's control channel uses.
 
+## Scripts
+
+All of these run from WSL, in this directory.
+
+| | |
+|---|---|
+| `npm start` | Launch the Windows app. It starts its own bridge. |
+| `npm run bridge` | Run the bridge in the foreground and open <http://127.0.0.1:45888> in any browser. The fastest loop for UI work — edit `web/`, hit refresh. |
+| `npm run build` | Build and install the app (calls `install.ps1` through PowerShell). Pass options after `--`, e.g. `npm run build -- -NoInstall`. |
+| `npm run icon` | Regenerate `app/icon.ico`. |
+
+There is deliberately no `node_modules` in this repo and `electron .` will not
+work here: the shell is packaged from a staging directory on the Windows side,
+and a Linux Electron is not the app you want anyway. `npm start` finds the built
+executable instead, and tells you what to run if it is missing. (`npm run dist`
+exists only for `install.ps1` to call inside that staging directory.)
+
 ## Install
 
 From PowerShell, in this directory:
@@ -56,6 +73,8 @@ From PowerShell, in this directory:
 ```powershell
 .\install.ps1
 ```
+
+or from WSL, `npm run build`.
 
 It checks that WSL can find the bridge, stages the Electron shell into
 `%LOCALAPPDATA%\ClaudeSessions-build`, packages it, and runs the installer.
@@ -80,6 +99,7 @@ create one in `%APPDATA%\claude-sessions\`:
 | | |
 |---|---|
 | **Left rail** | Every session on disk, grouped by project. Worktrees fold under the checkout that owns them. A green dot means the transcript changed in the last 90 seconds — something is working. |
+| **Ordering** | By when *you* last wrote, not by last activity. Sorting on activity meant a busy agent kept bumping its session to the top and shuffling the rest out from under the cursor. The timestamp on each row is the one it sorts by. |
 | **Pin / archive** | Hover a row for its two buttons, or use the ones beside the session title. Pinned sessions sit in their own group at the top, across projects. Archived ones collapse into a group at the bottom. |
 | **Conversation** | Your turns, Claude's replies with syntax-highlighted code, and one collapsible block per tool call. Edits render as diffs, subagents expand inline, and output too large to inline loads on demand. |
 | **Dev servers** | The chips under the title. Green means the port is answering right now; click to switch DevBrowser to that tab, starting DevBrowser if it isn't running. |
@@ -163,6 +183,24 @@ out so a server that has gone away is visible rather than silently missing.
 `~/.profile` but not `~/.bashrc` — and nvm installs itself in `~/.bashrc`. Node
 is simply absent in that context, so every caller goes through the script that
 knows where to look.
+
+## Working on this with agents
+
+`.claude/settings.json` pins `worktree.baseRef` to `head`. The global default is
+`fresh`, which branches a new worktree from `origin/<default-branch>` — and this
+repo has no remote, so there is no `origin/master` to branch from. Pinning it to
+the local HEAD avoids that whole question. Add a remote later and either setting
+works.
+
+Two other things that trip agents up here:
+
+- **Start them in this directory.** `EnterWorktree` needs a git repository at the
+  working directory. An agent launched in `~` reports "not in a git repository
+  and no WorktreeCreate hooks are configured", which reads like a missing hook
+  but is really just the wrong cwd. Nothing needs configuring — `cd` here first.
+- **One build at a time.** `install.ps1` wipes and rebuilds its staging
+  directory, so two agents packaging at once will pull the executable out from
+  under each other.
 
 ## Notes and limits
 
