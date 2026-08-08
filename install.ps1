@@ -81,6 +81,17 @@ Say "      node found in WSL: $check" Green
 
 # -- stage the shell somewhere Windows-local ----------------------------------
 
+# A running copy holds a lock on ClaudeSessions.exe and packaging fails with a
+# bare "Access is denied", so close it first.
+$running = Get-Process ClaudeSessions -ErrorAction SilentlyContinue
+if ($running) {
+    Say '      ClaudeSessions is running; closing it so the build can replace it.' Yellow
+    $running | ForEach-Object { $_.CloseMainWindow() | Out-Null }
+    Start-Sleep -Seconds 2
+    Get-Process ClaudeSessions -ErrorAction SilentlyContinue | Stop-Process -Force
+    Start-Sleep -Seconds 1
+}
+
 $stage = Join-Path $env:LOCALAPPDATA 'ClaudeSessions-build'
 Say "[2/5] Staging the shell in $stage..." Yellow
 

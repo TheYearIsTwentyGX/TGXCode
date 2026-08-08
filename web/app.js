@@ -34,12 +34,15 @@ const state = {
     offset: 0,
     nodes: new Map(),       // event id -> {ev, node}
     tools: new Map(),       // tool_use id -> {ev, node}
+    turns: [],              // the user messages, in order, for the turn rail
+    activeTurn: -1,
     runner: null,
     channels: [],
     pinned: true,           // stick to the bottom as new events arrive
     archiveOpen: (() => {
         try { return localStorage.getItem('archiveOpen') === '1'; } catch { return false; }
     })(),
+    unsent: new Map(),      // sessionId -> text written to a process but not yet in a transcript
 };
 
 const $ = (id) => document.getElementById(id);
@@ -47,7 +50,7 @@ const dom = {};
 for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-sub',
     'channels', 'scroll', 'log', 'status-line', 'status-text', 'btn-stop', 'input',
     'btn-send', 'model', 'perm', 'btn-new', 'db-status', 'db-label', 'toasts',
-    'btn-pin', 'btn-folder', 'btn-archive',
+    'btn-pin', 'btn-folder', 'btn-archive', 'turns', 'turn-pop',
     'new-scrim', 'new-cwd', 'new-picker', 'new-prompt', 'new-model', 'new-go']) {
     dom[id.replace(/-(\w)/g, (_, c) => c.toUpperCase())] = $(id);
 }
@@ -109,10 +112,57 @@ function clip(s, n) {
     return t.length > n ? t.slice(0, n - 1) + '…' : t;
 }
 
-function toast(text, kind = 'info', ms = 4200) {
-    const t = el('div', { class: 'toast', 'data-kind': kind }, text);
+/**
+ * @param {object} [opts] {ms, action:{label, onClick}} — an action keeps the
+ * toast up until it is used or dismissed, since it is the recovery path.
+ */
+function toast(text, kind = 'info', opts = {}) {
+    const { ms = 4200, action = null } = typeof opts === 'number' ? { ms: opts } : opts;
+    const t = el('div', { class: 'toast', 'data-kind': kind },
+        el('span', { class: 'toast-text' }, text));
+
+    if (action) {
+        t.append(el('button', {
+            class: 'toast-action', type: 'button',
+            onclick: () => { t.remove(); action.onClick(); },
+        }, action.label));
+    }
+    t.append(el('button', {
+        class: 'toast-close', type: 'button', 'aria-label': 'Dismiss',
+        onclick: () => t.remove(),
+    }, '✕'));
+
     dom.toasts.append(t);
-    setTimeout(() => t.remove(), ms);
+    if (!action) setTimeout(() => t.remove(), ms);
+    return t;
+}
+
+// ── drafts ───────────────────────────────────────────────────────────────
+// What is typed but not yet sent, and what was sent but never made it into a
+// transcript. Neither should be lost to a reload or a failed turn.
+
+const draftKey = (id) => `draft:${id}`;
+
+function loadDraft(id) {
+    try { return localStorage.getItem(draftKey(id)) || ''; } catch { return ''; }
+}
+
+function saveDraft(id, text) {
+    try {
+        if (text) localStorage.setItem(draftKey(id), text);
+        else localStorage.removeItem(draftKey(id));
+    } catch { /* storage unavailable; drafts are best effort */ }
+}
+
+/** Put text back in the composer without clobbering anything typed since. */
+function restoreToComposer(text) {
+    if (!text) return;
+    const current = dom.input.value.trim();
+    dom.input.value = current ? `${text}\n\n${current}` : text;
+    autoGrow();
+    dom.input.focus();
+    dom.input.setSelectionRange(dom.input.value.length, dom.input.value.length);
+    if (state.current) saveDraft(state.current.sessionId, dom.input.value);
 }
 
 // ── rail ─────────────────────────────────────────────────────────────────
@@ -274,8 +324,10 @@ function saveArchiveOpen() {
 
 // ── conversation ─────────────────────────────────────────────────────────
 
-async function openSession(id) {
-    if (state.current && state.current.sessionId === id) return;
+async function openSession(id, { quiet = false } = {}) {
+    if (state.current && state.current.sessionId === id) return true;
+    // Keep whatever is half-typed for the session being left behind.
+    if (state.current) saveDraft(state.current.sessionId, dom.input.value);
     try {
         const data = await get(`/api/sessions/${id}`);
         state.current = data.summary;
@@ -290,17 +342,48 @@ async function openSession(id) {
 
         renderHeader();
         dom.log.replaceChildren();
+        hideTurnPop();
         appendEvents(data.events, false);
+        renderTurns();      // a session with no turns of your own still clears the rail
         renderRail();
         applyRunner(state.runner);
         scrollToEnd(true);
 
         subscribe();
         loadChannels();
+
+        // Anything typed here before, or handed back by a failed turn.
+        dom.input.value = state.unsent.get(id) || loadDraft(id);
+        autoGrow();
         dom.input.focus();
+        return true;
     } catch (err) {
-        toast(`Could not open session: ${err.message}`, 'error');
+        if (!quiet) toast(`Could not open session: ${err.message}`, 'error');
+        return false;
     }
+}
+
+/**
+ * Open a session that may not exist on disk yet.
+ *
+ * A brand-new or freshly forked session has no transcript until `claude` writes
+ * its first line, so opening it immediately 404s. Wait for it to show up rather
+ * than guessing a delay.
+ */
+async function openSessionSoon(id, { timeoutMs = 25000 } = {}) {
+    const deadline = Date.now() + timeoutMs;
+    let delay = 350;
+    while (Date.now() < deadline) {
+        if (await openSession(id, { quiet: true })) {
+            loadSessions();
+            return true;
+        }
+        await new Promise(r => setTimeout(r, delay));
+        delay = Math.min(1500, Math.round(delay * 1.4));
+    }
+    await loadSessions();
+    toast('The new session has not shown up yet — it will appear in the list shortly.', 'warn');
+    return false;
 }
 
 function renderHeader() {
@@ -347,6 +430,7 @@ function renderHeaderActions() {
 
 function appendEvents(events, animate) {
     const frag = document.createDocumentFragment();
+    let newTurn = false;
     for (const ev of events) {
         if (ev.kind === 'tool-result') { patchTool(ev); continue; }
         if (state.nodes.has(ev.id)) continue;
@@ -354,9 +438,11 @@ function appendEvents(events, animate) {
         if (!node) continue;
         state.nodes.set(ev.id, { ev, node });
         if (ev.kind === 'tool') state.tools.set(ev.id, { ev, node });
+        if (ev.kind === 'user') newTurn = true;
         frag.append(node);
     }
     if (frag.childNodes.length) dom.log.append(frag);
+    if (newTurn) renderTurns();
 }
 
 /** A tool call whose result arrived in a later chunk than the call itself. */
@@ -782,9 +868,21 @@ function connect() {
 
     es.addEventListener('turn-complete', (e) => {
         const r = JSON.parse(e.data);
+        state.unsent.delete(r.sessionId);   // it is in the transcript now
         if (!state.current || r.sessionId !== state.current.sessionId) return;
         // The dev servers a turn started only become visible once it finishes.
         loadChannels();
+    });
+
+    es.addEventListener('send-failed', (e) => handleSendFailure(JSON.parse(e.data)));
+
+    es.addEventListener('session-forked', (e) => {
+        const { from, to } = JSON.parse(e.data);
+        state.unsent.delete(from);
+        if (!state.current || state.current.sessionId !== from) return;
+        toast('Branched off a copy — following the new session.', 'ok');
+        // The original keeps running elsewhere; the copy is where this turn goes.
+        openSessionSoon(to);
     });
 
     es.onerror = () => {
@@ -835,6 +933,112 @@ function scrollToEnd(instant) {
     }
 }
 
+// ── turn rail ────────────────────────────────────────────────────────────
+// A tick per thing you said, down the right edge of the transcript. Hovering
+// reads the message back; clicking jumps to it. Built from the rendered log,
+// so a session streaming in a terminal grows its rail as it goes.
+
+function turnText(ev) {
+    if (ev.command) return `/${ev.command.name}${ev.command.args ? ' ' + ev.command.args : ''}`;
+    return (ev.text || '').trim() || '(image only)';
+}
+
+/** Like clip(), but keeps line breaks — the popover renders them. */
+function clipLines(s, n) {
+    const t = String(s || '').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+    return t.length > n ? t.slice(0, n - 1) + '…' : t;
+}
+
+function renderTurns() {
+    state.turns = [];
+    for (const entry of state.nodes.values()) {
+        if (entry.ev.kind === 'user') state.turns.push(entry);
+    }
+    state.activeTurn = -1;
+
+    const total = state.turns.length;
+    dom.turns.replaceChildren(...state.turns.map((t, i) => el('button', {
+        class: 'turn-tick',
+        type: 'button',
+        'aria-label': `Turn ${i + 1} of ${total}: ${clip(turnText(t.ev), 60)}`,
+        onclick: () => jumpToTurn(t),
+        onmouseenter: (e) => showTurnPop(e.currentTarget, i),
+        onmouseleave: hideTurnPop,
+        onfocus: (e) => showTurnPop(e.currentTarget, i),
+        onblur: hideTurnPop,
+    })));
+    markActiveTurn();
+}
+
+function showTurnPop(tick, i) {
+    const t = state.turns[i];
+    if (!t) return;
+    const pop = dom.turnPop;
+    const isCmd = Boolean(t.ev.command);
+
+    pop.replaceChildren(
+        el('div', { class: 'pop-head' },
+            el('span', {}, `Turn ${i + 1} of ${state.turns.length}`),
+            el('span', { class: 'when' }, clockOf(t.ev.ts)),
+        ),
+        el('div', { class: 'pop-text' + (isCmd ? ' cmd' : '') },
+            clipLines(turnText(t.ev), 460)),
+    );
+    pop.hidden = false;
+
+    // Sits to the left of the rail, centred on its tick, kept on screen.
+    const r = tick.getBoundingClientRect();
+    const h = pop.offsetHeight;
+    pop.style.top = `${Math.min(Math.max(8, r.top + r.height / 2 - h / 2),
+        Math.max(8, window.innerHeight - h - 8))}px`;
+    pop.style.left = `${Math.max(8, r.left - pop.offsetWidth - 10)}px`;
+}
+
+function hideTurnPop() {
+    dom.turnPop.hidden = true;
+}
+
+function jumpToTurn(t) {
+    hideTurnPop();
+    const sc = dom.scroll;
+    const top = t.node.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop;
+    sc.scrollTop = Math.max(0, top - 14);
+    state.pinned = false;
+
+    t.node.classList.remove('flash');
+    void t.node.offsetWidth;    // restart the animation when the same tick is clicked twice
+    t.node.classList.add('flash');
+    setTimeout(() => t.node.classList.remove('flash'), 1400);
+}
+
+/** Whichever turn the transcript is currently sitting in. */
+function markActiveTurn() {
+    if (!state.turns.length) return;
+    const edge = dom.scroll.getBoundingClientRect().top + 60;
+    let active = 0;
+    for (let i = 0; i < state.turns.length; i++) {
+        if (state.turns[i].node.getBoundingClientRect().top > edge) break;
+        active = i;
+    }
+    if (active === state.activeTurn) return;
+    state.activeTurn = active;
+
+    const ticks = dom.turns.children;
+    for (let i = 0; i < ticks.length; i++) {
+        if (i === active) ticks[i].setAttribute('aria-current', 'true');
+        else ticks[i].removeAttribute('aria-current');
+    }
+
+    // Keep the marked tick visible when there are more turns than rail.
+    const tick = ticks[active];
+    if (!tick) return;
+    const railH = dom.turns.clientHeight;
+    if (tick.offsetTop < dom.turns.scrollTop
+        || tick.offsetTop + tick.offsetHeight > dom.turns.scrollTop + railH) {
+        dom.turns.scrollTop = tick.offsetTop - railH / 2;
+    }
+}
+
 // ── composer ─────────────────────────────────────────────────────────────
 
 function autoGrow() {
@@ -843,26 +1047,55 @@ function autoGrow() {
     dom.input.style.height = Math.max(38, Math.min(220, dom.input.scrollHeight)) + 'px';
 }
 
-async function sendMessage() {
-    const text = dom.input.value.trim();
+async function sendMessage({ fork = false, text: override = null } = {}) {
+    const text = override != null ? override : dom.input.value.trim();
     if (!text || !state.current) return;
-    dom.input.value = '';
-    autoGrow();
+    const sessionId = state.current.sessionId;
+
+    if (override == null) { dom.input.value = ''; autoGrow(); }
+    saveDraft(sessionId, '');
     dom.btnSend.disabled = true;
+
     try {
-        const r = await post(`/api/sessions/${state.current.sessionId}/send`, {
+        const r = await post(`/api/sessions/${sessionId}/send`, {
             text,
+            fork,
             model: dom.model.value || null,
             permissionMode: dom.perm.value,
         });
+        // Held until the turn lands in the transcript. If the process dies first
+        // — a session already running elsewhere is the common case — this is the
+        // only surviving copy of what was typed.
+        state.unsent.set(sessionId, text);
         applyRunner(r.status);
         state.pinned = true;
         scrollToEnd(false);
     } catch (err) {
-        dom.input.value = text;
+        restoreToComposer(text);
         toast(`Could not send: ${err.message}`, 'error');
     } finally {
         dom.btnSend.disabled = !state.current;
+    }
+}
+
+/** A turn that never started: give the text back, and offer the way forward. */
+function handleSendFailure(f) {
+    const text = (f.unsent && f.unsent[0]) || state.unsent.get(f.sessionId) || '';
+    state.unsent.delete(f.sessionId);
+
+    const onCurrent = state.current && state.current.sessionId === f.sessionId;
+    if (text) {
+        if (onCurrent) restoreToComposer(text);
+        else saveDraft(f.sessionId, text);   // waiting when they come back
+    }
+
+    if (f.kind === 'busy-elsewhere' && onCurrent && text) {
+        toast(`${f.message} Your message is back in the box.`, 'warn', {
+            action: { label: 'Branch off a copy', onClick: () => sendMessage({ fork: true }) },
+        });
+    } else {
+        toast(text ? `${f.message} Your message was put back.` : f.message, 'error',
+            { ms: 9000 });
     }
 }
 
@@ -910,11 +1143,8 @@ async function startNew() {
         });
         closeNew();
         toast('Session started.', 'ok');
-        // The transcript file appears a beat after the process starts.
-        setTimeout(async () => {
-            await loadSessions();
-            openSession(r.sessionId);
-        }, 1200);
+        // The transcript only exists once `claude` writes its first line.
+        openSessionSoon(r.sessionId);
     } catch (err) {
         toast(`Could not start the session: ${err.message}`, 'error');
     } finally {
@@ -930,7 +1160,7 @@ dom.search.addEventListener('input', debounce(() => {
     loadSessions();
 }, 180));
 
-dom.btnSend.addEventListener('click', sendMessage);
+dom.btnSend.addEventListener('click', () => sendMessage());
 dom.btnNew.addEventListener('click', openNew);
 
 dom.btnPin.addEventListener('click', () => {
@@ -956,6 +1186,13 @@ dom.newGo.addEventListener('click', startNew);
 dom.dbStatus.addEventListener('click', refreshDevBrowser);
 
 dom.input.addEventListener('input', autoGrow);
+dom.input.addEventListener('input', debounce(() => {
+    if (state.current) saveDraft(state.current.sessionId, dom.input.value);
+}, 400));
+// A reload or a crash should not eat a half-written message either.
+window.addEventListener('beforeunload', () => {
+    if (state.current) saveDraft(state.current.sessionId, dom.input.value);
+});
 dom.input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendMessage(); }
 });
@@ -970,7 +1207,11 @@ dom.btnStop.addEventListener('click', async () => {
 dom.scroll.addEventListener('scroll', () => {
     const sc = dom.scroll;
     state.pinned = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 90;
+    markActiveTurn();
 });
+
+// The tooltip is positioned against a tick, so it cannot follow one that moves.
+dom.turns.addEventListener('scroll', hideTurnPop);
 
 for (const n of document.querySelectorAll('[data-close]')) n.addEventListener('click', closeNew);
 dom.newScrim.addEventListener('click', (e) => { if (e.target === dom.newScrim) closeNew(); });

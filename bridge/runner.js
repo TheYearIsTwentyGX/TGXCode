@@ -43,6 +43,10 @@ class Runner extends EventEmitter {
         this.isNew = !!opts.isNew;
         this.model = opts.model || null;
         this.permissionMode = opts.permissionMode || 'acceptEdits';
+        // Branch off a copy instead of continuing in place. Needed when the
+        // original is already live somewhere else.
+        this.fork = !!opts.fork;
+        this.errorKind = null;
 
         this.proc = null;
         this.state = 'stopped';        // stopped | starting | idle | busy | error
@@ -51,6 +55,7 @@ class Runner extends EventEmitter {
         this.lastResult = null;        // {costUsd, durationMs, numTurns, isError}
         this.lastUsedAt = Date.now();
         this.queue = [];               // prompts sent before the process was ready
+        this.inFlight = [];            // written to the process, not yet answered
         this._buf = '';
         this._stderr = '';
         this._pendingTools = new Map();
@@ -70,6 +75,7 @@ class Runner extends EventEmitter {
         ];
         if (this.isNew) args.push('--session-id', this.sessionId);
         else args.push('--resume', this.sessionId);
+        if (this.fork) args.push('--fork-session');
         if (this.model) args.push('--model', this.model);
 
         this._setState('starting', 'Starting Claude…');
@@ -107,8 +113,19 @@ class Runner extends EventEmitter {
             } else if (code === 0) {
                 this._setState('stopped', null);
             } else {
-                this.lastError = this._stderr.trim().split('\n').slice(-4).join('\n')
-                    || `claude exited with code ${code}`;
+                const raw = this._stderr.trim();
+                const classified = classifyError(raw, code);
+                this.errorKind = classified.kind;
+                this.lastError = classified.message;
+                // The turn never started, so whatever the user typed was never
+                // recorded anywhere. Hand it back so the UI can restore it.
+                this.emit('failed', {
+                    kind: classified.kind,
+                    message: classified.message,
+                    unsent: this.inFlight.concat(this.queue),
+                });
+                this.inFlight.length = 0;
+                this.queue.length = 0;
                 this._setState('error', null);
             }
             this.emit('exit', code);
@@ -136,6 +153,9 @@ class Runner extends EventEmitter {
                 message: { role: 'user', content: [{ type: 'text', text }] },
             }) + '\n';
             this.proc.stdin.write(line);
+            // Held until a result arrives: if the process dies first, this text
+            // was never written to the transcript and would otherwise be lost.
+            this.inFlight.push(text);
             this._setState('busy', 'Thinking…');
         }
     }
@@ -183,8 +203,14 @@ class Runner extends EventEmitter {
         switch (msg.type) {
             case 'system':
                 if (msg.subtype === 'init') {
-                    // A resumed session keeps its id; a forked one would not.
-                    if (msg.session_id) this.sessionId = msg.session_id;
+                    // A resumed session keeps its id; a fork gets a new one, and
+                    // the UI has to follow it or the user is left watching a
+                    // transcript that will never move again.
+                    if (msg.session_id && msg.session_id !== this.sessionId) {
+                        const from = this.sessionId;
+                        this.sessionId = msg.session_id;
+                        this.emit('forked', { from, to: msg.session_id });
+                    }
                     this.emit('init', msg);
                 } else if (msg.subtype === 'permission_denied') {
                     this.emit('notice', {
@@ -228,6 +254,7 @@ class Runner extends EventEmitter {
                     stopReason: msg.stop_reason || null,
                 };
                 this._pendingTools.clear();
+                this.inFlight.length = 0;   // safely in the transcript now
                 this._setState('idle', null);
                 this.emit('turn-complete', this.lastResult);
                 break;
@@ -263,6 +290,38 @@ class Runner extends EventEmitter {
             queued: this.queue.length,
         };
     }
+}
+
+/**
+ * Turn `claude`'s stderr into something the UI can act on.
+ *
+ * The case that matters: a session already running elsewhere — a background
+ * agent, or a terminal — cannot be resumed, because two writers would be
+ * appending to one transcript. Claude Code refuses and suggests branching off a
+ * copy, which is exactly the recovery the UI should offer.
+ */
+function classifyError(stderr, code) {
+    const text = String(stderr || '').trim();
+
+    if (/currently running as a background agent|add --fork-session to branch/i.test(text)) {
+        return {
+            kind: 'busy-elsewhere',
+            message: 'This session is already running somewhere else, so it cannot be '
+                + 'continued here. Branch off a copy to keep going.',
+        };
+    }
+    if (/ENOENT|command not found|not found/i.test(text) && /claude/i.test(text)) {
+        return {
+            kind: 'no-claude',
+            message: 'Could not find the `claude` command in WSL. Check that it is on PATH.',
+        };
+    }
+    if (/No conversation found|session .* not found/i.test(text)) {
+        return { kind: 'missing', message: 'Claude Code could not find this session to resume.' };
+    }
+
+    const tail = text.split('\n').filter(Boolean).slice(-4).join('\n');
+    return { kind: 'unknown', message: tail || `claude exited with code ${code}` };
 }
 
 function describeTool(block) {
@@ -307,13 +366,14 @@ class RunnerPool extends EventEmitter {
     }
 
     /** Existing runner for a session, or a new one bound to `cwd`. */
-    ensure(sessionId, { cwd, model, permissionMode, isNew = false } = {}) {
+    ensure(sessionId, { cwd, model, permissionMode, isNew = false, fork = false } = {}) {
         let r = this.runners.get(sessionId);
         if (r) {
-            // A mode or model change only takes effect on a fresh process.
+            // A mode, model or fork change only takes effect on a fresh process.
             const wants = { model: model ?? r.model, permissionMode: permissionMode ?? r.permissionMode };
             if (r.state !== 'busy'
-                && (wants.model !== r.model || wants.permissionMode !== r.permissionMode)) {
+                && (wants.model !== r.model || wants.permissionMode !== r.permissionMode
+                    || fork !== r.fork || r.state === 'error')) {
                 r.retire();
                 this.runners.delete(sessionId);
                 r = null;
@@ -324,11 +384,18 @@ class RunnerPool extends EventEmitter {
 
         this._evictTo(MAX_LIVE - 1);
 
-        r = new Runner({ sessionId, cwd, model, permissionMode, isNew });
+        r = new Runner({ sessionId, cwd, model, permissionMode, isNew, fork });
         r.on('status', (s) => this.emit('status', s));
-        r.on('notice', (n) => this.emit('notice', { sessionId, ...n }));
-        r.on('turn-complete', (res) => this.emit('turn-complete', { sessionId, ...res }));
+        r.on('notice', (n) => this.emit('notice', { sessionId: r.sessionId, ...n }));
+        r.on('turn-complete', (res) => this.emit('turn-complete', { sessionId: r.sessionId, ...res }));
+        r.on('failed', (f) => this.emit('failed', { sessionId: r.sessionId, ...f }));
         r.on('exit', () => this.emit('status', r.status()));
+        r.on('forked', ({ from, to }) => {
+            // Re-key so a later send reaches the copy, not the original.
+            if (this.runners.get(from) === r) this.runners.delete(from);
+            this.runners.set(to, r);
+            this.emit('forked', { from, to });
+        });
         this.runners.set(sessionId, r);
         return r;
     }

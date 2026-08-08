@@ -43,6 +43,7 @@
 
     --gutter: 58px;
     --rail: 304px;
+    --turns: 30px;
 
     --sans: "Google Sans Text", "Google Sans", Roboto, "Segoe UI Variable Text",
             "Segoe UI", system-ui, -apple-system, sans-serif;
@@ -481,6 +482,8 @@ a:hover { text-decoration: underline; }
 
 /* ── transcript ──────────────────────────────────────────────────────── */
 
+.conv-body { display: flex; flex: 1; min-height: 0; }
+
 .scroll { flex: 1; overflow-y: auto; min-height: 0; scroll-behavior: smooth; }
 @media (prefers-reduced-motion: reduce) { .scroll { scroll-behavior: auto; } }
 
@@ -569,6 +572,99 @@ a:hover { text-decoration: underline; }
     height: 1px;
     background: var(--outline-soft);
 }
+
+/* ── turn rail ───────────────────────────────────────────────────────── */
+/* One tick per thing you said, down the right edge. Hover reads it back,
+   clicking jumps to it. Deliberately mute: it is a map, not a second rail. */
+
+.turns {
+    position: relative;   /* ticks measure their offset against the rail */
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    width: var(--turns);
+    padding: 8px 0 26px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: none;
+}
+.turns::-webkit-scrollbar { display: none; }
+.turns:empty { display: none; }
+
+.turn-tick {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 15px;
+    border-radius: var(--pill);
+    transition: background var(--t-fast) var(--ease);
+}
+.turn-tick::before {
+    content: "";
+    width: 11px;
+    height: 2px;
+    border-radius: var(--pill);
+    background: var(--text-4);
+    transition: width var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+}
+.turn-tick:hover { background: var(--s3); }
+.turn-tick:hover::before { width: 16px; background: var(--text-2); }
+.turn-tick[aria-current="true"]::before { width: 16px; background: var(--peach); }
+
+.turn-pop {
+    position: fixed;
+    z-index: 60;
+    width: 330px;
+    padding: 11px 15px 13px;
+    background: var(--s3);
+    border-radius: var(--r);
+    box-shadow: 0 10px 30px #000a;
+    pointer-events: none;
+    animation: pop-in var(--t-fast) var(--ease);
+}
+.turn-pop[hidden] { display: none; }
+
+.turn-pop .pop-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font: 500 11px/1.4 var(--sans);
+    letter-spacing: 0.03em;
+    color: var(--peach);
+}
+.turn-pop .pop-head .when {
+    margin-left: auto;
+    font-family: var(--mono);
+    color: var(--text-4);
+    font-variant-numeric: tabular-nums;
+}
+.turn-pop .pop-text {
+    margin-top: 6px;
+    max-height: 190px;
+    overflow: hidden;
+    font: 400 13px/1.6 var(--sans);
+    color: var(--text-2);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+.turn-pop .pop-text.cmd { font-family: var(--mono); font-size: 12.5px; color: var(--peach); }
+
+@keyframes pop-in {
+    from { opacity: 0; transform: translateX(4px); }
+    to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) { .turn-pop { animation: none; } }
+
+/* Where a jump landed, so the eye finds it without hunting. */
+.ev-user.flash .ev-body { animation: flash 1.3s var(--ease); }
+@keyframes flash {
+    0%, 55% { background: var(--blue-cont); }
+    100% { background: var(--s3); }
+}
+@media (prefers-reduced-motion: reduce) { .ev-user.flash .ev-body { animation: none; } }
 
 /* ── tool calls ──────────────────────────────────────────────────────── */
 
@@ -846,7 +942,9 @@ a:hover { text-decoration: underline; }
 
 /* ── composer ────────────────────────────────────────────────────────── */
 
-.composer { flex: none; padding: 4px 28px 18px; }
+/* The extra right padding is the turn rail's width: it keeps the composer on
+   the same centre line as the transcript, which the rail narrows. */
+.composer { flex: none; padding: 4px calc(28px + var(--turns)) 18px 28px; }
 .composer-inner { max-width: 1000px; margin: 0 auto; }
 
 .status-line {
@@ -1087,9 +1185,9 @@ a:hover { text-decoration: underline; }
 }
 .toast {
     display: flex;
-    align-items: flex-start;
-    gap: 10px;
-    padding: 13px 20px;
+    align-items: center;
+    gap: 6px;
+    padding: 11px 12px 11px 20px;
     background: #e3e3e3;
     color: #1f1f1f;
     border-radius: var(--r-sm);
@@ -1101,6 +1199,32 @@ a:hover { text-decoration: underline; }
 .toast[data-kind="error"] { background: #f9dedc; color: #410e0b; }
 .toast[data-kind="ok"] { background: #c4eed0; color: #0a2e18; }
 .toast[data-kind="warn"] { background: #fde9c4; color: #3a2503; }
+
+.toast-text { flex: 1; min-width: 0; }
+
+.toast-action {
+    flex: none;
+    height: 32px;
+    padding: 0 14px;
+    border-radius: var(--pill);
+    font: 500 13px/1 var(--sans);
+    color: var(--blue-deep);
+    white-space: nowrap;
+    transition: background var(--t-fast) var(--ease);
+}
+.toast-action:hover { background: #0b57d01f; }
+
+.toast-close {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    font-size: 12px;
+    opacity: 0.55;
+    transition: opacity var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+}
+.toast-close:hover { opacity: 1; background: #0000001a; }
 
 @keyframes rise {
     from { opacity: 0; transform: translateY(8px); }
@@ -1116,5 +1240,5 @@ a:hover { text-decoration: underline; }
     .ev-time { display: none; }
     .log { padding: 6px 16px 40px; }
     .conv-head { padding: 14px 16px 0; }
-    .composer { padding: 4px 16px 14px; }
+    .composer { padding: 4px calc(16px + var(--turns)) 14px 16px; }
 }

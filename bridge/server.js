@@ -290,9 +290,10 @@ async function api(req, res, url, pathname) {
                 cwd,
                 model: body.model || null,
                 permissionMode: normalizeMode(body.permissionMode),
+                fork: !!body.fork,
             });
             r.send(text);
-            return send(res, 200, { ok: true, status: r.status(), cwd });
+            return send(res, 200, { ok: true, status: r.status(), cwd, fork: !!body.fork });
         }
 
         if (tail === 'stop' && req.method === 'POST') {
@@ -317,9 +318,11 @@ async function api(req, res, url, pathname) {
         if (tail === 'reveal' && req.method === 'POST') {
             const summary = index.summary(sessionId);
             if (!summary) return send(res, 404, { error: 'session not found' });
-            // The worktree is where the work is; fall back to the project root.
-            const dir = (summary.cwd && fs.existsSync(summary.cwd)) ? summary.cwd
-                : summary.projectCwd;
+            // Where the agent is working now: its current cwd, which for a
+            // session that entered a worktree is the worktree itself.
+            const dir = [summary.cwd, summary.worktree && summary.worktree.path,
+                summary.projectCwd].find(d => d && fs.existsSync(d));
+            if (!dir) return send(res, 404, { error: 'no directory for this session' });
             const out = await openInExplorer(dir);
             return send(res, out.ok ? 200 : 502, { ...out, dir });
         }
@@ -454,6 +457,11 @@ index.on('changed', () => broadcast('sessions-changed', { at: Date.now() }));
 pool.on('status', (s) => broadcast('runner-status', s));
 pool.on('notice', (n) => broadcast('notice', n));
 pool.on('turn-complete', (r) => broadcast('turn-complete', r));
+pool.on('failed', (f) => broadcast('send-failed', f));
+pool.on('forked', ({ from, to }) => {
+    index.note(to);
+    broadcast('session-forked', { from, to });
+});
 
 let shuttingDown = false;
 function shutdown(code = 0) {

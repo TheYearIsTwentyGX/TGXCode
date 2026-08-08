@@ -79,8 +79,11 @@
         <div id="channels" class="channels"></div>
       </div>
 
-      <div id="scroll" class="scroll">
-        <div id="log" class="log"></div>
+      <div class="conv-body">
+        <div id="scroll" class="scroll">
+          <div id="log" class="log"></div>
+        </div>
+        <nav id="turns" class="turns" aria-label="Your messages in this session"></nav>
       </div>
 
       <div class="composer">
@@ -168,6 +171,8 @@
     </div>
   </div>
 </div>
+
+<div id="turn-pop" class="turn-pop" role="tooltip" hidden></div>
 
 <div id="toasts" class="toasts" aria-live="polite"></div>
 

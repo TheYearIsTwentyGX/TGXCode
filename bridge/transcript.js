@@ -164,6 +164,13 @@ function scanMeta(filePath) {
         }
     }
 
+    // cwd changes mid-session when the agent enters a worktree, and the directory
+    // it is in *now* is the one worth reporting. The loop above kept the first
+    // one; take the last instead. lastIndexOf scans natively, so this costs far
+    // less than parsing every line for a field we only need once.
+    const currentCwd = tailField(text, 'cwd');
+    if (currentCwd) meta.cwd = currentCwd;
+
     for (const t of TITLE_TYPES) {
         if (titles[t]) { meta.title = titles[t]; meta.titleSource = t; break; }
     }
@@ -202,6 +209,18 @@ function matchField(line, key) {
     const end = line.indexOf('"', start);
     if (end === -1) return null;
     const v = line.slice(start, end);
+    return v.includes('\\') ? null : v;
+}
+
+/** The last "key":"value" in a whole transcript, without parsing any of it. */
+function tailField(text, key) {
+    const needle = '"' + key + '":"';
+    const i = text.lastIndexOf(needle);
+    if (i === -1) return null;
+    const start = i + needle.length;
+    const end = text.indexOf('"', start);
+    if (end === -1) return null;
+    const v = text.slice(start, end);
     return v.includes('\\') ? null : v;
 }
 
