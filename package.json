@@ -7,6 +7,8 @@
   "private": true,
   "scripts": {
     "start": "node scripts/start.js",
+    "dev": "node scripts/dev.js",
+    "dev:headless": "node scripts/dev.js --no-window",
     "bridge": "node bridge/server.js",
     "build": "node scripts/build.js",
     "icon": "node app/make-icon.js --preview",

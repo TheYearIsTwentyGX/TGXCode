@@ -17,8 +17,17 @@ const fs = require('fs');
 const http = require('http');
 const { spawn, execFile } = require('child_process');
 
-const PORT = Number(process.env.CLAUDE_SESSIONS_PORT || 45888);
-const ORIGIN = `http://127.0.0.1:${PORT}`;
+// 45888 is the everyday instance. `npm run dev` starts a separate one on
+// another port and passes it in here, so working on this app cannot disturb a
+// window that has live sessions in it.
+const DEFAULT_PORT = 45888;
+let PORT = DEFAULT_PORT;
+let ORIGIN = `http://127.0.0.1:${PORT}`;
+
+function usePort(port) {
+    PORT = Number(port) || DEFAULT_PORT;
+    ORIGIN = `http://127.0.0.1:${PORT}`;
+}
 
 // Where the bridge lives inside WSL. Override in config.json next to this file
 // or with CLAUDE_SESSIONS_DIR, which is what you want when running from a
@@ -26,6 +35,7 @@ const ORIGIN = `http://127.0.0.1:${PORT}`;
 const DEFAULTS = {
     distro: '',                              // empty = WSL's default distro
     bridgeDir: '~/Other/claude-sessions',
+    port: DEFAULT_PORT,
 };
 
 let mainWindow = null;
@@ -51,6 +61,10 @@ function loadConfig() {
     }
     if (process.env.CLAUDE_SESSIONS_DIR) cfg.bridgeDir = process.env.CLAUDE_SESSIONS_DIR;
     if (process.env.CLAUDE_SESSIONS_DISTRO) cfg.distro = process.env.CLAUDE_SESSIONS_DISTRO;
+    // The environment wins: it is how `npm run dev` hands this window its own
+    // instance without editing the installed config.
+    if (process.env.CLAUDE_SESSIONS_PORT) cfg.port = Number(process.env.CLAUDE_SESSIONS_PORT);
+    usePort(cfg.port);
     return cfg;
 }
 
@@ -73,7 +87,8 @@ function ping(timeout = 1200) {
 
 // Where the bridge's own output goes, as a shell expression evaluated in WSL.
 const LOG_DIR = '"${XDG_CACHE_HOME:-$HOME/.cache}/claude-sessions"';
-const LOG_FILE = `${LOG_DIR}/bridge.log`;
+// Per-port, so a development bridge does not overwrite the everyday one's log.
+const logFile = () => `${LOG_DIR}/bridge-${PORT}.log`;
 
 /**
  * Start the bridge without leaving a console window on screen.
@@ -97,7 +112,8 @@ function startBridge(cfg) {
     const script = [
         `cd ${shellQuote(cfg.bridgeDir)} || exit 1`,
         `mkdir -p ${LOG_DIR}`,
-        `setsid nohup bash bridge/launch.sh >${LOG_FILE} 2>&1 </dev/null &`,
+        `export CLAUDE_SESSIONS_PORT=${PORT}`,
+        `setsid nohup bash bridge/launch.sh >${logFile()} 2>&1 </dev/null &`,
         'exit 0',
     ].join('\n');
     args.push('bash', '-lc', script);
@@ -113,7 +129,7 @@ function readBridgeLog(cfg) {
     return new Promise((resolve) => {
         const args = [];
         if (cfg.distro) args.push('-d', cfg.distro);
-        args.push('bash', '-lc', `tail -n 40 ${LOG_FILE} 2>/dev/null`);
+        args.push('bash', '-lc', `tail -n 40 ${logFile()} 2>/dev/null`);
         execFile('wsl.exe', args, { windowsHide: true, timeout: 8000 },
             (err, stdout) => resolve(String(stdout || '').trim()));
     });
@@ -205,7 +221,9 @@ function createWindow() {
         minWidth: 720,
         minHeight: 520,
         backgroundColor: '#131314',
-        title: 'Claude Sessions',
+        // Name the instance in the title bar: two identical windows, one of them
+        // holding real work, is a mistake waiting to happen.
+        title: PORT === DEFAULT_PORT ? 'Claude Sessions' : `Claude Sessions — dev :${PORT}`,
         icon: path.join(__dirname, 'icon.ico'),
         autoHideMenuBar: true,
         webPreferences: {

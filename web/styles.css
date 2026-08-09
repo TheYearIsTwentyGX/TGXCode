@@ -119,6 +119,17 @@ a:hover { text-decoration: underline; }
 }
 .wordmark b { color: var(--blue); font-size: 11px; }
 
+/* Only present on a development instance — the everyday window has no badge. */
+.dev-badge {
+    margin-left: 4px;
+    padding: 3px 9px;
+    border-radius: var(--pill);
+    background: #46331a;
+    color: var(--yellow);
+    font: 500 11px/1 var(--mono);
+    letter-spacing: 0.02em;
+}
+
 .bar-search {
     flex: 1;
     max-width: 520px;

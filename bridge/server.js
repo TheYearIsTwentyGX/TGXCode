@@ -226,7 +226,7 @@ async function api(req, res, url, pathname) {
     if (pathname === '/api/health') {
         return send(res, 200, {
             ok: true, app: 'claude-sessions', version: cfg.VERSION,
-            pid: process.pid, port: cfg.PORT, ready: index.ready,
+            pid: process.pid, port: cfg.PORT, dev: cfg.IS_DEV, ready: index.ready,
             sessions: index.sessions.size, host: os.hostname(),
             // Live SSE connections — a quick way to tell whether a UI attached.
             clients: clients.size, runners: Object.keys(pool.statuses()).length,
@@ -535,7 +535,13 @@ let shuttingDown = false;
 function shutdown(code = 0) {
     if (shuttingDown) return;
     shuttingDown = true;
-    try { pool.shutdown(); } catch { /* nothing to clean */ }
+    try {
+        const { stillRunning } = pool.shutdown();
+        if (stillRunning) {
+            console.log(`[claude-sessions] ${stillRunning} turn(s) were in flight and will `
+                + 'stop with this process — their transcripts keep whatever was written.');
+        }
+    } catch { /* nothing to clean */ }
     try { index.stop(); } catch { /* nothing to clean */ }
     try { server.close(); } catch { /* already closed */ }
     setTimeout(() => process.exit(code), 200).unref();
@@ -560,7 +566,13 @@ server.listen(cfg.PORT, cfg.HOST, async () => {
     await index.start();
     console.log(`[claude-sessions] indexed ${index.sessions.size} sessions in ${Date.now() - t0}ms`);
 
+    if (cfg.IS_DEV) {
+        console.log('[claude-sessions] development instance — the everyday one on '
+            + `${cfg.DEFAULT_PORT} is untouched.`);
+    }
+
     // This port shows up in DevBrowser's detected list; name it so it isn't just
     // another anonymous number in the rail.
-    devbrowser.setTitle(cfg.PORT, 'Claude Sessions (app)').catch(() => {});
+    devbrowser.setTitle(cfg.PORT,
+        cfg.IS_DEV ? 'Claude Sessions (dev)' : 'Claude Sessions (app)').catch(() => {});
 });

@@ -1126,6 +1126,21 @@ async function refreshDevBrowser() {
     }
 }
 
+/**
+ * Mark the window when it is talking to a development bridge. Two identical
+ * windows side by side, one with real sessions in it, is asking for trouble.
+ */
+async function markInstance() {
+    try {
+        const h = await get('/api/health');
+        if (!h.dev) return;
+        document.title = `Claude Sessions — dev :${h.port}`;
+        document.querySelector('.wordmark').append(
+            el('span', { class: 'dev-badge', title: `Development bridge on port ${h.port}` },
+                `dev :${h.port}`));
+    } catch { /* the status line already reports an unreachable bridge */ }
+}
+
 // ── streaming ────────────────────────────────────────────────────────────
 
 function connect() {
@@ -1611,6 +1626,7 @@ function debounce(fn, ms) {
 
 connect();
 loadSessions();
+markInstance();
 refreshDevBrowser();
 setInterval(refreshDevBrowser, 20_000);
 setInterval(() => { if (state.current) loadChannels(); }, 25_000);
