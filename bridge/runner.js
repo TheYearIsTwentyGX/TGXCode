@@ -86,6 +86,16 @@ class Runner extends EventEmitter {
                 cwd: this.cwd,
                 stdio: ['pipe', 'pipe', 'pipe'],
                 env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: 'claude-sessions' },
+                // Its own process group, so a Ctrl-C aimed at the bridge is not
+                // also delivered to a turn in flight; it gets to shut down on
+                // stdin EOF instead of being interrupted mid-write.
+                //
+                // This does not make a turn outlive the bridge, and nothing can:
+                // `claude` reads stdin for input, so when the bridge exits and
+                // the pipe closes it treats that as end-of-input and stops. That
+                // is exactly why the everyday instance runs on its own port —
+                // see CLAUDE.md.
+                detached: true,
             });
         } catch (err) {
             this.lastError = `Could not start ${CLAUDE_BIN}: ${err.message}`;
@@ -178,6 +188,24 @@ class Runner extends EventEmitter {
         return true;
     }
 
+    /**
+     * Stop managing the process without signalling it.
+     *
+     * Used when the bridge is going away mid-turn. It buys the process a chance
+     * to wind down on its own as our stdin pipe closes, rather than being killed
+     * outright — but it does not save the turn. Nothing can: `claude` reads
+     * stdin for input, so the pipe closing when we exit is end-of-input and it
+     * stops there. Protecting work means not killing the bridge in the first
+     * place, which is what the separate development port is for.
+     */
+    detach() {
+        if (!this.proc) return;
+        const proc = this.proc;
+        this.proc = null;
+        try { proc.unref(); } catch { /* already gone */ }
+        this._setState('stopped', null);
+    }
+
     /** Close stdin so the process exits once the current turn finishes. */
     retire() {
         if (!this.proc) return;
@@ -195,7 +223,15 @@ class Runner extends EventEmitter {
             this._buf = this._buf.slice(i + 1);
             if (!line.trim()) continue;
             let msg;
-            try { msg = JSON.parse(line); } catch { continue; }
+            try {
+                msg = JSON.parse(line);
+            } catch {
+                // stderr shares this stream now, so anything that is not an
+                // event is diagnostic text — and it is what classifyError reads
+                // to tell "already running elsewhere" from a generic failure.
+                this._stderr = (this._stderr + line + '\n').slice(-4000);
+                continue;
+            }
             this._onMessage(msg);
         }
     }
@@ -484,10 +520,24 @@ class RunnerPool extends EventEmitter {
         }
     }
 
-    shutdown() {
+    /**
+     * Stand down.
+     *
+     * A turn in flight is left unsignalled rather than killed, so it can wind
+     * down cleanly as our pipes close and whatever it already wrote stays in the
+     * transcript. It will still stop — see Runner#detach — which is why killing
+     * the bridge someone is using costs them work, and why development runs on
+     * its own port.
+     */
+    shutdown({ force = false } = {}) {
         clearInterval(this._sweep);
-        for (const r of this.runners.values()) r.stop();
+        let left = 0;
+        for (const r of this.runners.values()) {
+            if (r.state === 'busy' && !force) { left++; r.detach(); continue; }
+            r.stop();
+        }
         this.runners.clear();
+        return { stillRunning: left };
     }
 
     get busyCount() {

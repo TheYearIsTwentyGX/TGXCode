@@ -55,8 +55,10 @@ All of these run from WSL, in this directory.
 
 | | |
 |---|---|
-| `npm start` | Launch the Windows app. It starts its own bridge. |
-| `npm run bridge` | Run the bridge in the foreground and open <http://127.0.0.1:45888> in any browser. The fastest loop for UI work — edit `web/`, hit refresh. |
+| `npm start` | Launch the Windows app. It starts its own bridge on 45888. |
+| `npm run dev` | A **separate** instance on 45899 plus its own window, for working on this app without disturbing the one you actually use. |
+| `npm run dev:headless` | The same, bridge only — open the printed URL in a browser. The fastest loop for UI work: edit `web/`, hit refresh. |
+| `npm run bridge` | The bridge in the foreground on 45888. This is the everyday instance; use `dev` instead unless you mean it. |
 | `npm run build` | Build and install the app (calls `install.ps1` through PowerShell). Pass options after `--`, e.g. `npm run build -- -NoInstall`. |
 | `npm run icon` | Regenerate `app/icon.ico`. |
 
@@ -183,6 +185,32 @@ out so a server that has gone away is visible rather than silently missing.
 `~/.profile` but not `~/.bashrc` — and nvm installs itself in `~/.bashrc`. Node
 is simply absent in that context, so every caller goes through the script that
 knows where to look.
+
+## Two instances
+
+Port **45888** is the everyday app — the window you leave open with real
+sessions in it. Port **45899** is for working on this codebase: `npm run dev`
+starts a bridge there (or the next free port, so two agents can each have one)
+and opens a window titled `dev :45899` with an amber badge, so the two are never
+mistaken for each other. It refuses to bind 45888 at all.
+
+Both read the same `~/.claude/projects`, so a session started in one appears in
+the other — they are two views of the same transcripts. What is separate is the
+*process*, and that is the point:
+
+**Killing a bridge kills the turns running under it.** `claude` reads stdin for
+its input, so when the bridge exits and that pipe closes, it treats it as
+end-of-input and stops mid-turn. Running it detached with its output on a file
+descriptor does not change that — both were tried and measured. There is no way
+to make a turn outlive its bridge, so the only real protection is not killing
+the bridge somebody is using. Hence two ports.
+
+`pkill -f bridge/server.js` matches every bridge, including the everyday one.
+To stop your own, Ctrl-C the `npm run dev` that started it, or kill it by port:
+
+```bash
+kill "$(ss -ltnp 2>/dev/null | grep :45899 | grep -oP 'pid=\K\d+' | head -1)"
+```
 
 ## Working on this with agents
 
