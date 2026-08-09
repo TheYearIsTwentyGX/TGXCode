@@ -22,6 +22,7 @@ const { randomUUID } = require('crypto');
 const { EventEmitter } = require('events');
 
 const { CLAUDE_BIN } = require('./config');
+const { describeTool } = require('./transcript');
 
 // Processes are cheap to restart (resume is a warm cache hit), so don't hoard them.
 const MAX_LIVE = 4;
@@ -323,30 +324,6 @@ function classifyError(stderr, code) {
     const tail = text.split('\n').filter(Boolean).slice(-4).join('\n');
     return { kind: 'unknown', message: tail || `claude exited with code ${code}` };
 }
-
-function describeTool(block) {
-    const name = block.name;
-    const input = block.input || {};
-    switch (name) {
-        case 'Bash': return `Running: ${clip(input.description || input.command, 60)}`;
-        case 'Read': return `Reading ${base(input.file_path)}`;
-        case 'Edit': return `Editing ${base(input.file_path)}`;
-        case 'Write': return `Writing ${base(input.file_path)}`;
-        case 'Glob': return `Searching ${clip(input.pattern, 40)}`;
-        case 'Grep': return `Grepping ${clip(input.pattern, 40)}`;
-        case 'Task':
-        case 'Agent': return `Subagent: ${clip(input.description, 50)}`;
-        case 'WebFetch': return `Fetching ${clip(input.url, 50)}`;
-        case 'WebSearch': return `Searching the web`;
-        default: return `Running ${name}`;
-    }
-}
-
-const base = (p) => (p ? String(p).split('/').pop() : '');
-const clip = (s, n) => {
-    const t = String(s || '').replace(/\s+/g, ' ').trim();
-    return t.length > n ? t.slice(0, n - 1) + '…' : t;
-};
 
 // ---------------------------------------------------------------------------
 // Pool

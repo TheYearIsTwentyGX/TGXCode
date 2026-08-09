@@ -47,6 +47,13 @@
   <main class="main">
     <div id="conv" class="conv" hidden>
       <div class="conv-head">
+        <button id="btn-back" class="crumb" type="button" hidden>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M15 6 9 12l6 6" stroke="currentColor" stroke-width="2"
+                  stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span id="btn-back-label">Back</span>
+        </button>
         <div class="conv-title-row">
           <h1 id="conv-title" class="conv-title"></h1>
           <div class="conv-actions">
@@ -76,12 +83,16 @@
           </div>
         </div>
         <div id="conv-sub" class="conv-sub"></div>
+        <div id="agents" class="agents" aria-label="Subagents"></div>
         <div id="channels" class="channels"></div>
       </div>
 
       <div class="conv-body">
         <div id="scroll" class="scroll">
           <div id="log" class="log"></div>
+        </div>
+        <div id="agent-scroll" class="scroll" hidden>
+          <div id="agent-log" class="log"></div>
         </div>
         <nav id="turns" class="turns" aria-label="Your messages in this session"></nav>
       </div>

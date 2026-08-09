@@ -29,7 +29,13 @@ const flags = new Flags();
 const index = new SessionIndex(flags);
 const pool = new RunnerPool();
 
-/** @type {Map<string, {res: http.ServerResponse, subs: Map<string, {offset:number, watcher:any}>}>} */
+/**
+ * @type {Map<string, {
+ *   res: http.ServerResponse,
+ *   subs: Map<string, {offset:number, watcher:any}>,
+ *   agent: {sessionId:string, toolUseId:string, offset:number, watcher:any} | null,
+ * }>}
+ */
 const clients = new Map();
 
 // ---------------------------------------------------------------------------
@@ -50,11 +56,16 @@ function dropClient(id) {
     const c = clients.get(id);
     if (!c) return;
     for (const sub of c.subs.values()) stopWatch(sub);
+    stopAgentWatch(c);
     clients.delete(id);
 }
 
 function stopWatch(sub) {
     if (sub.watcher) { clearInterval(sub.watcher); sub.watcher = null; }
+}
+
+function stopAgentWatch(client) {
+    if (client.agent) { stopWatch(client.agent); client.agent = null; }
 }
 
 /**
@@ -94,6 +105,47 @@ function startWatch(clientId, sessionId, fromOffset) {
         }
     }, 400);
     sub.watcher.unref();
+}
+
+/**
+ * Follow one subagent's transcript for a client that is looking at it.
+ *
+ * Kept separate from the session follow rather than folded into it: a subagent
+ * writes to its own file on its own schedule, and the parent transcript records
+ * nothing at all between spawning the agent and collecting its result. Watching
+ * only the parent would leave a running subagent looking frozen.
+ */
+function startAgentWatch(clientId, sessionId, toolUseId, fromOffset) {
+    const client = clients.get(clientId);
+    if (!client) return;
+    stopAgentWatch(client);
+
+    const agent = { sessionId, toolUseId, offset: fromOffset, watcher: null };
+    client.agent = agent;
+
+    let inFlight = false;
+    agent.watcher = setInterval(() => {
+        if (inFlight) return;
+        inFlight = true;
+        try {
+            const delta = index.subagent(sessionId, toolUseId, agent.offset);
+            if (!delta) return;
+            if (delta.reset) {
+                agent.offset = 0;
+                sseSend(client, 'agent-reset', { sessionId, toolUseId });
+            } else if (delta.events.length) {
+                agent.offset = delta.offset;
+                sseSend(client, 'agent-tail', {
+                    sessionId, toolUseId, events: delta.events, offset: agent.offset,
+                });
+            } else {
+                agent.offset = delta.offset;
+            }
+        } finally {
+            inFlight = false;
+        }
+    }, 500);
+    agent.watcher.unref();
 }
 
 // ---------------------------------------------------------------------------
@@ -137,7 +189,7 @@ async function api(req, res, url, pathname) {
             Connection: 'keep-alive',
             'X-Accel-Buffering': 'no',
         });
-        const client = { res, subs: new Map() };
+        const client = { res, subs: new Map(), agent: null };
         clients.set(id, client);
         sseSend(client, 'hello', { clientId: id, version: cfg.VERSION });
 
@@ -149,7 +201,7 @@ async function api(req, res, url, pathname) {
 
     if (pathname === '/api/subscribe' && req.method === 'POST') {
         const body = await readJson(req);
-        const { clientId, sessionId, offset } = body;
+        const { clientId, sessionId, offset, agent } = body;
         if (!clients.has(clientId)) return send(res, 404, { error: 'unknown client' });
         const client = clients.get(clientId);
         // One session in view at a time; drop other follows so we aren't polling
@@ -158,6 +210,15 @@ async function api(req, res, url, pathname) {
             if (sid !== sessionId) { stopWatch(sub); client.subs.delete(sid); }
         }
         if (sessionId) startWatch(clientId, sessionId, Number(offset) || 0);
+
+        // The session keeps streaming while a subagent is on screen — switching
+        // back should not have to re-read the parent from the top.
+        if (agent && agent.toolUseId && sessionId) {
+            startAgentWatch(clientId, sessionId, String(agent.toolUseId),
+                Number(agent.offset) || 0);
+        } else {
+            stopAgentWatch(client);
+        }
         return send(res, 200, { ok: true });
     }
 
@@ -260,9 +321,16 @@ async function api(req, res, url, pathname) {
             return send(res, 200, out);
         }
 
+        if (tail === 'subagents' && req.method === 'GET') {
+            const agents = index.subagents(sessionId);
+            if (!agents) return send(res, 404, { error: 'session not found' });
+            return send(res, 200, { agents });
+        }
+
         if (tail === 'subagent' && req.method === 'GET') {
             const toolUseId = url.searchParams.get('toolUseId');
-            const data = index.subagent(sessionId, toolUseId);
+            const from = Number(url.searchParams.get('offset')) || 0;
+            const data = index.subagent(sessionId, toolUseId, from);
             if (!data) return send(res, 404, { error: 'subagent transcript not found' });
             return send(res, 200, data);
         }

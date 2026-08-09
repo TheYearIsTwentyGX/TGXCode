@@ -122,6 +122,16 @@ function scanMeta(filePath) {
                 // A tool_result is mechanically a user message; don't count it as one.
                 if (line.includes('"type":"tool_result"')) continue;
                 if (line.includes('"isMeta":true')) continue;
+                // Nor is a background task reporting in. Counting it would both
+                // inflate the turn count and, because lastUserTs is what the
+                // session list sorts on, let a finishing agent reorder the rail.
+                // Worth a real parse rather than a substring test: the tag can
+                // legitimately appear inside a message somebody quoted it into,
+                // and these lines are rare enough that the cost never shows.
+                if (line.includes(NOTIFICATION_TAG)) {
+                    const parsed = safeParse(line);
+                    if (parsed && isTaskNotification(userText(parsed))) continue;
+                }
                 meta.userMessages++;
                 // When *you* last spoke. The session list sorts on this rather
                 // than on file activity, so rows don't reshuffle every time an
@@ -310,6 +320,13 @@ function buildEvents(entries, ctx = {}) {
                         name: b.name, input: b.input || {},
                         status: 'pending', result: null, agent: null,
                     };
+                    // A subagent's transcript exists from the moment it starts,
+                    // which is exactly when watching it is worth something. Link
+                    // it at the call, not at the result — waiting for the result
+                    // would mean an agent is only visible once it is over.
+                    const spawned = ctx.subagentsByToolUse
+                        && ctx.subagentsByToolUse.get(b.id);
+                    if (spawned) ev.agent = agentRef(spawned);
                     toolsById.set(b.id, ev);
                     events.push(ev);
                 }
@@ -354,6 +371,15 @@ function buildEvents(entries, ctx = {}) {
         }
 
         const text = userText(e);
+
+        const notification = parseTaskNotification(text);
+        if (notification) {
+            events.push({
+                id: e.uuid, kind: 'agent-done', ts: e.timestamp, ...notification,
+            });
+            continue;
+        }
+
         const images = Array.isArray(content)
             ? content.filter(b => b.type === 'image').map(imageRef)
             : [];
@@ -376,6 +402,58 @@ function imageRef(b) {
         mediaType: src.media_type || 'image/png',
         // Transcripts inline base64; hand it straight to the UI as a data URI.
         dataUri: src.data ? `data:${src.media_type || 'image/png'};base64,${src.data}` : null,
+    };
+}
+
+// A background task finishing is delivered as a *user* message, because that is
+// the only channel into a conversation there is. It is not something you said,
+// and treating it as though it were is wrong twice over: it puts words in your
+// mouth, and it moves the session up a rail that is sorted by when you last
+// spoke — so an agent finishing quietly reorders your list.
+//
+// Anchored at the *start* of the message rather than matched anywhere in it,
+// because quoting one of these back into a conversation is a thing people do,
+// and a quote really is a turn you took.
+//
+// Two openings are accepted. The transcript normally holds the bare tag; the
+// preamble is addressed to the agent and added when its prompt is assembled, so
+// it does not reliably reach disk. Matching only the preamble — which is what
+// this did at first — matches nothing at all.
+// Deliberately missing its closing bracket, so the tag still matches if it ever
+// grows attributes.
+const NOTIFICATION_TAG = '<task-notification';
+const NOTIFICATION_PREFIX = '[SYSTEM NOTIFICATION - NOT USER INPUT]';
+
+function isTaskNotification(text) {
+    const t = String(text || '').trimStart();
+    if (!t.includes(NOTIFICATION_TAG)) return false;
+    return t.startsWith(NOTIFICATION_TAG) || t.startsWith(NOTIFICATION_PREFIX);
+}
+
+/** Pull the useful fields out of a task notification, or null if it isn't one. */
+function parseTaskNotification(text) {
+    if (!isTaskNotification(text)) return null;
+    const tag = (name) => {
+        const m = new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(text);
+        return m ? m[1].trim() : null;
+    };
+    const num = (name) => {
+        const v = tag(name);
+        return v && /^\d+$/.test(v) ? Number(v) : null;
+    };
+    const taskId = tag('task-id');
+    if (!taskId) return null;   // structurally not one of these after all
+    return {
+        taskId,
+        // The id of the Task call that spawned it — the same key subagent
+        // transcripts are filed under, so the UI can offer to open it.
+        toolUseId: tag('tool-use-id'),
+        status: tag('status') || 'completed',
+        summary: tag('summary'),
+        result: tag('result'),
+        tokens: num('subagent_tokens'),
+        toolUses: num('tool_uses'),
+        durationMs: num('duration_ms'),
     };
 }
 
@@ -434,15 +512,63 @@ function resultPayload(block, entry, ctx) {
             toolUses: structured.totalToolUseCount || null,
         };
     }
-    // A transcript on disk means the UI can offer to expand the subagent inline.
+    // A transcript on disk means the UI can open the subagent as its own view.
     const spawned = ctx.subagentsByToolUse && ctx.subagentsByToolUse.get(block.tool_use_id);
     if (spawned) {
-        const { file, ...rest } = spawned; // the client addresses it by tool_use id
-        ev.agent = { ...rest, ...(ev.agent || {}), hasTranscript: true };
+        // The result's own account of itself wins where it has one, and the meta
+        // file fills the gaps. Merged field by field rather than by spreading:
+        // the result records absent fields as null, and a plain spread would let
+        // those nulls overwrite values the meta file does know.
+        const ref = agentRef(spawned);
+        const own = ev.agent || {};
+        ev.agent = { ...ref, ...own };
+        for (const [k, v] of Object.entries(ref)) {
+            if (ev.agent[k] == null) ev.agent[k] = v;
+        }
+        ev.agent.hasTranscript = true;
     }
 
     return ev;
 }
+
+/**
+ * The identity of a subagent, as it travels with a tool event. Only identity —
+ * size and mtime change constantly and this payload is re-sent on every tail.
+ */
+function agentRef(spawned) {
+    return {
+        agentId: spawned.agentId,
+        agentType: spawned.agentType,
+        description: spawned.description,
+        spawnDepth: spawned.spawnDepth,
+        hasTranscript: true,
+    };
+}
+
+/** A short phrase for what a tool call is doing, for status lines. */
+function describeTool(block) {
+    const name = block.name;
+    const input = block.input || {};
+    switch (name) {
+        case 'Bash': return `Running: ${clip(input.description || input.command, 60)}`;
+        case 'Read': return `Reading ${base(input.file_path)}`;
+        case 'Edit': return `Editing ${base(input.file_path)}`;
+        case 'Write': return `Writing ${base(input.file_path)}`;
+        case 'Glob': return `Searching ${clip(input.pattern, 40)}`;
+        case 'Grep': return `Grepping ${clip(input.pattern, 40)}`;
+        case 'Task':
+        case 'Agent': return `Subagent: ${clip(input.description, 50)}`;
+        case 'WebFetch': return `Fetching ${clip(input.url, 50)}`;
+        case 'WebSearch': return `Searching the web`;
+        default: return `Running ${name}`;
+    }
+}
+
+const base = (p) => (p ? String(p).split('/').pop() : '');
+const clip = (s, n) => {
+    const t = String(s || '').replace(/\s+/g, ' ').trim();
+    return t.length > n ? t.slice(0, n - 1) + '…' : t;
+};
 
 // System entries a reader actually wants to see. Everything else — turn timings,
 // thinking-token counters, plugin reload chatter — is bookkeeping.
@@ -479,7 +605,13 @@ function systemEvent(e) {
 // Subagents
 // ---------------------------------------------------------------------------
 
-/** Map tool_use id -> {file, agentId, agentType, description} for a session. */
+/**
+ * Map tool_use id -> record, for every subagent a session spawned.
+ *
+ * The size and mtime come along because a subagent has no other liveness signal:
+ * its transcript is a plain file nobody closes, so "was it written to recently"
+ * is how the UI tells a working agent from a stalled one.
+ */
 function readSubagentIndex(sessionDir) {
     const out = new Map();
     const dir = path.join(sessionDir, 'subagents');
@@ -491,28 +623,107 @@ function readSubagentIndex(sessionDir) {
         try { meta = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch { continue; }
         if (!meta.toolUseId) continue;
         const agentId = f.replace(/^agent-/, '').replace(/\.meta\.json$/, '');
+        const file = path.join(dir, `agent-${agentId}.jsonl`);
+        // The meta file is written when the agent starts, so the transcript may
+        // not exist for a moment. That is a running agent with nothing to show.
+        let st = null;
+        try { st = fs.statSync(file); } catch { /* not written yet */ }
         out.set(meta.toolUseId, {
+            toolUseId: meta.toolUseId,
             agentId,
             agentType: meta.agentType || null,
             description: meta.description || null,
             spawnDepth: meta.spawnDepth || 1,
-            file: path.join(dir, `agent-${agentId}.jsonl`),
+            file,
+            bytes: st ? st.size : 0,
+            mtimeMs: st ? st.mtimeMs : 0,
         });
     }
     return out;
 }
 
-/** Parse one subagent transcript into render events. */
-function readSubagentTranscript(file) {
+const NEWLINE = Buffer.from('\n');
+
+/**
+ * Parse a subagent transcript from `from` bytes on, into render events.
+ *
+ * Returns {events, offset, size, reset}. `offset` only advances past lines that
+ * ended in a newline, so a caller can hand it straight back to follow the file
+ * as the agent writes — the same contract SessionIndex.readSince offers.
+ */
+function readSubagentTranscript(file, from = 0, ctx = {}) {
+    let st;
+    try { st = fs.statSync(file); } catch { return null; }
+    if (st.size < from) return { events: [], offset: 0, size: st.size, reset: true };
+    if (st.size === from) return { events: [], offset: from, size: st.size, reset: false };
+
     let buf;
-    try { buf = fs.readFileSync(file); } catch { return null; }
-    const { entries } = parseLines(Buffer.concat([buf, Buffer.from('\n')]));
+    try {
+        const fd = fs.openSync(file, 'r');
+        buf = Buffer.alloc(st.size - from);
+        fs.readSync(fd, buf, 0, buf.length, from);
+        fs.closeSync(fd);
+    } catch { return null; }
+
+    const { entries, consumed } = parseLines(buf);
+    // A last line still missing its newline is worth showing — an agent that
+    // finished without one would otherwise lose its final message — but it is
+    // not counted as consumed, so the next read picks it up again in full.
+    if (consumed < buf.length) {
+        const { entries: partial } = parseLines(Buffer.concat([buf.subarray(consumed), NEWLINE]));
+        entries.push(...partial);
+    }
+
     // Subagent entries are all flagged isSidechain; clear it so buildEvents keeps them.
     for (const e of entries) e.isSidechain = false;
-    return buildEvents(entries).events;
+    const { events } = buildEvents(entries, ctx);
+    return { events, offset: from + consumed, size: st.size, reset: false };
+}
+
+// How much of a transcript's tail to read when all we want is the last thing
+// that happened. Bounded, because this is polled while an agent runs and the
+// file it is polling can be tens of megabytes.
+const ACTIVITY_TAIL_BYTES = 64 * 1024;
+
+/**
+ * The last thing a transcript shows the agent doing — the subagent equivalent of
+ * the working pulse in the session rail. Returns {text, ts} or null.
+ */
+function lastActivity(file) {
+    let st;
+    try { st = fs.statSync(file); } catch { return null; }
+    if (!st.size) return null;
+
+    const from = Math.max(0, st.size - ACTIVITY_TAIL_BYTES);
+    let buf;
+    try {
+        const fd = fs.openSync(file, 'r');
+        buf = Buffer.alloc(st.size - from);
+        fs.readSync(fd, buf, 0, buf.length, from);
+        fs.closeSync(fd);
+    } catch { return null; }
+
+    const lines = buf.toString('utf8').split('\n');
+    if (from > 0) lines.shift();   // reading from an offset lands mid-line
+
+    for (let i = lines.length - 1; i >= 0; i--) {
+        if (!lines[i]) continue;
+        const e = safeParse(lines[i]);
+        if (!e || e.type !== 'assistant') continue;
+        const content = e.message && e.message.content;
+        if (!Array.isArray(content)) continue;
+        for (let j = content.length - 1; j >= 0; j--) {
+            const b = content[j];
+            if (b.type === 'tool_use') return { text: describeTool(b), ts: e.timestamp };
+            if (b.type === 'text' && b.text && b.text.trim()) {
+                return { text: firstLine(b.text, 70), ts: e.timestamp };
+            }
+        }
+    }
+    return null;
 }
 
 module.exports = {
     parseLines, scanMeta, buildEvents, readSubagentIndex, readSubagentTranscript,
-    stripEnvelope, firstLine,
+    lastActivity, describeTool, stripEnvelope, firstLine,
 };

@@ -101,13 +101,61 @@ create one in `%APPDATA%\claude-sessions\`:
 | **Left rail** | Every session on disk, grouped by project. Worktrees fold under the checkout that owns them. A green dot means the transcript changed in the last 90 seconds — something is working. |
 | **Ordering** | By when *you* last wrote, not by last activity. Sorting on activity meant a busy agent kept bumping its session to the top and shuffling the rest out from under the cursor. The timestamp on each row is the one it sorts by. |
 | **Pin / archive** | Hover a row for its two buttons, or use the ones beside the session title. Pinned sessions sit in their own group at the top, across projects. Archived ones collapse into a group at the bottom. |
-| **Conversation** | Your turns, Claude's replies with syntax-highlighted code, and one collapsible block per tool call. Edits render as diffs, subagents expand inline, and output too large to inline loads on demand. |
-| **Dev servers** | The chips under the title. Green means the port is answering right now; click to switch DevBrowser to that tab, starting DevBrowser if it isn't running. |
+| **Conversation** | Your turns, Claude's replies with syntax-highlighted code, and one collapsible block per tool call. Edits render as diffs, and output too large to inline loads on demand. |
+| **Subagents** | The first chip row under the title, one per subagent, with a light for how it is going and a line of what it is doing. Click to switch the pane over to it; `Esc` or the breadcrumb comes back. |
+| **Dev servers** | The second chip row. Green means the port is answering right now; click to switch DevBrowser to that tab, starting DevBrowser if it isn't running. |
 | **Open folder** | The folder button by the title shows the session's working directory in Windows File Explorer, through the `\\wsl.localhost` share. |
 | **Composer** | Sends to the session, resuming it in place — the same transcript a terminal would append to. |
 
-Shortcuts: `Ctrl+Enter` send, `Ctrl+K` filter, `Ctrl+N` new session, `Ctrl+R`
-reload, `Ctrl+±` zoom, `F12` devtools.
+Shortcuts: `Ctrl+Enter` send, `Ctrl+K` filter, `Ctrl+N` new session, `Esc` leave
+a subagent, `Ctrl+R` reload, `Ctrl+±` zoom, `F12` devtools.
+
+### Subagents are sessions too
+
+Claude Code writes a subagent's conversation to its own file, next to the
+transcript that spawned it:
+
+```
+<session-id>/subagents/agent-<id>.jsonl        the subagent's conversation
+<session-id>/subagents/agent-<id>.meta.json    {agentType, description, toolUseId}
+```
+
+So a subagent gets the same treatment a session does — it is rendered by the
+same code, and it streams while it runs. The chip row lists them in the order
+they were spawned; clicking one switches the pane over to it and starts tailing
+its file. Both panes stay mounted, so the session keeps streaming behind you and
+neither loses its scroll position.
+
+**Status comes from two places, because it has to.** Whether an agent is still
+going is in the *parent* transcript — a `Task` call with no result yet is an
+agent still running — and the app already has those events, so the light changes
+the moment the call returns without asking the bridge anything. What the agent is
+*doing* is only in the agent's own file, so the bridge tails the last 64KB of it
+and reports the last thing that happened. That is the line on the chip.
+
+The two together also catch the case neither can catch alone: a call with no
+result whose file has not been touched in 90 seconds is not working, it is a
+session that went away mid-call. The light stops pulsing and the chip says how
+long it has been idle, rather than showing green for something that has stopped.
+
+**A subagent finishing is not a turn you took.** Claude Code delivers that news
+as a *user* message, because a conversation has no other channel — so left alone
+it renders as though you had personally pasted a block of XML at yourself. It gets
+its own event instead, showing the summary, what the run cost, and a way into the
+transcript. The same entry is skipped when counting turns and when working out
+when you last spoke, which matters more than it sounds: the rail sorts on that,
+so an agent finishing would otherwise reorder your session list on its own.
+
+These are recognised by the message *starting* with `<task-notification>` — or
+with the `[SYSTEM NOTIFICATION - NOT USER INPUT]` preamble, which is addressed to
+the agent when its prompt is assembled and does not reliably reach disk. Anchored
+at the start rather than matched anywhere, because quoting one of these back into
+a conversation is a thing people do, and a quote really is a turn you took.
+
+Subagents don't take messages — the composer greys out while you are reading one.
+A subagent that spawned its own subagents shows them inside its transcript, at
+the `Task` call that spawned them, rather than flattening them into the session's
+chip row where they did not happen.
 
 ### Archiving never deletes
 
@@ -168,7 +216,7 @@ out so a server that has gone away is visible rather than silently missing.
 |---|---|
 | `bridge/server.js` | HTTP + SSE, routing, static files |
 | `bridge/sessions.js` | The session index — incremental, cached, watched |
-| `bridge/transcript.js` | JSONL → render events; pairs tool calls with results |
+| `bridge/transcript.js` | JSONL → render events; pairs tool calls with results; reads subagent transcripts |
 | `bridge/runner.js` | `claude` processes, one per active conversation |
 | `bridge/devservers.js` | Port detection and ranking |
 | `bridge/devbrowser.js` | DevBrowser control client |

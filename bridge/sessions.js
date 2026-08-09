@@ -13,12 +13,12 @@ const { EventEmitter } = require('events');
 
 const { PROJECTS_DIR, CACHE_DIR } = require('./config');
 const { scanMeta, parseLines, buildEvents, readSubagentIndex,
-    readSubagentTranscript } = require('./transcript');
+    readSubagentTranscript, lastActivity } = require('./transcript');
 
 const CACHE_FILE = path.join(CACHE_DIR, 'index.json');
 // Bump whenever scanMeta's output shape or derivation changes, so a stale cache
 // is discarded rather than silently serving metadata from the old rules.
-const CACHE_VERSION = 6;
+const CACHE_VERSION = 7;
 
 // A transcript touched this recently is treated as live.
 const ACTIVE_WINDOW_MS = 90_000;
@@ -299,16 +299,60 @@ class SessionIndex extends EventEmitter {
         return { reset: false, offset: offset + consumed, events };
     }
 
-    /** A subagent's transcript, addressed by the tool_use id that spawned it. */
-    subagent(sessionId, toolUseId) {
+    /**
+     * Every subagent this session spawned.
+     *
+     * Deliberately does not say whether an agent succeeded: that is written in
+     * the *parent* transcript, as the result of the tool call that spawned it,
+     * and the client already has those events rendered. What only the bridge can
+     * see is the agent's own file — how recently it was written to, and the last
+     * thing in it — so that is what this adds.
+     */
+    subagents(sessionId) {
         const rec = this.sessions.get(sessionId);
         if (!rec) return null;
         const idx = readSubagentIndex(path.join(rec.dir, sessionId));
+        const now = Date.now();
+        const out = [];
+        for (const entry of idx.values()) {
+            const { file, ...rest } = entry;
+            const activity = entry.bytes ? lastActivity(file) : null;
+            out.push({
+                ...rest,
+                updatedAt: entry.mtimeMs ? new Date(entry.mtimeMs).toISOString() : null,
+                // Same 90s window the session rail treats as live, for the same
+                // reason: a file nobody has touched in a minute and a half is not
+                // being worked on.
+                warm: entry.mtimeMs > 0 && (now - entry.mtimeMs) < ACTIVE_WINDOW_MS,
+                activity: activity ? activity.text : null,
+                activityTs: activity ? activity.ts : null,
+            });
+        }
+        out.sort((a, b) => a.mtimeMs - b.mtimeMs);
+        return out;
+    }
+
+    /**
+     * One subagent's transcript, addressed by the tool_use id that spawned it.
+     * `offset` follows the same contract as readSince: pass back what you were
+     * given to receive only what has been appended since.
+     */
+    subagent(sessionId, toolUseId, offset = 0) {
+        const rec = this.sessions.get(sessionId);
+        if (!rec) return null;
+        const sessionDir = path.join(rec.dir, sessionId);
+        const idx = readSubagentIndex(sessionDir);
         const entry = idx.get(toolUseId);
         if (!entry) return null;
-        const events = readSubagentTranscript(entry.file);
-        if (!events) return null;
-        return { ...entry, file: undefined, events };
+        // Passing the index through means a subagent that spawned its own
+        // subagents renders them as links too, rather than as bare tool calls.
+        const chunk = readSubagentTranscript(entry.file, offset, { subagentsByToolUse: idx });
+        if (!chunk) {
+            // The meta file exists but the transcript does not yet — an agent
+            // that has just started. An empty transcript is the honest answer.
+            return { ...entry, file: undefined, events: [], offset: 0, reset: false };
+        }
+        return { ...entry, file: undefined, ...chunk };
     }
 
     /** Tool output that was too large to inline, read from its spill file. */

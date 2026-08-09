@@ -36,6 +36,11 @@ const state = {
     tools: new Map(),       // tool_use id -> {ev, node}
     turns: [],              // the user messages, in order, for the turn rail
     activeTurn: -1,
+    agents: [],             // subagent records for this session, from the bridge
+    agent: null,            // the subagent being viewed, if any
+    agentOffset: 0,
+    agentNodes: new Map(),  // the viewed subagent's own event id -> {ev, node}
+    agentTools: new Map(),
     runner: null,
     channels: [],
     pinned: true,           // stick to the bottom as new events arrive
@@ -51,6 +56,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'channels', 'scroll', 'log', 'status-line', 'status-text', 'btn-stop', 'input',
     'btn-send', 'model', 'perm', 'btn-new', 'db-status', 'db-label', 'toasts',
     'btn-pin', 'btn-folder', 'btn-archive', 'turns', 'turn-pop',
+    'agents', 'agent-scroll', 'agent-log', 'btn-back', 'btn-back-label',
     'new-scrim', 'new-cwd', 'new-picker', 'new-prompt', 'new-model', 'new-go']) {
     dom[id.replace(/-(\w)/g, (_, c) => c.toUpperCase())] = $(id);
 }
@@ -338,6 +344,8 @@ async function openSession(id, { quiet = false } = {}) {
         state.nodes.clear();
         state.tools.clear();
         state.pinned = true;
+        state.agents = [];  // the previous session's agents are not this one's
+        leaveAgent();       // a subagent belongs to the session it was spawned by
 
         dom.placeholder.hidden = true;
         dom.conv.hidden = false;
@@ -345,7 +353,7 @@ async function openSession(id, { quiet = false } = {}) {
         renderHeader();
         dom.log.replaceChildren();
         hideTurnPop();
-        appendEvents(data.events, false);
+        appendEvents(data.events);
         renderTurns();      // a session with no turns of your own still clears the rail
         renderRail();
         applyRunner(state.runner);
@@ -353,6 +361,7 @@ async function openSession(id, { quiet = false } = {}) {
 
         subscribe();
         loadChannels();
+        loadAgents();
 
         // Anything typed here before, or handed back by a failed turn.
         dom.input.value = state.unsent.get(id) || loadDraft(id);
@@ -430,26 +439,53 @@ function renderHeaderActions() {
     dom.btnFolder.title = `Show ${s.cwd} in File Explorer`;
 }
 
-function appendEvents(events, animate) {
+// A session transcript and a subagent transcript render identically — they
+// differ only in which nodes they own and which pane they live in. A view is
+// that difference, so everything below can be written once.
+
+const SESSION_VIEW = {
+    isAgent: false,
+    nodes: state.nodes, tools: state.tools,
+    get log() { return dom.log; },
+    get scroll() { return dom.scroll; },
+};
+
+const AGENT_VIEW = {
+    isAgent: true,
+    nodes: state.agentNodes, tools: state.agentTools,
+    get log() { return dom.agentLog; },
+    get scroll() { return dom.agentScroll; },
+};
+
+function appendEvents(events, view = SESSION_VIEW) {
     const frag = document.createDocumentFragment();
     let newTurn = false;
+    let sawAgent = false;
     for (const ev of events) {
-        if (ev.kind === 'tool-result') { patchTool(ev); continue; }
-        if (state.nodes.has(ev.id)) continue;
+        if (ev.kind === 'tool-result') { patchTool(ev, view); continue; }
+        if (view.nodes.has(ev.id)) continue;
         const node = renderEvent(ev);
         if (!node) continue;
-        state.nodes.set(ev.id, { ev, node });
-        if (ev.kind === 'tool') state.tools.set(ev.id, { ev, node });
+        view.nodes.set(ev.id, { ev, node });
+        if (ev.kind === 'tool') {
+            view.tools.set(ev.id, { ev, node });
+            if (ev.name === 'Task' || ev.name === 'Agent') sawAgent = true;
+        }
         if (ev.kind === 'user') newTurn = true;
         frag.append(node);
     }
-    if (frag.childNodes.length) dom.log.append(frag);
-    if (newTurn) renderTurns();
+    if (frag.childNodes.length) view.log.append(frag);
+    if (!view.isAgent) {
+        if (newTurn) renderTurns();
+        // A Task call that has only just appeared belongs on the strip now, not
+        // after the next poll.
+        if (sawAgent) { renderAgents(); loadAgents(); }
+    }
 }
 
 /** A tool call whose result arrived in a later chunk than the call itself. */
-function patchTool(patch) {
-    const entry = state.tools.get(patch.toolId);
+function patchTool(patch, view = SESSION_VIEW) {
+    const entry = view.tools.get(patch.toolId);
     if (!entry) return;
     Object.assign(entry.ev, patch);
     if (entry.ev.ts && patch.resultTs) {
@@ -463,7 +499,9 @@ function patchTool(patch) {
     if (det && wasOpen) det.open = true;
     entry.node.replaceWith(fresh);
     entry.node = fresh;
-    state.nodes.set(entry.ev.id, entry);
+    view.nodes.set(entry.ev.id, entry);
+    // A result landing on a Task call is a subagent finishing: the strip says so.
+    if (!view.isAgent && entry.ev.agent) renderAgents();
 }
 
 function row(ev, kind, ...body) {
@@ -479,6 +517,7 @@ function renderEvent(ev) {
         case 'assistant': return renderAssistant(ev);
         case 'thinking': return renderThinking(ev);
         case 'tool': return renderTool(ev);
+        case 'agent-done': return renderAgentDone(ev);
         case 'system': return renderSystem(ev);
         case 'compact': return row(ev, 'compact', 'context compacted');
         default: return null;
@@ -522,6 +561,46 @@ function renderThinking(ev) {
             el('div', { class: 'prose', html: renderMarkdown(ev.text) })),
     );
     return row(ev, 'thinking', det);
+}
+
+/**
+ * A background task reporting back. It arrives as a user message — that is the
+ * only way into a conversation — but you did not write it, so it does not get
+ * rendered as though you had.
+ */
+function renderAgentDone(ev) {
+    const failed = ev.status && ev.status !== 'completed';
+    const meta = [ev.toolUses && `${ev.toolUses} tools`, dur(ev.durationMs),
+        ev.tokens && `${ev.tokens.toLocaleString()} tokens`].filter(Boolean).join(' · ');
+
+    const body = [el('div', { class: 'ev-label' },
+        failed ? `Subagent ${ev.status}` : 'Subagent finished')];
+    if (ev.summary) body.push(el('div', { class: 'agent-done-sum' }, ev.summary));
+    if (meta) body.push(el('div', { class: 'agent-done-meta' }, meta));
+
+    // The notification carries the id of the call that spawned it, which is the
+    // same key the transcripts are filed under — so this can be a way in.
+    if (ev.toolUseId && state.tools.has(ev.toolUseId)) {
+        body.push(el('div', { class: 'subagent-btns' },
+            el('button', {
+                class: 'more-btn primary', type: 'button',
+                onclick: () => openAgent(ev.toolUseId),
+            }, 'Open this subagent')));
+    }
+
+    if (ev.result) {
+        body.push(el('details', { class: 'tool' },
+            el('summary', {},
+                el('span', { class: 'caret' }, '▶'),
+                el('span', { class: 'tname' }, 'Result'),
+                el('span', { class: 'targ' }, clip(ev.result, 90)),
+            ),
+            el('div', { class: 'tool-body' },
+                el('div', { class: 'prose', html: renderMarkdown(ev.result) })),
+        ));
+    }
+
+    return row(ev, 'agent-done', ...body);
 }
 
 function renderSystem(ev) {
@@ -652,13 +731,24 @@ function toolBody(ev) {
     // --- subagent -------------------------------------------------------------
     if (ev.agent) {
         const a = ev.agent;
-        const meta = [a.agentType, a.model && shortModel(a.model),
+        const st = statusOfCall(ev);
+        const meta = [STATUS_WORD[st], a.agentType, a.model && shortModel(a.model),
             a.toolUses && `${a.toolUses} tools`, dur(a.durationMs)].filter(Boolean).join(' · ');
-        const wrap = el('div', { class: 'tool-section subagent' },
+        const wrap = el('div', { class: 'tool-section subagent', 'data-status': st },
             el('h4', {}, 'Subagent'),
-            el('div', { style: 'font:400 11.5px/1.6 var(--mono); color:var(--text-3)' }, meta));
+            el('div', { class: 'subagent-meta' }, meta));
+
         if (a.hasTranscript) {
-            const btn = el('button', { class: 'more-btn', type: 'button' }, 'Show its transcript');
+            const btns = el('div', { class: 'subagent-btns' });
+            // Two ways in on purpose: a peek that keeps your place in this
+            // conversation, and a switch for when the subagent is the thing you
+            // actually came to read.
+            btns.append(el('button', {
+                class: 'more-btn primary', type: 'button',
+                onclick: () => openAgent(ev.id),
+            }, 'Open this subagent'));
+
+            const btn = el('button', { class: 'more-btn', type: 'button' }, 'Peek inline');
             btn.addEventListener('click', async () => {
                 btn.disabled = true;
                 btn.textContent = 'Loading…';
@@ -673,11 +763,12 @@ function toolBody(ev) {
                     btn.replaceWith(log);
                 } catch (err) {
                     btn.disabled = false;
-                    btn.textContent = 'Show its transcript';
+                    btn.textContent = 'Peek inline';
                     toast(`Could not load the subagent transcript: ${err.message}`, 'error');
                 }
             });
-            wrap.append(btn);
+            btns.append(btn);
+            wrap.append(btns);
         }
         out.push(wrap);
     }
@@ -756,6 +847,216 @@ function kvView(obj) {
         dl.append(el('dt', {}, k), el('dd', {}, clip(text, 600)));
     }
     return dl;
+}
+
+// ── subagents ────────────────────────────────────────────────────────────
+// A subagent is a conversation the session had on its own. Two things about it
+// are worth seeing without opening it — whether it is still going, and what it
+// is doing — and those come from two different places. Whether the call
+// finished is in *this* transcript, as the result of the tool that spawned it,
+// which the client already has and which updates live. What the agent is doing
+// is in the agent's own file, which only the bridge can see.
+
+const STATUS_WORD = { running: 'running', done: 'finished', failed: 'failed' };
+
+/** How the tool call that spawned an agent ended. */
+function statusOfCall(ev) {
+    if (!ev || ev.status === 'pending') return 'running';
+    return ev.status === 'error' ? 'failed' : 'done';
+}
+
+async function loadAgents() {
+    if (!state.current) return;
+    const id = state.current.sessionId;
+    try {
+        const { agents } = await get(`/api/sessions/${id}/subagents`);
+        if (!state.current || state.current.sessionId !== id) return;
+        state.agents = agents;
+        renderAgents();
+        if (state.agent) renderAgentHeader();
+    } catch {
+        // The strip is derived from the transcript anyway; a failed refresh just
+        // means the activity lines are a poll behind.
+    }
+}
+
+/**
+ * Every subagent this session spawned, in the order it spawned them.
+ *
+ * Driven by the Task calls in the transcript rather than by the bridge's file
+ * listing, for two reasons: spawn order is the order worth reading them in, and
+ * the transcript is what knows how each call ended. The bridge's records only
+ * fill in what a file can tell you. Agents spawned *by* a subagent are left out
+ * — their call lives in that subagent's transcript, and that is where they read
+ * as belonging.
+ */
+function agentRows() {
+    const byId = new Map(state.agents.map(a => [a.toolUseId, a]));
+    const rows = [];
+    for (const { ev } of state.tools.values()) {
+        if (ev.name !== 'Task' && ev.name !== 'Agent') continue;
+        const info = byId.get(ev.id);
+        const a = ev.agent || {};
+        // No transcript on disk and nothing from the bridge: a call that was
+        // denied or never got off the ground. Nothing to switch to.
+        if (!info && !a.hasTranscript) continue;
+        rows.push({
+            toolUseId: ev.id,
+            status: statusOfCall(ev),
+            label: a.description || (info && info.description)
+                || toolSummary(ev) || a.agentType || 'Subagent',
+            agentType: a.agentType || (info && info.agentType) || null,
+            model: a.model || null,
+            depth: a.spawnDepth || (info && info.spawnDepth) || 1,
+            durationMs: ev.durationMs || a.durationMs || null,
+            toolUses: a.toolUses || null,
+            tokens: a.tokens || null,
+            startedAt: ev.ts,
+            activity: (info && info.activity) || null,
+            activityTs: (info && info.activityTs) || null,
+            warm: Boolean(info && info.warm),
+            bytes: (info && info.bytes) || 0,
+        });
+    }
+    return rows;
+}
+
+function renderAgents() {
+    const rows = agentRows();
+    dom.agents.replaceChildren();
+    if (!rows.length) return;
+
+    for (const a of rows) {
+        // A running agent that nothing has written to in a minute and a half is
+        // not working — it is a session that went away mid-call. Say so rather
+        // than showing a green light for something that has stopped.
+        const stalled = a.status === 'running' && !a.warm && a.bytes > 0;
+        const trailing = a.status === 'running'
+            ? (stalled ? `idle ${ago(a.activityTs || a.startedAt)}` : clip(a.activity || 'working', 34))
+            : [dur(a.durationMs), a.toolUses && `${a.toolUses} tools`].filter(Boolean).join(' · ');
+
+        dom.agents.append(el('button', {
+            class: 'agent-chip',
+            type: 'button',
+            'data-status': a.status,
+            'data-stalled': String(stalled),
+            'aria-current': state.agent === a.toolUseId ? 'true' : null,
+            title: [a.label, a.agentType && `type: ${a.agentType}`,
+                a.activity && `last: ${a.activity}`].filter(Boolean).join('\n'),
+            onclick: () => openAgent(a.toolUseId),
+        },
+            el('span', { class: 'led' }),
+            a.depth > 1 ? el('span', { class: 'depth' }, '↳') : null,
+            el('span', { class: 'name' }, clip(a.label, 34)),
+            trailing ? el('span', { class: 'trail' }, trailing) : null,
+            el('span', { class: 'go' }, 'View'),
+        ));
+    }
+}
+
+/** Switch the conversation pane over to one subagent's transcript. */
+async function openAgent(toolUseId) {
+    if (!state.current) return;
+    if (state.agent === toolUseId) return;
+    const sessionId = state.current.sessionId;
+
+    try {
+        const d = await get(`/api/sessions/${sessionId}/subagent`
+            + `?toolUseId=${encodeURIComponent(toolUseId)}`);
+        if (!state.current || state.current.sessionId !== sessionId) return;
+
+        state.agent = toolUseId;
+        state.agentOffset = d.offset || 0;
+        state.agentNodes.clear();
+        state.agentTools.clear();
+        dom.agentLog.replaceChildren();
+
+        // Both panes stay mounted, so each keeps its own scroll position and the
+        // session keeps streaming into its own while you read the subagent.
+        dom.scroll.hidden = true;
+        dom.agentScroll.hidden = false;
+        dom.turns.hidden = true;
+        hideTurnPop();
+
+        appendEvents(d.events, AGENT_VIEW);
+        renderAgentHeader();
+        renderAgents();
+        applyComposerScope();
+        dom.agentScroll.scrollTop = dom.agentScroll.scrollHeight;
+
+        subscribe();    // start following the agent's file as well
+        loadAgents();
+    } catch (err) {
+        toast(`Could not open the subagent: ${err.message}`, 'error');
+    }
+}
+
+/** Reset subagent state without touching the DOM — for switching sessions. */
+function leaveAgent() {
+    state.agent = null;
+    state.agentOffset = 0;
+    state.agentNodes.clear();
+    state.agentTools.clear();
+    dom.agentLog.replaceChildren();
+    dom.scroll.hidden = false;
+    dom.agentScroll.hidden = true;
+    dom.turns.hidden = false;
+    dom.btnBack.hidden = true;
+    applyComposerScope();
+}
+
+/** Back to the session that spawned it. */
+function closeAgent() {
+    if (!state.agent) return;
+    leaveAgent();
+    renderHeader();
+    renderAgents();
+    subscribe();        // stop the bridge following a file nobody is reading
+}
+
+function renderAgentHeader() {
+    const a = agentRows().find(r => r.toolUseId === state.agent);
+    if (!a) return;
+
+    dom.convTitle.textContent = a.label;
+    dom.btnBack.hidden = false;
+    dom.btnBackLabel.textContent = clip(state.current.title, 46);
+
+    const stalled = a.status === 'running' && !a.warm && a.bytes > 0;
+    const bits = [
+        el('span', { class: `agent-state ${a.status}` },
+            stalled ? 'stopped' : STATUS_WORD[a.status]),
+    ];
+    const push = (node) => { bits.push(el('span', { class: 'sep' }, '·'), node); };
+    if (a.agentType) push(el('span', { class: 'branch' }, a.agentType));
+    if (a.model) push(el('span', {}, shortModel(a.model)));
+    if (a.durationMs) push(el('span', {}, dur(a.durationMs)));
+    if (a.toolUses) push(el('span', {}, `${a.toolUses} tools`));
+    if (a.tokens) push(el('span', {}, `${a.tokens.toLocaleString()} tokens`));
+    if (a.status === 'running' && a.activity) {
+        push(el('span', { class: 'pulse' }, clip(a.activity, 40)));
+    }
+    dom.convSub.replaceChildren(...bits);
+}
+
+/**
+ * A subagent has no composer of its own — it is a conversation that already
+ * happened, driven by the session. Say that rather than leaving a dead box.
+ */
+function applyComposerScope() {
+    const onAgent = Boolean(state.agent);
+    dom.input.disabled = onAgent;
+    dom.input.placeholder = onAgent
+        ? 'Subagents do not take messages — go back to the session to reply.'
+        : 'Send a message to this session…';
+    dom.conv.dataset.scope = onAgent ? 'agent' : 'session';
+    if (onAgent) {
+        dom.btnSend.disabled = true;
+        dom.btnStop.hidden = true;
+    } else {
+        dom.btnSend.disabled = !state.current;
+        applyRunner(state.runner);
+    }
 }
 
 // ── dev-server channel strip ─────────────────────────────────────────────
@@ -839,8 +1140,29 @@ function connect() {
         if (!state.current || d.sessionId !== state.current.sessionId) return;
         state.offset = d.offset;
         const stick = state.pinned;
-        appendEvents(d.events, true);
-        if (stick) scrollToEnd(false);
+        appendEvents(d.events, SESSION_VIEW);
+        // The session pane keeps growing behind a subagent; don't yank the
+        // subagent's scroll position around for it.
+        if (stick && !state.agent) scrollToEnd(false);
+    });
+
+    es.addEventListener('agent-tail', (e) => {
+        const d = JSON.parse(e.data);
+        if (!state.agent || d.toolUseId !== state.agent) return;
+        if (!state.current || d.sessionId !== state.current.sessionId) return;
+        state.agentOffset = d.offset;
+        const sc = dom.agentScroll;
+        const stick = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 90;
+        appendEvents(d.events, AGENT_VIEW);
+        if (stick) sc.scrollTop = sc.scrollHeight;
+    });
+
+    es.addEventListener('agent-reset', (e) => {
+        const d = JSON.parse(e.data);
+        if (!state.agent || d.toolUseId !== state.agent) return;
+        const id = state.agent;
+        state.agent = null;         // force openAgent to rebuild from the top
+        openAgent(id);
     });
 
     es.addEventListener('reset', () => {
@@ -874,6 +1196,7 @@ function connect() {
         if (!state.current || r.sessionId !== state.current.sessionId) return;
         // The dev servers a turn started only become visible once it finishes.
         loadChannels();
+        loadAgents();
     });
 
     es.addEventListener('send-failed', (e) => handleSendFailure(JSON.parse(e.data)));
@@ -900,6 +1223,9 @@ async function subscribe() {
             clientId: state.clientId,
             sessionId: state.current.sessionId,
             offset: state.offset,
+            agent: state.agent
+                ? { toolUseId: state.agent, offset: state.agentOffset }
+                : null,
         });
     } catch { /* the SSE reconnect will re-subscribe */ }
 }
@@ -908,8 +1234,10 @@ function applyRunner(s) {
     state.runner = s;
     const busy = s && (s.state === 'busy' || s.state === 'starting');
     dom.statusLine.dataset.state = s ? (s.state === 'error' ? 'error' : busy ? 'busy' : 'idle') : 'idle';
-    dom.btnStop.hidden = !busy;
-    dom.btnSend.disabled = !state.current;
+    // While a subagent is on screen the composer belongs to nothing you can
+    // send to, so its controls stay out of the way.
+    dom.btnStop.hidden = !busy || Boolean(state.agent);
+    dom.btnSend.disabled = !state.current || Boolean(state.agent);
 
     if (s && s.state === 'error' && s.error) {
         dom.statusText.replaceChildren(el('span', { class: 'err' }, clip(s.error, 120)));
@@ -1186,6 +1514,7 @@ dom.btnFolder.addEventListener('click', async () => {
 });
 dom.newGo.addEventListener('click', startNew);
 dom.dbStatus.addEventListener('click', refreshDevBrowser);
+dom.btnBack.addEventListener('click', closeAgent);
 
 dom.input.addEventListener('input', autoGrow);
 dom.input.addEventListener('input', debounce(() => {
@@ -1220,6 +1549,7 @@ dom.newScrim.addEventListener('click', (e) => { if (e.target === dom.newScrim) c
 
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !dom.newScrim.hidden) { closeNew(); return; }
+    if (e.key === 'Escape' && state.agent) { closeAgent(); return; }
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); dom.search.focus(); }
     if ((e.ctrlKey || e.metaKey) && e.key === 'n') { e.preventDefault(); openNew(); }
 });
@@ -1249,3 +1579,14 @@ loadSessions();
 refreshDevBrowser();
 setInterval(refreshDevBrowser, 20_000);
 setInterval(() => { if (state.current) loadChannels(); }, 25_000);
+
+// A running subagent writes to its own file, which the parent transcript says
+// nothing about — so the only way its activity line moves is to go and look.
+// Only while something is actually running, and only for what is on screen.
+setInterval(() => {
+    if (!state.current) return;
+    const busy = state.runner && (state.runner.state === 'busy' || state.runner.state === 'starting');
+    // A busy session counts even with no agents listed yet: the first poll after
+    // a Task call starts is how the agent gets on the strip at all.
+    if (state.agent || busy || agentRows().some(a => a.status === 'running')) loadAgents();
+}, 4000);
