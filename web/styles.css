@@ -1105,7 +1105,14 @@ a:hover { text-decoration: underline; }
 .status-line[data-state="busy"] .led { background: var(--yellow); animation: breathe 1.6s var(--ease) infinite; }
 .status-line[data-state="error"] .led { background: var(--red); }
 .status-line[data-state="idle"] .led { background: var(--green); }
+/* Still running, but something is wrong — an API call being retried. */
+.status-line[data-state="stalled"] .led {
+    background: var(--yellow);
+    animation: breathe 1.6s var(--ease) infinite;
+}
 .status-line .err { color: var(--red); }
+.status-line .warn { color: var(--yellow); }
+.status-line .muted { color: var(--text-4); }
 
 @keyframes breathe {
     0%, 100% { opacity: 1; }

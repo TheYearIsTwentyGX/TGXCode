@@ -48,6 +48,7 @@ class Runner extends EventEmitter {
         // original is already live somewhere else.
         this.fork = !!opts.fork;
         this.errorKind = null;
+        this.retry = null;             // set while the CLI is retrying the API
 
         this.proc = null;
         this.state = 'stopped';        // stopped | starting | idle | busy | error
@@ -218,6 +219,28 @@ class Runner extends EventEmitter {
                         level: 'warn', kind: 'permission_denied',
                         text: msg.content || 'A tool call was denied by the permission mode.',
                     });
+                } else if (msg.subtype === 'api_retry') {
+                    // The CLI retries a failing API call up to ten times with
+                    // exponential backoff, which can run for several minutes.
+                    // Without this the UI just says "Thinking" the whole time and
+                    // the user has no idea anything is wrong, or that stopping is
+                    // an option.
+                    this.retry = {
+                        attempt: msg.attempt,
+                        max: msg.max_retries,
+                        status: msg.error_status || null,
+                        at: Date.now(),
+                    };
+                    this._setState('busy',
+                        `Can't reach the API — retry ${msg.attempt} of ${msg.max_retries}`);
+                    // One notice, not ten.
+                    if (msg.attempt === 1) {
+                        this.emit('notice', {
+                            level: 'warn', kind: 'api_retry',
+                            text: 'Trouble reaching the Anthropic API. Claude is retrying; '
+                                + 'this can take several minutes before it gives up.',
+                        });
+                    }
                 }
                 break;
 
@@ -246,9 +269,15 @@ class Runner extends EventEmitter {
                 break;
             }
 
-            case 'result':
+            case 'result': {
+                // A turn that ends in an API error still counts as "finished" to
+                // the CLI, so say what went wrong rather than quietly going idle.
+                const failed = !!msg.is_error;
+                const detail = typeof msg.result === 'string' ? msg.result : '';
                 this.lastResult = {
-                    isError: !!msg.is_error,
+                    isError: failed,
+                    detail: failed ? detail.slice(0, 300) : null,
+                    retries: this.retry ? this.retry.attempt : 0,
                     costUsd: msg.total_cost_usd || 0,
                     durationMs: msg.duration_ms || msg.duration_api_ms || 0,
                     numTurns: msg.num_turns || 0,
@@ -256,9 +285,17 @@ class Runner extends EventEmitter {
                 };
                 this._pendingTools.clear();
                 this.inFlight.length = 0;   // safely in the transcript now
+                this.retry = null;
                 this._setState('idle', null);
+                if (failed) {
+                    this.emit('notice', {
+                        level: 'warn', kind: 'turn_failed',
+                        text: detail || 'The turn ended with an error.',
+                    });
+                }
                 this.emit('turn-complete', this.lastResult);
                 break;
+            }
 
             case 'rate_limit_event':
                 if (msg.rate_limit_info && msg.rate_limit_info.status !== 'allowed') {
@@ -273,6 +310,10 @@ class Runner extends EventEmitter {
 
     _setState(state, activity) {
         const changed = this.state !== state || this.activity !== activity;
+        // Stamped once per turn, not on every activity change, so the elapsed
+        // time the UI shows covers the whole turn.
+        if (state === 'busy' && this.state !== 'busy') this.busySince = Date.now();
+        if (state !== 'busy') this.busySince = null;
         this.state = state;
         this.activity = activity;
         if (changed) this.emit('status', this.status());
@@ -287,8 +328,13 @@ class Runner extends EventEmitter {
             permissionMode: this.permissionMode,
             cwd: this.cwd,
             error: this.lastError,
+            errorKind: this.errorKind,
+            retry: this.retry,
             lastResult: this.lastResult,
             queued: this.queue.length,
+            // Lets the UI show how long a turn has been going, which matters
+            // when the API is being retried for minutes at a time.
+            busySince: this.state === 'busy' ? this.busySince : null,
         };
     }
 }
