@@ -43,6 +43,7 @@ const state = {
         try { return localStorage.getItem('archiveOpen') === '1'; } catch { return false; }
     })(),
     unsent: new Map(),      // sessionId -> text written to a process but not yet in a transcript
+    busyTimer: null,        // ticks the elapsed-time readout while a turn runs
 };
 
 const $ = (id) => document.getElementById(id);
@@ -907,17 +908,51 @@ async function subscribe() {
 function applyRunner(s) {
     state.runner = s;
     const busy = s && (s.state === 'busy' || s.state === 'starting');
-    dom.statusLine.dataset.state = s ? (s.state === 'error' ? 'error' : busy ? 'busy' : 'idle') : 'idle';
+    const retrying = Boolean(s && s.retry);
+
+    dom.statusLine.dataset.state = s
+        ? (s.state === 'error' ? 'error' : retrying ? 'stalled' : busy ? 'busy' : 'idle')
+        : 'idle';
     dom.btnStop.hidden = !busy;
     dom.btnSend.disabled = !state.current;
 
+    // A turn can run for minutes; without a clock it is impossible to tell a
+    // long tool call from a stuck one.
+    clearInterval(state.busyTimer);
+    state.busyTimer = null;
+    if (busy && s.busySince) {
+        state.busyTimer = setInterval(() => paintStatus(state.runner), 1000);
+    }
+    paintStatus(s);
+}
+
+function paintStatus(s) {
+    const busy = s && (s.state === 'busy' || s.state === 'starting');
+
     if (s && s.state === 'error' && s.error) {
-        dom.statusText.replaceChildren(el('span', { class: 'err' }, clip(s.error, 120)));
-    } else if (busy) {
-        dom.statusText.textContent = s.activity || 'Working…';
-    } else if (s && s.lastResult && s.lastResult.costUsd) {
+        dom.statusText.replaceChildren(el('span', { class: 'err' }, clip(s.error, 140)));
+        return;
+    }
+    if (busy) {
+        const elapsed = s.busySince ? ` · ${dur(Date.now() - s.busySince)}` : '';
+        const label = s.activity || 'Working…';
+        if (s.retry) {
+            dom.statusText.replaceChildren(
+                el('span', { class: 'warn' }, label),
+                el('span', {}, elapsed),
+                el('span', { class: 'muted' }, ' · Stop to give up early'));
+        } else {
+            dom.statusText.textContent = label + elapsed;
+        }
+        return;
+    }
+    const r = s && s.lastResult;
+    if (r && r.isError) {
+        dom.statusText.replaceChildren(
+            el('span', { class: 'err' }, clip(r.detail || 'The turn ended with an error.', 140)));
+    } else if (r && r.costUsd) {
         dom.statusText.textContent =
-            `Ready · last turn ${dur(s.lastResult.durationMs)} · $${s.lastResult.costUsd.toFixed(3)}`;
+            `Ready · last turn ${dur(r.durationMs)} · $${r.costUsd.toFixed(3)}`;
     } else {
         dom.statusText.textContent = 'Ready';
     }
