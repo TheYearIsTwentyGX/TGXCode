@@ -44,8 +44,15 @@ const state = {
     runner: null,
     channels: [],
     pinned: true,           // stick to the bottom as new events arrive
-    archiveOpen: (() => {
-        try { return localStorage.getItem('archiveOpen') === '1'; } catch { return false; }
+    // Which rail groups are shut. Storing the collapsed ones rather than the
+    // open ones means a project seen for the first time defaults to open.
+    collapsed: (() => {
+        try {
+            const raw = localStorage.getItem('railCollapsed');
+            if (raw) return new Set(JSON.parse(raw));
+            // Migrate the old single-group flag; archived stays shut by default.
+            return new Set(localStorage.getItem('archiveOpen') === '1' ? [] : ['archived']);
+        } catch { return new Set(['archived']); }
     })(),
     unsent: new Map(),      // sessionId -> text written to a process but not yet in a transcript
     busyTimer: null,        // ticks the elapsed-time readout while a turn runs
@@ -222,10 +229,7 @@ function renderRail() {
     const rest = state.sessions.filter(s => !s.pinned && !s.archived);
 
     // Pinned first, across every project — that is the point of pinning.
-    if (pinned.length) {
-        dom.rail.append(groupHead('Pinned', pinned));
-        for (const s of pinned) dom.rail.append(strip(s));
-    }
+    if (pinned.length) dom.rail.append(groupCard('pinned', 'Pinned', pinned));
 
     const groups = new Map();
     for (const s of rest) {
@@ -234,34 +238,40 @@ function renderRail() {
         groups.get(key).push(s);
     }
     for (const [project, list] of groups) {
-        dom.rail.append(groupHead(project, list));
-        for (const s of list) dom.rail.append(strip(s));
+        dom.rail.append(groupCard(`project:${project}`, project, list));
     }
 
-    if (archived.length) {
-        // Collapsed by default, but a filter that matches archived sessions
-        // should not silently hide its own results.
-        const open = state.archiveOpen || Boolean(state.query);
-        dom.rail.append(el('button', {
-            class: 'group-head archive-head',
-            type: 'button',
-            'aria-expanded': String(open),
-            onclick: () => { state.archiveOpen = !open; saveArchiveOpen(); renderRail(); },
-        },
-            el('span', { class: 'twist' }, icon('caret', 13)),
-            el('span', {}, 'Archived'),
-            el('span', { class: 'count' }, String(archived.length)),
-        ));
-        if (open) for (const s of archived) dom.rail.append(strip(s));
-    }
+    if (archived.length) dom.rail.append(groupCard('archived', 'Archived', archived));
 }
 
-function groupHead(label, list) {
+/** A rail group: a card whose heading shuts it. `key` is what the open/shut
+ *  state is remembered under, so it has to outlive a re-render. */
+function groupCard(key, label, list) {
+    // A filter that matches inside a shut group must not hide its own results.
+    // The heading still toggles while filtering; it takes effect once the
+    // filter clears.
+    const open = !state.collapsed.has(key) || Boolean(state.query);
     const live = list.filter(s => s.active || (s.runner && s.runner.state === 'busy')).length;
-    return el('div', { class: 'group-head' },
-        el('span', {}, label),
-        live ? el('span', { class: 'live' }, `${live} live`) : null,
-        el('span', { class: 'count' }, String(list.length)),
+    const bodyId = `group-${key.replace(/[^\w-]/g, '_')}`;
+
+    return el('section', { class: 'rail-group', 'data-key': key },
+        el('button', {
+            class: 'group-head',
+            type: 'button',
+            'aria-expanded': String(open),
+            'aria-controls': bodyId,
+            onclick: () => {
+                state.collapsed[open ? 'add' : 'delete'](key);
+                saveCollapsed();
+                renderRail();
+            },
+        },
+            el('span', { class: 'twist' }, icon('caret', 13)),
+            el('span', { class: 'group-label' }, label),
+            live ? el('span', { class: 'live' }, `${live} live`) : null,
+            el('span', { class: 'count' }, String(list.length)),
+        ),
+        open ? el('div', { class: 'group-body', id: bodyId }, list.map(strip)) : null,
     );
 }
 
@@ -327,8 +337,10 @@ async function setFlags(summary, change) {
     }
 }
 
-function saveArchiveOpen() {
-    try { localStorage.setItem('archiveOpen', state.archiveOpen ? '1' : '0'); } catch { /* private mode */ }
+function saveCollapsed() {
+    try {
+        localStorage.setItem('railCollapsed', JSON.stringify([...state.collapsed]));
+    } catch { /* private mode */ }
 }
 
 // ── conversation ─────────────────────────────────────────────────────────

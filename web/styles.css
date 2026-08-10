@@ -196,43 +196,48 @@ a:hover { text-decoration: underline; }
 
 .rail-scroll { flex: 1; overflow-y: auto; min-height: 0; padding-bottom: 12px; }
 
+/* Each group is a card, so where one project ends and the next begins is a
+   change of surface rather than something the eye has to infer from spacing.
+   One tonal step above the rail, which leaves --s2 free for row hover. */
+.rail-group {
+    background: var(--s1);
+    border-radius: var(--r-lg);
+    padding: 4px;
+    margin-bottom: 8px;
+}
+
+/* The heading is the disclosure — clicking it shuts the group. */
 .group-head {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: 9px;
-    padding: 16px 16px 6px;
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: var(--r);
     font: 500 11.5px/1.4 var(--sans);
     letter-spacing: 0.04em;
     color: var(--text-3);
-    text-transform: capitalize;
-}
-.group-head .count { margin-left: auto; color: var(--text-4); font-variant-numeric: tabular-nums; }
-.group-head .live { color: var(--green); }
-
-/* The archive disclosure is a group heading you can click. */
-.archive-head {
-    width: 100%;
-    border-radius: var(--pill);
-    padding: 10px 16px;
-    margin-top: 10px;
     transition: background var(--t-fast) var(--ease);
 }
-.archive-head:hover { background: var(--s2); color: var(--text-2); }
-.archive-head .twist {
+.group-head:hover { background: var(--s2); color: var(--text-2); }
+.group-head .group-label { text-transform: capitalize; }
+.group-head .count { margin-left: auto; color: var(--text-4); font-variant-numeric: tabular-nums; }
+.group-head .live { color: var(--green); }
+.group-head .twist {
     display: grid;
     place-items: center;
-    margin-left: -4px;
     color: var(--text-4);
     transition: transform var(--t-fast) var(--ease);
 }
-.archive-head[aria-expanded="true"] .twist { transform: rotate(90deg); }
+.group-head[aria-expanded="true"] .twist { transform: rotate(90deg); }
 
 /* An archived row reads as set aside, without being hard to read. */
 .strip[data-archived="true"] .strip-title { color: var(--text-3); }
 
 .strip {
-    /* --row-bg lets the action overlay fade into whatever the row is sitting on. */
-    --row-bg: var(--bg);
+    /* --row-bg lets the action overlay fade into whatever the row is sitting on,
+       which is now the group card rather than the rail itself. */
+    --row-bg: var(--s1);
     position: relative;
     display: flex;
     align-items: center;
