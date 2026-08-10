@@ -110,6 +110,11 @@
           <div id="queue" class="queue" hidden>
             <div class="queue-head">
               <span id="queue-count" class="queue-count"></span>
+              <!-- Only while a chip has the focus: the keys are worth knowing
+                   exactly then, and clutter the rest of the time. -->
+              <span class="queue-keys" aria-hidden="true">
+                <b>↑↓</b> pick <b>Alt+↑↓</b> move <b>Enter</b> edit <b>Esc</b> drop
+              </span>
               <button id="queue-clear" class="queue-clear" type="button">Clear</button>
             </div>
             <ol id="queue-list" class="queue-list" aria-label="Messages waiting to be sent"></ol>

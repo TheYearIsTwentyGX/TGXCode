@@ -67,6 +67,7 @@ const state = {
     queueDrag: null,        // id of the chip being dragged
     queueOpen: new Set(),   // ids of chips expanded to their full text
     queueSig: '',           // what the chips were last built from, to avoid churn
+    queueFocus: null,       // the chip holding the queue's single tab stop
 };
 
 const $ = (id) => document.getElementById(id);
@@ -1535,48 +1536,88 @@ function renderQueue(s) {
     const holdId = held ? held.dataset.id : null;
     const holdPart = held ? active.dataset.part : null;
 
-    dom.queueList.replaceChildren(...q.map(queueItem));
+    dom.queueList.replaceChildren(...q.map((entry, i) => queueItem(entry, i, rovingId())));
 
     if (holdId) {
         const back = dom.queueList.querySelector(`[data-id="${CSS.escape(holdId)}"]`);
-        const target = back && (back.querySelector(`[data-part="${holdPart}"]`)
-            || back.querySelector('[data-part="text"]'));
+        const target = back && (holdPart ? back.querySelector(`[data-part="${holdPart}"]`) : back);
         if (target) target.focus();
     }
 }
 
-function queueItem(entry, i) {
+/**
+ * Which chip Shift+Tab out of the composer lands on.
+ *
+ * The last one, because that is the message you just wrote and the one the
+ * composer sits directly beneath — and because it is what the browser would pick
+ * anyway, the queue being above the input in the document. After that it follows
+ * you: arrow to a chip and it stays the way back in.
+ */
+function rovingId() {
+    const q = state.queue;
+    if (!q.length) return null;
+    const remembered = q.some(x => x.id === state.queueFocus) ? state.queueFocus : null;
+    return remembered || q[q.length - 1].id;
+}
+
+/** Move the single tab stop without rebuilding the chips. */
+function setRovingTab() {
+    const id = rovingId();
+    for (const li of dom.queueList.children) {
+        li.tabIndex = li.dataset.id === id ? 0 : -1;
+    }
+}
+
+function focusChipAt(i) {
+    const li = dom.queueList.children[i];
+    if (!li) return false;
+    state.queueFocus = li.dataset.id;
+    setRovingTab();
+    li.focus();
+    return true;
+}
+
+/**
+ * One chip is one tab stop, and the chip itself takes the keys.
+ *
+ * The obvious markup — three buttons per row — puts Shift+Tab out of the composer
+ * on the *drop* button of the last message, which is both surprising and the one
+ * control there you would least like to hit by accident. So the row is the
+ * focusable thing, its buttons are taken out of the tab order, and everything
+ * they do has a key on the row instead.
+ */
+function queueItem(entry, i, roving) {
     const open = state.queueOpen.has(entry.id);
+    const toggleOpen = () => {
+        if (open) state.queueOpen.delete(entry.id);
+        else state.queueOpen.add(entry.id);
+        renderQueue(state.runner);
+    };
+
     const li = el('li', {
         class: 'queue-item' + (open ? ' open' : ''),
         'data-id': entry.id,
         draggable: 'true',
+        tabindex: entry.id === roving ? '0' : '-1',
+        'aria-label': `Waiting message ${i + 1} of ${state.queue.length}: ${clip(entry.text, 80)}`,
+        onfocus: () => { state.queueFocus = entry.id; setRovingTab(); },
+        onkeydown: (e) => onChipKey(e, entry, i, toggleOpen),
     },
         el('span', { class: 'queue-grip', title: 'Drag to reorder', 'aria-hidden': 'true' }, '⠿'),
         el('span', { class: 'queue-n' }, String(i + 1)),
         el('button', {
-            class: 'queue-text', type: 'button', 'data-part': 'text',
-            title: open ? 'Show less' : 'Show the whole message · Alt+↑/↓ to reorder',
-            onclick: () => {
-                if (open) state.queueOpen.delete(entry.id);
-                else state.queueOpen.add(entry.id);
-                renderQueue(state.runner);
-            },
-            // Dragging is not the only way to change the order.
-            onkeydown: (e) => {
-                if (!e.altKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
-                e.preventDefault();
-                moveQueued(entry.id, e.key === 'ArrowUp' ? -1 : 1);
-            },
+            class: 'queue-text', type: 'button', 'data-part': 'text', tabindex: '-1',
+            title: open ? 'Show less' : 'Show the whole message',
+            onclick: toggleOpen,
         }, open ? entry.text : clip(entry.text, 110)),
         el('div', { class: 'queue-acts' },
             el('button', {
-                class: 'queue-act', type: 'button', 'data-part': 'edit',
+                class: 'queue-act', type: 'button', 'data-part': 'edit', tabindex: '-1',
                 title: 'Take it out of the queue and back into the box',
                 onclick: () => editQueued(entry),
             }, 'Edit'),
             el('button', {
-                class: 'queue-act danger', type: 'button', 'data-part': 'drop',
+                class: 'queue-act danger', type: 'button', 'data-part': 'drop', tabindex: '-1',
                 title: 'Drop this message', 'aria-label': `Drop waiting message ${i + 1}`,
                 onclick: () => dropQueued(entry),
             }, '×'),
@@ -1596,6 +1637,46 @@ function queueItem(entry, i) {
         commitQueueOrder();
     });
     return li;
+}
+
+/**
+ * The keys on a focused chip.
+ *
+ * | ↑ ↓ | move between waiting messages |
+ * | Alt+↑ Alt+↓ | move the message itself |
+ * | Enter | take it back to the composer to reword |
+ * | Esc | drop it |
+ * | Space | show the whole message |
+ *
+ * Enter and Esc are the two things you actually want mid-turn — "I said that
+ * wrong" and "never mind" — so they are the unmodified keys.
+ */
+function onChipKey(e, entry, i, toggleOpen) {
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        const dir = e.key === 'ArrowUp' ? -1 : 1;
+        // Alt moves the message; on its own the key moves you.
+        if (e.altKey) moveQueued(entry.id, dir);
+        else focusChipAt(i + dir);
+        return;
+    }
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        editQueued(entry);
+        return;
+    }
+    if (e.key === 'Escape') {
+        // Escape closes the new-session dialog and leaves a subagent; while a
+        // chip has the focus it belongs to the chip.
+        e.preventDefault();
+        e.stopPropagation();
+        dropQueued(entry, { fromKeyboard: true, index: i });
+        return;
+    }
+    if (e.key === ' ' || e.key === 'Spacebar') {
+        e.preventDefault();   // otherwise the transcript scrolls behind it
+        toggleOpen();
+    }
 }
 
 /**
@@ -1632,8 +1713,10 @@ async function moveQueued(id, delta) {
     try {
         const r = await post(`/api/sessions/${state.current.sessionId}/queue/reorder`, { ids });
         applyRunner(r.status);
-        const moved = dom.queueList.querySelector(`[data-id="${CSS.escape(id)}"] .queue-text`);
-        if (moved) moved.focus();
+        // Follow the message, not the position: holding Alt+↑ should keep walking
+        // the same message up the queue.
+        const moved = dom.queueList.querySelector(`[data-id="${CSS.escape(id)}"]`);
+        if (moved) { state.queueFocus = id; setRovingTab(); moved.focus(); }
     } catch (err) {
         toast(`Could not reorder the queue: ${err.message}`, 'error');
     }
@@ -1652,13 +1735,21 @@ async function commitQueueOrder() {
     }
 }
 
-async function dropQueued(entry) {
+async function dropQueued(entry, { fromKeyboard = false, index = 0 } = {}) {
     if (!state.current) return;
     try {
         const r = await del(`/api/sessions/${state.current.sessionId}/queue/${entry.id}`);
         applyRunner(r.status);
         // No toast: the chip disappearing where you clicked is the feedback, and
         // *Edit* next to it is the non-destructive way out.
+        //
+        // Dropping from the keyboard has to say where the focus went, or it lands
+        // on the body and the next Escape closes something else entirely. Stay on
+        // the row that took this one's place; if that was the last message, the
+        // panel is gone and the composer is where you were headed anyway.
+        if (fromKeyboard && !focusChipAt(Math.min(index, state.queue.length - 1))) {
+            dom.input.focus();
+        }
     } catch (err) {
         toast(err.message, 'warn');
         refreshQueue();

@@ -1188,6 +1188,23 @@ a:hover { text-decoration: underline; }
     color: var(--text-4);
 }
 .queue-count { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The key map appears when the keyboard is actually in the queue, and takes the
+   count's place rather than pushing the row wider. */
+.queue-keys {
+    display: none;
+    flex: none;
+    gap: 4px;
+    white-space: nowrap;
+    color: var(--text-4);
+}
+.queue-keys b {
+    margin-left: 7px;
+    font: 500 10.5px/1 var(--mono);
+    color: var(--text-3);
+}
+.queue-keys b:first-child { margin-left: 0; }
+.queue:focus-within .queue-keys { display: block; }
 .queue-clear {
     flex: none;
     padding: 3px 9px;
@@ -1222,6 +1239,17 @@ a:hover { text-decoration: underline; }
 }
 .queue-item:hover { background: var(--s3); }
 .queue-item.dragging { opacity: 0.4; }
+
+/* The roving focus is the only thing telling you which message Enter and Esc are
+   about to act on, so it is styled on :focus rather than :focus-visible — it has
+   to be unmistakable every time, not only when the browser judges it earned. */
+.queue-item:focus {
+    outline: none;
+    background: var(--blue-cont);
+}
+.queue-item:focus .queue-text { color: #e6edff; }
+.queue-item:focus .queue-n { background: var(--blue); color: #062e6f; }
+.queue-item:focus .queue-act { color: #b3c7ea; }
 
 .queue-grip {
     flex: none;

@@ -108,11 +108,14 @@ create one in `%APPDATA%\claude-sessions\`:
 | **Dev servers** | The second chip row. Green means the port is answering right now; click to switch DevBrowser to that tab, starting DevBrowser if it isn't running. |
 | **Open folder** | The folder button by the title shows the session's working directory in Windows File Explorer, through the `\\wsl.localhost` share. |
 | **Composer** | Sends to the session, resuming it in place — the same transcript a terminal would append to. |
-| **Send queue** | Write while an agent is working and the message waits, listed above the composer in send order. Each one can be expanded, reordered, pulled back for editing, or dropped, right up until its turn starts. |
+| **Send queue** | Write while an agent is working and the message waits, listed above the composer in send order. Each one can be expanded, reordered, pulled back for editing, or dropped, right up until its turn starts. `Shift+Tab` out of the composer to work through them without the mouse. |
 
 Shortcuts: `Ctrl+Enter` send, `Ctrl+K` filter, `Ctrl+N` new session, `Esc` leave
-a subagent, `Alt+↑`/`Alt+↓` move a queued message, `Ctrl+R` reload, `Ctrl+±` zoom,
-`F12` devtools.
+a subagent, `Ctrl+R` reload, `Ctrl+±` zoom, `F12` devtools.
+
+In the send queue, `Shift+Tab` from the composer reaches the message you wrote
+last, and from there: `↑`/`↓` pick, `Alt+↑`/`Alt+↓` move it, `Space` show it in
+full, `Enter` take it back to the composer to reword, `Esc` drop it.
 
 ### Subagents are sessions too
 
@@ -190,6 +193,17 @@ cancellable:
 
 Rows in the rail carry a `+N queued` badge, so a session you queued work for and
 walked away from says so from the outside.
+
+**One chip is one tab stop.** The obvious markup — a text button plus *Edit* plus
+*×* on every row — puts `Shift+Tab` out of the composer on the drop button of the
+last message, which is both surprising and the one control there you would least
+like to hit blind. So the row itself is the focusable thing, its buttons are out
+of the tab order, and everything they do has a key on the row: `Enter` to reword,
+`Esc` to drop, `Space` to read it in full. The two you want mid-turn — *I said
+that wrong* and *never mind* — are the unmodified keys. Dropping from the keyboard
+moves the focus to the row that took the dropped one's place, or to the composer
+if that was the last one, because focus falling to the body would leave the next
+`Esc` closing something else entirely.
 
 ### Archiving never deletes
 
