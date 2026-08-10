@@ -264,7 +264,9 @@ async function api(req, res, url, pathname) {
         const statuses = pool.statuses();
         for (const s of sessions) {
             const st = statuses[s.sessionId];
-            if (st) { s.runner = { state: st.state, activity: st.activity }; }
+            // `queued` rides along so the rail can say a session has work waiting
+            // even while you are looking at a different one.
+            if (st) { s.runner = { state: st.state, activity: st.activity, queued: st.queued }; }
         }
         return send(res, 200, { sessions, ready: index.ready });
     }
@@ -360,14 +362,59 @@ async function api(req, res, url, pathname) {
                 permissionMode: normalizeMode(body.permissionMode),
                 fork: !!body.fork,
             });
-            r.send(text);
-            return send(res, 200, { ok: true, status: r.status(), cwd, fork: !!body.fork });
+            const entry = r.send(text);
+            // Which of the two happened matters to the caller: a message that is
+            // still queued is safe on this side and will be handed back if the
+            // process dies, so the UI only has to hold on to one that went out.
+            const status = r.status();
+            return send(res, 200, {
+                ok: true, id: entry.id, cwd, fork: !!body.fork, status,
+                queued: status.queue.some(q => q.id === entry.id),
+            });
         }
 
         if (tail === 'stop' && req.method === 'POST') {
             const r = pool.get(sessionId);
             if (!r) return send(res, 404, { error: 'no live process for this session' });
-            return send(res, 200, { ok: r.stop() });
+            const { ok, dropped } = r.stop();
+            return send(res, 200, { ok, dropped: dropped.map(q => q.text) });
+        }
+
+        // --- the send queue ------------------------------------------------
+        // Messages waiting behind the turn in flight. They live in the runner, so
+        // there is nothing to read when no process is live — that is an empty
+        // queue, not an error.
+        if (tail === 'queue') {
+            const r = pool.get(sessionId);
+            const qid = seg[4];
+
+            if (req.method === 'GET') {
+                const st = r && r.status();
+                return send(res, 200, { queue: st ? st.queue : [], status: st || null });
+            }
+
+            if (req.method === 'DELETE' && qid) {
+                if (!r) return send(res, 404, { error: 'nothing is queued for this session' });
+                const removed = r.dequeue(qid);
+                // Already written to the process: it cannot be taken back, and
+                // saying so beats silently doing nothing.
+                if (!removed) return send(res, 409, { error: 'that message has already been sent' });
+                return send(res, 200, { ok: true, removed, status: r.status() });
+            }
+
+            if (req.method === 'DELETE') {
+                if (!r) return send(res, 200, { ok: true, dropped: [] });
+                const dropped = r.clearQueue();
+                return send(res, 200, { ok: true, dropped, status: r.status() });
+            }
+
+            if (req.method === 'POST' && qid === 'reorder') {
+                if (!r) return send(res, 404, { error: 'nothing is queued for this session' });
+                const body = await readJson(req);
+                if (!Array.isArray(body.ids)) return send(res, 400, { error: 'ids must be an array' });
+                r.reorder(body.ids.map(String));
+                return send(res, 200, { ok: true, status: r.status() });
+            }
         }
 
         if (tail === 'flags' && req.method === 'POST') {

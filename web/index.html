@@ -105,6 +105,16 @@
             <button id="btn-stop" class="btn-stop" type="button" hidden>Stop</button>
           </div>
 
+          <!-- Messages waiting behind the turn in flight, in the order they will
+               be sent. Reads top to bottom into the composer below it. -->
+          <div id="queue" class="queue" hidden>
+            <div class="queue-head">
+              <span id="queue-count" class="queue-count"></span>
+              <button id="queue-clear" class="queue-clear" type="button">Clear</button>
+            </div>
+            <ol id="queue-list" class="queue-list" aria-label="Messages waiting to be sent"></ol>
+          </div>
+
           <div class="input-row">
             <textarea id="input" rows="1" placeholder="Send a message to this session…"
                       aria-label="Message"></textarea>

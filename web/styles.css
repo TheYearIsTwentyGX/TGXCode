@@ -330,15 +330,31 @@ a:hover { text-decoration: underline; }
     display: inline-flex;
     align-items: center;
     gap: 5px;
+    /* The activity text may be squeezed to nothing on a narrow rail; the dot is
+       the row's only sign of life, so it never is. */
+    min-width: 6px;
     color: var(--yellow);
 }
+.strip-meta .pulse-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .strip-meta .pulse::before {
     content: "";
+    flex: none;
     width: 6px; height: 6px;
     border-radius: 50%;
     background: var(--yellow);
     animation: breathe 1.6s var(--ease) infinite;
 }
+/* Messages you queued and then walked away from. Ahead of the activity, which is
+   what gives way when the row runs out of room. */
+.strip-meta .wait {
+    flex: none;
+    padding: 1px 7px;
+    border-radius: var(--pill);
+    background: var(--blue-tint);
+    color: var(--blue);
+    font-size: 10.5px;
+}
+
 .strip[data-state="active"] .strip-meta::before {
     content: "";
     width: 6px; height: 6px;
@@ -1150,6 +1166,115 @@ a:hover { text-decoration: underline; }
     transition: background var(--t-fast) var(--ease);
 }
 .btn-stop:hover { background: #33201f; }
+
+/* ── send queue ───────────────────────────────────────────────────────────
+   Sits directly above the box you type in, so the panel and the composer read
+   as one column in send order: what is waiting, then what you are writing. */
+
+.queue[hidden] { display: none; }
+.queue {
+    margin-bottom: 8px;
+    padding: 8px 8px 9px;
+    background: var(--s1);
+    border-radius: var(--r-lg);
+}
+
+.queue-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 6px 7px 8px;
+    font: 400 11.5px/1 var(--sans);
+    color: var(--text-4);
+}
+.queue-count { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.queue-clear {
+    flex: none;
+    padding: 3px 9px;
+    border-radius: var(--pill);
+    font: 400 11.5px/1 var(--sans);
+    color: var(--text-3);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.queue-clear:hover { background: #33201f; color: var(--red); }
+
+.queue-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    /* Four chips before it scrolls: enough to see a plan, not enough to eat the
+       transcript. */
+    max-height: 168px;
+    overflow-y: auto;
+}
+
+.queue-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 6px 5px 4px;
+    background: var(--s2);
+    border-radius: var(--r);
+    transition: background var(--t-fast) var(--ease), opacity var(--t-fast) var(--ease);
+}
+.queue-item:hover { background: var(--s3); }
+.queue-item.dragging { opacity: 0.4; }
+
+.queue-grip {
+    flex: none;
+    width: 14px;
+    color: var(--text-4);
+    font-size: 12px;
+    text-align: center;
+    cursor: grab;
+}
+.queue-item.dragging .queue-grip { cursor: grabbing; }
+
+/* The send order, which is the whole point of showing the queue at all. */
+.queue-n {
+    flex: none;
+    width: 17px; height: 17px;
+    border-radius: 50%;
+    background: var(--s4);
+    color: var(--text-3);
+    font: 500 10.5px/17px var(--mono);
+    text-align: center;
+}
+
+.queue-text {
+    flex: 1;
+    min-width: 0;
+    padding: 0;
+    text-align: left;
+    font: 400 12.5px/1.5 var(--sans);
+    color: var(--text-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+}
+.queue-item.open .queue-text {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 132px;
+    overflow-y: auto;
+}
+.queue-text:hover { color: var(--text); }
+
+.queue-acts { flex: none; display: flex; align-items: center; gap: 2px; }
+.queue-act {
+    padding: 3px 8px;
+    border-radius: var(--pill);
+    font: 400 11.5px/1.3 var(--sans);
+    color: var(--text-4);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.queue-act:hover { background: var(--s4); color: var(--text-2); }
+.queue-act.danger { font-size: 14px; line-height: 1; padding: 3px 8px 4px; }
+.queue-act.danger:hover { background: #33201f; color: var(--red); }
 
 .input-row {
     display: flex;

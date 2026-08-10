@@ -24,6 +24,9 @@ const { EventEmitter } = require('events');
 const { CLAUDE_BIN } = require('./config');
 const { describeTool } = require('./transcript');
 
+// Queue entry ids only have to be unique per process; the UI never persists one.
+let queueSeq = 0;
+
 // Processes are cheap to restart (resume is a warm cache hit), so don't hoard them.
 const MAX_LIVE = 4;
 const IDLE_EVICT_MS = 15 * 60 * 1000;
@@ -56,7 +59,10 @@ class Runner extends EventEmitter {
         this.lastError = null;
         this.lastResult = null;        // {costUsd, durationMs, numTurns, isError}
         this.lastUsedAt = Date.now();
-        this.queue = [];               // prompts sent before the process was ready
+        // Messages waiting their turn: {id, text, at}. Held here rather than
+        // written straight through, so they stay visible and cancellable — see
+        // _flushQueue.
+        this.queue = [];
         this.inFlight = [];            // written to the process, not yet answered
         this._buf = '';
         this._stderr = '';
@@ -134,7 +140,7 @@ class Runner extends EventEmitter {
                 this.emit('failed', {
                     kind: classified.kind,
                     message: classified.message,
-                    unsent: this.inFlight.concat(this.queue),
+                    unsent: this.inFlight.concat(this.queue.map(q => q.text)),
                 });
                 this.inFlight.length = 0;
                 this.queue.length = 0;
@@ -148,45 +154,108 @@ class Runner extends EventEmitter {
         this._flushQueue();
     }
 
-    /** Queue or deliver a user turn. Starts the process if it isn't running. */
+    /**
+     * Queue or deliver a user turn. Starts the process if it isn't running.
+     * Returns the queue entry, so a caller can tell whether its message went
+     * out immediately or is still waiting.
+     */
     send(text) {
         this.lastUsedAt = Date.now();
-        this.queue.push(text);
+        const entry = { id: `q${++queueSeq}`, text, at: Date.now() };
+        this.queue.push(entry);
         if (!this.proc) this.start();
         else this._flushQueue();
+        if (this.queue.includes(entry)) this._queueChanged();
+        return entry;
     }
 
+    /**
+     * Hand the next message to the process, one turn at a time.
+     *
+     * The CLI would happily take several lines at once, but then they are gone:
+     * nothing can be reordered or taken back, and there is no queue left for the
+     * UI to show. So only one message is in flight at a time and the rest wait
+     * here, where they can still be edited, reordered or dropped.
+     */
     _flushQueue() {
         if (!this.proc || !this.proc.stdin.writable) return;
-        while (this.queue.length) {
-            const text = this.queue.shift();
-            const line = JSON.stringify({
-                type: 'user',
-                message: { role: 'user', content: [{ type: 'text', text }] },
-            }) + '\n';
-            this.proc.stdin.write(line);
-            // Held until a result arrives: if the process dies first, this text
-            // was never written to the transcript and would otherwise be lost.
-            this.inFlight.push(text);
-            this._setState('busy', 'Thinking…');
+        if (this.state === 'busy' || this.inFlight.length) return;
+        const entry = this.queue.shift();
+        if (!entry) return;
+        const line = JSON.stringify({
+            type: 'user',
+            message: { role: 'user', content: [{ type: 'text', text: entry.text }] },
+        }) + '\n';
+        this.proc.stdin.write(line);
+        // Held until a result arrives: if the process dies first, this text
+        // was never written to the transcript and would otherwise be lost.
+        this.inFlight.push(entry.text);
+        this._setState('busy', 'Thinking…');
+        // _setState only reports when the state or activity moved; a shorter
+        // queue is news on its own.
+        this._queueChanged();
+    }
+
+    /** Drop one waiting message. Returns it, or null if it already went out. */
+    dequeue(id) {
+        const i = this.queue.findIndex(q => q.id === id);
+        if (i < 0) return null;
+        const [entry] = this.queue.splice(i, 1);
+        this._queueChanged();
+        return entry;
+    }
+
+    /** Drop everything still waiting. Returns what was dropped. */
+    clearQueue() {
+        if (!this.queue.length) return [];
+        const dropped = this.queue.slice();
+        this.queue.length = 0;
+        this._queueChanged();
+        return dropped;
+    }
+
+    /**
+     * Put the queue in the order given. Ids that are no longer waiting are
+     * ignored, and anything the caller did not mention keeps its place at the
+     * back — a message that flushed while the drag was in progress must not
+     * take the rest of the queue with it.
+     */
+    reorder(ids) {
+        const byId = new Map(this.queue.map(q => [q.id, q]));
+        const next = [];
+        for (const id of ids) {
+            const entry = byId.get(id);
+            if (entry && !next.includes(entry)) next.push(entry);
         }
+        for (const entry of this.queue) if (!next.includes(entry)) next.push(entry);
+        this.queue = next;
+        this._queueChanged();
+        return this.queue;
+    }
+
+    _queueChanged() {
+        this.emit('status', this.status());
     }
 
     /**
      * End the current turn. The CLI has no mid-turn interrupt on this channel, so
      * this terminates the process; the transcript keeps everything written so far
      * and the session resumes cleanly on the next send.
+     *
+     * Anything still queued is dropped — stopping means stopping — but it is
+     * handed back rather than binned, so the UI can return it to the composer.
      */
     stop() {
-        if (!this.proc) return false;
+        if (!this.proc) return { ok: false, dropped: [] };
         this._stopping = true;
+        const dropped = this.queue.slice();
         this.queue.length = 0;
         try { this.proc.stdin.end(); } catch { /* already closed */ }
         const proc = this.proc;
         // Give it a moment to exit gracefully, then insist.
         setTimeout(() => { try { proc.kill('SIGKILL'); } catch { /* gone */ } }, 1500).unref();
         try { proc.kill('SIGTERM'); } catch { /* gone */ }
-        return true;
+        return { ok: true, dropped };
     }
 
     /**
@@ -323,6 +392,8 @@ class Runner extends EventEmitter {
                 this.inFlight.length = 0;   // safely in the transcript now
                 this.retry = null;
                 this._setState('idle', null);
+                // The turn that was holding the queue back has landed.
+                this._flushQueue();
                 if (failed) {
                     this.emit('notice', {
                         level: 'warn', kind: 'turn_failed',
@@ -368,6 +439,12 @@ class Runner extends EventEmitter {
             retry: this.retry,
             lastResult: this.lastResult,
             queued: this.queue.length,
+            // The messages themselves, not just a count: the composer renders one
+            // chip per entry and needs the id to cancel or reorder it.
+            // Every status event carries this, so it stays a list of what is
+            // still waiting — the message being answered is on its way to the
+            // transcript and is read from there like any other.
+            queue: this.queue.map(q => ({ id: q.id, text: q.text, at: q.at })),
             // Lets the UI show how long a turn has been going, which matters
             // when the API is being retried for minutes at a time.
             busySince: this.state === 'busy' ? this.busySince : null,
@@ -427,12 +504,17 @@ class RunnerPool extends EventEmitter {
     /** Existing runner for a session, or a new one bound to `cwd`. */
     ensure(sessionId, { cwd, model, permissionMode, isNew = false, fork = false } = {}) {
         let r = this.runners.get(sessionId);
+        let carried = [];
         if (r) {
             // A mode, model or fork change only takes effect on a fresh process.
             const wants = { model: model ?? r.model, permissionMode: permissionMode ?? r.permissionMode };
             if (r.state !== 'busy'
                 && (wants.model !== r.model || wants.permissionMode !== r.permissionMode
                     || fork !== r.fork || r.state === 'error')) {
+                // A model or mode change replaces the process. Messages still
+                // waiting belong to the user, not to the process, so they move
+                // across rather than disappearing.
+                carried = r.clearQueue();
                 r.retire();
                 this.runners.delete(sessionId);
                 r = null;
@@ -455,6 +537,10 @@ class RunnerPool extends EventEmitter {
             this.runners.set(to, r);
             this.emit('forked', { from, to });
         });
+        if (carried.length) {
+            r.queue.push(...carried);
+            r._queueChanged();
+        }
         this.runners.set(sessionId, r);
         return r;
     }

@@ -108,9 +108,11 @@ create one in `%APPDATA%\claude-sessions\`:
 | **Dev servers** | The second chip row. Green means the port is answering right now; click to switch DevBrowser to that tab, starting DevBrowser if it isn't running. |
 | **Open folder** | The folder button by the title shows the session's working directory in Windows File Explorer, through the `\\wsl.localhost` share. |
 | **Composer** | Sends to the session, resuming it in place — the same transcript a terminal would append to. |
+| **Send queue** | Write while an agent is working and the message waits, listed above the composer in send order. Each one can be expanded, reordered, pulled back for editing, or dropped, right up until its turn starts. |
 
 Shortcuts: `Ctrl+Enter` send, `Ctrl+K` filter, `Ctrl+N` new session, `Esc` leave
-a subagent, `Ctrl+R` reload, `Ctrl+±` zoom, `F12` devtools.
+a subagent, `Alt+↑`/`Alt+↓` move a queued message, `Ctrl+R` reload, `Ctrl+±` zoom,
+`F12` devtools.
 
 ### Subagents are sessions too
 
@@ -158,6 +160,36 @@ Subagents don't take messages — the composer greys out while you are reading o
 A subagent that spawned its own subagents shows them inside its transcript, at
 the `Task` call that spawned them, rather than flattening them into the session's
 chip row where they did not happen.
+
+### The send queue holds messages back on purpose
+
+A turn takes minutes, and the next thing you want to say arrives long before it
+ends. The CLI would accept several messages down its stdin at once — but the
+moment one is written it is gone: it cannot be reordered, taken back, or even
+looked at. That is why nothing was ever shown for it.
+
+So the bridge keeps them instead. One message is in flight at a time; the rest sit
+in `Runner.queue` until the turn that was holding them up lands, and only then is
+the next one handed over. What you get for that is a queue you can actually work
+with — expand a message, drag it earlier, pull it back into the box to reword, or
+drop it — because until it is written, it is still yours.
+
+The line the app will not cross is pretending. Once a message has gone to the
+process it leaves the list, because it is on its way to the transcript and no
+button here can recall it. Everything that stays visible is genuinely still
+cancellable:
+
+- **Reordering** is committed to the bridge on drop, and a message that flushed
+  mid-drag keeps its place rather than dragging the rest of the queue with it.
+- **Stop** drops the queue, since stopping means stopping — but the messages were
+  never sent anywhere, so they come back to the composer instead of vanishing.
+- **A process that dies** hands back everything it was holding, the turn it died
+  on and the queue behind it, in the order you wrote them.
+- **A model or permission change** replaces the process; the queue moves across,
+  because those messages belong to you, not to the process.
+
+Rows in the rail carry a `+N queued` badge, so a session you queued work for and
+walked away from says so from the outside.
 
 ### Archiving never deletes
 

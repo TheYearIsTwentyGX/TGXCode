@@ -24,6 +24,13 @@ async function post(path, body) {
     return data;
 }
 
+async function del(path) {
+    const r = await fetch(path, { method: 'DELETE', headers: HEADERS });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    return data;
+}
+
 // ── state ────────────────────────────────────────────────────────────────
 
 const state = {
@@ -56,13 +63,18 @@ const state = {
     })(),
     unsent: new Map(),      // sessionId -> text written to a process but not yet in a transcript
     busyTimer: null,        // ticks the elapsed-time readout while a turn runs
+    queue: [],              // the current session's waiting messages, from the bridge
+    queueDrag: null,        // id of the chip being dragged
+    queueOpen: new Set(),   // ids of chips expanded to their full text
+    queueSig: '',           // what the chips were last built from, to avoid churn
 };
 
 const $ = (id) => document.getElementById(id);
 const dom = {};
 for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-sub',
     'channels', 'scroll', 'log', 'status-line', 'status-text', 'btn-stop', 'input',
-    'btn-send', 'model', 'perm', 'btn-new', 'db-status', 'db-label', 'toasts',
+    'btn-send', 'queue', 'queue-list', 'queue-count', 'queue-clear',
+    'model', 'perm', 'btn-new', 'db-status', 'db-label', 'toasts',
     'btn-pin', 'btn-folder', 'btn-archive', 'turns', 'turn-pop',
     'agents', 'agent-scroll', 'agent-log', 'btn-back', 'btn-back-label',
     'new-scrim', 'new-cwd', 'new-picker', 'new-prompt', 'new-model', 'new-go']) {
@@ -278,6 +290,7 @@ function groupCard(key, label, list) {
 function strip(s) {
     const running = s.runner && (s.runner.state === 'busy' || s.runner.state === 'starting');
     const current = state.current && state.current.sessionId === s.sessionId;
+    const queued = (s.runner && s.runner.queued) || 0;
 
     // A row, not a button: it holds its own pin and archive controls, and
     // nesting buttons is not allowed.
@@ -302,8 +315,13 @@ function strip(s) {
                     ago(s.lastUserTs || s.lastTs)),
                 el('span', { class: 'dot' }, '·'),
                 el('span', {}, `${s.userMessages} ${s.userMessages === 1 ? 'turn' : 'turns'}`),
+                // Something you queued here and then walked away from. Ahead of
+                // the activity because the activity is the one part of the row
+                // that may be cut short — it is the least specific thing on it.
+                queued ? queuedBadge(queued) : null,
                 running ? el('span', { class: 'dot' }, '·') : null,
-                running ? el('span', { class: 'pulse' }, clip(s.runner.activity || 'Working', 22)) : null,
+                running ? el('span', { class: 'pulse' },
+                    el('span', { class: 'pulse-t' }, clip(s.runner.activity || 'Working', 22))) : null,
             ),
         ),
         el('div', { class: 'strip-actions' },
@@ -320,6 +338,25 @@ function strip(s) {
             }, icon(s.archived ? 'unarchive' : 'archive')),
         ),
     );
+}
+
+function queuedBadge(queued) {
+    return el('span', {
+        class: 'wait',
+        title: `${queued} message${queued === 1 ? '' : 's'} waiting to be sent`,
+    }, `+${queued} queued`);
+}
+
+/** Update one row's queue count in place, rather than rebuilding the rail. */
+function patchQueuedBadge(stripEl, queued) {
+    const meta = stripEl.querySelector('.strip-meta');
+    if (!meta) return;
+    const existing = meta.querySelector('.wait');
+    if (!queued) { if (existing) existing.remove(); return; }
+    const fresh = queuedBadge(queued);
+    if (existing) existing.replaceWith(fresh);
+    // Ahead of the activity, in the place strip() would have built it.
+    else meta.insertBefore(fresh, meta.querySelector('.pulse')?.previousSibling || null);
 }
 
 /** Toggle pin/archive, updating in place so the rail doesn't jump under the cursor. */
@@ -1066,6 +1103,7 @@ function applyComposerScope() {
     if (onAgent) {
         dom.btnSend.disabled = true;
         dom.btnStop.hidden = true;
+        renderQueue(state.runner);   // the session's queue is not the agent's business
     } else {
         dom.btnSend.disabled = !state.current;
         applyRunner(state.runner);
@@ -1210,6 +1248,16 @@ function connect() {
         if (strip) {
             strip.dataset.state = (s.state === 'busy' || s.state === 'starting')
                 ? 'running' : strip.dataset.state;
+            // Keep the row's queue count live: the rail is only rebuilt when the
+            // session list changes, and queueing a message does not change it.
+            const row = state.sessions.find(x => x.sessionId === s.sessionId);
+            if (row) {
+                if (!row.runner) row.runner = { state: s.state, activity: s.activity, queued: 0 };
+                if (row.runner.queued !== s.queued) {
+                    row.runner.queued = s.queued;
+                    patchQueuedBadge(strip, s.queued);
+                }
+            }
         }
     });
 
@@ -1270,6 +1318,11 @@ function applyRunner(s) {
     // send to, so its controls stay out of the way.
     dom.btnStop.hidden = !busy || Boolean(state.agent);
     dom.btnSend.disabled = !state.current || Boolean(state.agent);
+    // Say what the button will actually do. While a turn is running the message
+    // joins the queue rather than going anywhere, and that is worth admitting
+    // before the click, not after.
+    dom.btnSend.textContent = busy && !state.agent ? 'Queue' : 'Send';
+    applyQueue(s);
 
     // A turn can run for minutes; without a clock it is impossible to tell a
     // long tool call from a stuck one.
@@ -1431,6 +1484,228 @@ function markActiveTurn() {
     }
 }
 
+// ── send queue ───────────────────────────────────────────────────────────
+// One turn runs at a time, so anything you write while an agent is working
+// waits. The bridge holds those messages instead of pushing them straight down
+// stdin, which is what makes them showable here: still yours, still editable,
+// still droppable. Once a message has gone to the process it is on its way to
+// the transcript and it leaves this list — nothing here pretends to cancel
+// something that has already been sent.
+
+/** Take the bridge's view of the queue and repaint. */
+function applyQueue(s) {
+    state.queue = (s && s.queue) || [];
+    for (const id of state.queueOpen) {
+        if (!state.queue.some(q => q.id === id)) state.queueOpen.delete(id);
+    }
+    renderQueue(s);
+}
+
+function renderQueue(s) {
+    const q = state.queue;
+    // While a subagent is on screen the composer belongs to nothing you can send
+    // to, so its queue is out of scope too.
+    const show = q.length > 0 && !state.agent;
+    dom.queue.hidden = !show;
+    if (!show) {
+        dom.queueList.replaceChildren();
+        state.queueSig = '';
+        return;
+    }
+
+    const busy = s && (s.state === 'busy' || s.state === 'starting');
+    dom.queueCount.textContent = q.length === 1
+        ? (busy ? '1 message waiting for this turn to finish' : '1 message waiting')
+        : `${q.length} messages waiting${busy ? ', in this order' : ''}`;
+    dom.queueClear.textContent = q.length === 1 ? 'Drop it' : 'Drop all';
+
+    // Runner status arrives every time the activity line moves, several times a
+    // turn. Rebuilding the chips on each one would throw away focus, an expanded
+    // message and any drag in progress, so only rebuild when the queue itself
+    // actually changed.
+    if (state.queueDrag) return;   // the drag owns the DOM until it ends
+    const sig = q.map(x => x.id).join(',') + '|' + [...state.queueOpen].sort().join(',');
+    if (sig === state.queueSig && dom.queueList.children.length === q.length) return;
+    state.queueSig = sig;
+
+    // Keep the keyboard where it was: reordering with Alt+arrows repaints the
+    // list under the very control being used.
+    const active = document.activeElement;
+    const held = active && active.closest && active.closest('.queue-item');
+    const holdId = held ? held.dataset.id : null;
+    const holdPart = held ? active.dataset.part : null;
+
+    dom.queueList.replaceChildren(...q.map(queueItem));
+
+    if (holdId) {
+        const back = dom.queueList.querySelector(`[data-id="${CSS.escape(holdId)}"]`);
+        const target = back && (back.querySelector(`[data-part="${holdPart}"]`)
+            || back.querySelector('[data-part="text"]'));
+        if (target) target.focus();
+    }
+}
+
+function queueItem(entry, i) {
+    const open = state.queueOpen.has(entry.id);
+    const li = el('li', {
+        class: 'queue-item' + (open ? ' open' : ''),
+        'data-id': entry.id,
+        draggable: 'true',
+    },
+        el('span', { class: 'queue-grip', title: 'Drag to reorder', 'aria-hidden': 'true' }, '⠿'),
+        el('span', { class: 'queue-n' }, String(i + 1)),
+        el('button', {
+            class: 'queue-text', type: 'button', 'data-part': 'text',
+            title: open ? 'Show less' : 'Show the whole message · Alt+↑/↓ to reorder',
+            onclick: () => {
+                if (open) state.queueOpen.delete(entry.id);
+                else state.queueOpen.add(entry.id);
+                renderQueue(state.runner);
+            },
+            // Dragging is not the only way to change the order.
+            onkeydown: (e) => {
+                if (!e.altKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
+                e.preventDefault();
+                moveQueued(entry.id, e.key === 'ArrowUp' ? -1 : 1);
+            },
+        }, open ? entry.text : clip(entry.text, 110)),
+        el('div', { class: 'queue-acts' },
+            el('button', {
+                class: 'queue-act', type: 'button', 'data-part': 'edit',
+                title: 'Take it out of the queue and back into the box',
+                onclick: () => editQueued(entry),
+            }, 'Edit'),
+            el('button', {
+                class: 'queue-act danger', type: 'button', 'data-part': 'drop',
+                title: 'Drop this message', 'aria-label': `Drop waiting message ${i + 1}`,
+                onclick: () => dropQueued(entry),
+            }, '×'),
+        ),
+    );
+
+    li.addEventListener('dragstart', (e) => {
+        state.queueDrag = entry.id;
+        li.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        // Firefox ignores a drag with nothing on the transfer.
+        e.dataTransfer.setData('text/plain', entry.id);
+    });
+    li.addEventListener('dragend', () => {
+        li.classList.remove('dragging');
+        state.queueDrag = null;
+        commitQueueOrder();
+    });
+    return li;
+}
+
+/**
+ * Reordering moves the row under the cursor as you go, so the list you drop on
+ * is the list you get. The bridge is told once, on drop.
+ */
+function onQueueDragOver(e) {
+    if (!state.queueDrag) return;
+    e.preventDefault();
+    const dragged = dom.queueList.querySelector('.dragging');
+    const over = e.target.closest && e.target.closest('.queue-item');
+    if (!dragged || !over || over === dragged) return;
+    const box = over.getBoundingClientRect();
+    const after = e.clientY > box.top + box.height / 2;
+    dom.queueList.insertBefore(dragged, after ? over.nextSibling : over);
+    renumberQueue();
+}
+
+function renumberQueue() {
+    [...dom.queueList.children].forEach((li, i) => {
+        const n = li.querySelector('.queue-n');
+        if (n) n.textContent = String(i + 1);
+    });
+}
+
+/** Nudge one message up or down the queue, keeping the keyboard focus on it. */
+async function moveQueued(id, delta) {
+    if (!state.current) return;
+    const ids = state.queue.map(q => q.id);
+    const from = ids.indexOf(id);
+    const to = from + delta;
+    if (from < 0 || to < 0 || to >= ids.length) return;
+    ids.splice(to, 0, ids.splice(from, 1)[0]);
+    try {
+        const r = await post(`/api/sessions/${state.current.sessionId}/queue/reorder`, { ids });
+        applyRunner(r.status);
+        const moved = dom.queueList.querySelector(`[data-id="${CSS.escape(id)}"] .queue-text`);
+        if (moved) moved.focus();
+    } catch (err) {
+        toast(`Could not reorder the queue: ${err.message}`, 'error');
+    }
+}
+
+async function commitQueueOrder() {
+    if (!state.current) return;
+    const ids = [...dom.queueList.children].map(li => li.dataset.id);
+    if (ids.join() === state.queue.map(q => q.id).join()) return;
+    try {
+        const r = await post(`/api/sessions/${state.current.sessionId}/queue/reorder`, { ids });
+        applyRunner(r.status);
+    } catch (err) {
+        toast(`Could not reorder the queue: ${err.message}`, 'error');
+        renderQueue(state.runner);   // back to what the bridge actually has
+    }
+}
+
+async function dropQueued(entry) {
+    if (!state.current) return;
+    try {
+        const r = await del(`/api/sessions/${state.current.sessionId}/queue/${entry.id}`);
+        applyRunner(r.status);
+        // No toast: the chip disappearing where you clicked is the feedback, and
+        // *Edit* next to it is the non-destructive way out.
+    } catch (err) {
+        toast(err.message, 'warn');
+        refreshQueue();
+    }
+}
+
+/** Pull a waiting message back into the composer, where it can be rewritten. */
+async function editQueued(entry) {
+    if (!state.current) return;
+    try {
+        const r = await del(`/api/sessions/${state.current.sessionId}/queue/${entry.id}`);
+        applyRunner(r.status);
+        restoreToComposer(entry.text);
+    } catch (err) {
+        toast(err.message, 'warn');
+        refreshQueue();
+    }
+}
+
+async function clearQueue() {
+    if (!state.current || !state.queue.length) return;
+    const dropped = state.queue.map(q => q.text);
+    try {
+        const r = await del(`/api/sessions/${state.current.sessionId}/queue`);
+        if (r.status) applyRunner(r.status); else applyQueue(null);
+        toast(dropped.length === 1 ? 'Message dropped.' : `${dropped.length} messages dropped.`,
+            'info', {
+                action: {
+                    label: 'Undo',
+                    onClick: async () => { for (const t of dropped) await sendMessage({ text: t }); },
+                },
+            });
+    } catch (err) {
+        toast(`Could not clear the queue: ${err.message}`, 'error');
+        refreshQueue();
+    }
+}
+
+/** Re-read the queue after a failed edit, so the view is never ahead of the bridge. */
+async function refreshQueue() {
+    if (!state.current) return;
+    try {
+        const r = await get(`/api/sessions/${state.current.sessionId}/queue`);
+        applyQueue(r.status || { queue: r.queue });
+    } catch { /* the next runner-status will fix it */ }
+}
+
 // ── composer ─────────────────────────────────────────────────────────────
 
 function autoGrow() {
@@ -1455,13 +1730,16 @@ async function sendMessage({ fork = false, text: override = null } = {}) {
             model: dom.model.value || null,
             permissionMode: dom.perm.value,
         });
-        // Held until the turn lands in the transcript. If the process dies first
-        // — a session already running elsewhere is the common case — this is the
-        // only surviving copy of what was typed.
-        state.unsent.set(sessionId, text);
+        // Only a message that actually went to the process needs holding here:
+        // if it died before answering, this is the only surviving copy of what
+        // was typed. A queued one is still on the bridge, which hands the whole
+        // queue back on failure.
+        if (!r.queued) state.unsent.set(sessionId, text);
         applyRunner(r.status);
-        state.pinned = true;
-        scrollToEnd(false);
+        if (!r.queued) {
+            state.pinned = true;
+            scrollToEnd(false);
+        }
     } catch (err) {
         restoreToComposer(text);
         toast(`Could not send: ${err.message}`, 'error');
@@ -1472,7 +1750,11 @@ async function sendMessage({ fork = false, text: override = null } = {}) {
 
 /** A turn that never started: give the text back, and offer the way forward. */
 function handleSendFailure(f) {
-    const text = (f.unsent && f.unsent[0]) || state.unsent.get(f.sessionId) || '';
+    // Everything the process was holding, in send order — the turn it died on
+    // plus whatever was still queued behind it.
+    const text = (f.unsent && f.unsent.length)
+        ? f.unsent.join('\n\n')
+        : (state.unsent.get(f.sessionId) || '');
     state.unsent.delete(f.sessionId);
 
     const onCurrent = state.current && state.current.sessionId === f.sessionId;
@@ -1592,9 +1874,26 @@ dom.input.addEventListener('keydown', (e) => {
 
 dom.btnStop.addEventListener('click', async () => {
     if (!state.current) return;
-    try { await post(`/api/sessions/${state.current.sessionId}/stop`, {}); toast('Stopped.', 'ok'); }
-    catch (err) { toast(`Could not stop: ${err.message}`, 'error'); }
+    try {
+        const r = await post(`/api/sessions/${state.current.sessionId}/stop`, {});
+        // Stopping drops the queue — but the messages were never sent anywhere,
+        // so they go back in the box rather than into the bin.
+        if (r.dropped && r.dropped.length) {
+            restoreToComposer(r.dropped.join('\n\n'));
+            toast(r.dropped.length === 1
+                ? 'Stopped. The message that was waiting is back in the box.'
+                : `Stopped. The ${r.dropped.length} waiting messages are back in the box.`, 'ok');
+        } else {
+            toast('Stopped.', 'ok');
+        }
+    } catch (err) { toast(`Could not stop: ${err.message}`, 'error'); }
 });
+
+dom.queueClear.addEventListener('click', clearQueue);
+dom.queueList.addEventListener('dragover', onQueueDragOver);
+// Without this the browser treats the list as a non-target and the drag snaps
+// back instead of dropping.
+dom.queueList.addEventListener('drop', (e) => e.preventDefault());
 
 // Stop auto-scrolling the moment the user scrolls away from the bottom.
 dom.scroll.addEventListener('scroll', () => {
