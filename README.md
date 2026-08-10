@@ -182,20 +182,43 @@ at that size it is mud, and the silhouette is what identifies the app anyway. Th
 
 ### Permissions
 
-Headless Claude never blocks on a permission prompt — it denies the tool call and
-carries on. So the mode you pick under the composer decides what a session can
-actually do:
+When Claude wants to run something the mode does not already cover, the turn
+stops and a card appears at the foot of the transcript with the tool name and its
+input rendered the way the tool block will render once it has run:
 
-- **acceptEdits** (default) — file edits go through, most other tools prompt, and
-  prompting means denied.
+```
+┌ Bash — permission needed ───────────────── 1:42 left ┐
+│  rm -rf dist                                          │
+│  [ Allow ]  [ Allow Bash all session ]  [ Deny ]      │
+└───────────────────────────────────────────────────────┘
+```
+
+`Y`, `A` and `N` answer it from the keyboard; the card takes focus on arrival if
+the window is focused. **Allow … all session** means this tool for this session
+only — a permanent allowlist belongs in Claude Code's own settings, not here.
+
+So the mode under the composer now decides how *often* you are asked, not what is
+possible:
+
+- **acceptEdits** (default) — file edits go through, most other tools ask.
 - **auto** — Claude judges each call, which is the mode these sessions normally
   run in interactively.
-- **bypassPermissions** — everything runs. Convenient and unguarded; pick it
-  deliberately.
+- **manual** — asks about everything.
+- **bypassPermissions** — everything runs, unasked. Convenient and unguarded;
+  pick it deliberately.
 
-When a call is denied the transcript shows a "Permission needed" notice saying
-so, rather than leaving you to wonder why Claude stopped short. Changing the mode
-takes effect on the next message.
+Changing the mode takes effect on the next message.
+
+Two things to know about the edges. A card nobody answers is **denied for you**
+after two minutes — the countdown says when — because a blocked turn otherwise
+holds a process open forever; and if no window is open at all, the ask is denied
+immediately, which is what the app did before any of this existed. Two auto-denials
+in a row stop the turn rather than let it spin.
+
+Approvals ride a control channel on the same stream that carries the session, and
+that channel is not a documented, stable surface. If the installed `claude` turns
+out not to support it, the app says so once and falls back to permission modes
+alone; sending never breaks over a protocol difference.
 
 ### How dev servers are found
 
@@ -287,9 +310,12 @@ Two other things that trip agents up here:
 - **Content comes from the transcript file, never from the process.** That is
   what makes a session running in your terminal look identical to one started
   here. The trade-off is that updates arrive per message rather than per token.
-- **Stop ends the process.** There is no mid-turn interrupt on the headless
-  channel. Whatever was written stays in the transcript and the session resumes
-  cleanly on the next message.
+- **Stop asks first, then insists.** The first click interrupts the turn over the
+  control channel: the process stays alive, nothing is left half-written, and the
+  session is resumable. For a few seconds afterwards the button reads **Force
+  stop**, which kills the process — the old behaviour, and still the thing to
+  reach for when the polite path does not take. The status line says which one
+  happened, because the outcomes differ.
 - **The bridge outlives the window.** It is started detached so a long turn
   survives closing the app, and shuts down on exit only when nothing is running.
   A second launch reuses whatever is already listening on 45888.

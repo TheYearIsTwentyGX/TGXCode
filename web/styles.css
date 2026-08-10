@@ -621,6 +621,40 @@ a:hover { text-decoration: underline; }
     padding: 6px 28px 48px;
 }
 
+/* ── loading skeleton ────────────────────────────────────────────────── */
+/* Shown in place of a transcript while its events are still on the wire, laid
+   out on the same grid as .ev so the pane does not jump when they arrive.
+   The pulse is shadcn/ui's Skeleton: a 2s ease-in-out fade to half opacity over
+   a muted surface, with its 6px radius landing on our --r-xs. */
+
+.skel {
+    background: var(--s3);
+    border-radius: var(--r-xs);
+    animation: skel-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+@keyframes skel-pulse { 50% { opacity: 0.5; } }
+@media (prefers-reduced-motion: reduce) { .skel { animation: none; } }
+
+.skel-time { width: 34px; height: 10px; margin: 6px 0 0 auto; }
+.skel-name { width: 46px; height: 11px; margin-bottom: 9px; }
+/* 11px on a 24px pitch matches the 14px/1.72 prose it stands in for. */
+.skel-line { height: 11px; margin: 6.5px 0; }
+/* The collapsed tool row: 13px/1.5 text in 8px padding, inside .tool's radius. */
+.skel-tool { height: 36px; border-radius: var(--r); margin: 3px 0; }
+
+.load-failed {
+    max-width: 560px;
+    margin: 40px auto;
+    text-align: center;
+    color: var(--text-3);
+    font-size: 13.5px;
+}
+
+/* `content-visibility: auto` was tried here and removed. Once tool bodies are
+   built lazily an event is a single light row, and the cost of the browser
+   skipping and unskipping 1700 of them measured ~40% *slower* to scroll than
+   simply laying them out (p50 22.8ms vs 16.8ms over the same sweep), with no
+   gain on open. It is worth revisiting only if rows get heavy again. */
 .ev {
     display: grid;
     grid-template-columns: var(--gutter) 1fr;
@@ -809,6 +843,113 @@ a:hover { text-decoration: underline; }
     100% { background: var(--s3); }
 }
 @media (prefers-reduced-motion: reduce) { .ev-user.flash .ev-body { animation: none; } }
+
+/* ── approval card ───────────────────────────────────────────────────── */
+/* A blocked turn. It reads as a tool block on purpose — the thing you are
+   approving should look the way it will look once it has run — but it is
+   outlined and warm-tinted, because unlike a tool block it is asking you
+   something and the turn does not move until you answer. */
+
+.perm {
+    /* Left-aligned with event bodies: the gutter is for timestamps, and this
+       has no time of its own until the transcript records the outcome. */
+    margin: 10px 0 6px calc(var(--gutter) + 16px);
+    background: var(--s2);
+    border: 1px solid var(--yellow);
+    border-radius: var(--r);
+    padding: 12px 15px 13px;
+    outline: none;
+    animation: perm-in var(--t-med) var(--ease);
+}
+.perm:focus-visible { box-shadow: 0 0 0 2px var(--blue); }
+.perm[data-pending] { opacity: 0.55; }
+
+@keyframes perm-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) { .perm { animation: none; } }
+
+.perm-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font: 400 13px/1.5 var(--sans);
+}
+.perm-tool {
+    font: 500 12.5px/1.5 var(--mono);
+    color: var(--yellow);
+}
+.perm-title { color: var(--text-3); }
+.perm-left {
+    margin-left: auto;
+    font-size: 11.5px;
+    color: var(--text-4);
+    font-variant-numeric: tabular-nums;
+}
+
+.perm-arg {
+    margin-top: 7px;
+    font: 400 12px/1.6 var(--mono);
+    color: var(--text-2);
+    /* A command worth approving is worth reading in full, so it wraps rather
+       than being clipped the way a settled tool row is. */
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 220px;
+    overflow: auto;
+}
+
+.perm-why {
+    margin-top: 6px;
+    font: 400 11.5px/1.5 var(--sans);
+    color: var(--text-4);
+}
+
+.perm-btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+
+.perm-btn {
+    height: 30px;
+    padding: 0 14px;
+    border-radius: var(--pill);
+    background: var(--s3);
+    color: var(--text-2);
+    font: 500 12px/1 var(--sans);
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    transition: background var(--t-fast) var(--ease);
+}
+.perm-btn:hover:not(:disabled) { background: var(--s4); }
+.perm-btn:disabled { opacity: 0.5; }
+.perm-btn.allow { background: var(--blue-cont); color: var(--blue); }
+.perm-btn.allow:hover:not(:disabled) { background: #26426f; }
+.perm-btn.deny { color: var(--red); }
+.perm-btn.deny:hover:not(:disabled) { background: #33201f; }
+
+.perm-btn kbd {
+    font: 500 10px/1 var(--mono);
+    padding: 3px 5px;
+    border-radius: var(--r-xs);
+    background: rgba(0, 0, 0, 0.28);
+    color: inherit;
+    opacity: 0.75;
+}
+
+/* What happened to a card that is gone. The transcript carries the real
+   record; this is only so the card does not vanish without a word. */
+.perm-done {
+    margin: 4px 0 4px calc(var(--gutter) + 16px);
+    font: 400 11.5px/1.6 var(--sans);
+    color: var(--text-4);
+}
+
+.status-line[data-state="ask"] .led {
+    background: var(--yellow);
+    animation: breathe 1.6s var(--ease) infinite;
+}
+.btn-stop.force { color: var(--red); background: #33201f; }
+.btn-stop.force:hover { background: #452a28; }
 
 /* ── tool calls ──────────────────────────────────────────────────────── */
 
@@ -1136,6 +1277,7 @@ a:hover { text-decoration: underline; }
 }
 @media (prefers-reduced-motion: reduce) {
     .status-line[data-state="busy"] .led,
+    .status-line[data-state="ask"] .led,
     .tool[data-status="pending"] > summary::before,
     .strip-meta .pulse::before { animation: none; }
 }

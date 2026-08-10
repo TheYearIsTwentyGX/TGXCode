@@ -32,6 +32,7 @@ const state = {
     query: '',
     current: null,          // session summary
     offset: 0,
+    openSeq: 0,             // bumped per open; a slow fetch checks it before drawing
     nodes: new Map(),       // event id -> {ev, node}
     tools: new Map(),       // tool_use id -> {ev, node}
     turns: [],              // the user messages, in order, for the turn rail
@@ -56,6 +57,9 @@ const state = {
     })(),
     unsent: new Map(),      // sessionId -> text written to a process but not yet in a transcript
     busyTimer: null,        // ticks the elapsed-time readout while a turn runs
+    ask: null,              // the approval this session is blocked on, if any
+    askTimer: null,         // ticks the countdown on the approval card
+    stopArmed: 0,           // when a soft Stop happened, for the force escalation
 };
 
 const $ = (id) => document.getElementById(id);
@@ -349,42 +353,128 @@ async function openSession(id, { quiet = false } = {}) {
     if (state.current && state.current.sessionId === id) return true;
     // Keep whatever is half-typed for the session being left behind.
     if (state.current) saveDraft(state.current.sessionId, dom.input.value);
+
+    // Switching should feel like switching, not like waiting: a long transcript
+    // is megabytes and the fetch is most of the delay. The rail summary is the
+    // same object the transcript endpoint returns, so the header is drawn for
+    // real straight away and only the body stands in until the events land.
+    // A session we hold no summary for — a fork still being written, which
+    // openSessionSoon() retries against — has nothing to draw from, so it keeps
+    // the old behaviour of arriving all at once.
+    const known = state.sessions.find(s => s.sessionId === id) || null;
+    const seq = ++state.openSeq;
+    if (known) beginOpen(known);
+
     try {
         const data = await get(`/api/sessions/${id}`);
-        state.current = data.summary;
-        state.offset = data.offset;
-        state.runner = data.runner;
-        state.nodes.clear();
-        state.tools.clear();
-        state.pinned = true;
-        state.agents = [];  // the previous session's agents are not this one's
-        leaveAgent();       // a subagent belongs to the session it was spawned by
+        // Another session was opened while this was in flight; that one owns the
+        // pane now and must not be overwritten by this late arrival.
+        if (seq !== state.openSeq) return true;
 
-        dom.placeholder.hidden = true;
-        dom.conv.hidden = false;
+        if (known) state.current = data.summary;   // the index may have moved on
+        else beginOpen(data.summary);              // nothing was drawn yet
+        state.offset = data.offset;
 
         renderHeader();
-        dom.log.replaceChildren();
-        hideTurnPop();
+        dom.log.replaceChildren();      // drops the skeleton
         appendEvents(data.events);
         renderTurns();      // a session with no turns of your own still clears the rail
         renderRail();
-        applyRunner(state.runner);
+        applyRunner(data.runner);
         scrollToEnd(true);
 
         subscribe();
         loadChannels();
         loadAgents();
-
-        // Anything typed here before, or handed back by a failed turn.
-        dom.input.value = state.unsent.get(id) || loadDraft(id);
-        autoGrow();
-        dom.input.focus();
         return true;
     } catch (err) {
+        if (seq !== state.openSeq) return true;
+        // The pane is already showing this session, so the failure has to be
+        // said there — a toast alone would leave a skeleton pulsing forever.
+        if (known) showOpenFailed(id, err);
         if (!quiet) toast(`Could not open session: ${err.message}`, 'error');
         return false;
     }
+}
+
+/**
+ * Move the conversation pane onto a session before its transcript exists.
+ *
+ * Everything here is derivable from the summary alone. What needs the fetch —
+ * the events, the byte offset, the runner state — is deliberately left cleared
+ * so nothing downstream reads the session it just left.
+ */
+function beginOpen(summary) {
+    state.current = summary;
+    state.offset = 0;
+    state.runner = null;
+    state.nodes.clear();
+    state.tools.clear();
+    state.turns = [];
+    state.activeTurn = -1;
+    state.pinned = true;
+    state.agents = [];  // the previous session's agents are not this one's
+    state.ask = null;   // approvals belong to the session that is blocked on them
+    state.stopArmed = 0;
+    leaveAgent();       // a subagent belongs to the session it was spawned by
+
+    dom.placeholder.hidden = true;
+    dom.conv.hidden = false;
+
+    renderHeader();
+    hideTurnPop();
+    dom.turns.replaceChildren();
+    dom.log.replaceChildren(skeleton());
+    dom.scroll.scrollTop = 0;
+    renderRail();       // the clicked row takes the current-session mark now
+    applyRunner(null);
+
+    // Anything typed here before, or handed back by a failed turn.
+    dom.input.value = state.unsent.get(summary.sessionId) || loadDraft(summary.sessionId);
+    autoGrow();
+    dom.input.focus();
+}
+
+function showOpenFailed(id, err) {
+    dom.log.replaceChildren(el('div', { class: 'load-failed' },
+        el('p', {}, `This conversation could not be loaded: ${err.message}`),
+        el('button', { class: 'more-btn', type: 'button',
+            onclick: () => { state.current = null; openSession(id); } }, 'Try again'),
+    ));
+}
+
+/**
+ * A stand-in for a transcript that is still loading.
+ *
+ * Shaped like the real thing — the same time gutter, prose blocks and collapsed
+ * tool rows — so the pane keeps its rhythm and does not visibly re-flow when the
+ * events replace it.
+ */
+function skeleton() {
+    const row = (...body) => el('div', { class: 'ev' },
+        el('div', { class: 'ev-time' }, el('div', { class: 'skel skel-time' })),
+        el('div', { class: 'ev-body' }, ...body));
+    const said = (...widths) => row(
+        el('div', { class: 'skel skel-name' }),
+        ...widths.map(w => el('div', { class: 'skel skel-line', style: `width:${w}` })));
+    const called = () => row(el('div', { class: 'skel skel-tool' }));
+
+    const box = el('div', { class: 'skeleton', role: 'status',
+        'aria-label': 'Loading this conversation' });
+
+    // A transcript opens scrolled to its end, so a stand-in that stops a third
+    // of the way down the pane reads as an empty conversation rather than a
+    // loading one. Fill the height there actually is, alternating the shapes so
+    // it does not look like a repeating pattern.
+    const SAID = [['54%'], ['97%', '88%', '61%'], ['93%', '46%'], ['89%', '96%', '72%', '38%']];
+    const target = Math.max(320, dom.scroll.clientHeight);
+    for (let i = 0, used = 0; used < target; i++) {
+        const widths = SAID[i % SAID.length];
+        box.append(said(...widths));
+        used += 32 + widths.length * 24;            // label, then prose on a 24px pitch
+        for (let c = 0, calls = 1 + (i % 3); c < calls; c++) { box.append(called()); used += 42; }
+    }
+    return box;
 }
 
 /**
@@ -500,7 +590,14 @@ function appendEvents(events, view = SESSION_VIEW) {
 function patchTool(patch, view = SESSION_VIEW) {
     const entry = view.tools.get(patch.toolId);
     if (!entry) return;
-    Object.assign(entry.ev, patch);
+    // Only the result fields. The patch is a well-formed event in its own right,
+    // so it carries `id` (`toolu_x:result`), `kind` ('tool-result') and the
+    // result's own `ts` — and merging those into the call is silently fatal:
+    // the new kind makes renderEvent fall through to null so the block is never
+    // redrawn, the new id unkeys it from `nodes`, and the new ts is the same
+    // instant as resultTs so every duration collapses to 0ms.
+    const { id, kind, toolId, ts, ...fields } = patch;
+    Object.assign(entry.ev, fields);
     if (entry.ev.ts && patch.resultTs) {
         entry.ev.durationMs = Date.parse(patch.resultTs) - Date.parse(entry.ev.ts);
     }
@@ -509,7 +606,9 @@ function patchTool(patch, view = SESSION_VIEW) {
     const fresh = renderEvent(entry.ev);
     if (!fresh) return;
     const det = fresh.querySelector('details');
-    if (det && wasOpen) det.open = true;
+    // Rebuild the body up front rather than waiting for the toggle event the
+    // assignment queues, so a block that was open does not blink shut.
+    if (det && wasOpen) { fillTool(det, entry.ev); det.open = true; }
     entry.node.replaceWith(fresh);
     entry.node = fresh;
     view.nodes.set(entry.ev.id, entry);
@@ -617,7 +716,7 @@ function renderAgentDone(ev) {
 }
 
 function renderSystem(ev) {
-    const label = ev.subtype === 'permission_denied' ? 'Permission needed'
+    const label = ev.subtype === 'permission_denied' ? 'Denied'
         : ev.subtype === 'away_summary' ? 'Summary'
         : ev.subtype.replace(/_/g, ' ');
     const body = [
@@ -625,11 +724,134 @@ function renderSystem(ev) {
         el('div', { class: 'prose', html: renderMarkdown(ev.text) }),
     ];
     if (ev.subtype === 'permission_denied') {
+        // Now that asks are answerable, most denials on this line are somebody's
+        // answer rather than a mode quietly refusing. Point at the mode only as
+        // the thing to change if you are being asked more than you want to be.
         body.push(el('div', { class: 'note', style: 'margin-top:6px; font-size:11.5px; color:var(--text-4)' },
-            'This session\'s permission mode did not allow that tool. '
-            + 'Change it below the composer and ask again.'));
+            'The permission mode below the composer decides how often you are asked.'));
     }
     return row(ev, 'system', ...body);
+}
+
+// ── approvals ────────────────────────────────────────────────────────────
+// A blocked turn, drawn at the foot of the transcript rather than as a toast:
+// toasts are dismissible and this is not — the turn is waiting on the answer.
+// The card is deliberately built from the same vocabulary as a tool block, so
+// what you approve looks like what you will see once it has run.
+
+const DECISION_WORD = {
+    allow: 'Allowed.', 'allow-always': 'Allowed for the rest of this session.',
+    deny: 'Denied.', stopped: 'Stopped before it was approved.',
+    cancelled: 'Withdrawn — the turn ended.',
+    superseded: 'Replaced by a later request.',
+    'auto-denied': 'Denied automatically — nobody answered.',
+    abandoned: 'The Claude process exited before this was answered.',
+};
+
+/** Show, replace or clear the approval card for the session on screen. */
+function renderAsk() {
+    clearInterval(state.askTimer);
+    state.askTimer = null;
+    const old = dom.log.querySelector('.perm');
+    if (old) old.remove();
+    if (!state.ask || state.agent) return;
+
+    const ask = state.ask;
+    const card = el('div', { class: 'perm', tabindex: '0',
+        role: 'group', 'aria-label': `Permission needed for ${ask.displayName}` });
+
+    const clock = el('span', { class: 'perm-left' });
+    card.append(
+        el('div', { class: 'perm-head' },
+            el('span', { class: 'perm-tool' }, ask.displayName),
+            el('span', { class: 'perm-title' }, 'permission needed'),
+            clock),
+        // toolSummary is the collapsed-row text of an ordinary tool block. Shape
+        // the ask like the event it reads and the two render identically.
+        el('div', { class: 'perm-arg' },
+            toolSummary({ name: ask.tool, input: ask.input }) || ask.description || ''),
+    );
+
+    if (ask.agentId) {
+        card.append(el('div', { class: 'perm-why' }, 'Asked by a subagent.'));
+    }
+    if (ask.reason) card.append(el('div', { class: 'perm-why' }, clip(ask.reason, 220)));
+
+    const btns = el('div', { class: 'perm-btns' },
+        el('button', { class: 'perm-btn allow', type: 'button',
+            onclick: () => answerAsk('allow') },
+            'Allow ', el('kbd', {}, 'Y')),
+        el('button', { class: 'perm-btn', type: 'button',
+            onclick: () => answerAsk('allow-always') },
+            `Allow ${ask.displayName} all session `, el('kbd', {}, 'A')),
+        el('button', { class: 'perm-btn deny', type: 'button',
+            onclick: () => answerAsk('deny') },
+            'Deny ', el('kbd', {}, 'N')),
+    );
+    card.append(btns);
+
+    card.addEventListener('keydown', (e) => {
+        if (e.ctrlKey || e.metaKey || e.altKey) return;
+        const k = e.key.toLowerCase();
+        const decision = k === 'y' ? 'allow' : k === 'a' ? 'allow-always' : k === 'n' ? 'deny' : null;
+        if (!decision) return;
+        e.preventDefault();
+        answerAsk(decision);
+    });
+
+    dom.log.append(card);
+
+    // The countdown is not decoration: the ask is denied for you when it runs
+    // out, and that should never arrive as a surprise.
+    const tick = () => {
+        const remaining = ask.expiresAt - Date.now();
+        if (remaining <= 0) { clock.textContent = 'expired'; return; }
+        const s = Math.ceil(remaining / 1000);
+        clock.textContent = `${Math.floor(s / 60)}:${pad(s % 60)} left`;
+    };
+    tick();
+    state.askTimer = setInterval(tick, 1000);
+
+    // Taking focus makes the single-key answers work without a click, but only
+    // when the user is actually here — stealing focus from another window, or
+    // from something being typed, would be worse than a click.
+    if (document.hasFocus() && !dom.input.matches(':focus')) card.focus({ preventScroll: true });
+    if (state.pinned) scrollToEnd(false);
+}
+
+async function answerAsk(decision) {
+    const ask = state.ask;
+    if (!ask || !state.current) return;
+    const card = dom.log.querySelector('.perm');
+    if (card) {
+        for (const b of card.querySelectorAll('button')) b.disabled = true;
+        card.dataset.pending = '1';
+    }
+    try {
+        await post(`/api/sessions/${state.current.sessionId}/permission`,
+            { requestId: ask.requestId, decision });
+    } catch (err) {
+        // 409 means another window got there first; the resolved event that
+        // follows takes the card down with the right reason on it.
+        toast(`Could not answer: ${err.message}`, 'error');
+        if (card) {
+            delete card.dataset.pending;
+            for (const b of card.querySelectorAll('button')) b.disabled = false;
+        }
+    }
+}
+
+/** Take the card down and leave a line saying how it ended. */
+function resolveAsk(outcome) {
+    if (!state.ask) return;
+    const tool = state.ask.displayName;
+    state.ask = null;
+    renderAsk();
+    const word = DECISION_WORD[outcome] || 'Answered.';
+    // The transcript will carry the real record; this is only the acknowledgement
+    // that the card is gone and why.
+    dom.log.append(el('div', { class: 'perm-done' }, `${tool} — ${word}`));
+    if (state.pinned) scrollToEnd(false);
 }
 
 // ── tools ────────────────────────────────────────────────────────────────
@@ -673,8 +895,24 @@ function renderTool(ev) {
         ),
     );
 
-    det.append(el('div', { class: 'tool-body' }, ...toolBody(ev)));
+    // The body is the expensive half of a transcript — highlighted code, diffs,
+    // rendered markdown — and it sits behind a summary that is closed by
+    // default. Most tool calls are never opened, so build it on first expand.
+    det.append(el('div', { class: 'tool-body' }));
+    // `click` lands before the open state is applied, so the body is there in
+    // the same frame the block expands. `toggle` is the backstop for opens that
+    // do not come from a click — find-in-page, or `open` set in code.
+    det.addEventListener('click', () => fillTool(det, ev));
+    det.addEventListener('toggle', () => fillTool(det, ev));
     return row(ev, 'tool', det);
+}
+
+/** Build a tool's body the first time it is actually shown. */
+function fillTool(det, ev) {
+    const body = det.querySelector('.tool-body');
+    if (!body || body.dataset.filled) return;
+    body.dataset.filled = '1';
+    body.append(...toolBody(ev));
 }
 
 function toolBody(ev) {
@@ -1213,6 +1451,19 @@ function connect() {
         }
     });
 
+    es.addEventListener('permission-request', (e) => {
+        const p = JSON.parse(e.data);
+        if (!state.current || p.sessionId !== state.current.sessionId) return;
+        state.ask = p;
+        renderAsk();
+    });
+
+    es.addEventListener('permission-resolved', (e) => {
+        const p = JSON.parse(e.data);
+        if (!state.ask || state.ask.requestId !== p.requestId) return;
+        resolveAsk(p.outcome);
+    });
+
     es.addEventListener('notice', (e) => {
         const n = JSON.parse(e.data);
         toast(n.text, n.level === 'warn' ? 'warn' : 'info', 7000);
@@ -1263,13 +1514,32 @@ function applyRunner(s) {
     const busy = s && (s.state === 'busy' || s.state === 'starting');
     const retrying = Boolean(s && s.retry);
 
+    // The status carries the pending ask too, so a window opening onto a session
+    // that is already blocked draws the card without having seen the event.
+    const ask = (s && s.pendingPermission) || null;
+    const same = ask && state.ask && ask.requestId === state.ask.requestId;
+    // Redraw on any change, and also when the card should be up but is not —
+    // coming back from a subagent leaves the log without one.
+    if (!same || (ask && !dom.log.querySelector('.perm'))) {
+        state.ask = ask;
+        renderAsk();
+    }
+
     dom.statusLine.dataset.state = s
-        ? (s.state === 'error' ? 'error' : retrying ? 'stalled' : busy ? 'busy' : 'idle')
+        ? (s.state === 'error' ? 'error' : ask ? 'ask' : retrying ? 'stalled' : busy ? 'busy' : 'idle')
         : 'idle';
     // While a subagent is on screen the composer belongs to nothing you can
     // send to, so its controls stay out of the way.
     dom.btnStop.hidden = !busy || Boolean(state.agent);
     dom.btnSend.disabled = !state.current || Boolean(state.agent);
+
+    // The escalation is armed against one turn. Once that turn is over the
+    // button must not still be offering to kill the next one.
+    if (!busy && state.stopArmed) {
+        state.stopArmed = 0;
+        dom.btnStop.textContent = 'Stop';
+        dom.btnStop.classList.remove('force');
+    }
 
     // A turn can run for minutes; without a clock it is impossible to tell a
     // long tool call from a stuck one.
@@ -1590,10 +1860,45 @@ dom.input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendMessage(); }
 });
 
+// Two stops, because the consequences differ. The first asks the turn to end
+// where it is, which leaves the session resumable and the transcript coherent.
+// A second click within a few seconds kills the process instead, which is what
+// you want when the polite one did not take — and which can leave a tool call
+// half-finished, so it is never what happens on the first click.
+const FORCE_WINDOW_MS = 4000;
+
+function armForce() {
+    state.stopArmed = Date.now();
+    dom.btnStop.textContent = 'Force stop';
+    dom.btnStop.classList.add('force');
+    setTimeout(() => {
+        if (Date.now() - state.stopArmed < FORCE_WINDOW_MS) return;
+        state.stopArmed = 0;
+        dom.btnStop.textContent = 'Stop';
+        dom.btnStop.classList.remove('force');
+    }, FORCE_WINDOW_MS + 50);
+}
+
 dom.btnStop.addEventListener('click', async () => {
     if (!state.current) return;
-    try { await post(`/api/sessions/${state.current.sessionId}/stop`, {}); toast('Stopped.', 'ok'); }
-    catch (err) { toast(`Could not stop: ${err.message}`, 'error'); }
+    const hard = state.stopArmed > 0 && Date.now() - state.stopArmed < FORCE_WINDOW_MS;
+    dom.btnStop.disabled = true;
+    try {
+        const out = await post(`/api/sessions/${state.current.sessionId}/stop`, { hard });
+        if (out.how === 'soft') {
+            toast('Asked the turn to stop — the session stays resumable.', 'ok');
+            armForce();
+        } else {
+            state.stopArmed = 0;
+            dom.btnStop.textContent = 'Stop';
+            dom.btnStop.classList.remove('force');
+            toast('Killed the process. Whatever was written is in the transcript.', 'warn');
+        }
+    } catch (err) {
+        toast(`Could not stop: ${err.message}`, 'error');
+    } finally {
+        dom.btnStop.disabled = false;
+    }
 });
 
 // Stop auto-scrolling the moment the user scrolls away from the bottom.

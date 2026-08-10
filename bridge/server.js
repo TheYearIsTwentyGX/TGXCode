@@ -367,7 +367,30 @@ async function api(req, res, url, pathname) {
         if (tail === 'stop' && req.method === 'POST') {
             const r = pool.get(sessionId);
             if (!r) return send(res, 404, { error: 'no live process for this session' });
-            return send(res, 200, { ok: r.stop() });
+            const body = await readJson(req);
+            // Soft by default: ask the turn to stop rather than killing it, so
+            // the session stays resumable. `hard` is the escalation, and the
+            // answer says which one actually happened because the outcomes
+            // differ enough for the user to care.
+            const out = await r.stop({ hard: !!body.hard });
+            return send(res, 200, out);
+        }
+
+        // Answer a pending approval. The runner owns the reply channel, so all
+        // this does is hand the decision over and let it write.
+        if (tail === 'permission' && req.method === 'POST') {
+            const r = pool.get(sessionId);
+            if (!r) return send(res, 404, { error: 'no live process for this session' });
+            const body = await readJson(req);
+            const decision = String(body.decision || '');
+            if (!['allow', 'allow-always', 'deny'].includes(decision)) {
+                return send(res, 400, { error: 'decision must be allow, allow-always or deny' });
+            }
+            const out = r.answerPermission(String(body.requestId || ''), decision,
+                body.updatedInput && typeof body.updatedInput === 'object' ? body.updatedInput : null);
+            // 409 rather than 500: losing the race with another window is an
+            // ordinary outcome, not a failure.
+            return send(res, out.ok ? 200 : 409, out);
         }
 
         if (tail === 'flags' && req.method === 'POST') {
@@ -521,8 +544,20 @@ function serveStatic(res, pathname) {
 // Wiring
 // ---------------------------------------------------------------------------
 
+/**
+ * Is anyone in a position to answer an approval for this session?
+ *
+ * Any live SSE client counts, not just one already following this transcript:
+ * the card is a session-level thing and a window that is open can be switched to
+ * it. With nothing connected there is nobody to ask, and the runner denies —
+ * which is exactly what the app did before approvals existed.
+ */
+pool.hasViewer = () => clients.size > 0;
+
 index.on('changed', () => broadcast('sessions-changed', { at: Date.now() }));
 pool.on('status', (s) => broadcast('runner-status', s));
+pool.on('permission-request', (p) => broadcast('permission-request', p));
+pool.on('permission-resolved', (p) => broadcast('permission-resolved', p));
 pool.on('notice', (n) => broadcast('notice', n));
 pool.on('turn-complete', (r) => broadcast('turn-complete', r));
 pool.on('failed', (f) => broadcast('send-failed', f));
