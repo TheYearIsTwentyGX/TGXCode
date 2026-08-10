@@ -621,6 +621,40 @@ a:hover { text-decoration: underline; }
     padding: 6px 28px 48px;
 }
 
+/* ── loading skeleton ────────────────────────────────────────────────── */
+/* Shown in place of a transcript while its events are still on the wire, laid
+   out on the same grid as .ev so the pane does not jump when they arrive.
+   The pulse is shadcn/ui's Skeleton: a 2s ease-in-out fade to half opacity over
+   a muted surface, with its 6px radius landing on our --r-xs. */
+
+.skel {
+    background: var(--s3);
+    border-radius: var(--r-xs);
+    animation: skel-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+@keyframes skel-pulse { 50% { opacity: 0.5; } }
+@media (prefers-reduced-motion: reduce) { .skel { animation: none; } }
+
+.skel-time { width: 34px; height: 10px; margin: 6px 0 0 auto; }
+.skel-name { width: 46px; height: 11px; margin-bottom: 9px; }
+/* 11px on a 24px pitch matches the 14px/1.72 prose it stands in for. */
+.skel-line { height: 11px; margin: 6.5px 0; }
+/* The collapsed tool row: 13px/1.5 text in 8px padding, inside .tool's radius. */
+.skel-tool { height: 36px; border-radius: var(--r); margin: 3px 0; }
+
+.load-failed {
+    max-width: 560px;
+    margin: 40px auto;
+    text-align: center;
+    color: var(--text-3);
+    font-size: 13.5px;
+}
+
+/* `content-visibility: auto` was tried here and removed. Once tool bodies are
+   built lazily an event is a single light row, and the cost of the browser
+   skipping and unskipping 1700 of them measured ~40% *slower* to scroll than
+   simply laying them out (p50 22.8ms vs 16.8ms over the same sweep), with no
+   gain on open. It is worth revisiting only if rows get heavy again. */
 .ev {
     display: grid;
     grid-template-columns: var(--gutter) 1fr;

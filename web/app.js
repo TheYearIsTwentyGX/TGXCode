@@ -32,6 +32,7 @@ const state = {
     query: '',
     current: null,          // session summary
     offset: 0,
+    openSeq: 0,             // bumped per open; a slow fetch checks it before drawing
     nodes: new Map(),       // event id -> {ev, node}
     tools: new Map(),       // tool_use id -> {ev, node}
     turns: [],              // the user messages, in order, for the turn rail
@@ -349,42 +350,128 @@ async function openSession(id, { quiet = false } = {}) {
     if (state.current && state.current.sessionId === id) return true;
     // Keep whatever is half-typed for the session being left behind.
     if (state.current) saveDraft(state.current.sessionId, dom.input.value);
+
+    // Switching should feel like switching, not like waiting: a long transcript
+    // is megabytes and the fetch is most of the delay. The rail summary is the
+    // same object the transcript endpoint returns, so the header is drawn for
+    // real straight away and only the body stands in until the events land.
+    // A session we hold no summary for — a fork still being written, which
+    // openSessionSoon() retries against — has nothing to draw from, so it keeps
+    // the old behaviour of arriving all at once.
+    const known = state.sessions.find(s => s.sessionId === id) || null;
+    const seq = ++state.openSeq;
+    if (known) beginOpen(known);
+
     try {
         const data = await get(`/api/sessions/${id}`);
-        state.current = data.summary;
-        state.offset = data.offset;
-        state.runner = data.runner;
-        state.nodes.clear();
-        state.tools.clear();
-        state.pinned = true;
-        state.agents = [];  // the previous session's agents are not this one's
-        leaveAgent();       // a subagent belongs to the session it was spawned by
+        // Another session was opened while this was in flight; that one owns the
+        // pane now and must not be overwritten by this late arrival.
+        if (seq !== state.openSeq) return true;
 
-        dom.placeholder.hidden = true;
-        dom.conv.hidden = false;
+        if (known) state.current = data.summary;   // the index may have moved on
+        else beginOpen(data.summary);              // nothing was drawn yet
+        state.offset = data.offset;
 
         renderHeader();
-        dom.log.replaceChildren();
-        hideTurnPop();
+        dom.log.replaceChildren();      // drops the skeleton
         appendEvents(data.events);
         renderTurns();      // a session with no turns of your own still clears the rail
         renderRail();
-        applyRunner(state.runner);
+        applyRunner(data.runner);
         scrollToEnd(true);
 
         subscribe();
         loadChannels();
         loadAgents();
-
-        // Anything typed here before, or handed back by a failed turn.
-        dom.input.value = state.unsent.get(id) || loadDraft(id);
-        autoGrow();
-        dom.input.focus();
         return true;
     } catch (err) {
+        if (seq !== state.openSeq) return true;
+        // The pane is already showing this session, so the failure has to be
+        // said there — a toast alone would leave a skeleton pulsing forever.
+        if (known) showOpenFailed(id, err);
         if (!quiet) toast(`Could not open session: ${err.message}`, 'error');
         return false;
     }
+}
+
+/**
+ * Move the conversation pane onto a session before its transcript exists.
+ *
+ * Everything here is derivable from the summary alone. What needs the fetch —
+ * the events, the byte offset, the runner state — is deliberately left cleared
+ * so nothing downstream reads the session it just left.
+ */
+function beginOpen(summary) {
+    state.current = summary;
+    state.offset = 0;
+    state.runner = null;
+    state.nodes.clear();
+    state.tools.clear();
+    state.turns = [];
+    state.activeTurn = -1;
+    state.pinned = true;
+    state.agents = [];  // the previous session's agents are not this one's
+    state.ask = null;   // approvals belong to the session that is blocked on them
+    state.stopArmed = 0;
+    leaveAgent();       // a subagent belongs to the session it was spawned by
+
+    dom.placeholder.hidden = true;
+    dom.conv.hidden = false;
+
+    renderHeader();
+    hideTurnPop();
+    dom.turns.replaceChildren();
+    dom.log.replaceChildren(skeleton());
+    dom.scroll.scrollTop = 0;
+    renderRail();       // the clicked row takes the current-session mark now
+    applyRunner(null);
+
+    // Anything typed here before, or handed back by a failed turn.
+    dom.input.value = state.unsent.get(summary.sessionId) || loadDraft(summary.sessionId);
+    autoGrow();
+    dom.input.focus();
+}
+
+function showOpenFailed(id, err) {
+    dom.log.replaceChildren(el('div', { class: 'load-failed' },
+        el('p', {}, `This conversation could not be loaded: ${err.message}`),
+        el('button', { class: 'more-btn', type: 'button',
+            onclick: () => { state.current = null; openSession(id); } }, 'Try again'),
+    ));
+}
+
+/**
+ * A stand-in for a transcript that is still loading.
+ *
+ * Shaped like the real thing — the same time gutter, prose blocks and collapsed
+ * tool rows — so the pane keeps its rhythm and does not visibly re-flow when the
+ * events replace it.
+ */
+function skeleton() {
+    const row = (...body) => el('div', { class: 'ev' },
+        el('div', { class: 'ev-time' }, el('div', { class: 'skel skel-time' })),
+        el('div', { class: 'ev-body' }, ...body));
+    const said = (...widths) => row(
+        el('div', { class: 'skel skel-name' }),
+        ...widths.map(w => el('div', { class: 'skel skel-line', style: `width:${w}` })));
+    const called = () => row(el('div', { class: 'skel skel-tool' }));
+
+    const box = el('div', { class: 'skeleton', role: 'status',
+        'aria-label': 'Loading this conversation' });
+
+    // A transcript opens scrolled to its end, so a stand-in that stops a third
+    // of the way down the pane reads as an empty conversation rather than a
+    // loading one. Fill the height there actually is, alternating the shapes so
+    // it does not look like a repeating pattern.
+    const SAID = [['54%'], ['97%', '88%', '61%'], ['93%', '46%'], ['89%', '96%', '72%', '38%']];
+    const target = Math.max(320, dom.scroll.clientHeight);
+    for (let i = 0, used = 0; used < target; i++) {
+        const widths = SAID[i % SAID.length];
+        box.append(said(...widths));
+        used += 32 + widths.length * 24;            // label, then prose on a 24px pitch
+        for (let c = 0, calls = 1 + (i % 3); c < calls; c++) { box.append(called()); used += 42; }
+    }
+    return box;
 }
 
 /**
@@ -500,7 +587,14 @@ function appendEvents(events, view = SESSION_VIEW) {
 function patchTool(patch, view = SESSION_VIEW) {
     const entry = view.tools.get(patch.toolId);
     if (!entry) return;
-    Object.assign(entry.ev, patch);
+    // Only the result fields. The patch is a well-formed event in its own right,
+    // so it carries `id` (`toolu_x:result`), `kind` ('tool-result') and the
+    // result's own `ts` — and merging those into the call is silently fatal:
+    // the new kind makes renderEvent fall through to null so the block is never
+    // redrawn, the new id unkeys it from `nodes`, and the new ts is the same
+    // instant as resultTs so every duration collapses to 0ms.
+    const { id, kind, toolId, ts, ...fields } = patch;
+    Object.assign(entry.ev, fields);
     if (entry.ev.ts && patch.resultTs) {
         entry.ev.durationMs = Date.parse(patch.resultTs) - Date.parse(entry.ev.ts);
     }
@@ -509,7 +603,9 @@ function patchTool(patch, view = SESSION_VIEW) {
     const fresh = renderEvent(entry.ev);
     if (!fresh) return;
     const det = fresh.querySelector('details');
-    if (det && wasOpen) det.open = true;
+    // Rebuild the body up front rather than waiting for the toggle event the
+    // assignment queues, so a block that was open does not blink shut.
+    if (det && wasOpen) { fillTool(det, entry.ev); det.open = true; }
     entry.node.replaceWith(fresh);
     entry.node = fresh;
     view.nodes.set(entry.ev.id, entry);
@@ -673,8 +769,24 @@ function renderTool(ev) {
         ),
     );
 
-    det.append(el('div', { class: 'tool-body' }, ...toolBody(ev)));
+    // The body is the expensive half of a transcript — highlighted code, diffs,
+    // rendered markdown — and it sits behind a summary that is closed by
+    // default. Most tool calls are never opened, so build it on first expand.
+    det.append(el('div', { class: 'tool-body' }));
+    // `click` lands before the open state is applied, so the body is there in
+    // the same frame the block expands. `toggle` is the backstop for opens that
+    // do not come from a click — find-in-page, or `open` set in code.
+    det.addEventListener('click', () => fillTool(det, ev));
+    det.addEventListener('toggle', () => fillTool(det, ev));
     return row(ev, 'tool', det);
+}
+
+/** Build a tool's body the first time it is actually shown. */
+function fillTool(det, ev) {
+    const body = det.querySelector('.tool-body');
+    if (!body || body.dataset.filled) return;
+    body.dataset.filled = '1';
+    body.append(...toolBody(ev));
 }
 
 function toolBody(ev) {
