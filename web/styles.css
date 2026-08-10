@@ -274,13 +274,20 @@ a:hover { text-decoration: underline; }
     opacity: 0;
     transition: opacity var(--t-fast) var(--ease);
 }
+/* Every row hides its controls until reached for, pinned ones included. They are
+   only transparent, never `display: none` — a hidden button is still a button and
+   has to stay in the tab order. A pinned row says so with the marker in its meta
+   line instead, which costs a glyph rather than a third of the row's width. */
 .strip:hover .strip-actions,
-.strip:focus-within .strip-actions,
-.strip[data-pinned="true"] .strip-actions { opacity: 1; }
+.strip:focus-within .strip-actions { opacity: 1; }
 
-/* A pinned row shows its buttons all the time, so give the text room rather than
-   letting the overlay sit on top of it. */
-.strip[data-pinned="true"] .strip-main { padding-right: 62px; }
+.strip-meta .tag-pin {
+    display: grid;
+    place-items: center;
+    flex: none;
+    color: var(--blue);
+}
+.strip[aria-current="true"] .strip-meta .tag-pin { color: #cfe0ff; }
 
 .mini {
     display: grid;
@@ -293,6 +300,23 @@ a:hover { text-decoration: underline; }
 .mini:hover { background: var(--s4); color: var(--text); }
 .mini.on { color: var(--blue); }
 .strip[aria-current="true"] .mini:hover { background: #30507f; }
+/* Destructive controls stay the same weight as their neighbours until reached
+   for — colouring one red at rest would make every row look like a warning. */
+.mini.danger:hover { background: #3a2422; color: var(--red); }
+.strip[aria-current="true"] .mini.danger:hover { background: #4a2b28; }
+
+/* Only a development bridge lists these at all; the tag says why a row is here
+   in a window where it might otherwise look like real work. */
+.tag-test {
+    flex: none;
+    padding: 0 6px;
+    border-radius: var(--r-xs);
+    background: var(--s4);
+    color: var(--text-3);
+    font: 500 10px/16px var(--mono);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
 
 /* State reads as a small dot before the title, not a slab edge. */
 .strip-title {
@@ -418,6 +442,7 @@ a:hover { text-decoration: underline; }
 .icon-btn:hover { background: var(--s3); color: var(--text); }
 .icon-btn.on { color: var(--blue); }
 .icon-btn:disabled { opacity: 0.4; cursor: default; background: none; }
+.icon-btn.danger:hover { background: #3a2422; color: var(--red); }
 
 .conv-sub {
     display: flex;
@@ -1418,6 +1443,9 @@ a:hover { text-decoration: underline; }
     padding: 14px 24px 20px;
 }
 .modal-foot .spacer { flex: 1; }
+/* Model and permission mode ride along with the actions. They wrap rather than
+   squeezing the buttons when the window is narrow. */
+.modal-foot .opts { flex-wrap: wrap; margin: 0; }
 
 .field { margin-bottom: 18px; }
 .field > label {
@@ -1436,12 +1464,26 @@ a:hover { text-decoration: underline; }
     transition: box-shadow var(--t-fast) var(--ease);
 }
 .field textarea { min-height: 100px; resize: vertical; }
+/* Sized by script from its contents (see grow()), so it needs no floor of its
+   own — and it scrolls rather than growing without limit once it hits the cap. */
+.field textarea.grow { min-height: 0; resize: none; overflow-y: auto; }
 .field input[type="text"] { font-family: var(--mono); font-size: 12.5px; }
 .field textarea:focus, .field input:focus {
     outline: none;
     box-shadow: inset 0 0 0 2px var(--blue);
 }
 .field .note { margin-top: 7px; font-size: 12px; color: var(--text-4); line-height: 1.5; }
+
+.field label.check {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0;
+    font: 400 13.5px/1.4 var(--sans);
+    color: var(--text-2);
+    cursor: pointer;
+}
+.field label.check input { accent-color: var(--blue); width: 16px; height: 16px; }
 
 .picker {
     background: var(--bg);
@@ -1478,6 +1520,44 @@ a:hover { text-decoration: underline; }
 .btn.primary { background: var(--blue); color: #062e6f; }
 .btn.primary:hover { background: var(--blue); filter: brightness(1.08); }
 .btn:disabled { opacity: 0.45; cursor: default; }
+
+/* The one button in the app that destroys something. Filled, in the error
+   colour, so it can never be mistaken for the confirm it sits next to. */
+.btn.destructive { background: var(--red); color: #4a0d09; }
+.btn.destructive:hover { background: var(--red); filter: brightness(1.08); }
+
+/* ── delete confirm ──────────────────────────────────────────────────── */
+
+.modal.danger { width: min(500px, 100%); }
+.modal.danger .modal-body { padding-bottom: 4px; }
+
+/* What is about to go, named — the whole reason this is a dialog and not a
+   confirm(): a title and a turn count are enough to catch the wrong row. */
+.del-what {
+    font: 400 15px/1.5 var(--sans);
+    color: var(--text);
+    padding: 12px 14px;
+    background: var(--bg);
+    border-radius: var(--r) var(--r) 0 0;
+}
+.del-meta {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    flex-wrap: wrap;
+    padding: 0 14px 12px;
+    background: var(--bg);
+    border-radius: 0 0 var(--r) var(--r);
+    font: 400 12px/1.5 var(--sans);
+    color: var(--text-4);
+}
+.del-meta .sep { opacity: 0.7; }
+.del-warn {
+    margin: 16px 0 4px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--red);
+}
 
 /* ── toast ───────────────────────────────────────────────────────────── */
 

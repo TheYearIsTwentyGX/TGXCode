@@ -159,7 +159,22 @@ A subagent that spawned its own subagents shows them inside its transcript, at
 the `Task` call that spawned them, rather than flattening them into the session's
 chip row where they did not happen.
 
-### Archiving never deletes
+### The rail is sorted on load, and then left alone
+
+The bridge returns sessions ordered by when *you* last wrote in them, and it
+recomputes that whenever anything changes. The rail takes that order once, at
+load, and then holds it: a session taking a message does not climb past its
+neighbours, and it does not drag its project card to the top of the rail either.
+Rows staying where you last saw them matters more than the list being perfectly
+ordered at every instant — the alternative moves things out from under the
+cursor while you are reading them. Reload to re-sort.
+
+A session that appears *after* that first load is genuinely new rather than
+merely busy, so it goes to the top of its group, and a project with no sessions
+in it yet gets a new card at the top of the rail. Neither disturbs the position
+of anything already placed.
+
+### Archiving never deletes — deleting does
 
 Archiving moves a session out of the way and nothing else. The transcript is
 untouched, the session still opens and still answers, and a filter that matches
@@ -167,10 +182,42 @@ an archived session expands the group so the result is not silently hidden.
 Pinning and archiving are mutually exclusive — asking for a session to sit at the
 top *and* be tucked away is a contradiction, so each clears the other.
 
-These two flags are the only state this app owns; everything else it shows is
-derived from Claude Code's own files, which it never writes to. They live in
+The trash icon, on a row or in the conversation header, is the one control that
+does destroy something. It asks first, in a dialog that names the session and its
+turn count, because the thing worth checking is *which* conversation. Confirming
+removes the transcript and the sidecar directory beside it — the session's
+subagent transcripts and any spilled tool output — and nothing else. A session
+with a turn in flight is refused rather than deleted out from under the turn;
+stop it first.
+
+These flags are the only state this app owns; everything else it shows is derived
+from Claude Code's own files, which it never writes to. They live in
 `~/.local/share/claude-sessions/flags.json`, and flags for transcripts that no
 longer exist are pruned automatically.
+
+### Test sessions
+
+A session can be marked **test**, which means only a development bridge lists it;
+the everyday window on 45888 never shows it. Both instances read the same
+transcripts, so this label is the only thing keeping an agent's scratch work out
+of a list of real conversations.
+
+The **Test session — dev only** checkbox in the Start a session dialog appears
+only on a dev bridge. Over the API it is a field on create, or a flag afterwards:
+
+```bash
+curl -sX POST http://127.0.0.1:45899/api/sessions \
+  -H 'X-Claude-Sessions-Client: 1' -H 'Content-Type: application/json' \
+  -d '{"cwd":"/home/you/project","prompt":"…","test":true}'
+
+curl -sX POST http://127.0.0.1:45899/api/sessions/$ID/flags \
+  -H 'X-Claude-Sessions-Client: 1' -H 'Content-Type: application/json' \
+  -d '{"test":true}'
+```
+
+Labelled sessions gather in a **Test sessions** card at the foot of the rail, so
+the ones left behind are easy to find and delete. Delete them; the label is a way
+to keep them out of sight until you do, not a substitute for cleaning up.
 
 ### The icon
 

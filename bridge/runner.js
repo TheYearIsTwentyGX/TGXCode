@@ -906,6 +906,20 @@ class RunnerPool extends EventEmitter {
         return out;
     }
 
+    /**
+     * Kill a session's process and forget it, without waiting for the idle
+     * sweep. For a session being deleted: the process holds the transcript we
+     * are about to unlink open and would carry on writing to a file nobody can
+     * see, so a polite interrupt is not enough here.
+     */
+    async forget(sessionId) {
+        const r = this.runners.get(sessionId);
+        if (!r) return false;
+        this.runners.delete(sessionId);
+        try { await r.stop({ hard: true }); } catch { /* already gone */ }
+        return true;
+    }
+
     _evictIdle() {
         const now = Date.now();
         for (const [id, r] of this.runners) {
