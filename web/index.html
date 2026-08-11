@@ -161,7 +161,10 @@
             <label for="perm">Permissions</label>
             <select id="perm" aria-label="Permission mode">
               <option value="acceptEdits">acceptEdits</option>
-              <option value="auto">auto</option>
+              <!-- The default: it is the mode these sessions run in when you
+                   drive them from a terminal, so a conversation continued here
+                   behaves the way the same conversation would there. -->
+              <option value="auto" selected>auto</option>
               <!-- Worth having now that a prompt is a real question rather than
                    a silent denial: manual asks about everything. -->
               <option value="manual">manual</option>
@@ -256,7 +259,10 @@
         <option value="acceptEdits">acceptEdits</option>
         <option value="auto">auto</option>
         <option value="manual">manual</option>
-        <option value="plan">plan</option>
+        <!-- Default here, unlike the composer: the first message of a session is
+             the one written with the least idea of what it will touch, so it is
+             worth reading a plan back before anything is changed. -->
+        <option value="plan" selected>plan</option>
         <option value="dontAsk">dontAsk</option>
         <option value="bypassPermissions">bypassPermissions</option>
       </select>

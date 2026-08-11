@@ -295,14 +295,25 @@ only — a permanent allowlist belongs in Claude Code's own settings, not here.
 So the mode under the composer now decides how *often* you are asked, not what is
 possible:
 
-- **acceptEdits** (default) — file edits go through, most other tools ask.
-- **auto** — Claude judges each call, which is the mode these sessions normally
-  run in interactively.
+- **auto** (default) — Claude judges each call, which is the mode these sessions
+  normally run in interactively.
+- **acceptEdits** — file edits go through, most other tools ask.
 - **manual** — asks about everything.
+- **plan** — nothing is changed at all; the turn ends with a plan to read.
 - **bypassPermissions** — everything runs, unasked. Convenient and unguarded;
   pick it deliberately.
 
 Changing the mode takes effect on the next message.
+
+The control belongs to the session in front of you, not to the window: opening a
+conversation puts it on the mode that session is running in, or — for one with no
+process of its own — the mode its transcript was last seen in, read back from
+disk. A mode you pick and do not send is remembered against that session for as
+long as the window is open, so looking away and back does not quietly drop it.
+
+**Start a session** starts in **plan** instead, because the first message of a
+session is the one written with the least idea of what it will touch. Switch the
+composer to another mode once you have read the plan back.
 
 Two things to know about the edges. A card nobody answers is **denied for you**
 after two minutes — the countdown says when — because a blocked turn otherwise

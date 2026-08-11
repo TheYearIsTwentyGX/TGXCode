@@ -34,6 +34,11 @@ async function del(path) {
 
 // ── state ────────────────────────────────────────────────────────────────
 
+// What the composer falls back to for a session nothing is known about. Matches
+// the `selected` option in index.html and the bridge's own default, so all three
+// agree about what "no mode was chosen" means.
+const DEFAULT_PERM = 'auto';
+
 const state = {
     clientId: null,
     dev: false,             // talking to a development bridge
@@ -52,6 +57,10 @@ const state = {
     agentNodes: new Map(),  // the viewed subagent's own event id -> {ev, node}
     agentTools: new Map(),
     runner: null,
+    // A permission mode picked here and not yet sent, per session. Deliberately
+    // not persisted: after a reload the transcript is the better answer, and this
+    // only exists so that looking away and back does not quietly drop a choice.
+    permChoice: new Map(),
     channels: [],
     pinned: true,           // stick to the bottom as new events arrive
     // Which rail groups are shut. Storing the collapsed ones rather than the
@@ -1820,7 +1829,31 @@ function applyRunner(s) {
     if (busy && s.busySince) {
         state.busyTimer = setInterval(() => paintStatus(state.runner), 1000);
     }
+    paintPerm();
     paintStatus(s);
+}
+
+/**
+ * Which permission mode the composer shows for the session it is pointing at.
+ *
+ * One control is shared by every session, so it has to be set on every open
+ * rather than left where it was: inheriting the last session's value is how a
+ * conversation gets sent in a mode that was picked for a different one, and
+ * `Pool.ensure` then restarts its process to honour it. In order of authority —
+ * a choice made here and not yet sent, the mode the live process is really in,
+ * and the mode the transcript was last seen in.
+ */
+function paintPerm() {
+    const id = state.current && state.current.sessionId;
+    const mode = (id && state.permChoice.get(id))
+        || (state.runner && state.runner.permissionMode)
+        || (state.current && state.current.permissionMode)
+        || DEFAULT_PERM;
+    // A mode this build does not offer — an older CLI's vocabulary, or a newer
+    // one's — must not leave the control blank, because "" is what would then be
+    // sent. Fall back rather than inventing an option for it.
+    const known = [...dom.perm.options].some(o => o.value === mode);
+    dom.perm.value = known ? mode : DEFAULT_PERM;
 }
 
 function paintStatus(s) {
@@ -2596,6 +2629,12 @@ dom.termGrip.addEventListener('keydown', (e) => {
 dom.newGo.addEventListener('click', startNew);
 dom.dbStatus.addEventListener('click', refreshDevBrowser);
 dom.btnBack.addEventListener('click', closeAgent);
+
+// A mode is picked for the conversation in front of you, so it is remembered
+// against that session rather than against the window — see paintPerm.
+dom.perm.addEventListener('change', () => {
+    if (state.current) state.permChoice.set(state.current.sessionId, dom.perm.value);
+});
 
 dom.input.addEventListener('input', autoGrow);
 dom.input.addEventListener('input', debounce(() => {

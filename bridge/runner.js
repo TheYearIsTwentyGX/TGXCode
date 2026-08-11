@@ -87,7 +87,7 @@ class Runner extends EventEmitter {
         this.cwd = opts.cwd;
         this.isNew = !!opts.isNew;
         this.model = opts.model || null;
-        this.permissionMode = opts.permissionMode || 'acceptEdits';
+        this.permissionMode = opts.permissionMode || 'auto';
         // Branch off a copy instead of continuing in place. Needed when the
         // original is already live somewhere else.
         this.fork = !!opts.fork;

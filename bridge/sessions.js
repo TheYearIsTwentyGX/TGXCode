@@ -222,6 +222,9 @@ class SessionIndex extends EventEmitter {
             worktree: m.worktree,
             pr: m.pr,
             model: m.model,
+            // What the composer should open on for a session with no process of
+            // its own — the mode it was last seen running in, not the app default.
+            permissionMode: m.permissionMode,
             version: m.version,
             sessionKind: m.sessionKind,
             userMessages: m.userMessages,

@@ -33,6 +33,16 @@ const WORKTREE_DIR_RE = /^(.*)\/\.claude\/worktrees\/(.+)$/;
 // of megabytes, for a field that is not in it, would cost more than the whole scan.
 const CWD_PARSE_LIMIT = 5;
 
+// The permission mode a session was last seen in. Two entries state it and they
+// mean slightly different things: a `permission-mode` line is the interactive UI
+// being toggled, while the field on a prompt is the mode that turn actually ran
+// under — the only one written for a session driven headless, as this app drives
+// them. Neither supersedes the other, so the scan takes whichever comes last.
+const PERM_FIELD = '"permissionMode":"';
+// `default` is the CLI's name for the mode this app calls `manual`: ask about
+// everything. Anything else unrecognised is left alone for the client to ignore.
+const MODE_ALIASES = { default: 'manual' };
+
 // ---------------------------------------------------------------------------
 // Line reading
 // ---------------------------------------------------------------------------
@@ -93,6 +103,7 @@ function scanMeta(filePath) {
         firstPrompt: null,
         lastPrompt: null,
         model: null,
+        permissionMode: null,
         userMessages: 0,
         assistantMessages: 0,
         toolCalls: 0,
@@ -153,6 +164,17 @@ function scanMeta(filePath) {
                     if (parsed && isTaskNotification(userText(parsed))) continue;
                 }
                 meta.userMessages++;
+                // A real parse rather than matchField: the field sits after
+                // `message` on the line, so a prompt that quoted one — this
+                // app's own transcripts talk about permission modes — would win
+                // the substring search. The gate keeps that cost off the many
+                // prompt lines that carry no mode at all.
+                if (line.includes(PERM_FIELD)) {
+                    const parsed = safeParse(line);
+                    if (parsed && typeof parsed.permissionMode === 'string') {
+                        meta.permissionMode = modeName(parsed.permissionMode);
+                    }
+                }
                 // When *you* last spoke. The session list sorts on this rather
                 // than on file activity, so rows don't reshuffle every time an
                 // agent writes a line.
@@ -174,7 +196,7 @@ function scanMeta(filePath) {
         // Small bookkeeping lines: parse them, they're cheap.
         if (line.includes('-title"') || line.includes('"type":"agent-name"')
             || line.includes('"type":"last-prompt"') || line.includes('"type":"worktree-state"')
-            || line.includes('"type":"pr-link"')) {
+            || line.includes('"type":"pr-link"') || line.includes('"type":"permission-mode"')) {
             const o = safeParse(line);
             if (!o) continue;
             switch (o.type) {
@@ -182,6 +204,11 @@ function scanMeta(filePath) {
                 case 'ai-title': titles['ai-title'] = o.aiTitle; break;
                 case 'agent-name': titles['agent-name'] = o.agentName; break;
                 case 'last-prompt': meta.lastPrompt = (o.lastPrompt || '').slice(0, 400); break;
+                case 'permission-mode':
+                    if (typeof o.permissionMode === 'string') {
+                        meta.permissionMode = modeName(o.permissionMode);
+                    }
+                    break;
                 case 'worktree-state':
                     // A null session is the record of *leaving* one. Which worktree
                     // it was is still worth keeping — it names the project — so
@@ -246,6 +273,10 @@ function scanMeta(filePath) {
         : meta.projectCwd;
 
     return meta;
+}
+
+function modeName(mode) {
+    return MODE_ALIASES[mode] || mode;
 }
 
 // Pull "key":"value" out of a raw line without parsing the whole object. Only

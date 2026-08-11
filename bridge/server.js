@@ -622,8 +622,11 @@ async function api(req, res, url, pathname) {
     return send(res, 404, { error: 'no such endpoint', pathname });
 }
 
+// An unrecognised mode falls back to the app's default rather than erroring: the
+// mode is a knob on a request that has real work in it, and refusing the whole
+// send over a typo in one field loses the message.
 function normalizeMode(mode) {
-    return PERMISSION_MODES.includes(mode) ? mode : 'acceptEdits';
+    return PERMISSION_MODES.includes(mode) ? mode : 'auto';
 }
 
 /**
