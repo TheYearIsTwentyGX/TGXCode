@@ -107,6 +107,7 @@ create one in `%APPDATA%\claude-sessions\`:
 | **Conversation** | Your turns, Claude's replies with syntax-highlighted code, and one collapsible block per tool call. Edits render as diffs, and output too large to inline loads on demand. |
 | **Subagents** | The first chip row under the title, one per subagent, with a light for how it is going and a line of what it is doing. Click to switch the pane over to it; `Esc` or the breadcrumb comes back. |
 | **Dev servers** | The second chip row. Green means the port is answering right now; click to switch DevBrowser to that tab, starting DevBrowser if it isn't running. |
+| **Dashboard** | The button in the top bar, with a count of how many places are unfinished. It lists, per project, every directory holding uncommitted changes and every pull request still open, with the sessions that worked there as links back into the conversation. |
 | **Open folder** | The folder button by the title shows the session's working directory in Windows File Explorer, through the `\\wsl.localhost` share. |
 | **Composer** | Sends to the session, resuming it in place — the same transcript a terminal would append to. |
 | **Send queue** | Write while an agent is working and the message waits, listed above the composer in send order. Each one can be expanded, reordered, pulled back for editing, or dropped, right up until its turn starts. `Shift+Tab` out of the composer to work through them without the mouse. |
@@ -330,11 +331,40 @@ devbrowser title 5006 "add-company-flow"
 Live ports are always offered; a couple of recently-dead ones are shown greyed
 out so a server that has gone away is visible rather than silently missing.
 
+### What the dashboard counts
+
+A finished conversation is not finished work. The rail is full of sessions that
+have been quiet for days and are still holding a worktree with eleven modified
+files in it, or a pull request nobody merged. That is what this screen is for,
+and it reads none of it from the transcripts:
+
+- **Uncommitted changes** come from `git status --porcelain=v2` in the
+  directories sessions were working in. A **directory** is the row, not a
+  session, because a worktree is what holds uncommitted work — several sessions
+  share one, and a session that has left a worktree still left its changes in it.
+- **Open pull requests** come from one `gh pr list --state open` per repository.
+  Being absent from that list *is* the answer to "has it been merged": a PR the
+  transcripts mention that is not open any more needs nothing from you.
+
+A workspace shows the PRs raised from the branch it has checked out, and only
+those — a session that raises a PR from a worktree and then leaves reports the
+*project* as its directory, and hanging the PR there would file it under a
+branch it has nothing to do with. PRs still open with nothing on disk answering
+for them get a row of their own, marked *no working directory left*.
+
+Two things stop this reporting nonsense. A worktree that was removed leaves its
+directory behind whenever anything untracked was in it, and because those
+directories live *inside* the project, git answers about the parent repository
+instead — so each directory must be its own checkout root (`rev-parse
+--show-toplevel`) or it is skipped. And everything here shells out, so all of it
+is cached: working trees for 15 seconds, GitHub for a minute.
+
 ## Layout
 
 | Path | |
 |---|---|
 | `bridge/server.js` | HTTP + SSE, routing, static files |
+| `bridge/dashboard.js` | Uncommitted changes and open PRs, per project |
 | `bridge/sessions.js` | The session index — incremental, cached, watched |
 | `bridge/transcript.js` | JSONL → render events; pairs tool calls with results; reads subagent transcripts |
 | `bridge/runner.js` | `claude` processes, one per active conversation |
