@@ -1648,6 +1648,18 @@ function connect() {
     es.addEventListener('hello', (e) => {
         state.clientId = JSON.parse(e.data).clientId;
         if (state.current) subscribe();
+        // Every `sessions-changed` while the stream was down was missed, and
+        // nothing replays them, so the rail is however it was when the stream
+        // dropped — a bridge restart used to leave rows sitting there with the
+        // turn counts and times they had beforehand. Reconnecting is exactly the
+        // moment the list cannot be trusted. Harmless on the first connect: it
+        // costs the one extra fetch that boot was going to make anyway.
+        loadSessions();
+        // Same reasoning for the status line, which onerror left reading
+        // "Reconnecting to the bridge…". applyRunner derives it from what we
+        // already know, so an idle session says Ready again and a busy one is
+        // left alone until its next status arrives.
+        applyRunner(state.runner);
     });
 
     es.addEventListener('tail', (e) => {
