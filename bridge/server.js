@@ -502,8 +502,17 @@ async function api(req, res, url, pathname) {
             if (!['allow', 'allow-always', 'deny'].includes(decision)) {
                 return send(res, 400, { error: 'decision must be allow, allow-always or deny' });
             }
-            const out = r.answerPermission(String(body.requestId || ''), decision,
-                body.updatedInput && typeof body.updatedInput === 'object' ? body.updatedInput : null);
+            // A plan and a question answer over the same route: the extras are
+            // what make them more than yes or no — which mode an approved plan
+            // continues in, what to tell the model when it is turned down, and
+            // the answers themselves.
+            const out = r.answerPermission(String(body.requestId || ''), decision, {
+                updatedInput: body.updatedInput && typeof body.updatedInput === 'object'
+                    ? body.updatedInput : null,
+                answers: body.answers && typeof body.answers === 'object' ? body.answers : null,
+                feedback: typeof body.feedback === 'string' ? body.feedback : '',
+                mode: PERMISSION_MODES.includes(body.mode) ? body.mode : null,
+            });
             // 409 rather than 500: losing the race with another window is an
             // ordinary outcome, not a failure.
             return send(res, out.ok ? 200 : 409, out);

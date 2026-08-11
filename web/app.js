@@ -78,6 +78,7 @@ const state = {
     queueFocus: null,       // the chip holding the queue's single tab stop
     ask: null,              // the approval this session is blocked on, if any
     askTimer: null,         // ticks the countdown on the approval card
+    runnerMode: null,       // the permission mode the bridge last reported
     stopArmed: 0,           // when a soft Stop happened, for the force escalation
     // The board of unfinished work. `at` is when the bridge last answered, so
     // opening it again does not re-run git over every worktree on the machine.
@@ -656,6 +657,7 @@ function beginOpen(summary) {
     state.pinned = true;
     state.agents = [];  // the previous session's agents are not this one's
     state.ask = null;   // approvals belong to the session that is blocked on them
+    state.runnerMode = null;
     state.stopArmed = 0;
     leaveAgent();       // a subagent belongs to the session it was spawned by
 
@@ -985,11 +987,22 @@ function renderSystem(ev) {
     return row(ev, 'system', ...body);
 }
 
-// ── approvals ────────────────────────────────────────────────────────────
+// ── approvals, plans and questions ───────────────────────────────────────
 // A blocked turn, drawn at the foot of the transcript rather than as a toast:
 // toasts are dismissible and this is not — the turn is waiting on the answer.
 // The card is deliberately built from the same vocabulary as a tool block, so
 // what you approve looks like what you will see once it has run.
+//
+// Three things arrive down this channel and only one of them is a permission:
+//
+//   tool      may I run this? — yes, yes-always, or no.
+//   plan      here is the plan. Approving it starts the work and decides the
+//             mode it runs under; turning it down is feedback, not a refusal,
+//             so the card offers somewhere to say what was wrong with it.
+//   question  a multiple-choice question, answered by picking.
+//
+// They share the card chrome because they share the thing that matters about
+// it: the turn does not move until you answer.
 
 const DECISION_WORD = {
     allow: 'Allowed.', 'allow-always': 'Allowed for the rest of this session.',
@@ -998,9 +1011,28 @@ const DECISION_WORD = {
     superseded: 'Replaced by a later request.',
     'auto-denied': 'Denied automatically — nobody answered.',
     abandoned: 'The Claude process exited before this was answered.',
+    'plan-approved': 'Approved.',
+    'plan-approved-note': 'Approved, with a note to bear in mind.',
+    'plan-rejected': 'Sent back for more planning.',
+    answered: 'Answered.',
+    dismissed: 'Dismissed — Claude carries on unaided.',
 };
 
-/** Show, replace or clear the approval card for the session on screen. */
+/** Head words per kind: what the card calls itself. */
+const ASK_HEAD = {
+    plan: { name: 'Plan', title: 'ready to start' },
+    question: { name: 'Question', title: 'waiting on you' },
+};
+
+const ASK_LABEL = {
+    plan: 'A plan waiting for your approval',
+    question: 'A question waiting for your answer',
+};
+
+/** Don't fire single-key shortcuts at somebody who is writing a sentence. */
+const isTyping = (t) => !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA');
+
+/** Show, replace or clear the card for whatever the session is blocked on. */
 function renderAsk() {
     clearInterval(state.askTimer);
     state.askTimer = null;
@@ -1009,47 +1041,26 @@ function renderAsk() {
     if (!state.ask || state.agent) return;
 
     const ask = state.ask;
-    const card = el('div', { class: 'perm', tabindex: '0',
-        role: 'group', 'aria-label': `Permission needed for ${ask.displayName}` });
+    const kind = ask.kind || 'tool';
+    const head = ASK_HEAD[kind] || { name: ask.displayName, title: 'permission needed' };
+    const card = el('div', { class: `perm perm-${kind}`, tabindex: '0',
+        role: 'group', 'aria-label': ASK_LABEL[kind] || `Permission needed for ${ask.displayName}` });
 
     const clock = el('span', { class: 'perm-left' });
     card.append(
         el('div', { class: 'perm-head' },
-            el('span', { class: 'perm-tool' }, ask.displayName),
-            el('span', { class: 'perm-title' }, 'permission needed'),
+            el('span', { class: 'perm-tool' }, head.name),
+            el('span', { class: 'perm-title' }, head.title),
             clock),
-        // toolSummary is the collapsed-row text of an ordinary tool block. Shape
-        // the ask like the event it reads and the two render identically.
-        el('div', { class: 'perm-arg' },
-            toolSummary({ name: ask.tool, input: ask.input }) || ask.description || ''),
     );
 
     if (ask.agentId) {
         card.append(el('div', { class: 'perm-why' }, 'Asked by a subagent.'));
     }
-    if (ask.reason) card.append(el('div', { class: 'perm-why' }, clip(ask.reason, 220)));
 
-    const btns = el('div', { class: 'perm-btns' },
-        el('button', { class: 'perm-btn allow', type: 'button',
-            onclick: () => answerAsk('allow') },
-            'Allow ', el('kbd', {}, 'Y')),
-        el('button', { class: 'perm-btn', type: 'button',
-            onclick: () => answerAsk('allow-always') },
-            `Allow ${ask.displayName} all session `, el('kbd', {}, 'A')),
-        el('button', { class: 'perm-btn deny', type: 'button',
-            onclick: () => answerAsk('deny') },
-            'Deny ', el('kbd', {}, 'N')),
-    );
-    card.append(btns);
-
-    card.addEventListener('keydown', (e) => {
-        if (e.ctrlKey || e.metaKey || e.altKey) return;
-        const k = e.key.toLowerCase();
-        const decision = k === 'y' ? 'allow' : k === 'a' ? 'allow-always' : k === 'n' ? 'deny' : null;
-        if (!decision) return;
-        e.preventDefault();
-        answerAsk(decision);
-    });
+    if (kind === 'plan') fillPlanAsk(card, ask);
+    else if (kind === 'question') fillQuestionAsk(card, ask);
+    else fillToolAsk(card, ask);
 
     dom.log.append(card);
 
@@ -1071,7 +1082,238 @@ function renderAsk() {
     if (state.pinned) scrollToEnd(false);
 }
 
-async function answerAsk(decision) {
+/** "May I run this?" — the original card, unchanged. */
+function fillToolAsk(card, ask) {
+    // toolSummary is the collapsed-row text of an ordinary tool block. Shape
+    // the ask like the event it reads and the two render identically.
+    card.append(el('div', { class: 'perm-arg' },
+        toolSummary({ name: ask.tool, input: ask.input }) || ask.description || ''));
+
+    if (ask.reason) card.append(el('div', { class: 'perm-why' }, clip(ask.reason, 220)));
+
+    card.append(el('div', { class: 'perm-btns' },
+        el('button', { class: 'perm-btn allow', type: 'button',
+            onclick: () => answerAsk({ decision: 'allow' }) },
+            'Allow ', el('kbd', {}, 'Y')),
+        el('button', { class: 'perm-btn', type: 'button',
+            onclick: () => answerAsk({ decision: 'allow-always' }) },
+            `Allow ${ask.displayName} all session `, el('kbd', {}, 'A')),
+        el('button', { class: 'perm-btn deny', type: 'button',
+            onclick: () => answerAsk({ decision: 'deny' }) },
+            'Deny ', el('kbd', {}, 'N')),
+    ));
+
+    card.addEventListener('keydown', (e) => {
+        if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return;
+        const k = e.key.toLowerCase();
+        const decision = k === 'y' ? 'allow' : k === 'a' ? 'allow-always' : k === 'n' ? 'deny' : null;
+        if (!decision) return;
+        e.preventDefault();
+        answerAsk({ decision });
+    });
+}
+
+/**
+ * A plan, and the two things approving one actually decides: that the work
+ * starts, and what it is allowed to do once it has.
+ *
+ * The session is in plan mode while this card is up, so approving without
+ * changing the mode would agree to the plan and then refuse every edit in it.
+ * That is why these are one button and not two steps.
+ */
+function fillPlanAsk(card, ask) {
+    const plan = (ask.input && ask.input.plan) || ask.description || '';
+    card.append(el('div', { class: 'perm-plan prose', html: renderMarkdown(plan) }));
+
+    // `auto` is the default because it is how these sessions run when you are
+    // sitting in front of one: Claude judges each call and asks when a call
+    // warrants it. Blanket-accepting edits is the deliberate second choice.
+    const approve = (mode) => answerAsk({ decision: 'allow', mode });
+    const btns = el('div', { class: 'perm-btns' },
+        el('button', { class: 'perm-btn allow', type: 'button',
+            title: 'Start work, asking about calls that warrant it',
+            onclick: () => approve('auto') },
+            'Approve ', el('kbd', {}, 'Y')),
+        el('button', { class: 'perm-btn', type: 'button',
+            title: 'Start work, and let file edits through without asking',
+            onclick: () => approve('acceptEdits') },
+            'Approve — auto-accept edits ', el('kbd', {}, 'A')),
+        el('button', { class: 'perm-btn', type: 'button',
+            title: 'Approve the plan, with something to bear in mind while doing it',
+            onclick: () => openFeedback(card, 'approve') },
+            'Approve with feedback ', el('kbd', {}, 'F')),
+        el('button', { class: 'perm-btn deny', type: 'button',
+            onclick: () => openFeedback(card, 'reject') },
+            'Keep planning ', el('kbd', {}, 'N')),
+    );
+    card.append(btns,
+        el('div', { class: 'perm-why' },
+            'Approving leaves plan mode and sets the permission mode under the composer.'));
+
+    card.addEventListener('keydown', (e) => {
+        if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return;
+        const k = e.key.toLowerCase();
+        if (k === 'y') { e.preventDefault(); approve('auto'); }
+        else if (k === 'a') { e.preventDefault(); approve('acceptEdits'); }
+        else if (k === 'f') { e.preventDefault(); openFeedback(card, 'approve'); }
+        else if (k === 'n') { e.preventDefault(); openFeedback(card, 'reject'); }
+    });
+}
+
+/**
+ * Say something about the plan — whether or not you are approving it.
+ *
+ * Both answers are a sentence rather than a verdict, and they reach the model
+ * by different routes because the protocol gives them different routes. Turned
+ * down, the note is the tool's error, which is where the model reads a refusal
+ * — so "too broad, do the parser first" is planned against, while a silent no
+ * is usually just re-sent shorter. Approved, it is appended to the plan itself,
+ * because a condition you attach to a yes is part of what was agreed to.
+ *
+ * @param {'approve'|'reject'} how
+ */
+function openFeedback(card, how) {
+    const btns = card.querySelector('.perm-btns');
+    if (!btns || card.querySelector('.perm-feedback')) return;
+    const approving = how === 'approve';
+
+    const ta = el('textarea', { class: 'perm-fb', rows: '3',
+        'aria-label': approving ? 'What should Claude bear in mind?'
+            : 'What should change about this plan?',
+        placeholder: approving
+            ? 'Anything to bear in mind? Enter to approve, Esc to go back.'
+            : 'What should change? Enter to send, Esc to go back.' });
+    const send = () => answerAsk(approving
+        ? { decision: 'allow', mode: 'auto', feedback: ta.value }
+        : { decision: 'deny', feedback: ta.value });
+    const cancel = () => { box.remove(); btns.hidden = false; card.focus({ preventScroll: true }); };
+
+    const box = el('div', { class: 'perm-feedback' }, ta,
+        el('div', { class: 'perm-btns' },
+            el('button', { class: `perm-btn ${approving ? 'allow' : 'deny'}`, type: 'button',
+                onclick: send },
+                approving ? 'Approve with this note ' : 'Send it back ', el('kbd', {}, '⏎')),
+            el('button', { class: 'perm-btn', type: 'button', onclick: cancel }, 'Cancel')));
+
+    ta.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+        else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+    });
+
+    btns.hidden = true;
+    btns.after(box);
+    ta.focus();
+}
+
+/**
+ * A multiple-choice question, or several.
+ *
+ * Native radios and checkboxes rather than clickable divs: arrow keys, space,
+ * groups and labels all work without being reimplemented, and a question is
+ * exactly the moment not to have reinvented a form control. Every question has
+ * an "Other" row, because the honest answer is often none of the above.
+ */
+function fillQuestionAsk(card, ask) {
+    const questions = (ask.input && ask.input.questions) || [];
+    const readers = [];
+    const wrap = el('div', { class: 'perm-qs' });
+
+    questions.forEach((q, qi) => {
+        const group = el('div', { class: 'perm-q', role: 'group',
+            'aria-label': q.question || q.header || `Question ${qi + 1}` });
+        group.append(el('div', { class: 'perm-q-head' },
+            q.header ? el('span', { class: 'perm-q-chip' }, q.header) : null,
+            el('span', { class: 'perm-q-text' }, q.question || '')));
+
+        const name = `perm-q${qi}`;
+        const type = q.multiSelect ? 'checkbox' : 'radio';
+        const picks = [];
+
+        for (const [oi, opt] of (q.options || []).entries()) {
+            const box = el('input', { type, name, id: `${name}-o${oi}`, value: opt.label || '' });
+            box.addEventListener('change', update);
+            picks.push({ box, label: opt.label || '' });
+            group.append(el('label', { class: 'perm-opt', for: `${name}-o${oi}` }, box,
+                el('span', { class: 'perm-opt-body' },
+                    el('span', { class: 'perm-opt-label' }, opt.label || ''),
+                    opt.description ? el('span', { class: 'perm-opt-desc' }, opt.description) : null,
+                    // Previews are for comparing, so they are readable on hover
+                    // and focus too — not only once you have already chosen.
+                    opt.preview ? el('pre', { class: 'perm-opt-preview' }, opt.preview) : null)));
+        }
+
+        const otherBox = el('input', { type, name, id: `${name}-other` });
+        const otherText = el('input', { type: 'text', class: 'perm-other', autocomplete: 'off',
+            'aria-label': `A different answer to "${q.question || ''}"`, placeholder: 'Something else…' });
+        otherBox.addEventListener('change', update);
+        // Typing is choosing; making people also click the radio is a trap.
+        otherText.addEventListener('input', () => {
+            if (otherText.value.trim()) otherBox.checked = true;
+            update();
+        });
+        group.append(el('label', { class: 'perm-opt perm-opt-other', for: `${name}-other` }, otherBox,
+            el('span', { class: 'perm-opt-body' },
+                el('span', { class: 'perm-opt-label' }, 'Other'), otherText)));
+
+        // One question's answer, as the string the model will be handed. Several
+        // selections read back as a list, which is how they were asked.
+        readers.push(() => {
+            const chosen = picks.filter(p => p.box.checked).map(p => p.label);
+            const other = otherBox.checked ? otherText.value.trim() : '';
+            if (other) chosen.push(other);
+            return { question: q.question, answer: chosen.join(', ') };
+        });
+
+        wrap.append(group);
+    });
+
+    const submit = el('button', { class: 'perm-btn allow', type: 'button',
+        onclick: () => answerAsk({ decision: 'allow', answers: collect() }) },
+        questions.length > 1 ? 'Send answers ' : 'Send answer ', el('kbd', {}, '⏎'));
+
+    function collect() {
+        const out = {};
+        for (const read of readers) {
+            const { question, answer } = read();
+            if (answer) out[question] = answer;
+        }
+        return out;
+    }
+
+    // Claude asked all of them; answering some and leaving the rest to guesswork
+    // is the outcome this card exists to avoid.
+    function update() {
+        const done = Object.keys(collect()).length;
+        submit.disabled = done !== readers.length;
+        submit.title = submit.disabled
+            ? `${readers.length - done} still to answer`
+            : '';
+    }
+
+    card.append(wrap, el('div', { class: 'perm-btns' }, submit,
+        el('button', { class: 'perm-btn deny', type: 'button',
+            title: 'Answer nothing and let Claude decide for itself',
+            onclick: () => answerAsk({ decision: 'deny' }) },
+            'Skip'),
+    ));
+
+    card.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.metaKey) return;
+        if (submit.disabled) return;
+        e.preventDefault();
+        submit.click();
+    });
+
+    update();
+}
+
+/**
+ * Send an answer.
+ *
+ * @param {{decision:'allow'|'allow-always'|'deny', mode?:string,
+ *          answers?:object, feedback?:string}} payload
+ */
+async function answerAsk(payload) {
     const ask = state.ask;
     if (!ask || !state.current) return;
     const card = dom.log.querySelector('.perm');
@@ -1081,7 +1323,7 @@ async function answerAsk(decision) {
     }
     try {
         await post(`/api/sessions/${state.current.sessionId}/permission`,
-            { requestId: ask.requestId, decision });
+            { requestId: ask.requestId, ...payload });
     } catch (err) {
         // 409 means another window got there first; the resolved event that
         // follows takes the card down with the right reason on it.
@@ -1096,7 +1338,8 @@ async function answerAsk(decision) {
 /** Take the card down and leave a line saying how it ended. */
 function resolveAsk(outcome) {
     if (!state.ask) return;
-    const tool = state.ask.displayName;
+    const head = ASK_HEAD[state.ask.kind];
+    const tool = head ? head.name : state.ask.displayName;
     state.ask = null;
     renderAsk();
     const word = DECISION_WORD[outcome] || 'Answered.';
@@ -1124,6 +1367,10 @@ function toolSummary(ev) {
         case 'WebSearch': return i.query;
         case 'TodoWrite': return `${(i.tasks || i.todos || []).length} items`;
         case 'Skill': return '/' + (i.skill || '');
+        // The first heading of a plan is what it is a plan for.
+        case 'ExitPlanMode': return clip((i.plan || '').replace(/^#+\s*/, ''), 80);
+        case 'AskUserQuestion':
+            return (i.questions || []).map(q => q.header || q.question).join(' · ');
         case 'SendMessage': return `to ${i.to || i.recipient || '?'}`;
         default: {
             const first = Object.values(i)[0];
@@ -1189,6 +1436,12 @@ function toolBody(ev) {
         out.push(section('Tasks', todoView(i.tasks || i.todos || [])));
     } else if (ev.name === 'Task' || ev.name === 'Agent') {
         out.push(section('Prompt', el('div', { class: 'prose', html: renderMarkdown(i.prompt || '') })));
+    } else if (ev.name === 'ExitPlanMode') {
+        // The card is long gone by the time anyone reads this back; the plan
+        // that was approved is the whole content of the call.
+        out.push(section('Plan', el('div', { class: 'prose', html: renderMarkdown(i.plan || '') })));
+    } else if (ev.name === 'AskUserQuestion') {
+        out.push(section('Questions', questionsView(i.questions || [])));
     } else if (Object.keys(i).length) {
         out.push(section('Input', kvView(i)));
     }
@@ -1339,6 +1592,27 @@ function todoView(items) {
         list.append(el('div', { style: `color:${st === 'completed' ? 'var(--text-4)' : 'var(--text)'}` },
             el('span', { style: `color:${color}; margin-right:8px` }, mark),
             t.subject || t.content || t.description || t.activeForm || ''));
+    }
+    return list;
+}
+
+/**
+ * What was asked, read back later.
+ *
+ * The answer is not here — it is in the tool result, which says what was picked
+ * — so this stays a record of the question and the choices it offered.
+ */
+function questionsView(questions) {
+    const list = el('div', { class: 'qview' });
+    for (const q of questions) {
+        list.append(el('div', { class: 'qview-q' },
+            q.header ? el('span', { class: 'perm-q-chip' }, q.header) : null,
+            el('span', {}, q.question || '')));
+        for (const opt of q.options || []) {
+            list.append(el('div', { class: 'qview-o' },
+                el('span', { class: 'qview-mark' }, '○'),
+                el('span', {}, opt.label || '')));
+        }
     }
     return list;
 }
@@ -2325,6 +2599,15 @@ function applyRunner(s) {
     if (!same || (ask && !dom.log.querySelector('.perm'))) {
         state.ask = ask;
         renderAsk();
+    }
+
+    // Approving a plan changes the mode out from under the selector, so the
+    // selector follows the bridge. Only on a change the bridge reports, though:
+    // a mode picked here and not yet sent is a choice, not a stale value, and
+    // reasserting the running process's mode over it would undo it as it is typed.
+    if (s && s.permissionMode && s.permissionMode !== state.runnerMode) {
+        state.runnerMode = s.permissionMode;
+        if (dom.perm.value !== s.permissionMode) dom.perm.value = s.permissionMode;
     }
 
     dom.statusLine.dataset.state = s

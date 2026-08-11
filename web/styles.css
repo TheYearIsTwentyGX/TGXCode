@@ -1078,6 +1078,9 @@ a:hover { text-decoration: underline; }
 }
 
 .perm-btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+/* An author `display` beats the UA rule for [hidden], and this row is hidden
+   while the feedback box that replaces it is open. */
+.perm-btns[hidden] { display: none; }
 
 .perm-btn {
     height: 30px;
@@ -1106,6 +1109,145 @@ a:hover { text-decoration: underline; }
     color: inherit;
     opacity: 0.75;
 }
+
+/* ── the plan card ───────────────────────────────────────────────────── */
+/* Same chrome as an approval, because the same thing is true of it: the turn
+   is stopped until you answer. What differs is that this is prose to read
+   rather than a command to check, so it gets room and reads as a document. */
+
+.perm-plan {
+    margin-top: 10px;
+    padding: 2px 14px 2px;
+    background: var(--bg);
+    border-radius: var(--r-sm);
+    border: 1px solid var(--outline-soft);
+    /* Long enough to read a plan in, short enough that the buttons stay on
+       screen — a plan you have to scroll past to accept is a plan people
+       accept without reading. */
+    max-height: 46vh;
+    overflow: auto;
+}
+
+/* Where a rejected plan gets its "why". */
+.perm-feedback { margin-top: 10px; }
+
+.perm-fb {
+    width: 100%;
+    padding: 9px 11px;
+    background: var(--bg);
+    border: 1px solid var(--outline);
+    border-radius: var(--r-sm);
+    color: var(--text);
+    font: 400 12.5px/1.6 var(--sans);
+    resize: vertical;
+}
+.perm-fb:focus { outline: none; border-color: var(--blue); }
+.perm-fb::placeholder { color: var(--text-4); }
+
+/* ── the question card ───────────────────────────────────────────────── */
+
+.perm-qs { margin-top: 4px; }
+
+.perm-q + .perm-q {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--outline-soft);
+}
+
+.perm-q-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: 8px 0 9px;
+    font: 400 13px/1.5 var(--sans);
+    color: var(--text);
+}
+.perm-q-chip {
+    flex: none;
+    padding: 2px 8px;
+    border-radius: var(--pill);
+    background: var(--s4);
+    color: var(--text-3);
+    font: 500 10.5px/1.5 var(--sans);
+    text-transform: lowercase;
+}
+.perm-q-text { min-width: 0; }
+
+.perm-opt {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 8px 11px;
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-sm);
+    background: var(--bg);
+    cursor: pointer;
+    transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+}
+.perm-opt + .perm-opt { margin-top: 6px; }
+.perm-opt:hover { background: var(--s2); }
+.perm-opt:focus-within { border-color: var(--blue); }
+.perm-opt:has(input:checked) { border-color: var(--blue); background: var(--blue-tint); }
+
+.perm-opt input { flex: none; margin-top: 2px; accent-color: var(--blue-deep); }
+.perm-opt-body { display: block; min-width: 0; flex: 1; }
+.perm-opt-label {
+    display: block;
+    font: 500 12.5px/1.5 var(--sans);
+    color: var(--text);
+}
+.perm-opt-desc {
+    display: block;
+    margin-top: 2px;
+    font: 400 11.5px/1.55 var(--sans);
+    color: var(--text-3);
+}
+
+/* A preview is for comparing, so it opens on hover and focus as well as on
+   selection — needing to choose an option to see what it means would defeat
+   the point of previewing it. */
+.perm-opt-preview {
+    display: none;
+    margin: 8px 0 2px;
+    padding: 8px 10px;
+    max-height: 200px;
+    overflow: auto;
+    background: var(--s1);
+    border-radius: var(--r-xs);
+    font: 400 11.5px/1.6 var(--mono);
+    color: var(--text-2);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.perm-opt:hover .perm-opt-preview,
+.perm-opt:focus-within .perm-opt-preview,
+.perm-opt:has(input:checked) .perm-opt-preview { display: block; }
+
+.perm-other {
+    width: 100%;
+    margin-top: 5px;
+    padding: 5px 9px;
+    background: var(--s1);
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-xs);
+    color: var(--text);
+    font: 400 12px/1.5 var(--sans);
+}
+.perm-other:focus { outline: none; border-color: var(--blue); }
+.perm-other::placeholder { color: var(--text-4); }
+
+/* Questions as they read back in the transcript, once the card is long gone. */
+.qview { font: 400 12px/1.7 var(--sans); }
+.qview-q {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    margin: 8px 0 4px;
+    color: var(--text);
+}
+.qview-q:first-child { margin-top: 0; }
+.qview-o { color: var(--text-3); padding-left: 4px; }
+.qview-mark { color: var(--text-4); margin-right: 8px; }
 
 /* What happened to a card that is gone. The transcript carries the real
    record; this is only so the card does not vanish without a word. */

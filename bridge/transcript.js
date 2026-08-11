@@ -658,6 +658,8 @@ function describeTool(block) {
         case 'Agent': return `Subagent: ${clip(input.description, 50)}`;
         case 'WebFetch': return `Fetching ${clip(input.url, 50)}`;
         case 'WebSearch': return `Searching the web`;
+        case 'ExitPlanMode': return 'Presenting a plan';
+        case 'AskUserQuestion': return 'Asking you a question';
         default: return `Running ${name}`;
     }
 }

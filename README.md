@@ -105,6 +105,7 @@ create one in `%APPDATA%\claude-sessions\`:
 | **Ordering** | By when *you* last wrote, not by last activity. Sorting on activity meant a busy agent kept bumping its session to the top and shuffling the rest out from under the cursor. The timestamp on each row is the one it sorts by. |
 | **Pin / archive** | Hover a row for its two buttons, or use the ones beside the session title. Pinned sessions sit in their own group at the top, across projects. Archived ones collapse into a group at the bottom. |
 | **Conversation** | Your turns, Claude's replies with syntax-highlighted code, and one collapsible block per tool call. Edits render as diffs, and output too large to inline loads on demand. |
+| **Plans & questions** | When Claude presents a plan or asks a multiple-choice question, the turn stops on a card at the foot of the transcript. A plan can be approved, approved with a note to bear in mind, or sent back with what to change; approving picks the mode the work continues in. Questions are answered by picking, with an *Other* row for none-of-the-above. |
 | **Subagents** | The first chip row under the title, one per subagent, with a light for how it is going and a line of what it is doing. Click to switch the pane over to it; `Esc` or the breadcrumb comes back. |
 | **Dev servers** | The second chip row. Green means the port is answering right now; click to switch DevBrowser to that tab, starting DevBrowser if it isn't running. |
 | **Dashboard** | The button in the top bar, with a count of how many places are unfinished. It lists, per project, every directory holding uncommitted changes and every pull request still open, with the sessions that worked there as links back into the conversation. |
@@ -315,6 +316,64 @@ Approvals ride a control channel on the same stream that carries the session, an
 that channel is not a documented, stable surface. If the installed `claude` turns
 out not to support it, the app says so once and falls back to permission modes
 alone; sending never breaks over a protocol difference.
+
+### Plans and questions
+
+Two of the things that come down that same channel are not permissions at all —
+they are Claude talking to you — and each gets a card of its own.
+
+**A plan** arrives when a session in plan mode is ready to start. The plan is
+rendered as the document it is, and approving it decides two things at once:
+
+```
+┌ Plan — ready to start ────────────────── 14:53 left ┐
+│  ## Add a --version flag                            │
+│  • Read the version from package.json…              │
+│  • Handle the flag before subcommand dispatch…      │
+│                                                     │
+│  [ Approve ]  [ Approve — auto-accept edits ]       │
+│  [ Approve with feedback ]  [ Keep planning ]       │
+└─────────────────────────────────────────────────────┘
+```
+
+The second thing is the mode. A session sitting on this card is *in* plan mode,
+where the work it is asking to do would be refused — so approving switches the
+mode as it starts and the selector under the composer follows. Approving without
+that would agree to a plan and then block every edit in it.
+
+Plain **Approve** (`Y`) continues in **auto**, the mode these sessions run in
+when you are sitting in front of one: Claude judges each call and asks when one
+warrants it. `A` blanket-accepts edits instead, which is the deliberate second
+choice rather than the default.
+
+Two of the four buttons are a sentence rather than a verdict, and they reach the
+model by different routes because the protocol gives them different routes:
+
+- **Keep planning** (`N`) is feedback, not a refusal. What you write goes back as
+  the tool's error, which is where the model reads a refusal — so "too broad, do
+  the parser first" produces a different plan rather than the same one again.
+  Sent back empty it just says to keep going.
+- **Approve with feedback** (`F`) is "yes, and…". The note is appended to the
+  plan itself, and Claude Code echoes it back to the model under *Approved Plan
+  (edited by user)* — so a condition you attach to a yes becomes part of what was
+  agreed to, which is where it belongs. An allow carries no message of its own;
+  that was measured, not assumed.
+
+**A question** is Claude's multiple-choice ask, rendered as a form: radios for one
+answer, checkboxes where several are allowed, an **Other** row on every question
+for when none of them fit, and each option's preview shown as you hover or pick
+it. Send stays disabled until every question has an answer — Claude asked them
+all, and leaving some to guesswork is what this card exists to avoid. **Skip**
+answers nothing and lets it carry on unaided.
+
+Both cards wait 15 minutes rather than the two an approval gets: a plan is
+something you read, and being made to re-read it because a countdown ran out
+while you were thinking is its own kind of rude. Both still expire, because a
+blocked turn holds a process open otherwise.
+
+Before this, both were denied outright — they arrive flagged as needing an
+interactive prompt, which for any other tool means "a dialog this app cannot
+draw". For these two it is exactly the dialog it can draw.
 
 ### Notifications
 
