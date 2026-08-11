@@ -90,6 +90,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'channels', 'scroll', 'log', 'status-line', 'status-text', 'btn-stop', 'input',
     'btn-send', 'queue', 'queue-list', 'queue-count', 'queue-clear',
     'model', 'perm', 'btn-new', 'db-status', 'db-label', 'toasts',
+    'btn-bell', 'bell-menu', 'opt-desktop', 'opt-sound', 'bell-note', 'bell-try',
     'btn-pin', 'btn-folder', 'btn-term', 'btn-archive', 'btn-delete', 'turns', 'turn-pop',
     'term-pane', 'term-grip', 'term-dir', 'term-moved', 'term-body', 'term-restart', 'term-close',
     'agents', 'agent-scroll', 'agent-log', 'btn-back', 'btn-back-label',
@@ -1871,6 +1872,287 @@ function statusWord(xy) {
     return xy[0] !== '.' ? 'staged' : 'modified';
 }
 
+// ── notifications ────────────────────────────────────────────────────────
+//
+// A turn can run for minutes, and the point of leaving one going is that you go
+// and do something else meanwhile. The rail already says what happened — but
+// only once you look at it. This is the part that reaches you when you are not
+// looking.
+//
+// It lives in the page rather than in the Electron shell, which has two
+// consequences worth knowing. The good one: the same behaviour comes with the
+// browser UI, and a sound has nowhere else to come from anyway. The bad one: a
+// window that is closed hears nothing, because the only subscriber to the
+// bridge's events went with it. Fixing that means the shell holding an
+// EventSource of its own — see docs/plans/02-notifications-and-shell.md.
+
+const NOTIFY = {
+    // Under this and you were almost certainly still sitting in front of it.
+    minTurnMs: 30_000,
+    // One per session per this, so a draining queue is not a stack of toasts.
+    perSessionMs: 10_000,
+};
+
+const notify = {
+    desktop: localStorage.getItem('notifyDesktop') !== '0',
+    sound: localStorage.getItem('notifySound') !== '0',
+    fired: new Map(),   // sessionId -> when something last fired for it
+    busy: new Map(),    // sessionId -> when its running turn started
+    audio: null,
+};
+
+/**
+ * How long the turn kept somebody waiting, measured here rather than taken
+ * from the result.
+ *
+ * The result's own duration is usually the same number — measured against a
+ * one-minute turn the two agreed to within 10ms. But it is assembled in
+ * runner.js as `duration_ms || duration_api_ms`, and that second field is API
+ * time only, so a CLI that ever omits the first quietly starts reporting a
+ * fraction of the wall clock. Deciding "long enough to have walked away from"
+ * on a number that can change meaning is not worth the coupling.
+ *
+ * The bridge stamps `busySince` on every status it broadcasts, so this app's
+ * own measure is already on the wire. Keep the last one seen per session and
+ * subtract when the turn lands; the reported duration is the fallback, for a
+ * window that opened after the turn had already started.
+ */
+function noteRunner(s) {
+    if (s.busySince) notify.busy.set(s.sessionId, s.busySince);
+}
+
+function waitedMs(r) {
+    const started = notify.busy.get(r.sessionId);
+    notify.busy.delete(r.sessionId);
+    return started ? Date.now() - started : (r.durationMs || 0);
+}
+
+const notifyPermission = () =>
+    (typeof Notification === 'undefined' ? 'unsupported' : Notification.permission);
+
+/**
+ * Whether a finished turn is worth interrupting somebody for.
+ *
+ * Being strict here is the whole game: notifications that fire too often get
+ * switched off, and then the one that mattered is lost with them.
+ *
+ *   - A turn that ended badly always counts. Every other kind of ending you
+ *     find out about by waiting; this one leaves you waiting forever.
+ *   - Nothing is said about the session you are looking at in a focused
+ *     window. You watched it land.
+ *   - Half a minute is the line between a turn you sat through and one you
+ *     walked away from.
+ *   - At most one per session per ten seconds, whatever the reason.
+ *
+ * Returns false for a normal finish, true for a bad one, null for silence.
+ */
+function turnWorthSaying(r, waited) {
+    const bad = Boolean(r.isError);
+    if (!bad) {
+        const watching = document.hasFocus()
+            && state.current && state.current.sessionId === r.sessionId;
+        if (watching || waited < NOTIFY.minTurnMs) return null;
+    }
+    if (!allowedNow(r.sessionId)) return null;
+    return bad;
+}
+
+function allowedNow(sessionId) {
+    const last = notify.fired.get(sessionId) || 0;
+    if (Date.now() - last < NOTIFY.perSessionMs) return false;
+    notify.fired.set(sessionId, Date.now());
+    return true;
+}
+
+const sessionTitle = (id) => {
+    const row = state.sessions.find(s => s.sessionId === id);
+    return (row && row.title) || 'A session';
+};
+
+function announceTurn(r) {
+    // Read before the decision either way: the stamp has to be cleared whether
+    // or not this one gets said out loud, or the next turn inherits it.
+    const waited = waitedMs(r);
+    const bad = turnWorthSaying(r, waited);
+    if (bad === null) return;
+    announce(
+        `${clip(sessionTitle(r.sessionId), 60)} — ${bad ? 'turn failed' : 'finished'}`,
+        bad ? clip(r.detail || 'The turn ended with an error.', 160)
+            : `Ran for ${dur(waited)}.`,
+        bad, r.sessionId,
+    );
+}
+
+// A send that never became a turn: the session is finished in the sense that
+// matters, because nothing more is coming and nobody is going to be told. The
+// composer's toast covers the window that did the sending — this covers the
+// queued message you walked away from.
+function announceSendFailure(f) {
+    const watching = document.hasFocus()
+        && state.current && state.current.sessionId === f.sessionId;
+    if (watching || !allowedNow(f.sessionId)) return;
+    announce(
+        `${clip(sessionTitle(f.sessionId), 60)} — could not run`,
+        clip(f.message || 'The message never reached Claude.', 160),
+        true, f.sessionId,
+    );
+}
+
+function announce(title, body, bad, sessionId) {
+    chime(bad);
+    if (!notify.desktop || notifyPermission() !== 'granted') return;
+    let n;
+    try {
+        n = new Notification(title, {
+            body,
+            // A second one for the same session replaces the first rather than
+            // piling up behind it.
+            tag: sessionId ? `claude-session:${sessionId}` : 'claude-session',
+            // chime() is the only thing here allowed to make a noise, so that
+            // the sound checkbox means what it says.
+            silent: true,
+        });
+    } catch { return; /* some engines expose Notification but refuse `new` */ }
+    n.onclick = () => {
+        // Best effort. A renderer cannot reliably raise its own window on
+        // Windows — that belongs to the shell, along with the tray and the
+        // deep links it would route through. Opening the session still works
+        // for whenever the window does come forward.
+        window.focus();
+        if (sessionId) openSession(sessionId);
+        n.close();
+    };
+}
+
+/**
+ * Two notes up for a turn that landed, one flat low one for a turn that did
+ * not. Synthesised rather than shipped as a file: it is four oscillators' worth
+ * of code against a binary asset in a repo that has none, and it keeps the
+ * sound tunable in the same place as everything else.
+ *
+ * Short and quiet on purpose. This fires in a room where somebody is working.
+ */
+function chime(bad) {
+    if (!notify.sound) return;
+    const ctx = audioContext();
+    if (!ctx) return;
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+    const t0 = ctx.currentTime + 0.01;
+    const notes = bad
+        ? [[311.13, 0, 0.44, 0.09]]                       // E♭4, alone
+        : [[587.33, 0, 0.16, 0.11], [880, 0.11, 0.34, 0.1]];  // D5 → A5
+    for (const [hz, at, len, peak] of notes) {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = hz;
+        const s = t0 + at;
+        // Ramped, not switched: a square-edged gain change is a click.
+        gain.gain.setValueAtTime(0.0001, s);
+        gain.gain.exponentialRampToValueAtTime(peak, s + 0.014);
+        gain.gain.exponentialRampToValueAtTime(0.0001, s + len);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(s);
+        osc.stop(s + len + 0.03);
+    }
+}
+
+function audioContext() {
+    if (notify.audio) return notify.audio;
+    const Ctor = window.AudioContext || window.webkitAudioContext;
+    if (!Ctor) return null;
+    try { notify.audio = new Ctor(); } catch { return null; }
+    return notify.audio;
+}
+
+// A context built before the page has been touched starts suspended and stays
+// that way, so the first chime after a fresh load would be silent. Build it on
+// the first interaction of any kind instead — including, below, the click that
+// turns the sound on.
+function wakeAudio() {
+    const ctx = audioContext();
+    if (ctx && ctx.state === 'suspended') ctx.resume().catch(() => {});
+}
+for (const type of ['pointerdown', 'keydown']) {
+    window.addEventListener(type, () => { if (notify.sound) wakeAudio(); }, { once: true });
+}
+
+// ── the bell ─────────────────────────────────────────────────────────────
+
+const NOTE = {
+    unsupported: 'This browser has no desktop notifications, so the sound is all '
+        + 'there is here.',
+    denied: 'The browser is blocking notifications for this page. Allow them in '
+        + 'its site settings and this will come back.',
+    rules: 'Only for turns over 30 seconds, and never for the session you are '
+        + 'watching in front of you. A turn that fails always says so.',
+};
+
+function renderBell() {
+    const perm = notifyPermission();
+    const desktopOn = notify.desktop && perm === 'granted';
+    // Struck through only when nothing at all would fire.
+    dom.btnBell.dataset.on = String(desktopOn || notify.sound);
+    dom.btnBell.title = desktopOn || notify.sound
+        ? 'Notifications on' : 'Notifications off';
+
+    // The checkbox shows what will actually happen, not what was asked for: a
+    // ticked box that the browser is quietly overruling is worse than an
+    // unticked one, and unticked is also what invites the click that asks.
+    dom.optDesktop.checked = desktopOn;
+    dom.optDesktop.disabled = perm === 'denied' || perm === 'unsupported';
+    dom.optSound.checked = notify.sound;
+
+    const stuck = perm === 'denied' ? NOTE.denied : perm === 'unsupported' ? NOTE.unsupported : '';
+    dom.bellNote.textContent = stuck || NOTE.rules;
+    dom.bellNote.className = 'bell-note' + (stuck ? ' warn' : '');
+}
+
+function showBell(on) {
+    dom.bellMenu.hidden = !on;
+    dom.btnBell.setAttribute('aria-expanded', String(on));
+    if (on) renderBell();
+}
+
+dom.btnBell.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showBell(dom.bellMenu.hidden);
+});
+
+dom.optDesktop.addEventListener('change', async () => {
+    notify.desktop = dom.optDesktop.checked;
+    localStorage.setItem('notifyDesktop', notify.desktop ? '1' : '0');
+    // Asking here and nowhere else is deliberate: a permission prompt no
+    // gesture invited is the one people press Block on, and some browsers
+    // refuse to show it at all.
+    if (notify.desktop && notifyPermission() === 'default') {
+        try { await Notification.requestPermission(); } catch { /* renders as denied */ }
+    }
+    renderBell();
+});
+
+dom.optSound.addEventListener('change', () => {
+    notify.sound = dom.optSound.checked;
+    localStorage.setItem('notifySound', notify.sound ? '1' : '0');
+    // This click is a gesture, which is what an AudioContext has been waiting
+    // for if the page has not been touched yet.
+    if (notify.sound) { wakeAudio(); chime(false); }
+    renderBell();
+});
+
+// Worth having: Focus Assist and Do Not Disturb drop notifications without a
+// word, so "did that work" is otherwise unanswerable until a turn ends.
+dom.bellTry.addEventListener('click', () => {
+    announce('Claude Sessions', 'This is what a finished turn will look like.', false, null);
+    if (!notify.sound && (!notify.desktop || notifyPermission() !== 'granted')) {
+        toast('Both switches are off, so nothing would fire.', 'warn');
+    }
+});
+
+document.addEventListener('click', (e) => {
+    if (!dom.bellMenu.hidden && !e.target.closest('.bell-wrap')) showBell(false);
+});
+
 // ── streaming ────────────────────────────────────────────────────────────
 
 function connect() {
@@ -1950,6 +2232,7 @@ function connect() {
 
     es.addEventListener('runner-status', (e) => {
         const s = JSON.parse(e.data);
+        noteRunner(s);   // when this turn started, for the notification rules
         if (state.current && s.sessionId === state.current.sessionId) applyRunner(s);
         // The rail's own copy, so a rebuild from the held order draws what the
         // patch below already put on screen rather than reverting it.
@@ -1980,13 +2263,20 @@ function connect() {
     es.addEventListener('turn-complete', (e) => {
         const r = JSON.parse(e.data);
         state.unsent.delete(r.sessionId);   // it is in the transcript now
+        // Ahead of the early return below, which drops every session but the
+        // open one — and those are precisely the ones worth being told about.
+        announceTurn(r);
         if (!state.current || r.sessionId !== state.current.sessionId) return;
         // The dev servers a turn started only become visible once it finishes.
         loadChannels();
         loadAgents();
     });
 
-    es.addEventListener('send-failed', (e) => handleSendFailure(JSON.parse(e.data)));
+    es.addEventListener('send-failed', (e) => {
+        const f = JSON.parse(e.data);
+        announceSendFailure(f);
+        handleSendFailure(f);
+    });
 
     es.addEventListener('session-forked', (e) => {
         const { from, to } = JSON.parse(e.data);
@@ -2944,6 +3234,7 @@ dom.dashRefresh.addEventListener('click', () => loadDash({ refresh: true }));
 
 document.addEventListener('keydown', (e) => {
     // The confirm sits over the new-session dialog, so it answers Escape first.
+    if (e.key === 'Escape' && !dom.bellMenu.hidden) { showBell(false); dom.btnBell.focus(); return; }
     if (e.key === 'Escape' && !dom.delScrim.hidden) { closeDelete(); return; }
     if (e.key === 'Escape' && !dom.newScrim.hidden) { closeNew(); return; }
     if (e.key === 'Escape' && state.dash.open) { showDash(false); return; }
@@ -2975,6 +3266,7 @@ function debounce(fn, ms) {
 connect();
 loadSessions();
 markInstance();
+renderBell();
 refreshDevBrowser();
 // Restore the pane before the first session lands, so it opens with the window
 // already the right shape rather than growing one out from under the transcript.

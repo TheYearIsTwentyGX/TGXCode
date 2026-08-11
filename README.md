@@ -316,6 +316,38 @@ that channel is not a documented, stable surface. If the installed `claude` turn
 out not to support it, the app says so once and falls back to permission modes
 alone; sending never breaks over a protocol difference.
 
+### Notifications
+
+The bell in the top bar decides what happens when a turn you are not watching
+comes to an end — a desktop notification, a short chime, or both. Clicking a
+notification opens that session.
+
+It is deliberately quiet. A notification that fires too often gets switched off,
+and the one that mattered goes with it, so a finished turn only speaks up if:
+
+- it **failed**, which is the one ending you cannot discover by waiting; or
+- it ran for **over 30 seconds** and is not the session you have open in a
+  focused window.
+
+At most one per session per ten seconds, so a draining queue is one notification
+rather than five. A send that never became a turn always says so.
+
+The thirty seconds is wall clock, timed from the moment the bridge marked the
+runner busy rather than read off the turn's result. The two normally agree to
+within milliseconds, but the result's duration falls back to the CLI's *API*
+time when the wall-clock field is missing, and a threshold should not rest on a
+number that can quietly change meaning.
+
+Two limits worth knowing. **The page is what listens**, not the Windows shell, so
+a window that is closed hears nothing — the tray and a shell-side subscriber are
+in `docs/plans/02-notifications-and-shell.md`. And Windows **Focus Assist** drops
+notifications without a word; **Try it** in the bell menu is there so you can
+tell that apart from the app being wrong.
+
+In a browser, the first tick of *Show a desktop notification* is what asks
+permission — the click is the gesture browsers require, and a prompt nobody
+invited is the one people press Block on. The packaged app grants it already.
+
 ### How dev servers are found
 
 A long session mentions dozens of ports, most of them history. The bridge scans

@@ -40,6 +40,39 @@
       <span id="dash-badge" class="bar-badge" hidden></span>
     </button>
 
+    <!-- What reaches you when the window is not the thing you are looking at.
+         The rules it obeys are in announceTurn(); the note inside says them out
+         loud, because a notification you cannot predict is one you switch off. -->
+    <div class="bell-wrap">
+      <button id="btn-bell" class="bell" type="button" data-on="false"
+              aria-haspopup="dialog" aria-expanded="false" aria-controls="bell-menu"
+              title="Notifications">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M6.6 10a5.4 5.4 0 0 1 10.8 0c0 3.9 1.6 5.4 1.6 5.4H5s1.6-1.5 1.6-5.4Z"
+                stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+          <path d="M10 18.3a2.2 2.2 0 0 0 4 0" stroke="currentColor" stroke-width="1.7"
+                stroke-linecap="round"/>
+          <path class="slash" d="M4.6 4.6 19.4 19.4" stroke="currentColor"
+                stroke-width="1.7" stroke-linecap="round"/>
+        </svg>
+      </button>
+
+      <div id="bell-menu" class="bell-menu" role="dialog"
+           aria-label="Notification settings" hidden>
+        <div class="bell-head">When a turn finishes</div>
+        <label class="check">
+          <input id="opt-desktop" type="checkbox">
+          <span>Show a desktop notification</span>
+        </label>
+        <label class="check">
+          <input id="opt-sound" type="checkbox">
+          <span>Play a sound</span>
+        </label>
+        <div id="bell-note" class="bell-note"></div>
+        <button id="bell-try" class="bell-try" type="button">Try it</button>
+      </div>
+    </div>
+
     <button id="db-status" class="db-status" data-up="false" type="button"
             title="DevBrowser connection">
       <span class="led"></span><span id="db-label">DevBrowser</span>
