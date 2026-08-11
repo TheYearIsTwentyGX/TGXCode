@@ -2429,8 +2429,16 @@ dom.input.addEventListener('input', debounce(() => {
 window.addEventListener('beforeunload', () => {
     if (state.current) saveDraft(state.current.sessionId, dom.input.value);
 });
+// Enter sends, Shift+Enter breaks the line — chat convention, and what the hand
+// reaches for. Ctrl/Cmd+Enter stays wired up because it used to be the only way
+// and fingers remember. `isComposing` keeps an IME's Enter for the IME: it is
+// picking a candidate, not finishing a message.
 dom.input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendMessage(); }
+    if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
+    if (e.altKey) return;
+    if (e.shiftKey && !(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    sendMessage();
 });
 
 // Two stops, because the consequences differ. The first asks the turn to end
