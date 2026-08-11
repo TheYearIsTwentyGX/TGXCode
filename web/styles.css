@@ -610,18 +610,28 @@ a:hover { text-decoration: underline; }
 .channel {
     display: inline-flex;
     align-items: center;
-    gap: 9px;
     flex: none;
     height: 34px;
-    padding: 0 6px 0 13px;
+    padding-right: 5px;
     background: var(--s2);
     border-radius: var(--pill);
     white-space: nowrap;
     transition: background var(--t-fast) var(--ease);
 }
 .channel:hover { background: var(--s3); }
-.channel[data-live="false"] { opacity: 0.55; }
+/* A dead port has nothing to stop, so its chip is all switch and keeps no room
+   on the end for a button that is not there. */
+.channel[data-live="false"] { opacity: 0.55; padding-right: 6px; }
 .channel[data-live="false"]:hover { opacity: 0.85; }
+
+.chan-open {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    height: 34px;
+    padding-left: 13px;
+    border-radius: var(--pill);
+}
 
 .channel .led {
     width: 7px; height: 7px;
@@ -654,9 +664,33 @@ a:hover { text-decoration: underline; }
     background: transparent;
     transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
-.channel:hover .go { background: var(--blue-deep); color: #fff; }
-.channel[data-live="false"]:hover .go { background: var(--s5); color: var(--text-2); }
+/* Lit by hovering the switch itself, not the chip: reaching for the stop button
+   should not first promise to open a tab. */
+.chan-open:hover .go { background: var(--blue-deep); color: #fff; }
+.channel[data-live="false"] .chan-open:hover .go { background: var(--s5); color: var(--text-2); }
 .channel.busy { opacity: 0.7; }
+.channel.busy .chan-stop { pointer-events: none; }
+
+/* Shut the server down. Quiet until hovered, because the chip's own job is to
+   open a tab and this one is destructive — a red button sitting on every live
+   port would read as a warning about the port. */
+.chan-stop {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 25px; height: 25px;
+    flex: none;
+    border-radius: 50%;
+    color: var(--text-4);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.chan-stop:hover { background: #3a2422; color: var(--red); }
+
+/* Armed: one more click ends it. The chip says so where it said "Open", so the
+   confirmation is on the thing being confirmed and not in a dialog. */
+.channel[data-arm="true"] .chan-stop { background: #3a2422; color: var(--red); }
+.channel[data-arm="true"] .go,
+.channel[data-arm="true"] .chan-open:hover .go { background: #3a2422; color: var(--red); }
 
 /* ── transcript ──────────────────────────────────────────────────────── */
 

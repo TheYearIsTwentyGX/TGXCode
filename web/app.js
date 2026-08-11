@@ -269,6 +269,9 @@ const ICON = {
         + 'stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
     caret: '<path d="m9 6 6 6-6 6" stroke="currentColor" stroke-width="2" '
         + 'stroke-linecap="round" stroke-linejoin="round"/>',
+    power: '<path d="M12 3.4v7.2" stroke="currentColor" stroke-width="2.1" '
+        + 'stroke-linecap="round"/><path d="M7.5 6.6a6.4 6.4 0 1 0 9 0" stroke="currentColor" '
+        + 'stroke-width="2.1" stroke-linecap="round"/>',
     trash: '<path d="M4.5 6.8h15" stroke="currentColor" stroke-width="1.8" '
         + 'stroke-linecap="round"/><path d="M6.6 6.8 7.7 19a1.5 1.5 0 0 0 1.5 1.4h5.6A1.5 1.5 0 0 0 '
         + '16.3 19l1.1-12.2" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>'
@@ -1570,27 +1573,102 @@ async function loadChannels() {
 }
 
 function renderChannels() {
-    dom.channels.replaceChildren();
-    for (const p of state.channels) {
-        const btn = el('button', {
-            class: 'channel',
-            type: 'button',
-            'data-live': String(p.listening),
-            title: p.evidence ? `${p.evidence.from}: ${p.evidence.command}` : '',
-            onclick: () => openInDevBrowser(p, btn),
+    dom.channels.replaceChildren(...state.channels.map(channelChip));
+}
+
+/**
+ * One port: most of the chip switches DevBrowser to it, and — while it is still
+ * answering — a button on the end shuts it down.
+ */
+function channelChip(p) {
+    const go = el('span', { class: 'go' }, p.listening ? 'Open' : 'Gone');
+    const chip = el('div', {
+        class: 'channel',
+        'data-live': String(p.listening),
+        title: p.evidence ? `${p.evidence.from}: ${p.evidence.command}` : '',
+    },
+        el('button', {
+            class: 'chan-open', type: 'button',
+            title: `Switch DevBrowser to :${p.port}`,
+            onclick: () => openInDevBrowser(p, chip, go),
         },
             el('span', { class: 'led' }),
             el('span', { class: 'port' }, ':' + p.port),
             p.title ? el('span', { class: 'name' }, p.title) : null,
-            el('span', { class: 'go' }, p.listening ? 'Open' : 'Gone'),
-        );
-        dom.channels.append(btn);
+            go,
+        ),
+    );
+    if (p.listening) chip.append(stopButton(p, chip, go));
+    return chip;
+}
+
+/**
+ * Killing a server is a click too cheap to leave unguarded: the chips sit side by
+ * side, all the same size, and the one you meant is usually the neighbour of the
+ * one you hit. So the first click only arms — the chip says what is about to
+ * happen — and the second signals. Leaving the chip, or waiting, calls it off.
+ */
+function stopButton(p, chip, go) {
+    let timer = null;
+    const disarm = () => {
+        clearTimeout(timer);
+        if (chip.dataset.arm !== 'true') return;
+        chip.dataset.arm = 'false';
+        go.textContent = 'Open';
+    };
+    const btn = el('button', {
+        class: 'chan-stop', type: 'button',
+        title: `Stop the server on :${p.port}`,
+        'aria-label': `Stop the server on :${p.port}`,
+        onclick: () => {
+            if (chip.dataset.arm === 'true') { disarm(); stopChannel(p, chip, go); return; }
+            chip.dataset.arm = 'true';
+            go.textContent = 'Stop?';
+            timer = setTimeout(disarm, 4000);
+            nameOwner(p, chip, btn);
+        },
+    }, icon('power', 13));
+    chip.addEventListener('mouseleave', disarm);
+    return btn;
+}
+
+/**
+ * While a chip is armed, its tooltip stops describing the command that *started*
+ * the server and describes the process that holds the port now. Ports get reused
+ * across worktrees, so the pid and command line are the only things that say the
+ * server is still the one the transcript found.
+ */
+async function nameOwner(p, chip, btn) {
+    try {
+        const r = await get(`/api/devservers/owner?port=${p.port}`);
+        if (chip.dataset.arm !== 'true') return;   // disarmed while we asked
+        btn.title = r.owners.length
+            ? r.owners.map(o => `Stop pid ${o.pid} — ${o.command}`).join('\n')
+            : `Nothing on this side owns :${p.port}`;
+    } catch { /* the confirmation stands without it */ }
+}
+
+async function stopChannel(p, chip, go) {
+    chip.classList.add('busy');
+    go.textContent = 'Stopping';
+    try {
+        const r = await post('/api/devservers/stop', { port: p.port });
+        const who = `:${p.port} (pid ${r.pids.join(', ')})`;
+        toast(r.escalated
+            ? `Stopped ${who} — it ignored SIGTERM, so it was killed.`
+            : `Stopped ${who}.`, 'ok');
+        // The chip's own state is now stale in more ways than one — the port is
+        // dead, and its rank against the others has changed. Ask again.
+        loadChannels();
+    } catch (err) {
+        chip.classList.remove('busy');
+        go.textContent = 'Open';
+        toast(err.message, 'error');
     }
 }
 
-async function openInDevBrowser(p, btn) {
-    btn.classList.add('busy');
-    const go = btn.querySelector('.go');
+async function openInDevBrowser(p, chip, go) {
+    chip.classList.add('busy');
     const was = go.textContent;
     go.textContent = 'Opening';
     try {
@@ -1605,7 +1683,7 @@ async function openInDevBrowser(p, btn) {
         go.textContent = was;
         toast(`Could not switch to :${p.port}. ${err.message}`, 'error');
     } finally {
-        btn.classList.remove('busy');
+        chip.classList.remove('busy');
     }
 }
 
@@ -2745,7 +2823,12 @@ refreshDevBrowser();
 // already the right shape rather than growing one out from under the transcript.
 showTerm(termOpen());
 setInterval(refreshDevBrowser, 20_000);
-setInterval(() => { if (state.current) loadChannels(); }, 25_000);
+// Not while a chip is armed or working: rebuilding the strip there would either
+// take back a stop the user is halfway through asking for, or drop the label off
+// one already in flight.
+setInterval(() => {
+    if (state.current && !dom.channels.querySelector('[data-arm="true"], .busy')) loadChannels();
+}, 25_000);
 
 // A running subagent writes to its own file, which the parent transcript says
 // nothing about — so the only way its activity line moves is to go and look.

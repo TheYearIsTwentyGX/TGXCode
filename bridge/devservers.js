@@ -16,7 +16,9 @@
 // to it was start it or kill it, and whether the name DevBrowser has for it
 // matches this session's worktree.
 
+const fs = require('fs');
 const net = require('net');
+const { execFile } = require('child_process');
 const { PORT_DENYLIST } = require('./config');
 
 // Commands that plausibly start a long-lived server.
@@ -226,4 +228,114 @@ async function enrich(candidates, titles = {}, session = {}) {
     return { ports: liveOnes.concat(deadOnes), total: ranked.length };
 }
 
-module.exports = { detect, enrich, isListening };
+// ---------------------------------------------------------------------------
+// Stopping one
+// ---------------------------------------------------------------------------
+// The chip says a port is answering; this is what lets the same chip stop it.
+// It works from the socket rather than from the transcript: whatever the agent
+// typed to start the server, the process holding the port is the one to signal.
+
+/**
+ * Processes that are never a dev server, however they got hold of a port.
+ *
+ * A bridge is a Claude Sessions instance like this one, and killing it takes its
+ * turns down with it — `claude` reads stdin, so the closed pipe reads as
+ * end-of-input and the turn stops mid-flight. A `claude` process *is* a turn.
+ * Neither is something a button in this UI should be able to end by accident.
+ */
+function protectedAs(cmdline) {
+    const argv = cmdline.split('\0').filter(Boolean);
+    const joined = argv.join(' ');
+    const argv0 = (argv[0] || '').split('/').pop();
+    if (/bridge\/server\.js/.test(joined)) return 'a Claude Sessions bridge';
+    if (argv0 === 'claude' || /claude-code\/cli\.js|\.claude\/local\/claude/.test(joined)) {
+        return 'a claude agent process';
+    }
+    return null;
+}
+
+/**
+ * Who is listening on a port, straight from `ss`. Several pids can share one
+ * listening socket (a forked worker pool), so this is a list.
+ *
+ * Only Linux sockets are visible here. WSL's mirrored networking means a
+ * Windows-side server answers on 127.0.0.1 too but has no pid on this side —
+ * that reads as an empty list, and the caller says so rather than guessing.
+ */
+function owners(port) {
+    return new Promise((resolve) => {
+        execFile('ss', ['-ltnpH'], { timeout: 3000, maxBuffer: 4 << 20 }, (err, stdout) => {
+            if (err || !stdout) return resolve([]);
+            const pids = new Set();
+            for (const line of stdout.split('\n')) {
+                // LISTEN 0 511 127.0.0.1:45899 0.0.0.0:* users:(("node",pid=1234,fd=21))
+                const local = line.trim().split(/\s+/)[3];
+                if (!local || !local.endsWith(':' + port)) continue;
+                for (const m of matchAll(line, /pid=(\d+)/g)) pids.add(Number(m[1]));
+            }
+            resolve([...pids].map((pid) => {
+                let cmdline = '';
+                try { cmdline = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8'); } catch { /* gone */ }
+                return {
+                    pid,
+                    command: clip(cmdline.split('\0').filter(Boolean).join(' '), 120),
+                    protectedAs: pid === process.pid || pid === process.ppid
+                        ? 'this bridge' : protectedAs(cmdline),
+                };
+            }));
+        });
+    });
+}
+
+/** Poll until nothing answers on the port, or the deadline passes. */
+async function waitGone(port, ms) {
+    const deadline = Date.now() + ms;
+    for (;;) {
+        if (!await isListening(port, 200)) return true;
+        if (Date.now() >= deadline) return false;
+        await new Promise(r => setTimeout(r, 150));
+    }
+}
+
+/**
+ * Stop whatever is listening on `port`: SIGTERM, and SIGKILL only if the socket
+ * is still up after a grace period. Signals go to the listening pids themselves,
+ * not their process group — a server the agent started in the foreground of a
+ * Bash call shares a group with the shell that `claude` is waiting on.
+ */
+async function stop(port, { graceMs = 2500, hardMs = 1500 } = {}) {
+    const found = await owners(port);
+    if (!found.length) {
+        return { ok: false, reason: 'no-owner', listening: await isListening(port) };
+    }
+    const guarded = found.find(o => o.protectedAs);
+    if (guarded) {
+        return { ok: false, reason: 'protected', what: guarded.protectedAs, pid: guarded.pid };
+    }
+
+    const pids = found.map(o => o.pid);
+    const signal = (sig) => {
+        let sent = 0;
+        let denied = false;
+        for (const pid of pids) {
+            try { process.kill(pid, sig); sent++; }
+            catch (err) { if (err.code === 'EPERM') denied = true; }  // ESRCH: already gone
+        }
+        return { sent, denied };
+    };
+
+    const term = signal('SIGTERM');
+    if (!term.sent && term.denied) return { ok: false, reason: 'not-permitted', pids };
+    if (await waitGone(port, graceMs)) {
+        return { ok: true, port, pids, commands: found.map(o => o.command), escalated: false };
+    }
+
+    signal('SIGKILL');
+    const gone = await waitGone(port, hardMs);
+    return {
+        ok: gone, port, pids, commands: found.map(o => o.command), escalated: true,
+        reason: gone ? null : 'still-listening',
+    };
+}
+
+module.exports = { detect, enrich, isListening, owners, stop };

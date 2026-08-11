@@ -106,7 +106,7 @@ create one in `%APPDATA%\claude-sessions\`:
 | **Pin / archive** | Hover a row for its two buttons, or use the ones beside the session title. Pinned sessions sit in their own group at the top, across projects. Archived ones collapse into a group at the bottom. |
 | **Conversation** | Your turns, Claude's replies with syntax-highlighted code, and one collapsible block per tool call. Edits render as diffs, and output too large to inline loads on demand. |
 | **Subagents** | The first chip row under the title, one per subagent, with a light for how it is going and a line of what it is doing. Click to switch the pane over to it; `Esc` or the breadcrumb comes back. |
-| **Dev servers** | The second chip row. Green means the port is answering right now; click to switch DevBrowser to that tab, starting DevBrowser if it isn't running. |
+| **Dev servers** | The second chip row. Green means the port is answering right now; click to switch DevBrowser to that tab, starting DevBrowser if it isn't running. The button on the end shuts the server down — one click arms it, the next signals. |
 | **Open folder** | The folder button by the title shows the session's working directory in Windows File Explorer, through the `\\wsl.localhost` share. |
 | **Composer** | Sends to the session, resuming it in place — the same transcript a terminal would append to. |
 | **Send queue** | Write while an agent is working and the message waits, listed above the composer in send order. Each one can be expanded, reordered, pulled back for editing, or dropped, right up until its turn starts. `Shift+Tab` out of the composer to work through them without the mouse. |
@@ -329,6 +329,26 @@ devbrowser title 5006 "add-company-flow"
 
 Live ports are always offered; a couple of recently-dead ones are shown greyed
 out so a server that has gone away is visible rather than silently missing.
+
+### Stopping one
+
+The chip's end button ends the server. Two clicks, because the chips are
+identical in size and sit shoulder to shoulder — the first arms it and the chip
+says `Stop?` where it said `Open`, the second signals. Moving off the chip, or
+waiting four seconds, calls it off.
+
+What gets signalled comes from the socket, not the transcript: `ss` says which
+pids hold the port, they get a `SIGTERM`, and only if the port is still answering
+2.5s later a `SIGKILL`. Signals go to those pids alone and never to their process
+group, because a server started in the foreground of a Bash call shares a group
+with the shell `claude` is waiting on.
+
+Two things are never stopped this way, however they got hold of a port: another
+**Claude Sessions bridge** — killing one takes its turns with it, since `claude`
+reads the closed stdin as end-of-input — and a **`claude`** process, which *is* a
+turn. Both are named and left alone. A port with no Linux process behind it says
+so too: with WSL mirrored networking a Windows-side server answers on 127.0.0.1
+but has no pid on this side, and the chip reports that rather than guessing.
 
 ## Layout
 

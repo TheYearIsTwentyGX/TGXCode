@@ -583,6 +583,42 @@ async function api(req, res, url, pathname) {
         }
     }
 
+    // --- dev servers -------------------------------------------------------
+    // Both of these are keyed by port, not by session: the chip is offered
+    // because this session started the server, but what answers on the port —
+    // and what ends up killed — is whoever holds the socket now, which is the
+    // only thing that can be checked for real.
+
+    // Who holds a port, so a chip about to stop one can say whose process it is.
+    // Ports get reused across worktrees; the pid and command line are the only
+    // things that tell you the server is still the one you meant.
+    if (pathname === '/api/devservers/owner' && req.method === 'GET') {
+        const port = Number(url.searchParams.get('port'));
+        if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+            return send(res, 400, { error: 'invalid port' });
+        }
+        const [owners, listening] = await Promise.all([
+            devservers.owners(port), devservers.isListening(port),
+        ]);
+        return send(res, 200, { port, listening, owners });
+    }
+
+    if (pathname === '/api/devservers/stop' && req.method === 'POST') {
+        const body = await readJson(req);
+        const port = Number(body.port);
+        if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+            return send(res, 400, { error: 'invalid port' });
+        }
+        // The same list that keeps a port out of the chip row keeps it from being
+        // killed through one — this bridge's own port included.
+        if (cfg.PORT_DENYLIST.has(port)) {
+            return send(res, 403, { error: `:${port} is not a dev server this app will stop` });
+        }
+        const out = await devservers.stop(port);
+        if (out.ok) return send(res, 200, out);
+        return send(res, STOP_STATUS[out.reason] || 502, { ...out, error: stopMessage(out, port) });
+    }
+
     // --- devbrowser --------------------------------------------------------
     if (pathname === '/api/devbrowser/status' && req.method === 'GET') {
         const [health, tls] = await Promise.all([devbrowser.health(), devbrowser.titles()]);
@@ -624,6 +660,20 @@ async function api(req, res, url, pathname) {
 
 function normalizeMode(mode) {
     return PERMISSION_MODES.includes(mode) ? mode : 'acceptEdits';
+}
+
+const STOP_STATUS = { protected: 403, 'no-owner': 409, 'not-permitted': 403 };
+
+/** Why a stop did not happen, in words the chip can put in a toast. */
+function stopMessage(out, port) {
+    if (out.reason === 'protected') return `:${port} is ${out.what} — left alone`;
+    if (out.reason === 'no-owner') {
+        return out.listening
+            ? `Something answers on :${port} but no Linux process owns it — it may be running on Windows`
+            : `Nothing is listening on :${port}`;
+    }
+    if (out.reason === 'not-permitted') return `Not allowed to signal the process on :${port}`;
+    return `:${port} is still listening after SIGKILL`;
 }
 
 /**

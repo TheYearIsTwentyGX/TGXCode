@@ -32,11 +32,12 @@ So "restart" means: re-run *that command*, in the session's cwd.
   the recorded command detached with output to a log file, the same
   `setsid nohup … &` pattern `app/main.js` uses to launch the bridge without a
   console.
-- **Stop** — find the listener and terminate it. Resolve owner via
-  `ss -ltnp` / `/proc/net/tcp` rather than a blind `fuser -k`, and **confirm
-  before killing**, showing the pid and command line. Killing the wrong process
-  because a port was reused is exactly the failure the config's `PORT_DENYLIST`
-  exists to avoid elsewhere.
+- **Stop** — *done.* `devservers.stop()` resolves the owner via `ss -ltnp`,
+  SIGTERMs those pids and escalates to SIGKILL only if the port still answers;
+  the chip arms on the first click and shows the pid and command line in its
+  tooltip (`/api/devservers/owner`) before the second one signals. `PORT_DENYLIST`
+  gates the endpoint, and a process whose command line is a bridge or a `claude`
+  is named and refused — killing either takes a turn down with it.
 - Never auto-start anything. The agent starts servers; the app offers to
   restart one you can see.
 
@@ -90,6 +91,6 @@ hitting an app's root on a timer is not always harmless.
 
 - A dev server killed by the agent can be restarted from its chip with the same
   command, and the chip goes green.
-- Stopping a server shows which pid and command will be killed before doing it.
+- ✅ Stopping a server shows which pid and command will be killed before doing it.
 - A server started by a worktree session gets a DevBrowser tab named for the
   worktree.
