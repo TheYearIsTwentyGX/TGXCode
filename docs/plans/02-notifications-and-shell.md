@@ -6,8 +6,21 @@
 > **Partly landed.** §2 (what earns a notification) is built in `web/app.js`,
 > along with a sound, which this plan did not have. It listens from the page,
 > so the rules apply whenever a window is open and nothing fires when one is
-> not. §1 (a shell-side subscriber), §3 (tray), §4 (close to tray) and §5 (deep
-> links) are untouched, and §1 is what makes a closed window audible.
+> not. §1 (a shell-side subscriber), §3 (tray) and §4 (close to tray) are
+> untouched, and §1 is what makes a closed window audible.
+>
+> §2's `permission-request` row is built too, covering all three kinds — tool,
+> plan and question — with Allow/Deny buttons on the toast. Those needed a
+> service worker (`web/sw.js`): actions do not exist on a plain notification.
+> Chromium's `Notification.maxActions` is **2**, so the third answer ("allow
+> all session") stays on the card; three buttons would mean raw Windows toast
+> XML from the main process and protocol activation to report which was
+> pressed, which is most of §5 and Windows-only.
+>
+> §5 is not built, but its URL shape is: `#/session/<id>` is read on load, so
+> a worker that has to open a window lands on the right session — and a
+> `claude-sessions://` handler, when it exists, has a vocabulary to route into
+> rather than inventing a second one.
 >
 > Two departures from §2, both from building it: a turn finishing in a focused
 > window on a *different* session does notify — "never for the session that is
