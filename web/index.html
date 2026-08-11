@@ -80,6 +80,17 @@
                 <path d="M10 12.5h4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
               </svg>
             </button>
+            <button id="btn-delete" class="icon-btn danger" type="button"
+                    title="Delete this session permanently">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M4.5 6.8h15" stroke="currentColor" stroke-width="1.7"
+                      stroke-linecap="round"/>
+                <path d="M6.6 6.8 7.7 19a1.5 1.5 0 0 0 1.5 1.4h5.6A1.5 1.5 0 0 0 16.3 19l1.1-12.2"
+                      stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+                <path d="M9.6 6.8V4.6a1 1 0 0 1 1-1h2.8a1 1 0 0 1 1 1v2.2"
+                      stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+              </svg>
+            </button>
           </div>
         </div>
         <div id="conv-sub" class="conv-sub"></div>
@@ -139,6 +150,9 @@
             <select id="perm" aria-label="Permission mode">
               <option value="acceptEdits">acceptEdits</option>
               <option value="auto">auto</option>
+              <!-- Worth having now that a prompt is a real question rather than
+                   a silent denial: manual asks about everything. -->
+              <option value="manual">manual</option>
               <option value="plan">plan</option>
               <option value="dontAsk">dontAsk</option>
               <option value="bypassPermissions">bypassPermissions</option>
@@ -177,11 +191,25 @@
       </div>
       <div class="field">
         <label for="new-prompt">First message</label>
-        <textarea id="new-prompt" placeholder="What should this session do?"></textarea>
+        <!-- rows="2" and no min-height: the box is sized by its contents from
+             the first keystroke, so a one-line prompt does not sit in a tall
+             empty well. -->
+        <textarea id="new-prompt" class="grow" rows="2"
+                  placeholder="What should this session do?"></textarea>
+      </div>
+      <!-- Only shown by a development bridge; see markInstance(). -->
+      <div class="field" id="new-test-row" hidden>
+        <label class="check">
+          <input id="new-test" type="checkbox">
+          <span>Test session — dev only</span>
+        </label>
+        <div class="note">Kept out of the everyday window on :45888. Use this for
+          sessions you are starting to try something out, and delete them when
+          you are done.</div>
       </div>
     </div>
     <div class="modal-foot">
-      <div class="opts" style="margin: 0">
+      <div class="opts">
       <label for="new-model">Model</label>
       <select id="new-model">
         <option value="">inherit</option>
@@ -190,10 +218,45 @@
         <option value="haiku">haiku</option>
         <option value="fable">fable</option>
       </select>
+      <label for="new-perm">Permissions</label>
+      <!-- Its own control rather than borrowing the composer's: the mode a new
+           session starts in is a decision about that session, and the composer
+           belongs to whichever conversation happens to be open behind this. -->
+      <select id="new-perm">
+        <option value="acceptEdits">acceptEdits</option>
+        <option value="auto">auto</option>
+        <option value="manual">manual</option>
+        <option value="plan">plan</option>
+        <option value="dontAsk">dontAsk</option>
+        <option value="bypassPermissions">bypassPermissions</option>
+      </select>
       </div>
       <span class="spacer"></span>
       <button class="btn" data-close type="button">Cancel</button>
       <button id="new-go" class="btn primary" type="button">Start</button>
+    </div>
+  </div>
+</div>
+
+<!-- Delete a session. Its own dialog rather than a confirm(): the thing worth
+     reading before agreeing is *which* conversation, and how much of it. -->
+<div id="del-scrim" class="scrim" hidden>
+  <div class="modal danger" role="dialog" aria-modal="true" aria-labelledby="del-title">
+    <div class="modal-head">
+      <span id="del-title">Delete this session?</span>
+      <button class="modal-close" data-close-del type="button" aria-label="Close">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="del-what" id="del-what"></div>
+      <div class="del-meta" id="del-meta"></div>
+      <p class="del-warn">This deletes the transcript from disk, along with any
+        subagent transcripts and saved tool output belonging to it. It cannot be
+        undone, and it is not what archiving does.</p>
+    </div>
+    <div class="modal-foot">
+      <span class="spacer"></span>
+      <button class="btn" data-close-del type="button">Cancel</button>
+      <button id="del-go" class="btn destructive" type="button">Delete permanently</button>
     </div>
   </div>
 </div>

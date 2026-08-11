@@ -27,6 +27,38 @@ must stop your own, Ctrl-C the `npm run dev` you started, or kill it by port:
 kill "$(ss -ltnp 2>/dev/null | grep :45899 | grep -oP 'pid=\K\d+' | head -1)"
 ```
 
+## Clean up the sessions you start
+
+Every session you start to try something out lands in the user's sidebar, because
+both instances read the same `~/.claude/projects`. Groups full of `probe`,
+`sandbox` and the like are what that looks like after a few agents have been
+through. **Do not leave them there.** Either:
+
+- **Mark it a test session**, which keeps it out of the everyday window entirely.
+  Tick *Test session — dev only* in the Start a session dialog, or pass the field:
+
+  ```bash
+  curl -sX POST http://127.0.0.1:45899/api/sessions \
+    -H 'X-Claude-Sessions-Client: 1' -H 'Content-Type: application/json' \
+    -d '{"cwd":"'"$PWD"'","prompt":"…","test":true}'
+  ```
+
+  Labelled sessions collect in a **Test sessions** card at the foot of the rail on
+  dev only. Prefer this: a session you forget to delete is then still invisible to
+  the user.
+
+- **Or delete it when you are done**, with the trash icon on the row, or:
+
+  ```bash
+  curl -sX DELETE http://127.0.0.1:45899/api/sessions/$ID \
+    -H 'X-Claude-Sessions-Client: 1'
+  ```
+
+  This is a hard delete — the transcript and its sidecar directory. Do it to
+  sessions *you* created, never to one you found.
+
+Best is both: label it on the way in, delete it on the way out.
+
 ## Never rebuild without asking
 
 `install.ps1` force-closes any running ClaudeSessions and replaces the

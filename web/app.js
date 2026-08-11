@@ -35,10 +35,12 @@ async function del(path) {
 
 const state = {
     clientId: null,
+    dev: false,             // talking to a development bridge
     sessions: [],
     query: '',
     current: null,          // session summary
     offset: 0,
+    openSeq: 0,             // bumped per open; a slow fetch checks it before drawing
     nodes: new Map(),       // event id -> {ev, node}
     tools: new Map(),       // tool_use id -> {ev, node}
     turns: [],              // the user messages, in order, for the turn rail
@@ -61,13 +63,21 @@ const state = {
             return new Set(localStorage.getItem('archiveOpen') === '1' ? [] : ['archived']);
         } catch { return new Set(['archived']); }
     })(),
+    // Where each row and each group card sits, decided once — see rememberOrder.
+    order: new Map(),       // sessionId -> rank
+    groupOrder: new Map(),  // group key -> rank
+    freshRank: 0,           // ranks for what turns up after the first load
     unsent: new Map(),      // sessionId -> text written to a process but not yet in a transcript
+    pendingDelete: null,    // the session the confirm dialog is asking about
     busyTimer: null,        // ticks the elapsed-time readout while a turn runs
     queue: [],              // the current session's waiting messages, from the bridge
     queueDrag: null,        // id of the chip being dragged
     queueOpen: new Set(),   // ids of chips expanded to their full text
     queueSig: '',           // what the chips were last built from, to avoid churn
     queueFocus: null,       // the chip holding the queue's single tab stop
+    ask: null,              // the approval this session is blocked on, if any
+    askTimer: null,         // ticks the countdown on the approval card
+    stopArmed: 0,           // when a soft Stop happened, for the force escalation
 };
 
 const $ = (id) => document.getElementById(id);
@@ -76,9 +86,11 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'channels', 'scroll', 'log', 'status-line', 'status-text', 'btn-stop', 'input',
     'btn-send', 'queue', 'queue-list', 'queue-count', 'queue-clear',
     'model', 'perm', 'btn-new', 'db-status', 'db-label', 'toasts',
-    'btn-pin', 'btn-folder', 'btn-archive', 'turns', 'turn-pop',
+    'btn-pin', 'btn-folder', 'btn-archive', 'btn-delete', 'turns', 'turn-pop',
     'agents', 'agent-scroll', 'agent-log', 'btn-back', 'btn-back-label',
-    'new-scrim', 'new-cwd', 'new-picker', 'new-prompt', 'new-model', 'new-go']) {
+    'new-scrim', 'new-cwd', 'new-picker', 'new-prompt', 'new-model', 'new-perm',
+    'new-test', 'new-test-row', 'new-go',
+    'del-scrim', 'del-what', 'del-meta', 'del-go']) {
     dom[id.replace(/-(\w)/g, (_, c) => c.toUpperCase())] = $(id);
 }
 
@@ -199,11 +211,47 @@ async function loadSessions() {
         const q = state.query ? `?q=${encodeURIComponent(state.query)}` : '';
         const { sessions } = await get('/api/sessions' + q);
         state.sessions = sessions;
+        rememberOrder(sessions);
         renderRail();
     } catch (err) {
         toast(`Could not load sessions: ${err.message}`, 'error');
     }
 }
+
+const groupKeyOf = (s) => `project:${s.projectName || 'unknown'}`;
+
+/**
+ * Decide where each row and each group card sits, once.
+ *
+ * The bridge returns sessions newest-first and recomputes that on every change,
+ * so the rail used to re-sort itself whenever anything happened anywhere: a
+ * session taking a message climbed past its neighbours and dragged its whole
+ * project card up with it, moving rows out from under the cursor of somebody
+ * reading them. So the order the rail was opened with is the order it keeps —
+ * a reload is what re-sorts it.
+ *
+ * Ranks from the first load count up from zero, in the order the bridge sent
+ * them. Anything first seen after that is genuinely new rather than merely
+ * busy, so it takes a negative rank: it lands at the top of its group, and a
+ * project nobody had a session in yet lands at the top of the rail, without
+ * disturbing the position of anything already placed.
+ */
+function rememberOrder(sessions) {
+    const firstLoad = state.order.size === 0;
+    for (const s of sessions) {
+        if (!state.order.has(s.sessionId)) {
+            state.order.set(s.sessionId, firstLoad ? state.order.size : --state.freshRank);
+        }
+        // Recorded for every session, pinned or not: unpinning one later has to
+        // drop it back into a project card that already knows where it goes.
+        const key = groupKeyOf(s);
+        if (!state.groupOrder.has(key)) {
+            state.groupOrder.set(key, firstLoad ? state.groupOrder.size : --state.freshRank);
+        }
+    }
+}
+
+const rankOf = (s) => state.order.get(s.sessionId) ?? 0;
 
 const ICON = {
     pin: '<path d="M9 3h6l-.7 5.2 3 2.6V13H6.7v-2.2l3-2.6L9 3Z" stroke="currentColor" '
@@ -219,6 +267,11 @@ const ICON = {
         + 'stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
     caret: '<path d="m9 6 6 6-6 6" stroke="currentColor" stroke-width="2" '
         + 'stroke-linecap="round" stroke-linejoin="round"/>',
+    trash: '<path d="M4.5 6.8h15" stroke="currentColor" stroke-width="1.8" '
+        + 'stroke-linecap="round"/><path d="M6.6 6.8 7.7 19a1.5 1.5 0 0 0 1.5 1.4h5.6A1.5 1.5 0 0 0 '
+        + '16.3 19l1.1-12.2" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>'
+        + '<path d="M9.6 6.8V4.6a1 1 0 0 1 1-1h2.8a1 1 0 0 1 1 1v2.2" stroke="currentColor" '
+        + 'stroke-width="1.8" stroke-linejoin="round"/>',
 };
 
 function icon(name, size = 15) {
@@ -237,23 +290,33 @@ function renderRail() {
         return;
     }
 
-    const pinned = state.sessions.filter(s => s.pinned);
-    const archived = state.sessions.filter(s => s.archived);
-    const rest = state.sessions.filter(s => !s.pinned && !s.archived);
+    // Held order, not the order the bridge sent. See rememberOrder.
+    const ordered = [...state.sessions].sort((a, b) => rankOf(a) - rankOf(b));
+
+    const pinned = ordered.filter(s => s.pinned);
+    const archived = ordered.filter(s => s.archived && !s.pinned);
+    // Scratch sessions gathered in one place, because the point of labelling one
+    // is to be able to find it again and delete it. Only a development bridge
+    // sends any, so the everyday window never grows this card.
+    const test = ordered.filter(s => s.test && !s.pinned && !s.archived);
+    const rest = ordered.filter(s => !s.pinned && !s.archived && !s.test);
 
     // Pinned first, across every project — that is the point of pinning.
     if (pinned.length) dom.rail.append(groupCard('pinned', 'Pinned', pinned));
 
     const groups = new Map();
     for (const s of rest) {
-        const key = s.projectName || 'unknown';
-        if (!groups.has(key)) groups.set(key, []);
-        groups.get(key).push(s);
+        const key = groupKeyOf(s);
+        if (!groups.has(key)) groups.set(key, { label: s.projectName || 'unknown', list: [] });
+        groups.get(key).list.push(s);
     }
-    for (const [project, list] of groups) {
-        dom.rail.append(groupCard(`project:${project}`, project, list));
+    const byGroupRank = [...groups].sort(
+        (a, b) => (state.groupOrder.get(a[0]) ?? 0) - (state.groupOrder.get(b[0]) ?? 0));
+    for (const [key, { label, list }] of byGroupRank) {
+        dom.rail.append(groupCard(key, label, list));
     }
 
+    if (test.length) dom.rail.append(groupCard('test', 'Test sessions', test));
     if (archived.length) dom.rail.append(groupCard('archived', 'Archived', archived));
 }
 
@@ -309,6 +372,13 @@ function strip(s) {
         },
             el('span', { class: 'strip-title' }, s.title),
             el('span', { class: 'strip-meta' },
+                // Pinning is a state worth seeing without hovering, and this is
+                // where it goes now that the buttons are hover-only.
+                s.pinned ? el('span', { class: 'tag-pin', title: 'Pinned' },
+                    icon('pin', 11)) : null,
+                // Only ever set on a development bridge, and worth saying on the
+                // row: a labelled session is one somebody meant to throw away.
+                s.test ? el('span', { class: 'tag-test' }, 'test') : null,
                 s.worktree ? el('span', { class: 'wt' }, s.worktree.name) : null,
                 s.worktree ? el('span', { class: 'dot' }, '·') : null,
                 // The time the list is ordered by, so the order reads as sorted.
@@ -337,6 +407,11 @@ function strip(s) {
                 title: s.archived ? 'Restore from archive' : 'Archive',
                 onclick: (e) => { e.stopPropagation(); setFlags(s, { archived: !s.archived }); },
             }, icon(s.archived ? 'unarchive' : 'archive')),
+            el('button', {
+                class: 'mini danger', type: 'button',
+                title: 'Delete permanently',
+                onclick: (e) => { e.stopPropagation(); askDelete(s); },
+            }, icon('trash')),
         ),
     );
 }
@@ -364,9 +439,9 @@ function patchQueuedBadge(stripEl, queued) {
 async function setFlags(summary, change) {
     try {
         const r = await post(`/api/sessions/${summary.sessionId}/flags`, change);
-        Object.assign(summary, { pinned: r.pinned, archived: r.archived });
+        Object.assign(summary, { pinned: r.pinned, archived: r.archived, test: r.test });
         if (state.current && state.current.sessionId === summary.sessionId) {
-            Object.assign(state.current, { pinned: r.pinned, archived: r.archived });
+            Object.assign(state.current, { pinned: r.pinned, archived: r.archived, test: r.test });
             renderHeaderActions();
         }
         renderRail();
@@ -381,48 +456,219 @@ function saveCollapsed() {
     } catch { /* private mode */ }
 }
 
+// ── delete ───────────────────────────────────────────────────────────────
+// Archiving is the reversible one and is a click. This is not reversible, so it
+// is a click plus an answer to a question that names what is about to go.
+
+function askDelete(summary) {
+    state.pendingDelete = summary;
+    dom.delWhat.textContent = summary.title;
+    // replaceChildren has no opinion about nulls the way el() does — it would
+    // render them as the word "null".
+    dom.delMeta.replaceChildren(...[
+        el('span', {}, summary.projectName),
+        el('span', { class: 'sep' }, '·'),
+        el('span', {}, `${summary.userMessages} ${summary.userMessages === 1 ? 'turn' : 'turns'}`),
+        el('span', { class: 'sep' }, '·'),
+        el('span', {}, `last written ${ago(summary.lastTs)} ago`),
+        summary.test ? el('span', { class: 'sep' }, '·') : null,
+        summary.test ? el('span', { class: 'tag-test' }, 'test') : null,
+    ].filter(Boolean));
+    dom.delScrim.hidden = false;
+    dom.delGo.focus();
+}
+
+function closeDelete() {
+    dom.delScrim.hidden = true;
+    state.pendingDelete = null;
+    dom.delGo.disabled = false;
+    dom.delGo.textContent = 'Delete permanently';
+}
+
+async function confirmDelete() {
+    const s = state.pendingDelete;
+    if (!s) return;
+    dom.delGo.disabled = true;
+    dom.delGo.textContent = 'Deleting…';
+    try {
+        await del(`/api/sessions/${s.sessionId}`);
+        closeDelete();
+        toast(`Deleted “${clip(s.title, 40)}”.`, 'ok');
+        // The bridge broadcasts as well, so this is only about not waiting for a
+        // round trip to stop showing a conversation that no longer exists.
+        forgetSession(s.sessionId);
+    } catch (err) {
+        dom.delGo.disabled = false;
+        dom.delGo.textContent = 'Delete permanently';
+        toast(`Could not delete: ${err.message}`, 'error');
+    }
+}
+
+/** Drop every trace of a session that has gone, whoever deleted it. */
+function forgetSession(sessionId) {
+    state.sessions = state.sessions.filter(s => s.sessionId !== sessionId);
+    state.order.delete(sessionId);
+    state.unsent.delete(sessionId);
+    saveDraft(sessionId, '');
+    if (state.pendingDelete && state.pendingDelete.sessionId === sessionId) closeDelete();
+    if (state.current && state.current.sessionId === sessionId) clearCurrent();
+    renderRail();
+}
+
+/** Back to the empty state — the conversation on screen is not there any more. */
+function clearCurrent() {
+    state.current = null;
+    state.openSeq++;        // a transcript fetch still in flight must not draw
+    state.offset = 0;
+    state.runner = null;
+    state.nodes.clear();
+    state.tools.clear();
+    state.turns = [];
+    state.activeTurn = -1;
+    state.agents = [];
+    state.ask = null;
+    leaveAgent();
+    clearInterval(state.busyTimer);
+    state.busyTimer = null;
+    dom.log.replaceChildren();
+    dom.turns.replaceChildren();
+    dom.agents.replaceChildren();
+    dom.channels.replaceChildren();
+    hideTurnPop();
+    dom.conv.hidden = true;
+    dom.placeholder.hidden = false;
+    dom.btnSend.disabled = true;
+    subscribe();            // stop the bridge tailing a file that is gone
+}
+
 // ── conversation ─────────────────────────────────────────────────────────
 
 async function openSession(id, { quiet = false } = {}) {
     if (state.current && state.current.sessionId === id) return true;
     // Keep whatever is half-typed for the session being left behind.
     if (state.current) saveDraft(state.current.sessionId, dom.input.value);
+
+    // Switching should feel like switching, not like waiting: a long transcript
+    // is megabytes and the fetch is most of the delay. The rail summary is the
+    // same object the transcript endpoint returns, so the header is drawn for
+    // real straight away and only the body stands in until the events land.
+    // A session we hold no summary for — a fork still being written, which
+    // openSessionSoon() retries against — has nothing to draw from, so it keeps
+    // the old behaviour of arriving all at once.
+    const known = state.sessions.find(s => s.sessionId === id) || null;
+    const seq = ++state.openSeq;
+    if (known) beginOpen(known);
+
     try {
         const data = await get(`/api/sessions/${id}`);
-        state.current = data.summary;
-        state.offset = data.offset;
-        state.runner = data.runner;
-        state.nodes.clear();
-        state.tools.clear();
-        state.pinned = true;
-        state.agents = [];  // the previous session's agents are not this one's
-        leaveAgent();       // a subagent belongs to the session it was spawned by
+        // Another session was opened while this was in flight; that one owns the
+        // pane now and must not be overwritten by this late arrival.
+        if (seq !== state.openSeq) return true;
 
-        dom.placeholder.hidden = true;
-        dom.conv.hidden = false;
+        if (known) state.current = data.summary;   // the index may have moved on
+        else beginOpen(data.summary);              // nothing was drawn yet
+        state.offset = data.offset;
 
         renderHeader();
-        dom.log.replaceChildren();
-        hideTurnPop();
+        dom.log.replaceChildren();      // drops the skeleton
         appendEvents(data.events);
         renderTurns();      // a session with no turns of your own still clears the rail
         renderRail();
-        applyRunner(state.runner);
+        applyRunner(data.runner);
         scrollToEnd(true);
 
         subscribe();
         loadChannels();
         loadAgents();
-
-        // Anything typed here before, or handed back by a failed turn.
-        dom.input.value = state.unsent.get(id) || loadDraft(id);
-        autoGrow();
-        dom.input.focus();
         return true;
     } catch (err) {
+        if (seq !== state.openSeq) return true;
+        // The pane is already showing this session, so the failure has to be
+        // said there — a toast alone would leave a skeleton pulsing forever.
+        if (known) showOpenFailed(id, err);
         if (!quiet) toast(`Could not open session: ${err.message}`, 'error');
         return false;
     }
+}
+
+/**
+ * Move the conversation pane onto a session before its transcript exists.
+ *
+ * Everything here is derivable from the summary alone. What needs the fetch —
+ * the events, the byte offset, the runner state — is deliberately left cleared
+ * so nothing downstream reads the session it just left.
+ */
+function beginOpen(summary) {
+    state.current = summary;
+    state.offset = 0;
+    state.runner = null;
+    state.nodes.clear();
+    state.tools.clear();
+    state.turns = [];
+    state.activeTurn = -1;
+    state.pinned = true;
+    state.agents = [];  // the previous session's agents are not this one's
+    state.ask = null;   // approvals belong to the session that is blocked on them
+    state.stopArmed = 0;
+    leaveAgent();       // a subagent belongs to the session it was spawned by
+
+    dom.placeholder.hidden = true;
+    dom.conv.hidden = false;
+
+    renderHeader();
+    hideTurnPop();
+    dom.turns.replaceChildren();
+    dom.log.replaceChildren(skeleton());
+    dom.scroll.scrollTop = 0;
+    renderRail();       // the clicked row takes the current-session mark now
+    applyRunner(null);
+
+    // Anything typed here before, or handed back by a failed turn.
+    dom.input.value = state.unsent.get(summary.sessionId) || loadDraft(summary.sessionId);
+    autoGrow();
+    dom.input.focus();
+}
+
+function showOpenFailed(id, err) {
+    dom.log.replaceChildren(el('div', { class: 'load-failed' },
+        el('p', {}, `This conversation could not be loaded: ${err.message}`),
+        el('button', { class: 'more-btn', type: 'button',
+            onclick: () => { state.current = null; openSession(id); } }, 'Try again'),
+    ));
+}
+
+/**
+ * A stand-in for a transcript that is still loading.
+ *
+ * Shaped like the real thing — the same time gutter, prose blocks and collapsed
+ * tool rows — so the pane keeps its rhythm and does not visibly re-flow when the
+ * events replace it.
+ */
+function skeleton() {
+    const row = (...body) => el('div', { class: 'ev' },
+        el('div', { class: 'ev-time' }, el('div', { class: 'skel skel-time' })),
+        el('div', { class: 'ev-body' }, ...body));
+    const said = (...widths) => row(
+        el('div', { class: 'skel skel-name' }),
+        ...widths.map(w => el('div', { class: 'skel skel-line', style: `width:${w}` })));
+    const called = () => row(el('div', { class: 'skel skel-tool' }));
+
+    const box = el('div', { class: 'skeleton', role: 'status',
+        'aria-label': 'Loading this conversation' });
+
+    // A transcript opens scrolled to its end, so a stand-in that stops a third
+    // of the way down the pane reads as an empty conversation rather than a
+    // loading one. Fill the height there actually is, alternating the shapes so
+    // it does not look like a repeating pattern.
+    const SAID = [['54%'], ['97%', '88%', '61%'], ['93%', '46%'], ['89%', '96%', '72%', '38%']];
+    const target = Math.max(320, dom.scroll.clientHeight);
+    for (let i = 0, used = 0; used < target; i++) {
+        const widths = SAID[i % SAID.length];
+        box.append(said(...widths));
+        used += 32 + widths.length * 24;            // label, then prose on a 24px pitch
+        for (let c = 0, calls = 1 + (i % 3); c < calls; c++) { box.append(called()); used += 42; }
+    }
+    return box;
 }
 
 /**
@@ -487,6 +733,7 @@ function renderHeaderActions() {
     dom.btnPin.title = s.pinned ? 'Unpin this session' : 'Pin this session to the top';
     dom.btnArchive.classList.toggle('on', !!s.archived);
     dom.btnArchive.title = s.archived ? 'Restore from archive' : 'Archive this session';
+    dom.btnDelete.title = `Delete “${clip(s.title, 40)}” permanently`;
     dom.btnFolder.title = `Show ${s.cwd} in File Explorer`;
 }
 
@@ -538,7 +785,14 @@ function appendEvents(events, view = SESSION_VIEW) {
 function patchTool(patch, view = SESSION_VIEW) {
     const entry = view.tools.get(patch.toolId);
     if (!entry) return;
-    Object.assign(entry.ev, patch);
+    // Only the result fields. The patch is a well-formed event in its own right,
+    // so it carries `id` (`toolu_x:result`), `kind` ('tool-result') and the
+    // result's own `ts` — and merging those into the call is silently fatal:
+    // the new kind makes renderEvent fall through to null so the block is never
+    // redrawn, the new id unkeys it from `nodes`, and the new ts is the same
+    // instant as resultTs so every duration collapses to 0ms.
+    const { id, kind, toolId, ts, ...fields } = patch;
+    Object.assign(entry.ev, fields);
     if (entry.ev.ts && patch.resultTs) {
         entry.ev.durationMs = Date.parse(patch.resultTs) - Date.parse(entry.ev.ts);
     }
@@ -547,7 +801,9 @@ function patchTool(patch, view = SESSION_VIEW) {
     const fresh = renderEvent(entry.ev);
     if (!fresh) return;
     const det = fresh.querySelector('details');
-    if (det && wasOpen) det.open = true;
+    // Rebuild the body up front rather than waiting for the toggle event the
+    // assignment queues, so a block that was open does not blink shut.
+    if (det && wasOpen) { fillTool(det, entry.ev); det.open = true; }
     entry.node.replaceWith(fresh);
     entry.node = fresh;
     view.nodes.set(entry.ev.id, entry);
@@ -655,7 +911,7 @@ function renderAgentDone(ev) {
 }
 
 function renderSystem(ev) {
-    const label = ev.subtype === 'permission_denied' ? 'Permission needed'
+    const label = ev.subtype === 'permission_denied' ? 'Denied'
         : ev.subtype === 'away_summary' ? 'Summary'
         : ev.subtype.replace(/_/g, ' ');
     const body = [
@@ -663,11 +919,134 @@ function renderSystem(ev) {
         el('div', { class: 'prose', html: renderMarkdown(ev.text) }),
     ];
     if (ev.subtype === 'permission_denied') {
+        // Now that asks are answerable, most denials on this line are somebody's
+        // answer rather than a mode quietly refusing. Point at the mode only as
+        // the thing to change if you are being asked more than you want to be.
         body.push(el('div', { class: 'note', style: 'margin-top:6px; font-size:11.5px; color:var(--text-4)' },
-            'This session\'s permission mode did not allow that tool. '
-            + 'Change it below the composer and ask again.'));
+            'The permission mode below the composer decides how often you are asked.'));
     }
     return row(ev, 'system', ...body);
+}
+
+// ── approvals ────────────────────────────────────────────────────────────
+// A blocked turn, drawn at the foot of the transcript rather than as a toast:
+// toasts are dismissible and this is not — the turn is waiting on the answer.
+// The card is deliberately built from the same vocabulary as a tool block, so
+// what you approve looks like what you will see once it has run.
+
+const DECISION_WORD = {
+    allow: 'Allowed.', 'allow-always': 'Allowed for the rest of this session.',
+    deny: 'Denied.', stopped: 'Stopped before it was approved.',
+    cancelled: 'Withdrawn — the turn ended.',
+    superseded: 'Replaced by a later request.',
+    'auto-denied': 'Denied automatically — nobody answered.',
+    abandoned: 'The Claude process exited before this was answered.',
+};
+
+/** Show, replace or clear the approval card for the session on screen. */
+function renderAsk() {
+    clearInterval(state.askTimer);
+    state.askTimer = null;
+    const old = dom.log.querySelector('.perm');
+    if (old) old.remove();
+    if (!state.ask || state.agent) return;
+
+    const ask = state.ask;
+    const card = el('div', { class: 'perm', tabindex: '0',
+        role: 'group', 'aria-label': `Permission needed for ${ask.displayName}` });
+
+    const clock = el('span', { class: 'perm-left' });
+    card.append(
+        el('div', { class: 'perm-head' },
+            el('span', { class: 'perm-tool' }, ask.displayName),
+            el('span', { class: 'perm-title' }, 'permission needed'),
+            clock),
+        // toolSummary is the collapsed-row text of an ordinary tool block. Shape
+        // the ask like the event it reads and the two render identically.
+        el('div', { class: 'perm-arg' },
+            toolSummary({ name: ask.tool, input: ask.input }) || ask.description || ''),
+    );
+
+    if (ask.agentId) {
+        card.append(el('div', { class: 'perm-why' }, 'Asked by a subagent.'));
+    }
+    if (ask.reason) card.append(el('div', { class: 'perm-why' }, clip(ask.reason, 220)));
+
+    const btns = el('div', { class: 'perm-btns' },
+        el('button', { class: 'perm-btn allow', type: 'button',
+            onclick: () => answerAsk('allow') },
+            'Allow ', el('kbd', {}, 'Y')),
+        el('button', { class: 'perm-btn', type: 'button',
+            onclick: () => answerAsk('allow-always') },
+            `Allow ${ask.displayName} all session `, el('kbd', {}, 'A')),
+        el('button', { class: 'perm-btn deny', type: 'button',
+            onclick: () => answerAsk('deny') },
+            'Deny ', el('kbd', {}, 'N')),
+    );
+    card.append(btns);
+
+    card.addEventListener('keydown', (e) => {
+        if (e.ctrlKey || e.metaKey || e.altKey) return;
+        const k = e.key.toLowerCase();
+        const decision = k === 'y' ? 'allow' : k === 'a' ? 'allow-always' : k === 'n' ? 'deny' : null;
+        if (!decision) return;
+        e.preventDefault();
+        answerAsk(decision);
+    });
+
+    dom.log.append(card);
+
+    // The countdown is not decoration: the ask is denied for you when it runs
+    // out, and that should never arrive as a surprise.
+    const tick = () => {
+        const remaining = ask.expiresAt - Date.now();
+        if (remaining <= 0) { clock.textContent = 'expired'; return; }
+        const s = Math.ceil(remaining / 1000);
+        clock.textContent = `${Math.floor(s / 60)}:${pad(s % 60)} left`;
+    };
+    tick();
+    state.askTimer = setInterval(tick, 1000);
+
+    // Taking focus makes the single-key answers work without a click, but only
+    // when the user is actually here — stealing focus from another window, or
+    // from something being typed, would be worse than a click.
+    if (document.hasFocus() && !dom.input.matches(':focus')) card.focus({ preventScroll: true });
+    if (state.pinned) scrollToEnd(false);
+}
+
+async function answerAsk(decision) {
+    const ask = state.ask;
+    if (!ask || !state.current) return;
+    const card = dom.log.querySelector('.perm');
+    if (card) {
+        for (const b of card.querySelectorAll('button')) b.disabled = true;
+        card.dataset.pending = '1';
+    }
+    try {
+        await post(`/api/sessions/${state.current.sessionId}/permission`,
+            { requestId: ask.requestId, decision });
+    } catch (err) {
+        // 409 means another window got there first; the resolved event that
+        // follows takes the card down with the right reason on it.
+        toast(`Could not answer: ${err.message}`, 'error');
+        if (card) {
+            delete card.dataset.pending;
+            for (const b of card.querySelectorAll('button')) b.disabled = false;
+        }
+    }
+}
+
+/** Take the card down and leave a line saying how it ended. */
+function resolveAsk(outcome) {
+    if (!state.ask) return;
+    const tool = state.ask.displayName;
+    state.ask = null;
+    renderAsk();
+    const word = DECISION_WORD[outcome] || 'Answered.';
+    // The transcript will carry the real record; this is only the acknowledgement
+    // that the card is gone and why.
+    dom.log.append(el('div', { class: 'perm-done' }, `${tool} — ${word}`));
+    if (state.pinned) scrollToEnd(false);
 }
 
 // ── tools ────────────────────────────────────────────────────────────────
@@ -711,8 +1090,24 @@ function renderTool(ev) {
         ),
     );
 
-    det.append(el('div', { class: 'tool-body' }, ...toolBody(ev)));
+    // The body is the expensive half of a transcript — highlighted code, diffs,
+    // rendered markdown — and it sits behind a summary that is closed by
+    // default. Most tool calls are never opened, so build it on first expand.
+    det.append(el('div', { class: 'tool-body' }));
+    // `click` lands before the open state is applied, so the body is there in
+    // the same frame the block expands. `toggle` is the backstop for opens that
+    // do not come from a click — find-in-page, or `open` set in code.
+    det.addEventListener('click', () => fillTool(det, ev));
+    det.addEventListener('toggle', () => fillTool(det, ev));
     return row(ev, 'tool', det);
+}
+
+/** Build a tool's body the first time it is actually shown. */
+function fillTool(det, ev) {
+    const body = det.querySelector('.tool-body');
+    if (!body || body.dataset.filled) return;
+    body.dataset.filled = '1';
+    body.append(...toolBody(ev));
 }
 
 function toolBody(ev) {
@@ -1184,6 +1579,11 @@ async function refreshDevBrowser() {
 async function markInstance() {
     try {
         const h = await get('/api/health');
+        state.dev = !!h.dev;
+        // Starting a session that only this instance will list is a development
+        // affordance; offering it in the everyday window would be offering to
+        // hide a real conversation from the window you are standing in.
+        dom.newTestRow.hidden = !state.dev;
         if (!h.dev) return;
         document.title = `Claude Sessions — dev :${h.port}`;
         document.querySelector('.wordmark').append(
@@ -1242,6 +1642,21 @@ function connect() {
 
     es.addEventListener('sessions-changed', () => loadSessions());
 
+    // Someone deleted a session — possibly in another window, possibly this one.
+    es.addEventListener('session-deleted', (e) => {
+        const d = JSON.parse(e.data);
+        const wasOpen = state.current && state.current.sessionId === d.sessionId;
+        // Read before forgetSession, which takes the dialog down: this event can
+        // beat the answer to our own DELETE back.
+        const mine = state.pendingDelete && state.pendingDelete.sessionId === d.sessionId;
+        forgetSession(d.sessionId);
+        // Only worth saying when the conversation vanished from under someone;
+        // the window that did the deleting has already had its own toast.
+        if (wasOpen && !mine) {
+            toast(`“${clip(d.title || 'That session', 40)}” was deleted.`, 'warn');
+        }
+    });
+
     es.addEventListener('runner-status', (e) => {
         const s = JSON.parse(e.data);
         if (state.current && s.sessionId === state.current.sessionId) applyRunner(s);
@@ -1260,6 +1675,19 @@ function connect() {
                 }
             }
         }
+    });
+
+    es.addEventListener('permission-request', (e) => {
+        const p = JSON.parse(e.data);
+        if (!state.current || p.sessionId !== state.current.sessionId) return;
+        state.ask = p;
+        renderAsk();
+    });
+
+    es.addEventListener('permission-resolved', (e) => {
+        const p = JSON.parse(e.data);
+        if (!state.ask || state.ask.requestId !== p.requestId) return;
+        resolveAsk(p.outcome);
     });
 
     es.addEventListener('notice', (e) => {
@@ -1294,11 +1722,13 @@ function connect() {
 }
 
 async function subscribe() {
-    if (!state.clientId || !state.current) return;
+    if (!state.clientId) return;
     try {
+        // A null session is a real answer, not a no-op: it is how the bridge is
+        // told to stop tailing a transcript nobody is looking at any more.
         await post('/api/subscribe', {
             clientId: state.clientId,
-            sessionId: state.current.sessionId,
+            sessionId: state.current ? state.current.sessionId : null,
             offset: state.offset,
             agent: state.agent
                 ? { toolUseId: state.agent, offset: state.agentOffset }
@@ -1312,8 +1742,19 @@ function applyRunner(s) {
     const busy = s && (s.state === 'busy' || s.state === 'starting');
     const retrying = Boolean(s && s.retry);
 
+    // The status carries the pending ask too, so a window opening onto a session
+    // that is already blocked draws the card without having seen the event.
+    const ask = (s && s.pendingPermission) || null;
+    const same = ask && state.ask && ask.requestId === state.ask.requestId;
+    // Redraw on any change, and also when the card should be up but is not —
+    // coming back from a subagent leaves the log without one.
+    if (!same || (ask && !dom.log.querySelector('.perm'))) {
+        state.ask = ask;
+        renderAsk();
+    }
+
     dom.statusLine.dataset.state = s
-        ? (s.state === 'error' ? 'error' : retrying ? 'stalled' : busy ? 'busy' : 'idle')
+        ? (s.state === 'error' ? 'error' : ask ? 'ask' : retrying ? 'stalled' : busy ? 'busy' : 'idle')
         : 'idle';
     // While a subagent is on screen the composer belongs to nothing you can
     // send to, so its controls stay out of the way.
@@ -1324,6 +1765,14 @@ function applyRunner(s) {
     // before the click, not after.
     dom.btnSend.textContent = busy && !state.agent ? 'Queue' : 'Send';
     applyQueue(s);
+
+    // The escalation is armed against one turn. Once that turn is over the
+    // button must not still be offering to kill the next one.
+    if (!busy && state.stopArmed) {
+        state.stopArmed = 0;
+        dom.btnStop.textContent = 'Stop';
+        dom.btnStop.classList.remove('force');
+    }
 
     // A turn can run for minutes; without a clock it is impossible to tell a
     // long tool call from a stuck one.
@@ -1799,11 +2248,24 @@ async function refreshQueue() {
 
 // ── composer ─────────────────────────────────────────────────────────────
 
-function autoGrow() {
-    dom.input.style.height = 'auto';
-    // Never below the button height, so an empty composer stays centred.
-    dom.input.style.height = Math.max(38, Math.min(220, dom.input.scrollHeight)) + 'px';
+/**
+ * Size a textarea to its contents.
+ *
+ * `height: auto` first so the box can shrink again — scrollHeight never reports
+ * less than the height already set, so measuring without clearing it makes a
+ * textarea that only ever grows.
+ */
+function grow(ta, min, max) {
+    ta.style.height = 'auto';
+    ta.style.height = Math.max(min, Math.min(max, ta.scrollHeight)) + 'px';
 }
+
+// Never below the button height, so an empty composer stays centred.
+const autoGrow = () => grow(dom.input, 38, 220);
+
+// The dialog's own limits: two lines to start, and a ceiling low enough that a
+// pasted-in briefing cannot push the Start button off the bottom of the modal.
+const growPrompt = () => grow(dom.newPrompt, 62, 300);
 
 async function sendMessage({ fork = false, text: override = null } = {}) {
     const text = override != null ? override : dom.input.value.trim();
@@ -1869,6 +2331,8 @@ function handleSendFailure(f) {
 async function openNew() {
     dom.newScrim.hidden = false;
     dom.newPrompt.value = '';
+    growPrompt();
+    dom.newTest.checked = false;
     dom.newCwd.value = state.current
         ? (state.current.worktree ? state.current.worktree.originalCwd : state.current.cwd)
         : '';
@@ -1904,7 +2368,8 @@ async function startNew() {
         const r = await post('/api/sessions', {
             cwd, prompt,
             model: dom.newModel.value || null,
-            permissionMode: dom.perm.value,
+            permissionMode: dom.newPerm.value,
+            test: state.dev && dom.newTest.checked,
         });
         closeNew();
         toast('Session started.', 'ok');
@@ -1936,6 +2401,11 @@ dom.btnArchive.addEventListener('click', () => {
     if (state.current) setFlags(state.current, { archived: !state.current.archived });
 });
 
+dom.btnDelete.addEventListener('click', () => {
+    if (state.current) askDelete(state.current);
+});
+dom.delGo.addEventListener('click', confirmDelete);
+
 dom.btnFolder.addEventListener('click', async () => {
     if (!state.current) return;
     dom.btnFolder.disabled = true;
@@ -1963,21 +2433,55 @@ dom.input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendMessage(); }
 });
 
+// Two stops, because the consequences differ. The first asks the turn to end
+// where it is, which leaves the session resumable and the transcript coherent.
+// A second click within a few seconds kills the process instead, which is what
+// you want when the polite one did not take — and which can leave a tool call
+// half-finished, so it is never what happens on the first click.
+const FORCE_WINDOW_MS = 4000;
+
+function armForce() {
+    state.stopArmed = Date.now();
+    dom.btnStop.textContent = 'Force stop';
+    dom.btnStop.classList.add('force');
+    setTimeout(() => {
+        if (Date.now() - state.stopArmed < FORCE_WINDOW_MS) return;
+        state.stopArmed = 0;
+        dom.btnStop.textContent = 'Stop';
+        dom.btnStop.classList.remove('force');
+    }, FORCE_WINDOW_MS + 50);
+}
+
 dom.btnStop.addEventListener('click', async () => {
     if (!state.current) return;
+    const hard = state.stopArmed > 0 && Date.now() - state.stopArmed < FORCE_WINDOW_MS;
+    dom.btnStop.disabled = true;
     try {
-        const r = await post(`/api/sessions/${state.current.sessionId}/stop`, {});
-        // Stopping drops the queue — but the messages were never sent anywhere,
-        // so they go back in the box rather than into the bin.
-        if (r.dropped && r.dropped.length) {
-            restoreToComposer(r.dropped.join('\n\n'));
-            toast(r.dropped.length === 1
-                ? 'Stopped. The message that was waiting is back in the box.'
-                : `Stopped. The ${r.dropped.length} waiting messages are back in the box.`, 'ok');
-        } else {
-            toast('Stopped.', 'ok');
+        const out = await post(`/api/sessions/${state.current.sessionId}/stop`, { hard });
+        // Either way the send queue went with the turn — but those messages never
+        // reached the process, so they come back to the box rather than being
+        // binned. Said as part of the stop toast, not a second one.
+        let back = '';
+        if (out.dropped && out.dropped.length) {
+            restoreToComposer(out.dropped.join('\n\n'));
+            back = out.dropped.length === 1
+                ? ' The message that was waiting is back in the box.'
+                : ` The ${out.dropped.length} waiting messages are back in the box.`;
         }
-    } catch (err) { toast(`Could not stop: ${err.message}`, 'error'); }
+        if (out.how === 'soft') {
+            toast('Asked the turn to stop — the session stays resumable.' + back, 'ok');
+            armForce();
+        } else {
+            state.stopArmed = 0;
+            dom.btnStop.textContent = 'Stop';
+            dom.btnStop.classList.remove('force');
+            toast('Killed the process. Whatever was written is in the transcript.' + back, 'warn');
+        }
+    } catch (err) {
+        toast(`Could not stop: ${err.message}`, 'error');
+    } finally {
+        dom.btnStop.disabled = false;
+    }
 });
 
 dom.queueClear.addEventListener('click', clearQueue);
@@ -1996,10 +2500,21 @@ dom.scroll.addEventListener('scroll', () => {
 // The tooltip is positioned against a tick, so it cannot follow one that moves.
 dom.turns.addEventListener('scroll', hideTurnPop);
 
-for (const n of document.querySelectorAll('[data-close]')) n.addEventListener('click', closeNew);
+dom.newPrompt.addEventListener('input', growPrompt);
+
+for (const n of dom.newScrim.querySelectorAll('[data-close]')) {
+    n.addEventListener('click', closeNew);
+}
 dom.newScrim.addEventListener('click', (e) => { if (e.target === dom.newScrim) closeNew(); });
 
+for (const n of dom.delScrim.querySelectorAll('[data-close-del]')) {
+    n.addEventListener('click', closeDelete);
+}
+dom.delScrim.addEventListener('click', (e) => { if (e.target === dom.delScrim) closeDelete(); });
+
 document.addEventListener('keydown', (e) => {
+    // The confirm sits over the new-session dialog, so it answers Escape first.
+    if (e.key === 'Escape' && !dom.delScrim.hidden) { closeDelete(); return; }
     if (e.key === 'Escape' && !dom.newScrim.hidden) { closeNew(); return; }
     if (e.key === 'Escape' && state.agent) { closeAgent(); return; }
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); dom.search.focus(); }

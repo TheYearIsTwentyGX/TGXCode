@@ -184,8 +184,9 @@ cancellable:
 
 - **Reordering** is committed to the bridge on drop, and a message that flushed
   mid-drag keeps its place rather than dragging the rest of the queue with it.
-- **Stop** drops the queue, since stopping means stopping — but the messages were
-  never sent anywhere, so they come back to the composer instead of vanishing.
+- **Stop** drops the queue whichever way it ends the turn, soft interrupt or hard
+  kill, since stopping means stopping — but the messages were never sent anywhere,
+  so they come back to the composer instead of vanishing.
 - **A process that dies** hands back everything it was holding, the turn it died
   on and the queue behind it, in the order you wrote them.
 - **A model or permission change** replaces the process; the queue moves across,
@@ -205,7 +206,22 @@ moves the focus to the row that took the dropped one's place, or to the composer
 if that was the last one, because focus falling to the body would leave the next
 `Esc` closing something else entirely.
 
-### Archiving never deletes
+### The rail is sorted on load, and then left alone
+
+The bridge returns sessions ordered by when *you* last wrote in them, and it
+recomputes that whenever anything changes. The rail takes that order once, at
+load, and then holds it: a session taking a message does not climb past its
+neighbours, and it does not drag its project card to the top of the rail either.
+Rows staying where you last saw them matters more than the list being perfectly
+ordered at every instant — the alternative moves things out from under the
+cursor while you are reading them. Reload to re-sort.
+
+A session that appears *after* that first load is genuinely new rather than
+merely busy, so it goes to the top of its group, and a project with no sessions
+in it yet gets a new card at the top of the rail. Neither disturbs the position
+of anything already placed.
+
+### Archiving never deletes — deleting does
 
 Archiving moves a session out of the way and nothing else. The transcript is
 untouched, the session still opens and still answers, and a filter that matches
@@ -213,10 +229,42 @@ an archived session expands the group so the result is not silently hidden.
 Pinning and archiving are mutually exclusive — asking for a session to sit at the
 top *and* be tucked away is a contradiction, so each clears the other.
 
-These two flags are the only state this app owns; everything else it shows is
-derived from Claude Code's own files, which it never writes to. They live in
+The trash icon, on a row or in the conversation header, is the one control that
+does destroy something. It asks first, in a dialog that names the session and its
+turn count, because the thing worth checking is *which* conversation. Confirming
+removes the transcript and the sidecar directory beside it — the session's
+subagent transcripts and any spilled tool output — and nothing else. A session
+with a turn in flight is refused rather than deleted out from under the turn;
+stop it first.
+
+These flags are the only state this app owns; everything else it shows is derived
+from Claude Code's own files, which it never writes to. They live in
 `~/.local/share/claude-sessions/flags.json`, and flags for transcripts that no
 longer exist are pruned automatically.
+
+### Test sessions
+
+A session can be marked **test**, which means only a development bridge lists it;
+the everyday window on 45888 never shows it. Both instances read the same
+transcripts, so this label is the only thing keeping an agent's scratch work out
+of a list of real conversations.
+
+The **Test session — dev only** checkbox in the Start a session dialog appears
+only on a dev bridge. Over the API it is a field on create, or a flag afterwards:
+
+```bash
+curl -sX POST http://127.0.0.1:45899/api/sessions \
+  -H 'X-Claude-Sessions-Client: 1' -H 'Content-Type: application/json' \
+  -d '{"cwd":"/home/you/project","prompt":"…","test":true}'
+
+curl -sX POST http://127.0.0.1:45899/api/sessions/$ID/flags \
+  -H 'X-Claude-Sessions-Client: 1' -H 'Content-Type: application/json' \
+  -d '{"test":true}'
+```
+
+Labelled sessions gather in a **Test sessions** card at the foot of the rail, so
+the ones left behind are easy to find and delete. Delete them; the label is a way
+to keep them out of sight until you do, not a substitute for cleaning up.
 
 ### The icon
 
@@ -228,20 +276,43 @@ at that size it is mud, and the silhouette is what identifies the app anyway. Th
 
 ### Permissions
 
-Headless Claude never blocks on a permission prompt — it denies the tool call and
-carries on. So the mode you pick under the composer decides what a session can
-actually do:
+When Claude wants to run something the mode does not already cover, the turn
+stops and a card appears at the foot of the transcript with the tool name and its
+input rendered the way the tool block will render once it has run:
 
-- **acceptEdits** (default) — file edits go through, most other tools prompt, and
-  prompting means denied.
+```
+┌ Bash — permission needed ───────────────── 1:42 left ┐
+│  rm -rf dist                                          │
+│  [ Allow ]  [ Allow Bash all session ]  [ Deny ]      │
+└───────────────────────────────────────────────────────┘
+```
+
+`Y`, `A` and `N` answer it from the keyboard; the card takes focus on arrival if
+the window is focused. **Allow … all session** means this tool for this session
+only — a permanent allowlist belongs in Claude Code's own settings, not here.
+
+So the mode under the composer now decides how *often* you are asked, not what is
+possible:
+
+- **acceptEdits** (default) — file edits go through, most other tools ask.
 - **auto** — Claude judges each call, which is the mode these sessions normally
   run in interactively.
-- **bypassPermissions** — everything runs. Convenient and unguarded; pick it
-  deliberately.
+- **manual** — asks about everything.
+- **bypassPermissions** — everything runs, unasked. Convenient and unguarded;
+  pick it deliberately.
 
-When a call is denied the transcript shows a "Permission needed" notice saying
-so, rather than leaving you to wonder why Claude stopped short. Changing the mode
-takes effect on the next message.
+Changing the mode takes effect on the next message.
+
+Two things to know about the edges. A card nobody answers is **denied for you**
+after two minutes — the countdown says when — because a blocked turn otherwise
+holds a process open forever; and if no window is open at all, the ask is denied
+immediately, which is what the app did before any of this existed. Two auto-denials
+in a row stop the turn rather than let it spin.
+
+Approvals ride a control channel on the same stream that carries the session, and
+that channel is not a documented, stable surface. If the installed `claude` turns
+out not to support it, the app says so once and falls back to permission modes
+alone; sending never breaks over a protocol difference.
 
 ### How dev servers are found
 
@@ -333,9 +404,12 @@ Two other things that trip agents up here:
 - **Content comes from the transcript file, never from the process.** That is
   what makes a session running in your terminal look identical to one started
   here. The trade-off is that updates arrive per message rather than per token.
-- **Stop ends the process.** There is no mid-turn interrupt on the headless
-  channel. Whatever was written stays in the transcript and the session resumes
-  cleanly on the next message.
+- **Stop asks first, then insists.** The first click interrupts the turn over the
+  control channel: the process stays alive, nothing is left half-written, and the
+  session is resumable. For a few seconds afterwards the button reads **Force
+  stop**, which kills the process — the old behaviour, and still the thing to
+  reach for when the polite path does not take. The status line says which one
+  happened, because the outcomes differ.
 - **The bridge outlives the window.** It is started detached so a long turn
   survives closing the app, and shuts down on exit only when nothing is running.
   A second launch reuses whatever is already listening on 45888.
