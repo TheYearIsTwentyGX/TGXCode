@@ -166,6 +166,92 @@ a:hover { text-decoration: underline; }
 .db-status .led { width: 7px; height: 7px; border-radius: 50%; background: var(--text-4); }
 .db-status[data-up="true"] .led { background: var(--green); }
 
+/* ── notifications ───────────────────────────────────────────────────── */
+
+.bell-wrap { position: relative; }
+
+.bell {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    color: var(--text-4);
+    background: var(--s2);
+    border-radius: 50%;
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.bell:hover { background: var(--s3); color: var(--text-2); }
+.bell[data-on="true"] { color: var(--text-2); }
+.bell[data-on="true"]:hover { color: var(--text); }
+/* The bell is struck through only while nothing at all would fire — the state
+   worth spotting from across the room is the silent one. */
+.bell .slash { display: none; }
+.bell[data-on="false"] .slash { display: inline; }
+.bell[aria-expanded="true"] { background: var(--s3); color: var(--text); }
+
+.bell-menu {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    z-index: 60;
+    width: 286px;
+    padding: 13px 15px 12px;
+    background: var(--s3);
+    border-radius: var(--r);
+    box-shadow: 0 10px 30px #000a;
+    animation: bell-in var(--t-fast) var(--ease);
+    transform-origin: top right;
+}
+.bell-menu[hidden] { display: none; }
+
+@keyframes bell-in {
+    from { opacity: 0; transform: translateY(-5px); }
+    to { opacity: 1; transform: none; }
+}
+
+.bell-head {
+    margin-bottom: 10px;
+    font: 500 11px/1 var(--sans);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-4);
+}
+
+.bell-menu .check {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 5px 0;
+    font: 400 13px/1.4 var(--sans);
+    color: var(--text-2);
+    cursor: pointer;
+}
+.bell-menu .check input { accent-color: var(--blue); width: 16px; height: 16px; flex: none; }
+.bell-menu .check:hover { color: var(--text); }
+.bell-menu .check:has(input:disabled) { color: var(--text-4); cursor: default; }
+
+.bell-note {
+    margin-top: 9px;
+    font: 400 11.5px/1.55 var(--sans);
+    color: var(--text-4);
+}
+.bell-note:empty { display: none; }
+.bell-note.warn { color: var(--yellow); }
+
+.bell-try {
+    margin-top: 11px;
+    padding: 5px 12px;
+    font: 500 12px/1 var(--sans);
+    color: var(--text-3);
+    background: var(--s2);
+    border-radius: var(--pill);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.bell-try:hover { background: var(--bg); color: var(--text); }
+
+@media (prefers-reduced-motion: reduce) { .bell-menu { animation: none; } }
+
 /* ── rail ────────────────────────────────────────────────────────────── */
 
 .rail {
