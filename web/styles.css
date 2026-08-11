@@ -242,7 +242,9 @@ a:hover { text-decoration: underline; }
     display: flex;
     align-items: center;
     width: 100%;
-    border-radius: var(--pill);
+    /* A squircle rather than a pill: a two-line row rounded to its full height
+       reads as a lozenge floating in the card, and the ends eat into the title. */
+    border-radius: var(--r);
     transition: background var(--t-fast) var(--ease);
 }
 .strip:hover { background: var(--s2); --row-bg: var(--s2); }
@@ -254,7 +256,7 @@ a:hover { text-decoration: underline; }
     min-width: 0;
     text-align: left;
     padding: 9px 14px 10px;
-    border-radius: var(--pill);
+    border-radius: var(--r);
 }
 
 /* Pin and archive stay out of the way until the row is hovered — except a pin,
@@ -270,7 +272,7 @@ a:hover { text-decoration: underline; }
     gap: 1px;
     padding-left: 26px;
     background: linear-gradient(90deg, transparent, var(--row-bg) 24px);
-    border-radius: var(--pill);
+    border-radius: var(--r);
     opacity: 0;
     transition: opacity var(--t-fast) var(--ease);
 }
