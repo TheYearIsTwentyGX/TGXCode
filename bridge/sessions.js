@@ -3,7 +3,7 @@
 // An index over every transcript under ~/.claude/projects.
 //
 // There are ~700 files totalling a few hundred MB here, so a full rescan on
-// every request is not viable. Metadata is cached keyed by (size, mtime) and
+// every request is not viable. Metadata is cached keyed by (path, size, mtime) and
 // persisted to disk, making a warm start instant and a cold start a one-off
 // few-second scan. Directory watches keep the index fresh afterwards.
 
@@ -30,6 +30,13 @@ class SessionIndex extends EventEmitter {
         this.flags = flags;
         /** @type {Map<string, {file, dir, size, mtimeMs, meta}>} keyed by sessionId */
         this.sessions = new Map();
+        /**
+         * The same records keyed by path. A session id can name a file in more
+         * than one project directory, so the path is what a parse is actually
+         * about; keying the parse cache by id re-parses the copy that lost.
+         * @type {Map<string, {file, dir, size, mtimeMs, meta}>}
+         */
+        this.byFile = new Map();
         this.watchers = [];
         this.ready = false;
         this._saveTimer = null;
@@ -65,8 +72,12 @@ class SessionIndex extends EventEmitter {
             return { scanned: 0, changed: 0 };
         }
 
-        const seen = new Set();
-        let changed = 0;
+        // Built fresh rather than mutated in place, because which file a session
+        // resolves to depends on every candidate for it having been seen — an
+        // answer that only exists once the pass is over.
+        const byFile = new Map();
+        const chosen = new Map();
+        let parsed = 0;
         let scanned = 0;
 
         for (const dir of projectDirs) {
@@ -80,27 +91,33 @@ class SessionIndex extends EventEmitter {
                 if (!st.isFile() || st.size === 0) continue;
 
                 const id = f.slice(0, -'.jsonl'.length);
-                seen.add(id);
                 scanned++;
 
-                const prev = this.sessions.get(id);
-                if (prev && prev.size === st.size && prev.mtimeMs === st.mtimeMs) continue;
-
-                const meta = scanMeta(file);
-                if (!meta) continue;
-                this.sessions.set(id, {
-                    file, dir, size: st.size, mtimeMs: st.mtimeMs, meta,
-                });
-                changed++;
-                // Yield periodically so a cold scan doesn't stall the event loop.
-                if (changed % 25 === 0) await new Promise(r => setImmediate(r));
+                let rec = this.byFile.get(file);
+                if (!rec || rec.size !== st.size || rec.mtimeMs !== st.mtimeMs) {
+                    const meta = scanMeta(file);
+                    if (!meta) continue;
+                    rec = { file, dir, size: st.size, mtimeMs: st.mtimeMs, meta };
+                    parsed++;
+                    // Yield periodically so a cold scan doesn't stall the event loop.
+                    if (parsed % 25 === 0) await new Promise(r => setImmediate(r));
+                }
+                byFile.set(file, rec);
+                chosen.set(id, conversationRecord(chosen.get(id), rec));
             }
         }
 
-        // Drop sessions whose files disappeared.
-        for (const id of [...this.sessions.keys()]) {
-            if (!seen.has(id)) { this.sessions.delete(id); changed++; }
+        let changed = 0;
+        for (const [id, rec] of chosen) {
+            const prev = this.sessions.get(id);
+            if (!prev || prev.file !== rec.file || prev.size !== rec.size
+                || prev.mtimeMs !== rec.mtimeMs) changed++;
         }
+        // Sessions whose files disappeared.
+        for (const id of this.sessions.keys()) if (!chosen.has(id)) changed++;
+
+        this.sessions = chosen;
+        this.byFile = byFile;
         // Don't accumulate pins and archives for transcripts that are long gone.
         if (this.flags) this.flags.prune(new Set(this.sessions.keys()));
 
@@ -146,6 +163,10 @@ class SessionIndex extends EventEmitter {
             if (raw.version !== CACHE_VERSION) return;
             for (const rec of raw.sessions) {
                 this.sessions.set(rec.meta.sessionId, rec);
+                // So the first rescan re-parses only what changed on disk. The
+                // cache holds one file per session; a session with a second copy
+                // pays for it once, on the pass that first sees the other.
+                if (rec.file) this.byFile.set(rec.file, rec);
             }
         } catch { /* no cache yet, or unreadable: a full scan rebuilds it */ }
     }
@@ -417,6 +438,29 @@ class SessionIndex extends EventEmitter {
         const rec = this.sessions.get(sessionId);
         if (!rec) return null;
 
+        const removed = this._removeFile(rec);
+        if (!removed) return null;
+
+        // A session that crossed into a worktree has a second transcript, under
+        // that worktree's project directory. Leaving it behind would leave the
+        // row in the list too, now holding whatever bookkeeping that copy has and
+        // none of the conversation: a session the user deleted, apparently
+        // emptied instead. The id comes from each file's own name, as above.
+        for (const other of [...this.byFile.values()]) {
+            if (other.file === rec.file) continue;
+            if (path.basename(other.file, '.jsonl') !== sessionId) continue;
+            this._removeFile(other);
+        }
+
+        this.sessions.delete(sessionId);
+        if (this.flags) this.flags.prune(new Set(this.sessions.keys()));
+        this._scheduleSave();
+        this.emit('changed');
+        return removed;
+    }
+
+    /** One transcript and its sidecar directory. Path rules per remove(). */
+    _removeFile(rec) {
         const root = path.resolve(PROJECTS_DIR);
         const projectDir = path.resolve(rec.dir);
         const file = path.resolve(rec.file);
@@ -437,12 +481,37 @@ class SessionIndex extends EventEmitter {
             }
         } catch { /* most sessions never spawn an agent, so there is no directory */ }
 
-        this.sessions.delete(sessionId);
-        if (this.flags) this.flags.prune(new Set(this.sessions.keys()));
-        this._scheduleSave();
-        this.emit('changed');
+        this.byFile.delete(rec.file);
         return { file, dir: removedDir };
     }
+}
+
+/**
+ * Which of two files claiming one session id holds the session.
+ *
+ * A session that crosses into a worktree ends up with two transcripts, because
+ * Claude Code files one under the directory it is running in and a worktree is
+ * a project directory of its own. One copy holds the conversation and the other
+ * holds only bookkeeping — a title, a mode, the worktree state — and which is
+ * which goes either way: a session that moved into a worktree mid-conversation
+ * keeps its turns in the project it started from, while one launched straight
+ * into a worktree keeps them there. Both cases are on this machine.
+ *
+ * Nothing used to choose. The index was keyed by session id alone and set
+ * unconditionally, so the copy scanned last won and the order `readdir` happened
+ * to return project directories in decided whether a session showed its history
+ * or showed nothing at all — one session on disk got each answer.
+ */
+function conversationRecord(a, b) {
+    if (!a) return b;
+    if (!b) return a;
+    const turns = (r) => r.meta.userMessages + r.meta.assistantMessages;
+    if (turns(a) !== turns(b)) return turns(a) > turns(b) ? a : b;
+    // Equal conversation: the longer file holds more of everything else. Falling
+    // back to mtime keeps this deterministic rather than order-dependent, which
+    // is the whole point.
+    if (a.size !== b.size) return a.size > b.size ? a : b;
+    return a.mtimeMs >= b.mtimeMs ? a : b;
 }
 
 /**

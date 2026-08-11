@@ -47,7 +47,7 @@ These come out of how the app already works, and every plan respects them.
 
 | | Plan | Why |
 |---|---|---|
-| 10 | [Code and git](docs/plans/10-code-and-git.md) | "What did this agent actually change" currently means scrolling. |
+| 10 | [Code and git](docs/plans/10-code-and-git.md) | "What did this agent actually change" currently means scrolling. Part of the git side exists: `bridge/dashboard.js` already runs `git status --porcelain=v2` per directory, cached, for the dashboard — the primitives to extract into `bridge/git.js` are there. |
 | 11 | [Labels and session info](docs/plans/11-labels-and-session-info.md) | Auto-titles are often bad, and the `system/init` message knows exactly which config produced a session's behaviour. |
 | 12 | [Export](docs/plans/12-export.md) | Sharing what an agent did without screenshotting it. |
 | 13 | [Dev servers](docs/plans/13-dev-servers.md) | We detect ports but can't act on them. |

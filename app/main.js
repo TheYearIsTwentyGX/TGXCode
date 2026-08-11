@@ -282,6 +282,16 @@ function createWindow() {
 
 // ── boot ─────────────────────────────────────────────────────────────────
 
+// What Windows prints above a toast. Left alone, Electron announces itself as
+// `electron.app.<productName>`, and since nothing is registered under that ID
+// Windows has no display name to look up and shows the raw string — which is
+// how notifications came to be headed `electron.app.ClaudeSessions`.
+//
+// That fallback is the mechanism, so this is set to the words that should
+// appear rather than to a reverse-DNS identifier: an ID Windows cannot resolve
+// gets printed verbatim either way. Keep it human-readable for that reason.
+app.setAppUserModelId('TGXCode');
+
 app.whenReady().then(async () => {
     const cfg = loadConfig();
     const win = createWindow();
