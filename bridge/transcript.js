@@ -23,6 +23,16 @@ const CONTENT_TYPES = new Set(['user', 'assistant', 'system']);
 // Bookkeeping entries we mine for session metadata, cheapest signal last.
 const TITLE_TYPES = ['custom-title', 'agent-name', 'ai-title'];
 
+// `<project>/.claude/worktrees/<name>`, where the name may itself hold slashes —
+// EnterWorktree allows a path of segments, and it becomes a path on disk.
+const WORKTREE_DIR_RE = /^(.*)\/\.claude\/worktrees\/(.+)$/;
+
+// How many entries to parse looking for the launch cwd before giving up. The
+// first conversation entry carries one, so the budget is only ever spent on a
+// transcript that has none — where parsing every line of a file that runs to tens
+// of megabytes, for a field that is not in it, would cost more than the whole scan.
+const CWD_PARSE_LIMIT = 5;
+
 // ---------------------------------------------------------------------------
 // Line reading
 // ---------------------------------------------------------------------------
@@ -90,11 +100,13 @@ function scanMeta(filePath) {
         lastTs: null,
         lastUserTs: null,
         worktree: null,
+        inWorktree: false,
         pr: null,
         bytes: text.length,
     };
 
     const titles = {};
+    let cwdTries = 0;
 
     for (const line of text.split('\n')) {
         if (!line) continue;
@@ -113,7 +125,15 @@ function scanMeta(filePath) {
                 if (!meta.firstTs) meta.firstTs = ts;
                 meta.lastTs = ts;
             }
-            if (!meta.cwd) meta.cwd = matchField(line, 'cwd');
+            // The launch cwd is what pins a session to a project, and everything
+            // below leans on it, so it is worth a real parse of one entry rather
+            // than a substring test: matchField takes the first `"cwd":"` on the
+            // line, which a message that quoted one would win.
+            if (!meta.cwd && cwdTries < CWD_PARSE_LIMIT) {
+                cwdTries++;
+                const o = safeParse(line);
+                if (o && o.cwd) meta.cwd = o.cwd;
+            }
             if (!meta.gitBranch) meta.gitBranch = matchField(line, 'gitBranch');
             if (!meta.version) meta.version = matchField(line, 'version');
             if (!meta.sessionKind) meta.sessionKind = matchField(line, 'sessionKind');
@@ -163,6 +183,10 @@ function scanMeta(filePath) {
                 case 'agent-name': titles['agent-name'] = o.agentName; break;
                 case 'last-prompt': meta.lastPrompt = (o.lastPrompt || '').slice(0, 400); break;
                 case 'worktree-state':
+                    // A null session is the record of *leaving* one. Which worktree
+                    // it was is still worth keeping — it names the project — so
+                    // only the "in it now" part is cleared.
+                    meta.inWorktree = Boolean(o.worktreeSession);
                     if (o.worktreeSession) {
                         meta.worktree = {
                             name: o.worktreeSession.worktreeName,
@@ -179,13 +203,6 @@ function scanMeta(filePath) {
         }
     }
 
-    // cwd changes mid-session when the agent enters a worktree, and the directory
-    // it is in *now* is the one worth reporting. The loop above kept the first
-    // one; take the last instead. lastIndexOf scans natively, so this costs far
-    // less than parsing every line for a field we only need once.
-    const currentCwd = tailField(text, 'cwd');
-    if (currentCwd) meta.cwd = currentCwd;
-
     for (const t of TITLE_TYPES) {
         if (titles[t]) { meta.title = titles[t]; meta.titleSource = t; break; }
     }
@@ -195,21 +212,38 @@ function scanMeta(filePath) {
     }
     if (!meta.title) { meta.title = 'Untitled session'; meta.titleSource = 'none'; }
 
-    // A worktree session records the worktree as its cwd, but it belongs to the
-    // checkout that owns it — otherwise every worktree becomes its own project
-    // in the list. Prefer the recorded worktree state; fall back to the on-disk
-    // convention <project>/.claude/worktrees/<name>.
+    // Which project a session belongs to, and only then which directory to show
+    // for it. Doing it the other way round — read the directory, derive the project
+    // from it — is what put a session in a project called "vendor": `cwd` follows
+    // the shell, a `cd` inside a Bash call moves it, and reading the last one in
+    // the file caught an agent that had fetched a library into web/vendor and had
+    // not come home yet.
+    //
+    // A worktree session belongs to the checkout that owns it, or every worktree
+    // becomes a project of its own in the rail. The worktree-state entry says which
+    // checkout, authoritatively, and is the only thing that knows for a session
+    // that has roamed. Failing that the trail of directories gives the checkout,
+    // and the on-disk convention maps a worktree back to its owner.
     if (meta.worktree && meta.worktree.originalCwd) {
-        meta.projectCwd = meta.worktree.originalCwd;
+        meta.projectCwd = projectRootOf(meta.worktree.originalCwd);
     } else {
-        const m = /^(.*)\/\.claude\/worktrees\/([^/]+)/.exec(meta.cwd || '');
-        if (m) {
-            meta.projectCwd = m[1];
-            meta.worktree = { name: m[2], branch: meta.gitBranch, path: meta.cwd, originalCwd: m[1] };
-        } else {
-            meta.projectCwd = meta.cwd;
+        const root = trailCheckout(text) || meta.cwd;
+        meta.projectCwd = projectRootOf(root);
+        if (meta.projectCwd !== root) {
+            meta.worktree = { name: worktreeNameOf(root), branch: meta.gitBranch,
+                path: root, originalCwd: meta.projectCwd };
+            // Nothing recorded a departure, and the trail leads here.
+            meta.inWorktree = true;
         }
     }
+
+    // The worktree while the session is in one — the row should say which — and the
+    // project once it has left. Whether it has left is the one thing the transcript
+    // states outright, which beats guessing it from a directory the shell may have
+    // been parked in when the session ended.
+    meta.cwd = (meta.inWorktree && meta.worktree)
+        ? meta.worktree.path
+        : meta.projectCwd;
 
     return meta;
 }
@@ -227,16 +261,80 @@ function matchField(line, key) {
     return v.includes('\\') ? null : v;
 }
 
-/** The last "key":"value" in a whole transcript, without parsing any of it. */
-function tailField(text, key) {
-    const needle = '"' + key + '":"';
-    const i = text.lastIndexOf(needle);
-    if (i === -1) return null;
-    const start = i + needle.length;
-    const end = text.indexOf('"', start);
-    if (end === -1) return null;
-    const v = text.slice(start, end);
-    return v.includes('\\') ? null : v;
+/** The checkout a worktree directory belongs to, or null if it is not one. */
+function worktreeBaseOf(dir) {
+    const m = WORKTREE_DIR_RE.exec(dir || '');
+    return m ? m[1] : null;
+}
+
+/** A worktree directory's name, the part below `.claude/worktrees/`. */
+function worktreeNameOf(dir) {
+    const m = WORKTREE_DIR_RE.exec(dir || '');
+    return m ? m[2] : null;
+}
+
+/**
+ * The checkout underneath a directory, out through any nesting of worktrees.
+ *
+ * Worktrees nest: enter one from inside another and the session it belongs to is
+ * recorded against the outer *worktree*, not the project. Taking that at face
+ * value grew a rail group called "build-app" — a worktree filed as a project of
+ * its own, which is the thing worktrees are mapped to their owners to avoid.
+ */
+function projectRootOf(dir) {
+    let at = dir;
+    // Bounded rather than `while`: this walks a path from a transcript, and a
+    // malformed one should not be able to spin here.
+    for (let i = 0; i < 8 && at; i++) {
+        const base = worktreeBaseOf(at);
+        if (!base) return at;
+        at = base;
+    }
+    return at;
+}
+
+// A checkout root carries `.git` — a directory in a clone, a file in a worktree,
+// so existence is the whole test. A directory that has since been deleted simply
+// is not one, which leaves the launch cwd standing; that is the right answer for
+// a path nobody can look at any more.
+function isCheckout(dir) {
+    if (!dir || !dir.startsWith('/')) return false;
+    try { return fs.existsSync(path.join(dir, '.git')); } catch { return false; }
+}
+
+/**
+ * The checkout a session belongs to, read off the trail of directories its
+ * entries were recorded in.
+ *
+ * A session's cwd follows the shell, so the file holds a trail rather than one
+ * directory: the project, plus wherever a `cd` inside a Bash call left things —
+ * a vendor directory a library was fetched into, a jobs/tmp scratch space,
+ * ~/.claude/plans. Neither end of the trail is reliably the project. What is
+ * reliable is that the project is a checkout, so the first directory on the trail
+ * that is one wins: a session launched in its project matches on the first entry,
+ * and one launched in ~ matches as soon as it walks in.
+ *
+ * Walks the raw text rather than the parsed entries — one linear pass that stops
+ * at the answer, and in the common case stops on the first entry.
+ */
+function trailCheckout(text) {
+    const needle = '"cwd":"';
+    const seen = new Set();
+    let at = 0;
+    while (true) {
+        const i = text.indexOf(needle, at);
+        if (i === -1) return null;
+        const start = i + needle.length;
+        const end = text.indexOf('"', start);
+        if (end === -1) return null;
+        at = end;
+        const dir = text.slice(start, end);
+        // `seen` is what keeps this to a handful of stat calls on a file with
+        // thousands of entries, nearly all of them naming the same directory.
+        if (dir.includes('\\') || seen.has(dir)) continue;
+        seen.add(dir);
+        if (isCheckout(dir)) return dir;
+    }
 }
 
 function safeParse(line) {
