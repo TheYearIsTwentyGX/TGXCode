@@ -1282,6 +1282,85 @@ a:hover { text-decoration: underline; }
 .tok-diff-add  { color: #a7e6bd; }
 .tok-diff-del  { color: #f4b4ae; }
 
+/* ── terminal ────────────────────────────────────────────────────────── */
+
+/* Height is set by dragging the grip and remembered; the flex rules only stop
+   it eating the transcript entirely, which a drag to the top otherwise would. */
+.term-pane {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    height: var(--term-h, 300px);
+    min-height: 120px;
+    max-height: 78vh;
+    background: var(--s2);
+    border-top: 1px solid var(--outline-soft);
+}
+.term-pane[hidden] { display: none; }
+
+.term-grip {
+    flex: none;
+    height: 7px;
+    margin-top: -4px;
+    cursor: row-resize;
+    background: transparent;
+    transition: background var(--t-fast) var(--ease);
+}
+.term-grip:hover, .term-grip.dragging { background: var(--blue-cont); }
+
+.term-head {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 2px 12px 4px;
+}
+.term-dir {
+    flex: none;
+    font: 400 11.5px/1.5 var(--mono);
+    color: var(--text-4);
+    white-space: nowrap;
+    overflow: hidden;
+}
+/* Only shown when the session has moved on from where this shell opened —
+   a worktree it entered after the pane was already running. */
+.term-moved {
+    flex: 0 1 auto;
+    min-width: 0;
+    font: 400 11.5px/1.5 var(--sans);
+    color: var(--yellow);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.term-moved[hidden] { display: none; }
+.term-head .spacer { flex: 1; }
+
+.term-btn {
+    flex: none;
+    padding: 3px 10px;
+    border-radius: var(--pill);
+    font: 400 12px/1.4 var(--sans);
+    color: var(--text-3);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.term-btn:hover { background: var(--s3); color: var(--text); }
+
+/* xterm measures itself against this box, so it has to be the one that scrolls
+   and it has to have a real height of its own. */
+.term-body {
+    flex: 1;
+    min-height: 0;
+    padding: 0 6px 6px 12px;
+    overflow: hidden;
+}
+.term-body .xterm { height: 100%; }
+.term-body .xterm-viewport { background: transparent !important; }
+.term-body .xterm-viewport::-webkit-scrollbar { width: 10px; }
+
+/* Dragging the grip over the transcript would otherwise select all of it. */
+body.term-resizing { user-select: none; cursor: row-resize; }
+
 /* ── composer ────────────────────────────────────────────────────────── */
 
 /* The extra right padding is the turn rail's width: it keeps the composer on

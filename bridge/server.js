@@ -21,6 +21,7 @@ const { Flags } = require('./flags');
 const devbrowser = require('./devbrowser');
 const devservers = require('./devservers');
 const { openInExplorer } = require('./explorer');
+const { TerminalPool } = require('./terminal');
 
 const WEB_DIR = path.join(__dirname, '..', 'web');
 const CLIENT_HEADER = 'x-claude-sessions-client';
@@ -28,6 +29,7 @@ const CLIENT_HEADER = 'x-claude-sessions-client';
 const flags = new Flags();
 const index = new SessionIndex(flags);
 const pool = new RunnerPool();
+const terminals = new TerminalPool();
 
 /**
  * @type {Map<string, {
@@ -230,6 +232,7 @@ async function api(req, res, url, pathname) {
             sessions: index.sessions.size, host: os.hostname(),
             // Live SSE connections — a quick way to tell whether a UI attached.
             clients: clients.size, runners: Object.keys(pool.statuses()).length,
+            terminals: terminals.live().length,
             // Turns in flight. Restarting would end them, so anything that
             // restarts the bridge should look here first.
             busy: pool.busyCount,
@@ -329,6 +332,9 @@ async function api(req, res, url, pathname) {
                 });
             }
             await pool.forget(sessionId);
+            // The shell was opened on this session's directory and belongs to
+            // it; with the session gone there is nothing left to reattach to.
+            terminals.closeSession(sessionId);
 
             let removed;
             try { removed = index.remove(sessionId); }
@@ -497,13 +503,83 @@ async function api(req, res, url, pathname) {
         if (tail === 'reveal' && req.method === 'POST') {
             const summary = index.summary(sessionId);
             if (!summary) return send(res, 404, { error: 'session not found' });
-            // Where the agent is working now: its current cwd, which for a
-            // session that entered a worktree is the worktree itself.
-            const dir = [summary.cwd, summary.worktree && summary.worktree.path,
-                summary.projectCwd].find(d => d && fs.existsSync(d));
+            const dir = workingDir(summary);
             if (!dir) return send(res, 404, { error: 'no directory for this session' });
             const out = await openInExplorer(dir);
             return send(res, out.ok ? 200 : 502, { ...out, dir });
+        }
+
+        // Open (or come back to) a shell in the same directory reveal would
+        // show. One per session, so the pane reopens where you left it.
+        if (tail === 'terminal' && req.method === 'POST') {
+            const summary = index.summary(sessionId);
+            if (!summary) return send(res, 404, { error: 'session not found' });
+            const dir = workingDir(summary);
+            if (!dir) return send(res, 404, { error: 'no directory for this session' });
+            const body = await readJson(req);
+            try {
+                const term = terminals.open({
+                    sessionId, cwd: dir, rows: body.rows, cols: body.cols,
+                });
+                // `cwd` in the answer is the shell's own, which for one started
+                // before the session moved is not the directory asked for.
+                return send(res, 200, { ...term.info(), sessionCwd: dir });
+            } catch (err) {
+                return send(res, 409, { error: err.message });
+            }
+        }
+    }
+
+    // --- terminals ---------------------------------------------------------
+    // Keyed by terminal rather than by session so a pane keeps talking to the
+    // shell it opened even if the session list moves underneath it.
+    if (seg[1] === 'terminals' && seg[2]) {
+        const term = terminals.get(seg[2]);
+        if (!term) return send(res, 404, { error: 'no such terminal' });
+        const tail = seg[3];
+
+        // Its own stream, not the app's SSE channel: this is a byte pipe that
+        // can move megabytes when a build is noisy, and it has no business
+        // sharing a connection with transcript tailing.
+        if (tail === 'stream' && req.method === 'GET') {
+            res.writeHead(200, {
+                'Content-Type': 'text/event-stream',
+                'Cache-Control': 'no-cache, no-transform',
+                Connection: 'keep-alive',
+                'X-Accel-Buffering': 'no',
+            });
+            const emit = (event, data) => {
+                try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); }
+                catch { /* the socket went away; the close handler cleans up */ }
+            };
+            emit('opened', term.info());
+            const detach = term.attach(emit);
+            const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* closed */ } }, 25_000);
+            ping.unref();
+            req.on('close', () => { clearInterval(ping); detach(); });
+            return;
+        }
+
+        if (tail === 'input' && req.method === 'POST') {
+            const body = await readJson(req);
+            // Base64 both ways: a keystroke is bytes, and half a multi-byte
+            // character is a legitimate thing to send on its own.
+            if (typeof body.b64 !== 'string') return send(res, 400, { error: 'b64 is required' });
+            const ok = term.write(Buffer.from(body.b64, 'base64'));
+            // The shell exiting while you were mid-keystroke is ordinary, and
+            // the pane already knows from the exit event — say so, don't fail.
+            return send(res, 200, { ok, exited: term.exited });
+        }
+
+        if (tail === 'resize' && req.method === 'POST') {
+            const body = await readJson(req);
+            term.resize(body.rows, body.cols);
+            return send(res, 200, { ok: true, rows: term.rows, cols: term.cols });
+        }
+
+        if (!tail && req.method === 'DELETE') {
+            terminals.close(term.id);
+            return send(res, 200, { ok: true });
         }
     }
 
@@ -548,6 +624,16 @@ async function api(req, res, url, pathname) {
 
 function normalizeMode(mode) {
     return PERMISSION_MODES.includes(mode) ? mode : 'acceptEdits';
+}
+
+/**
+ * Where the agent is working now: its current cwd, which for a session that
+ * entered a worktree is the worktree itself. Reveal and the terminal pane both
+ * mean this directory when they say "where the session is".
+ */
+function workingDir(summary) {
+    return [summary.cwd, summary.worktree && summary.worktree.path, summary.projectCwd]
+        .find(d => d && fs.existsSync(d)) || null;
 }
 
 function listDir(dir) {
@@ -665,6 +751,9 @@ function shutdown(code = 0) {
                 + 'stop with this process — their transcripts keep whatever was written.');
         }
     } catch { /* nothing to clean */ }
+    // Terminals run in their own process groups, so unlike turns they would
+    // outlive us if we did not take them with us.
+    try { terminals.shutdown(); } catch { /* nothing to clean */ }
     try { index.stop(); } catch { /* nothing to clean */ }
     try { server.close(); } catch { /* already closed */ }
     setTimeout(() => process.exit(code), 200).unref();

@@ -6,6 +6,7 @@
 
 import { renderMarkdown, inline } from './markdown.js';
 import { highlight, escapeHtml } from './highlight.js';
+import { TerminalPane } from './terminal.js';
 
 // ── api ──────────────────────────────────────────────────────────────────
 
@@ -86,7 +87,8 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'channels', 'scroll', 'log', 'status-line', 'status-text', 'btn-stop', 'input',
     'btn-send', 'queue', 'queue-list', 'queue-count', 'queue-clear',
     'model', 'perm', 'btn-new', 'db-status', 'db-label', 'toasts',
-    'btn-pin', 'btn-folder', 'btn-archive', 'btn-delete', 'turns', 'turn-pop',
+    'btn-pin', 'btn-folder', 'btn-term', 'btn-archive', 'btn-delete', 'turns', 'turn-pop',
+    'term-pane', 'term-grip', 'term-dir', 'term-moved', 'term-body', 'term-restart', 'term-close',
     'agents', 'agent-scroll', 'agent-log', 'btn-back', 'btn-back-label',
     'new-scrim', 'new-cwd', 'new-picker', 'new-prompt', 'new-model', 'new-perm',
     'new-test', 'new-test-row', 'new-go',
@@ -538,6 +540,9 @@ function clearCurrent() {
     dom.conv.hidden = true;
     dom.placeholder.hidden = false;
     dom.btnSend.disabled = true;
+    // The pane lives inside .conv, so it goes with it; the shell keeps running
+    // and is there again the moment the session is.
+    termPane.detach();
     subscribe();            // stop the bridge tailing a file that is gone
 }
 
@@ -622,6 +627,7 @@ function beginOpen(summary) {
     dom.scroll.scrollTop = 0;
     renderRail();       // the clicked row takes the current-session mark now
     applyRunner(null);
+    syncTerm();         // an open pane follows the session onto its directory
 
     // Anything typed here before, or handed back by a failed turn.
     dom.input.value = state.unsent.get(summary.sessionId) || loadDraft(summary.sessionId);
@@ -735,6 +741,8 @@ function renderHeaderActions() {
     dom.btnArchive.title = s.archived ? 'Restore from archive' : 'Archive this session';
     dom.btnDelete.title = `Delete “${clip(s.title, 40)}” permanently`;
     dom.btnFolder.title = `Show ${s.cwd} in File Explorer`;
+    dom.btnTerm.title = dom.termPane.hidden
+        ? `Open a terminal in ${s.cwd}` : 'Hide the terminal';
 }
 
 // A session transcript and a subagent transcript render identically — they
@@ -2326,6 +2334,125 @@ function handleSendFailure(f) {
     }
 }
 
+// ── terminal ─────────────────────────────────────────────────────────────
+
+// The pane is a property of the window, not of a session: leave it open and
+// every session you move to shows its own shell in its own directory, which is
+// what you want when the pane is open because you are comparing two of them.
+// Its height is remembered for the same reason.
+const TERM_MIN = 120;
+
+const termPane = new TerminalPane({
+    mount: dom.termBody,
+    onOpen: (info) => paintTermHead(info),
+    onError: (msg) => toast(`Terminal: ${msg}`, 'error'),
+});
+
+function termHeight() {
+    const saved = Number(localStorage.getItem('termHeight'));
+    return Number.isFinite(saved) && saved >= TERM_MIN ? saved : 300;
+}
+
+function setTermHeight(px) {
+    const max = Math.max(TERM_MIN, Math.round(window.innerHeight * 0.78));
+    const h = Math.min(max, Math.max(TERM_MIN, Math.round(px)));
+    dom.termPane.style.setProperty('--term-h', `${h}px`);
+    localStorage.setItem('termHeight', String(h));
+}
+
+function termOpen() { return localStorage.getItem('termOpen') === '1'; }
+
+/** A path the way a shell prompt writes it: ~ for home, and only the tail. */
+function homely(cwd) {
+    const short = String(cwd || '').replace(/^\/home\/[^/]+/, '~');
+    if (short.length <= 52) return short;
+    const parts = short.split('/');
+    const out = [];
+    // Whole segments only — half a directory name is worse than fewer of them.
+    for (let i = parts.length - 1; i >= 0; i--) {
+        if (out.join('/').length + parts[i].length + 1 > 50) break;
+        out.unshift(parts[i]);
+    }
+    return `…/${out.join('/')}`;
+}
+
+/**
+ * Label the pane with the directory the shell is actually in.
+ *
+ * Not with the session's, because the two drift: a session that enters a
+ * worktree after the pane was opened leaves its shell behind in the old
+ * directory. Saying so is the honest thing — the alternative is a heading that
+ * quietly contradicts the prompt two lines below it.
+ */
+function paintTermHead(info) {
+    const shellCwd = (info && info.cwd) || '';
+    dom.termDir.textContent = homely(shellCwd);
+    dom.termDir.title = shellCwd;
+
+    const now = state.current && state.current.cwd;
+    const moved = !!(info && now && now !== shellCwd);
+    dom.termMoved.hidden = !moved;
+    if (moved) {
+        dom.termMoved.textContent = `· session moved to ${homely(now)}`;
+        dom.termMoved.title = now;
+    }
+    dom.termRestart.title = moved
+        ? `Restart the shell in ${now}` : 'End this shell and start a new one';
+}
+
+/** Show or hide the pane. The shell itself is unaffected either way. */
+function showTerm(on, { focus = false } = {}) {
+    localStorage.setItem('termOpen', on ? '1' : '0');
+    dom.termPane.hidden = !on;
+    dom.btnTerm.classList.toggle('on', on);
+    dom.btnTerm.setAttribute('aria-pressed', String(on));
+    renderHeaderActions();
+    if (!on) { termPane.detach(); return; }
+
+    setTermHeight(termHeight());
+    syncTerm();
+    if (focus) termPane.focus();
+}
+
+/** Point the pane at whatever session is on screen. */
+function syncTerm() {
+    if (dom.termPane.hidden) return;
+    if (!state.current) { termPane.detach(); paintTermHead(null); return; }
+    // Already attached: the shell is known, so the head can be right now rather
+    // than after a round trip. Otherwise stand in with where it is about to open.
+    if (termPane.info && termPane.sessionId === state.current.sessionId) {
+        paintTermHead(termPane.info);
+    } else {
+        dom.termDir.textContent = homely(state.current.cwd);
+        dom.termDir.title = state.current.cwd || '';
+        dom.termMoved.hidden = true;
+    }
+    termPane.attach(state.current.sessionId);
+}
+
+/**
+ * Drag the grip to resize. Measured from the pane's bottom edge rather than
+ * from where the drag started, so the pointer stays on the grip however far
+ * the clamp has moved it.
+ */
+function startTermDrag(e) {
+    e.preventDefault();
+    const bottom = dom.termPane.getBoundingClientRect().bottom;
+    dom.termGrip.classList.add('dragging');
+    document.body.classList.add('term-resizing');
+
+    const move = (ev) => setTermHeight(bottom - ev.clientY);
+    const up = () => {
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+        dom.termGrip.classList.remove('dragging');
+        document.body.classList.remove('term-resizing');
+        termPane.refit();
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+}
+
 // ── new session ──────────────────────────────────────────────────────────
 
 async function openNew() {
@@ -2417,6 +2544,24 @@ dom.btnFolder.addEventListener('click', async () => {
         dom.btnFolder.disabled = false;
     }
 });
+dom.btnTerm.addEventListener('click', () => {
+    if (!state.current) return;
+    showTerm(dom.termPane.hidden, { focus: true });
+});
+dom.termClose.addEventListener('click', () => showTerm(false));
+dom.termRestart.addEventListener('click', async () => {
+    await termPane.kill();
+    syncTerm();
+    termPane.focus();
+});
+dom.termGrip.addEventListener('pointerdown', startTermDrag);
+// Keyboard equivalent of the drag, so the pane is not mouse-only.
+dom.termGrip.addEventListener('keydown', (e) => {
+    const step = e.shiftKey ? 60 : 20;
+    if (e.key === 'ArrowUp') { e.preventDefault(); setTermHeight(dom.termPane.offsetHeight + step); }
+    if (e.key === 'ArrowDown') { e.preventDefault(); setTermHeight(dom.termPane.offsetHeight - step); }
+});
+
 dom.newGo.addEventListener('click', startNew);
 dom.dbStatus.addEventListener('click', refreshDevBrowser);
 dom.btnBack.addEventListener('click', closeAgent);
@@ -2545,6 +2690,9 @@ connect();
 loadSessions();
 markInstance();
 refreshDevBrowser();
+// Restore the pane before the first session lands, so it opens with the window
+// already the right shape rather than growing one out from under the transcript.
+showTerm(termOpen());
 setInterval(refreshDevBrowser, 20_000);
 setInterval(() => { if (state.current) loadChannels(); }, 25_000);
 
