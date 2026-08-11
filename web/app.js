@@ -34,6 +34,11 @@ async function del(path) {
 
 // ── state ────────────────────────────────────────────────────────────────
 
+// What the composer falls back to for a session nothing is known about. Matches
+// the `selected` option in index.html and the bridge's own default, so all three
+// agree about what "no mode was chosen" means.
+const DEFAULT_PERM = 'auto';
+
 const state = {
     clientId: null,
     dev: false,             // talking to a development bridge
@@ -52,6 +57,10 @@ const state = {
     agentNodes: new Map(),  // the viewed subagent's own event id -> {ev, node}
     agentTools: new Map(),
     runner: null,
+    // A permission mode picked here and not yet sent, per session. Deliberately
+    // not persisted: after a reload the transcript is the better answer, and this
+    // only exists so that looking away and back does not quietly drop a choice.
+    permChoice: new Map(),
     channels: [],
     pinned: true,           // stick to the bottom as new events arrive
     // Which rail groups are shut. Storing the collapsed ones rather than the
@@ -78,7 +87,13 @@ const state = {
     queueFocus: null,       // the chip holding the queue's single tab stop
     ask: null,              // the approval this session is blocked on, if any
     askTimer: null,         // ticks the countdown on the approval card
+    // The mode the bridge last reported, per session, so that a mode which moves
+    // under a session can be told apart from one being seen for the first time.
+    runnerMode: new Map(),
     stopArmed: 0,           // when a soft Stop happened, for the force escalation
+    // The board of unfinished work. `at` is when the bridge last answered, so
+    // opening it again does not re-run git over every worktree on the machine.
+    dash: { open: false, data: null, at: 0, loading: false, error: null, files: new Set() },
 };
 
 const $ = (id) => document.getElementById(id);
@@ -87,9 +102,11 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'channels', 'scroll', 'log', 'status-line', 'status-text', 'btn-stop', 'input',
     'btn-send', 'queue', 'queue-list', 'queue-count', 'queue-clear',
     'model', 'perm', 'btn-new', 'db-status', 'db-label', 'toasts',
+    'btn-bell', 'bell-menu', 'opt-desktop', 'opt-sound', 'bell-note', 'bell-try',
     'btn-pin', 'btn-folder', 'btn-term', 'btn-archive', 'btn-delete', 'turns', 'turn-pop',
     'term-pane', 'term-grip', 'term-dir', 'term-moved', 'term-body', 'term-restart', 'term-close',
     'agents', 'agent-scroll', 'agent-log', 'btn-back', 'btn-back-label',
+    'btn-dash', 'dash-badge', 'dash', 'dash-sub', 'dash-body', 'dash-refresh',
     'new-scrim', 'new-cwd', 'new-picker', 'new-prompt', 'new-model', 'new-perm',
     'new-test', 'new-test-row', 'new-go',
     'del-scrim', 'del-what', 'del-meta', 'del-go']) {
@@ -576,7 +593,9 @@ function clearCurrent() {
     dom.channels.replaceChildren();
     hideTurnPop();
     dom.conv.hidden = true;
-    dom.placeholder.hidden = false;
+    // Not while the board is up: the empty state would sit under it, and the
+    // session that went away is not what you are looking at anyway.
+    dom.placeholder.hidden = state.dash.open;
     dom.btnSend.disabled = true;
     // The pane lives inside .conv, so it goes with it; the shell keeps running
     // and is there again the moment the session is.
@@ -655,6 +674,8 @@ function beginOpen(summary) {
     state.stopArmed = 0;
     leaveAgent();       // a subagent belongs to the session it was spawned by
 
+    // Picking a session is done with the board, whichever way you got there.
+    if (state.dash.open) showDash(false);
     dom.placeholder.hidden = true;
     dom.conv.hidden = false;
 
@@ -979,11 +1000,22 @@ function renderSystem(ev) {
     return row(ev, 'system', ...body);
 }
 
-// ── approvals ────────────────────────────────────────────────────────────
+// ── approvals, plans and questions ───────────────────────────────────────
 // A blocked turn, drawn at the foot of the transcript rather than as a toast:
 // toasts are dismissible and this is not — the turn is waiting on the answer.
 // The card is deliberately built from the same vocabulary as a tool block, so
 // what you approve looks like what you will see once it has run.
+//
+// Three things arrive down this channel and only one of them is a permission:
+//
+//   tool      may I run this? — yes, yes-always, or no.
+//   plan      here is the plan. Approving it starts the work and decides the
+//             mode it runs under; turning it down is feedback, not a refusal,
+//             so the card offers somewhere to say what was wrong with it.
+//   question  a multiple-choice question, answered by picking.
+//
+// They share the card chrome because they share the thing that matters about
+// it: the turn does not move until you answer.
 
 const DECISION_WORD = {
     allow: 'Allowed.', 'allow-always': 'Allowed for the rest of this session.',
@@ -992,9 +1024,28 @@ const DECISION_WORD = {
     superseded: 'Replaced by a later request.',
     'auto-denied': 'Denied automatically — nobody answered.',
     abandoned: 'The Claude process exited before this was answered.',
+    'plan-approved': 'Approved.',
+    'plan-approved-note': 'Approved, with a note to bear in mind.',
+    'plan-rejected': 'Sent back for more planning.',
+    answered: 'Answered.',
+    dismissed: 'Dismissed — Claude carries on unaided.',
 };
 
-/** Show, replace or clear the approval card for the session on screen. */
+/** Head words per kind: what the card calls itself. */
+const ASK_HEAD = {
+    plan: { name: 'Plan', title: 'ready to start' },
+    question: { name: 'Question', title: 'waiting on you' },
+};
+
+const ASK_LABEL = {
+    plan: 'A plan waiting for your approval',
+    question: 'A question waiting for your answer',
+};
+
+/** Don't fire single-key shortcuts at somebody who is writing a sentence. */
+const isTyping = (t) => !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA');
+
+/** Show, replace or clear the card for whatever the session is blocked on. */
 function renderAsk() {
     clearInterval(state.askTimer);
     state.askTimer = null;
@@ -1003,47 +1054,26 @@ function renderAsk() {
     if (!state.ask || state.agent) return;
 
     const ask = state.ask;
-    const card = el('div', { class: 'perm', tabindex: '0',
-        role: 'group', 'aria-label': `Permission needed for ${ask.displayName}` });
+    const kind = ask.kind || 'tool';
+    const head = ASK_HEAD[kind] || { name: ask.displayName, title: 'permission needed' };
+    const card = el('div', { class: `perm perm-${kind}`, tabindex: '0',
+        role: 'group', 'aria-label': ASK_LABEL[kind] || `Permission needed for ${ask.displayName}` });
 
     const clock = el('span', { class: 'perm-left' });
     card.append(
         el('div', { class: 'perm-head' },
-            el('span', { class: 'perm-tool' }, ask.displayName),
-            el('span', { class: 'perm-title' }, 'permission needed'),
+            el('span', { class: 'perm-tool' }, head.name),
+            el('span', { class: 'perm-title' }, head.title),
             clock),
-        // toolSummary is the collapsed-row text of an ordinary tool block. Shape
-        // the ask like the event it reads and the two render identically.
-        el('div', { class: 'perm-arg' },
-            toolSummary({ name: ask.tool, input: ask.input }) || ask.description || ''),
     );
 
     if (ask.agentId) {
         card.append(el('div', { class: 'perm-why' }, 'Asked by a subagent.'));
     }
-    if (ask.reason) card.append(el('div', { class: 'perm-why' }, clip(ask.reason, 220)));
 
-    const btns = el('div', { class: 'perm-btns' },
-        el('button', { class: 'perm-btn allow', type: 'button',
-            onclick: () => answerAsk('allow') },
-            'Allow ', el('kbd', {}, 'Y')),
-        el('button', { class: 'perm-btn', type: 'button',
-            onclick: () => answerAsk('allow-always') },
-            `Allow ${ask.displayName} all session `, el('kbd', {}, 'A')),
-        el('button', { class: 'perm-btn deny', type: 'button',
-            onclick: () => answerAsk('deny') },
-            'Deny ', el('kbd', {}, 'N')),
-    );
-    card.append(btns);
-
-    card.addEventListener('keydown', (e) => {
-        if (e.ctrlKey || e.metaKey || e.altKey) return;
-        const k = e.key.toLowerCase();
-        const decision = k === 'y' ? 'allow' : k === 'a' ? 'allow-always' : k === 'n' ? 'deny' : null;
-        if (!decision) return;
-        e.preventDefault();
-        answerAsk(decision);
-    });
+    if (kind === 'plan') fillPlanAsk(card, ask);
+    else if (kind === 'question') fillQuestionAsk(card, ask);
+    else fillToolAsk(card, ask);
 
     dom.log.append(card);
 
@@ -1065,7 +1095,238 @@ function renderAsk() {
     if (state.pinned) scrollToEnd(false);
 }
 
-async function answerAsk(decision) {
+/** "May I run this?" — the original card, unchanged. */
+function fillToolAsk(card, ask) {
+    // toolSummary is the collapsed-row text of an ordinary tool block. Shape
+    // the ask like the event it reads and the two render identically.
+    card.append(el('div', { class: 'perm-arg' },
+        toolSummary({ name: ask.tool, input: ask.input }) || ask.description || ''));
+
+    if (ask.reason) card.append(el('div', { class: 'perm-why' }, clip(ask.reason, 220)));
+
+    card.append(el('div', { class: 'perm-btns' },
+        el('button', { class: 'perm-btn allow', type: 'button',
+            onclick: () => answerAsk({ decision: 'allow' }) },
+            'Allow ', el('kbd', {}, 'Y')),
+        el('button', { class: 'perm-btn', type: 'button',
+            onclick: () => answerAsk({ decision: 'allow-always' }) },
+            `Allow ${ask.displayName} all session `, el('kbd', {}, 'A')),
+        el('button', { class: 'perm-btn deny', type: 'button',
+            onclick: () => answerAsk({ decision: 'deny' }) },
+            'Deny ', el('kbd', {}, 'N')),
+    ));
+
+    card.addEventListener('keydown', (e) => {
+        if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return;
+        const k = e.key.toLowerCase();
+        const decision = k === 'y' ? 'allow' : k === 'a' ? 'allow-always' : k === 'n' ? 'deny' : null;
+        if (!decision) return;
+        e.preventDefault();
+        answerAsk({ decision });
+    });
+}
+
+/**
+ * A plan, and the two things approving one actually decides: that the work
+ * starts, and what it is allowed to do once it has.
+ *
+ * The session is in plan mode while this card is up, so approving without
+ * changing the mode would agree to the plan and then refuse every edit in it.
+ * That is why these are one button and not two steps.
+ */
+function fillPlanAsk(card, ask) {
+    const plan = (ask.input && ask.input.plan) || ask.description || '';
+    card.append(el('div', { class: 'perm-plan prose', html: renderMarkdown(plan) }));
+
+    // `auto` is the default because it is how these sessions run when you are
+    // sitting in front of one: Claude judges each call and asks when a call
+    // warrants it. Blanket-accepting edits is the deliberate second choice.
+    const approve = (mode) => answerAsk({ decision: 'allow', mode });
+    const btns = el('div', { class: 'perm-btns' },
+        el('button', { class: 'perm-btn allow', type: 'button',
+            title: 'Start work, asking about calls that warrant it',
+            onclick: () => approve('auto') },
+            'Approve ', el('kbd', {}, 'Y')),
+        el('button', { class: 'perm-btn', type: 'button',
+            title: 'Start work, and let file edits through without asking',
+            onclick: () => approve('acceptEdits') },
+            'Approve — auto-accept edits ', el('kbd', {}, 'A')),
+        el('button', { class: 'perm-btn', type: 'button',
+            title: 'Approve the plan, with something to bear in mind while doing it',
+            onclick: () => openFeedback(card, 'approve') },
+            'Approve with feedback ', el('kbd', {}, 'F')),
+        el('button', { class: 'perm-btn deny', type: 'button',
+            onclick: () => openFeedback(card, 'reject') },
+            'Keep planning ', el('kbd', {}, 'N')),
+    );
+    card.append(btns,
+        el('div', { class: 'perm-why' },
+            'Approving leaves plan mode and sets the permission mode under the composer.'));
+
+    card.addEventListener('keydown', (e) => {
+        if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return;
+        const k = e.key.toLowerCase();
+        if (k === 'y') { e.preventDefault(); approve('auto'); }
+        else if (k === 'a') { e.preventDefault(); approve('acceptEdits'); }
+        else if (k === 'f') { e.preventDefault(); openFeedback(card, 'approve'); }
+        else if (k === 'n') { e.preventDefault(); openFeedback(card, 'reject'); }
+    });
+}
+
+/**
+ * Say something about the plan — whether or not you are approving it.
+ *
+ * Both answers are a sentence rather than a verdict, and they reach the model
+ * by different routes because the protocol gives them different routes. Turned
+ * down, the note is the tool's error, which is where the model reads a refusal
+ * — so "too broad, do the parser first" is planned against, while a silent no
+ * is usually just re-sent shorter. Approved, it is appended to the plan itself,
+ * because a condition you attach to a yes is part of what was agreed to.
+ *
+ * @param {'approve'|'reject'} how
+ */
+function openFeedback(card, how) {
+    const btns = card.querySelector('.perm-btns');
+    if (!btns || card.querySelector('.perm-feedback')) return;
+    const approving = how === 'approve';
+
+    const ta = el('textarea', { class: 'perm-fb', rows: '3',
+        'aria-label': approving ? 'What should Claude bear in mind?'
+            : 'What should change about this plan?',
+        placeholder: approving
+            ? 'Anything to bear in mind? Enter to approve, Esc to go back.'
+            : 'What should change? Enter to send, Esc to go back.' });
+    const send = () => answerAsk(approving
+        ? { decision: 'allow', mode: 'auto', feedback: ta.value }
+        : { decision: 'deny', feedback: ta.value });
+    const cancel = () => { box.remove(); btns.hidden = false; card.focus({ preventScroll: true }); };
+
+    const box = el('div', { class: 'perm-feedback' }, ta,
+        el('div', { class: 'perm-btns' },
+            el('button', { class: `perm-btn ${approving ? 'allow' : 'deny'}`, type: 'button',
+                onclick: send },
+                approving ? 'Approve with this note ' : 'Send it back ', el('kbd', {}, '⏎')),
+            el('button', { class: 'perm-btn', type: 'button', onclick: cancel }, 'Cancel')));
+
+    ta.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+        else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+    });
+
+    btns.hidden = true;
+    btns.after(box);
+    ta.focus();
+}
+
+/**
+ * A multiple-choice question, or several.
+ *
+ * Native radios and checkboxes rather than clickable divs: arrow keys, space,
+ * groups and labels all work without being reimplemented, and a question is
+ * exactly the moment not to have reinvented a form control. Every question has
+ * an "Other" row, because the honest answer is often none of the above.
+ */
+function fillQuestionAsk(card, ask) {
+    const questions = (ask.input && ask.input.questions) || [];
+    const readers = [];
+    const wrap = el('div', { class: 'perm-qs' });
+
+    questions.forEach((q, qi) => {
+        const group = el('div', { class: 'perm-q', role: 'group',
+            'aria-label': q.question || q.header || `Question ${qi + 1}` });
+        group.append(el('div', { class: 'perm-q-head' },
+            q.header ? el('span', { class: 'perm-q-chip' }, q.header) : null,
+            el('span', { class: 'perm-q-text' }, q.question || '')));
+
+        const name = `perm-q${qi}`;
+        const type = q.multiSelect ? 'checkbox' : 'radio';
+        const picks = [];
+
+        for (const [oi, opt] of (q.options || []).entries()) {
+            const box = el('input', { type, name, id: `${name}-o${oi}`, value: opt.label || '' });
+            box.addEventListener('change', update);
+            picks.push({ box, label: opt.label || '' });
+            group.append(el('label', { class: 'perm-opt', for: `${name}-o${oi}` }, box,
+                el('span', { class: 'perm-opt-body' },
+                    el('span', { class: 'perm-opt-label' }, opt.label || ''),
+                    opt.description ? el('span', { class: 'perm-opt-desc' }, opt.description) : null,
+                    // Previews are for comparing, so they are readable on hover
+                    // and focus too — not only once you have already chosen.
+                    opt.preview ? el('pre', { class: 'perm-opt-preview' }, opt.preview) : null)));
+        }
+
+        const otherBox = el('input', { type, name, id: `${name}-other` });
+        const otherText = el('input', { type: 'text', class: 'perm-other', autocomplete: 'off',
+            'aria-label': `A different answer to "${q.question || ''}"`, placeholder: 'Something else…' });
+        otherBox.addEventListener('change', update);
+        // Typing is choosing; making people also click the radio is a trap.
+        otherText.addEventListener('input', () => {
+            if (otherText.value.trim()) otherBox.checked = true;
+            update();
+        });
+        group.append(el('label', { class: 'perm-opt perm-opt-other', for: `${name}-other` }, otherBox,
+            el('span', { class: 'perm-opt-body' },
+                el('span', { class: 'perm-opt-label' }, 'Other'), otherText)));
+
+        // One question's answer, as the string the model will be handed. Several
+        // selections read back as a list, which is how they were asked.
+        readers.push(() => {
+            const chosen = picks.filter(p => p.box.checked).map(p => p.label);
+            const other = otherBox.checked ? otherText.value.trim() : '';
+            if (other) chosen.push(other);
+            return { question: q.question, answer: chosen.join(', ') };
+        });
+
+        wrap.append(group);
+    });
+
+    const submit = el('button', { class: 'perm-btn allow', type: 'button',
+        onclick: () => answerAsk({ decision: 'allow', answers: collect() }) },
+        questions.length > 1 ? 'Send answers ' : 'Send answer ', el('kbd', {}, '⏎'));
+
+    function collect() {
+        const out = {};
+        for (const read of readers) {
+            const { question, answer } = read();
+            if (answer) out[question] = answer;
+        }
+        return out;
+    }
+
+    // Claude asked all of them; answering some and leaving the rest to guesswork
+    // is the outcome this card exists to avoid.
+    function update() {
+        const done = Object.keys(collect()).length;
+        submit.disabled = done !== readers.length;
+        submit.title = submit.disabled
+            ? `${readers.length - done} still to answer`
+            : '';
+    }
+
+    card.append(wrap, el('div', { class: 'perm-btns' }, submit,
+        el('button', { class: 'perm-btn deny', type: 'button',
+            title: 'Answer nothing and let Claude decide for itself',
+            onclick: () => answerAsk({ decision: 'deny' }) },
+            'Skip'),
+    ));
+
+    card.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.metaKey) return;
+        if (submit.disabled) return;
+        e.preventDefault();
+        submit.click();
+    });
+
+    update();
+}
+
+/**
+ * Send an answer.
+ *
+ * @param {{decision:'allow'|'allow-always'|'deny', mode?:string,
+ *          answers?:object, feedback?:string}} payload
+ */
+async function answerAsk(payload) {
     const ask = state.ask;
     if (!ask || !state.current) return;
     const card = dom.log.querySelector('.perm');
@@ -1075,7 +1336,7 @@ async function answerAsk(decision) {
     }
     try {
         await post(`/api/sessions/${state.current.sessionId}/permission`,
-            { requestId: ask.requestId, decision });
+            { requestId: ask.requestId, ...payload });
     } catch (err) {
         // 409 means another window got there first; the resolved event that
         // follows takes the card down with the right reason on it.
@@ -1090,7 +1351,8 @@ async function answerAsk(decision) {
 /** Take the card down and leave a line saying how it ended. */
 function resolveAsk(outcome) {
     if (!state.ask) return;
-    const tool = state.ask.displayName;
+    const head = ASK_HEAD[state.ask.kind];
+    const tool = head ? head.name : state.ask.displayName;
     state.ask = null;
     renderAsk();
     const word = DECISION_WORD[outcome] || 'Answered.';
@@ -1118,6 +1380,10 @@ function toolSummary(ev) {
         case 'WebSearch': return i.query;
         case 'TodoWrite': return `${(i.tasks || i.todos || []).length} items`;
         case 'Skill': return '/' + (i.skill || '');
+        // The first heading of a plan is what it is a plan for.
+        case 'ExitPlanMode': return clip((i.plan || '').replace(/^#+\s*/, ''), 80);
+        case 'AskUserQuestion':
+            return (i.questions || []).map(q => q.header || q.question).join(' · ');
         case 'SendMessage': return `to ${i.to || i.recipient || '?'}`;
         default: {
             const first = Object.values(i)[0];
@@ -1183,6 +1449,12 @@ function toolBody(ev) {
         out.push(section('Tasks', todoView(i.tasks || i.todos || [])));
     } else if (ev.name === 'Task' || ev.name === 'Agent') {
         out.push(section('Prompt', el('div', { class: 'prose', html: renderMarkdown(i.prompt || '') })));
+    } else if (ev.name === 'ExitPlanMode') {
+        // The card is long gone by the time anyone reads this back; the plan
+        // that was approved is the whole content of the call.
+        out.push(section('Plan', el('div', { class: 'prose', html: renderMarkdown(i.plan || '') })));
+    } else if (ev.name === 'AskUserQuestion') {
+        out.push(section('Questions', questionsView(i.questions || [])));
     } else if (Object.keys(i).length) {
         out.push(section('Input', kvView(i)));
     }
@@ -1333,6 +1605,27 @@ function todoView(items) {
         list.append(el('div', { style: `color:${st === 'completed' ? 'var(--text-4)' : 'var(--text)'}` },
             el('span', { style: `color:${color}; margin-right:8px` }, mark),
             t.subject || t.content || t.description || t.activeForm || ''));
+    }
+    return list;
+}
+
+/**
+ * What was asked, read back later.
+ *
+ * The answer is not here — it is in the tool result, which says what was picked
+ * — so this stays a record of the question and the choices it offered.
+ */
+function questionsView(questions) {
+    const list = el('div', { class: 'qview' });
+    for (const q of questions) {
+        list.append(el('div', { class: 'qview-q' },
+            q.header ? el('span', { class: 'perm-q-chip' }, q.header) : null,
+            el('span', {}, q.question || '')));
+        for (const opt of q.options || []) {
+            list.append(el('div', { class: 'qview-o' },
+                el('span', { class: 'qview-mark' }, '○'),
+                el('span', {}, opt.label || '')));
+        }
     }
     return list;
 }
@@ -1718,6 +2011,657 @@ async function markInstance() {
     } catch { /* the status line already reports an unreachable bridge */ }
 }
 
+// ── dashboard ────────────────────────────────────────────────────────────
+// The rail answers "what have I been talking to". This answers "what have I
+// left behind" — changes nobody committed, pull requests nobody merged — which
+// is the thing a screen full of finished conversations hides.
+
+// How old an answer may be before opening the board goes and asks again. The
+// bridge caches underneath this, so a re-ask is usually free anyway.
+const DASH_STALE_MS = 45_000;
+
+function showDash(on) {
+    state.dash.open = on;
+    dom.dash.hidden = !on;
+    dom.btnDash.classList.toggle('on', on);
+    dom.btnDash.setAttribute('aria-pressed', String(on));
+    // The conversation is not closed, only covered: coming back out lands on
+    // the same transcript, scrolled where it was.
+    dom.conv.hidden = on || !state.current;
+    dom.placeholder.hidden = on || Boolean(state.current);
+
+    if (on) {
+        if (Date.now() - state.dash.at > DASH_STALE_MS) loadDash();
+        else renderDash();
+    } else if (state.current) {
+        // The terminal was display:none while the board was up, and xterm sizes
+        // itself to a box it could not measure then.
+        termPane.refit();
+    }
+}
+
+async function loadDash({ refresh = false } = {}) {
+    if (state.dash.loading) return;
+    state.dash.loading = true;
+    state.dash.error = null;
+    renderDash();
+    try {
+        const data = await get('/api/dashboard' + (refresh ? '?refresh=1' : ''));
+        state.dash.data = data;
+        state.dash.at = Date.now();
+    } catch (err) {
+        state.dash.error = err.message;
+    } finally {
+        state.dash.loading = false;
+        renderDash();
+        paintDashBadge();
+    }
+}
+
+/**
+ * How much is outstanding, on the button that opens the board. Counted in
+ * places rather than in files or PRs: "eleven" meaning eleven modified files in
+ * one worktree and "eleven" meaning eleven worktrees are different news.
+ */
+function paintDashBadge() {
+    const d = state.dash.data;
+    const rows = d ? d.projects.reduce((n, p) => n + p.workspaces.length, 0) : 0;
+    dom.dashBadge.hidden = !rows;
+    dom.dashBadge.textContent = String(rows);
+    dom.btnDash.title = rows
+        ? `${rows} ${rows === 1 ? 'place has' : 'places have'} uncommitted changes or an open pull request`
+        : 'Uncommitted changes and open pull requests, by project';
+}
+
+function renderDash() {
+    const d = state.dash.data;
+    dom.dashRefresh.disabled = state.dash.loading;
+    dom.dashRefresh.textContent = state.dash.loading ? 'Checking…' : 'Refresh';
+
+    if (d) {
+        const when = ago(d.checkedAt);
+        dom.dashSub.textContent = [
+            `${d.dirty} ${d.dirty === 1 ? 'directory' : 'directories'} with uncommitted changes`,
+            `${d.open} pull ${d.open === 1 ? 'request' : 'requests'} still open`,
+            when === 'now' ? 'checked just now' : `checked ${when} ago`,
+        ].join(' · ');
+    } else {
+        dom.dashSub.textContent = 'Uncommitted changes, and pull requests that are '
+            + 'open but not merged.';
+    }
+
+    const body = dom.dashBody;
+    if (state.dash.error) {
+        body.replaceChildren(el('div', { class: 'dash-note error' },
+            el('p', {}, `Could not read the working trees: ${state.dash.error}`),
+            el('button', { class: 'more-btn', type: 'button', onclick: () => loadDash() },
+                'Try again')));
+        return;
+    }
+    if (!d) {
+        body.replaceChildren(el('div', { class: 'dash-note' },
+            el('p', {}, 'Reading working trees and asking GitHub…')));
+        return;
+    }
+
+    const nodes = [];
+    // gh failing is worth saying outright rather than quietly listing no PRs:
+    // an empty board would otherwise read as "nothing open".
+    if (!d.gh.ok) {
+        nodes.push(el('div', { class: 'dash-note warn' },
+            el('p', {}, `Pull requests could not be listed — ${d.gh.error}. `
+                + 'Uncommitted changes below are unaffected.')));
+    }
+    if (!d.projects.length) {
+        nodes.push(el('div', { class: 'dash-note' },
+            el('p', {}, 'Nothing uncommitted, and no pull request left open. '
+                + 'Every worktree on this machine is clean.')));
+    }
+    for (const p of d.projects) nodes.push(dashProject(p));
+    body.replaceChildren(...nodes);
+}
+
+function dashProject(p) {
+    const counts = [];
+    if (p.dirty) counts.push(`${p.dirty} dirty`);
+    if (p.open) counts.push(`${p.open} open PR${p.open === 1 ? '' : 's'}`);
+
+    return el('section', { class: 'dproj' },
+        el('header', { class: 'dproj-head' },
+            el('span', { class: 'dproj-name' }, p.name),
+            p.repo ? el('span', { class: 'dproj-repo' }, p.repo) : null,
+            el('span', { class: 'dproj-counts' }, counts.join(' · ')),
+        ),
+        el('div', { class: 'dproj-body' }, p.workspaces.map(w => dashRow(p, w))),
+    );
+}
+
+function dashRow(project, w) {
+    const g = w.git || {};
+    const filesId = `${project.cwd}::${w.dir || (w.prs[0] && w.prs[0].url) || w.name}`;
+    const showFiles = state.dash.files.has(filesId);
+
+    const signals = [];
+    if (g.dirty) {
+        signals.push(el('button', {
+            class: 'sig dirty' + (showFiles ? ' on' : ''),
+            type: 'button',
+            'aria-expanded': String(showFiles),
+            title: dirtyTitle(g),
+            onclick: () => {
+                state.dash.files[showFiles ? 'delete' : 'add'](filesId);
+                renderDash();
+            },
+        }, `${g.files} uncommitted`));
+    }
+    // Only where there is an upstream to be ahead of; a worktree branch that was
+    // never pushed has nothing to compare against and says nothing here.
+    if (g.ahead) signals.push(el('span', { class: 'sig quiet' }, `${g.ahead} unpushed`));
+    if (g.conflicts) signals.push(el('span', { class: 'sig bad' }, `${g.conflicts} conflicted`));
+
+    for (const pr of w.prs) {
+        signals.push(el('a', {
+            class: 'sig pr' + (pr.draft ? ' draft' : ''),
+            href: pr.url, target: '_blank', rel: 'noreferrer',
+            title: `${pr.title}\n${pr.url}\nopened by ${pr.author || 'someone'}, `
+                + `updated ${ago(pr.updatedAt)} ago`,
+        },
+            el('span', { class: 'pr-num' }, `#${pr.number}`),
+            el('span', { class: 'pr-title' }, clip(pr.title, 46)),
+            pr.draft ? el('span', { class: 'pr-tag' }, 'draft') : null,
+            pr.reviewDecision === 'APPROVED' ? el('span', { class: 'pr-tag ok' }, 'approved') : null,
+            pr.reviewDecision === 'CHANGES_REQUESTED'
+                ? el('span', { class: 'pr-tag bad' }, 'changes requested') : null,
+        ));
+    }
+
+    return el('article', { class: 'wsrow', 'data-kind': w.kind },
+        el('div', { class: 'wsrow-head' },
+            el('span', { class: 'ws-name' }, w.name),
+            w.kind === 'gone'
+                ? el('span', { class: 'ws-note' }, 'no working directory left')
+                : el('span', { class: 'ws-branch', title: w.dir || '' },
+                    g.branch || (g.detached ? 'detached HEAD' : '—')),
+            el('span', { class: 'wsrow-signals' }, signals),
+        ),
+        showFiles && g.sample ? el('ul', { class: 'ws-files' },
+            g.sample.map(f => el('li', {},
+                el('span', { class: 'fstat', 'data-s': f.status }, statusWord(f.status)),
+                el('span', { class: 'fpath' }, f.path))),
+            g.files > g.sample.length
+                ? el('li', { class: 'more' }, `and ${g.files - g.sample.length} more`)
+                : null,
+        ) : null,
+        el('div', { class: 'ws-sessions' },
+            w.sessions.map(s => dashSession(s)),
+            w.moreSessions
+                ? el('span', { class: 'ws-more' }, `+${w.moreSessions} older`)
+                : null,
+        ),
+    );
+}
+
+function dashSession(s) {
+    const running = s.runner && (s.runner.state === 'busy' || s.runner.state === 'starting');
+    return el('button', {
+        class: 'schip',
+        type: 'button',
+        'data-state': running ? 'running' : (s.active ? 'active' : 'idle'),
+        title: `${s.title}\n${s.userMessages} turns · last message ${ago(s.lastTs)} ago`,
+        onclick: () => { showDash(false); openSession(s.sessionId); },
+    },
+        el('span', { class: 'schip-dot' }),
+        el('span', { class: 'schip-title' }, clip(s.title, 40)),
+        el('span', { class: 'schip-ago' }, ago(s.lastTs)),
+    );
+}
+
+function dirtyTitle(g) {
+    const bits = [];
+    if (g.staged) bits.push(`${g.staged} staged`);
+    if (g.unstaged) bits.push(`${g.unstaged} modified`);
+    if (g.untracked) bits.push(`${g.untracked} untracked`);
+    if (g.conflicts) bits.push(`${g.conflicts} conflicted`);
+    return bits.join(' · ') + ' — click to list them';
+}
+
+function statusWord(xy) {
+    if (xy === '??') return 'new';
+    if (xy === 'UU') return 'conflict';
+    if (xy[0] === 'D' || xy[1] === 'D') return 'deleted';
+    if (xy[0] === 'A') return 'added';
+    if (xy[0] === 'R' || xy[1] === 'R') return 'renamed';
+    return xy[0] !== '.' ? 'staged' : 'modified';
+}
+
+// ── notifications ────────────────────────────────────────────────────────
+//
+// A turn can run for minutes, and the point of leaving one going is that you go
+// and do something else meanwhile. The rail already says what happened — but
+// only once you look at it. This is the part that reaches you when you are not
+// looking.
+//
+// It lives in the page rather than in the Electron shell, which has two
+// consequences worth knowing. The good one: the same behaviour comes with the
+// browser UI, and a sound has nowhere else to come from anyway. The bad one: a
+// window that is closed hears nothing, because the only subscriber to the
+// bridge's events went with it. Fixing that means the shell holding an
+// EventSource of its own — see docs/plans/02-notifications-and-shell.md.
+
+const NOTIFY = {
+    // Under this and you were almost certainly still sitting in front of it.
+    minTurnMs: 30_000,
+    // One per session per this, so a draining queue is not a stack of toasts.
+    perSessionMs: 10_000,
+};
+
+const notify = {
+    desktop: localStorage.getItem('notifyDesktop') !== '0',
+    sound: localStorage.getItem('notifySound') !== '0',
+    sw: null,           // the worker registration, once it is ready — see sw.js
+    fired: new Map(),   // sessionId -> when something last fired for it
+    busy: new Map(),    // sessionId -> when its running turn started
+    audio: null,
+};
+
+/**
+ * How long the turn kept somebody waiting, measured here rather than taken
+ * from the result.
+ *
+ * The result's own duration is usually the same number — measured against a
+ * one-minute turn the two agreed to within 10ms. But it is assembled in
+ * runner.js as `duration_ms || duration_api_ms`, and that second field is API
+ * time only, so a CLI that ever omits the first quietly starts reporting a
+ * fraction of the wall clock. Deciding "long enough to have walked away from"
+ * on a number that can change meaning is not worth the coupling.
+ *
+ * The bridge stamps `busySince` on every status it broadcasts, so this app's
+ * own measure is already on the wire. Keep the last one seen per session and
+ * subtract when the turn lands; the reported duration is the fallback, for a
+ * window that opened after the turn had already started.
+ */
+function noteRunner(s) {
+    if (s.busySince) notify.busy.set(s.sessionId, s.busySince);
+}
+
+function waitedMs(r) {
+    const started = notify.busy.get(r.sessionId);
+    notify.busy.delete(r.sessionId);
+    return started ? Date.now() - started : (r.durationMs || 0);
+}
+
+const notifyPermission = () =>
+    (typeof Notification === 'undefined' ? 'unsupported' : Notification.permission);
+
+/**
+ * Whether a finished turn is worth interrupting somebody for.
+ *
+ * Being strict here is the whole game: notifications that fire too often get
+ * switched off, and then the one that mattered is lost with them.
+ *
+ *   - A turn that ended badly always counts. Every other kind of ending you
+ *     find out about by waiting; this one leaves you waiting forever.
+ *   - Nothing is said about the session you are looking at in a focused
+ *     window. You watched it land.
+ *   - Half a minute is the line between a turn you sat through and one you
+ *     walked away from.
+ *   - At most one per session per ten seconds, whatever the reason.
+ *
+ * Returns false for a normal finish, true for a bad one, null for silence.
+ */
+function turnWorthSaying(r, waited) {
+    const bad = Boolean(r.isError);
+    if (!bad) {
+        const watching = document.hasFocus()
+            && state.current && state.current.sessionId === r.sessionId;
+        if (watching || waited < NOTIFY.minTurnMs) return null;
+    }
+    if (!allowedNow(r.sessionId)) return null;
+    return bad;
+}
+
+function allowedNow(sessionId) {
+    const last = notify.fired.get(sessionId) || 0;
+    if (Date.now() - last < NOTIFY.perSessionMs) return false;
+    notify.fired.set(sessionId, Date.now());
+    return true;
+}
+
+const sessionTitle = (id) => {
+    const row = state.sessions.find(s => s.sessionId === id);
+    return (row && row.title) || 'A session';
+};
+
+function announceTurn(r) {
+    // Read before the decision either way: the stamp has to be cleared whether
+    // or not this one gets said out loud, or the next turn inherits it.
+    const waited = waitedMs(r);
+    const bad = turnWorthSaying(r, waited);
+    if (bad === null) return;
+    announce(
+        `${clip(sessionTitle(r.sessionId), 60)} — ${bad ? 'turn failed' : 'finished'}`,
+        bad ? clip(r.detail || 'The turn ended with an error.', 160)
+            : `Ran for ${dur(waited)}.`,
+        bad ? 'fail' : 'done', r.sessionId,
+    );
+}
+
+// A send that never became a turn: the session is finished in the sense that
+// matters, because nothing more is coming and nobody is going to be told. The
+// composer's toast covers the window that did the sending — this covers the
+// queued message you walked away from.
+function announceSendFailure(f) {
+    const watching = document.hasFocus()
+        && state.current && state.current.sessionId === f.sessionId;
+    if (watching || !allowedNow(f.sessionId)) return;
+    announce(
+        `${clip(sessionTitle(f.sessionId), 60)} — could not run`,
+        clip(f.message || 'The message never reached Claude.', 160),
+        'fail', f.sessionId,
+    );
+}
+
+/**
+ * A blocked turn, said out loud.
+ *
+ * Three things arrive down this channel and only one is a permission — see the
+ * approvals section for the vocabulary. What they share is the thing that
+ * matters here: the turn does not move until you answer, so unlike a finished
+ * turn there is no duration to wait for and nothing to be gained by holding
+ * back. If you are not looking at the card, you want to know.
+ *
+ * A tool and a plan get two buttons, because yes and no are the whole answer
+ * for a tool and are approve-or-keep-planning for a plan. A question gets
+ * none: its answer is a choice among options that will not fit on a toast, so
+ * it can only invite you to come and read it.
+ */
+function announceAsk(p) {
+    const watching = document.hasFocus()
+        && state.current && state.current.sessionId === p.sessionId;
+    if (watching) return;
+
+    const kind = p.kind || 'tool';
+    const head = ASK_TITLE[kind] || `${p.displayName} needs permission`;
+    // Deliberately not gated on allowedNow: the toast carries a tag, so a
+    // second ask replaces the first rather than stacking, and suppressing it
+    // would leave the old one on screen offering to answer a dead request.
+    // Only the noise is rationed, below.
+    showAsk(`${clip(sessionTitle(p.sessionId), 60)} — ${head}`, askBody(p, kind), p, kind);
+    if (allowedNow(p.sessionId)) chime('ask');
+}
+
+const ASK_TITLE = {
+    plan: 'a plan to approve',
+    question: 'a question for you',
+};
+
+function askBody(p, kind) {
+    if (kind === 'plan') {
+        return clip((p.input && p.input.plan) || p.description || 'A plan is ready.', 160);
+    }
+    if (kind === 'question') {
+        const qs = (p.input && p.input.questions) || [];
+        return clip(qs.length ? qs[0].question : 'A question is waiting.', 160);
+    }
+    return clip(toolSummary({ name: p.tool, input: p.input }) || p.description || '', 160);
+}
+
+const ASK_ACTIONS = {
+    tool: [{ action: 'allow', title: 'Allow' }, { action: 'deny', title: 'Deny' }],
+    plan: [{ action: 'allow', title: 'Approve' }, { action: 'deny', title: 'Keep planning' }],
+    question: [],
+};
+
+/**
+ * Shown through the service-worker registration rather than `new
+ * Notification`, because that is the only kind the platform will put buttons
+ * on. With no worker — registration failed, or the browser has none — this
+ * falls back to a plain notification, which still says what is waiting and
+ * still opens the card when clicked. Only the buttons are lost.
+ */
+function showAsk(title, body, p, kind) {
+    if (!notify.desktop || notifyPermission() !== 'granted') return;
+    const opts = {
+        body,
+        tag: askTag(p.sessionId),
+        silent: true,
+        requireInteraction: true,   // a blocked turn should not time out on screen
+        data: { sessionId: p.sessionId, requestId: p.requestId },
+        actions: ASK_ACTIONS[kind] || [],
+    };
+    if (notify.sw) {
+        notify.sw.showNotification(title, opts).catch(() => {});
+        return;
+    }
+    announce(title, body, null, p.sessionId);
+}
+
+const askTag = (sessionId) => `claude-ask:${sessionId}`;
+
+/**
+ * Take the toast down once the ask is no longer waiting — answered in a
+ * window, answered from another toast, or expired into an auto-deny. A
+ * notification offering to allow something that has already been decided is
+ * worse than no notification at all.
+ */
+function clearAsk(sessionId) {
+    if (!notify.sw) return;
+    notify.sw.getNotifications({ tag: askTag(sessionId) })
+        .then(list => list.forEach(n => n.close()))
+        .catch(() => {});
+}
+
+function announce(title, body, tone, sessionId) {
+    chime(tone);
+    if (!notify.desktop || notifyPermission() !== 'granted') return;
+    let n;
+    try {
+        n = new Notification(title, {
+            body,
+            // A second one for the same session replaces the first rather than
+            // piling up behind it.
+            tag: sessionId ? `claude-session:${sessionId}` : 'claude-session',
+            // chime() is the only thing here allowed to make a noise, so that
+            // the sound checkbox means what it says.
+            silent: true,
+        });
+    } catch { return; /* some engines expose Notification but refuse `new` */ }
+    n.onclick = () => {
+        // Raising the window is the shell's job — a renderer cannot get past
+        // the Windows foreground lock on its own — so ask it if it is there.
+        // In a browser tab it is not, and window.focus() is what that
+        // environment gives us; it works from a notification click, which is
+        // a user gesture.
+        if (window.claudeShell) window.claudeShell.revealWindow();
+        else window.focus();
+        if (sessionId) openSession(sessionId);
+        n.close();
+    };
+}
+
+/**
+ * Three sounds, because they mean three different things and the whole point
+ * of a sound is to be understood without looking.
+ *
+ *   done  two notes up — finished, nothing wanted from you.
+ *   fail  one flat low note — over, and it went wrong.
+ *   ask   two notes on the same pitch, like a knock. Something is waiting on
+ *         you, and repetition rather than melody is what reads as a request.
+ *
+ * Synthesised rather than shipped as a file: it is a few oscillators' worth of
+ * code against binary assets in a repo that has none, and it keeps the sounds
+ * tunable in the same place as everything else.
+ *
+ * Short and quiet on purpose. This fires in a room where somebody is working.
+ * An unrecognised tone is silence, so a caller that has already made its own
+ * noise can pass none.
+ */
+const CHIME = {
+    done: [[587.33, 0, 0.16, 0.11], [880, 0.11, 0.34, 0.1]],   // D5 → A5
+    fail: [[311.13, 0, 0.44, 0.09]],                            // E♭4, alone
+    ask: [[698.46, 0, 0.11, 0.1], [698.46, 0.17, 0.22, 0.1]],   // F5, twice
+};
+
+function chime(tone) {
+    if (!notify.sound) return;
+    const notes = CHIME[tone];
+    if (!notes) return;
+    const ctx = audioContext();
+    if (!ctx) return;
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+    const t0 = ctx.currentTime + 0.01;
+    for (const [hz, at, len, peak] of notes) {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = hz;
+        const s = t0 + at;
+        // Ramped, not switched: a square-edged gain change is a click.
+        gain.gain.setValueAtTime(0.0001, s);
+        gain.gain.exponentialRampToValueAtTime(peak, s + 0.014);
+        gain.gain.exponentialRampToValueAtTime(0.0001, s + len);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(s);
+        osc.stop(s + len + 0.03);
+    }
+}
+
+function audioContext() {
+    if (notify.audio) return notify.audio;
+    const Ctor = window.AudioContext || window.webkitAudioContext;
+    if (!Ctor) return null;
+    try { notify.audio = new Ctor(); } catch { return null; }
+    return notify.audio;
+}
+
+// A context built before the page has been touched starts suspended and stays
+// that way, so the first chime after a fresh load would be silent. Build it on
+// the first interaction of any kind instead — including, below, the click that
+// turns the sound on.
+function wakeAudio() {
+    const ctx = audioContext();
+    if (ctx && ctx.state === 'suspended') ctx.resume().catch(() => {});
+}
+for (const type of ['pointerdown', 'keydown']) {
+    window.addEventListener(type, () => { if (notify.sound) wakeAudio(); }, { once: true });
+}
+
+// ── the worker that carries the buttons ──────────────────────────────────
+//
+// Registered for one capability — actions on a notification — and holding no
+// cache and no fetch handler, so it changes nothing else about how the page
+// loads. If it fails to register, asks fall back to a plain notification with
+// no buttons; everything else carries on.
+
+async function registerWorker() {
+    if (!('serviceWorker' in navigator)) return;
+    try {
+        await navigator.serviceWorker.register('./sw.js');
+        notify.sw = await navigator.serviceWorker.ready;
+    } catch { /* no buttons, then — showAsk falls back */ }
+}
+
+// The worker cannot open a session itself; it can only say which one a click
+// was about. Raising the window is the shell's job, and the preload bridge for
+// that lives here rather than there.
+navigator.serviceWorker?.addEventListener('message', (e) => {
+    const msg = e.data || {};
+    if (msg.type !== 'reveal-session') return;
+    if (window.claudeShell) window.claudeShell.revealWindow();
+    if (msg.sessionId) openSession(msg.sessionId);
+});
+
+/**
+ * `#/session/<id>` on load, which is how a click that had to open a window
+ * gets to the right conversation. Deliberately the same shape plan 02 gives
+ * the deep links, so a `claude-sessions://` handler can route into the page
+ * without inventing a second vocabulary.
+ */
+function openFromHash() {
+    const m = /^#\/session\/([0-9a-f-]{8,})$/i.exec(location.hash || '');
+    if (!m) return false;
+    history.replaceState(null, '', location.pathname);   // don't reopen on refresh
+    openSession(m[1]);
+    return true;
+}
+
+// ── the bell ─────────────────────────────────────────────────────────────
+
+const NOTE = {
+    unsupported: 'This browser has no desktop notifications, so the sound is all '
+        + 'there is here.',
+    denied: 'The browser is blocking notifications for this page. Allow them in '
+        + 'its site settings and this will come back.',
+    rules: 'A plan, a question or a permission always speaks up — the turn is '
+        + 'stopped until you answer. A turn finishing only does if it ran over '
+        + '30 seconds. Never for the session already in front of you.',
+};
+
+function renderBell() {
+    const perm = notifyPermission();
+    const desktopOn = notify.desktop && perm === 'granted';
+    // Struck through only when nothing at all would fire.
+    dom.btnBell.dataset.on = String(desktopOn || notify.sound);
+    dom.btnBell.title = desktopOn || notify.sound
+        ? 'Notifications on' : 'Notifications off';
+
+    // The checkbox shows what will actually happen, not what was asked for: a
+    // ticked box that the browser is quietly overruling is worse than an
+    // unticked one, and unticked is also what invites the click that asks.
+    dom.optDesktop.checked = desktopOn;
+    dom.optDesktop.disabled = perm === 'denied' || perm === 'unsupported';
+    dom.optSound.checked = notify.sound;
+
+    const stuck = perm === 'denied' ? NOTE.denied : perm === 'unsupported' ? NOTE.unsupported : '';
+    dom.bellNote.textContent = stuck || NOTE.rules;
+    dom.bellNote.className = 'bell-note' + (stuck ? ' warn' : '');
+}
+
+function showBell(on) {
+    dom.bellMenu.hidden = !on;
+    dom.btnBell.setAttribute('aria-expanded', String(on));
+    if (on) renderBell();
+}
+
+dom.btnBell.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showBell(dom.bellMenu.hidden);
+});
+
+dom.optDesktop.addEventListener('change', async () => {
+    notify.desktop = dom.optDesktop.checked;
+    localStorage.setItem('notifyDesktop', notify.desktop ? '1' : '0');
+    // Asking here and nowhere else is deliberate: a permission prompt no
+    // gesture invited is the one people press Block on, and some browsers
+    // refuse to show it at all.
+    if (notify.desktop && notifyPermission() === 'default') {
+        try { await Notification.requestPermission(); } catch { /* renders as denied */ }
+    }
+    renderBell();
+});
+
+dom.optSound.addEventListener('change', () => {
+    notify.sound = dom.optSound.checked;
+    localStorage.setItem('notifySound', notify.sound ? '1' : '0');
+    // This click is a gesture, which is what an AudioContext has been waiting
+    // for if the page has not been touched yet.
+    if (notify.sound) { wakeAudio(); chime('done'); }
+    renderBell();
+});
+
+// Worth having: Focus Assist and Do Not Disturb drop notifications without a
+// word, so "did that work" is otherwise unanswerable until a turn ends.
+dom.bellTry.addEventListener('click', () => {
+    announce('Claude Sessions', 'This is what a finished turn will look like.', 'done', null);
+    if (!notify.sound && (!notify.desktop || notifyPermission() !== 'granted')) {
+        toast('Both switches are off, so nothing would fire.', 'warn');
+    }
+});
+
+document.addEventListener('click', (e) => {
+    if (!dom.bellMenu.hidden && !e.target.closest('.bell-wrap')) showBell(false);
+});
+
 // ── streaming ────────────────────────────────────────────────────────────
 
 function connect() {
@@ -1797,6 +2741,7 @@ function connect() {
 
     es.addEventListener('runner-status', (e) => {
         const s = JSON.parse(e.data);
+        noteRunner(s);   // when this turn started, for the notification rules
         if (state.current && s.sessionId === state.current.sessionId) applyRunner(s);
         // The rail's own copy, so a rebuild from the held order draws what the
         // patch below already put on screen rather than reverting it.
@@ -1808,6 +2753,9 @@ function connect() {
 
     es.addEventListener('permission-request', (e) => {
         const p = JSON.parse(e.data);
+        // Ahead of the early return, as with turn-complete: the asks worth
+        // interrupting somebody for are the ones not already on screen.
+        announceAsk(p);
         if (!state.current || p.sessionId !== state.current.sessionId) return;
         state.ask = p;
         renderAsk();
@@ -1815,6 +2763,9 @@ function connect() {
 
     es.addEventListener('permission-resolved', (e) => {
         const p = JSON.parse(e.data);
+        // However it was answered — here, in another window, from the toast
+        // itself, or by the two-minute auto-deny — the toast has to go.
+        clearAsk(p.sessionId);
         if (!state.ask || state.ask.requestId !== p.requestId) return;
         resolveAsk(p.outcome);
     });
@@ -1827,13 +2778,20 @@ function connect() {
     es.addEventListener('turn-complete', (e) => {
         const r = JSON.parse(e.data);
         state.unsent.delete(r.sessionId);   // it is in the transcript now
+        // Ahead of the early return below, which drops every session but the
+        // open one — and those are precisely the ones worth being told about.
+        announceTurn(r);
         if (!state.current || r.sessionId !== state.current.sessionId) return;
         // The dev servers a turn started only become visible once it finishes.
         loadChannels();
         loadAgents();
     });
 
-    es.addEventListener('send-failed', (e) => handleSendFailure(JSON.parse(e.data)));
+    es.addEventListener('send-failed', (e) => {
+        const f = JSON.parse(e.data);
+        announceSendFailure(f);
+        handleSendFailure(f);
+    });
 
     es.addEventListener('session-forked', (e) => {
         const { from, to } = JSON.parse(e.data);
@@ -1882,6 +2840,18 @@ function applyRunner(s) {
         renderAsk();
     }
 
+    // Approving a plan changes the mode out from under the selector, so a change
+    // the bridge reports outranks a mode picked here and not yet sent: what the
+    // work continues in was just decided, by the same person who would have made
+    // that choice anyway. Learning a session's mode for the first time is not
+    // such a change, or opening a session would drop the choice made for it.
+    if (s && s.permissionMode) {
+        const seen = state.runnerMode.has(s.sessionId);
+        const moved = state.runnerMode.get(s.sessionId) !== s.permissionMode;
+        state.runnerMode.set(s.sessionId, s.permissionMode);
+        if (seen && moved) state.permChoice.delete(s.sessionId);
+    }
+
     dom.statusLine.dataset.state = s
         ? (s.state === 'error' ? 'error' : ask ? 'ask' : retrying ? 'stalled' : busy ? 'busy' : 'idle')
         : 'idle';
@@ -1910,7 +2880,31 @@ function applyRunner(s) {
     if (busy && s.busySince) {
         state.busyTimer = setInterval(() => paintStatus(state.runner), 1000);
     }
+    paintPerm();
     paintStatus(s);
+}
+
+/**
+ * Which permission mode the composer shows for the session it is pointing at.
+ *
+ * One control is shared by every session, so it has to be set on every open
+ * rather than left where it was: inheriting the last session's value is how a
+ * conversation gets sent in a mode that was picked for a different one, and
+ * `Pool.ensure` then restarts its process to honour it. In order of authority —
+ * a choice made here and not yet sent, the mode the live process is really in,
+ * and the mode the transcript was last seen in.
+ */
+function paintPerm() {
+    const id = state.current && state.current.sessionId;
+    const mode = (id && state.permChoice.get(id))
+        || (state.runner && state.runner.permissionMode)
+        || (state.current && state.current.permissionMode)
+        || DEFAULT_PERM;
+    // A mode this build does not offer — an older CLI's vocabulary, or a newer
+    // one's — must not leave the control blank, because "" is what would then be
+    // sent. Fall back rather than inventing an option for it.
+    const known = [...dom.perm.options].some(o => o.value === mode);
+    dom.perm.value = known ? mode : DEFAULT_PERM;
 }
 
 function paintStatus(s) {
@@ -2687,6 +3681,12 @@ dom.newGo.addEventListener('click', startNew);
 dom.dbStatus.addEventListener('click', refreshDevBrowser);
 dom.btnBack.addEventListener('click', closeAgent);
 
+// A mode is picked for the conversation in front of you, so it is remembered
+// against that session rather than against the window — see paintPerm.
+dom.perm.addEventListener('change', () => {
+    if (state.current) state.permChoice.set(state.current.sessionId, dom.perm.value);
+});
+
 dom.input.addEventListener('input', autoGrow);
 dom.input.addEventListener('input', debounce(() => {
     if (state.current) saveDraft(state.current.sessionId, dom.input.value);
@@ -2786,10 +3786,15 @@ for (const n of dom.delScrim.querySelectorAll('[data-close-del]')) {
 }
 dom.delScrim.addEventListener('click', (e) => { if (e.target === dom.delScrim) closeDelete(); });
 
+dom.btnDash.addEventListener('click', () => showDash(!state.dash.open));
+dom.dashRefresh.addEventListener('click', () => loadDash({ refresh: true }));
+
 document.addEventListener('keydown', (e) => {
     // The confirm sits over the new-session dialog, so it answers Escape first.
+    if (e.key === 'Escape' && !dom.bellMenu.hidden) { showBell(false); dom.btnBell.focus(); return; }
     if (e.key === 'Escape' && !dom.delScrim.hidden) { closeDelete(); return; }
     if (e.key === 'Escape' && !dom.newScrim.hidden) { closeNew(); return; }
+    if (e.key === 'Escape' && state.dash.open) { showDash(false); return; }
     if (e.key === 'Escape' && state.agent) { closeAgent(); return; }
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); dom.search.focus(); }
     if ((e.ctrlKey || e.metaKey) && e.key === 'n') { e.preventDefault(); openNew(); }
@@ -2818,6 +3823,9 @@ function debounce(fn, ms) {
 connect();
 loadSessions();
 markInstance();
+renderBell();
+registerWorker();
+openFromHash();
 refreshDevBrowser();
 // Restore the pane before the first session lands, so it opens with the window
 // already the right shape rather than growing one out from under the transcript.
@@ -2829,6 +3837,13 @@ setInterval(refreshDevBrowser, 20_000);
 setInterval(() => {
     if (state.current && !dom.channels.querySelector('[data-arm="true"], .busy')) loadChannels();
 }, 25_000);
+
+// The count on the Dashboard button is the only thing that says there is
+// anything to look at, so it is read once at startup — a few seconds in, where
+// it cannot slow the first paint of the session list — and then only while the
+// board is actually on screen.
+setTimeout(() => loadDash(), 3000);
+setInterval(() => { if (state.dash.open) loadDash(); }, 60_000);
 
 // A running subagent writes to its own file, which the parent transcript says
 // nothing about — so the only way its activity line moves is to go and look.

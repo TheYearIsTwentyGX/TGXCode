@@ -20,6 +20,7 @@ const { RunnerPool, PERMISSION_MODES } = require('./runner');
 const { Flags } = require('./flags');
 const devbrowser = require('./devbrowser');
 const devservers = require('./devservers');
+const dashboard = require('./dashboard');
 const { openInExplorer } = require('./explorer');
 const { TerminalPool } = require('./terminal');
 
@@ -281,6 +282,28 @@ async function api(req, res, url, pathname) {
         return send(res, 200, { sessions, ready: index.ready });
     }
 
+    // Work in flight: uncommitted changes and unmerged pull requests, by project.
+    // Shells out to git and gh, so it is not on the session list's path — the rail
+    // must not wait on GitHub — and everything it reads is cached behind it.
+    if (pathname === '/api/dashboard' && req.method === 'GET') {
+        const data = await dashboard.build(index, {
+            includeTest: cfg.IS_DEV,
+            refresh: url.searchParams.get('refresh') === '1',
+        });
+        // The same live status the rail carries, so a row can say that one of
+        // its sessions is working right now rather than looking abandoned.
+        const statuses = pool.statuses();
+        for (const p of data.projects) {
+            for (const w of p.workspaces) {
+                for (const s of w.sessions) {
+                    const st = statuses[s.sessionId];
+                    if (st) s.runner = { state: st.state, activity: st.activity, queued: st.queued };
+                }
+            }
+        }
+        return send(res, 200, data);
+    }
+
     if (pathname === '/api/sessions' && req.method === 'POST') {
         const body = await readJson(req);
         const cwd = body.cwd && String(body.cwd);
@@ -479,8 +502,17 @@ async function api(req, res, url, pathname) {
             if (!['allow', 'allow-always', 'deny'].includes(decision)) {
                 return send(res, 400, { error: 'decision must be allow, allow-always or deny' });
             }
-            const out = r.answerPermission(String(body.requestId || ''), decision,
-                body.updatedInput && typeof body.updatedInput === 'object' ? body.updatedInput : null);
+            // A plan and a question answer over the same route: the extras are
+            // what make them more than yes or no — which mode an approved plan
+            // continues in, what to tell the model when it is turned down, and
+            // the answers themselves.
+            const out = r.answerPermission(String(body.requestId || ''), decision, {
+                updatedInput: body.updatedInput && typeof body.updatedInput === 'object'
+                    ? body.updatedInput : null,
+                answers: body.answers && typeof body.answers === 'object' ? body.answers : null,
+                feedback: typeof body.feedback === 'string' ? body.feedback : '',
+                mode: PERMISSION_MODES.includes(body.mode) ? body.mode : null,
+            });
             // 409 rather than 500: losing the race with another window is an
             // ordinary outcome, not a failure.
             return send(res, out.ok ? 200 : 409, out);
@@ -658,8 +690,11 @@ async function api(req, res, url, pathname) {
     return send(res, 404, { error: 'no such endpoint', pathname });
 }
 
+// An unrecognised mode falls back to the app's default rather than erroring: the
+// mode is a knob on a request that has real work in it, and refusing the whole
+// send over a typo in one field loses the message.
 function normalizeMode(mode) {
-    return PERMISSION_MODES.includes(mode) ? mode : 'acceptEdits';
+    return PERMISSION_MODES.includes(mode) ? mode : 'auto';
 }
 
 const STOP_STATUS = { protected: 403, 'no-owner': 409, 'not-permitted': 403 };

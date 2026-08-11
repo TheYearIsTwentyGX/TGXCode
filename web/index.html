@@ -27,6 +27,52 @@
 
     <span class="bar-spacer"></span>
 
+    <!-- Work that is finished with the conversation but not with you: changes
+         nobody committed, pull requests nobody merged. -->
+    <button id="btn-dash" class="bar-btn" type="button" aria-pressed="false"
+            title="Uncommitted changes and open pull requests, by project">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <rect x="3.2" y="4.2" width="7" height="7" rx="2" stroke="currentColor" stroke-width="1.7"/>
+        <rect x="13.8" y="4.2" width="7" height="11.5" rx="2" stroke="currentColor" stroke-width="1.7"/>
+        <rect x="3.2" y="14" width="7" height="5.8" rx="2" stroke="currentColor" stroke-width="1.7"/>
+      </svg>
+      <span>Dashboard</span>
+      <span id="dash-badge" class="bar-badge" hidden></span>
+    </button>
+
+    <!-- What reaches you when the window is not the thing you are looking at.
+         The rules it obeys are in announceTurn(); the note inside says them out
+         loud, because a notification you cannot predict is one you switch off. -->
+    <div class="bell-wrap">
+      <button id="btn-bell" class="bell" type="button" data-on="false"
+              aria-haspopup="dialog" aria-expanded="false" aria-controls="bell-menu"
+              title="Notifications">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M6.6 10a5.4 5.4 0 0 1 10.8 0c0 3.9 1.6 5.4 1.6 5.4H5s1.6-1.5 1.6-5.4Z"
+                stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+          <path d="M10 18.3a2.2 2.2 0 0 0 4 0" stroke="currentColor" stroke-width="1.7"
+                stroke-linecap="round"/>
+          <path class="slash" d="M4.6 4.6 19.4 19.4" stroke="currentColor"
+                stroke-width="1.7" stroke-linecap="round"/>
+        </svg>
+      </button>
+
+      <div id="bell-menu" class="bell-menu" role="dialog"
+           aria-label="Notification settings" hidden>
+        <div class="bell-head">When something wants you</div>
+        <label class="check">
+          <input id="opt-desktop" type="checkbox">
+          <span>Show a desktop notification</span>
+        </label>
+        <label class="check">
+          <input id="opt-sound" type="checkbox">
+          <span>Play a sound</span>
+        </label>
+        <div id="bell-note" class="bell-note"></div>
+        <button id="bell-try" class="bell-try" type="button">Try it</button>
+      </div>
+    </div>
+
     <button id="db-status" class="db-status" data-up="false" type="button"
             title="DevBrowser connection">
       <span class="led"></span><span id="db-label">DevBrowser</span>
@@ -161,7 +207,10 @@
             <label for="perm">Permissions</label>
             <select id="perm" aria-label="Permission mode">
               <option value="acceptEdits">acceptEdits</option>
-              <option value="auto">auto</option>
+              <!-- The default: it is the mode these sessions run in when you
+                   drive them from a terminal, so a conversation continued here
+                   behaves the way the same conversation would there. -->
+              <option value="auto" selected>auto</option>
               <!-- Worth having now that a prompt is a real question rather than
                    a silent denial: manual asks about everything. -->
               <option value="manual">manual</option>
@@ -192,6 +241,21 @@
         <div id="term-body" class="term-body"></div>
       </section>
     </div>
+
+    <!-- The board of unfinished work. Grouped by project, a row per directory,
+         because a worktree is what holds uncommitted changes — sessions share
+         one, and the sessions are how you get back to the conversation. -->
+    <section id="dash" class="dash" hidden aria-label="Work in flight">
+      <header class="dash-head">
+        <div>
+          <h1 class="dash-title">Work in flight</h1>
+          <p id="dash-sub" class="dash-sub">Uncommitted changes, and pull requests
+            that are open but not merged.</p>
+        </div>
+        <button id="dash-refresh" class="dash-btn" type="button">Refresh</button>
+      </header>
+      <div id="dash-body" class="dash-body"></div>
+    </section>
 
     <div id="placeholder" class="empty">
       <h2>No session selected</h2>
@@ -256,7 +320,10 @@
         <option value="acceptEdits">acceptEdits</option>
         <option value="auto">auto</option>
         <option value="manual">manual</option>
-        <option value="plan">plan</option>
+        <!-- Default here, unlike the composer: the first message of a session is
+             the one written with the least idea of what it will touch, so it is
+             worth reading a plan back before anything is changed. -->
+        <option value="plan" selected>plan</option>
         <option value="dontAsk">dontAsk</option>
         <option value="bypassPermissions">bypassPermissions</option>
       </select>

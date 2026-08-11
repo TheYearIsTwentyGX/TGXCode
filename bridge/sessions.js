@@ -18,7 +18,7 @@ const { scanMeta, parseLines, buildEvents, readSubagentIndex,
 const CACHE_FILE = path.join(CACHE_DIR, 'index.json');
 // Bump whenever scanMeta's output shape or derivation changes, so a stale cache
 // is discarded rather than silently serving metadata from the old rules.
-const CACHE_VERSION = 8;
+const CACHE_VERSION = 9;
 
 // A transcript touched this recently is treated as live.
 const ACTIVE_WINDOW_MS = 90_000;
@@ -243,6 +243,9 @@ class SessionIndex extends EventEmitter {
             worktree: m.worktree,
             pr: m.pr,
             model: m.model,
+            // What the composer should open on for a session with no process of
+            // its own — the mode it was last seen running in, not the app default.
+            permissionMode: m.permissionMode,
             version: m.version,
             sessionKind: m.sessionKind,
             userMessages: m.userMessages,
