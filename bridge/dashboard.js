@@ -27,6 +27,8 @@ const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
 
+const { cached, mapLimit } = require('./memo');
+
 // Working trees are local and cheap; GitHub is neither.
 const STATUS_TTL_MS = 15_000;
 const PR_TTL_MS = 60_000;
@@ -72,38 +74,6 @@ function run(cmd, args, { cwd, timeout = GIT_TIMEOUT_MS } = {}) {
                 code: err ? (err.code ?? 1) : 0,
             }));
     });
-}
-
-/**
- * Memoise a promise-returning call, sharing one in-flight call between callers.
- * Ten worktrees of the same repository ask for its PRs at the same instant, and
- * that has to be one request to GitHub rather than ten.
- */
-function cached(store, key, ttl, produce) {
-    const hit = store.get(key);
-    if (hit) {
-        if (hit.pending) return hit.pending;
-        if (Date.now() - hit.at < ttl) return Promise.resolve(hit.value);
-    }
-    const pending = produce().then(
-        (value) => { store.set(key, { value, at: Date.now() }); return value; },
-        (err) => { store.delete(key); throw err; },
-    );
-    store.set(key, { pending, at: 0 });
-    return pending;
-}
-
-async function mapLimit(items, limit, fn) {
-    const out = new Array(items.length);
-    let next = 0;
-    const worker = async () => {
-        while (next < items.length) {
-            const at = next++;
-            out[at] = await fn(items[at], at);
-        }
-    };
-    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-    return out;
 }
 
 const firstLine = (s) => String(s || '').trim().split('\n')[0] || '';

@@ -27,6 +27,20 @@
 
     <span class="bar-spacer"></span>
 
+    <!-- Every session that is running right now, on one screen. The rail is one
+         conversation at a time by design; this is the view for the afternoon
+         when five agents are working and one of them is stuck. -->
+    <button id="btn-live" class="bar-btn" type="button" aria-pressed="false"
+            title="Every session running right now (Ctrl+2)">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="12" cy="12" r="3.1" fill="currentColor"/>
+        <path d="M6.6 17.4a7.6 7.6 0 0 1 0-10.8M17.4 6.6a7.6 7.6 0 0 1 0 10.8"
+              stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+      </svg>
+      <span>Live</span>
+      <span id="live-badge" class="bar-badge" hidden></span>
+    </button>
+
     <!-- Work that is finished with the conversation but not with you: changes
          nobody committed, pull requests nobody merged. -->
     <button id="btn-dash" class="bar-btn" type="button" aria-pressed="false"
@@ -189,6 +203,15 @@
             <ol id="queue-list" class="queue-list" aria-label="Messages waiting to be sent"></ol>
           </div>
 
+          <!-- This session already has a process somewhere else, so sending from
+               here would put two writers on one transcript. Offered before
+               anything is sent, rather than caught afterwards by the error. -->
+          <div id="lock" class="lock" hidden>
+            <span id="lock-text" class="lock-text"></span>
+            <button id="lock-fork" class="lock-btn primary" type="button">Branch off a copy</button>
+            <button id="lock-anyway" class="lock-btn" type="button">Send anyway</button>
+          </div>
+
           <div class="input-row">
             <textarea id="input" rows="1" placeholder="Send a message to this session…"
                       aria-label="Message"></textarea>
@@ -255,6 +278,20 @@
         <button id="dash-refresh" class="dash-btn" type="button">Refresh</button>
       </header>
       <div id="dash-body" class="dash-body"></div>
+    </section>
+
+    <!-- One card per running session, needs-you first. Fed by a single SSE
+         `overview` event carrying state rather than transcript content, which is
+         what lets a screenful of sessions cost one payload and one timer. -->
+    <section id="live" class="live" hidden aria-label="Sessions running now">
+      <header class="live-head">
+        <div>
+          <h1 class="live-title">Live</h1>
+          <p id="live-sub" class="live-sub">Every session with a process, and what
+            it is waiting on.</p>
+        </div>
+      </header>
+      <div id="live-body" class="live-body"></div>
     </section>
 
     <div id="placeholder" class="empty">

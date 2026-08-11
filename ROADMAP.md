@@ -31,15 +31,15 @@ These come out of how the app already works, and every plan respects them.
 | 1 | [Permission prompts and real interrupt](docs/plans/01-permissions-and-interrupt.md) | Today "prompting means denied", so the only working modes are *edits only* or *no guardrails at all*. This is the difference between a viewer and a client. |
 | 2 | [Notifications, tray, and deep links](docs/plans/02-notifications-and-shell.md) | The premise of the app is watching sessions you aren't sitting in front of, and it currently cannot tell you anything. |
 | 3 | [Search](docs/plans/03-search.md) | 700 transcripts, and the only thing you can match on is the title and first prompt. |
-| 4 | [Liveness and the live-elsewhere lock](docs/plans/04-liveness-and-locking.md) | `~/.claude/sessions/*.json` is an authoritative registry of running sessions we aren't reading. It replaces an mtime guess and closes the two-writers hole. |
+| 4 | ~~[Liveness and the live-elsewhere lock](docs/plans/04-liveness-and-locking.md)~~ — **built** | `bridge/registry.js` reads `~/.claude/sessions/*.json` and verifies each pid against `/proc/<pid>/stat` field 22. Summaries carry `live` beside `active`; the rail has a third state and the composer offers the branch before anything is sent. |
 | 5 | [Usage and quota](docs/plans/05-usage-and-quota.md) | On a quota plan the question is "how much of my 5-hour window is left", and the answer is already flowing past us in `rate_limit_event`. |
 
 ## Tier 2 — makes long sessions and many sessions workable
 
 | | Plan | Why |
 |---|---|---|
-| 6 | [Multi-session dashboard](docs/plans/06-dashboard.md) | One-session-at-a-time is the wrong shape when five agents are running. |
-| 7 | [Transcript view: todos, error markers, virtualization](docs/plans/07-transcript-view.md) | Long sessions are slow to open and hard to navigate, and the todo list — the best summary of what an agent is doing — is buried in a collapsed block. |
+| 6 | ~~[Multi-session dashboard](docs/plans/06-dashboard.md)~~ — **built, as *Live*** | `bridge/overview.js` + the `Live` panel. Named *Live* because *Dashboard* was already the work-in-flight board (10). One SSE `overview` event, one timer, needs-you first, and a tool permission is answered from the card. |
+| 7 | [Transcript view: todos, error markers, virtualization](docs/plans/07-transcript-view.md) | Long sessions are slow to open and hard to navigate, and the todo list — the best summary of what an agent is doing — is buried in a collapsed block. Task progress is already read for the Live cards: `bridge/tasks.js` reads `~/.claude/tasks/<id>/`, which is the current list rather than something reconstructed from the transcript. |
 | 8 | [Branch from a turn](docs/plans/08-branch-from-turn.md) | Forking is already implemented end to end; it just isn't reachable from a point in history. |
 | 9 | [Composer](docs/plans/09-composer.md) | `@` files, `/` commands, images, a visible send queue, retry, snippets. |
 
@@ -69,6 +69,14 @@ work and the dashboard want a trustworthy answer to "is this session actually
 running." Then permissions, which is the largest single behaviour change.
 Notifications next because by then there are real events worth surfacing.
 Usage and search are independent of everything and can slot in anywhere.
+
+Of these, 01, 02 and 04 are done, and 06 was built on top of 04 — the dashboard
+was worth having only once "running" was read rather than guessed. **05 and 03
+are what is left of tier 1**, and both are independent of everything else.
+
+`GET /api/overview` now exists and is the thing the tray menu (02) and anything
+else wanting "what is happening right now" should read, rather than growing a
+second answer to the same question.
 
 ## Deliberately not doing
 

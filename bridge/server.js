@@ -16,11 +16,13 @@ const { randomUUID } = require('crypto');
 
 const cfg = require('./config');
 const { SessionIndex } = require('./sessions');
+const { SessionRegistry } = require('./registry');
 const { RunnerPool, PERMISSION_MODES } = require('./runner');
 const { Flags } = require('./flags');
 const devbrowser = require('./devbrowser');
 const devservers = require('./devservers');
 const dashboard = require('./dashboard');
+const overview = require('./overview');
 const { openInExplorer } = require('./explorer');
 const { TerminalPool } = require('./terminal');
 
@@ -29,8 +31,14 @@ const CLIENT_HEADER = 'x-claude-sessions-client';
 
 const flags = new Flags();
 const index = new SessionIndex(flags);
+const registry = new SessionRegistry();
 const pool = new RunnerPool();
 const terminals = new TerminalPool();
+
+// Which sessions are running, from Claude Code's own registry rather than from
+// how recently a file changed. The index works without it; every summary simply
+// carries `live: null` and the mtime window is all anyone has to go on.
+index.registry = registry;
 
 /**
  * @type {Map<string, {
@@ -61,10 +69,108 @@ function dropClient(id) {
     for (const sub of c.subs.values()) stopWatch(sub);
     stopAgentWatch(c);
     clients.delete(id);
+    // The last window watching the board closing is what stops its timer.
+    if (c.overview) syncBoard();
 }
 
 function stopWatch(sub) {
     if (sub.watcher) { clearInterval(sub.watcher); sub.watcher = null; }
+}
+
+// ---------------------------------------------------------------------------
+// The live board
+// ---------------------------------------------------------------------------
+//
+// One timer for every client watching it, not one per client and certainly not
+// one per session. It builds the payload once a second, and sends only when the
+// answer actually moved — a board of five idle sessions is silent.
+
+const OVERVIEW_MS = 1_000;
+
+const board = { timer: null, devTimer: null };
+
+function boardWatchers() {
+    return [...clients.values()].filter(c => c.overview);
+}
+
+/** Start or stop the tick to match how many people are looking. */
+function syncBoard() {
+    const watching = boardWatchers().length > 0;
+    if (watching && !board.timer) {
+        board.timer = setInterval(tickBoard, OVERVIEW_MS);
+        board.timer.unref();
+        // Port probes and a DevBrowser round trip: far too expensive for the
+        // tick, so it runs on its own slow cycle and the tick reads what it left.
+        // Half the cache's life, not all of it: at exactly the TTL every other
+        // pass lands on a still-warm entry and does nothing, which made chips
+        // twice as stale as the number they are supposed to obey.
+        board.devTimer = setInterval(tickDevServers, overview.DEVSERVER_TTL_MS / 2);
+        board.devTimer.unref();
+        tickDevServers();
+    } else if (!watching && board.timer) {
+        clearInterval(board.timer);
+        clearInterval(board.devTimer);
+        board.timer = null;
+        board.devTimer = null;
+    }
+}
+
+function buildBoard() {
+    return overview.build(index, pool, registry, { includeTest: cfg.IS_DEV });
+}
+
+/**
+ * Send the board to anyone who has not already got this exact answer.
+ *
+ * The "has anything changed" mark is per client, not global. A shared one meant
+ * a second window opening the board — which is sent the state directly, so that
+ * it is not looking at an empty grid — moved the mark for everybody, and the
+ * windows already watching were told nothing until the *next* change.
+ */
+function tickBoard() {
+    const watchers = boardWatchers();
+    if (!watchers.length) return;
+
+    // Built once however many windows are watching. That is the whole point of
+    // a summary channel.
+    const data = buildBoard();
+    const sig = signature(data);
+    for (const c of watchers) {
+        if (c.lastBoard === sig) continue;
+        c.lastBoard = sig;
+        sseSend(c, 'overview', data);
+    }
+}
+
+/**
+ * The payload with the parts that move on their own taken out, so that "did
+ * anything happen" is not answered by the clock. `at` changes on every build by
+ * definition, and `busySince` is a fixed instant the UI counts up from itself.
+ */
+function signature(data) {
+    return JSON.stringify(data, (k, v) => (k === 'at' ? 0 : v));
+}
+
+/**
+ * The board as it stands, to one client that has just asked for it.
+ *
+ * Sent directly rather than through the tick because a window opening the board
+ * should not watch an empty grid for up to a second, and because a second window
+ * joining a board that is already ticking would otherwise wait for something to
+ * change before it saw anything at all.
+ */
+function sendBoardNow(client) {
+    const data = buildBoard();
+    client.lastBoard = signature(data);   // so the next tick does not repeat it
+    sseSend(client, 'overview', data);
+}
+
+async function tickDevServers() {
+    if (!board.timer) return;
+    const ids = buildBoard().sessions.map(s => s.sessionId);
+    try {
+        if (await overview.refreshDevServers(index, ids)) tickBoard();
+    } catch { /* nothing here is worth failing a tick over */ }
 }
 
 function stopAgentWatch(client) {
@@ -192,7 +298,7 @@ async function api(req, res, url, pathname) {
             Connection: 'keep-alive',
             'X-Accel-Buffering': 'no',
         });
-        const client = { res, subs: new Map(), agent: null };
+        const client = { res, subs: new Map(), agent: null, overview: false };
         clients.set(id, client);
         sseSend(client, 'hello', { clientId: id, version: cfg.VERSION });
 
@@ -207,6 +313,16 @@ async function api(req, res, url, pathname) {
         const { clientId, sessionId, offset, agent } = body;
         if (!clients.has(clientId)) return send(res, 404, { error: 'unknown client' });
         const client = clients.get(clientId);
+
+        // The board is a separate follow from the conversation, and orthogonal to
+        // it: it stays up while you read one session, and the session keeps
+        // tailing while the board is on screen.
+        const wants = Boolean(body.overview);
+        if (client.overview !== wants) {
+            client.overview = wants;
+            syncBoard();
+            if (wants) sendBoardNow(client);
+        }
         // One session in view at a time; drop other follows so we aren't polling
         // transcripts nobody is looking at.
         for (const [sid, sub] of client.subs) {
@@ -234,6 +350,9 @@ async function api(req, res, url, pathname) {
             // Live SSE connections — a quick way to tell whether a UI attached.
             clients: clients.size, runners: Object.keys(pool.statuses()).length,
             terminals: terminals.live().length,
+            // Sessions with a process, from Claude Code's registry — including
+            // every one running in a terminal, which no other count here sees.
+            live: registry.liveCount, registered: registry.size,
             // Turns in flight. Restarting would end them, so anything that
             // restarts the bridge should look here first.
             busy: pool.busyCount,
@@ -280,6 +399,14 @@ async function api(req, res, url, pathname) {
             if (st) { s.runner = { state: st.state, activity: st.activity, queued: st.queued }; }
         }
         return send(res, 200, { sessions, ready: index.ready });
+    }
+
+    // Every live session at once: what it is doing, how far through its tasks it
+    // is, and what it is blocked on. State rather than content, which is what
+    // makes one payload enough for a screenful of sessions — see overview.js.
+    // Pollable by anything; the UI takes it over SSE instead.
+    if (pathname === '/api/overview' && req.method === 'GET') {
+        return send(res, 200, buildBoard());
     }
 
     // Work in flight: uncommitted changes and unmerged pull requests, by project.
@@ -814,9 +941,15 @@ function serveStatic(res, pathname) {
 pool.hasViewer = () => clients.size > 0;
 
 index.on('changed', () => broadcast('sessions-changed', { at: Date.now() }));
+// A session starting or stopping in a terminal writes nothing to a transcript,
+// so the registry is the only thing that notices — the rail would otherwise wait
+// for the next thing that happened to change a file.
+registry.on('changed', () => broadcast('sessions-changed', { at: Date.now() }));
 pool.on('status', (s) => broadcast('runner-status', s));
-pool.on('permission-request', (p) => broadcast('permission-request', p));
-pool.on('permission-resolved', (p) => broadcast('permission-resolved', p));
+// A card is answered from the board, so the board must not be up to a second
+// behind on an ask appearing or being taken away.
+pool.on('permission-request', (p) => { broadcast('permission-request', p); tickBoard(); });
+pool.on('permission-resolved', (p) => { broadcast('permission-resolved', p); tickBoard(); });
 pool.on('notice', (n) => broadcast('notice', n));
 pool.on('turn-complete', (r) => broadcast('turn-complete', r));
 pool.on('failed', (f) => broadcast('send-failed', f));
@@ -840,6 +973,7 @@ function shutdown(code = 0) {
     // outlive us if we did not take them with us.
     try { terminals.shutdown(); } catch { /* nothing to clean */ }
     try { index.stop(); } catch { /* nothing to clean */ }
+    try { registry.stop(); } catch { /* nothing to clean */ }
     try { server.close(); } catch { /* already closed */ }
     setTimeout(() => process.exit(code), 200).unref();
 }
@@ -859,6 +993,12 @@ server.on('error', (err) => {
 
 server.listen(cfg.PORT, cfg.HOST, async () => {
     console.log(`[claude-sessions] bridge listening on http://${cfg.HOST}:${cfg.PORT}`);
+    // Before the index, so the very first summaries it hands out already say
+    // what is running rather than guessing at it for one scan.
+    registry.start();
+    console.log(`[claude-sessions] registry: ${registry.liveCount} of ${registry.size} `
+        + 'session(s) still have a process');
+
     const t0 = Date.now();
     await index.start();
     console.log(`[claude-sessions] indexed ${index.sessions.size} sessions in ${Date.now() - t0}ms`);

@@ -28,6 +28,14 @@ class SessionIndex extends EventEmitter {
     constructor(flags = null) {
         super();
         this.flags = flags;
+        /**
+         * Which sessions are actually running, when we have it. Set from
+         * server.js rather than constructed here: the index is about files on
+         * disk, and a registry that is missing or unreadable has to leave it
+         * working exactly as before.
+         * @type {import('./registry').SessionRegistry|null}
+         */
+        this.registry = null;
         /** @type {Map<string, {file, dir, size, mtimeMs, meta}>} keyed by sessionId */
         this.sessions = new Map();
         /**
@@ -229,13 +237,18 @@ class SessionIndex extends EventEmitter {
         const flags = this.flags
             ? this.flags.get(m.sessionId)
             : { pinned: false, archived: false, test: false };
+        const live = this.registry ? this.registry.for(m.sessionId) : null;
         return {
             sessionId: m.sessionId,
             pinned: flags.pinned,
             archived: flags.archived,
             test: flags.test,
-            title: m.title,
-            titleSource: m.titleSource,
+            // The registry's own label, for a session whose transcript produced
+            // no title of its own — scanMeta falls back to "Untitled session",
+            // and a name Claude Code already derived beats that.
+            title: (m.titleSource === 'none' && live && live.name) ? live.name : m.title,
+            titleSource: (m.titleSource === 'none' && live && live.name)
+                ? 'registry' : m.titleSource,
             cwd: m.cwd,
             projectCwd: m.projectCwd,
             projectName: projectName(m.projectCwd || m.cwd),
@@ -257,6 +270,17 @@ class SessionIndex extends EventEmitter {
             lastPrompt: m.lastPrompt || m.firstPrompt,
             bytes: rec.size,
             mtimeMs: rec.mtimeMs,
+            // Two different questions, deliberately kept apart.
+            //
+            // `live` is the registry: is there a process, right now. It is the
+            // one to believe when it is there.
+            //
+            // `active` is the file: has the transcript been written to lately.
+            // It is wrong in both directions — a session thinking for two
+            // minutes looks dead, one that finished eighty seconds ago looks
+            // alive — but it is all there is for a Claude Code old enough to
+            // write no registry entry, so it stays as the fallback.
+            live,
             active: (now - rec.mtimeMs) < ACTIVE_WINDOW_MS,
         };
     }

@@ -91,9 +91,22 @@ const state = {
     // under a session can be told apart from one being seen for the first time.
     runnerMode: new Map(),
     stopArmed: 0,           // when a soft Stop happened, for the force escalation
+    // Sessions where "Send anyway" was clicked past the live-elsewhere lock.
+    // Per session and not persisted: the next window, and this one after a
+    // reload, should ask again rather than inherit somebody's earlier gamble.
+    lockOverride: new Set(),
     // The board of unfinished work. `at` is when the bridge last answered, so
     // opening it again does not re-run git over every worktree on the machine.
     dash: { open: false, data: null, at: 0, loading: false, error: null, files: new Set() },
+    // The live board. `watching` is what the bridge has been told, kept apart
+    // from `open` so that a re-subscribe for some other reason does not turn the
+    // board's timer on for a window that closed it.
+    live: { open: false, watching: false, data: null, at: 0, clock: null },
+    // Sessions blocked on an answer, kept whether or not the board is open, so
+    // the badge on a shut board still says how many people are waiting.
+    waiting: new Set(),
+    // A second-monitor window: no rail, no composer, just cards.
+    focus: false,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -107,6 +120,8 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'term-pane', 'term-grip', 'term-dir', 'term-moved', 'term-body', 'term-restart', 'term-close',
     'agents', 'agent-scroll', 'agent-log', 'btn-back', 'btn-back-label',
     'btn-dash', 'dash-badge', 'dash', 'dash-sub', 'dash-body', 'dash-refresh',
+    'lock', 'lock-text', 'lock-fork', 'lock-anyway',
+    'btn-live', 'live-badge', 'live', 'live-sub', 'live-body',
     'new-scrim', 'new-cwd', 'new-picker', 'new-prompt', 'new-model', 'new-perm',
     'new-test', 'new-test-row', 'new-go',
     'del-scrim', 'del-what', 'del-meta', 'del-go']) {
@@ -232,6 +247,10 @@ async function loadSessions() {
         state.sessions = sessions;
         rememberOrder(sessions);
         renderRail();
+        // `live` rides on the session list, not on runner-status, so this is the
+        // only moment the composer learns that a session started or stopped in a
+        // terminal. The registry broadcasts sessions-changed for exactly this.
+        paintLock();
     } catch (err) {
         toast(`Could not load sessions: ${err.message}`, 'error');
     }
@@ -377,13 +396,15 @@ function strip(s) {
     const running = s.runner && (s.runner.state === 'busy' || s.runner.state === 'starting');
     const current = state.current && state.current.sessionId === s.sessionId;
     const queued = (s.runner && s.runner.queued) || 0;
+    const away = elsewhere(s);
 
     // A row, not a button: it holds its own pin and archive controls, and
     // nesting buttons is not allowed.
     return el('div', {
         class: 'strip',
         'data-id': s.sessionId,
-        'data-state': running ? 'running' : (s.active ? 'active' : 'idle'),
+        'data-state': stripState(s),
+        title: away ? awayWords(away) : null,
         'data-pinned': String(!!s.pinned),
         'data-archived': String(!!s.archived),
         'aria-current': current ? 'true' : null,
@@ -401,6 +422,10 @@ function strip(s) {
                 // Only ever set on a development bridge, and worth saying on the
                 // row: a labelled session is one somebody meant to throw away.
                 s.test ? el('span', { class: 'tag-test' }, 'test') : null,
+                // A background agent is a different sort of thing from a session
+                // somebody is sitting in front of, and only the registry knows.
+                (s.live && s.live.kind === 'bg')
+                    ? el('span', { class: 'tag-bg', title: 'A background agent' }, 'bg') : null,
                 s.worktree ? el('span', { class: 'wt' }, s.worktree.name) : null,
                 s.worktree ? el('span', { class: 'dot' }, '·') : null,
                 // The time the list is ordered by, so the order reads as sorted.
@@ -435,6 +460,40 @@ function strip(s) {
         ),
     );
 }
+
+/**
+ * The registry entry for a session running somewhere that is not us — a
+ * terminal, VS Code, a background agent — or null.
+ *
+ * `runner` is the test for "ours": the bridge only reports one for a process it
+ * started itself, so a session with a live registry entry and no runner is one
+ * this window cannot send into without two processes appending to one file.
+ */
+function elsewhere(s) {
+    if (!s || !s.live || !s.live.running) return null;
+    return s.runner ? null : s.live;
+}
+
+/** Three states where there used to be two. `active` is the mtime fallback. */
+function stripState(s) {
+    if (s.runner && (s.runner.state === 'busy' || s.runner.state === 'starting')) return 'running';
+    if (elsewhere(s)) return 'elsewhere';
+    return s.active ? 'active' : 'idle';
+}
+
+/** How to describe a session running outside this app, in a sentence. */
+function awayWords(live) {
+    const where = WHERE[live.entrypoint] || (live.kind === 'bg' ? 'as a background agent' : null);
+    return `Running ${where || `under ${live.entrypoint || 'another client'}`}`
+        + ` (pid ${live.pid})`;
+}
+
+const WHERE = {
+    cli: 'in a terminal',
+    vscode: 'in VS Code',
+    'sdk-cli': 'under the SDK',
+    'claude-sessions': 'in another Claude Sessions window',
+};
 
 /**
  * What a row says about the turn it is running: its separator and the activity
@@ -485,7 +544,7 @@ function patchStripStatus(stripEl, s) {
     if (!meta) return;
     const runner = s.runner;
     const running = runner && (runner.state === 'busy' || runner.state === 'starting');
-    stripEl.dataset.state = running ? 'running' : (s.active ? 'active' : 'idle');
+    stripEl.dataset.state = stripState(s);
     // Cleared before the queue badge is placed, so it lands where strip() puts it.
     for (const node of meta.querySelectorAll('.dot-act, .pulse')) node.remove();
     patchQueuedBadge(stripEl, (runner && runner.queued) || 0);
@@ -593,9 +652,9 @@ function clearCurrent() {
     dom.channels.replaceChildren();
     hideTurnPop();
     dom.conv.hidden = true;
-    // Not while the board is up: the empty state would sit under it, and the
+    // Not while a panel is up: the empty state would sit under it, and the
     // session that went away is not what you are looking at anyway.
-    dom.placeholder.hidden = state.dash.open;
+    paintPanels();
     dom.btnSend.disabled = true;
     // The pane lives inside .conv, so it goes with it; the shell keeps running
     // and is there again the moment the session is.
@@ -1321,7 +1380,21 @@ function fillQuestionAsk(card, ask) {
 }
 
 /**
- * Send an answer.
+ * Send an answer to a named ask, wherever it is being answered from.
+ *
+ * Takes the session and the request rather than reading `state.current`, because
+ * the live board answers asks belonging to sessions that are not open — which is
+ * the point of that view. Throws; the caller decides what to say about it.
+ *
+ * @param {{decision:'allow'|'allow-always'|'deny', mode?:string,
+ *          answers?:object, feedback?:string}} payload
+ */
+function answerAskFor(sessionId, requestId, payload) {
+    return post(`/api/sessions/${sessionId}/permission`, { requestId, ...payload });
+}
+
+/**
+ * Send an answer for the session on screen.
  *
  * @param {{decision:'allow'|'allow-always'|'deny', mode?:string,
  *          answers?:object, feedback?:string}} payload
@@ -1335,8 +1408,7 @@ async function answerAsk(payload) {
         card.dataset.pending = '1';
     }
     try {
-        await post(`/api/sessions/${state.current.sessionId}/permission`,
-            { requestId: ask.requestId, ...payload });
+        await answerAskFor(state.current.sessionId, ask.requestId, payload);
     } catch (err) {
         // 409 means another window got there first; the resolved event that
         // follows takes the card down with the right reason on it.
@@ -1846,7 +1918,7 @@ function applyComposerScope() {
         renderQueue(state.runner);   // the session's queue is not the agent's business
     } else {
         dom.btnSend.disabled = !state.current;
-        applyRunner(state.runner);
+        applyRunner(state.runner);   // paints the lock, which owns btnSend after this
     }
 }
 
@@ -2011,6 +2083,332 @@ async function markInstance() {
     } catch { /* the status line already reports an unreachable bridge */ }
 }
 
+// ── live ─────────────────────────────────────────────────────────────────
+// The rail is one conversation at a time, which is the right shape for reading
+// one and the wrong shape for an afternoon with five agents working. This is
+// the other view: a card per running session, needs-you first, so that "which
+// one is stuck" is a glance rather than a round of clicking.
+//
+// Everything on a card arrives in a single `overview` event. Nothing here
+// subscribes to a transcript.
+
+/** Tell the bridge whether this window is watching the board. */
+function syncBoardWatch() {
+    if (state.live.watching === state.live.open) return;
+    state.live.watching = state.live.open;
+    subscribe();
+}
+
+function showLive(on) {
+    state.live.open = on;
+    if (on) state.dash.open = false;   // one panel at a time
+    paintPanels();
+    syncBoardWatch();
+
+    // The turn clocks count up between pushes rather than with them: a board of
+    // sessions all doing something slow would otherwise be perfectly still, and
+    // a still clock is how a stuck turn looks.
+    clearInterval(state.live.clock);
+    state.live.clock = on ? setInterval(tickCardClocks, 1000) : null;
+
+    if (on) renderLive();
+    // Coming back to a conversation: the terminal was display:none and xterm
+    // cannot size itself to a box it could not measure.
+    else if (state.current) termPane.refit();
+}
+
+function tickCardClocks() {
+    for (const n of dom.liveBody.querySelectorAll('.lcard-clock[data-since]')) {
+        n.textContent = dur(Date.now() - Number(n.dataset.since));
+    }
+}
+
+function applyOverview(data) {
+    state.live.data = data;
+    state.live.at = Date.now();
+    // The board is authoritative while it is open: it can see an ask that was
+    // already outstanding when this window connected, which no event would have
+    // told us about.
+    state.waiting = new Set(data.sessions.filter(s => s.ask).map(s => s.sessionId));
+    paintLiveBadge();
+    if (state.live.open) renderLive();
+}
+
+/**
+ * How many sessions are waiting on you, on the button that opens the board.
+ *
+ * Counted in people-blocking things, not in running ones: five agents working
+ * is the normal state of this machine and not news, and one of them stopped
+ * with a question is the whole reason to look.
+ *
+ * Kept from the `permission-request` and `permission-resolved` broadcasts rather
+ * than from the board's own payload, because the badge's whole job is to be
+ * right when the board is *shut* — reading it from a channel nobody is
+ * subscribed to left it blank until first opened and frozen ever after. Those
+ * events already reach every window; this only counts them.
+ */
+function paintLiveBadge() {
+    const waiting = state.waiting.size;
+    dom.liveBadge.hidden = !waiting;
+    dom.liveBadge.textContent = String(waiting);
+    dom.liveBadge.classList.toggle('urgent', waiting > 0);
+    dom.btnLive.title = waiting
+        ? `${waiting} session${waiting === 1 ? ' is' : 's are'} waiting for you (Ctrl+2)`
+        : 'Every session running right now (Ctrl+2)';
+}
+
+/** Prime the badge at boot, for asks that were already outstanding. */
+async function primeWaiting() {
+    try {
+        const d = await get('/api/overview');
+        state.waiting = new Set(d.sessions.filter(s => s.ask).map(s => s.sessionId));
+        paintLiveBadge();
+    } catch { /* the first permission event will start the count off anyway */ }
+}
+
+function renderLive() {
+    const d = state.live.data;
+
+    if (!d) {
+        dom.liveSub.textContent = 'Asking the bridge what is running…';
+        dom.liveBody.replaceChildren(el('div', { class: 'live-note' },
+            el('p', {}, 'Asking the bridge what is running…')));
+        return;
+    }
+
+    const bits = [];
+    if (d.waiting) bits.push(`${d.waiting} waiting for you`);
+    bits.push(`${d.running} running`);
+    if (d.hidden) bits.push(`${d.hidden} more not shown`);
+    dom.liveSub.textContent = bits.join(' · ');
+
+    if (!d.sessions.length) {
+        dom.liveBody.replaceChildren(el('div', { class: 'live-note' },
+            el('p', {}, 'Nothing is running. Every session on this machine is idle, '
+                + 'here and in every terminal.')));
+        return;
+    }
+    dom.liveBody.replaceChildren(...d.sessions.map(liveCard));
+}
+
+/**
+ * One session, as a card.
+ *
+ * Deliberately built from the same pieces as the rail row — activityBits,
+ * queuedBadge, ago, clip — rather than a second vocabulary for the same facts.
+ * The risk with a view like this is two renderers of one state drifting apart,
+ * and sharing the small parts is what keeps them honest.
+ */
+function liveCard(s) {
+    const r = s.runner;
+    const busy = r && (r.state === 'busy' || r.state === 'starting');
+    const away = s.live && s.live.running && !r;
+
+    return el('article', { class: 'lcard', 'data-reason': s.reason, 'data-id': s.sessionId },
+        el('header', { class: 'lcard-head' },
+            el('span', { class: 'lcard-dot' }),
+            el('button', {
+                class: 'lcard-title', type: 'button',
+                title: 'Open this conversation',
+                onclick: () => { showLive(false); openSession(s.sessionId); },
+            }, clip(s.title, 60)),
+            el('span', { class: 'lcard-where' },
+                s.worktree ? s.worktree.name : s.projectName),
+        ),
+
+        el('div', { class: 'lcard-line' }, liveStatusWords(s, busy, away)),
+
+        s.tasks ? taskBar(s.tasks) : null,
+
+        el('div', { class: 'lcard-facts' },
+            s.tasks ? el('span', {}, `${s.tasks.done} of ${s.tasks.total} tasks`) : null,
+            el('span', {}, `${s.toolCalls} tool${s.toolCalls === 1 ? '' : 's'}`),
+            (r && r.queued) ? queuedBadge(r.queued) : null,
+            // A port something is answering on right now. The overview refreshes
+            // these on its own slow cycle, so a chip is at most ~15s old.
+            ...(s.devservers || []).map(devChip),
+            el('span', { class: 'lcard-ago' }, ago(s.lastTs)),
+        ),
+
+        s.ask ? liveAsk(s) : null,
+
+        s.headlines.length ? el('ol', { class: 'lcard-log' },
+            s.headlines.map(h => el('li', { title: h.text }, clip(h.text, 74)))) : null,
+
+        el('div', { class: 'lcard-acts' },
+            el('button', {
+                class: 'lbtn', type: 'button',
+                onclick: () => { showLive(false); openSession(s.sessionId); },
+            }, 'Open'),
+            busy ? el('button', {
+                class: 'lbtn', type: 'button',
+                title: 'Interrupt the turn this session is running',
+                onclick: (e) => stopFromCard(s.sessionId, e.currentTarget),
+            }, 'Stop') : null,
+        ),
+    );
+}
+
+/** The one line under the title: what it is doing, and for how long. */
+function liveStatusWords(s, busy, away) {
+    const r = s.runner;
+    if (s.ask) {
+        return [el('span', { class: 'lstate ask' }, ASK_WORD[s.ask.kind] || 'Waiting for you')];
+    }
+    if (r && r.state === 'error') {
+        return [el('span', { class: 'lstate err' }, clip(r.error || 'The turn failed.', 68))];
+    }
+    if (busy) {
+        return [
+            el('span', { class: r.retry ? 'lstate warn' : 'lstate' },
+                clip(r.activity || 'Working…', 52)),
+            r.busySince ? el('span', { class: 'lcard-clock', 'data-since': r.busySince },
+                dur(Date.now() - r.busySince)) : null,
+        ];
+    }
+    if (away) {
+        // No activity line to give: the runner that would report one belongs to
+        // whoever is driving the session, not to us. The headlines say the rest.
+        return [el('span', { class: 'lstate quiet' }, lower(awayWords(s.live)))];
+    }
+    if (s.tasks && s.tasks.current) {
+        return [el('span', { class: 'lstate quiet' }, clip(s.tasks.current, 60))];
+    }
+    return [el('span', { class: 'lstate quiet' }, 'Idle')];
+}
+
+const ASK_WORD = {
+    tool: 'Waiting for permission',
+    plan: 'Waiting on a plan',
+    question: 'Waiting on a question',
+};
+
+/**
+ * A port this session has something answering on, as a chip that switches
+ * DevBrowser to it.
+ *
+ * Its own request rather than the channel strip's `openInDevBrowser`, which
+ * writes progress into a separate "Open" button it is given — handing it the
+ * chip's own label made a successful click rename `:5006` to `Open`.
+ */
+function devChip(d) {
+    return el('button', {
+        class: 'lchip', type: 'button',
+        title: `Show :${d.port}${d.title ? ` (${d.title})` : ''} in DevBrowser`,
+        onclick: async (e) => {
+            const chip = e.currentTarget;
+            chip.classList.add('busy');
+            chip.disabled = true;
+            try {
+                const r = await post('/api/devbrowser/open', {
+                    port: d.port,
+                    // Name the tab if the transcript knew what it was and
+                    // DevBrowser did not.
+                    title: d.owned ? undefined : d.title || undefined,
+                });
+                if (r.launched) toast(`Started DevBrowser and switched to :${d.port}.`, 'ok');
+            } catch (err) {
+                toast(`Could not switch to :${d.port}. ${err.message}`, 'error');
+            } finally {
+                chip.classList.remove('busy');
+                chip.disabled = false;
+            }
+        },
+    }, `:${d.port}`, d.title ? el('i', {}, clip(d.title, 16)) : null);
+}
+
+function taskBar(t) {
+    const pct = t.total ? Math.round((t.done / t.total) * 100) : 0;
+    return el('div', {
+        class: 'tbar', title: `${t.done} of ${t.total} tasks done`,
+        role: 'progressbar', 'aria-valuenow': t.done, 'aria-valuemin': 0, 'aria-valuemax': t.total,
+    }, el('span', { class: 'tbar-fill', style: `width:${pct}%` }));
+}
+
+/**
+ * The ask, on the card.
+ *
+ * A tool ask is answered here — that is the single best reason for this view to
+ * exist, and it is the common case by a wide margin. A plan or a set of
+ * questions is not: the answer is a choice made against text that does not fit
+ * in a tile, and offering two buttons against a plan nobody has read is worse
+ * than a button that goes and shows it. Same judgement the notification actions
+ * already make.
+ */
+function liveAsk(s) {
+    const ask = s.ask;
+    const kind = ask.kind || 'tool';
+    const what = kind === 'tool'
+        ? (toolSummary({ name: ask.tool, input: ask.input }) || ask.displayName)
+        : askBody(ask, kind);
+
+    return el('div', { class: `lask lask-${kind}` },
+        el('div', { class: 'lask-what' },
+            el('b', {}, kind === 'tool' ? ask.displayName : ASK_HEAD[kind].name),
+            what ? el('span', {}, clip(what, 90)) : null),
+        el('div', { class: 'lask-acts' },
+            kind === 'tool' ? [
+                el('button', {
+                    class: 'lbtn ok', type: 'button',
+                    onclick: (e) => answerFromCard(s, { decision: 'allow' }, e.currentTarget),
+                }, 'Allow'),
+                el('button', {
+                    class: 'lbtn', type: 'button',
+                    title: `Allow ${ask.displayName} for the rest of this session`,
+                    onclick: (e) => answerFromCard(s, { decision: 'allow-always' }, e.currentTarget),
+                }, 'Always'),
+                el('button', {
+                    class: 'lbtn no', type: 'button',
+                    onclick: (e) => answerFromCard(s, { decision: 'deny' }, e.currentTarget),
+                }, 'Deny'),
+            ] : el('button', {
+                class: 'lbtn ok', type: 'button',
+                onclick: () => { showLive(false); openSession(s.sessionId); },
+            }, 'Answer →'),
+        ),
+    );
+}
+
+async function answerFromCard(s, payload, btn) {
+    const card = btn.closest('.lcard');
+    for (const b of card.querySelectorAll('.lask button')) b.disabled = true;
+    try {
+        await answerAskFor(s.sessionId, s.ask.requestId, payload);
+    } catch (err) {
+        toast(`Could not answer: ${err.message}`, 'error');
+        for (const b of card.querySelectorAll('.lask button')) b.disabled = false;
+    }
+}
+
+/**
+ * Stop a turn from the card. Always the soft stop — the escalation to a kill is
+ * armed by pressing Stop twice in the conversation, and a single button on a
+ * card several sessions away from the one you are reading is not the place to
+ * offer it.
+ */
+async function stopFromCard(sessionId, btn) {
+    btn.disabled = true;
+    btn.textContent = 'Stopping…';
+    try {
+        const r = await post(`/api/sessions/${sessionId}/stop`, {});
+        // Whatever never reached the process comes back, exactly as it does in
+        // the conversation view — otherwise a queue would vanish silently. One
+        // draft holds all of them, joined the way the composer restores them;
+        // saving each in turn would leave only the last.
+        const dropped = r.dropped || [];
+        if (dropped.length) {
+            const held = loadDraft(sessionId);
+            saveDraft(sessionId, [held, dropped.join('\n\n')].filter(Boolean).join('\n\n'));
+            toast(`Stopped. ${dropped.length} unsent message${dropped.length === 1
+                ? ' is' : 's are'} waiting in that session's composer.`, 'info');
+        }
+    } catch (err) {
+        toast(`Could not stop: ${err.message}`, 'error');
+        btn.disabled = false;
+        btn.textContent = 'Stop';
+    }
+}
+
 // ── dashboard ────────────────────────────────────────────────────────────
 // The rail answers "what have I been talking to". This answers "what have I
 // left behind" — changes nobody committed, pull requests nobody merged — which
@@ -2020,15 +2418,35 @@ async function markInstance() {
 // bridge caches underneath this, so a re-ask is usually free anyway.
 const DASH_STALE_MS = 45_000;
 
+/**
+ * Which of the three things `main` can hold is on screen.
+ *
+ * Two full-height panels now cover the conversation — Live and Work in flight —
+ * and they used to each set `conv.hidden` themselves, which meant whichever
+ * closed last decided what the other was doing. One function owns it instead:
+ * the panels say what they want, this works out the consequences.
+ *
+ * The conversation is covered, never closed. Its tail keeps running, its scroll
+ * position is untouched, and coming back out lands exactly where it was.
+ */
+function paintPanels() {
+    const panel = state.dash.open || state.live.open;
+    dom.dash.hidden = !state.dash.open;
+    dom.live.hidden = !state.live.open;
+    dom.conv.hidden = panel || !state.current;
+    dom.placeholder.hidden = panel || Boolean(state.current);
+
+    for (const [btn, on] of [[dom.btnDash, state.dash.open], [dom.btnLive, state.live.open]]) {
+        btn.classList.toggle('on', on);
+        btn.setAttribute('aria-pressed', String(on));
+    }
+}
+
 function showDash(on) {
     state.dash.open = on;
-    dom.dash.hidden = !on;
-    dom.btnDash.classList.toggle('on', on);
-    dom.btnDash.setAttribute('aria-pressed', String(on));
-    // The conversation is not closed, only covered: coming back out lands on
-    // the same transcript, scrolled where it was.
-    dom.conv.hidden = on || !state.current;
-    dom.placeholder.hidden = on || Boolean(state.current);
+    if (on) state.live.open = false;   // one panel at a time
+    paintPanels();
+    syncBoardWatch();
 
     if (on) {
         if (Date.now() - state.dash.at > DASH_STALE_MS) loadDash();
@@ -2669,7 +3087,11 @@ function connect() {
 
     es.addEventListener('hello', (e) => {
         state.clientId = JSON.parse(e.data).clientId;
-        if (state.current) subscribe();
+        // A new client id knows nothing about what this window was following, so
+        // the board has to be asked for again — including when no session is
+        // open, which is the ordinary case for a window left on the board.
+        state.live.watching = false;
+        if (state.current || state.live.open) { state.live.watching = state.live.open; subscribe(); }
         // Every `sessions-changed` while the stream was down was missed, and
         // nothing replays them, so the rail is however it was when the stream
         // dropped — a bridge restart used to leave rows sitting there with the
@@ -2722,6 +3144,8 @@ function connect() {
         }
     });
 
+    es.addEventListener('overview', (e) => applyOverview(JSON.parse(e.data)));
+
     es.addEventListener('sessions-changed', () => loadSessions());
 
     // Someone deleted a session — possibly in another window, possibly this one.
@@ -2756,6 +3180,8 @@ function connect() {
         // Ahead of the early return, as with turn-complete: the asks worth
         // interrupting somebody for are the ones not already on screen.
         announceAsk(p);
+        state.waiting.add(p.sessionId);
+        paintLiveBadge();
         if (!state.current || p.sessionId !== state.current.sessionId) return;
         state.ask = p;
         renderAsk();
@@ -2766,6 +3192,8 @@ function connect() {
         // However it was answered — here, in another window, from the toast
         // itself, or by the two-minute auto-deny — the toast has to go.
         clearAsk(p.sessionId);
+        state.waiting.delete(p.sessionId);
+        paintLiveBadge();
         if (!state.ask || state.ask.requestId !== p.requestId) return;
         resolveAsk(p.outcome);
     });
@@ -2820,6 +3248,10 @@ async function subscribe() {
             agent: state.agent
                 ? { toolUseId: state.agent, offset: state.agentOffset }
                 : null,
+            // Orthogonal to the session follow: the board stays up while you
+            // read a conversation, and the conversation keeps tailing while the
+            // board is on screen.
+            overview: state.live.open,
         });
     } catch { /* the SSE reconnect will re-subscribe */ }
 }
@@ -2881,8 +3313,60 @@ function applyRunner(s) {
         state.busyTimer = setInterval(() => paintStatus(state.runner), 1000);
     }
     paintPerm();
+    paintLock();
     paintStatus(s);
 }
+
+/**
+ * The offer to branch, when this session already has a process somewhere else.
+ *
+ * The recovery for this exists and works — `claude` refuses to resume, the
+ * bridge classifies the refusal as `busy-elsewhere`, and handleSendFailure puts
+ * the message back and offers the fork. But it only happens *after* the send,
+ * and it rests on matching an error string. The registry says the same thing
+ * beforehand, so the choice can be offered while it is still a choice.
+ *
+ * The composer is disabled rather than removed, and "Send anyway" is always
+ * there: the registry can be wrong — a file left by a crash mid-write, a setup
+ * nobody anticipated — and being locked out of your own session by a bad guess
+ * is worse than the risk of the thing it is guarding against.
+ */
+/**
+ * The registry entry holding the composer shut, or null.
+ *
+ * One function rather than a flag, because the answer has to be the same for the
+ * banner, the send button and `sendMessage` — a lock that only the button knew
+ * about was a lock Enter walked straight through.
+ */
+function lockedNow() {
+    if (state.agent || !state.current) return null;
+    if (state.lockOverride.has(state.current.sessionId)) return null;
+    const s = state.sessions.find(x => x.sessionId === state.current.sessionId);
+    return s ? elsewhere(s) : null;
+}
+
+function paintLock() {
+    const away = lockedNow();
+    dom.lock.hidden = !away;
+
+    if (away) {
+        dom.lockText.textContent = `This session is ${lower(awayWords(away))}.`;
+        // Not `readonly`: a message can still be written while deciding, and the
+        // fork carries whatever is in the box.
+        dom.btnSend.disabled = true;
+        dom.btnSend.textContent = 'Send';
+        return;
+    }
+
+    // The lock clearing has to give the button back here. Nothing else will: a
+    // session running in a terminal has no runner of ours, so its finishing
+    // produces no runner-status event, and Send would stay grey for good.
+    if (state.current && !state.agent && dom.btnSend.disabled && !state.runner) {
+        dom.btnSend.disabled = false;
+    }
+}
+
+const lower = (s) => s.charAt(0).toLowerCase() + s.slice(1);
 
 /**
  * Which permission mode the composer shows for the session it is pointing at.
@@ -3395,6 +3879,17 @@ async function sendMessage({ fork = false, text: override = null } = {}) {
     if (!text || !state.current) return;
     const sessionId = state.current.sessionId;
 
+    // The lock is a rule, not a disabled button. Greying out Send left Enter —
+    // and every internal caller — going straight past it into the two-writers
+    // case the whole thing exists to prevent. Branching is exempt: a fork is the
+    // way out, and it writes to a new transcript rather than this one.
+    if (!fork && lockedNow()) {
+        toast('This session is running elsewhere. Branch off a copy, or choose '
+            + '“Send anyway”.', 'warn');
+        dom.lockFork.focus();
+        return;
+    }
+
     if (override == null) { dom.input.value = ''; autoGrow(); }
     saveDraft(sessionId, '');
     dom.btnSend.disabled = true;
@@ -3786,8 +4281,22 @@ for (const n of dom.delScrim.querySelectorAll('[data-close-del]')) {
 }
 dom.delScrim.addEventListener('click', (e) => { if (e.target === dom.delScrim) closeDelete(); });
 
+dom.btnLive.addEventListener('click', () => showLive(!state.live.open));
 dom.btnDash.addEventListener('click', () => showDash(!state.dash.open));
 dom.dashRefresh.addEventListener('click', () => loadDash({ refresh: true }));
+
+// The safe way past the lock: a copy of the conversation with a process of its
+// own. sendMessage already does the whole thing — the original keeps running
+// wherever it is, and the window follows the fork.
+dom.lockFork.addEventListener('click', () => sendMessage({ fork: true }));
+dom.lockAnyway.addEventListener('click', () => {
+    if (!state.current) return;
+    state.lockOverride.add(state.current.sessionId);
+    applyRunner(state.runner);   // re-enables the send button, then repaints the lock
+    toast('Sending into a session that is running elsewhere. If Claude Code refuses '
+        + 'to resume it, your message comes back and the branch is offered again.', 'warn', 8000);
+    dom.input.focus();
+});
 
 document.addEventListener('keydown', (e) => {
     // The confirm sits over the new-session dialog, so it answers Escape first.
@@ -3795,9 +4304,19 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !dom.delScrim.hidden) { closeDelete(); return; }
     if (e.key === 'Escape' && !dom.newScrim.hidden) { closeNew(); return; }
     if (e.key === 'Escape' && state.dash.open) { showDash(false); return; }
+    if (e.key === 'Escape' && state.live.open) { showLive(false); return; }
     if (e.key === 'Escape' && state.agent) { closeAgent(); return; }
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); dom.search.focus(); }
     if ((e.ctrlKey || e.metaKey) && e.key === 'n') { e.preventDefault(); openNew(); }
+
+    // The three things `main` can show. Ctrl rather than a bare digit because
+    // the composer is a textarea and these have to work while it has the focus.
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && '123'.includes(e.key)) {
+        e.preventDefault();
+        if (e.key === '1') { showLive(false); showDash(false); }
+        else if (e.key === '2') showLive(true);
+        else showDash(true);
+    }
 });
 
 // Copy buttons inside rendered markdown are delegated: the blocks are innerHTML.
@@ -3818,6 +4337,23 @@ function debounce(fn, ms) {
     return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
 }
 
+/**
+ * `?view=live` opens on the board, and `&focus=1` strips the window down to it.
+ *
+ * For the second monitor: a browser window left up all afternoon showing what
+ * every agent is doing, with no rail, no composer and no chrome to click past.
+ * The README already treats browser use as first-class, and this is the case it
+ * is best at.
+ */
+function applyViewParams() {
+    const q = new URLSearchParams(location.search);
+    state.focus = q.get('focus') === '1';
+    if (state.focus) document.querySelector('.app').dataset.focus = '1';
+    // Focus mode has nothing else to show, so it implies the board.
+    if (state.focus || q.get('view') === 'live') showLive(true);
+    else if (q.get('view') === 'dashboard') showDash(true);
+}
+
 // ── go ───────────────────────────────────────────────────────────────────
 
 connect();
@@ -3825,6 +4361,8 @@ loadSessions();
 markInstance();
 renderBell();
 registerWorker();
+applyViewParams();
+primeWaiting();
 openFromHash();
 refreshDevBrowser();
 // Restore the pane before the first session lands, so it opens with the window
