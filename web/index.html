@@ -27,6 +27,19 @@
 
     <span class="bar-spacer"></span>
 
+    <!-- Work that is finished with the conversation but not with you: changes
+         nobody committed, pull requests nobody merged. -->
+    <button id="btn-dash" class="bar-btn" type="button" aria-pressed="false"
+            title="Uncommitted changes and open pull requests, by project">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <rect x="3.2" y="4.2" width="7" height="7" rx="2" stroke="currentColor" stroke-width="1.7"/>
+        <rect x="13.8" y="4.2" width="7" height="11.5" rx="2" stroke="currentColor" stroke-width="1.7"/>
+        <rect x="3.2" y="14" width="7" height="5.8" rx="2" stroke="currentColor" stroke-width="1.7"/>
+      </svg>
+      <span>Dashboard</span>
+      <span id="dash-badge" class="bar-badge" hidden></span>
+    </button>
+
     <button id="db-status" class="db-status" data-up="false" type="button"
             title="DevBrowser connection">
       <span class="led"></span><span id="db-label">DevBrowser</span>
@@ -192,6 +205,21 @@
         <div id="term-body" class="term-body"></div>
       </section>
     </div>
+
+    <!-- The board of unfinished work. Grouped by project, a row per directory,
+         because a worktree is what holds uncommitted changes — sessions share
+         one, and the sessions are how you get back to the conversation. -->
+    <section id="dash" class="dash" hidden aria-label="Work in flight">
+      <header class="dash-head">
+        <div>
+          <h1 class="dash-title">Work in flight</h1>
+          <p id="dash-sub" class="dash-sub">Uncommitted changes, and pull requests
+            that are open but not merged.</p>
+        </div>
+        <button id="dash-refresh" class="dash-btn" type="button">Refresh</button>
+      </header>
+      <div id="dash-body" class="dash-body"></div>
+    </section>
 
     <div id="placeholder" class="empty">
       <h2>No session selected</h2>

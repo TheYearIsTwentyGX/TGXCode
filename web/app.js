@@ -79,6 +79,9 @@ const state = {
     ask: null,              // the approval this session is blocked on, if any
     askTimer: null,         // ticks the countdown on the approval card
     stopArmed: 0,           // when a soft Stop happened, for the force escalation
+    // The board of unfinished work. `at` is when the bridge last answered, so
+    // opening it again does not re-run git over every worktree on the machine.
+    dash: { open: false, data: null, at: 0, loading: false, error: null, files: new Set() },
 };
 
 const $ = (id) => document.getElementById(id);
@@ -90,6 +93,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'btn-pin', 'btn-folder', 'btn-term', 'btn-archive', 'btn-delete', 'turns', 'turn-pop',
     'term-pane', 'term-grip', 'term-dir', 'term-moved', 'term-body', 'term-restart', 'term-close',
     'agents', 'agent-scroll', 'agent-log', 'btn-back', 'btn-back-label',
+    'btn-dash', 'dash-badge', 'dash', 'dash-sub', 'dash-body', 'dash-refresh',
     'new-scrim', 'new-cwd', 'new-picker', 'new-prompt', 'new-model', 'new-perm',
     'new-test', 'new-test-row', 'new-go',
     'del-scrim', 'del-what', 'del-meta', 'del-go']) {
@@ -573,7 +577,9 @@ function clearCurrent() {
     dom.channels.replaceChildren();
     hideTurnPop();
     dom.conv.hidden = true;
-    dom.placeholder.hidden = false;
+    // Not while the board is up: the empty state would sit under it, and the
+    // session that went away is not what you are looking at anyway.
+    dom.placeholder.hidden = state.dash.open;
     dom.btnSend.disabled = true;
     // The pane lives inside .conv, so it goes with it; the shell keeps running
     // and is there again the moment the session is.
@@ -652,6 +658,8 @@ function beginOpen(summary) {
     state.stopArmed = 0;
     leaveAgent();       // a subagent belongs to the session it was spawned by
 
+    // Picking a session is done with the board, whichever way you got there.
+    if (state.dash.open) showDash(false);
     dom.placeholder.hidden = true;
     dom.conv.hidden = false;
 
@@ -1638,6 +1646,229 @@ async function markInstance() {
             el('span', { class: 'dev-badge', title: `Development bridge on port ${h.port}` },
                 `dev :${h.port}`));
     } catch { /* the status line already reports an unreachable bridge */ }
+}
+
+// ── dashboard ────────────────────────────────────────────────────────────
+// The rail answers "what have I been talking to". This answers "what have I
+// left behind" — changes nobody committed, pull requests nobody merged — which
+// is the thing a screen full of finished conversations hides.
+
+// How old an answer may be before opening the board goes and asks again. The
+// bridge caches underneath this, so a re-ask is usually free anyway.
+const DASH_STALE_MS = 45_000;
+
+function showDash(on) {
+    state.dash.open = on;
+    dom.dash.hidden = !on;
+    dom.btnDash.classList.toggle('on', on);
+    dom.btnDash.setAttribute('aria-pressed', String(on));
+    // The conversation is not closed, only covered: coming back out lands on
+    // the same transcript, scrolled where it was.
+    dom.conv.hidden = on || !state.current;
+    dom.placeholder.hidden = on || Boolean(state.current);
+
+    if (on) {
+        if (Date.now() - state.dash.at > DASH_STALE_MS) loadDash();
+        else renderDash();
+    } else if (state.current) {
+        // The terminal was display:none while the board was up, and xterm sizes
+        // itself to a box it could not measure then.
+        termPane.refit();
+    }
+}
+
+async function loadDash({ refresh = false } = {}) {
+    if (state.dash.loading) return;
+    state.dash.loading = true;
+    state.dash.error = null;
+    renderDash();
+    try {
+        const data = await get('/api/dashboard' + (refresh ? '?refresh=1' : ''));
+        state.dash.data = data;
+        state.dash.at = Date.now();
+    } catch (err) {
+        state.dash.error = err.message;
+    } finally {
+        state.dash.loading = false;
+        renderDash();
+        paintDashBadge();
+    }
+}
+
+/**
+ * How much is outstanding, on the button that opens the board. Counted in
+ * places rather than in files or PRs: "eleven" meaning eleven modified files in
+ * one worktree and "eleven" meaning eleven worktrees are different news.
+ */
+function paintDashBadge() {
+    const d = state.dash.data;
+    const rows = d ? d.projects.reduce((n, p) => n + p.workspaces.length, 0) : 0;
+    dom.dashBadge.hidden = !rows;
+    dom.dashBadge.textContent = String(rows);
+    dom.btnDash.title = rows
+        ? `${rows} ${rows === 1 ? 'place has' : 'places have'} uncommitted changes or an open pull request`
+        : 'Uncommitted changes and open pull requests, by project';
+}
+
+function renderDash() {
+    const d = state.dash.data;
+    dom.dashRefresh.disabled = state.dash.loading;
+    dom.dashRefresh.textContent = state.dash.loading ? 'Checking…' : 'Refresh';
+
+    if (d) {
+        const when = ago(d.checkedAt);
+        dom.dashSub.textContent = [
+            `${d.dirty} ${d.dirty === 1 ? 'directory' : 'directories'} with uncommitted changes`,
+            `${d.open} pull ${d.open === 1 ? 'request' : 'requests'} still open`,
+            when === 'now' ? 'checked just now' : `checked ${when} ago`,
+        ].join(' · ');
+    } else {
+        dom.dashSub.textContent = 'Uncommitted changes, and pull requests that are '
+            + 'open but not merged.';
+    }
+
+    const body = dom.dashBody;
+    if (state.dash.error) {
+        body.replaceChildren(el('div', { class: 'dash-note error' },
+            el('p', {}, `Could not read the working trees: ${state.dash.error}`),
+            el('button', { class: 'more-btn', type: 'button', onclick: () => loadDash() },
+                'Try again')));
+        return;
+    }
+    if (!d) {
+        body.replaceChildren(el('div', { class: 'dash-note' },
+            el('p', {}, 'Reading working trees and asking GitHub…')));
+        return;
+    }
+
+    const nodes = [];
+    // gh failing is worth saying outright rather than quietly listing no PRs:
+    // an empty board would otherwise read as "nothing open".
+    if (!d.gh.ok) {
+        nodes.push(el('div', { class: 'dash-note warn' },
+            el('p', {}, `Pull requests could not be listed — ${d.gh.error}. `
+                + 'Uncommitted changes below are unaffected.')));
+    }
+    if (!d.projects.length) {
+        nodes.push(el('div', { class: 'dash-note' },
+            el('p', {}, 'Nothing uncommitted, and no pull request left open. '
+                + 'Every worktree on this machine is clean.')));
+    }
+    for (const p of d.projects) nodes.push(dashProject(p));
+    body.replaceChildren(...nodes);
+}
+
+function dashProject(p) {
+    const counts = [];
+    if (p.dirty) counts.push(`${p.dirty} dirty`);
+    if (p.open) counts.push(`${p.open} open PR${p.open === 1 ? '' : 's'}`);
+
+    return el('section', { class: 'dproj' },
+        el('header', { class: 'dproj-head' },
+            el('span', { class: 'dproj-name' }, p.name),
+            p.repo ? el('span', { class: 'dproj-repo' }, p.repo) : null,
+            el('span', { class: 'dproj-counts' }, counts.join(' · ')),
+        ),
+        el('div', { class: 'dproj-body' }, p.workspaces.map(w => dashRow(p, w))),
+    );
+}
+
+function dashRow(project, w) {
+    const g = w.git || {};
+    const filesId = `${project.cwd}::${w.dir || (w.prs[0] && w.prs[0].url) || w.name}`;
+    const showFiles = state.dash.files.has(filesId);
+
+    const signals = [];
+    if (g.dirty) {
+        signals.push(el('button', {
+            class: 'sig dirty' + (showFiles ? ' on' : ''),
+            type: 'button',
+            'aria-expanded': String(showFiles),
+            title: dirtyTitle(g),
+            onclick: () => {
+                state.dash.files[showFiles ? 'delete' : 'add'](filesId);
+                renderDash();
+            },
+        }, `${g.files} uncommitted`));
+    }
+    // Only where there is an upstream to be ahead of; a worktree branch that was
+    // never pushed has nothing to compare against and says nothing here.
+    if (g.ahead) signals.push(el('span', { class: 'sig quiet' }, `${g.ahead} unpushed`));
+    if (g.conflicts) signals.push(el('span', { class: 'sig bad' }, `${g.conflicts} conflicted`));
+
+    for (const pr of w.prs) {
+        signals.push(el('a', {
+            class: 'sig pr' + (pr.draft ? ' draft' : ''),
+            href: pr.url, target: '_blank', rel: 'noreferrer',
+            title: `${pr.title}\n${pr.url}\nopened by ${pr.author || 'someone'}, `
+                + `updated ${ago(pr.updatedAt)} ago`,
+        },
+            el('span', { class: 'pr-num' }, `#${pr.number}`),
+            el('span', { class: 'pr-title' }, clip(pr.title, 46)),
+            pr.draft ? el('span', { class: 'pr-tag' }, 'draft') : null,
+            pr.reviewDecision === 'APPROVED' ? el('span', { class: 'pr-tag ok' }, 'approved') : null,
+            pr.reviewDecision === 'CHANGES_REQUESTED'
+                ? el('span', { class: 'pr-tag bad' }, 'changes requested') : null,
+        ));
+    }
+
+    return el('article', { class: 'wsrow', 'data-kind': w.kind },
+        el('div', { class: 'wsrow-head' },
+            el('span', { class: 'ws-name' }, w.name),
+            w.kind === 'gone'
+                ? el('span', { class: 'ws-note' }, 'no working directory left')
+                : el('span', { class: 'ws-branch', title: w.dir || '' },
+                    g.branch || (g.detached ? 'detached HEAD' : '—')),
+            el('span', { class: 'wsrow-signals' }, signals),
+        ),
+        showFiles && g.sample ? el('ul', { class: 'ws-files' },
+            g.sample.map(f => el('li', {},
+                el('span', { class: 'fstat', 'data-s': f.status }, statusWord(f.status)),
+                el('span', { class: 'fpath' }, f.path))),
+            g.files > g.sample.length
+                ? el('li', { class: 'more' }, `and ${g.files - g.sample.length} more`)
+                : null,
+        ) : null,
+        el('div', { class: 'ws-sessions' },
+            w.sessions.map(s => dashSession(s)),
+            w.moreSessions
+                ? el('span', { class: 'ws-more' }, `+${w.moreSessions} older`)
+                : null,
+        ),
+    );
+}
+
+function dashSession(s) {
+    const running = s.runner && (s.runner.state === 'busy' || s.runner.state === 'starting');
+    return el('button', {
+        class: 'schip',
+        type: 'button',
+        'data-state': running ? 'running' : (s.active ? 'active' : 'idle'),
+        title: `${s.title}\n${s.userMessages} turns · last message ${ago(s.lastTs)} ago`,
+        onclick: () => { showDash(false); openSession(s.sessionId); },
+    },
+        el('span', { class: 'schip-dot' }),
+        el('span', { class: 'schip-title' }, clip(s.title, 40)),
+        el('span', { class: 'schip-ago' }, ago(s.lastTs)),
+    );
+}
+
+function dirtyTitle(g) {
+    const bits = [];
+    if (g.staged) bits.push(`${g.staged} staged`);
+    if (g.unstaged) bits.push(`${g.unstaged} modified`);
+    if (g.untracked) bits.push(`${g.untracked} untracked`);
+    if (g.conflicts) bits.push(`${g.conflicts} conflicted`);
+    return bits.join(' · ') + ' — click to list them';
+}
+
+function statusWord(xy) {
+    if (xy === '??') return 'new';
+    if (xy === 'UU') return 'conflict';
+    if (xy[0] === 'D' || xy[1] === 'D') return 'deleted';
+    if (xy[0] === 'A') return 'added';
+    if (xy[0] === 'R' || xy[1] === 'R') return 'renamed';
+    return xy[0] !== '.' ? 'staged' : 'modified';
 }
 
 // ── streaming ────────────────────────────────────────────────────────────
@@ -2696,10 +2927,14 @@ for (const n of dom.delScrim.querySelectorAll('[data-close-del]')) {
 }
 dom.delScrim.addEventListener('click', (e) => { if (e.target === dom.delScrim) closeDelete(); });
 
+dom.btnDash.addEventListener('click', () => showDash(!state.dash.open));
+dom.dashRefresh.addEventListener('click', () => loadDash({ refresh: true }));
+
 document.addEventListener('keydown', (e) => {
     // The confirm sits over the new-session dialog, so it answers Escape first.
     if (e.key === 'Escape' && !dom.delScrim.hidden) { closeDelete(); return; }
     if (e.key === 'Escape' && !dom.newScrim.hidden) { closeNew(); return; }
+    if (e.key === 'Escape' && state.dash.open) { showDash(false); return; }
     if (e.key === 'Escape' && state.agent) { closeAgent(); return; }
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); dom.search.focus(); }
     if ((e.ctrlKey || e.metaKey) && e.key === 'n') { e.preventDefault(); openNew(); }
@@ -2734,6 +2969,13 @@ refreshDevBrowser();
 showTerm(termOpen());
 setInterval(refreshDevBrowser, 20_000);
 setInterval(() => { if (state.current) loadChannels(); }, 25_000);
+
+// The count on the Dashboard button is the only thing that says there is
+// anything to look at, so it is read once at startup — a few seconds in, where
+// it cannot slow the first paint of the session list — and then only while the
+// board is actually on screen.
+setTimeout(() => loadDash(), 3000);
+setInterval(() => { if (state.dash.open) loadDash(); }, 60_000);
 
 // A running subagent writes to its own file, which the parent transcript says
 // nothing about — so the only way its activity line moves is to go and look.

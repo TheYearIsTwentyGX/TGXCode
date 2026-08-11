@@ -20,6 +20,7 @@ const { RunnerPool, PERMISSION_MODES } = require('./runner');
 const { Flags } = require('./flags');
 const devbrowser = require('./devbrowser');
 const devservers = require('./devservers');
+const dashboard = require('./dashboard');
 const { openInExplorer } = require('./explorer');
 const { TerminalPool } = require('./terminal');
 
@@ -279,6 +280,28 @@ async function api(req, res, url, pathname) {
             if (st) { s.runner = { state: st.state, activity: st.activity, queued: st.queued }; }
         }
         return send(res, 200, { sessions, ready: index.ready });
+    }
+
+    // Work in flight: uncommitted changes and unmerged pull requests, by project.
+    // Shells out to git and gh, so it is not on the session list's path — the rail
+    // must not wait on GitHub — and everything it reads is cached behind it.
+    if (pathname === '/api/dashboard' && req.method === 'GET') {
+        const data = await dashboard.build(index, {
+            includeTest: cfg.IS_DEV,
+            refresh: url.searchParams.get('refresh') === '1',
+        });
+        // The same live status the rail carries, so a row can say that one of
+        // its sessions is working right now rather than looking abandoned.
+        const statuses = pool.statuses();
+        for (const p of data.projects) {
+            for (const w of p.workspaces) {
+                for (const s of w.sessions) {
+                    const st = statuses[s.sessionId];
+                    if (st) s.runner = { state: st.state, activity: st.activity, queued: st.queued };
+                }
+            }
+        }
+        return send(res, 200, data);
     }
 
     if (pathname === '/api/sessions' && req.method === 'POST') {
