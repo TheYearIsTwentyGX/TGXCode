@@ -230,6 +230,9 @@ async function api(req, res, url, pathname) {
             sessions: index.sessions.size, host: os.hostname(),
             // Live SSE connections — a quick way to tell whether a UI attached.
             clients: clients.size, runners: Object.keys(pool.statuses()).length,
+            // Turns in flight. Restarting would end them, so anything that
+            // restarts the bridge should look here first.
+            busy: pool.busyCount,
             permissionModes: PERMISSION_MODES,
         });
     }

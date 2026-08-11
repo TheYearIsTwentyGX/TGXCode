@@ -7,6 +7,7 @@
   "private": true,
   "scripts": {
     "start": "node scripts/start.js",
+    "restart": "bash scripts/restart-bridge.sh",
     "dev": "node scripts/dev.js",
     "dev:headless": "node scripts/dev.js --no-window",
     "bridge": "node bridge/server.js",
