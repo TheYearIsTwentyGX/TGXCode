@@ -56,6 +56,7 @@ All of these run from WSL, in this directory.
 | | |
 |---|---|
 | `npm start` | Launch the Windows app. It starts its own bridge on 45888. |
+| `npm run restart` | Restart the everyday bridge so it picks up whatever is on main. Refuses while a turn is in flight; `-- --pull` fast-forwards from origin first, `-- --status` just reports. |
 | `npm run dev` | A **separate** instance on 45899 plus its own window, for working on this app without disturbing the one you actually use. |
 | `npm run dev:headless` | The same, bridge only — open the printed URL in a browser. The fastest loop for UI work: edit `web/`, hit refresh. |
 | `npm run bridge` | The bridge in the foreground on 45888. This is the everyday instance; use `dev` instead unless you mean it. |
@@ -376,6 +377,20 @@ To stop your own, Ctrl-C the `npm run dev` that started it, or kill it by port:
 ```bash
 kill "$(ss -ltnp 2>/dev/null | grep :45899 | grep -oP 'pid=\K\d+' | head -1)"
 ```
+
+### Picking up new code
+
+The bridge runs whatever was on disk when it started, so it keeps running old
+code until you restart it. Add this to `~/.bashrc`:
+
+```bash
+alias restart-bridge='bash ~/Other/claude-sessions/scripts/restart-bridge.sh'
+```
+
+Then `restart-bridge` from anywhere. It touches only the everyday port, refuses
+while a turn is in flight (`--force` overrides), takes `--pull` to fast-forward
+from origin first, and `--status` to just report what is running. Any open
+window reconnects on its own.
 
 ## Working on this with agents
 
