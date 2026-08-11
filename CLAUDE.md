@@ -27,6 +27,37 @@ must stop your own, Ctrl-C the `npm run dev` you started, or kill it by port:
 kill "$(ss -ltnp 2>/dev/null | grep :45899 | grep -oP 'pid=\K\d+' | head -1)"
 ```
 
+## Work in a worktree, never the main checkout
+
+Several agents work on this repo at once — there are usually a handful of live
+worktrees under `.claude/worktrees/` — and they all reach for the same few files
+in `bridge/` and `web/`. Editing `/home/dylan_hays/Other/claude-sessions`
+directly means two agents silently overwriting each other, and it leaves the
+user's own checkout dirty while they are running the app out of it.
+
+**Make the worktree your first action, before the first edit.** Use
+`EnterWorktree` with a short name for the work; it branches `worktree-<name>` off
+HEAD and moves you there.
+
+- **`cd` into the repo first.** `EnterWorktree` needs a git repository at the
+  working directory; an agent launched in `~` reports "not in a git repository
+  and no WorktreeCreate hooks are configured", which looks like a missing hook
+  but is just the wrong directory.
+- `baseRef` is pinned to `head` in `.claude/settings.json` because this repo has
+  no remote — there is no `origin/main` to branch from.
+- **Enter it before you start editing, not after.** Moving mid-session works, but
+  every edit you have already made stays behind in the main checkout and has to
+  be carried across by hand — which is a merge you did not need to do.
+- Either way, a session that enters a worktree ends up with two transcript files.
+  That is expected and handled; see *Notes that save time* for what it means.
+- A dev bridge run from inside the worktree serves that worktree's `bridge/` and
+  `web/`, which is what you want when verifying your own change.
+
+Not everything is an edit. Reading transcripts, diagnosing, querying a bridge and
+running `npm run dev` are fine from wherever you are. The rule is about writing
+to tracked files: if you are about to change one, be in a worktree. When in
+doubt, make one — it costs a second and nothing is lost by it.
+
 ## Clean up the sessions you start
 
 Every session you start to try something out lands in the user's sidebar, because
@@ -79,11 +110,17 @@ other, since the staging directory is wiped and rebuilt.
 
 ## Notes that save time
 
-- **Work from a worktree, and `cd` here first.** `EnterWorktree` needs a git
-  repository at the working directory; an agent launched in `~` reports
-  "not in a git repository and no WorktreeCreate hooks are configured", which
-  looks like a missing hook but is just the wrong directory. `baseRef` is pinned
-  to `head` in `.claude/settings.json` because this repo has no remote.
+- **Entering a worktree splits the session's transcript in two.** Claude Code
+  files a transcript under the project directory for the cwd it is running in,
+  and a worktree is a project directory of its own, so a session that crosses
+  into one leaves a second `<id>.jsonl` under
+  `~/.claude/projects/…--claude-worktrees-<name>/`. One copy holds the
+  conversation and the other only bookkeeping — a title, a mode, the worktree
+  state — and which gets which goes either way: both orders exist on this
+  machine. `conversationRecord` in `bridge/sessions.js` is what picks the copy
+  with the conversation in it. Before that the index took whichever copy was
+  scanned last, so directory order decided whether a session showed its history
+  or showed 0 turns and nothing at all.
 - **No `node_modules`, on purpose.** `electron .` will not work here; the shell
   is packaged from a Windows-side staging directory. `npm start` finds the built
   executable instead.
