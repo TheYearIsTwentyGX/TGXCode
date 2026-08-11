@@ -100,7 +100,7 @@ const $ = (id) => document.getElementById(id);
 const dom = {};
 for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-sub',
     'channels', 'scroll', 'log', 'status-line', 'status-text', 'btn-stop', 'input',
-    'btn-send', 'queue', 'queue-list', 'queue-count', 'queue-clear',
+    'btn-send', 'btn-lgtm', 'queue', 'queue-list', 'queue-count', 'queue-clear',
     'model', 'perm', 'btn-new', 'db-status', 'db-label', 'toasts',
     'btn-bell', 'bell-menu', 'opt-desktop', 'opt-sound', 'bell-note', 'bell-try',
     'btn-pin', 'btn-folder', 'btn-term', 'btn-archive', 'btn-delete', 'turns', 'turn-pop',
@@ -596,7 +596,7 @@ function clearCurrent() {
     // Not while the board is up: the empty state would sit under it, and the
     // session that went away is not what you are looking at anyway.
     dom.placeholder.hidden = state.dash.open;
-    dom.btnSend.disabled = true;
+    enableSend(false);
     // The pane lives inside .conv, so it goes with it; the shell keeps running
     // and is there again the moment the session is.
     termPane.detach();
@@ -1841,11 +1841,11 @@ function applyComposerScope() {
         : 'Send a message to this session…';
     dom.conv.dataset.scope = onAgent ? 'agent' : 'session';
     if (onAgent) {
-        dom.btnSend.disabled = true;
+        enableSend(false);
         dom.btnStop.hidden = true;
         renderQueue(state.runner);   // the session's queue is not the agent's business
     } else {
-        dom.btnSend.disabled = !state.current;
+        enableSend(Boolean(state.current));
         applyRunner(state.runner);
     }
 }
@@ -2858,11 +2858,12 @@ function applyRunner(s) {
     // While a subagent is on screen the composer belongs to nothing you can
     // send to, so its controls stay out of the way.
     dom.btnStop.hidden = !busy || Boolean(state.agent);
-    dom.btnSend.disabled = !state.current || Boolean(state.agent);
+    enableSend(Boolean(state.current) && !state.agent);
     // Say what the button will actually do. While a turn is running the message
     // joins the queue rather than going anywhere, and that is worth admitting
     // before the click, not after.
     dom.btnSend.textContent = busy && !state.agent ? 'Queue' : 'Send';
+    dom.btnLgtm.title = busy && !state.agent ? LGTM_TITLE_BUSY : LGTM_TITLE;
     applyQueue(s);
 
     // The escalation is armed against one turn. Once that turn is over the
@@ -3390,14 +3391,56 @@ const autoGrow = () => grow(dom.input, 38, 220);
 // pasted-in briefing cannot push the Start button off the bottom of the modal.
 const growPrompt = () => grow(dom.newPrompt, 62, 300);
 
-async function sendMessage({ fork = false, text: override = null } = {}) {
+/** Send and LGTM are enabled together: both are ways of sending to the session. */
+function enableSend(on) {
+    dom.btnSend.disabled = !on;
+    dom.btnLgtm.disabled = !on;
+}
+
+/**
+ * What LGTM says.
+ *
+ * The button sends this as an ordinary message, which is the point: approving
+ * work is a thing worth having in the transcript in words, and "LGTM" on its own
+ * is not an instruction — it does not say whether the branch is already on a PR,
+ * or what counts as done.
+ *
+ * It ends by naming what should stop the merge, because the failure this replaces
+ * is not a bad merge, it is a green one reported over the top of a red check.
+ * Repositories with no remote are the normal case on this machine, so the PR is
+ * described by what it is for rather than assumed to exist.
+ */
+const LGTM_PROMPT = `LGTM — take it from here and land it.
+
+- If this work is not on a pull request yet, commit whatever is outstanding on a
+  branch of its own and open one. If the repository has no remote, merging that
+  branch into the main branch is the equivalent — do that instead.
+- Run the checks this project expects of a change: its tests, lint, typecheck,
+  build, whatever it has. Fix what they turn up.
+- Once they pass, merge it.
+
+If something genuinely blocks the merge — checks you cannot fix, conflicts, a
+review asking for changes — stop and tell me instead of working around it.`;
+
+const LGTM_TITLE = 'Send: open a PR for this work if there is not one, run the '
+    + 'checks, and merge it once they pass.';
+const LGTM_TITLE_BUSY = 'Queue behind the running turn: open a PR for this work '
+    + 'if there is not one, run the checks, and merge it once they pass.';
+
+async function sendMessage({ fork = false, text: override = null, canned = false } = {}) {
     const text = override != null ? override : dom.input.value.trim();
     if (!text || !state.current) return;
     const sessionId = state.current.sessionId;
 
-    if (override == null) { dom.input.value = ''; autoGrow(); }
-    saveDraft(sessionId, '');
-    dom.btnSend.disabled = true;
+    // Only a message that came out of the box empties the box — and only then is
+    // the saved draft gone with it. A canned send leaves a half-written message
+    // where it was, rather than dropping it on the way past.
+    if (override == null) {
+        dom.input.value = '';
+        autoGrow();
+        saveDraft(sessionId, '');
+    }
+    enableSend(false);
 
     try {
         const r = await post(`/api/sessions/${sessionId}/send`, {
@@ -3409,18 +3452,19 @@ async function sendMessage({ fork = false, text: override = null } = {}) {
         // Only a message that actually went to the process needs holding here:
         // if it died before answering, this is the only surviving copy of what
         // was typed. A queued one is still on the bridge, which hands the whole
-        // queue back on failure.
-        if (!r.queued) state.unsent.set(sessionId, text);
+        // queue back on failure. Canned text is not worth holding at all — it is
+        // a button press away, and it is long.
+        if (!r.queued && !canned) state.unsent.set(sessionId, text);
         applyRunner(r.status);
         if (!r.queued) {
             state.pinned = true;
             scrollToEnd(false);
         }
     } catch (err) {
-        restoreToComposer(text);
+        if (!canned) restoreToComposer(text);
         toast(`Could not send: ${err.message}`, 'error');
     } finally {
-        dom.btnSend.disabled = !state.current;
+        enableSend(Boolean(state.current));
     }
 }
 
@@ -3633,6 +3677,10 @@ dom.search.addEventListener('input', debounce(() => {
 }, 180));
 
 dom.btnSend.addEventListener('click', () => sendMessage());
+// One click, and no confirmation over the top of it: the click *is* the approval,
+// and the session still asks for whatever its permission mode makes it ask for
+// before anything is pushed or merged.
+dom.btnLgtm.addEventListener('click', () => sendMessage({ text: LGTM_PROMPT, canned: true }));
 dom.btnNew.addEventListener('click', openNew);
 
 dom.btnPin.addEventListener('click', () => {

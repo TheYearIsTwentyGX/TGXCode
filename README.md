@@ -111,6 +111,7 @@ create one in `%APPDATA%\claude-sessions\`:
 | **Dashboard** | The button in the top bar, with a count of how many places are unfinished. It lists, per project, every directory holding uncommitted changes and every pull request still open, with the sessions that worked there as links back into the conversation. |
 | **Open folder** | The folder button by the title shows the session's working directory in Windows File Explorer, through the `\\wsl.localhost` share. |
 | **Composer** | Sends to the session, resuming it in place — the same transcript a terminal would append to. |
+| **LGTM** | Beside *Send*, for when you have read the work and it is done: it sends a written instruction to put the change on a pull request if it is not on one already, run the project's checks, and merge once they pass — and to stop and say so if something blocks it. One click, no confirmation over the top; the session still asks for what its permission mode makes it ask for. |
 | **Send queue** | Write while an agent is working and the message waits, listed above the composer in send order. Each one can be expanded, reordered, pulled back for editing, or dropped, right up until its turn starts. `Shift+Tab` out of the composer to work through them without the mouse. |
 
 Shortcuts: `Ctrl+Enter` send, `Ctrl+K` filter, `Ctrl+N` new session, `Esc` leave
