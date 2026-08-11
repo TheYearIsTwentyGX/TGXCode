@@ -2014,11 +2014,13 @@ function announce(title, body, bad, sessionId) {
         });
     } catch { return; /* some engines expose Notification but refuse `new` */ }
     n.onclick = () => {
-        // Best effort. A renderer cannot reliably raise its own window on
-        // Windows — that belongs to the shell, along with the tray and the
-        // deep links it would route through. Opening the session still works
-        // for whenever the window does come forward.
-        window.focus();
+        // Raising the window is the shell's job — a renderer cannot get past
+        // the Windows foreground lock on its own — so ask it if it is there.
+        // In a browser tab it is not, and window.focus() is what that
+        // environment gives us; it works from a notification click, which is
+        // a user gesture.
+        if (window.claudeShell) window.claudeShell.revealWindow();
+        else window.focus();
         if (sessionId) openSession(sessionId);
         n.close();
     };

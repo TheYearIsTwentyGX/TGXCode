@@ -11,7 +11,7 @@
 // WSL on this machine runs with networkingMode=mirrored, so the bridge binding
 // 127.0.0.1 inside Linux is reachable from Windows at the same address.
 
-const { app, BrowserWindow, shell, Menu, screen } = require('electron');
+const { app, BrowserWindow, shell, Menu, screen, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -230,6 +230,9 @@ function createWindow() {
             nodeIntegration: false,
             contextIsolation: true,
             spellcheck: true,
+            // One channel, so a clicked notification can raise this window —
+            // the only thing the page cannot do for itself. See preload.js.
+            preload: path.join(__dirname, 'preload.js'),
         },
     });
 
@@ -291,6 +294,26 @@ function createWindow() {
 // appear rather than to a reverse-DNS identifier: an ID Windows cannot resolve
 // gets printed verbatim either way. Keep it human-readable for that reason.
 app.setAppUserModelId('TGXCode');
+
+// Raise the window a clicked notification belongs to.
+//
+// Windows will not let a background process take the foreground on its own —
+// that is the foreground lock, and it is why `window.focus()` from the page
+// does nothing useful. Marking the window always-on-top for the length of the
+// call is the way through it: the flag bypasses the lock, and clearing it
+// immediately afterwards means the window does not actually stay on top of
+// everything else. It ends up raised and focused, and behaves normally after.
+//
+// Sent by preload.js, which is the page's only way to ask.
+ipcMain.on('reveal-window', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+    if (!win || win.isDestroyed()) return;
+    if (win.isMinimized()) win.restore();
+    win.setAlwaysOnTop(true);
+    win.show();
+    win.setAlwaysOnTop(false);
+    win.focus();
+});
 
 app.whenReady().then(async () => {
     const cfg = loadConfig();
