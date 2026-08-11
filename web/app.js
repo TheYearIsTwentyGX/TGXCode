@@ -658,8 +658,13 @@ function beginOpen(summary) {
     renderRail();       // the clicked row takes the current-session mark now
     applyRunner(null);
 
-    // Anything typed here before, or handed back by a failed turn.
-    dom.input.value = state.unsent.get(summary.sessionId) || loadDraft(summary.sessionId);
+    // Anything typed here before, or handed back by a failed turn — but only what
+    // is genuinely still owed to the composer. state.unsent is insurance against a
+    // process dying mid-turn, not a draft: reading it here put the message you had
+    // just sent back in the box every time you looked away and back, and leaving
+    // again then saved that copy as a real draft, which outlived the turn.
+    // handleSendFailure and editQueued are the two things that hand text back.
+    dom.input.value = loadDraft(summary.sessionId);
     autoGrow();
     dom.input.focus();
 }
