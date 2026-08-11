@@ -346,6 +346,12 @@ a:hover { text-decoration: underline; }
     color: var(--text-3);
     font-family: var(--mono);
     font-size: 11px;
+    /* Gave up none of its width before, so on a pinned or labelled row it took
+       what the activity line needed. It is the longest thing on the line and the
+       least urgent, so it is the one that abbreviates. */
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 .strip[aria-current="true"] .strip-meta .wt { color: #b3c7ea; }
 .strip-meta .dot { color: var(--text-4); opacity: 0.6; }
@@ -353,21 +359,12 @@ a:hover { text-decoration: underline; }
 .strip-meta .pulse {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
-    /* The activity text may be squeezed to nothing on a narrow rail; the dot is
-       the row's only sign of life, so it never is. */
-    min-width: 6px;
+    /* Squeezed to nothing on a narrow rail, and that is allowed: the dot at the
+       head of the line is what says the session is working. */
+    min-width: 0;
     color: var(--yellow);
 }
 .strip-meta .pulse-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.strip-meta .pulse::before {
-    content: "";
-    flex: none;
-    width: 6px; height: 6px;
-    border-radius: 50%;
-    background: var(--yellow);
-    animation: breathe 1.6s var(--ease) infinite;
-}
 /* Messages you queued and then walked away from. Ahead of the activity, which is
    what gives way when the row runs out of room. */
 .strip-meta .wait {
@@ -379,14 +376,24 @@ a:hover { text-decoration: underline; }
     font-size: 10.5px;
 }
 
-.strip[data-state="active"] .strip-meta::before {
+/* Whether a session is doing anything, at the head of the line.
+   It used to be green-for-active only, standing down for running rows on the
+   grounds that the activity line said it better. But the activity line is last on
+   a row that does not wrap, so a row carrying a pin, a test label or a worktree
+   name pushed it off the end — a pinned session that was thinking looked exactly
+   like one that was idle. The words can still be cut; this cannot. */
+.strip[data-state="active"] .strip-meta::before,
+.strip[data-state="running"] .strip-meta::before {
     content: "";
     width: 6px; height: 6px;
     border-radius: 50%;
     background: var(--green);
     flex: none;
 }
-.strip[data-state="running"] .strip-meta::before { display: none; }
+.strip[data-state="running"] .strip-meta::before {
+    background: var(--yellow);
+    animation: breathe 1.6s var(--ease) infinite;
+}
 
 .rail-empty {
     padding: 34px 20px;
@@ -1320,7 +1327,7 @@ a:hover { text-decoration: underline; }
     .status-line[data-state="busy"] .led,
     .status-line[data-state="ask"] .led,
     .tool[data-status="pending"] > summary::before,
-    .strip-meta .pulse::before { animation: none; }
+    .strip[data-state="running"] .strip-meta::before { animation: none; }
 }
 
 .btn-stop {

@@ -390,9 +390,7 @@ function strip(s) {
                 // the activity because the activity is the one part of the row
                 // that may be cut short — it is the least specific thing on it.
                 queued ? queuedBadge(queued) : null,
-                running ? el('span', { class: 'dot' }, '·') : null,
-                running ? el('span', { class: 'pulse' },
-                    el('span', { class: 'pulse-t' }, clip(s.runner.activity || 'Working', 22))) : null,
+                activityBits(running ? s.runner : null),
             ),
         ),
         el('div', { class: 'strip-actions' },
@@ -416,6 +414,23 @@ function strip(s) {
     );
 }
 
+/**
+ * What a row says about the turn it is running: its separator and the activity
+ * line, as a pair, so a status update can swap them as one.
+ *
+ * Only the words. That a session is working at all is said by the dot at the head
+ * of the meta line, which is the part that has to survive a narrow rail — this
+ * text is last in a row that does not wrap, so it is the first thing to go.
+ */
+function activityBits(runner) {
+    if (!runner) return [];
+    return [
+        el('span', { class: 'dot dot-act' }, '·'),
+        el('span', { class: 'pulse' },
+            el('span', { class: 'pulse-t' }, clip(runner.activity || 'Working', 22))),
+    ];
+}
+
 function queuedBadge(queued) {
     return el('span', {
         class: 'wait',
@@ -433,6 +448,26 @@ function patchQueuedBadge(stripEl, queued) {
     if (existing) existing.replaceWith(fresh);
     // Ahead of the activity, in the place strip() would have built it.
     else meta.insertBefore(fresh, meta.querySelector('.pulse')?.previousSibling || null);
+}
+
+/**
+ * Bring one row's state, queue count and activity line up to date in place.
+ *
+ * The rail is rebuilt only when the session list changes, and none of the things
+ * that move while a turn runs change it: not the tool being called, not the queue
+ * behind it, not the turn ending. So a row kept whatever the last list happened to
+ * say — an activity line minutes stale, and a finished turn still breathing.
+ */
+function patchStripStatus(stripEl, s) {
+    const meta = stripEl.querySelector('.strip-meta');
+    if (!meta) return;
+    const runner = s.runner;
+    const running = runner && (runner.state === 'busy' || runner.state === 'starting');
+    stripEl.dataset.state = running ? 'running' : (s.active ? 'active' : 'idle');
+    // Cleared before the queue badge is placed, so it lands where strip() puts it.
+    for (const node of meta.querySelectorAll('.dot-act, .pulse')) node.remove();
+    patchQueuedBadge(stripEl, (runner && runner.queued) || 0);
+    for (const node of activityBits(running ? runner : null)) meta.append(node);
 }
 
 /** Toggle pin/archive, updating in place so the rail doesn't jump under the cursor. */
@@ -1660,21 +1695,12 @@ function connect() {
     es.addEventListener('runner-status', (e) => {
         const s = JSON.parse(e.data);
         if (state.current && s.sessionId === state.current.sessionId) applyRunner(s);
+        // The rail's own copy, so a rebuild from the held order draws what the
+        // patch below already put on screen rather than reverting it.
+        const row = state.sessions.find(x => x.sessionId === s.sessionId);
+        if (row) row.runner = { state: s.state, activity: s.activity, queued: s.queued };
         const strip = dom.rail.querySelector(`[data-id="${CSS.escape(s.sessionId)}"]`);
-        if (strip) {
-            strip.dataset.state = (s.state === 'busy' || s.state === 'starting')
-                ? 'running' : strip.dataset.state;
-            // Keep the row's queue count live: the rail is only rebuilt when the
-            // session list changes, and queueing a message does not change it.
-            const row = state.sessions.find(x => x.sessionId === s.sessionId);
-            if (row) {
-                if (!row.runner) row.runner = { state: s.state, activity: s.activity, queued: 0 };
-                if (row.runner.queued !== s.queued) {
-                    row.runner.queued = s.queued;
-                    patchQueuedBadge(strip, s.queued);
-                }
-            }
-        }
+        if (strip && row) patchStripStatus(strip, row);
     });
 
     es.addEventListener('permission-request', (e) => {
