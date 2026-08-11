@@ -390,19 +390,45 @@ draw". For these two it is exactly the dialog it can draw.
 
 ### Notifications
 
-The bell in the top bar decides what happens when a turn you are not watching
-comes to an end — a desktop notification, a short chime, or both. Clicking a
-notification opens that session.
+The bell in the top bar decides what reaches you about a session you are not
+watching — a desktop notification, a short chime, or both. Clicking one opens
+that session.
 
-It is deliberately quiet. A notification that fires too often gets switched off,
-and the one that mattered goes with it, so a finished turn only speaks up if:
+Two different things get announced, and they are not held to the same standard.
 
-- it **failed**, which is the one ending you cannot discover by waiting; or
-- it ran for **over 30 seconds** and is not the session you have open in a
-  focused window.
+**Something waiting on you always speaks up** — a plan, a question, or a
+permission. The turn is stopped until it is answered, so there is nothing to be
+gained by holding back and no duration to wait for.
 
-At most one per session per ten seconds, so a draining queue is one notification
+**A turn finishing** is rationed, because a notification that fires too often
+gets switched off and takes the one that mattered with it. It only speaks up if
+it **failed** — the one ending you cannot discover by waiting — or if it ran for
+**over 30 seconds**. Never for the session already open in a focused window, in
+either case: you can see it.
+
+At most one chime per session per ten seconds, so a draining queue is one sound
 rather than five. A send that never became a turn always says so.
+
+A permission or a plan carries **Allow** and **Deny** buttons on the toast
+itself, answerable without switching to the app. Chromium allows exactly two
+(`Notification.maxActions`), which is why **Allow all session** is not among
+them — it is the rarest of the three and the one most worth reading the card
+before choosing. A question gets no buttons at all: its answer is a choice among
+options that will not fit on a toast. Clicking the body always opens the card,
+where every answer lives.
+
+Those buttons are the only reason `web/sw.js` exists. Actions are not available
+on a plain notification — only on the persistent kind, shown through a service
+worker registration. It holds no cache and installs no `fetch` handler, so it
+never serves a request and cannot serve a stale one; editing `web/` and
+refreshing behaves exactly as it did before. What it buys is that a button press
+is handled in the worker rather than the page, so answering does not depend on
+the window being open, focused, or still on that session.
+
+The three sounds mean three different things, since the point of a sound is to
+be understood without looking: two notes up for a turn that finished, one flat
+low note for one that failed, and two notes on the same pitch — a knock — for
+something waiting on you.
 
 The thirty seconds is wall clock, timed from the moment the bridge marked the
 runner busy rather than read off the turn's result. The two normally agree to

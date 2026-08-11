@@ -2180,6 +2180,7 @@ const NOTIFY = {
 const notify = {
     desktop: localStorage.getItem('notifyDesktop') !== '0',
     sound: localStorage.getItem('notifySound') !== '0',
+    sw: null,           // the worker registration, once it is ready — see sw.js
     fired: new Map(),   // sessionId -> when something last fired for it
     busy: new Map(),    // sessionId -> when its running turn started
     audio: null,
@@ -2263,7 +2264,7 @@ function announceTurn(r) {
         `${clip(sessionTitle(r.sessionId), 60)} — ${bad ? 'turn failed' : 'finished'}`,
         bad ? clip(r.detail || 'The turn ended with an error.', 160)
             : `Ran for ${dur(waited)}.`,
-        bad, r.sessionId,
+        bad ? 'fail' : 'done', r.sessionId,
     );
 }
 
@@ -2278,12 +2279,102 @@ function announceSendFailure(f) {
     announce(
         `${clip(sessionTitle(f.sessionId), 60)} — could not run`,
         clip(f.message || 'The message never reached Claude.', 160),
-        true, f.sessionId,
+        'fail', f.sessionId,
     );
 }
 
-function announce(title, body, bad, sessionId) {
-    chime(bad);
+/**
+ * A blocked turn, said out loud.
+ *
+ * Three things arrive down this channel and only one is a permission — see the
+ * approvals section for the vocabulary. What they share is the thing that
+ * matters here: the turn does not move until you answer, so unlike a finished
+ * turn there is no duration to wait for and nothing to be gained by holding
+ * back. If you are not looking at the card, you want to know.
+ *
+ * A tool and a plan get two buttons, because yes and no are the whole answer
+ * for a tool and are approve-or-keep-planning for a plan. A question gets
+ * none: its answer is a choice among options that will not fit on a toast, so
+ * it can only invite you to come and read it.
+ */
+function announceAsk(p) {
+    const watching = document.hasFocus()
+        && state.current && state.current.sessionId === p.sessionId;
+    if (watching) return;
+
+    const kind = p.kind || 'tool';
+    const head = ASK_TITLE[kind] || `${p.displayName} needs permission`;
+    // Deliberately not gated on allowedNow: the toast carries a tag, so a
+    // second ask replaces the first rather than stacking, and suppressing it
+    // would leave the old one on screen offering to answer a dead request.
+    // Only the noise is rationed, below.
+    showAsk(`${clip(sessionTitle(p.sessionId), 60)} — ${head}`, askBody(p, kind), p, kind);
+    if (allowedNow(p.sessionId)) chime('ask');
+}
+
+const ASK_TITLE = {
+    plan: 'a plan to approve',
+    question: 'a question for you',
+};
+
+function askBody(p, kind) {
+    if (kind === 'plan') {
+        return clip((p.input && p.input.plan) || p.description || 'A plan is ready.', 160);
+    }
+    if (kind === 'question') {
+        const qs = (p.input && p.input.questions) || [];
+        return clip(qs.length ? qs[0].question : 'A question is waiting.', 160);
+    }
+    return clip(toolSummary({ name: p.tool, input: p.input }) || p.description || '', 160);
+}
+
+const ASK_ACTIONS = {
+    tool: [{ action: 'allow', title: 'Allow' }, { action: 'deny', title: 'Deny' }],
+    plan: [{ action: 'allow', title: 'Approve' }, { action: 'deny', title: 'Keep planning' }],
+    question: [],
+};
+
+/**
+ * Shown through the service-worker registration rather than `new
+ * Notification`, because that is the only kind the platform will put buttons
+ * on. With no worker — registration failed, or the browser has none — this
+ * falls back to a plain notification, which still says what is waiting and
+ * still opens the card when clicked. Only the buttons are lost.
+ */
+function showAsk(title, body, p, kind) {
+    if (!notify.desktop || notifyPermission() !== 'granted') return;
+    const opts = {
+        body,
+        tag: askTag(p.sessionId),
+        silent: true,
+        requireInteraction: true,   // a blocked turn should not time out on screen
+        data: { sessionId: p.sessionId, requestId: p.requestId },
+        actions: ASK_ACTIONS[kind] || [],
+    };
+    if (notify.sw) {
+        notify.sw.showNotification(title, opts).catch(() => {});
+        return;
+    }
+    announce(title, body, null, p.sessionId);
+}
+
+const askTag = (sessionId) => `claude-ask:${sessionId}`;
+
+/**
+ * Take the toast down once the ask is no longer waiting — answered in a
+ * window, answered from another toast, or expired into an auto-deny. A
+ * notification offering to allow something that has already been decided is
+ * worse than no notification at all.
+ */
+function clearAsk(sessionId) {
+    if (!notify.sw) return;
+    notify.sw.getNotifications({ tag: askTag(sessionId) })
+        .then(list => list.forEach(n => n.close()))
+        .catch(() => {});
+}
+
+function announce(title, body, tone, sessionId) {
+    chime(tone);
     if (!notify.desktop || notifyPermission() !== 'granted') return;
     let n;
     try {
@@ -2311,22 +2402,36 @@ function announce(title, body, bad, sessionId) {
 }
 
 /**
- * Two notes up for a turn that landed, one flat low one for a turn that did
- * not. Synthesised rather than shipped as a file: it is four oscillators' worth
- * of code against a binary asset in a repo that has none, and it keeps the
- * sound tunable in the same place as everything else.
+ * Three sounds, because they mean three different things and the whole point
+ * of a sound is to be understood without looking.
+ *
+ *   done  two notes up — finished, nothing wanted from you.
+ *   fail  one flat low note — over, and it went wrong.
+ *   ask   two notes on the same pitch, like a knock. Something is waiting on
+ *         you, and repetition rather than melody is what reads as a request.
+ *
+ * Synthesised rather than shipped as a file: it is a few oscillators' worth of
+ * code against binary assets in a repo that has none, and it keeps the sounds
+ * tunable in the same place as everything else.
  *
  * Short and quiet on purpose. This fires in a room where somebody is working.
+ * An unrecognised tone is silence, so a caller that has already made its own
+ * noise can pass none.
  */
-function chime(bad) {
+const CHIME = {
+    done: [[587.33, 0, 0.16, 0.11], [880, 0.11, 0.34, 0.1]],   // D5 → A5
+    fail: [[311.13, 0, 0.44, 0.09]],                            // E♭4, alone
+    ask: [[698.46, 0, 0.11, 0.1], [698.46, 0.17, 0.22, 0.1]],   // F5, twice
+};
+
+function chime(tone) {
     if (!notify.sound) return;
+    const notes = CHIME[tone];
+    if (!notes) return;
     const ctx = audioContext();
     if (!ctx) return;
     if (ctx.state === 'suspended') ctx.resume().catch(() => {});
     const t0 = ctx.currentTime + 0.01;
-    const notes = bad
-        ? [[311.13, 0, 0.44, 0.09]]                       // E♭4, alone
-        : [[587.33, 0, 0.16, 0.11], [880, 0.11, 0.34, 0.1]];  // D5 → A5
     for (const [hz, at, len, peak] of notes) {
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
@@ -2363,6 +2468,45 @@ for (const type of ['pointerdown', 'keydown']) {
     window.addEventListener(type, () => { if (notify.sound) wakeAudio(); }, { once: true });
 }
 
+// ── the worker that carries the buttons ──────────────────────────────────
+//
+// Registered for one capability — actions on a notification — and holding no
+// cache and no fetch handler, so it changes nothing else about how the page
+// loads. If it fails to register, asks fall back to a plain notification with
+// no buttons; everything else carries on.
+
+async function registerWorker() {
+    if (!('serviceWorker' in navigator)) return;
+    try {
+        await navigator.serviceWorker.register('./sw.js');
+        notify.sw = await navigator.serviceWorker.ready;
+    } catch { /* no buttons, then — showAsk falls back */ }
+}
+
+// The worker cannot open a session itself; it can only say which one a click
+// was about. Raising the window is the shell's job, and the preload bridge for
+// that lives here rather than there.
+navigator.serviceWorker?.addEventListener('message', (e) => {
+    const msg = e.data || {};
+    if (msg.type !== 'reveal-session') return;
+    if (window.claudeShell) window.claudeShell.revealWindow();
+    if (msg.sessionId) openSession(msg.sessionId);
+});
+
+/**
+ * `#/session/<id>` on load, which is how a click that had to open a window
+ * gets to the right conversation. Deliberately the same shape plan 02 gives
+ * the deep links, so a `claude-sessions://` handler can route into the page
+ * without inventing a second vocabulary.
+ */
+function openFromHash() {
+    const m = /^#\/session\/([0-9a-f-]{8,})$/i.exec(location.hash || '');
+    if (!m) return false;
+    history.replaceState(null, '', location.pathname);   // don't reopen on refresh
+    openSession(m[1]);
+    return true;
+}
+
 // ── the bell ─────────────────────────────────────────────────────────────
 
 const NOTE = {
@@ -2370,8 +2514,9 @@ const NOTE = {
         + 'there is here.',
     denied: 'The browser is blocking notifications for this page. Allow them in '
         + 'its site settings and this will come back.',
-    rules: 'Only for turns over 30 seconds, and never for the session you are '
-        + 'watching in front of you. A turn that fails always says so.',
+    rules: 'A plan, a question or a permission always speaks up — the turn is '
+        + 'stopped until you answer. A turn finishing only does if it ran over '
+        + '30 seconds. Never for the session already in front of you.',
 };
 
 function renderBell() {
@@ -2422,14 +2567,14 @@ dom.optSound.addEventListener('change', () => {
     localStorage.setItem('notifySound', notify.sound ? '1' : '0');
     // This click is a gesture, which is what an AudioContext has been waiting
     // for if the page has not been touched yet.
-    if (notify.sound) { wakeAudio(); chime(false); }
+    if (notify.sound) { wakeAudio(); chime('done'); }
     renderBell();
 });
 
 // Worth having: Focus Assist and Do Not Disturb drop notifications without a
 // word, so "did that work" is otherwise unanswerable until a turn ends.
 dom.bellTry.addEventListener('click', () => {
-    announce('Claude Sessions', 'This is what a finished turn will look like.', false, null);
+    announce('Claude Sessions', 'This is what a finished turn will look like.', 'done', null);
     if (!notify.sound && (!notify.desktop || notifyPermission() !== 'granted')) {
         toast('Both switches are off, so nothing would fire.', 'warn');
     }
@@ -2530,6 +2675,9 @@ function connect() {
 
     es.addEventListener('permission-request', (e) => {
         const p = JSON.parse(e.data);
+        // Ahead of the early return, as with turn-complete: the asks worth
+        // interrupting somebody for are the ones not already on screen.
+        announceAsk(p);
         if (!state.current || p.sessionId !== state.current.sessionId) return;
         state.ask = p;
         renderAsk();
@@ -2537,6 +2685,9 @@ function connect() {
 
     es.addEventListener('permission-resolved', (e) => {
         const p = JSON.parse(e.data);
+        // However it was answered — here, in another window, from the toast
+        // itself, or by the two-minute auto-deny — the toast has to go.
+        clearAsk(p.sessionId);
         if (!state.ask || state.ask.requestId !== p.requestId) return;
         resolveAsk(p.outcome);
     });
@@ -3595,6 +3746,8 @@ connect();
 loadSessions();
 markInstance();
 renderBell();
+registerWorker();
+openFromHash();
 refreshDevBrowser();
 // Restore the pane before the first session lands, so it opens with the window
 // already the right shape rather than growing one out from under the transcript.
