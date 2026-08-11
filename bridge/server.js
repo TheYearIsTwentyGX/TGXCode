@@ -260,6 +260,10 @@ async function api(req, res, url, pathname) {
             query: url.searchParams.get('q') || '',
             project: url.searchParams.get('project') || null,
             limit: Number(url.searchParams.get('limit')) || 500,
+            // Scratch sessions an agent started to try something out belong to
+            // the instance that started them, not to the window the user leaves
+            // open with real work in it.
+            includeTest: cfg.IS_DEV,
         });
         const statuses = pool.statuses();
         for (const s of sessions) {
@@ -282,8 +286,11 @@ async function api(req, res, url, pathname) {
                 model: body.model || null,
                 permissionMode: normalizeMode(body.permissionMode),
             });
+            // Label it before it exists on disk, so it is never briefly visible
+            // in the everyday window while the first rescan catches up.
+            if (body.test) flags.set(out.sessionId, { test: true });
             index.note(out.sessionId);
-            return send(res, 200, out);
+            return send(res, 200, { ...out, test: !!body.test });
         } catch (err) {
             return send(res, 400, { error: err.message });
         }
@@ -299,6 +306,35 @@ async function api(req, res, url, pathname) {
             if (!data) return send(res, 404, { error: 'session not found' });
             const st = pool.statuses()[sessionId];
             return send(res, 200, { ...data, runner: st || null });
+        }
+
+        // Hard delete. Everywhere else in this app "remove" means archive; this
+        // is the one place that means it, so it refuses to guess: a session with
+        // a turn in flight is not deleted out from under the turn, because the
+        // process would keep writing to an unlinked file and the work would be
+        // gone with no transcript to show what happened.
+        if (!tail && req.method === 'DELETE') {
+            const summary = index.summary(sessionId);
+            if (!summary) return send(res, 404, { error: 'session not found' });
+
+            const r = pool.get(sessionId);
+            if (r && (r.state === 'busy' || r.state === 'starting')) {
+                return send(res, 409, {
+                    error: 'a turn is still running — stop it first, then delete',
+                });
+            }
+            await pool.forget(sessionId);
+
+            let removed;
+            try { removed = index.remove(sessionId); }
+            catch (err) { return send(res, 500, { error: `could not delete: ${err.message}` }); }
+            if (!removed) return send(res, 404, { error: 'session not found' });
+
+            // Two events: one for windows showing this conversation, which have
+            // to leave it, and the ordinary list refresh for everybody else.
+            broadcast('session-deleted', { sessionId, title: summary.title });
+            broadcast('sessions-changed', { at: Date.now() });
+            return send(res, 200, { ok: true, sessionId, ...removed });
         }
 
         if (tail === 'since' && req.method === 'GET') {
@@ -367,7 +403,30 @@ async function api(req, res, url, pathname) {
         if (tail === 'stop' && req.method === 'POST') {
             const r = pool.get(sessionId);
             if (!r) return send(res, 404, { error: 'no live process for this session' });
-            return send(res, 200, { ok: r.stop() });
+            const body = await readJson(req);
+            // Soft by default: ask the turn to stop rather than killing it, so
+            // the session stays resumable. `hard` is the escalation, and the
+            // answer says which one actually happened because the outcomes
+            // differ enough for the user to care.
+            const out = await r.stop({ hard: !!body.hard });
+            return send(res, 200, out);
+        }
+
+        // Answer a pending approval. The runner owns the reply channel, so all
+        // this does is hand the decision over and let it write.
+        if (tail === 'permission' && req.method === 'POST') {
+            const r = pool.get(sessionId);
+            if (!r) return send(res, 404, { error: 'no live process for this session' });
+            const body = await readJson(req);
+            const decision = String(body.decision || '');
+            if (!['allow', 'allow-always', 'deny'].includes(decision)) {
+                return send(res, 400, { error: 'decision must be allow, allow-always or deny' });
+            }
+            const out = r.answerPermission(String(body.requestId || ''), decision,
+                body.updatedInput && typeof body.updatedInput === 'object' ? body.updatedInput : null);
+            // 409 rather than 500: losing the race with another window is an
+            // ordinary outcome, not a failure.
+            return send(res, out.ok ? 200 : 409, out);
         }
 
         if (tail === 'flags' && req.method === 'POST') {
@@ -377,6 +436,7 @@ async function api(req, res, url, pathname) {
             const next = flags.set(sessionId, {
                 pinned: typeof body.pinned === 'boolean' ? body.pinned : undefined,
                 archived: typeof body.archived === 'boolean' ? body.archived : undefined,
+                test: typeof body.test === 'boolean' ? body.test : undefined,
             });
             broadcast('sessions-changed', { at: Date.now() });
             return send(res, 200, { ok: true, sessionId, ...next });
@@ -521,8 +581,20 @@ function serveStatic(res, pathname) {
 // Wiring
 // ---------------------------------------------------------------------------
 
+/**
+ * Is anyone in a position to answer an approval for this session?
+ *
+ * Any live SSE client counts, not just one already following this transcript:
+ * the card is a session-level thing and a window that is open can be switched to
+ * it. With nothing connected there is nobody to ask, and the runner denies —
+ * which is exactly what the app did before approvals existed.
+ */
+pool.hasViewer = () => clients.size > 0;
+
 index.on('changed', () => broadcast('sessions-changed', { at: Date.now() }));
 pool.on('status', (s) => broadcast('runner-status', s));
+pool.on('permission-request', (p) => broadcast('permission-request', p));
+pool.on('permission-resolved', (p) => broadcast('permission-resolved', p));
 pool.on('notice', (n) => broadcast('notice', n));
 pool.on('turn-complete', (r) => broadcast('turn-complete', r));
 pool.on('failed', (f) => broadcast('send-failed', f));

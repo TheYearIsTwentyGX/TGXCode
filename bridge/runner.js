@@ -15,6 +15,28 @@
 // contributes is liveness: is a turn in flight, which tool is executing, did the
 // process die. Keeping the two concerns apart avoids de-duplicating the same
 // message from two sources.
+//
+// The same stream is also used *backwards*, as a control channel. Alongside the
+// user turns we write, `claude` and the bridge exchange correlated
+// control_request/control_response pairs. Two of them matter here:
+//
+//   can_use_tool  — inbound. The CLI is asking whether a tool call may run.
+//                   Without an answer it blocks, which is what makes a real
+//                   approval prompt possible instead of the silent denial
+//                   headless mode does by default. Enabled by
+//                   `--permission-prompt-tool stdio`.
+//   interrupt     — outbound. Ends the turn where it stands without killing the
+//                   process, so the session stays resumable and no tool result
+//                   is left half-written.
+//
+// A permission ask is state about a turn, not content of it, so it lives here
+// next to the other liveness state and never goes near the transcript. The real
+// record of what was allowed or denied still arrives from the file.
+//
+// None of this is a documented, stable surface, so every part of it is written
+// to degrade rather than break: an unrecognised subtype is answered and ignored,
+// a CLI that rejects the flag falls back to permission modes alone, and an
+// interrupt that does not land falls through to the signal path.
 
 const fs = require('fs');
 const { spawn } = require('child_process');
@@ -30,12 +52,31 @@ const IDLE_EVICT_MS = 15 * 60 * 1000;
 
 const PERMISSION_MODES = ['auto', 'acceptEdits', 'plan', 'manual', 'dontAsk', 'bypassPermissions'];
 
+// How long an approval card may sit unanswered before the ask is denied for you.
+// A blocked turn holds a process open indefinitely otherwise, and the person who
+// would have answered may have closed the window hours ago.
+const PERMISSION_TIMEOUT_MS =
+    Number(process.env.CLAUDE_SESSIONS_PERMISSION_TIMEOUT_MS) || 120_000;
+
+// Requests we make of the CLI, where no answer means the version in front of us
+// does not speak this part of the protocol. Short, because every one of them has
+// a working fallback.
+const CONTROL_TIMEOUT_MS = 8_000;
+
+// Denying forever is a spin: the model retries, gets denied, retries. Stop the
+// turn instead and say why.
+const MAX_AUTO_DENIES = 2;
+
 class Runner extends EventEmitter {
     /**
      * @param {object} opts
      * @param {string} opts.sessionId
      * @param {string} opts.cwd
      * @param {boolean} opts.isNew   start a fresh session rather than resuming
+     * @param {{permissionPrompt:boolean, interrupt:boolean}} [opts.caps]
+     *   What this `claude` build has been observed to support. Shared across the
+     *   pool, so one runner discovering a gap spares the rest from rediscovering
+     *   it.
      */
     constructor(opts) {
         super();
@@ -61,6 +102,20 @@ class Runner extends EventEmitter {
         this._buf = '';
         this._stderr = '';
         this._pendingTools = new Map();
+
+        // -- control channel ------------------------------------------------
+        this.caps = opts.caps || { permissionPrompt: true, interrupt: true };
+        /** Is anyone actually in a position to answer an approval card? */
+        this.hasViewer = opts.hasViewer || (() => false);
+        /** @type {null | {id:string, tool:string, input:object, askedAt:number, expiresAt:number}} */
+        this.pendingPermission = null;
+        this._ctlSeq = 0;
+        this._pending = new Map();     // request_id -> {resolve, reject, timer}
+        // Tools the user said yes to for the rest of this session. The CLI is
+        // told too (destination "session"), so this only does work after a
+        // process restart, when the CLI's own copy is gone and ours is not.
+        this._sessionAllow = new Set();
+        this._autoDenies = 0;
     }
 
     // -- lifecycle ---------------------------------------------------------
@@ -75,6 +130,11 @@ class Runner extends EventEmitter {
             '--verbose',
             '--permission-mode', this.permissionMode,
         ];
+        // The whole point of the control channel: route "may I?" back to us
+        // instead of letting headless mode answer "no" on the user's behalf.
+        // `stdio` is the CLI's sentinel for "ask over this stream" rather than
+        // the name of an MCP tool.
+        if (this.caps.permissionPrompt) args.push('--permission-prompt-tool', 'stdio');
         if (this.isNew) args.push('--session-id', this.sessionId);
         else args.push('--resume', this.sessionId);
         if (this.fork) args.push('--fork-session');
@@ -119,6 +179,7 @@ class Runner extends EventEmitter {
         this.proc.on('close', (code) => {
             this.proc = null;
             this._pendingTools.clear();
+            this._abandonControl('the Claude process exited');
             if (this._stopping) {
                 this._stopping = false;
                 this._setState('stopped', null);
@@ -126,6 +187,26 @@ class Runner extends EventEmitter {
                 this._setState('stopped', null);
             } else {
                 const raw = this._stderr.trim();
+
+                // A build that does not know the flag rejects it before doing
+                // any work. Drop approval prompts for the rest of the bridge's
+                // life rather than letting a protocol difference break sending,
+                // and put the turn back on the queue so nothing is lost.
+                if (this.caps.permissionPrompt && /permission-prompt-tool/i.test(raw)) {
+                    this.caps.permissionPrompt = false;
+                    this.queue = this.inFlight.concat(this.queue);
+                    this.inFlight.length = 0;
+                    this._stderr = '';
+                    this.emit('notice', {
+                        level: 'warn', kind: 'no_permission_prompt',
+                        text: 'This Claude Code version does not support approval prompts here — '
+                            + 'using permission mode only.',
+                    });
+                    this.emit('exit', code);
+                    this.start();
+                    return;
+                }
+
                 const classified = classifyError(raw, code);
                 this.errorKind = classified.kind;
                 this.lastError = classified.message;
@@ -142,6 +223,12 @@ class Runner extends EventEmitter {
             }
             this.emit('exit', code);
         });
+
+        // The handshake the Agent SDK opens with. We need nothing from the
+        // reply, but a CLI that expects a client to announce itself gets what it
+        // is waiting for, and a round trip completing tells us the channel works
+        // in both directions before anything depends on it.
+        this._control('initialize', {}).catch(() => { /* older build; the fallbacks cover it */ });
 
         // The process is ready for input immediately; `system/init` confirms it.
         this._setState('idle', null);
@@ -173,12 +260,53 @@ class Runner extends EventEmitter {
     }
 
     /**
-     * End the current turn. The CLI has no mid-turn interrupt on this channel, so
-     * this terminates the process; the transcript keeps everything written so far
-     * and the session resumes cleanly on the next send.
+     * End the current turn.
+     *
+     * The soft path asks the CLI to interrupt itself: the turn stops where it
+     * is, the process stays alive, and the session is resumable with nothing
+     * half-written. The hard path is the old behaviour — SIGTERM, then SIGKILL —
+     * which ends the turn wherever it happens to be, possibly mid-tool-call.
+     *
+     * Soft is tried first and falls through to hard if the CLI does not answer,
+     * so this never becomes a way to fail to stop something.
+     *
+     * @returns {Promise<{ok:boolean, how:'soft'|'hard'|null}>}
      */
-    stop() {
-        if (!this.proc) return false;
+    async stop({ hard = false } = {}) {
+        if (!this.proc) return { ok: false, how: null };
+
+        // An unanswered ask is holding the turn open. Whichever path we take, it
+        // has to be answered first — the CLI is blocked waiting on us and will
+        // not process an interrupt until it is unblocked.
+        if (this.pendingPermission) {
+            const ask = this.pendingPermission;
+            this._respondPermission(ask, {
+                behavior: 'deny',
+                message: 'Stopped from Claude Sessions before this was approved.',
+            });
+            this._clearPermission('stopped');
+        }
+
+        if (!hard && this.caps.interrupt) {
+            this.queue.length = 0;
+            try {
+                await this._control('interrupt', { cancel_queued: true });
+                // Leave the state alone: the CLI answers an interrupt with a
+                // `result` like any other turn ending, and that is what should
+                // move us back to idle.
+                return { ok: true, how: 'soft' };
+            } catch {
+                // Either this build has no interrupt or it did not answer in
+                // time. Stop asking, and stop it the way that always works.
+                this.caps.interrupt = false;
+            }
+        }
+
+        // Awaiting the interrupt gave the process time to exit on its own — a
+        // failed interrupt and a dead process look the same from here. There is
+        // nothing left to signal.
+        if (!this.proc) return { ok: true, how: 'soft' };
+
         this._stopping = true;
         this.queue.length = 0;
         try { this.proc.stdin.end(); } catch { /* already closed */ }
@@ -186,7 +314,229 @@ class Runner extends EventEmitter {
         // Give it a moment to exit gracefully, then insist.
         setTimeout(() => { try { proc.kill('SIGKILL'); } catch { /* gone */ } }, 1500).unref();
         try { proc.kill('SIGTERM'); } catch { /* gone */ }
-        return true;
+        return { ok: true, how: 'hard' };
+    }
+
+    // -- control channel ---------------------------------------------------
+
+    _write(obj) {
+        if (!this.proc || !this.proc.stdin.writable) return false;
+        try {
+            this.proc.stdin.write(JSON.stringify(obj) + '\n');
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    /** Outbound request; resolves with the CLI's response payload. */
+    _control(subtype, payload = {}, { timeoutMs = CONTROL_TIMEOUT_MS } = {}) {
+        return new Promise((resolve, reject) => {
+            const id = `req_${++this._ctlSeq}`;
+            if (!this._write({
+                type: 'control_request', request_id: id, request: { subtype, ...payload },
+            })) {
+                reject(new Error('the Claude process is not accepting input'));
+                return;
+            }
+            const timer = setTimeout(() => {
+                this._pending.delete(id);
+                reject(new Error(`no answer to control request "${subtype}"`));
+            }, timeoutMs);
+            timer.unref();
+            this._pending.set(id, { resolve, reject, timer });
+        });
+    }
+
+    /** Fail every outstanding request; the channel they were riding on is gone. */
+    _abandonControl(why) {
+        for (const [, p] of this._pending) {
+            clearTimeout(p.timer);
+            p.reject(new Error(why));
+        }
+        this._pending.clear();
+        // Nothing can answer it now, and nothing is waiting for the answer.
+        if (this.pendingPermission) {
+            clearTimeout(this.pendingPermission.timer);
+            const { id } = this.pendingPermission;
+            this.pendingPermission = null;
+            this.emit('permission-resolved', {
+                sessionId: this.sessionId, requestId: id, outcome: 'abandoned',
+            });
+        }
+    }
+
+    /**
+     * An inbound request from the CLI.
+     *
+     * Only `can_use_tool` is ours to act on. Anything else is a newer CLI
+     * expecting a client we are not — answer it with an error so it stops
+     * waiting on us, and carry on.
+     */
+    _onControlRequest(msg) {
+        const req = msg.request || {};
+        if (req.subtype !== 'can_use_tool') {
+            this._write({
+                type: 'control_response',
+                response: {
+                    subtype: 'error', request_id: msg.request_id,
+                    error: `claude-sessions does not handle the "${req.subtype}" control request`,
+                },
+            });
+            return;
+        }
+
+        // Some MCP asks need a dialog of the server's own, which this channel
+        // cannot carry. Offering Allow would be a lie — the call fails anyway —
+        // so say what happened instead of pretending it was a choice.
+        if (req.requires_user_interaction) {
+            this._write({
+                type: 'control_response',
+                response: {
+                    subtype: 'success', request_id: msg.request_id,
+                    response: {
+                        behavior: 'deny', toolName: req.tool_name,
+                        message: 'This tool needs its own interactive prompt, which Claude '
+                            + 'Sessions cannot show. Run it from a terminal.',
+                    },
+                },
+            });
+            this.emit('notice', {
+                level: 'warn', kind: 'permission_uninteractive',
+                text: `${req.tool_name} asked for an interactive prompt this app cannot show, `
+                    + 'so it was denied. That tool needs a terminal.',
+            });
+            return;
+        }
+
+        const ask = {
+            id: msg.request_id,
+            tool: req.tool_name,
+            displayName: req.display_name || req.tool_name,
+            input: req.input || {},
+            toolUseId: req.tool_use_id || null,
+            description: req.description || null,
+            reason: req.decision_reason || null,
+            blockedPath: req.blocked_path || null,
+            // A call made by a subagent, not by the session itself.
+            agentId: req.agent_id || null,
+            askedAt: Date.now(),
+            expiresAt: Date.now() + PERMISSION_TIMEOUT_MS,
+            timer: null,
+        };
+
+        // Said yes to this tool earlier in the session, before the process was
+        // last restarted. The CLI has forgotten; we have not.
+        if (this._sessionAllow.has(ask.tool)) {
+            this._respondPermission(ask, {
+                behavior: 'allow',
+                updatedPermissions: sessionAllowRule(ask.tool),
+            });
+            return;
+        }
+
+        // Nothing is attached to answer, so the honest outcome is the one the
+        // app produced before any of this existed: denied.
+        if (!this.hasViewer()) {
+            this._autoDeny(ask, 'No Claude Sessions window was open to approve this, so it was denied.');
+            return;
+        }
+
+        // Only one ask can be outstanding per process, but be defensive: a
+        // second would otherwise silently orphan the first.
+        if (this.pendingPermission) {
+            this._respondPermission(this.pendingPermission, {
+                behavior: 'deny',
+                message: 'Superseded by a later permission request.',
+            });
+            this._clearPermission('superseded');
+        }
+
+        ask.timer = setTimeout(
+            () => this._autoDeny(ask, `Nobody answered within ${Math.round(PERMISSION_TIMEOUT_MS / 1000)}s, `
+                + 'so it was denied.'),
+            PERMISSION_TIMEOUT_MS);
+        ask.timer.unref();
+
+        this.pendingPermission = ask;
+        this._setState('busy', `Waiting for you: ${ask.displayName}`);
+        this.emit('permission-request', { sessionId: this.sessionId, ...publicAsk(ask) });
+    }
+
+    /**
+     * Answer an outstanding ask. Called from the UI.
+     *
+     * @param {string} requestId
+     * @param {'allow'|'allow-always'|'deny'} decision
+     * @param {object} [updatedInput] edited tool input to run instead
+     */
+    answerPermission(requestId, decision, updatedInput) {
+        const ask = this.pendingPermission;
+        if (!ask) return { ok: false, error: 'nothing is waiting for approval' };
+        // Two windows, one ask: the first answer wins and the second is told so
+        // rather than silently doing nothing.
+        if (ask.id !== requestId) return { ok: false, error: 'that request was already answered' };
+
+        this.lastUsedAt = Date.now();
+        this._autoDenies = 0;   // somebody is here; the spin guard can reset
+
+        if (decision === 'deny') {
+            this._respondPermission(ask, {
+                behavior: 'deny', message: 'Denied from Claude Sessions.',
+            });
+        } else {
+            const always = decision === 'allow-always';
+            if (always) this._sessionAllow.add(ask.tool);
+            this._respondPermission(ask, {
+                behavior: 'allow',
+                updatedInput: updatedInput && Object.keys(updatedInput).length ? updatedInput : null,
+                updatedPermissions: always ? sessionAllowRule(ask.tool) : null,
+            });
+        }
+        this._clearPermission(decision);
+        return { ok: true };
+    }
+
+    _respondPermission(ask, { behavior, message, updatedInput, updatedPermissions }) {
+        const response = { behavior, toolName: ask.tool };
+        if (behavior === 'allow' && updatedInput) response.updatedInput = updatedInput;
+        if (behavior === 'deny') response.message = message || 'Denied from Claude Sessions.';
+        if (updatedPermissions) response.updatedPermissions = updatedPermissions;
+        this._write({
+            type: 'control_response',
+            response: { subtype: 'success', request_id: ask.id, response },
+        });
+    }
+
+    _clearPermission(outcome) {
+        const ask = this.pendingPermission;
+        if (!ask) return;
+        clearTimeout(ask.timer);
+        this.pendingPermission = null;
+        this.emit('permission-resolved', {
+            sessionId: this.sessionId, requestId: ask.id, outcome,
+        });
+        // The tool is about to run (or not); either way we are back to working.
+        if (this.state === 'busy') this._setState('busy', 'Thinking…');
+    }
+
+    _autoDeny(ask, reason) {
+        this._autoDenies++;
+        this._respondPermission(ask, { behavior: 'deny', message: reason });
+        if (this.pendingPermission && this.pendingPermission.id === ask.id) {
+            this._clearPermission('auto-denied');
+        }
+        this.emit('notice', { level: 'warn', kind: 'permission_auto_denied', text: reason });
+
+        if (this._autoDenies >= MAX_AUTO_DENIES) {
+            this._autoDenies = 0;
+            this.emit('notice', {
+                level: 'warn', kind: 'permission_auto_denied',
+                text: `${MAX_AUTO_DENIES} tool calls in a row were denied with nobody to approve `
+                    + 'them, so the turn was stopped rather than left to spin.',
+            });
+            this.stop().catch(() => { /* the hard path already ran */ });
+        }
     }
 
     /**
@@ -203,6 +553,7 @@ class Runner extends EventEmitter {
         if (!this.proc) return;
         const proc = this.proc;
         this.proc = null;
+        this._abandonControl('the bridge stopped managing this process');
         try { proc.unref(); } catch { /* already gone */ }
         this._setState('stopped', null);
     }
@@ -239,6 +590,32 @@ class Runner extends EventEmitter {
 
     _onMessage(msg) {
         switch (msg.type) {
+            case 'control_request':
+                this._onControlRequest(msg);
+                break;
+
+            case 'control_response': {
+                const r = msg.response || {};
+                const p = this._pending.get(r.request_id);
+                if (!p) break;
+                this._pending.delete(r.request_id);
+                clearTimeout(p.timer);
+                if (r.subtype === 'error') p.reject(new Error(r.error || 'the request was refused'));
+                else p.resolve(r.response || {});
+                break;
+            }
+
+            case 'control_cancel_request': {
+                // The CLI withdrew an ask — usually because the turn it belonged
+                // to ended. Take the card down rather than leaving a dead one on
+                // screen with a countdown running.
+                const id = msg.request_id || (msg.request && msg.request.request_id);
+                if (this.pendingPermission && this.pendingPermission.id === id) {
+                    this._clearPermission('cancelled');
+                }
+                break;
+            }
+
             case 'system':
                 if (msg.subtype === 'init') {
                     // A resumed session keeps its id; a fork gets a new one, and
@@ -322,6 +699,7 @@ class Runner extends EventEmitter {
                 this._pendingTools.clear();
                 this.inFlight.length = 0;   // safely in the transcript now
                 this.retry = null;
+                this._autoDenies = 0;       // a finished turn is not a spin
                 this._setState('idle', null);
                 if (failed) {
                     this.emit('notice', {
@@ -368,11 +746,48 @@ class Runner extends EventEmitter {
             retry: this.retry,
             lastResult: this.lastResult,
             queued: this.queue.length,
+            // A window opening onto a session that is already blocked on an ask
+            // has to be able to draw the card without having seen the event.
+            pendingPermission: this.pendingPermission ? publicAsk(this.pendingPermission) : null,
+            canPrompt: this.caps.permissionPrompt,
             // Lets the UI show how long a turn has been going, which matters
             // when the API is being retried for minutes at a time.
             busySince: this.state === 'busy' ? this.busySince : null,
         };
     }
+}
+
+/** The ask as the UI sees it — no timer handle, nothing it cannot serialise. */
+function publicAsk(ask) {
+    return {
+        requestId: ask.id,
+        tool: ask.tool,
+        displayName: ask.displayName,
+        input: ask.input,
+        toolUseId: ask.toolUseId,
+        description: ask.description,
+        reason: ask.reason,
+        blockedPath: ask.blockedPath,
+        agentId: ask.agentId,
+        askedAt: ask.askedAt,
+        expiresAt: ask.expiresAt,
+    };
+}
+
+/**
+ * "Allow this tool for the rest of the session."
+ *
+ * `destination: 'session'` keeps it in the CLI's memory for this process only.
+ * A wider scope would mean writing to Claude Code's own settings files, which is
+ * not ours to do — a permanent allowlist belongs in Claude Code, not here.
+ */
+function sessionAllowRule(toolName) {
+    return [{
+        type: 'addRules',
+        rules: [{ toolName }],
+        behavior: 'allow',
+        destination: 'session',
+    }];
 }
 
 /**
@@ -418,6 +833,16 @@ class RunnerPool extends EventEmitter {
         this.runners = new Map();
         this._sweep = setInterval(() => this._evictIdle(), 60_000);
         this._sweep.unref();
+
+        // What this `claude` build turned out to support, learned once and
+        // shared: a runner that discovers a gap saves every later one from
+        // rediscovering it the same expensive way.
+        this.caps = { permissionPrompt: true, interrupt: true };
+
+        // Replaced by the server with the real answer. Whether anything is
+        // listening decides between blocking on a person and denying, so
+        // guessing "yes" here would hang turns nobody is watching.
+        this.hasViewer = () => false;
     }
 
     get(sessionId) {
@@ -443,9 +868,14 @@ class RunnerPool extends EventEmitter {
 
         this._evictTo(MAX_LIVE - 1);
 
-        r = new Runner({ sessionId, cwd, model, permissionMode, isNew, fork });
+        r = new Runner({ sessionId, cwd, model, permissionMode, isNew, fork, caps: this.caps });
+        // Read through `r.sessionId` rather than closing over the id it was
+        // created with: a fork changes it, and the viewer check has to follow.
+        r.hasViewer = () => this.hasViewer(r.sessionId);
         r.on('status', (s) => this.emit('status', s));
         r.on('notice', (n) => this.emit('notice', { sessionId: r.sessionId, ...n }));
+        r.on('permission-request', (p) => this.emit('permission-request', p));
+        r.on('permission-resolved', (p) => this.emit('permission-resolved', p));
         r.on('turn-complete', (res) => this.emit('turn-complete', { sessionId: r.sessionId, ...res }));
         r.on('failed', (f) => this.emit('failed', { sessionId: r.sessionId, ...f }));
         r.on('exit', () => this.emit('status', r.status()));
@@ -474,6 +904,20 @@ class RunnerPool extends EventEmitter {
         const out = {};
         for (const [id, r] of this.runners) out[id] = r.status();
         return out;
+    }
+
+    /**
+     * Kill a session's process and forget it, without waiting for the idle
+     * sweep. For a session being deleted: the process holds the transcript we
+     * are about to unlink open and would carry on writing to a file nobody can
+     * see, so a polite interrupt is not enough here.
+     */
+    async forget(sessionId) {
+        const r = this.runners.get(sessionId);
+        if (!r) return false;
+        this.runners.delete(sessionId);
+        try { await r.stop({ hard: true }); } catch { /* already gone */ }
+        return true;
     }
 
     _evictIdle() {
@@ -511,7 +955,9 @@ class RunnerPool extends EventEmitter {
         let left = 0;
         for (const r of this.runners.values()) {
             if (r.state === 'busy' && !force) { left++; r.detach(); continue; }
-            r.stop();
+            // Hard, deliberately: the bridge is going away, so there is nobody
+            // left to wait for a polite interrupt to be answered.
+            r.stop({ hard: true });
         }
         this.runners.clear();
         return { stillRunning: left };

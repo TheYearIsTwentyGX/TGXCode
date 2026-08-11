@@ -169,8 +169,16 @@ class SessionIndex extends EventEmitter {
 
     // -- queries -----------------------------------------------------------
 
-    /** Session summaries for the list, newest activity first. */
-    list({ query = '', project = null, limit = 500 } = {}) {
+    /**
+     * Session summaries for the list, newest activity first.
+     *
+     * `includeTest` is the everyday window's protection from the development
+     * one: sessions an agent started to try something out are labelled, and only
+     * the development bridge passes true. The transcripts are all in the same
+     * place — the two instances read the same directory — so this is the only
+     * thing keeping scratch work out of a list of real conversations.
+     */
+    list({ query = '', project = null, limit = 500, includeTest = false } = {}) {
         const now = Date.now();
         const q = query.trim().toLowerCase();
         const out = [];
@@ -178,6 +186,7 @@ class SessionIndex extends EventEmitter {
         for (const rec of this.sessions.values()) {
             const m = rec.meta;
             if (project && m.projectCwd !== project) continue;
+            if (!includeTest && this.flags && this.flags.test.has(m.sessionId)) continue;
             if (q) {
                 const hay = [m.title, m.firstPrompt, m.lastPrompt, m.cwd,
                     m.worktree && m.worktree.name, m.sessionId]
@@ -196,11 +205,14 @@ class SessionIndex extends EventEmitter {
 
     _summary(rec, now = Date.now()) {
         const m = rec.meta;
-        const flags = this.flags ? this.flags.get(m.sessionId) : { pinned: false, archived: false };
+        const flags = this.flags
+            ? this.flags.get(m.sessionId)
+            : { pinned: false, archived: false, test: false };
         return {
             sessionId: m.sessionId,
             pinned: flags.pinned,
             archived: flags.archived,
+            test: flags.test,
             title: m.title,
             titleSource: m.titleSource,
             cwd: m.cwd,
@@ -378,6 +390,58 @@ class SessionIndex extends EventEmitter {
     /** Register a session created outside a rescan so it appears immediately. */
     note(sessionId) {
         this._scheduleRescan();
+    }
+
+    /**
+     * Delete a transcript and everything filed under it. Irreversible.
+     *
+     * This is the only thing the app ever removes from ~/.claude, so it is
+     * deliberately narrow. What goes is the `.jsonl` this index recorded for the
+     * session and the sibling directory of the same name, which is where Claude
+     * Code keeps that session's subagent transcripts and spilled tool output —
+     * leaving it behind would orphan tens of megabytes with nothing left to
+     * reach it by.
+     *
+     * Both paths come from the record's own `file`, never from the id. A record
+     * loaded from cache is keyed by whatever `sessionId` the transcript claimed,
+     * which is not ours to trust: joining `..` onto the project directory
+     * resolves to the projects directory itself, and this method would then
+     * recursively delete every transcript on the machine. The sidecar is always
+     * the transcript's path minus its extension, and it has to sit strictly
+     * below the project directory or it is not removed at all.
+     *
+     * @returns {{file: string, dir: string|null}|null} null if the session is
+     *   unknown, or if its recorded path does not resolve where it should.
+     */
+    remove(sessionId) {
+        const rec = this.sessions.get(sessionId);
+        if (!rec) return null;
+
+        const root = path.resolve(PROJECTS_DIR);
+        const projectDir = path.resolve(rec.dir);
+        const file = path.resolve(rec.file);
+        if (file === root || !file.startsWith(root + path.sep)) return null;
+        if (!file.endsWith('.jsonl')) return null;
+
+        const dir = file.slice(0, -'.jsonl'.length);
+        const sidecar = dir.startsWith(projectDir + path.sep) ? dir : null;
+
+        // The transcript first: with it gone the session is off the list even if
+        // clearing the directory fails, which is the outcome the user asked for.
+        fs.rmSync(file, { force: true });
+        let removedDir = null;
+        try {
+            if (sidecar && fs.statSync(sidecar).isDirectory()) {
+                fs.rmSync(sidecar, { recursive: true, force: true });
+                removedDir = sidecar;
+            }
+        } catch { /* most sessions never spawn an agent, so there is no directory */ }
+
+        this.sessions.delete(sessionId);
+        if (this.flags) this.flags.prune(new Set(this.sessions.keys()));
+        this._scheduleSave();
+        this.emit('changed');
+        return { file, dir: removedDir };
     }
 }
 

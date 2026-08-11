@@ -274,13 +274,20 @@ a:hover { text-decoration: underline; }
     opacity: 0;
     transition: opacity var(--t-fast) var(--ease);
 }
+/* Every row hides its controls until reached for, pinned ones included. They are
+   only transparent, never `display: none` — a hidden button is still a button and
+   has to stay in the tab order. A pinned row says so with the marker in its meta
+   line instead, which costs a glyph rather than a third of the row's width. */
 .strip:hover .strip-actions,
-.strip:focus-within .strip-actions,
-.strip[data-pinned="true"] .strip-actions { opacity: 1; }
+.strip:focus-within .strip-actions { opacity: 1; }
 
-/* A pinned row shows its buttons all the time, so give the text room rather than
-   letting the overlay sit on top of it. */
-.strip[data-pinned="true"] .strip-main { padding-right: 62px; }
+.strip-meta .tag-pin {
+    display: grid;
+    place-items: center;
+    flex: none;
+    color: var(--blue);
+}
+.strip[aria-current="true"] .strip-meta .tag-pin { color: #cfe0ff; }
 
 .mini {
     display: grid;
@@ -293,6 +300,23 @@ a:hover { text-decoration: underline; }
 .mini:hover { background: var(--s4); color: var(--text); }
 .mini.on { color: var(--blue); }
 .strip[aria-current="true"] .mini:hover { background: #30507f; }
+/* Destructive controls stay the same weight as their neighbours until reached
+   for — colouring one red at rest would make every row look like a warning. */
+.mini.danger:hover { background: #3a2422; color: var(--red); }
+.strip[aria-current="true"] .mini.danger:hover { background: #4a2b28; }
+
+/* Only a development bridge lists these at all; the tag says why a row is here
+   in a window where it might otherwise look like real work. */
+.tag-test {
+    flex: none;
+    padding: 0 6px;
+    border-radius: var(--r-xs);
+    background: var(--s4);
+    color: var(--text-3);
+    font: 500 10px/16px var(--mono);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
 
 /* State reads as a small dot before the title, not a slab edge. */
 .strip-title {
@@ -418,6 +442,7 @@ a:hover { text-decoration: underline; }
 .icon-btn:hover { background: var(--s3); color: var(--text); }
 .icon-btn.on { color: var(--blue); }
 .icon-btn:disabled { opacity: 0.4; cursor: default; background: none; }
+.icon-btn.danger:hover { background: #3a2422; color: var(--red); }
 
 .conv-sub {
     display: flex;
@@ -844,6 +869,113 @@ a:hover { text-decoration: underline; }
 }
 @media (prefers-reduced-motion: reduce) { .ev-user.flash .ev-body { animation: none; } }
 
+/* ── approval card ───────────────────────────────────────────────────── */
+/* A blocked turn. It reads as a tool block on purpose — the thing you are
+   approving should look the way it will look once it has run — but it is
+   outlined and warm-tinted, because unlike a tool block it is asking you
+   something and the turn does not move until you answer. */
+
+.perm {
+    /* Left-aligned with event bodies: the gutter is for timestamps, and this
+       has no time of its own until the transcript records the outcome. */
+    margin: 10px 0 6px calc(var(--gutter) + 16px);
+    background: var(--s2);
+    border: 1px solid var(--yellow);
+    border-radius: var(--r);
+    padding: 12px 15px 13px;
+    outline: none;
+    animation: perm-in var(--t-med) var(--ease);
+}
+.perm:focus-visible { box-shadow: 0 0 0 2px var(--blue); }
+.perm[data-pending] { opacity: 0.55; }
+
+@keyframes perm-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) { .perm { animation: none; } }
+
+.perm-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font: 400 13px/1.5 var(--sans);
+}
+.perm-tool {
+    font: 500 12.5px/1.5 var(--mono);
+    color: var(--yellow);
+}
+.perm-title { color: var(--text-3); }
+.perm-left {
+    margin-left: auto;
+    font-size: 11.5px;
+    color: var(--text-4);
+    font-variant-numeric: tabular-nums;
+}
+
+.perm-arg {
+    margin-top: 7px;
+    font: 400 12px/1.6 var(--mono);
+    color: var(--text-2);
+    /* A command worth approving is worth reading in full, so it wraps rather
+       than being clipped the way a settled tool row is. */
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 220px;
+    overflow: auto;
+}
+
+.perm-why {
+    margin-top: 6px;
+    font: 400 11.5px/1.5 var(--sans);
+    color: var(--text-4);
+}
+
+.perm-btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+
+.perm-btn {
+    height: 30px;
+    padding: 0 14px;
+    border-radius: var(--pill);
+    background: var(--s3);
+    color: var(--text-2);
+    font: 500 12px/1 var(--sans);
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    transition: background var(--t-fast) var(--ease);
+}
+.perm-btn:hover:not(:disabled) { background: var(--s4); }
+.perm-btn:disabled { opacity: 0.5; }
+.perm-btn.allow { background: var(--blue-cont); color: var(--blue); }
+.perm-btn.allow:hover:not(:disabled) { background: #26426f; }
+.perm-btn.deny { color: var(--red); }
+.perm-btn.deny:hover:not(:disabled) { background: #33201f; }
+
+.perm-btn kbd {
+    font: 500 10px/1 var(--mono);
+    padding: 3px 5px;
+    border-radius: var(--r-xs);
+    background: rgba(0, 0, 0, 0.28);
+    color: inherit;
+    opacity: 0.75;
+}
+
+/* What happened to a card that is gone. The transcript carries the real
+   record; this is only so the card does not vanish without a word. */
+.perm-done {
+    margin: 4px 0 4px calc(var(--gutter) + 16px);
+    font: 400 11.5px/1.6 var(--sans);
+    color: var(--text-4);
+}
+
+.status-line[data-state="ask"] .led {
+    background: var(--yellow);
+    animation: breathe 1.6s var(--ease) infinite;
+}
+.btn-stop.force { color: var(--red); background: #33201f; }
+.btn-stop.force:hover { background: #452a28; }
+
 /* ── tool calls ──────────────────────────────────────────────────────── */
 
 .tool {
@@ -1170,6 +1302,7 @@ a:hover { text-decoration: underline; }
 }
 @media (prefers-reduced-motion: reduce) {
     .status-line[data-state="busy"] .led,
+    .status-line[data-state="ask"] .led,
     .tool[data-status="pending"] > summary::before,
     .strip-meta .pulse::before { animation: none; }
 }
@@ -1310,6 +1443,9 @@ a:hover { text-decoration: underline; }
     padding: 14px 24px 20px;
 }
 .modal-foot .spacer { flex: 1; }
+/* Model and permission mode ride along with the actions. They wrap rather than
+   squeezing the buttons when the window is narrow. */
+.modal-foot .opts { flex-wrap: wrap; margin: 0; }
 
 .field { margin-bottom: 18px; }
 .field > label {
@@ -1328,12 +1464,26 @@ a:hover { text-decoration: underline; }
     transition: box-shadow var(--t-fast) var(--ease);
 }
 .field textarea { min-height: 100px; resize: vertical; }
+/* Sized by script from its contents (see grow()), so it needs no floor of its
+   own — and it scrolls rather than growing without limit once it hits the cap. */
+.field textarea.grow { min-height: 0; resize: none; overflow-y: auto; }
 .field input[type="text"] { font-family: var(--mono); font-size: 12.5px; }
 .field textarea:focus, .field input:focus {
     outline: none;
     box-shadow: inset 0 0 0 2px var(--blue);
 }
 .field .note { margin-top: 7px; font-size: 12px; color: var(--text-4); line-height: 1.5; }
+
+.field label.check {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0;
+    font: 400 13.5px/1.4 var(--sans);
+    color: var(--text-2);
+    cursor: pointer;
+}
+.field label.check input { accent-color: var(--blue); width: 16px; height: 16px; }
 
 .picker {
     background: var(--bg);
@@ -1370,6 +1520,44 @@ a:hover { text-decoration: underline; }
 .btn.primary { background: var(--blue); color: #062e6f; }
 .btn.primary:hover { background: var(--blue); filter: brightness(1.08); }
 .btn:disabled { opacity: 0.45; cursor: default; }
+
+/* The one button in the app that destroys something. Filled, in the error
+   colour, so it can never be mistaken for the confirm it sits next to. */
+.btn.destructive { background: var(--red); color: #4a0d09; }
+.btn.destructive:hover { background: var(--red); filter: brightness(1.08); }
+
+/* ── delete confirm ──────────────────────────────────────────────────── */
+
+.modal.danger { width: min(500px, 100%); }
+.modal.danger .modal-body { padding-bottom: 4px; }
+
+/* What is about to go, named — the whole reason this is a dialog and not a
+   confirm(): a title and a turn count are enough to catch the wrong row. */
+.del-what {
+    font: 400 15px/1.5 var(--sans);
+    color: var(--text);
+    padding: 12px 14px;
+    background: var(--bg);
+    border-radius: var(--r) var(--r) 0 0;
+}
+.del-meta {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    flex-wrap: wrap;
+    padding: 0 14px 12px;
+    background: var(--bg);
+    border-radius: 0 0 var(--r) var(--r);
+    font: 400 12px/1.5 var(--sans);
+    color: var(--text-4);
+}
+.del-meta .sep { opacity: 0.7; }
+.del-warn {
+    margin: 16px 0 4px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--red);
+}
 
 /* ── toast ───────────────────────────────────────────────────────────── */
 

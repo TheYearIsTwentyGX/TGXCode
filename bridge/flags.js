@@ -1,6 +1,6 @@
 'use strict';
 
-// Per-session flags the user sets: pinned and archived.
+// Per-session flags the user sets: pinned, archived, and test.
 //
 // This is the only state the app owns. Everything else it shows is derived from
 // Claude Code's own transcripts, which we never write to — so these live in
@@ -9,6 +9,13 @@
 //
 // Archiving never deletes anything. An archived session keeps its transcript and
 // stays reachable; it just moves out of the way.
+//
+// `test` is the odd one out: not a decision about a conversation so much as a
+// label saying it was never meant to be read. An agent working on this codebase
+// starts sessions to see whether the UI does what it claims, and those used to
+// pile up in the everyday window alongside real work. A test session is listed
+// by the development bridge only, so the everyday instance never shows it — see
+// SessionIndex#list.
 
 const fs = require('fs');
 const path = require('path');
@@ -24,6 +31,7 @@ class Flags {
     constructor() {
         this.pinned = new Set();
         this.archived = new Set();
+        this.test = new Set();
         this._saveTimer = null;
         this.load();
     }
@@ -37,6 +45,10 @@ class Flags {
             if (data.version !== VERSION) return;
             this.pinned = new Set(Array.isArray(data.pinned) ? data.pinned : []);
             this.archived = new Set(Array.isArray(data.archived) ? data.archived : []);
+            // Added after the first version of this file shipped. Absent is
+            // empty, which is why it did not need a version bump — bumping
+            // would have thrown away everybody's pins to gain nothing.
+            this.test = new Set(Array.isArray(data.test) ? data.test : []);
         } catch (err) {
             console.error(`[claude-sessions] ignoring unreadable ${STATE_FILE}: ${err.message}`);
         }
@@ -54,6 +66,7 @@ class Flags {
                     version: VERSION,
                     pinned: [...this.pinned],
                     archived: [...this.archived],
+                    test: [...this.test],
                 }, null, 2));
                 fs.renameSync(tmp, STATE_FILE);
             } catch (err) {
@@ -67,6 +80,7 @@ class Flags {
         return {
             pinned: this.pinned.has(sessionId),
             archived: this.archived.has(sessionId),
+            test: this.test.has(sessionId),
         };
     }
 
@@ -75,7 +89,7 @@ class Flags {
      * for a session to sit at the top and be tucked away at once is a
      * contradiction, and pinning is the more deliberate of the two.
      */
-    set(sessionId, { pinned, archived } = {}) {
+    set(sessionId, { pinned, archived, test } = {}) {
         if (typeof pinned === 'boolean') {
             if (pinned) { this.pinned.add(sessionId); this.archived.delete(sessionId); }
             else this.pinned.delete(sessionId);
@@ -84,6 +98,13 @@ class Flags {
             if (archived) { this.archived.add(sessionId); this.pinned.delete(sessionId); }
             else this.archived.delete(sessionId);
         }
+        // Not in tension with the other two: a test session can still be pinned
+        // while it is being worked on. It just is not the everyday window's
+        // business either way.
+        if (typeof test === 'boolean') {
+            if (test) this.test.add(sessionId);
+            else this.test.delete(sessionId);
+        }
         this.save();
         return this.get(sessionId);
     }
@@ -91,7 +112,7 @@ class Flags {
     /** Forget flags for transcripts that no longer exist. */
     prune(liveIds) {
         let changed = false;
-        for (const set of [this.pinned, this.archived]) {
+        for (const set of [this.pinned, this.archived, this.test]) {
             for (const id of [...set]) {
                 if (!liveIds.has(id)) { set.delete(id); changed = true; }
             }
