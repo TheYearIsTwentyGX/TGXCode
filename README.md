@@ -105,8 +105,10 @@ create one in `%APPDATA%\claude-sessions\`:
 | **Ordering** | By when *you* last wrote, not by last activity. Sorting on activity meant a busy agent kept bumping its session to the top and shuffling the rest out from under the cursor. The timestamp on each row is the one it sorts by. |
 | **Pin / archive** | Hover a row for its two buttons, or use the ones beside the session title. Pinned sessions sit in their own group at the top, across projects. Archived ones collapse into a group at the bottom. |
 | **Conversation** | Your turns, Claude's replies with syntax-highlighted code, and one collapsible block per tool call. Edits render as diffs, and output too large to inline loads on demand. |
+| **Plans & questions** | When Claude presents a plan or asks a multiple-choice question, the turn stops on a card at the foot of the transcript. A plan can be approved, approved with a note to bear in mind, or sent back with what to change; approving picks the mode the work continues in. Questions are answered by picking, with an *Other* row for none-of-the-above. |
 | **Subagents** | The first chip row under the title, one per subagent, with a light for how it is going and a line of what it is doing. Click to switch the pane over to it; `Esc` or the breadcrumb comes back. |
 | **Dev servers** | The second chip row. Green means the port is answering right now; click to switch DevBrowser to that tab, starting DevBrowser if it isn't running. |
+| **Dashboard** | The button in the top bar, with a count of how many places are unfinished. It lists, per project, every directory holding uncommitted changes and every pull request still open, with the sessions that worked there as links back into the conversation. |
 | **Open folder** | The folder button by the title shows the session's working directory in Windows File Explorer, through the `\\wsl.localhost` share. |
 | **Composer** | Sends to the session, resuming it in place — the same transcript a terminal would append to. |
 | **Send queue** | Write while an agent is working and the message waits, listed above the composer in send order. Each one can be expanded, reordered, pulled back for editing, or dropped, right up until its turn starts. `Shift+Tab` out of the composer to work through them without the mouse. |
@@ -309,7 +311,9 @@ The control belongs to the session in front of you, not to the window: opening a
 conversation puts it on the mode that session is running in, or — for one with no
 process of its own — the mode its transcript was last seen in, read back from
 disk. A mode you pick and do not send is remembered against that session for as
-long as the window is open, so looking away and back does not quietly drop it.
+long as the window is open, so looking away and back does not quietly drop it —
+until the mode moves underneath it, as approving a plan does, which is a decision
+about the same thing and a newer one.
 
 **Start a session** starts in **plan** instead, because the first message of a
 session is the one written with the least idea of what it will touch. Switch the
@@ -326,6 +330,96 @@ that channel is not a documented, stable surface. If the installed `claude` turn
 out not to support it, the app says so once and falls back to permission modes
 alone; sending never breaks over a protocol difference.
 
+### Plans and questions
+
+Two of the things that come down that same channel are not permissions at all —
+they are Claude talking to you — and each gets a card of its own.
+
+**A plan** arrives when a session in plan mode is ready to start. The plan is
+rendered as the document it is, and approving it decides two things at once:
+
+```
+┌ Plan — ready to start ────────────────── 14:53 left ┐
+│  ## Add a --version flag                            │
+│  • Read the version from package.json…              │
+│  • Handle the flag before subcommand dispatch…      │
+│                                                     │
+│  [ Approve ]  [ Approve — auto-accept edits ]       │
+│  [ Approve with feedback ]  [ Keep planning ]       │
+└─────────────────────────────────────────────────────┘
+```
+
+The second thing is the mode. A session sitting on this card is *in* plan mode,
+where the work it is asking to do would be refused — so approving switches the
+mode as it starts and the selector under the composer follows. Approving without
+that would agree to a plan and then block every edit in it.
+
+Plain **Approve** (`Y`) continues in **auto**, the mode these sessions run in
+when you are sitting in front of one: Claude judges each call and asks when one
+warrants it. `A` blanket-accepts edits instead, which is the deliberate second
+choice rather than the default.
+
+Two of the four buttons are a sentence rather than a verdict, and they reach the
+model by different routes because the protocol gives them different routes:
+
+- **Keep planning** (`N`) is feedback, not a refusal. What you write goes back as
+  the tool's error, which is where the model reads a refusal — so "too broad, do
+  the parser first" produces a different plan rather than the same one again.
+  Sent back empty it just says to keep going.
+- **Approve with feedback** (`F`) is "yes, and…". The note is appended to the
+  plan itself, and Claude Code echoes it back to the model under *Approved Plan
+  (edited by user)* — so a condition you attach to a yes becomes part of what was
+  agreed to, which is where it belongs. An allow carries no message of its own;
+  that was measured, not assumed.
+
+**A question** is Claude's multiple-choice ask, rendered as a form: radios for one
+answer, checkboxes where several are allowed, an **Other** row on every question
+for when none of them fit, and each option's preview shown as you hover or pick
+it. Send stays disabled until every question has an answer — Claude asked them
+all, and leaving some to guesswork is what this card exists to avoid. **Skip**
+answers nothing and lets it carry on unaided.
+
+Both cards wait 15 minutes rather than the two an approval gets: a plan is
+something you read, and being made to re-read it because a countdown ran out
+while you were thinking is its own kind of rude. Both still expire, because a
+blocked turn holds a process open otherwise.
+
+Before this, both were denied outright — they arrive flagged as needing an
+interactive prompt, which for any other tool means "a dialog this app cannot
+draw". For these two it is exactly the dialog it can draw.
+
+### Notifications
+
+The bell in the top bar decides what happens when a turn you are not watching
+comes to an end — a desktop notification, a short chime, or both. Clicking a
+notification opens that session.
+
+It is deliberately quiet. A notification that fires too often gets switched off,
+and the one that mattered goes with it, so a finished turn only speaks up if:
+
+- it **failed**, which is the one ending you cannot discover by waiting; or
+- it ran for **over 30 seconds** and is not the session you have open in a
+  focused window.
+
+At most one per session per ten seconds, so a draining queue is one notification
+rather than five. A send that never became a turn always says so.
+
+The thirty seconds is wall clock, timed from the moment the bridge marked the
+runner busy rather than read off the turn's result. The two normally agree to
+within milliseconds, but the result's duration falls back to the CLI's *API*
+time when the wall-clock field is missing, and a threshold should not rest on a
+number that can quietly change meaning.
+
+Two limits worth knowing. **The page is what listens**, not the Windows shell, so
+a window that is closed hears nothing — the tray and a shell-side subscriber are
+in `docs/plans/02-notifications-and-shell.md`. And Windows **Focus Assist** drops
+notifications without a word; **Try it** in the bell menu is there so you can
+tell that apart from the app being wrong.
+
+In a browser, the first tick of *Show a desktop notification* is what asks
+permission — the click is the gesture browsers require, and a prompt nobody
+invited is the one people press Block on. The packaged app grants it already.
+
 ### How dev servers are found
 
 A long session mentions dozens of ports, most of them history. The bridge scans
@@ -341,11 +435,40 @@ devbrowser title 5006 "add-company-flow"
 Live ports are always offered; a couple of recently-dead ones are shown greyed
 out so a server that has gone away is visible rather than silently missing.
 
+### What the dashboard counts
+
+A finished conversation is not finished work. The rail is full of sessions that
+have been quiet for days and are still holding a worktree with eleven modified
+files in it, or a pull request nobody merged. That is what this screen is for,
+and it reads none of it from the transcripts:
+
+- **Uncommitted changes** come from `git status --porcelain=v2` in the
+  directories sessions were working in. A **directory** is the row, not a
+  session, because a worktree is what holds uncommitted work — several sessions
+  share one, and a session that has left a worktree still left its changes in it.
+- **Open pull requests** come from one `gh pr list --state open` per repository.
+  Being absent from that list *is* the answer to "has it been merged": a PR the
+  transcripts mention that is not open any more needs nothing from you.
+
+A workspace shows the PRs raised from the branch it has checked out, and only
+those — a session that raises a PR from a worktree and then leaves reports the
+*project* as its directory, and hanging the PR there would file it under a
+branch it has nothing to do with. PRs still open with nothing on disk answering
+for them get a row of their own, marked *no working directory left*.
+
+Two things stop this reporting nonsense. A worktree that was removed leaves its
+directory behind whenever anything untracked was in it, and because those
+directories live *inside* the project, git answers about the parent repository
+instead — so each directory must be its own checkout root (`rev-parse
+--show-toplevel`) or it is skipped. And everything here shells out, so all of it
+is cached: working trees for 15 seconds, GitHub for a minute.
+
 ## Layout
 
 | Path | |
 |---|---|
 | `bridge/server.js` | HTTP + SSE, routing, static files |
+| `bridge/dashboard.js` | Uncommitted changes and open PRs, per project |
 | `bridge/sessions.js` | The session index — incremental, cached, watched |
 | `bridge/transcript.js` | JSONL → render events; pairs tool calls with results; reads subagent transcripts |
 | `bridge/runner.js` | `claude` processes, one per active conversation |

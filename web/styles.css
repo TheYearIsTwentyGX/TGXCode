@@ -150,6 +150,41 @@ a:hover { text-decoration: underline; }
 
 .bar-spacer { flex: 1; }
 
+/* Shares the shape of the DevBrowser pill next to it — both are window-level
+   state, and a bar of matching lozenges reads as one control group. */
+.bar-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 34px;
+    padding: 0 14px;
+    font: 500 12.5px/1 var(--sans);
+    color: var(--text-2);
+    background: var(--s2);
+    border-radius: var(--pill);
+    white-space: nowrap;
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.bar-btn:hover { background: var(--s3); color: var(--text); }
+.bar-btn svg { color: var(--text-3); }
+.bar-btn.on { background: var(--blue-cont); color: #dbe6fb; }
+.bar-btn.on svg { color: var(--blue); }
+
+/* A count, not an alert: unfinished work is the normal state of this machine. */
+.bar-badge {
+    min-width: 19px;
+    height: 19px;
+    padding: 0 6px;
+    border-radius: var(--pill);
+    background: var(--s4);
+    color: var(--text-2);
+    font: 500 11px/19px var(--mono);
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+}
+.bar-badge[hidden] { display: none; }
+.bar-btn.on .bar-badge { background: #2f4d80; color: #e6eefb; }
+
 .db-status {
     display: flex;
     align-items: center;
@@ -165,6 +200,92 @@ a:hover { text-decoration: underline; }
 .db-status:hover { background: var(--s3); color: var(--text); }
 .db-status .led { width: 7px; height: 7px; border-radius: 50%; background: var(--text-4); }
 .db-status[data-up="true"] .led { background: var(--green); }
+
+/* ── notifications ───────────────────────────────────────────────────── */
+
+.bell-wrap { position: relative; }
+
+.bell {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    color: var(--text-4);
+    background: var(--s2);
+    border-radius: 50%;
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.bell:hover { background: var(--s3); color: var(--text-2); }
+.bell[data-on="true"] { color: var(--text-2); }
+.bell[data-on="true"]:hover { color: var(--text); }
+/* The bell is struck through only while nothing at all would fire — the state
+   worth spotting from across the room is the silent one. */
+.bell .slash { display: none; }
+.bell[data-on="false"] .slash { display: inline; }
+.bell[aria-expanded="true"] { background: var(--s3); color: var(--text); }
+
+.bell-menu {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    z-index: 60;
+    width: 286px;
+    padding: 13px 15px 12px;
+    background: var(--s3);
+    border-radius: var(--r);
+    box-shadow: 0 10px 30px #000a;
+    animation: bell-in var(--t-fast) var(--ease);
+    transform-origin: top right;
+}
+.bell-menu[hidden] { display: none; }
+
+@keyframes bell-in {
+    from { opacity: 0; transform: translateY(-5px); }
+    to { opacity: 1; transform: none; }
+}
+
+.bell-head {
+    margin-bottom: 10px;
+    font: 500 11px/1 var(--sans);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-4);
+}
+
+.bell-menu .check {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 5px 0;
+    font: 400 13px/1.4 var(--sans);
+    color: var(--text-2);
+    cursor: pointer;
+}
+.bell-menu .check input { accent-color: var(--blue); width: 16px; height: 16px; flex: none; }
+.bell-menu .check:hover { color: var(--text); }
+.bell-menu .check:has(input:disabled) { color: var(--text-4); cursor: default; }
+
+.bell-note {
+    margin-top: 9px;
+    font: 400 11.5px/1.55 var(--sans);
+    color: var(--text-4);
+}
+.bell-note:empty { display: none; }
+.bell-note.warn { color: var(--yellow); }
+
+.bell-try {
+    margin-top: 11px;
+    padding: 5px 12px;
+    font: 500 12px/1 var(--sans);
+    color: var(--text-3);
+    background: var(--s2);
+    border-radius: var(--pill);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.bell-try:hover { background: var(--bg); color: var(--text); }
+
+@media (prefers-reduced-motion: reduce) { .bell-menu { animation: none; } }
 
 /* ── rail ────────────────────────────────────────────────────────────── */
 
@@ -957,6 +1078,9 @@ a:hover { text-decoration: underline; }
 }
 
 .perm-btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+/* An author `display` beats the UA rule for [hidden], and this row is hidden
+   while the feedback box that replaces it is open. */
+.perm-btns[hidden] { display: none; }
 
 .perm-btn {
     height: 30px;
@@ -985,6 +1109,145 @@ a:hover { text-decoration: underline; }
     color: inherit;
     opacity: 0.75;
 }
+
+/* ── the plan card ───────────────────────────────────────────────────── */
+/* Same chrome as an approval, because the same thing is true of it: the turn
+   is stopped until you answer. What differs is that this is prose to read
+   rather than a command to check, so it gets room and reads as a document. */
+
+.perm-plan {
+    margin-top: 10px;
+    padding: 2px 14px 2px;
+    background: var(--bg);
+    border-radius: var(--r-sm);
+    border: 1px solid var(--outline-soft);
+    /* Long enough to read a plan in, short enough that the buttons stay on
+       screen — a plan you have to scroll past to accept is a plan people
+       accept without reading. */
+    max-height: 46vh;
+    overflow: auto;
+}
+
+/* Where a rejected plan gets its "why". */
+.perm-feedback { margin-top: 10px; }
+
+.perm-fb {
+    width: 100%;
+    padding: 9px 11px;
+    background: var(--bg);
+    border: 1px solid var(--outline);
+    border-radius: var(--r-sm);
+    color: var(--text);
+    font: 400 12.5px/1.6 var(--sans);
+    resize: vertical;
+}
+.perm-fb:focus { outline: none; border-color: var(--blue); }
+.perm-fb::placeholder { color: var(--text-4); }
+
+/* ── the question card ───────────────────────────────────────────────── */
+
+.perm-qs { margin-top: 4px; }
+
+.perm-q + .perm-q {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--outline-soft);
+}
+
+.perm-q-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: 8px 0 9px;
+    font: 400 13px/1.5 var(--sans);
+    color: var(--text);
+}
+.perm-q-chip {
+    flex: none;
+    padding: 2px 8px;
+    border-radius: var(--pill);
+    background: var(--s4);
+    color: var(--text-3);
+    font: 500 10.5px/1.5 var(--sans);
+    text-transform: lowercase;
+}
+.perm-q-text { min-width: 0; }
+
+.perm-opt {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 8px 11px;
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-sm);
+    background: var(--bg);
+    cursor: pointer;
+    transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+}
+.perm-opt + .perm-opt { margin-top: 6px; }
+.perm-opt:hover { background: var(--s2); }
+.perm-opt:focus-within { border-color: var(--blue); }
+.perm-opt:has(input:checked) { border-color: var(--blue); background: var(--blue-tint); }
+
+.perm-opt input { flex: none; margin-top: 2px; accent-color: var(--blue-deep); }
+.perm-opt-body { display: block; min-width: 0; flex: 1; }
+.perm-opt-label {
+    display: block;
+    font: 500 12.5px/1.5 var(--sans);
+    color: var(--text);
+}
+.perm-opt-desc {
+    display: block;
+    margin-top: 2px;
+    font: 400 11.5px/1.55 var(--sans);
+    color: var(--text-3);
+}
+
+/* A preview is for comparing, so it opens on hover and focus as well as on
+   selection — needing to choose an option to see what it means would defeat
+   the point of previewing it. */
+.perm-opt-preview {
+    display: none;
+    margin: 8px 0 2px;
+    padding: 8px 10px;
+    max-height: 200px;
+    overflow: auto;
+    background: var(--s1);
+    border-radius: var(--r-xs);
+    font: 400 11.5px/1.6 var(--mono);
+    color: var(--text-2);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.perm-opt:hover .perm-opt-preview,
+.perm-opt:focus-within .perm-opt-preview,
+.perm-opt:has(input:checked) .perm-opt-preview { display: block; }
+
+.perm-other {
+    width: 100%;
+    margin-top: 5px;
+    padding: 5px 9px;
+    background: var(--s1);
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-xs);
+    color: var(--text);
+    font: 400 12px/1.5 var(--sans);
+}
+.perm-other:focus { outline: none; border-color: var(--blue); }
+.perm-other::placeholder { color: var(--text-4); }
+
+/* Questions as they read back in the transcript, once the card is long gone. */
+.qview { font: 400 12px/1.7 var(--sans); }
+.qview-q {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    margin: 8px 0 4px;
+    color: var(--text);
+}
+.qview-q:first-child { margin-top: 0; }
+.qview-o { color: var(--text-3); padding-left: 4px; }
+.qview-mark { color: var(--text-4); margin-right: 8px; }
 
 /* What happened to a card that is gone. The transcript carries the real
    record; this is only so the card does not vanish without a word. */
@@ -1636,6 +1899,245 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 }
 .empty h2 { margin: 0; font: 400 19px/1.3 var(--sans); color: var(--text-2); }
 .empty p { margin: 0; max-width: 400px; font-size: 14px; line-height: 1.65; }
+
+/* ── dashboard ───────────────────────────────────────────────────────── */
+/* Work that outlived its conversation. Laid out as a board rather than as more
+   rows: each line is a directory and carries its own signals on the right, so
+   the eye can run down the right edge for "what needs doing" and down the left
+   for "where". */
+
+.dash {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+.dash[hidden] { display: none; }
+
+.dash-head {
+    flex: none;
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    padding: 22px 28px 16px;
+}
+
+.dash-title { margin: 0; font: 400 21px/1.3 var(--sans); color: var(--text); }
+
+.dash-sub {
+    margin: 5px 0 0;
+    max-width: 640px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text-3);
+}
+
+.dash-btn {
+    margin-left: auto;
+    flex: none;
+    height: 34px;
+    padding: 0 16px;
+    border-radius: var(--pill);
+    background: var(--s3);
+    color: var(--text-2);
+    font: 500 12.5px/1 var(--sans);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.dash-btn:hover { background: var(--s4); color: var(--text); }
+.dash-btn:disabled { color: var(--text-4); background: var(--s2); cursor: default; }
+
+.dash-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 28px 32px;
+}
+
+.dash-note {
+    padding: 18px 20px;
+    margin-bottom: 12px;
+    background: var(--s2);
+    border-radius: var(--r);
+    color: var(--text-3);
+    font-size: 13.5px;
+}
+.dash-note p { margin: 0; }
+.dash-note.warn { color: var(--yellow); background: #2e2717; }
+.dash-note.error { color: var(--red); background: #2f2120; }
+
+/* One card per project, the same idea as a rail group: where one project ends
+   is a change of surface, not a hairline. */
+.dproj {
+    background: var(--s2);
+    border-radius: var(--r-lg);
+    padding: 4px 4px 8px;
+    margin-bottom: 12px;
+}
+
+.dproj-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 12px 16px 8px;
+}
+.dproj-name { font: 500 14px/1.3 var(--sans); color: var(--text); }
+.dproj-repo { font: 400 11.5px/1.3 var(--mono); color: var(--text-4); }
+.dproj-counts {
+    margin-left: auto;
+    font: 400 11.5px/1.3 var(--sans);
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
+}
+
+.wsrow {
+    padding: 10px 14px 11px;
+    border-radius: var(--r);
+    transition: background var(--t-fast) var(--ease);
+}
+.wsrow:hover { background: var(--s3); }
+
+.wsrow-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.ws-name {
+    font: 500 13.5px/1.4 var(--sans);
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* The main checkout is not a worktree and should not be mistaken for one. */
+.wsrow[data-kind="checkout"] .ws-name { color: var(--blue); }
+.wsrow[data-kind="gone"] .ws-name { color: var(--text-3); }
+
+.ws-branch {
+    flex: none;
+    font: 400 11.5px/1.4 var(--mono);
+    color: var(--text-4);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 34ch;
+}
+.ws-note { font: 400 11.5px/1.4 var(--sans); color: var(--text-4); font-style: italic; }
+
+/* Signals sit on the right of every row at the same tab stops, so a column of
+   them can be read down rather than hunted for. */
+.wsrow-signals {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: none;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.sig {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    height: 26px;
+    padding: 0 11px;
+    border-radius: var(--pill);
+    font: 500 11.5px/1 var(--sans);
+    white-space: nowrap;
+    background: var(--s4);
+    color: var(--text-2);
+}
+.sig.dirty { background: #3a3320; color: var(--yellow); }
+.sig.dirty:hover, .sig.dirty.on { background: #4a4128; }
+.sig.quiet { background: var(--s3); color: var(--text-3); }
+.sig.bad { background: #3a2422; color: var(--red); }
+
+.sig.pr { background: var(--blue-tint); color: var(--blue); text-decoration: none; }
+.sig.pr:hover { background: #1e3358; text-decoration: none; }
+.sig.pr.draft { background: var(--s3); color: var(--text-2); }
+.sig.pr.draft:hover { background: var(--s4); }
+.sig .pr-num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.sig .pr-title {
+    font-weight: 400;
+    color: var(--text-3);
+    max-width: 42ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.sig .pr-tag {
+    padding: 0 6px;
+    border-radius: var(--r-xs);
+    background: #0003;
+    font: 500 10px/16px var(--mono);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-3);
+}
+.sig .pr-tag.ok { color: var(--green); }
+.sig .pr-tag.bad { color: var(--red); }
+
+/* The files behind a count, on demand. A dashboard that lists them all is a
+   `git status` you did not ask for. */
+.ws-files {
+    list-style: none;
+    margin: 8px 0 2px;
+    padding: 10px 12px;
+    background: var(--bg);
+    border-radius: var(--r-sm);
+    font: 400 12px/1.9 var(--mono);
+}
+.ws-files li { display: flex; gap: 12px; }
+.ws-files .fstat { flex: none; width: 9ch; color: var(--text-4); }
+.ws-files .fstat[data-s="??"] { color: var(--green); }
+.ws-files .fstat[data-s="UU"] { color: var(--red); }
+.ws-files .fpath { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; }
+.ws-files .more { color: var(--text-4); }
+
+.ws-sessions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 8px;
+}
+
+/* The way back to the conversation. Deliberately quieter than the signals: the
+   row is about the work, and the session is how you go and do something about it. */
+.schip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 28px;
+    padding: 0 12px;
+    border-radius: var(--pill);
+    background: var(--s3);
+    color: var(--text-2);
+    font: 400 12px/1 var(--sans);
+    max-width: 100%;
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.wsrow:hover .schip { background: var(--s4); }
+.schip:hover { background: var(--s5) !important; color: var(--text); }
+
+.schip-dot {
+    flex: none;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--text-4);
+}
+.schip[data-state="active"] .schip-dot { background: var(--blue); }
+.schip[data-state="running"] .schip-dot {
+    background: var(--green);
+    animation: schip-breathe 1.8s ease-in-out infinite;
+}
+@keyframes schip-breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+.schip-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.schip-ago { flex: none; color: var(--text-4); font-size: 11px; }
+
+.ws-more { font: 400 11.5px/1 var(--sans); color: var(--text-4); padding: 0 4px; }
 
 .scrim {
     position: fixed;

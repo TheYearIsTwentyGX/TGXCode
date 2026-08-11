@@ -28,6 +28,25 @@
 //   interrupt     — outbound. Ends the turn where it stands without killing the
 //                   process, so the session stays resumable and no tool result
 //                   is left half-written.
+//   set_permission_mode
+//                 — outbound. Changes the mode of the running process. Used when
+//                   a plan is approved: the session has to leave plan mode or
+//                   the work it just agreed to is refused.
+//
+// Two of the tools that come through can_use_tool are not really permission
+// questions at all — they are the model talking to the user:
+//
+//   ExitPlanMode     — "here is the plan, may I start?". Allowing it is approval;
+//                      denying it with a message is feedback, and the model
+//                      plans again with that message in hand.
+//   AskUserQuestion  — a multiple-choice question. The answer goes back in
+//                      `updatedInput.answers`, keyed by question text, and the
+//                      tool result echoes it to the model.
+//
+// Both arrive flagged `requires_user_interaction`, which for an ordinary tool
+// means "this needs a dialog we cannot draw, so deny it". For these two the
+// dialog is exactly what this app can draw, so they are carved out of that rule
+// and answered properly instead of being turned away.
 //
 // A permission ask is state about a turn, not content of it, so it lives here
 // next to the other liveness state and never goes near the transcript. The real
@@ -60,6 +79,22 @@ const PERMISSION_MODES = ['auto', 'acceptEdits', 'plan', 'manual', 'dontAsk', 'b
 // would have answered may have closed the window hours ago.
 const PERMISSION_TIMEOUT_MS =
     Number(process.env.CLAUDE_SESSIONS_PERMISSION_TIMEOUT_MS) || 120_000;
+
+/**
+ * Which tools are a conversation rather than a permission question.
+ * @type {Record<string, 'plan'|'question'>}
+ */
+const ASK_KINDS = { ExitPlanMode: 'plan', AskUserQuestion: 'question' };
+
+// A plan or a question deserves longer than a tool call does. Two minutes is
+// right for "may I run this?" — you are watching the turn or you are not — but
+// a plan is something you read, and being made to re-read it because the card
+// expired while you were thinking is its own kind of rude. It still expires:
+// something has to, or the process is held open for good.
+const ANSWER_TIMEOUT_MS =
+    Number(process.env.CLAUDE_SESSIONS_ANSWER_TIMEOUT_MS) || 15 * 60_000;
+
+const askTimeout = (kind) => (kind === 'tool' ? PERMISSION_TIMEOUT_MS : ANSWER_TIMEOUT_MS);
 
 // Requests we make of the CLI, where no answer means the version in front of us
 // does not speak this part of the protocol. Short, because every one of them has
@@ -462,10 +497,14 @@ class Runner extends EventEmitter {
             return;
         }
 
+        // A plan and a question are asks this app has a real answer for; every
+        // other tool that wants its own dialog is one it does not.
+        const kind = ASK_KINDS[req.tool_name] || 'tool';
+
         // Some MCP asks need a dialog of the server's own, which this channel
         // cannot carry. Offering Allow would be a lie — the call fails anyway —
         // so say what happened instead of pretending it was a choice.
-        if (req.requires_user_interaction) {
+        if (req.requires_user_interaction && kind === 'tool') {
             this._write({
                 type: 'control_response',
                 response: {
@@ -487,6 +526,7 @@ class Runner extends EventEmitter {
 
         const ask = {
             id: msg.request_id,
+            kind,
             tool: req.tool_name,
             displayName: req.display_name || req.tool_name,
             input: req.input || {},
@@ -497,13 +537,18 @@ class Runner extends EventEmitter {
             // A call made by a subagent, not by the session itself.
             agentId: req.agent_id || null,
             askedAt: Date.now(),
-            expiresAt: Date.now() + PERMISSION_TIMEOUT_MS,
+            expiresAt: Date.now() + askTimeout(kind),
             timer: null,
         };
 
         // Said yes to this tool earlier in the session, before the process was
         // last restarted. The CLI has forgotten; we have not.
-        if (this._sessionAllow.has(ask.tool)) {
+        //
+        // Only tools: "always allow" is a statement about a kind of action, and
+        // a plan or a question has no kind — each one is a different plan and a
+        // different question, and answering the next one in advance is not
+        // something anybody can mean.
+        if (kind === 'tool' && this._sessionAllow.has(ask.tool)) {
             this._respondPermission(ask, {
                 behavior: 'allow',
                 updatedPermissions: sessionAllowRule(ask.tool),
@@ -514,7 +559,10 @@ class Runner extends EventEmitter {
         // Nothing is attached to answer, so the honest outcome is the one the
         // app produced before any of this existed: denied.
         if (!this.hasViewer()) {
-            this._autoDeny(ask, 'No Claude Sessions window was open to approve this, so it was denied.');
+            this._autoDeny(ask, kind === 'tool'
+                ? 'No Claude Sessions window was open to approve this, so it was denied.'
+                : `No Claude Sessions window was open to answer this, so ${
+                    kind === 'plan' ? 'the plan was not approved' : 'the question went unanswered'}.`);
             return;
         }
 
@@ -528,14 +576,19 @@ class Runner extends EventEmitter {
             this._clearPermission('superseded');
         }
 
+        const mins = Math.round(askTimeout(kind) / 60_000);
         ask.timer = setTimeout(
-            () => this._autoDeny(ask, `Nobody answered within ${Math.round(PERMISSION_TIMEOUT_MS / 1000)}s, `
-                + 'so it was denied.'),
-            PERMISSION_TIMEOUT_MS);
+            () => this._autoDeny(ask, kind === 'tool'
+                ? `Nobody answered within ${Math.round(PERMISSION_TIMEOUT_MS / 1000)}s, so it was denied.`
+                : `Nobody answered within ${mins} minutes, so this went unanswered. Ask again `
+                    + 'if you still need it.'),
+            askTimeout(kind));
         ask.timer.unref();
 
         this.pendingPermission = ask;
-        this._setState('busy', `Waiting for you: ${ask.displayName}`);
+        this._setState('busy', kind === 'plan' ? 'Waiting for you: a plan to approve'
+            : kind === 'question' ? 'Waiting for you: a question'
+            : `Waiting for you: ${ask.displayName}`);
         this.emit('permission-request', { sessionId: this.sessionId, ...publicAsk(ask) });
     }
 
@@ -544,9 +597,13 @@ class Runner extends EventEmitter {
      *
      * @param {string} requestId
      * @param {'allow'|'allow-always'|'deny'} decision
-     * @param {object} [updatedInput] edited tool input to run instead
+     * @param {object} [extra]
+     * @param {object} [extra.updatedInput] edited tool input to run instead
+     * @param {Record<string,string>} [extra.answers] answers, keyed by question text
+     * @param {string} [extra.feedback] what to tell the model when it is turned down
+     * @param {string} [extra.mode] permission mode to continue an approved plan in
      */
-    answerPermission(requestId, decision, updatedInput) {
+    answerPermission(requestId, decision, extra = {}) {
         const ask = this.pendingPermission;
         if (!ask) return { ok: false, error: 'nothing is waiting for approval' };
         // Two windows, one ask: the first answer wins and the second is told so
@@ -556,6 +613,8 @@ class Runner extends EventEmitter {
         this.lastUsedAt = Date.now();
         this._autoDenies = 0;   // somebody is here; the spin guard can reset
 
+        if (ask.kind !== 'tool') return this._answerConversation(ask, decision, extra);
+
         if (decision === 'deny') {
             this._respondPermission(ask, {
                 behavior: 'deny', message: 'Denied from Claude Sessions.',
@@ -563,6 +622,7 @@ class Runner extends EventEmitter {
         } else {
             const always = decision === 'allow-always';
             if (always) this._sessionAllow.add(ask.tool);
+            const { updatedInput } = extra;
             this._respondPermission(ask, {
                 behavior: 'allow',
                 updatedInput: updatedInput && Object.keys(updatedInput).length ? updatedInput : null,
@@ -571,6 +631,104 @@ class Runner extends EventEmitter {
         }
         this._clearPermission(decision);
         return { ok: true };
+    }
+
+    /**
+     * Answer a plan or a question — the two asks that are the model talking to
+     * you rather than asking to run something.
+     *
+     * Both ride the allow/deny channel, because that is the only channel there
+     * is, but neither reads as a permission to the model: a denied plan comes
+     * back as feedback to plan against, and an allowed question carries the
+     * answers in its input.
+     */
+    _answerConversation(ask, decision, { answers, feedback, mode } = {}) {
+        const turnedDown = decision === 'deny';
+
+        if (turnedDown) {
+            // The message is the whole point. A plan turned down without a word
+            // leaves the model to guess what was wrong with it, and it will
+            // usually guess "too long" and try again — so say something, and
+            // when there is nothing to say, at least say which it was.
+            const said = String(feedback || '').trim();
+            this._respondPermission(ask, {
+                behavior: 'deny',
+                message: said || (ask.kind === 'plan'
+                    ? 'Not yet — keep planning.'
+                    : 'The question was dismissed unanswered. Use your own judgement and carry on.'),
+            });
+            this._clearPermission(ask.kind === 'plan' ? 'plan-rejected' : 'dismissed');
+            return { ok: true };
+        }
+
+        if (ask.kind === 'question') {
+            // `answers` is keyed by the question text, which is what the CLI
+            // matches on; a key that names no question is dropped rather than
+            // passed through, so a stale card cannot answer a live question.
+            const asked = new Set((ask.input.questions || []).map(q => q.question));
+            const clean = {};
+            for (const [q, a] of Object.entries(answers || {})) {
+                if (asked.has(q) && String(a || '').trim()) clean[q] = String(a);
+            }
+            if (!Object.keys(clean).length) {
+                return { ok: false, error: 'no answers were given' };
+            }
+            this._respondPermission(ask, {
+                behavior: 'allow',
+                updatedInput: { ...ask.input, answers: clean },
+            });
+            this._clearPermission('answered');
+            return { ok: true };
+        }
+
+        // An approved plan. Allowing the tool is what tells the model to start.
+        //
+        // "Yes, and…" rides on the plan itself. An allow response carries no
+        // message the model ever sees — that was measured, not assumed — but
+        // the approved plan is echoed back to it in full, and the CLI labels an
+        // edited one "(edited by user)". So a note appended to the plan is
+        // read as part of what was agreed to, which is where a condition on
+        // approving belongs anyway.
+        const note = String(feedback || '').trim();
+        this._respondPermission(ask, {
+            behavior: 'allow',
+            updatedInput: note
+                ? { ...ask.input, plan: `${ask.input.plan || ''}\n\n## Note from the user\n${note}\n` }
+                : null,
+        });
+        this._clearPermission(note ? 'plan-approved-note' : 'plan-approved');
+        // …but the session is still in plan mode, where the work it has just
+        // been told to do is refused. Leaving it there would approve a plan and
+        // then block it, which is worse than not asking.
+        if (mode && mode !== this.permissionMode) this._setPermissionMode(mode);
+        return { ok: true };
+    }
+
+    /**
+     * Change the mode of the running process.
+     *
+     * Also kept locally, because the mode outlives the process: a later restart
+     * builds its argv from `permissionMode`, and a session that had left plan
+     * mode must not silently return to it.
+     */
+    _setPermissionMode(mode) {
+        const previous = this.permissionMode;
+        this.permissionMode = mode;
+        this._queueChanged();   // the UI's mode selector follows this
+        this._control('set_permission_mode', { mode }).catch(() => {
+            // An older CLI that does not know the request leaves the process in
+            // plan mode while we believe otherwise. Put our copy back and say
+            // so — silently refusing every edit of an approved plan is the
+            // worst version of this.
+            this.permissionMode = previous;
+            this._queueChanged();
+            this.emit('notice', {
+                level: 'warn', kind: 'mode_change_failed',
+                text: `Approved, but this Claude Code version would not switch out of `
+                    + `${previous} mode from here. Change the mode under the composer and `
+                    + 'send a message to carry on.',
+            });
+        });
     }
 
     _respondPermission(ask, { behavior, message, updatedInput, updatedPermissions }) {
@@ -845,6 +1003,9 @@ class Runner extends EventEmitter {
 function publicAsk(ask) {
     return {
         requestId: ask.id,
+        // 'tool' | 'plan' | 'question'. Which card the UI draws — the plan and
+        // the questions themselves are already in `input`.
+        kind: ask.kind || 'tool',
         tool: ask.tool,
         displayName: ask.displayName,
         input: ask.input,
