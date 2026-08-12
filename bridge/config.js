@@ -23,6 +23,22 @@ const DEV_PORT = 45899;
 const PORT = Number(process.env.CLAUDE_SESSIONS_PORT || DEFAULT_PORT);
 const IS_DEV = PORT !== DEFAULT_PORT;
 
+// The checkout this bridge is running out of.
+//
+// Resolved from this file rather than from cwd, because the file's location is
+// what decides what gets served: server.js builds WEB_DIR from __dirname too. A
+// bridge started as `node bridge/server.js` from a worktree serves that
+// worktree's UI no matter where the process was launched from, and this is the
+// value that says so out loud — over /api/health, so the Windows shell can check
+// what it is about to adopt.
+const ROOT = path.resolve(__dirname, '..');
+
+// EnterWorktree puts every worktree under .claude/worktrees/ inside the parent
+// checkout, so the path is the test. A worktree bridge is a development bridge
+// whatever port it was asked for — see the refusal in server.js.
+const IS_WORKTREE = `${ROOT}${path.sep}`.includes(
+    `${path.sep}.claude${path.sep}worktrees${path.sep}`);
+
 // WSL runs with networkingMode=mirrored on this machine, so binding loopback is
 // enough for the Windows-side Electron shell to reach us on 127.0.0.1.
 const HOST = process.env.CLAUDE_SESSIONS_HOST || '127.0.0.1';
@@ -43,7 +59,7 @@ const PORT_DENYLIST = new Set([
 const VERSION = '1.0.0';
 
 module.exports = {
-    HOME, PROJECTS_DIR, CACHE_DIR, PORT, HOST, VERSION,
+    HOME, PROJECTS_DIR, CACHE_DIR, PORT, HOST, VERSION, ROOT, IS_WORKTREE,
     DEFAULT_PORT, DEV_PORT, IS_DEV,
     DEVBROWSER_DEFAULT_PORT, CLAUDE_BIN, PORT_DENYLIST,
 };

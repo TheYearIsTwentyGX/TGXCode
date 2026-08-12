@@ -92,6 +92,10 @@ class Terminal {
         // bridge was itself started from inside a session, nothing downstream
         // should go on believing it is the agent's own environment.
         delete env.CLAUDE_CODE_ENTRYPOINT;
+        // And this pane is the likeliest place of all for someone to type
+        // `bash bridge/launch.sh`. Inheriting the port would aim that at the
+        // everyday instance without saying so — see sessionEnv in runner.js.
+        delete env.CLAUDE_SESSIONS_PORT;
 
         this.proc = spawn('script', ['-qfec', boot, '/dev/null'], {
             cwd,

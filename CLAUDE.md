@@ -27,6 +27,32 @@ must stop your own, Ctrl-C the `npm run dev` you started, or kill it by port:
 kill "$(ss -ltnp 2>/dev/null | grep :45899 | grep -oP 'pid=\K\d+' | head -1)"
 ```
 
+**`CLAUDE_SESSIONS_PORT` in your environment is not a port you chose.** A session
+started from the app inherits the bridge's environment, so for a long time that
+variable arrived pre-set to `45888` — and `bash bridge/launch.sh` or
+`node bridge/server.js` from a worktree then bound the user's port without a port
+ever being mentioned. That bridge reported `dev: false`, the Windows shell adopted
+it in place of its own, and the everyday window quietly served a branch's UI out
+of a stale worktree. It is the most expensive way this rule has been broken.
+
+Three things stop it now, and none of them is you remembering:
+
+- `bridge/server.js` refuses to bind 45888 when it is running out of
+  `.claude/worktrees/` — exit 4, before the socket. `npm run dev` still refuses
+  the port outright.
+- The bridge no longer passes `CLAUDE_SESSIONS_PORT` to the sessions or terminals
+  it starts, so a fresh session inherits nothing to trip over.
+- `scripts/restart-bridge.sh` refuses the everyday port from a worktree. Without
+  that it would kill the user's bridge and then fail to replace it, which is worse
+  than the bug. `--status` still works from anywhere.
+
+`/api/health` reports `root` — which checkout a bridge is serving. When a window
+shows something you cannot explain, check that first:
+
+```bash
+curl -s http://127.0.0.1:45888/api/health | python3 -m json.tool | grep root
+```
+
 ## Work in a worktree, never the main checkout
 
 Several agents work on this repo at once — there are usually a handful of live

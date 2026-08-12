@@ -56,6 +56,29 @@ if [ "$STATUS_ONLY" = 1 ]; then
     exit 0
 fi
 
+# --- never the everyday instance, from a worktree ---------------------------
+
+# This script kills whatever is on $PORT and starts a bridge from $REPO — the
+# checkout it lives in. Run from a worktree against the everyday port, that
+# replaces the user's bridge with a branch's, which is the failure the port guard
+# in bridge/server.js exists to stop. And because that guard now refuses the
+# bind, the replacement would never come up: the everyday instance would be dead
+# rather than merely wrong. So refuse here, before anything is killed.
+#
+# --status is read-only and stays allowed above.
+case "$REPO/" in
+    */.claude/worktrees/*)
+        if [ "$PORT" = 45888 ]; then
+            echo "restart-bridge: $REPO is a worktree." >&2
+            echo "  Refusing to restart the everyday bridge on $PORT — it would come" >&2
+            echo "  back serving this worktree, and bridge/server.js will not allow that." >&2
+            echo "  Your own: CLAUDE_SESSIONS_PORT=45899 scripts/restart-bridge.sh" >&2
+            echo "  The everyday one: run this from the main checkout." >&2
+            exit 1
+        fi
+        ;;
+esac
+
 # --- don't throw away work -------------------------------------------------
 
 if [ -n "$CURRENT" ]; then
