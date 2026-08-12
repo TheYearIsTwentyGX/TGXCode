@@ -148,6 +148,15 @@ function card(index, s, runner, reason) {
         pinned: s.pinned,
         test: s.test,
         model: s.model,
+        // The mode a message sent from this card has to carry.
+        //
+        // `pool.ensure` compares the mode it is given against the mode the live
+        // process is in, and replaces the process when they differ. The send
+        // route defaults a missing one to `auto`, so a card that said nothing
+        // would quietly restart every session running in acceptEdits or plan.
+        // Same precedence the composer's own selector uses: the live process
+        // first, then the mode the transcript was last seen in.
+        permissionMode: (runner && runner.permissionMode) || s.permissionMode || null,
         lastTs: s.lastTs,
         lastUserTs: s.lastUserTs,
         toolCalls: s.toolCalls,

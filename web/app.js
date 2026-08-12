@@ -101,7 +101,10 @@ const state = {
     // The live board. `watching` is what the bridge has been told, kept apart
     // from `open` so that a re-subscribe for some other reason does not turn the
     // board's timer on for a window that closed it.
-    live: { open: false, watching: false, data: null, at: 0, clock: null },
+    live: { open: false, watching: false, data: null, at: 0, clock: null,
+        // Half-written messages per card, held here rather than in the DOM so
+        // they outlive the redraws the board does while agents work.
+        drafts: new Map() },
     // Sessions blocked on an answer, kept whether or not the board is open, so
     // the badge on a shut board still says how many people are waiting.
     waiting: new Set(),
@@ -733,10 +736,15 @@ function beginOpen(summary) {
     state.stopArmed = 0;
     leaveAgent();       // a subagent belongs to the session it was spawned by
 
-    // Picking a session is done with the board, whichever way you got there.
+    // Picking a session is done with the work-in-flight board, whichever way you
+    // got there. The live board is not a place you leave — it docks under the
+    // conversation you just opened, which is the whole point of it.
     if (state.dash.open) showDash(false);
-    dom.placeholder.hidden = true;
-    dom.conv.hidden = false;
+    // Through paintPanels rather than by hand: opening a session is what turns a
+    // full-height board into a docked one, and setting `conv.hidden` here
+    // directly left the two disagreeing — the conversation drawn underneath a
+    // board that still thought it had the window to itself.
+    paintPanels();
 
     renderHeader();
     hideTurnPop();
@@ -2101,7 +2109,9 @@ function syncBoardWatch() {
 
 function showLive(on) {
     state.live.open = on;
-    if (on) state.dash.open = false;   // one panel at a time
+    // The other way round from showDash: turning the board on gets the
+    // whole-screen board out of the way, since the two cannot both be read.
+    if (on) state.dash.open = false;
     paintPanels();
     syncBoardWatch();
 
@@ -2111,9 +2121,10 @@ function showLive(on) {
     clearInterval(state.live.clock);
     state.live.clock = on ? setInterval(tickCardClocks, 1000) : null;
 
-    if (on) renderLive();
+    if (liveVisible()) renderLive();
     // Coming back to a conversation: the terminal was display:none and xterm
-    // cannot size itself to a box it could not measure.
+    // cannot size itself to a box it could not measure. paintPanels refits when
+    // the conversation is up; this covers the board closing entirely.
     else if (state.current) termPane.refit();
 }
 
@@ -2131,8 +2142,13 @@ function applyOverview(data) {
     // told us about.
     state.waiting = new Set(data.sessions.filter(s => s.ask).map(s => s.sessionId));
     paintLiveBadge();
-    if (state.live.open) renderLive();
+    // Not while the work-in-flight board is covering it: the cards would be
+    // rebuilt once a second for nobody to look at.
+    if (liveVisible()) renderLive();
 }
+
+/** Whether the board is actually on screen, rather than merely switched on. */
+const liveVisible = () => state.live.open && !state.dash.open;
 
 /**
  * How many sessions are waiting on you, on the button that opens the board.
@@ -2188,7 +2204,31 @@ function renderLive() {
                 + 'here and in every terminal.')));
         return;
     }
-    dom.liveBody.replaceChildren(...d.sessions.map(liveCard));
+
+    // The board is rebuilt whenever anything moves, which is constantly while
+    // agents are working — an activity line changing is enough. Somebody typing
+    // into a card would have the box pulled out from under them mid-word, so
+    // where the cursor was is noted and put back. The text itself survives in
+    // `drafts`; this is about the focus and the caret.
+    const active = document.activeElement;
+    const typing = active && active.dataset && active.dataset.sendFor
+        ? { id: active.dataset.sendFor, at: active.selectionStart, to: active.selectionEnd }
+        : null;
+    const scroll = dom.liveBody.scrollLeft;
+
+    const docked = dom.live.dataset.mode === 'dock';
+    dom.liveBody.replaceChildren(...d.sessions.map(s => liveCard(s, docked)));
+    dom.liveBody.scrollLeft = scroll;
+
+    if (typing) {
+        const box = dom.liveBody.querySelector(
+            `[data-send-for="${CSS.escape(typing.id)}"]`);
+        if (box) {
+            box.focus({ preventScroll: true });
+            box.setSelectionRange(typing.at, typing.to);
+        }
+    }
+    for (const box of dom.liveBody.querySelectorAll('.lsend-box')) grow(box, 30, 84);
 }
 
 /**
@@ -2199,10 +2239,15 @@ function renderLive() {
  * The risk with a view like this is two renderers of one state drifting apart,
  * and sharing the small parts is what keeps them honest.
  */
-function liveCard(s) {
+function liveCard(s, docked = false) {
     const r = s.runner;
     const busy = r && (r.state === 'busy' || r.state === 'starting');
     const away = s.live && s.live.running && !r;
+    // Docked, the card is sharing the window with the conversation and every
+    // row it gives up is a row of transcript. So it drops what is duplicated
+    // elsewhere: one line of history, and the Open button — the title above it
+    // already opens the session, and the rail is right there.
+    const lines = docked ? 2 : HEADLINES_SHOWN;
 
     return el('article', { class: 'lcard', 'data-reason': s.reason, 'data-id': s.sessionId },
         el('header', { class: 'lcard-head' },
@@ -2210,7 +2255,7 @@ function liveCard(s) {
             el('button', {
                 class: 'lcard-title', type: 'button',
                 title: 'Open this conversation',
-                onclick: () => { showLive(false); openSession(s.sessionId); },
+                onclick: () => openSession(s.sessionId),
             }, clip(s.title, 60)),
             el('span', { class: 'lcard-where' },
                 s.worktree ? s.worktree.name : s.projectName),
@@ -2233,20 +2278,111 @@ function liveCard(s) {
         s.ask ? liveAsk(s) : null,
 
         s.headlines.length ? el('ol', { class: 'lcard-log' },
-            s.headlines.map(h => el('li', { title: h.text }, clip(h.text, 74)))) : null,
+            s.headlines.slice(-lines).map(h => el('li', { title: h.text }, clip(h.text, 74)))) : null,
 
-        el('div', { class: 'lcard-acts' },
-            el('button', {
+        cardComposer(s, busy, away),
+
+        (!docked || busy) ? el('div', { class: 'lcard-acts' },
+            docked ? null : el('button', {
                 class: 'lbtn', type: 'button',
-                onclick: () => { showLive(false); openSession(s.sessionId); },
+                onclick: () => openSession(s.sessionId),
             }, 'Open'),
             busy ? el('button', {
                 class: 'lbtn', type: 'button',
                 title: 'Interrupt the turn this session is running',
                 onclick: (e) => stopFromCard(s.sessionId, e.currentTarget),
             }, 'Stop') : null,
-        ),
+        ) : null,
     );
+}
+
+// How much history a card carries when it has the screen to itself.
+const HEADLINES_SHOWN = 3;
+
+/**
+ * A line to write back to the session, on the card.
+ *
+ * The common thing to want from this view is a sentence — "yes, carry on",
+ * "try the other one" — to a session you are not reading. Making that a trip
+ * through the conversation and back is most of the reason the view would go
+ * unused.
+ *
+ * A session running under something that is not this bridge does not get one.
+ * That is the same rule as the composer lock, and for the same reason: sending
+ * would put a second process on one transcript. The card says so and hands over
+ * to the conversation, where the branch is offered properly — a fork is too big
+ * a thing to do from a tile by accident.
+ */
+function cardComposer(s, busy, away) {
+    if (away) {
+        return el('div', {
+            class: 'lsend locked',
+            title: 'Sending from here would put a second process on this '
+                + 'session\'s transcript. Open it to branch off a copy.',
+        }, el('span', {}, 'Running elsewhere — open to branch.'));
+    }
+
+    const box = el('textarea', {
+        class: 'lsend-box', rows: 1, placeholder: busy ? 'Queue a message…' : 'Send a message…',
+        'aria-label': `Message ${s.title}`,
+        // Named so that a re-render can put the focus and the caret back where
+        // the typing was; the board redraws whenever anything moves.
+        'data-send-for': s.sessionId,
+    });
+    box.value = state.live.drafts.get(s.sessionId) || '';
+    box.addEventListener('input', () => {
+        state.live.drafts.set(s.sessionId, box.value);
+        grow(box, 30, 84);
+    });
+    box.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
+        if (e.shiftKey || e.altKey) return;
+        e.preventDefault();
+        sendFromCard(s, box);
+    });
+
+    return el('div', { class: 'lsend' },
+        box,
+        el('button', {
+            class: 'lbtn ok lsend-go', type: 'button',
+            title: busy ? 'Add to this session\'s queue' : 'Send to this session',
+            onclick: () => sendFromCard(s, box),
+        }, busy ? 'Queue' : 'Send'),
+    );
+}
+
+async function sendFromCard(s, box) {
+    const text = box.value.trim();
+    if (!text) return;
+
+    const go = box.parentElement.querySelector('.lsend-go');
+    box.disabled = true;
+    go.disabled = true;
+    try {
+        const r = await post(`/api/sessions/${s.sessionId}/send`, {
+            text,
+            // Carried, not defaulted. The send route turns a missing mode into
+            // `auto`, and pool.ensure replaces the process when the mode it is
+            // given differs from the one it is in — so saying nothing here would
+            // restart a session that was running in acceptEdits or plan.
+            permissionMode: s.permissionMode || undefined,
+        });
+        state.live.drafts.delete(s.sessionId);
+        box.value = '';
+        grow(box, 30, 84);
+        // Same rule as the composer: only a message that reached the process
+        // needs holding, since a queued one is on the bridge and comes back by
+        // itself if the process dies.
+        if (!r.queued) state.unsent.set(s.sessionId, text);
+        toast(r.queued
+            ? `Queued for “${clip(s.title, 32)}”.`
+            : `Sent to “${clip(s.title, 32)}”.`, 'ok', 3000);
+    } catch (err) {
+        toast(`Could not send: ${err.message}`, 'error');
+    } finally {
+        box.disabled = false;
+        go.disabled = false;
+    }
 }
 
 /** The one line under the title: what it is doing, and for how long. */
@@ -2363,7 +2499,7 @@ function liveAsk(s) {
                 }, 'Deny'),
             ] : el('button', {
                 class: 'lbtn ok', type: 'button',
-                onclick: () => { showLive(false); openSession(s.sessionId); },
+                onclick: () => openSession(s.sessionId),
             }, 'Answer →'),
         ),
     );
@@ -2430,27 +2566,50 @@ const DASH_STALE_MS = 45_000;
  * position is untouched, and coming back out lands exactly where it was.
  */
 function paintPanels() {
-    const panel = state.dash.open || state.live.open;
+    // The board docks under the conversation rather than replacing it: the
+    // reason to watch five agents is usually that you are working in one of
+    // them, and having to choose between the two made you keep switching. It
+    // takes only the height its cards need — one row, scrolled sideways when
+    // there are more than fit — and the conversation keeps everything else.
+    //
+    // With nothing open, or in focus mode, there is no conversation to share
+    // with and the board has the floor.
+    const docked = state.live.open && Boolean(state.current) && !state.focus;
+    const full = state.live.open && !docked;
+
     dom.dash.hidden = !state.dash.open;
-    dom.live.hidden = !state.live.open;
-    dom.conv.hidden = panel || !state.current;
-    dom.placeholder.hidden = panel || Boolean(state.current);
+    dom.live.hidden = !state.live.open || state.dash.open;
+    dom.live.dataset.mode = docked ? 'dock' : 'full';
+    // The conversation stays up under a docked board; the work-in-flight board
+    // is a whole screen and still covers it.
+    dom.conv.hidden = state.dash.open || full || !state.current;
+    dom.placeholder.hidden = state.dash.open || state.live.open || Boolean(state.current);
 
     for (const [btn, on] of [[dom.btnDash, state.dash.open], [dom.btnLive, state.live.open]]) {
         btn.classList.toggle('on', on);
         btn.setAttribute('aria-pressed', String(on));
     }
+    // The conversation's box just changed height, and xterm only knows what it
+    // is told.
+    if (state.current && !dom.conv.hidden) termPane.refit();
 }
 
 function showDash(on) {
     state.dash.open = on;
-    if (on) state.live.open = false;   // one panel at a time
+    // The live board is not closed by this, only covered. It is a strip you
+    // leave up; the work-in-flight board is a whole screen you go and read and
+    // then come back from, and coming back should find things as you left them.
     paintPanels();
     syncBoardWatch();
 
     if (on) {
         if (Date.now() - state.dash.at > DASH_STALE_MS) loadDash();
         else renderDash();
+    } else if (state.live.open) {
+        // The board was left switched on underneath and has been ignoring its
+        // pushes; catch it up before it comes back into view.
+        renderLive();
+        if (state.current) termPane.refit();
     } else if (state.current) {
         // The terminal was display:none while the board was up, and xterm sizes
         // itself to a box it could not measure then.

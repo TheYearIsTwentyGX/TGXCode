@@ -2035,6 +2035,50 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     align-content: start;
 }
 
+/* ── docked under a conversation ─────────────────────────────────────────
+   The board takes the height its cards need and no more, so the conversation
+   keeps the rest of the window. One row, scrolled sideways past the third or
+   fourth card, rather than a grid that wraps and eats the screen. */
+
+.live[data-mode="dock"] {
+    flex: none;
+    /* A card with a plan waiting on it is taller than one that is just working,
+       and the dock follows. The ceiling is what keeps this a strip rather than
+       a half-and-half split: on a laptop the cards would otherwise take about
+       as much as the conversation, which is the thing this is not. */
+    max-height: 38vh;
+    border-top: 1px solid var(--s4);
+    background: var(--bg);
+}
+
+.live[data-mode="dock"] .live-head {
+    padding: 9px 28px 7px;
+    align-items: baseline;
+    gap: 10px;
+}
+.live[data-mode="dock"] .live-head > div {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+}
+.live[data-mode="dock"] .live-title { font-size: 12.5px; color: var(--text-3); }
+.live[data-mode="dock"] .live-sub { margin: 0; font-size: 11.5px; }
+
+.live[data-mode="dock"] .live-body {
+    padding: 0 28px 14px;
+    /* One row: columns are laid out along the inline axis and the row scrolls,
+       instead of wrapping into however many rows it takes. */
+    grid-template-columns: none;
+    grid-auto-flow: column;
+    grid-auto-columns: 330px;
+    overflow-x: auto;
+    /* Only bites when a card is taller than the cap allows — a plan waiting on
+       a short window. Normally the row fits and nothing scrolls vertically. */
+    overflow-y: auto;
+    align-content: stretch;
+}
+.live[data-mode="dock"] .live-note { grid-column: auto; min-width: 330px; }
+
 .live-note {
     grid-column: 1 / -1;
     padding: 18px 20px;
@@ -2200,7 +2244,47 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 /* The newest line is the one you are actually reading. */
 .lcard-log li:last-child { color: var(--text-2); }
 
-.lcard-acts { display: flex; gap: 6px; margin-top: auto; padding-top: 2px; }
+/* A line back to the session, without going and opening it. */
+.lsend {
+    display: flex;
+    align-items: flex-end;
+    gap: 6px;
+    margin-top: auto;
+    padding: 5px 5px 5px 11px;
+    background: var(--s3);
+    border-radius: var(--r);
+    transition: background var(--t-fast) var(--ease);
+}
+.lsend:focus-within { background: var(--s4); }
+
+.lsend-box {
+    flex: 1;
+    min-width: 0;
+    min-height: 30px;
+    max-height: 84px;
+    padding: 7px 0;
+    border: 0;
+    background: none;
+    resize: none;
+    color: var(--text);
+    font: 400 12.5px/16px var(--sans);
+    overflow-y: auto;
+}
+.lsend-box::placeholder { color: var(--text-4); }
+.lsend-box:disabled { opacity: 0.5; }
+.lsend-go { height: 30px; padding: 0 11px; font-size: 11.5px; }
+
+/* The one case that gets no box: a session with a process that is not ours. */
+.lsend.locked {
+    display: block;
+    padding: 7px 11px;
+    background: var(--s1);
+    color: var(--text-4);
+    font-size: 11.5px;
+    line-height: 1.5;
+}
+
+.lcard-acts { display: flex; gap: 6px; padding-top: 2px; }
 
 .lbtn {
     flex: none;
