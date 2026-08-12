@@ -126,18 +126,20 @@ export class TerminalPane {
         this.term.onResize(({ rows, cols }) => this.pushSize(rows, cols));
 
         // Ctrl+C has to stay an interrupt here, which is what the shell expects,
-        // so copy and paste take the Ctrl+Shift pair a terminal normally uses.
+        // so copy takes the Ctrl+Shift pair a terminal normally uses. Copy needs
+        // this handler because an xterm selection is not a DOM selection, so the
+        // browser has nothing of its own to copy.
+        //
+        // Paste is deliberately absent. Ctrl+Shift+V already reaches xterm as an
+        // ordinary paste event, which it brackets and forwards on its own; a
+        // clipboard.readText() branch here delivers the same text a second time,
+        // because returning false only stops xterm from handling the key and
+        // never cancels the browser's own paste.
         this.term.attachCustomKeyEventHandler((e) => {
             if (e.type !== 'keydown') return true;
             if (e.ctrlKey && e.shiftKey && e.code === 'KeyC') {
                 const sel = this.term.getSelection();
                 if (sel) navigator.clipboard.writeText(sel).catch(() => {});
-                return false;
-            }
-            if (e.ctrlKey && e.shiftKey && e.code === 'KeyV') {
-                navigator.clipboard.readText()
-                    .then((t) => t && this.term.paste(t))
-                    .catch(() => {});
                 return false;
             }
             return true;
