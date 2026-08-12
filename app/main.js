@@ -144,10 +144,141 @@ function shellQuote(p) {
     return q(s);
 }
 
-/** Ensure a bridge is answering, starting one if needed. */
+// ── the right checkout ───────────────────────────────────────────────────
+//
+// A port answering is not proof it is answering for the right tree.
+//
+// The bridge hands its environment to every session it starts, so an agent
+// working on this codebase inherits CLAUDE_SESSIONS_PORT pointing at the
+// everyday instance; a bridge started from a worktree then binds 45888 without
+// anyone choosing that port, reports `dev: false`, and gets adopted here. The
+// window looks exactly like the everyday one and serves a branch's UI out of a
+// stale worktree — which is how a merged change went missing from a window that
+// had been refreshed a dozen times.
+//
+// The bridge now refuses that bind (server.js) and no longer passes the port
+// down (runner.js, terminal.js), so the accident cannot recur. This is the other
+// half: what the shell does about a bridge that is on its port anyway — a second
+// clone, something started by hand, or a version predating those guards. It is
+// checked only for the everyday port. A development instance is deliberately
+// pointed at a port by `npm run dev` and serves whatever checkout started it,
+// which is the whole point of having one.
+
+/** A WSL path with a leading `~` expanded against the bridge's own $HOME. */
+function expandHome(p, home) {
+    const s = String(p || '').replace(/\/+$/, '');
+    if (!home) return s;
+    if (s === '~') return home;
+    if (s.startsWith('~/')) return `${home}/${s.slice(2)}`;
+    return s;
+}
+
+/**
+ * Is this bridge serving the checkout we are configured for?
+ *
+ * A bridge too old to report `root` cannot answer the question, and on the
+ * everyday port an unverifiable bridge is treated as the wrong one: it is
+ * restarted from the configured directory, which is where it should have been
+ * running in the first place. Nothing is lost by that — a restart from the right
+ * tree is the correct outcome either way, and turns in flight are protected by
+ * the shutdown endpoint refusing while any is running.
+ */
+function servesConfigured(health, cfg) {
+    if (!health || !health.root) return false;
+    return health.root.replace(/\/+$/, '') === expandHome(cfg.bridgeDir, health.home);
+}
+
+/** Ask a bridge to stand down. 409 means it is mid-turn and will not. */
+function askShutdown(pid) {
+    return new Promise((resolve) => {
+        const req = http.request(`${ORIGIN}/api/shutdown?pid=${pid}`, {
+            method: 'POST',
+            headers: { 'X-Claude-Sessions-Client': '1', 'Content-Length': '0' },
+            timeout: 4000,
+        }, (res) => {
+            res.resume();
+            res.on('end', () => resolve(res.statusCode));
+        });
+        req.on('timeout', () => { req.destroy(); resolve(0); });
+        req.on('error', () => resolve(0));
+        req.end();
+    });
+}
+
+/**
+ * Take the everyday port back from a bridge serving the wrong checkout.
+ *
+ * Only ever through /api/shutdown, never a kill: that endpoint answers 409 while
+ * a turn is in flight, and killing a bridge kills its turns — measured, and the
+ * reason this app has a separate development port at all. So a squatter with work
+ * running is waited for rather than shot, with the reason on screen. Three minutes
+ * is long enough for an ordinary turn to land and short enough that a stuck one
+ * does not leave a window saying nothing.
+ */
+async function reclaimPort(cfg, health, onStatus) {
+    const where = health.root || 'an unknown checkout';
+    const deadline = Date.now() + 180_000;
+
+    for (;;) {
+        const code = await askShutdown(health.pid);
+        if (code === 200 || code === 0) break;   // stood down, or already gone
+
+        if (code !== 409 || Date.now() > deadline) {
+            return {
+                ok: false,
+                error: `The bridge on ${PORT} is serving ${where}, not `
+                    + `${cfg.bridgeDir}, and would not stand down`
+                    + `${code === 409 ? ' — it still has a turn running' : ''}.\n\n`
+                    + `Finish or stop that work, or end it by hand inside WSL:\n`
+                    + `  kill ${health.pid}\n\n`
+                    + `then reopen Claude Sessions.`,
+            };
+        }
+
+        const fresh = await ping();
+        if (!fresh) break;                       // it went away on its own
+        if (servesConfigured(fresh, cfg)) return { ok: true, adopted: fresh };
+        onStatus(`Waiting for the bridge on ${PORT} to finish.`,
+            `It is serving ${where}, not the checkout this app is configured for `
+            + `(${cfg.bridgeDir}), so it cannot be used — but it has `
+            + `${fresh.busy || 1} turn${fresh.busy === 1 ? '' : 's'} in flight and `
+            + `stopping it would end them.\n\n`
+            + `This window takes the port over as soon as that work finishes.`);
+        await new Promise(r => setTimeout(r, 3000));
+    }
+
+    // Standing down is asynchronous; the socket has to be free before we bind it.
+    const gone = Date.now() + 15_000;
+    while (Date.now() < gone) {
+        if (!await ping(600)) return { ok: true };
+        await new Promise(r => setTimeout(r, 400));
+    }
+    return {
+        ok: false,
+        error: `The bridge on ${PORT} agreed to stop but is still answering.\n\n`
+            + `Inside WSL:\n  kill ${health.pid}\n\nthen reopen Claude Sessions.`,
+    };
+}
+
+/** Ensure a bridge is answering *for the configured checkout*, starting one if needed. */
 async function ensureBridge(cfg, onStatus) {
     let health = await ping();
-    if (health) return { ok: true, health, started: false };
+
+    // Adopting whatever is on the port is right for a development instance and
+    // wrong for the everyday one — see the note above.
+    if (health && (PORT !== DEFAULT_PORT || servesConfigured(health, cfg))) {
+        return { ok: true, health, started: false };
+    }
+
+    if (health) {
+        onStatus(`Another checkout is on ${PORT} — taking it back…`);
+        const reclaimed = await reclaimPort(cfg, health, onStatus);
+        if (!reclaimed.ok) return { ok: false, error: reclaimed.error, portHeld: true };
+        // It may have been replaced by the right one while we waited.
+        if (reclaimed.adopted) {
+            return { ok: true, health: reclaimed.adopted, started: false };
+        }
+    }
 
     onStatus('Starting the bridge inside WSL…');
     startBridge(cfg);
@@ -157,10 +288,20 @@ async function ensureBridge(cfg, onStatus) {
     while (Date.now() < deadline) {
         await new Promise(r => setTimeout(r, 600));
         health = await ping();
-        if (health) {
-            bridgePid = health.pid || null;
-            return { ok: true, health, started: true };
+        if (!health) continue;
+        // Ours, or did something else win the race for the port?
+        if (PORT === DEFAULT_PORT && !servesConfigured(health, cfg)) {
+            return {
+                ok: false,
+                portHeld: true,
+                error: `Started a bridge in ${cfg.bridgeDir}, but ${PORT} is being `
+                    + `answered by one serving ${health.root || 'an unknown checkout'}.\n\n`
+                    + `Something else claimed the port first. Inside WSL:\n`
+                    + `  kill ${health.pid}\n\nthen reopen Claude Sessions.`,
+            };
         }
+        bridgePid = health.pid || null;
+        return { ok: true, health, started: true };
     }
     return { ok: false, error: await readBridgeLog(cfg) || 'The bridge did not start in time.' };
 }
@@ -328,6 +469,12 @@ app.whenReady().then(async () => {
     if (!win || win.isDestroyed()) return;
 
     if (!result.ok) {
+        // A port held by the wrong checkout is a different failure from a bridge
+        // that would not come up, and the advice for it is already in the error.
+        if (result.portHeld) {
+            setStatus(`Nothing is being served on ${PORT}.`, result.error);
+            return;
+        }
         setStatus('The bridge would not start.',
             `Tried to run bridge/launch.sh in ${cfg.bridgeDir}`
             + `${cfg.distro ? ` on WSL distro ${cfg.distro}` : ''}.\n\n`

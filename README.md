@@ -559,6 +559,47 @@ To stop your own, Ctrl-C the `npm run dev` that started it, or kill it by port:
 kill "$(ss -ltnp 2>/dev/null | grep :45899 | grep -oP 'pid=\K\d+' | head -1)"
 ```
 
+### Which checkout is on the port
+
+Two ports keep the *processes* apart. They did not, for a while, keep the *code*
+apart — and the way that failed is worth writing down, because every step of it
+looked reasonable.
+
+The bridge handed its own environment to every session it started, so an agent
+working on this codebase inherited `CLAUDE_SESSIONS_PORT=45888`. Nothing then had
+to mention a port for the mistake to happen: `bash bridge/launch.sh` in a worktree
+bound the everyday one. It came up reporting `dev: false`, because that flag is
+derived from the port. And the Windows shell, which starts a bridge only when
+nothing answers, adopted it. The result is a window that looks exactly like the
+everyday app — no amber badge, no `dev` in the title — serving a branch's `web/`
+out of a worktree that may be weeks stale. A change merged to `main` is then
+simply absent from a window that has been reloaded a dozen times, and every
+instinct says to look at the merge.
+
+So the port alone is not identity. `/api/health` reports `root`, the checkout the
+bridge is running out of, resolved from `__dirname` because that is what decides
+what gets served:
+
+```bash
+curl -s http://127.0.0.1:45888/api/health | python3 -m json.tool | grep root
+```
+
+Four guards, arranged so that no single one has to hold:
+
+| Where | What |
+| --- | --- |
+| `bridge/server.js` | Refuses to bind 45888 when running out of `.claude/worktrees/` — exit 4, before the socket, so no way of starting a bridge gets around it. |
+| `bridge/runner.js`, `bridge/terminal.js` | Sessions and terminal panes no longer inherit `CLAUDE_SESSIONS_PORT`. The variable is the bridge's own business. |
+| `scripts/restart-bridge.sh` | Refuses the everyday port from a worktree, *before* killing anything — otherwise the guard above turns a takeover into an outage. `--status` still works anywhere. |
+| `app/main.js` | Verifies `root` against its configured `bridgeDir` before adopting a bridge on 45888, and takes the port back if it does not match. |
+
+Taking the port back goes through `/api/shutdown`, never a kill, because that
+endpoint answers 409 while a turn is in flight. A squatter with work running is
+waited for — the window says what it is waiting for and how many turns — and the
+port is claimed the moment that work lands. A development instance is exempt from
+the check: it is pointed at a port deliberately and serves whichever checkout
+started it, which is the entire point of having one.
+
 ### Picking up new code
 
 The bridge runs whatever was on disk when it started, so it keeps running old
@@ -608,7 +649,9 @@ Two other things that trip agents up here:
   happened, because the outcomes differ.
 - **The bridge outlives the window.** It is started detached so a long turn
   survives closing the app, and shuts down on exit only when nothing is running.
-  A second launch reuses whatever is already listening on 45888.
+  A second launch reuses what is already listening on 45888 — but only after
+  checking it is serving the configured checkout; see *Which checkout is on the
+  port*.
 - **One writer at a time.** Sending from here while the same session is mid-turn
   in a terminal would have two processes appending to one transcript. The rail
   flags active sessions; it does not stop you.
