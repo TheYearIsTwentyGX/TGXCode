@@ -229,6 +229,16 @@
             <textarea id="input" rows="1" placeholder="Send a message to this session…"
                       aria-label="Message"></textarea>
             <button id="btn-send" class="btn-send" type="button" disabled>Send</button>
+            <!-- The end of a review in one click. It sends a written instruction
+                 like any other message, so the transcript records what was asked
+                 for rather than a button having happened.
+
+                 Outside Send rather than between Send and the box: the hand
+                 leaving the textarea reaches Send first, and the button that
+                 merges things is the one you have to travel past it to hit. -->
+            <button id="btn-lgtm" class="btn-lgtm" type="button" disabled
+                    title="Send: open a PR for this work if there isn't one, run the
+checks, and merge it once they pass.">LGTM</button>
           </div>
 
           <div class="opts">

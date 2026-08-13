@@ -68,6 +68,25 @@ const { describeTool } = require('./transcript');
 // Queue entry ids only have to be unique per process; the UI never persists one.
 let queueSeq = 0;
 
+/**
+ * The environment a session runs in.
+ *
+ * A session inherits the bridge's environment, and `CLAUDE_SESSIONS_PORT` has no
+ * business travelling down it. The bridge sets that variable for itself; an agent
+ * that inherits it is holding the port of *this* instance, so a bridge it starts
+ * while working on this codebase silently binds the everyday one — which is
+ * exactly how a worktree came to be serving the user's window. An agent that
+ * genuinely wants a port picks one, and `npm run dev` picks a free one for it.
+ *
+ * CLAUDE_CODE_ENTRYPOINT goes the other way: it is set here so the CLI knows what
+ * started it.
+ */
+function sessionEnv() {
+    const env = { ...process.env, CLAUDE_CODE_ENTRYPOINT: 'claude-sessions' };
+    delete env.CLAUDE_SESSIONS_PORT;
+    return env;
+}
+
 // Processes are cheap to restart (resume is a warm cache hit), so don't hoard them.
 const MAX_LIVE = 4;
 const IDLE_EVICT_MS = 15 * 60 * 1000;
@@ -187,7 +206,7 @@ class Runner extends EventEmitter {
             this.proc = spawn(CLAUDE_BIN, args, {
                 cwd: this.cwd,
                 stdio: ['pipe', 'pipe', 'pipe'],
-                env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: 'claude-sessions' },
+                env: sessionEnv(),
                 // Its own process group, so a Ctrl-C aimed at the bridge is not
                 // also delivered to a turn in flight; it gets to shut down on
                 // stdin EOF instead of being interrupted mid-write.

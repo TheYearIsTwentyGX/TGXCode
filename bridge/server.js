@@ -347,6 +347,11 @@ async function api(req, res, url, pathname) {
             ok: true, app: 'claude-sessions', version: cfg.VERSION,
             pid: process.pid, port: cfg.PORT, dev: cfg.IS_DEV, ready: index.ready,
             sessions: index.sessions.size, host: os.hostname(),
+            // Which checkout is being served, and the home directory to expand a
+            // `~` in the shell's configured bridgeDir against. The Windows shell
+            // compares these before it adopts a bridge it did not start: a port
+            // answering is not proof it is answering for the right tree.
+            root: cfg.ROOT, home: cfg.HOME, worktree: cfg.IS_WORKTREE,
             // Live SSE connections — a quick way to tell whether a UI attached.
             clients: clients.size, runners: Object.keys(pool.statuses()).length,
             terminals: terminals.live().length,
@@ -980,6 +985,31 @@ function shutdown(code = 0) {
 
 process.on('SIGINT', () => shutdown(0));
 process.on('SIGTERM', () => shutdown(0));
+
+// A worktree may never be the everyday instance.
+//
+// The everyday port is not something anyone chose here: the bridge hands its own
+// environment to every session it starts, so `CLAUDE_SESSIONS_PORT=45888` is
+// already set for an agent working in a worktree, and `bash bridge/launch.sh`
+// there binds the user's port without a port ever being mentioned. What follows
+// is worse than a clash — the bind succeeds if the everyday bridge is not up
+// yet, /api/health reports `dev: false`, and the Windows shell adopts it. The
+// window then looks exactly like the everyday one while serving a branch's UI
+// out of a stale worktree.
+//
+// scripts/dev.js has always refused this, but only for `npm run dev`; the guard
+// belongs where the port is bound so that no way of starting a bridge can get
+// around it.
+if (cfg.PORT === cfg.DEFAULT_PORT && cfg.IS_WORKTREE) {
+    console.error(`[claude-sessions] refusing to serve ${cfg.ROOT} on `
+        + `${cfg.DEFAULT_PORT} — that is the everyday instance, and this is a `
+        + 'worktree.');
+    console.error('  Start a development bridge instead: npm run dev, or '
+        + `CLAUDE_SESSIONS_PORT=${cfg.DEV_PORT} bash bridge/launch.sh`);
+    console.error('  CLAUDE_SESSIONS_PORT is inherited from the bridge that '
+        + 'started this session, so unset it rather than trusting it.');
+    process.exit(4);
+}
 
 server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
