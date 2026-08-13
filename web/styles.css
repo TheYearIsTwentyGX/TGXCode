@@ -1884,6 +1884,11 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 /* The live-elsewhere lock, directly above the box it is holding shut. Sits where
    the queue sits, in the warning colour, because it is the one thing between a
    message and two processes writing to one transcript. */
+/* Setting `display` here is what makes the guard below necessary: a class beats
+   the browser's own `[hidden] { display: none }`, so without it the bar is on
+   screen for every session however the attribute is set. */
+.lock[hidden] { display: none; }
+
 .lock {
     display: flex;
     align-items: center;
