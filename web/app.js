@@ -124,7 +124,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'agents', 'agent-scroll', 'agent-log', 'btn-back', 'btn-back-label',
     'btn-dash', 'dash-badge', 'dash', 'dash-sub', 'dash-body', 'dash-refresh',
     'lock', 'lock-text', 'lock-fork', 'lock-anyway',
-    'btn-live', 'live-badge', 'live', 'live-sub', 'live-body',
+    'btn-live', 'live-badge', 'live', 'live-sub', 'live-body', 'live-focus', 'focus-exit',
     'new-scrim', 'new-cwd', 'new-picker', 'new-prompt', 'new-model', 'new-perm',
     'new-test', 'new-test-row', 'new-go',
     'del-scrim', 'del-what', 'del-meta', 'del-go']) {
@@ -2126,6 +2126,71 @@ function showLive(on) {
     // cannot size itself to a box it could not measure. paintPanels refits when
     // the conversation is up; this covers the board closing entirely.
     else if (state.current) termPane.refit();
+    // Closing the board is also leaving focus mode; there is nothing focused on.
+    if (!on && state.focus) setFocus(false);
+    else rememberView();
+}
+
+/**
+ * Focus mode: the board with the window to itself.
+ *
+ * It began as a URL — `?view=live&focus=1`, for a browser left open on a second
+ * monitor — which made it unreachable from the app, whose window has no address
+ * bar. So it is a toggle, and the URL follows it: what is on screen is what you
+ * would get by opening the address the button leaves behind, and that address
+ * can be copied into a browser on the other screen.
+ */
+function setFocus(on) {
+    state.focus = on;
+    const app = document.querySelector('.app');
+    if (on) app.dataset.focus = '1';
+    else delete app.dataset.focus;
+
+    dom.liveFocus.setAttribute('aria-pressed', String(on));
+    dom.liveFocus.classList.toggle('on', on);
+    // Focus mode is the board, full height, so turning it on turns the board on.
+    if (on && !state.live.open) { showLive(true); return; }
+
+    paintPanels();
+    // Full and docked cards are built differently — the density changes with the
+    // room available — so this is a rebuild, not just a resize.
+    if (liveVisible()) renderLive();
+    else if (state.current) termPane.refit();
+    rememberView();
+}
+
+/** Keep the address bar honest, so the view can be reopened or copied. */
+function rememberView() {
+    const q = new URLSearchParams();
+    if (state.live.open) q.set('view', 'live');
+    if (state.focus) q.set('focus', '1');
+    const search = q.toString();
+    history.replaceState(null, '', search ? `${location.pathname}?${search}` : location.pathname);
+}
+
+/**
+ * A wheel over the docked strip scrolls it along.
+ *
+ * A mouse only reports vertical movement, and the dock only scrolls sideways, so
+ * without this the wheel did nothing at all over the one part of the screen the
+ * cards are on. Down is right, which is the direction the row runs.
+ */
+function onDockWheel(e) {
+    if (dom.live.dataset.mode !== 'dock') return;
+    // A trackpad swiped sideways already says so; leave that alone.
+    if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+
+    const strip = dom.liveBody;
+    const max = strip.scrollWidth - strip.clientWidth;
+    if (max <= 0) return;
+
+    // Wheels that report lines rather than pixels would otherwise creep.
+    const step = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
+    const before = strip.scrollLeft;
+    strip.scrollLeft = Math.max(0, Math.min(max, before + step));
+    // Only swallow the gesture when it actually moved something — at either end
+    // the wheel should go back to doing whatever it would have done.
+    if (strip.scrollLeft !== before) e.preventDefault();
 }
 
 function tickCardClocks() {
@@ -2249,9 +2314,15 @@ function liveCard(s, docked = false) {
     // already opens the session, and the rail is right there.
     const lines = docked ? 2 : HEADLINES_SHOWN;
 
-    return el('article', { class: 'lcard', 'data-reason': s.reason, 'data-id': s.sessionId },
+    return el('article', {
+        class: 'lcard', 'data-reason': s.reason, 'data-id': s.sessionId,
+        onclick: (e) => { if (cardClickOpens(e)) openSession(s.sessionId); },
+    },
         el('header', { class: 'lcard-head' },
             el('span', { class: 'lcard-dot' }),
+            // Still a button, though the whole card now opens the session: it is
+            // what a keyboard reaches and what a screen reader announces, and
+            // the card around it is a mouse affordance layered over the top.
             el('button', {
                 class: 'lcard-title', type: 'button',
                 title: 'Open this conversation',
@@ -2298,6 +2369,23 @@ function liveCard(s, docked = false) {
 
 // How much history a card carries when it has the screen to itself.
 const HEADLINES_SHOWN = 3;
+
+/**
+ * Whether a click on a card was meant as "open this session".
+ *
+ * The card is one big target, which is what you want when the alternative is
+ * hitting a line of text — but everything on it that does something of its own
+ * has to keep doing it. Allowing, denying, stopping a turn or opening a dev
+ * server are not "take me there", and neither is putting the cursor in the
+ * message box or dragging across a line to copy it.
+ */
+function cardClickOpens(e) {
+    if (e.target.closest('button, a, input, textarea, select, label, .lsend, .lask')) return false;
+    // Selecting text on a card ends in a click; that should leave the selection
+    // alone rather than navigating away from it.
+    const picked = window.getSelection();
+    return !(picked && picked.type === 'Range' && String(picked).trim());
+}
 
 /**
  * A line to write back to the session, on the card.
@@ -4441,6 +4529,10 @@ for (const n of dom.delScrim.querySelectorAll('[data-close-del]')) {
 dom.delScrim.addEventListener('click', (e) => { if (e.target === dom.delScrim) closeDelete(); });
 
 dom.btnLive.addEventListener('click', () => showLive(!state.live.open));
+dom.liveFocus.addEventListener('click', () => setFocus(!state.focus));
+dom.focusExit.addEventListener('click', () => setFocus(false));
+// The dock runs sideways and a mouse wheel only goes up and down.
+dom.liveBody.addEventListener('wheel', onDockWheel, { passive: false });
 dom.btnDash.addEventListener('click', () => showDash(!state.dash.open));
 dom.dashRefresh.addEventListener('click', () => loadDash({ refresh: true }));
 
@@ -4463,6 +4555,9 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !dom.delScrim.hidden) { closeDelete(); return; }
     if (e.key === 'Escape' && !dom.newScrim.hidden) { closeNew(); return; }
     if (e.key === 'Escape' && state.dash.open) { showDash(false); return; }
+    // Out of focus mode before out of the board: focus mode is the deeper state,
+    // and leaving it should not also take the board away.
+    if (e.key === 'Escape' && state.focus) { setFocus(false); return; }
     if (e.key === 'Escape' && state.live.open) { showLive(false); return; }
     if (e.key === 'Escape' && state.agent) { closeAgent(); return; }
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); dom.search.focus(); }
@@ -4506,11 +4601,12 @@ function debounce(fn, ms) {
  */
 function applyViewParams() {
     const q = new URLSearchParams(location.search);
-    state.focus = q.get('focus') === '1';
-    if (state.focus) document.querySelector('.app').dataset.focus = '1';
-    // Focus mode has nothing else to show, so it implies the board.
-    if (state.focus || q.get('view') === 'live') showLive(true);
+    // Focus mode has nothing else to show, so it implies the board. Order
+    // matters: showLive first, then setFocus, or setFocus turns the board on
+    // itself and paints twice.
+    if (q.get('view') === 'live' || q.get('focus') === '1') showLive(true);
     else if (q.get('view') === 'dashboard') showDash(true);
+    if (q.get('focus') === '1') setFocus(true);
 }
 
 // ── go ───────────────────────────────────────────────────────────────────

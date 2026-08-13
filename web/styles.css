@@ -2096,6 +2096,10 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     padding: 14px 15px 12px;
     background: var(--s2);
     border-radius: var(--r-lg);
+    /* The whole card opens the session — see cardClickOpens for what is carved
+       out of that. Anything with its own behaviour keeps its own cursor. */
+    cursor: pointer;
+    transition: background var(--t-fast) var(--ease);
     /* The band a card is sorted into, said again in colour along its edge, so
        that "who is blocked on me" survives a screen too full to read. */
     box-shadow: inset 3px 0 0 var(--s4);
@@ -2141,7 +2145,14 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+/* Hovering anywhere on the card says what clicking it will do. */
+.lcard:hover { background: var(--s3); }
+.lcard:hover .lcard-title,
 .lcard-title:hover { color: var(--blue); }
+/* The parts that are not "open this session": they keep their own cursor, and
+   the card's hover tint is not a promise they make. */
+.lsend, .lask, .lcard-log { cursor: auto; }
+.lsend-box { cursor: text; }
 
 .lcard-where {
     flex: none;
@@ -2306,8 +2317,30 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 /* An urgent badge is a count of people waiting, not of things happening. */
 .bar-badge.urgent { background: var(--yellow); color: #241f07; }
 
-/* Focus mode: a browser window left up on a second monitor. Everything that is
-   about driving one conversation goes, because there is no conversation here. */
+/* The board's own header controls: the Focus toggle sits here, beside the count. */
+.live-btn {
+    margin-left: auto;
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    height: 30px;
+    padding: 0 13px;
+    border: 0;
+    border-radius: var(--pill);
+    background: var(--s3);
+    color: var(--text-3);
+    font: 500 12px/1 var(--sans);
+    cursor: pointer;
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.live-btn:hover { background: var(--s4); color: var(--text); }
+.live-btn.on { background: var(--blue-cont); color: var(--blue); }
+.live[data-mode="dock"] .live-btn { height: 24px; padding: 0 10px; font-size: 11.5px; }
+
+/* Focus mode: the board with the window to itself, for a second monitor.
+   Everything that is about driving one conversation goes, because there is no
+   conversation here. */
 .app[data-focus="1"] {
     grid-template-columns: 1fr;
     grid-template-areas: "bar" "main";
@@ -2317,6 +2350,11 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 .app[data-focus="1"] #btn-dash,
 .app[data-focus="1"] .live-head { display: none; }
 .app[data-focus="1"] .live-body { padding-top: 18px; }
+
+/* The way out, and the only piece of chrome focus mode adds rather than takes
+   away — the button that turned it on is inside the header it hides. */
+#focus-exit { display: none; }
+.app[data-focus="1"] #focus-exit { display: inline-flex; }
 
 .dash-head {
     flex: none;

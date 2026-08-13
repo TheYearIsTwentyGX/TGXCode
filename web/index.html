@@ -41,6 +41,19 @@
       <span id="live-badge" class="bar-badge" hidden></span>
     </button>
 
+    <!-- The way back. Focus mode hides the board's own header along with
+         everything else, so the button that turned it on goes with it — this is
+         the one piece of chrome that has to survive. Escape does it too. -->
+    <button id="focus-exit" class="bar-btn" type="button"
+            title="Leave focus mode (Esc)">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"
+              stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+              stroke-linejoin="round"/>
+      </svg>
+      <span>Exit focus</span>
+    </button>
+
     <!-- Work that is finished with the conversation but not with you: changes
          nobody committed, pull requests nobody merged. -->
     <button id="btn-dash" class="bar-btn" type="button" aria-pressed="false"
@@ -290,6 +303,17 @@
           <p id="live-sub" class="live-sub">Every session with a process, and what
             it is waiting on.</p>
         </div>
+        <!-- The stripped-down layout, without having to type a URL: this window
+             has no address bar, so ?view=live&focus=1 was unreachable from it. -->
+        <button id="live-focus" class="live-btn" type="button" aria-pressed="false"
+                title="Fill the window with the board — no rail, no conversation">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"
+                  stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+                  stroke-linejoin="round"/>
+          </svg>
+          <span>Focus</span>
+        </button>
       </header>
       <div id="live-body" class="live-body"></div>
     </section>
