@@ -922,6 +922,11 @@ a:hover { text-decoration: underline; }
 .ev-user .ev-label { color: var(--peach); }
 .ev-user .prose { color: var(--text); }
 
+/* A turn drawn at Send, before the transcript has it. Full strength, because the
+   message is real and on its way — what is missing is only the time it was
+   recorded at, so the gutter that will hold it says so and then fills in. */
+.ev-user[data-pending] .ev-time::after { content: '·'; }
+
 /* assistant turn */
 .ev-assistant .ev-body { padding: 3px 0 10px; }
 .ev-assistant .ev-label { color: var(--blue); }

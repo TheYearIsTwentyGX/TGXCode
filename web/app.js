@@ -78,6 +78,11 @@ const state = {
     groupOrder: new Map(),  // group key -> rank
     freshRank: 0,           // ranks for what turns up after the first load
     unsent: new Map(),      // sessionId -> text written to a process but not yet in a transcript
+    // The one message drawn in the log before the transcript has it:
+    // {sessionId, node, timer}. Kept out of state.nodes on purpose — renderTurns
+    // builds the turn rail from there, and a tick whose node is about to be
+    // thrown away is worse than a tick that arrives one poll late.
+    pendingSend: null,
     pendingDelete: null,    // the session the confirm dialog is asking about
     busyTimer: null,        // ticks the elapsed-time readout while a turn runs
     queue: [],              // the current session's waiting messages, from the bridge
@@ -646,6 +651,7 @@ function clearCurrent() {
     state.activeTurn = -1;
     state.agents = [];
     state.ask = null;
+    clearPendingSend();   // the conversation it was drawn in is gone
     leaveAgent();
     clearInterval(state.busyTimer);
     state.busyTimer = null;
@@ -694,7 +700,14 @@ async function openSession(id, { quiet = false } = {}) {
         state.offset = data.offset;
 
         renderHeader();
-        dom.log.replaceChildren();      // drops the skeleton
+        // Drops the skeleton — and with it a row drawn at Send while this fetch was
+        // still in flight, which is reachable because the composer is live over a
+        // skeleton. Forget it rather than re-append it: the transcript that is about
+        // to be drawn may already contain the message, and putting the row back
+        // would be guessing about where in this fetch it belongs. The message is
+        // safe either way, and the state has to agree with the log.
+        dom.log.replaceChildren();
+        clearPendingSend();
         appendEvents(data.events);
         renderTurns();      // a session with no turns of your own still clears the rail
         renderRail();
@@ -733,6 +746,9 @@ function beginOpen(summary) {
     state.pinned = true;
     state.agents = [];  // the previous session's agents are not this one's
     state.ask = null;   // approvals belong to the session that is blocked on them
+    // A row drawn for one session is not evidence about another. The log is
+    // replaced below in any case; this is what disarms the timer holding it.
+    clearPendingSend();
     state.stopArmed = 0;
     leaveAgent();       // a subagent belongs to the session it was spawned by
 
@@ -908,7 +924,25 @@ function appendEvents(events, view = SESSION_VIEW) {
             view.tools.set(ev.id, { ev, node });
             if (ev.name === 'Task' || ev.name === 'Agent') sawAgent = true;
         }
-        if (ev.kind === 'user') newTurn = true;
+        if (ev.kind === 'user') {
+            newTurn = true;
+            // The transcript has caught up with the row drawn at Send, so that row
+            // gives way to this one. Which entry it is cannot be checked and must
+            // not be guessed at: `claude` mints the uuid, and rewrites the text on
+            // the way in often enough — a slash command arrives parsed, an envelope
+            // is stripped — that matching on it would fail exactly when it mattered
+            // and leave the message on screen twice. What is reliable is the order.
+            // One user entry lands per send, sends are strictly ordered, and only
+            // one row is ever pending, so the entry that arrives is the row that is
+            // waiting. Retiring it here rather than after the append is what keeps
+            // the swap invisible: both happen before the next frame is painted.
+            // A subagent's own prompt is not ours — different transcript, different
+            // pane — so the session view is the only one that reconciles.
+            if (!view.isAgent && state.pendingSend && state.current
+                && state.pendingSend.sessionId === state.current.sessionId) {
+                clearPendingSend();
+            }
+        }
         frag.append(node);
     }
     if (frag.childNodes.length) view.log.append(frag);
@@ -3387,6 +3421,10 @@ function connect() {
         if (state.current) {
             const id = state.current.sessionId;
             state.current = null;
+            // openSession only redraws immediately for a session we hold a summary
+            // for; otherwise beginOpen waits on the fetch, and until then the row
+            // is standing in a log about to be rebuilt from a file that shrank.
+            clearPendingSend();
             openSession(id);
         }
     });
@@ -3471,6 +3509,10 @@ function connect() {
     es.addEventListener('session-forked', (e) => {
         const { from, to } = JSON.parse(e.data);
         state.unsent.delete(from);
+        // The turn went to the copy, so the original's transcript will never show
+        // it. openSessionSoon below can retry for a while, and the row must not sit
+        // there through that.
+        if (state.pendingSend && state.pendingSend.sessionId === from) clearPendingSend();
         if (!state.current || state.current.sessionId !== from) return;
         toast('Branched off a copy — following the new session.', 'ok');
         // The original keeps running elsewhere; the copy is where this turn goes.
@@ -4160,6 +4202,58 @@ const LGTM_TITLE = 'Send: open a PR for this work if there is not one, run the '
 const LGTM_TITLE_BUSY = 'Queue behind the running turn: open a PR for this work '
     + 'if there is not one, run the checks, and merge it once they pass.';
 
+// ── optimistic sends ─────────────────────────────────────────────────────
+// A message you have just sent is not in the transcript yet, and cannot be: the
+// bridge never writes transcripts, `claude` appends the user entry itself, and the
+// bridge only learns of it on the next poll of the file. On a cold start — spawning
+// the process and resuming a long transcript before it reads its first line — that
+// is seconds, which looks exactly like a Send that did nothing. So the row is drawn
+// here at the click, and the real one takes its place when it arrives.
+
+// How long a drawn-but-unconfirmed row may stand. Long enough to clear a cold start
+// and a poll; erring long costs nothing, because the row is right and only
+// unconfirmed.
+const PENDING_MS = 30000;
+
+/**
+ * Draw the message that has just been sent, ahead of the transcript.
+ *
+ * Only ever one at a time: pressing Enter twice in the same moment sends a second
+ * message the bridge queues, and a queued message is already shown as a chip.
+ */
+function showPendingSend(sessionId, text) {
+    if (state.pendingSend) return;
+    // The real renderer, so the swap when the transcript catches up is one node for
+    // another and not a reflow. No `ts`: clockOf gives an empty gutter for a missing
+    // one, and the marker on it says what that means. Sending the local clock
+    // instead would print a time the transcript is then free to disagree with —
+    // a cold start really does record the entry a second or more later.
+    const node = renderUser({ kind: 'user', text, ts: null });
+    node.dataset.pending = '1';
+    dom.log.append(node);
+    state.pendingSend = {
+        sessionId, node, timer: setTimeout(clearPendingSend, PENDING_MS),
+    };
+    state.pinned = true;
+    scrollToEnd(false);
+}
+
+/**
+ * Take the pending row down, however it ended.
+ *
+ * Nothing here has to hand the text back: a row that is retired because the
+ * transcript arrived has been replaced by the real thing, and every other route —
+ * a refused POST, a send-failed, a session that went away — either restores the
+ * composer itself or still holds the text in state.unsent.
+ */
+function clearPendingSend() {
+    const p = state.pendingSend;
+    if (!p) return;
+    clearTimeout(p.timer);
+    state.pendingSend = null;
+    p.node.remove();
+}
+
 async function sendMessage({ fork = false, text: override = null, canned = false } = {}) {
     const text = override != null ? override : dom.input.value.trim();
     if (!text || !state.current) return;
@@ -4185,6 +4279,21 @@ async function sendMessage({ fork = false, text: override = null, canned = false
         autoGrow();
         saveDraft(sessionId, '');
     }
+
+    // Drawn in the same frame the box empties, so the message moves from one to the
+    // other rather than vanishing. Only a message that goes straight to the process,
+    // though: one the bridge queues must not appear at the foot of the log, because
+    // the foot of the log is *after* output that is still streaming above it — and a
+    // queued message already has somewhere to be seen, as a chip on the composer.
+    // The runner state is the same thing the button reads to decide whether it says
+    // Queue or Send. The bridge's own answer is better, but it only arrives after
+    // the await, and waiting for it is the delay this exists to remove. A fork is
+    // left out because the copy gets its own transcript, and this log with it.
+    const runner = state.runner;
+    const willQueue = Boolean(runner
+        && (runner.state === 'busy' || runner.state === 'starting'));
+    if (!fork && !willQueue) showPendingSend(sessionId, text);
+
     enableSend(false);
 
     try {
@@ -4204,8 +4313,14 @@ async function sendMessage({ fork = false, text: override = null, canned = false
         if (!r.queued) {
             state.pinned = true;
             scrollToEnd(false);
+        } else {
+            // Our reading of the runner was behind the bridge's — another window
+            // sent a moment ago, or the session is being held somewhere else. The
+            // chip is the honest home for a queued message, so the row gives way.
+            clearPendingSend();
         }
     } catch (err) {
+        clearPendingSend();   // it never reached the bridge; the log must not claim it did
         if (!canned) restoreToComposer(text);
         toast(`Could not send: ${err.message}`, 'error');
     } finally {
@@ -4221,6 +4336,13 @@ function handleSendFailure(f) {
         ? f.unsent.join('\n\n')
         : (state.unsent.get(f.sessionId) || '');
     state.unsent.delete(f.sessionId);
+    // The turn never started, so nothing is coming to replace the row. This arrives
+    // as an event rather than as a refused POST — a process that died on the write,
+    // a session already held in a terminal — and can be about a session that is not
+    // the one on screen, hence the check.
+    if (state.pendingSend && state.pendingSend.sessionId === f.sessionId) {
+        clearPendingSend();
+    }
 
     const onCurrent = state.current && state.current.sessionId === f.sessionId;
     if (text) {
