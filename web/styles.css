@@ -517,6 +517,31 @@ a:hover { text-decoration: underline; }
     background: var(--yellow);
     animation: breathe 1.6s var(--ease) infinite;
 }
+/* Running, but not by us — a terminal, VS Code, a background agent. Hollow to
+   the filled dot of a session this window is driving, because the difference
+   decides whether you can send into it. */
+.strip[data-state="elsewhere"] .strip-meta::before {
+    content: "";
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: transparent;
+    box-shadow: inset 0 0 0 1.5px var(--yellow);
+    flex: none;
+}
+
+/* A background agent: nobody is sitting in front of this one. Shaped like the
+   test label beside it, in the quieter colour — it is a fact about the session,
+   not a warning. */
+.tag-bg {
+    flex: none;
+    padding: 0 6px;
+    border-radius: var(--r-xs);
+    background: var(--s3);
+    color: var(--text-4);
+    font: 500 10px/16px var(--mono);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
 
 .rail-empty {
     padding: 34px 20px;
@@ -1861,6 +1886,42 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 .queue-act.danger { font-size: 14px; line-height: 1; padding: 3px 8px 4px; }
 .queue-act.danger:hover { background: #33201f; color: var(--red); }
 
+/* The live-elsewhere lock, directly above the box it is holding shut. Sits where
+   the queue sits, in the warning colour, because it is the one thing between a
+   message and two processes writing to one transcript. */
+/* Setting `display` here is what makes the guard below necessary: a class beats
+   the browser's own `[hidden] { display: none }`, so without it the bar is on
+   screen for every session however the attribute is set. */
+.lock[hidden] { display: none; }
+
+.lock {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+    padding: 9px 10px 9px 14px;
+    background: var(--s1);
+    border-radius: var(--r-lg);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--yellow) 26%, transparent);
+    font: 400 12.5px/1.4 var(--sans);
+    color: var(--text-2);
+}
+.lock-text { flex: 1; min-width: 0; }
+
+.lock-btn {
+    flex: none;
+    padding: 6px 12px;
+    border: 0;
+    border-radius: var(--pill);
+    background: var(--s4);
+    color: var(--text-2);
+    font: 500 12.5px/1 var(--sans);
+    cursor: pointer;
+    transition: background var(--t-fast) var(--ease);
+}
+.lock-btn:hover { background: var(--s5); }
+.lock-btn.primary { background: var(--blue-cont); color: var(--blue); }
+
 .input-row {
     display: flex;
     align-items: flex-end;
@@ -1962,13 +2023,365 @@ body.term-resizing { user-select: none; cursor: row-resize; }
    the eye can run down the right edge for "what needs doing" and down the left
    for "where". */
 
-.dash {
+.dash, .live {
     display: flex;
     flex-direction: column;
     flex: 1;
     min-height: 0;
 }
-.dash[hidden] { display: none; }
+.dash[hidden], .live[hidden] { display: none; }
+
+/* ── the live board ──────────────────────────────────────────────────────
+   A card per running session. The grid decides its own column count so that a
+   half-width window and a second monitor both read well without a breakpoint
+   for each. */
+
+.live-head {
+    flex: none;
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    padding: 22px 28px 16px;
+}
+.live-title { margin: 0; font: 400 21px/1.3 var(--sans); color: var(--text); }
+.live-sub {
+    margin: 5px 0 0;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text-3);
+}
+
+.live-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 28px 32px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+    gap: 14px;
+    align-content: start;
+}
+
+/* ── docked under a conversation ─────────────────────────────────────────
+   The board takes the height its cards need and no more, so the conversation
+   keeps the rest of the window. One row, scrolled sideways past the third or
+   fourth card, rather than a grid that wraps and eats the screen. */
+
+.live[data-mode="dock"] {
+    flex: none;
+    /* A card with a plan waiting on it is taller than one that is just working,
+       and the dock follows. The ceiling is what keeps this a strip rather than
+       a half-and-half split: on a laptop the cards would otherwise take about
+       as much as the conversation, which is the thing this is not. */
+    max-height: 38vh;
+    border-top: 1px solid var(--s4);
+    background: var(--bg);
+}
+
+.live[data-mode="dock"] .live-head {
+    padding: 9px 28px 7px;
+    align-items: baseline;
+    gap: 10px;
+}
+.live[data-mode="dock"] .live-head > div {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+}
+.live[data-mode="dock"] .live-title { font-size: 12.5px; color: var(--text-3); }
+.live[data-mode="dock"] .live-sub { margin: 0; font-size: 11.5px; }
+
+.live[data-mode="dock"] .live-body {
+    padding: 0 28px 14px;
+    /* One row: columns are laid out along the inline axis and the row scrolls,
+       instead of wrapping into however many rows it takes. */
+    grid-template-columns: none;
+    grid-auto-flow: column;
+    grid-auto-columns: 330px;
+    overflow-x: auto;
+    /* Only bites when a card is taller than the cap allows — a plan waiting on
+       a short window. Normally the row fits and nothing scrolls vertically. */
+    overflow-y: auto;
+    align-content: stretch;
+}
+.live[data-mode="dock"] .live-note { grid-column: auto; min-width: 330px; }
+
+.live-note {
+    grid-column: 1 / -1;
+    padding: 18px 20px;
+    background: var(--s2);
+    border-radius: var(--r);
+    color: var(--text-3);
+    font-size: 13.5px;
+}
+.live-note p { margin: 0; }
+
+.lcard {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    padding: 14px 15px 12px;
+    background: var(--s2);
+    border-radius: var(--r-lg);
+    /* The whole card opens the session — see cardClickOpens for what is carved
+       out of that. Anything with its own behaviour keeps its own cursor. */
+    cursor: pointer;
+    transition: background var(--t-fast) var(--ease);
+    /* The band a card is sorted into, said again in colour along its edge, so
+       that "who is blocked on me" survives a screen too full to read. */
+    box-shadow: inset 3px 0 0 var(--s4);
+}
+.lcard[data-reason="ask"]   { box-shadow: inset 3px 0 0 var(--yellow); background: #232017; }
+.lcard[data-reason="error"] { box-shadow: inset 3px 0 0 var(--red); }
+.lcard[data-reason="here"]  { box-shadow: inset 3px 0 0 var(--green); }
+/* Running, but not ours to stop — dimmer than the green of a turn this window
+   is driving, and still clearly not the grey of an idle card. */
+.lcard[data-reason="elsewhere"] { box-shadow: inset 3px 0 0 #3f6b4c; }
+
+.lcard-head { display: flex; align-items: center; gap: 8px; }
+
+.lcard-dot {
+    flex: none;
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--text-4);
+}
+.lcard[data-reason="here"] .lcard-dot {
+    background: var(--yellow);
+    animation: breathe 1.6s var(--ease) infinite;
+}
+.lcard[data-reason="ask"] .lcard-dot { background: var(--yellow); }
+.lcard[data-reason="error"] .lcard-dot { background: var(--red); }
+/* Hollow, exactly as in the rail: running, but not by us. */
+.lcard[data-reason="elsewhere"] .lcard-dot {
+    background: transparent;
+    box-shadow: inset 0 0 0 1.5px var(--yellow);
+}
+
+.lcard-title {
+    flex: 1;
+    min-width: 0;
+    padding: 0;
+    background: none;
+    border: 0;
+    text-align: left;
+    font: 500 13.5px/1.35 var(--sans);
+    color: var(--text);
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* Hovering anywhere on the card says what clicking it will do. */
+.lcard:hover { background: var(--s3); }
+.lcard:hover .lcard-title,
+.lcard-title:hover { color: var(--blue); }
+/* The parts that are not "open this session": they keep their own cursor, and
+   the card's hover tint is not a promise they make. */
+.lsend, .lask, .lcard-log { cursor: auto; }
+.lsend-box { cursor: text; }
+
+.lcard-where {
+    flex: none;
+    max-width: 40%;
+    font: 400 11px/1 var(--mono);
+    color: var(--text-4);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.lcard-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.lstate {
+    flex: 1;
+    min-width: 0;
+    font-size: 12.5px;
+    color: var(--text-2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.lstate.quiet { color: var(--text-4); }
+.lstate.warn  { color: var(--yellow); }
+.lstate.err   { color: var(--red); }
+.lstate.ask   { color: var(--yellow); font-weight: 500; }
+.lcard-clock { flex: none; font: 400 11.5px/1 var(--mono); color: var(--text-4); }
+
+/* How far through its own task list the session is. */
+.tbar {
+    height: 3px;
+    border-radius: var(--pill);
+    background: var(--s4);
+    overflow: hidden;
+}
+.tbar-fill {
+    display: block;
+    height: 100%;
+    background: var(--blue);
+    transition: width var(--t-med) var(--ease);
+}
+
+.lcard-facts {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    font-size: 11.5px;
+    color: var(--text-4);
+}
+.lcard-facts .wait { font-size: 10.5px; }
+.lcard-ago { margin-left: auto; }
+
+.lchip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 1px 8px;
+    border: 0;
+    border-radius: var(--pill);
+    background: var(--blue-tint);
+    color: var(--blue);
+    font: 500 10.5px/17px var(--mono);
+    cursor: pointer;
+}
+.lchip i { font-style: normal; color: var(--text-3); }
+.lchip:hover { background: var(--blue-cont); }
+.lchip.busy { opacity: 0.6; }
+
+/* What the session has stopped for. */
+.lask {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 9px 10px;
+    background: var(--s1);
+    border-radius: var(--r);
+}
+.lask-what { font-size: 12px; line-height: 1.45; color: var(--text-3); }
+.lask-what b {
+    display: block;
+    font: 500 12px/1.4 var(--mono);
+    color: var(--text-2);
+}
+.lask-acts { display: flex; gap: 6px; }
+
+.lcard-log {
+    margin: 0;
+    padding: 8px 10px;
+    list-style: none;
+    background: var(--s1);
+    border-radius: var(--r);
+    font: 400 11.5px/1.7 var(--mono);
+    color: var(--text-4);
+}
+.lcard-log li {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* The newest line is the one you are actually reading. */
+.lcard-log li:last-child { color: var(--text-2); }
+
+/* A line back to the session, without going and opening it. */
+.lsend {
+    display: flex;
+    align-items: flex-end;
+    gap: 6px;
+    margin-top: auto;
+    padding: 5px 5px 5px 11px;
+    background: var(--s3);
+    border-radius: var(--r);
+    transition: background var(--t-fast) var(--ease);
+}
+.lsend:focus-within { background: var(--s4); }
+
+.lsend-box {
+    flex: 1;
+    min-width: 0;
+    min-height: 30px;
+    max-height: 84px;
+    padding: 7px 0;
+    border: 0;
+    background: none;
+    resize: none;
+    color: var(--text);
+    font: 400 12.5px/16px var(--sans);
+    overflow-y: auto;
+}
+.lsend-box::placeholder { color: var(--text-4); }
+.lsend-box:disabled { opacity: 0.5; }
+.lsend-go { height: 30px; padding: 0 11px; font-size: 11.5px; }
+
+/* The one case that gets no box: a session with a process that is not ours. */
+.lsend.locked {
+    display: block;
+    padding: 7px 11px;
+    background: var(--s1);
+    color: var(--text-4);
+    font-size: 11.5px;
+    line-height: 1.5;
+}
+
+.lcard-acts { display: flex; gap: 6px; padding-top: 2px; }
+
+.lbtn {
+    flex: none;
+    height: 27px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: var(--pill);
+    background: var(--s3);
+    color: var(--text-2);
+    font: 500 12px/1 var(--sans);
+    cursor: pointer;
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.lbtn:hover { background: var(--s4); color: var(--text); }
+.lbtn.ok { background: var(--blue-cont); color: var(--blue); }
+.lbtn.no:hover { background: #3a2422; color: var(--red); }
+.lbtn:disabled { opacity: 0.45; cursor: default; }
+
+/* An urgent badge is a count of people waiting, not of things happening. */
+.bar-badge.urgent { background: var(--yellow); color: #241f07; }
+
+/* The board's own header controls: the Focus toggle sits here, beside the count. */
+.live-btn {
+    margin-left: auto;
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    height: 30px;
+    padding: 0 13px;
+    border: 0;
+    border-radius: var(--pill);
+    background: var(--s3);
+    color: var(--text-3);
+    font: 500 12px/1 var(--sans);
+    cursor: pointer;
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.live-btn:hover { background: var(--s4); color: var(--text); }
+.live-btn.on { background: var(--blue-cont); color: var(--blue); }
+.live[data-mode="dock"] .live-btn { height: 24px; padding: 0 10px; font-size: 11.5px; }
+
+/* Focus mode: the board with the window to itself, for a second monitor.
+   Everything that is about driving one conversation goes, because there is no
+   conversation here. */
+.app[data-focus="1"] {
+    grid-template-columns: 1fr;
+    grid-template-areas: "bar" "main";
+}
+.app[data-focus="1"] .rail,
+.app[data-focus="1"] .bar-search,
+.app[data-focus="1"] #btn-dash,
+.app[data-focus="1"] .live-head { display: none; }
+.app[data-focus="1"] .live-body { padding-top: 18px; }
+
+/* The way out, and the only piece of chrome focus mode adds rather than takes
+   away — the button that turned it on is inside the header it hides. */
+#focus-exit { display: none; }
+.app[data-focus="1"] #focus-exit { display: inline-flex; }
 
 .dash-head {
     flex: none;

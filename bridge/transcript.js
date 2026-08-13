@@ -816,11 +816,8 @@ function readSubagentTranscript(file, from = 0, ctx = {}) {
 // file it is polling can be tens of megabytes.
 const ACTIVITY_TAIL_BYTES = 64 * 1024;
 
-/**
- * The last thing a transcript shows the agent doing — the subagent equivalent of
- * the working pulse in the session rail. Returns {text, ts} or null.
- */
-function lastActivity(file) {
+/** The tail of a transcript as lines, or null. Bounded by ACTIVITY_TAIL_BYTES. */
+function tailLines(file) {
     let st;
     try { st = fs.statSync(file); } catch { return null; }
     if (!st.size) return null;
@@ -836,8 +833,28 @@ function lastActivity(file) {
 
     const lines = buf.toString('utf8').split('\n');
     if (from > 0) lines.shift();   // reading from an offset lands mid-line
+    return lines;
+}
 
-    for (let i = lines.length - 1; i >= 0; i--) {
+/**
+ * The last few things a transcript shows the agent doing, oldest first.
+ *
+ * This is how a card says what a session is up to without anybody subscribing to
+ * it. Reading the tail is what makes that affordable: no offsets to keep, no
+ * watcher per session, and it costs the same on a forty-megabyte transcript as
+ * on a new one. It also works for a session running in a terminal, which has no
+ * runner here to ask.
+ *
+ * One headline per assistant message — the last interesting block in it — rather
+ * than one per block, because a message that calls four tools is one step as far
+ * as a reader is concerned.
+ */
+function recentActivity(file, want = 3) {
+    const lines = tailLines(file);
+    if (!lines) return [];
+
+    const out = [];
+    for (let i = lines.length - 1; i >= 0 && out.length < want; i--) {
         if (!lines[i]) continue;
         const e = safeParse(lines[i]);
         if (!e || e.type !== 'assistant') continue;
@@ -845,10 +862,59 @@ function lastActivity(file) {
         if (!Array.isArray(content)) continue;
         for (let j = content.length - 1; j >= 0; j--) {
             const b = content[j];
-            if (b.type === 'tool_use') return { text: describeTool(b), ts: e.timestamp };
+            if (b.type === 'tool_use') { out.push({ text: describeTool(b), ts: e.timestamp }); break; }
             if (b.type === 'text' && b.text && b.text.trim()) {
-                return { text: firstLine(b.text, 70), ts: e.timestamp };
+                out.push({ text: firstLine(b.text, 70), ts: e.timestamp });
+                break;
             }
+        }
+    }
+    return out.reverse();
+}
+
+/**
+ * The last thing a transcript shows the agent doing — the subagent equivalent of
+ * the working pulse in the session rail. Returns {text, ts} or null.
+ */
+function lastActivity(file) {
+    return recentActivity(file, 1)[0] || null;
+}
+
+/**
+ * How far through its todo list a session is: {done, total} or null.
+ *
+ * The newest TodoWrite in the tail is the current list — the tool is called with
+ * the whole list every time, so the most recent call is the whole answer and
+ * there is nothing to accumulate. Read from the same buffer the headlines come
+ * from, so a card costs one read rather than two.
+ *
+ * A session whose last TodoWrite has scrolled out of the tail reports null and
+ * simply shows no progress bar. Widening the window to chase it would make every
+ * card more expensive to spare the oldest ones a missing line.
+ */
+function todoProgress(file) {
+    const lines = tailLines(file);
+    if (!lines) return null;
+
+    for (let i = lines.length - 1; i >= 0; i--) {
+        if (!lines[i] || !lines[i].includes('TodoWrite')) continue;
+        const e = safeParse(lines[i]);
+        if (!e || e.type !== 'assistant') continue;
+        const content = e.message && e.message.content;
+        if (!Array.isArray(content)) continue;
+        for (let j = content.length - 1; j >= 0; j--) {
+            const b = content[j];
+            if (b.type !== 'tool_use' || b.name !== 'TodoWrite') continue;
+            const items = (b.input && b.input.todos) || [];
+            if (!Array.isArray(items) || !items.length) continue;
+            return {
+                done: items.filter(t => t && t.status === 'completed').length,
+                total: items.length,
+                // What it is on right now, which is the useful half of a todo
+                // list you are only glancing at.
+                current: (items.find(t => t && t.status === 'in_progress') || {}).content || null,
+                ts: e.timestamp,
+            };
         }
     }
     return null;
@@ -856,5 +922,5 @@ function lastActivity(file) {
 
 module.exports = {
     parseLines, scanMeta, buildEvents, readSubagentIndex, readSubagentTranscript,
-    lastActivity, describeTool, stripEnvelope, firstLine,
+    lastActivity, recentActivity, todoProgress, describeTool, stripEnvelope, firstLine,
 };

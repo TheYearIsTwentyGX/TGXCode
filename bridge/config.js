@@ -9,6 +9,11 @@ const HOME = os.homedir();
 const PROJECTS_DIR = process.env.CLAUDE_SESSIONS_PROJECTS_DIR
     || path.join(HOME, '.claude', 'projects');
 
+// And one file per *running* session here, named for its pid. Read-only to us,
+// like everything else under ~/.claude — see bridge/registry.js.
+const REGISTRY_DIR = process.env.CLAUDE_SESSIONS_REGISTRY_DIR
+    || path.join(HOME, '.claude', 'sessions');
+
 // Our cache lives outside ~/.claude so we never confuse Claude's own tooling.
 const CACHE_DIR = path.join(process.env.XDG_CACHE_HOME || path.join(HOME, '.cache'),
     'claude-sessions');
@@ -59,7 +64,8 @@ const PORT_DENYLIST = new Set([
 const VERSION = '1.0.0';
 
 module.exports = {
-    HOME, PROJECTS_DIR, CACHE_DIR, PORT, HOST, VERSION, ROOT, IS_WORKTREE,
+    HOME, PROJECTS_DIR, REGISTRY_DIR, CACHE_DIR, PORT, HOST, VERSION,
+    ROOT, IS_WORKTREE,
     DEFAULT_PORT, DEV_PORT, IS_DEV,
     DEVBROWSER_DEFAULT_PORT, CLAUDE_BIN, PORT_DENYLIST,
 };
