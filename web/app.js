@@ -700,7 +700,14 @@ async function openSession(id, { quiet = false } = {}) {
         state.offset = data.offset;
 
         renderHeader();
-        dom.log.replaceChildren();      // drops the skeleton
+        // Drops the skeleton — and with it a row drawn at Send while this fetch was
+        // still in flight, which is reachable because the composer is live over a
+        // skeleton. Forget it rather than re-append it: the transcript that is about
+        // to be drawn may already contain the message, and putting the row back
+        // would be guessing about where in this fetch it belongs. The message is
+        // safe either way, and the state has to agree with the log.
+        dom.log.replaceChildren();
+        clearPendingSend();
         appendEvents(data.events);
         renderTurns();      // a session with no turns of your own still clears the rail
         renderRail();
