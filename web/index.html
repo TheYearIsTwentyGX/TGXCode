@@ -313,6 +313,20 @@ checks, and merge it once they pass.">LGTM</button>
           <p id="live-sub" class="live-sub">Every session with a process, and what
             it is waiting on.</p>
         </div>
+        <!-- Which way the board and the conversation divide the window. Under it
+             suits a wide screen and a long transcript; beside it suits watching
+             a lot of cards at once. -->
+        <button id="live-side" class="live-btn" type="button" aria-pressed="false"
+                title="Put the board beside the conversation">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <rect id="live-side-a" x="3.5" y="4" width="17" height="7" rx="1.8"
+                  stroke="currentColor" stroke-width="1.8"/>
+            <rect id="live-side-b" x="3.5" y="13" width="17" height="7" rx="1.8"
+                  stroke="currentColor" stroke-width="1.8"/>
+          </svg>
+          <span id="live-side-label">Stacked</span>
+        </button>
+
         <!-- The stripped-down layout, without having to type a URL: this window
              has no address bar, so ?view=live&focus=1 was unreachable from it. -->
         <button id="live-focus" class="live-btn" type="button" aria-pressed="false"

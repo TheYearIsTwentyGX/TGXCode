@@ -104,7 +104,12 @@ const state = {
     live: { open: false, watching: false, data: null, at: 0, clock: null,
         // Half-written messages per card, held here rather than in the DOM so
         // they outlive the redraws the board does while agents work.
-        drafts: new Map() },
+        drafts: new Map(),
+        // Which way the board and the conversation divide the window:
+        // 'bottom' stacks them, 'side' puts them next to each other. A property
+        // of the window rather than of a session, like the terminal pane, so it
+        // is remembered and every session you move to keeps it.
+        dock: localStorage.getItem('liveDock') === 'side' ? 'side' : 'bottom' },
     // Sessions blocked on an answer, kept whether or not the board is open, so
     // the badge on a shut board still says how many people are waiting.
     waiting: new Set(),
@@ -125,11 +130,16 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'btn-dash', 'dash-badge', 'dash', 'dash-sub', 'dash-body', 'dash-refresh',
     'lock', 'lock-text', 'lock-fork', 'lock-anyway',
     'btn-live', 'live-badge', 'live', 'live-sub', 'live-body', 'live-focus', 'focus-exit',
+    'live-side', 'live-side-label', 'live-side-a', 'live-side-b',
     'new-scrim', 'new-cwd', 'new-picker', 'new-prompt', 'new-model', 'new-perm',
     'new-test', 'new-test-row', 'new-go',
     'del-scrim', 'del-what', 'del-meta', 'del-go']) {
     dom[id.replace(/-(\w)/g, (_, c) => c.toUpperCase())] = $(id);
 }
+// The two containers that carry layout state as data attributes rather than
+// holding content of their own, so they have classes instead of ids.
+dom.main = document.querySelector('.main');
+dom.app = document.querySelector('.app');
 
 // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -2132,6 +2142,48 @@ function showLive(on) {
 }
 
 /**
+ * Which way the window divides between the board and the conversation.
+ *
+ * Under it, the cards are a strip and the transcript keeps the full width — good
+ * for reading one session while the others tick along. Beside it, the cards are
+ * a column: fewer of them fit across, but many more fit down, which is the
+ * arrangement for an afternoon spent watching rather than reading.
+ */
+function setDockSide(side) {
+    state.live.dock = side ? 'side' : 'bottom';
+    localStorage.setItem('liveDock', state.live.dock);
+    paintDockButton();
+    paintPanels();
+    // A card is built differently for a strip than for a column — the strip is
+    // short of height and the column is short of width — so this is a rebuild.
+    if (liveVisible()) renderLive();
+}
+
+function paintDockButton() {
+    const side = state.live.dock === 'side';
+    dom.liveSide.setAttribute('aria-pressed', String(side));
+    dom.liveSide.classList.toggle('on', side);
+    dom.liveSideLabel.textContent = side ? 'Side by side' : 'Stacked';
+    dom.liveSide.title = side
+        ? 'Put the board under the conversation'
+        : 'Put the board beside the conversation';
+    // The icon is the arrangement itself: two boxes above one another, or two
+    // next to each other.
+    const [a, b] = [dom.liveSideA, dom.liveSideB];
+    if (side) {
+        a.setAttribute('x', '3.5'); a.setAttribute('y', '4');
+        a.setAttribute('width', '7'); a.setAttribute('height', '16');
+        b.setAttribute('x', '13.5'); b.setAttribute('y', '4');
+        b.setAttribute('width', '7'); b.setAttribute('height', '16');
+    } else {
+        a.setAttribute('x', '3.5'); a.setAttribute('y', '4');
+        a.setAttribute('width', '17'); a.setAttribute('height', '7');
+        b.setAttribute('x', '3.5'); b.setAttribute('y', '13');
+        b.setAttribute('width', '17'); b.setAttribute('height', '7');
+    }
+}
+
+/**
  * Focus mode: the board with the window to itself.
  *
  * It began as a URL — `?view=live&focus=1`, for a browser left open on a second
@@ -2142,9 +2194,8 @@ function showLive(on) {
  */
 function setFocus(on) {
     state.focus = on;
-    const app = document.querySelector('.app');
-    if (on) app.dataset.focus = '1';
-    else delete app.dataset.focus;
+    if (on) dom.app.dataset.focus = '1';
+    else delete dom.app.dataset.focus;
 
     dom.liveFocus.setAttribute('aria-pressed', String(on));
     dom.liveFocus.classList.toggle('on', on);
@@ -2176,7 +2227,9 @@ function rememberView() {
  * cards are on. Down is right, which is the direction the row runs.
  */
 function onDockWheel(e) {
-    if (dom.live.dataset.mode !== 'dock') return;
+    // Only the strip runs sideways. As a column it scrolls the ordinary way and
+    // the wheel needs no help at all.
+    if (dom.live.dataset.mode !== 'dock' || state.live.dock !== 'bottom') return;
     // A trackpad swiped sideways already says so; leave that alone.
     if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
 
@@ -2279,11 +2332,14 @@ function renderLive() {
     const typing = active && active.dataset && active.dataset.sendFor
         ? { id: active.dataset.sendFor, at: active.selectionStart, to: active.selectionEnd }
         : null;
-    const scroll = dom.liveBody.scrollLeft;
+    const scroll = { x: dom.liveBody.scrollLeft, y: dom.liveBody.scrollTop };
 
-    const docked = dom.live.dataset.mode === 'dock';
-    dom.liveBody.replaceChildren(...d.sessions.map(s => liveCard(s, docked)));
-    dom.liveBody.scrollLeft = scroll;
+    // Only the bottom strip is short of room. As a column, or with the window to
+    // itself, the board has the height for a fuller card.
+    const compact = dom.live.dataset.mode === 'dock' && state.live.dock === 'bottom';
+    dom.liveBody.replaceChildren(...d.sessions.map(s => liveCard(s, compact)));
+    dom.liveBody.scrollLeft = scroll.x;
+    dom.liveBody.scrollTop = scroll.y;
 
     if (typing) {
         const box = dom.liveBody.querySelector(
@@ -2304,15 +2360,16 @@ function renderLive() {
  * The risk with a view like this is two renderers of one state drifting apart,
  * and sharing the small parts is what keeps them honest.
  */
-function liveCard(s, docked = false) {
+function liveCard(s, compact = false) {
     const r = s.runner;
     const busy = r && (r.state === 'busy' || r.state === 'starting');
     const away = s.live && s.live.running && !r;
-    // Docked, the card is sharing the window with the conversation and every
-    // row it gives up is a row of transcript. So it drops what is duplicated
-    // elsewhere: one line of history, and the Open button — the title above it
-    // already opens the session, and the rail is right there.
-    const lines = docked ? 2 : HEADLINES_SHOWN;
+    // In the bottom strip every row a card gives up is a row of transcript, so
+    // it drops what is duplicated elsewhere: one line of history, and the Open
+    // button — the title above it already opens the session, and the rail is
+    // right there. Beside the conversation there is height to spare and the
+    // fuller card is free.
+    const lines = compact ? 2 : HEADLINES_SHOWN;
 
     return el('article', {
         class: 'lcard', 'data-reason': s.reason, 'data-id': s.sessionId,
@@ -2353,8 +2410,8 @@ function liveCard(s, docked = false) {
 
         cardComposer(s, busy, away),
 
-        (!docked || busy) ? el('div', { class: 'lcard-acts' },
-            docked ? null : el('button', {
+        (!compact || busy) ? el('div', { class: 'lcard-acts' },
+            compact ? null : el('button', {
                 class: 'lbtn', type: 'button',
                 onclick: () => openSession(s.sessionId),
             }, 'Open'),
@@ -2668,6 +2725,10 @@ function paintPanels() {
     dom.dash.hidden = !state.dash.open;
     dom.live.hidden = !state.live.open || state.dash.open;
     dom.live.dataset.mode = docked ? 'dock' : 'full';
+    // The orientation lives on both: `main` has to change its flex direction,
+    // and the board has to know whether it is a strip or a column.
+    dom.live.dataset.dock = state.live.dock;
+    dom.main.dataset.dock = docked ? state.live.dock : 'bottom';
     // The conversation stays up under a docked board; the work-in-flight board
     // is a whole screen and still covers it.
     dom.conv.hidden = state.dash.open || full || !state.current;
@@ -4580,6 +4641,7 @@ for (const n of dom.delScrim.querySelectorAll('[data-close-del]')) {
 dom.delScrim.addEventListener('click', (e) => { if (e.target === dom.delScrim) closeDelete(); });
 
 dom.btnLive.addEventListener('click', () => showLive(!state.live.open));
+dom.liveSide.addEventListener('click', () => setDockSide(state.live.dock !== 'side'));
 dom.liveFocus.addEventListener('click', () => setFocus(!state.focus));
 dom.focusExit.addEventListener('click', () => setFocus(false));
 // The dock runs sideways and a mouse wheel only goes up and down.
@@ -4667,6 +4729,7 @@ loadSessions();
 markInstance();
 renderBell();
 registerWorker();
+paintDockButton();      // the remembered arrangement, before anything is drawn
 applyViewParams();
 primeWaiting();
 openFromHash();
