@@ -254,8 +254,18 @@ The ask shape (`permission-request`, and `runner.pendingPermission`):
   "tool": "Bash", "displayName": "Bash", "input": {…},
   "toolUseId": "…", "description": null, "reason": null,
   "blockedPath": null, "agentId": null,
-  "askedAt": 1786722343125, "expiresAt": 1786722463125 }
+  "askedAt": 1786722343125 }
 ```
+
+**An ask does not expire.** There is no deadline to count down and no
+`expiresAt` — a card waits as long as you do, and a client that attaches later
+finds it on `runner.pendingPermission`. `askedAt` is there so a client can say how
+long something has been blocked, which is the number that matters when the person
+who should answer is not at the desk.
+
+The case that made expiry seem necessary is handled earlier and more bluntly: an
+ask arriving with no client connected is denied immediately, because there is
+nobody to ask.
 
 `outcome` values on `permission-resolved`: `allow`, `allow-always`, `deny`,
 `answered`, `dismissed`, `plan-approved`, `plan-approved-note`, `plan-rejected`,

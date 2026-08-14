@@ -146,10 +146,15 @@ function ago(ts) {
     return `${Math.round(h / 24)}d`;
 }
 
-/** Seconds until an ask expires, or null when it does not. */
-function secondsLeft(expiresAt) {
-    if (!expiresAt) return null;
-    return Math.max(0, Math.round((expiresAt - Date.now()) / 1000));
+/** How long an ask has been waiting, in words. */
+function waitingFor(askedAt) {
+    if (!askedAt) return '';
+    const s = Math.max(0, Math.round((Date.now() - askedAt) / 1000));
+    if (s < 45) return 'just now';
+    const m = Math.round(s / 60);
+    if (m < 60) return `waiting ${m} min`;
+    const h = Math.round(m / 60);
+    return `waiting ${h}h`;
 }
 
 // ---------------------------------------------------------------------------
@@ -936,17 +941,16 @@ function renderAsk(ask) {
     else if (ask.kind === 'question') fillQuestionAsk(card, ask);
     else fillToolAsk(card, ask);
 
-    const expiry = el('div', { class: 'ask-expiry' });
-    card.append(expiry);
-    const tick = () => {
-        const left = secondsLeft(ask.expiresAt);
-        if (left === null) { expiry.textContent = ''; return; }
-        if (left <= 0) { expiry.textContent = 'Expired'; clearInterval(askTimer); return; }
-        expiry.textContent = left < 90 ? `${left}s left`
-            : `${Math.round(left / 60)} min left`;
-    };
+    // How long it has been waiting, not how long is left: asks no longer expire.
+    // The card stays until it is answered, which is the whole point — you should be
+    // able to read a plan without a clock running. What is still worth knowing on a
+    // phone is that something has been blocked for twenty minutes.
+    const waited = el('div', { class: 'ask-expiry' });
+    card.append(waited);
+    const tick = () => { waited.textContent = waitingFor(ask.askedAt); };
     tick();
-    askTimer = setInterval(tick, 1000);
+    // Once a minute is enough for a number measured in minutes.
+    askTimer = setInterval(tick, 30_000);
 
     dom['ask-slot'].append(card);
     scrollToEnd();
