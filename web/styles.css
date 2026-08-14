@@ -2113,10 +2113,19 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 
 .main[data-dock="side"] { flex-direction: row; }
 
+/* Side by side, the conversation has to be willing to give way. A flex item's
+   default minimum is its content, and a transcript's content is wide — so it
+   held its full width and shoved the board off the edge of the window instead
+   of sharing the room. */
+.main[data-dock="side"] > .conv { min-width: 0; }
+
 .live[data-mode="dock"][data-dock="side"] {
-    /* Wide enough for a card and its message box, never so wide that the
-       transcript beside it starts wrapping badly. */
-    width: clamp(320px, 30vw, 440px);
+    /* A share of the space beside the transcript rather than a share of the
+       whole window: the rail is already spoken for, and sizing against it made
+       the column too wide on a narrow screen. Wide enough for a card and its
+       message box, never wide enough to crowd out the transcript. */
+    flex: 0 0 clamp(300px, 32%, 440px);
+    width: auto;
     max-height: none;
     border-top: 0;
     border-left: 1px solid var(--s4);
@@ -2129,8 +2138,13 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 
 .live[data-mode="dock"][data-dock="side"] .live-body {
     padding: 0 18px 18px;
-    /* Back to an ordinary single column that scrolls downwards. */
-    grid-template-columns: 1fr;
+    /* Back to an ordinary single column that scrolls downwards.
+       `minmax(0, 1fr)` rather than `1fr`, which is `minmax(auto, 1fr)` — that
+       `auto` floor refuses to go below the content's min-content width, and a
+       nowrap headline is as wide as its text. The cards were sized to their
+       longest line and hung off the side of the window, clipped rather than
+       scrollable because this column deliberately hides its overflow. */
+    grid-template-columns: minmax(0, 1fr);
     grid-auto-flow: row;
     grid-auto-columns: auto;
     overflow-x: hidden;
@@ -2160,6 +2174,11 @@ body.term-resizing { user-select: none; cursor: row-resize; }
        out of that. Anything with its own behaviour keeps its own cursor. */
     cursor: pointer;
     transition: background var(--t-fast) var(--ease);
+    /* Everything on a card that would rather not wrap — a title, a headline, a
+       worktree name — has to be allowed to give way instead, or its full width
+       becomes the card's minimum and the card stops fitting its column. The
+       ellipsis is what it gives way to. */
+    min-width: 0;
     /* The band a card is sorted into, said again in colour along its edge, so
        that "who is blocked on me" survives a screen too full to read. */
     box-shadow: inset 3px 0 0 var(--s4);
@@ -2215,7 +2234,10 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 .lsend-box { cursor: text; }
 
 .lcard-where {
-    flex: none;
+    /* Shrinkable, not fixed: `flex: none` meant the whole worktree name counted
+       towards the card's minimum width even though it ellipsises. */
+    flex: 0 1 auto;
+    min-width: 0;
     max-width: 40%;
     font: 400 11px/1 var(--mono);
     color: var(--text-4);
@@ -2258,6 +2280,7 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     display: flex;
     align-items: center;
     flex-wrap: wrap;
+    min-width: 0;
     gap: 4px 8px;
     font-size: 11.5px;
     color: var(--text-4);
@@ -2277,7 +2300,18 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     font: 500 10.5px/17px var(--mono);
     cursor: pointer;
 }
-.lchip i { font-style: normal; color: var(--text-3); }
+/* A DevBrowser tab name can be long, and a chip does not wrap — so the name
+   gives way and the port number, the part that identifies it, never does. */
+.lchip i {
+    font-style: normal;
+    color: var(--text-3);
+    min-width: 0;
+    max-width: 13ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.lchip { max-width: 100%; }
 .lchip:hover { background: var(--blue-cont); }
 .lchip.busy { opacity: 0.6; }
 
@@ -2300,6 +2334,7 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 
 .lcard-log {
     margin: 0;
+    min-width: 0;
     padding: 8px 10px;
     list-style: none;
     background: var(--s1);
@@ -2320,6 +2355,7 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     display: flex;
     align-items: flex-end;
     gap: 6px;
+    min-width: 0;
     margin-top: auto;
     padding: 5px 5px 5px 11px;
     background: var(--s3);
