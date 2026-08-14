@@ -257,11 +257,15 @@ The **Test session — dev only** checkbox in the Start a session dialog appears
 only on a dev bridge. Over the API it is a field on create, or a flag afterwards:
 
 ```bash
+TOKEN=$(cat ~/.local/share/claude-sessions/token)
+
 curl -sX POST http://127.0.0.1:45899/api/sessions \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'X-Claude-Sessions-Client: 1' -H 'Content-Type: application/json' \
   -d '{"cwd":"/home/you/project","prompt":"…","test":true}'
 
 curl -sX POST http://127.0.0.1:45899/api/sessions/$ID/flags \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'X-Claude-Sessions-Client: 1' -H 'Content-Type: application/json' \
   -d '{"test":true}'
 ```
@@ -510,6 +514,48 @@ instead — so each directory must be its own checkout root (`rev-parse
 --show-toplevel`) or it is skipped. And everything here shells out, so all of it
 is cached: working trees for 15 seconds, GitHub for a minute.
 
+## On a phone
+
+The premise of the app is watching sessions you are not sitting in front of, and
+`/m` is that taken one step further: the same bridge, a screen at a time, opening
+on what is blocked on you rather than on a list of everything.
+
+It is a second client, not a second version. Everything it shows comes from the
+same API the desktop uses, which is written down in [`docs/api.md`](docs/api.md) so
+that a native Android client can be a third client rather than a rewrite.
+
+**Getting there.** Press the phone button in the top bar for a pairing link. Open
+it once on the device: it trades the token for a year-long `HttpOnly` cookie and
+lands on `/m`, so the token is never in a URL again. Add it to the home screen and
+it opens standalone.
+
+Reaching the bridge from outside the flat is a deployment choice, and
+[`docs/remote.md`](docs/remote.md) is the runbook. The short version is
+`tailscale serve` on the Windows host: free, no port forwarding, and — because WSL
+runs mirrored and the proxy talks to Windows loopback — **the bridge never binds
+anything but `127.0.0.1`**. That matters here, where the home network is a subnet
+shared with the building.
+
+**What it does differently.** Tool calls are one line you can tap rather than
+rendered inline; on a 390px screen an expanded Bash result buries the sentence you
+opened the phone to read. Long transcripts arrive tail-first (`?tail=`), because
+half a megabyte of JSON over a relay is not a loading state anyone waits through.
+And it assumes reconnection rather than treating it as an error: there is no SSE
+replay, so it re-subscribes from the byte offset it holds and catches up over
+`/since`.
+
+**What it will not let you do.** A phone can watch, send, answer permissions, plans
+and questions, and start an ordinary session. It cannot open a terminal, shut the
+bridge down, stop a dev server, or start anything in `bypassPermissions` — the
+bridge refuses those with a 403 rather than the UI merely omitting a button. The
+reasoning is in `docs/plans/14-bridge-security.md` §C and the table in
+`docs/remote.md`.
+
+**One thing worth knowing.** An ask is denied outright when no client is connected
+— there is nobody to ask. So a connected phone is what makes a session answerable
+while you are away from the desk, and a phone that has dropped its connection is
+not.
+
 ## Layout
 
 | Path | |
@@ -523,10 +569,14 @@ is cached: working trees for 15 seconds, GitHub for a minute.
 | `bridge/devbrowser.js` | DevBrowser control client |
 | `bridge/explorer.js` | Opens a WSL directory in File Explorer |
 | `bridge/flags.js` | Pinned and archived state |
+| `bridge/auth.js` | The access token, and telling local from remote apart |
 | `bridge/launch.sh` | Finds a node, then starts the bridge |
 | `web/` | The UI. No build step, no dependencies |
+| `web/mobile.*` | The phone surface at `/m` — a second client of the same API |
 | `app/main.js` | The Electron shell |
-| `app/make-icon.js` | Generates `app/icon.ico` |
+| `app/make-icon.js` | Generates `app/icon.ico` and the PWA icons in `web/` |
+| `docs/api.md` | The bridge API, as a contract for other clients |
+| `docs/remote.md` | Reaching the bridge from a phone |
 
 `launch.sh` exists because `wsl.exe bash -lc` runs a *login* shell, which reads
 `~/.profile` but not `~/.bashrc` — and nvm installs itself in `~/.bashrc`. Node

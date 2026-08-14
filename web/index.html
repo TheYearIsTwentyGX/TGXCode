@@ -67,6 +67,17 @@
       <span id="dash-badge" class="bar-badge" hidden></span>
     </button>
 
+    <!-- The same sessions, on a phone. Icon-only: it is a setup step you do once
+         per device, not something to give a word of the bar to forever. -->
+    <button id="btn-pair" class="bar-btn icon-only" type="button"
+            title="Connect a phone to this bridge">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <rect x="7" y="2.5" width="10" height="19" rx="2.6"
+              stroke="currentColor" stroke-width="1.7"/>
+        <path d="M11 18.6h2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+      </svg>
+    </button>
+
     <!-- What reaches you when the window is not the thing you are looking at.
          The rules it obeys are in announceTurn(); the note inside says them out
          loud, because a notification you cannot predict is one you switch off. -->
@@ -425,6 +436,37 @@ checks, and merge it once they pass.">LGTM</button>
       <span class="spacer"></span>
       <button class="btn" data-close-del type="button">Cancel</button>
       <button id="del-go" class="btn destructive" type="button">Delete permanently</button>
+    </div>
+  </div>
+</div>
+
+<!-- Connect a phone. The token is 43 characters, so the useful thing this dialog
+     does is let you copy the whole pairing URL rather than read it out. -->
+<div id="pair-scrim" class="scrim" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pair-title">
+    <div class="modal-head">
+      <span id="pair-title">Connect a phone</span>
+      <button class="modal-close" data-close-pair type="button" aria-label="Close">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="note">Open this once on the phone. It signs the device in for a
+        year and lands on the phone view; the token is not in any URL after that.</p>
+      <div class="field">
+        <label for="pair-url">Pairing link</label>
+        <input id="pair-url" type="text" spellcheck="false" readonly>
+      </div>
+      <div class="field">
+        <label for="pair-host">Reachable at</label>
+        <input id="pair-host" type="text" spellcheck="false"
+               placeholder="https://machine.tailnet.ts.net" list="pair-hosts">
+        <datalist id="pair-hosts"></datalist>
+        <div class="note" id="pair-note"></div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="spacer"></span>
+      <button class="btn" data-close-pair type="button">Close</button>
+      <button id="pair-copy" class="btn primary" type="button">Copy link</button>
     </div>
   </div>
 </div>

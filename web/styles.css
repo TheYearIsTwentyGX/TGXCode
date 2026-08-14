@@ -170,6 +170,18 @@ a:hover { text-decoration: underline; }
 .bar-btn.on { background: var(--blue-cont); color: #dbe6fb; }
 .bar-btn.on svg { color: var(--blue); }
 
+/* A square button for a setup step you do once per device, rather than one that
+   spends a word of the bar on itself forever. */
+.bar-btn.icon-only { padding: 0; width: 34px; justify-content: center; gap: 0; }
+
+/* The pairing link is the whole point of that dialog, so it gets the monospace
+   treatment and does not wrap into something unreadable. */
+#pair-url {
+    font-family: var(--mono);
+    font-size: 12px;
+    text-overflow: ellipsis;
+}
+
 /* A count, not an alert: unfinished work is the normal state of this machine. */
 .bar-badge {
     min-width: 19px;

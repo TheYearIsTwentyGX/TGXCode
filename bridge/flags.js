@@ -19,11 +19,9 @@
 
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 
-const STATE_DIR = path.join(
-    process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'),
-    'claude-sessions');
+const { STATE_DIR } = require('./config');
+
 const STATE_FILE = path.join(STATE_DIR, 'flags.json');
 const VERSION = 1;
 

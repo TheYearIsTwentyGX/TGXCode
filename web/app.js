@@ -42,6 +42,7 @@ const DEFAULT_PERM = 'auto';
 const state = {
     clientId: null,
     dev: false,             // talking to a development bridge
+    pairInfo: null,         // what /api/pairing said this machine is reachable as
     sessions: [],
     query: '',
     current: null,          // session summary
@@ -132,7 +133,9 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'btn-live', 'live-badge', 'live', 'live-sub', 'live-body', 'live-focus', 'focus-exit',
     'new-scrim', 'new-cwd', 'new-picker', 'new-prompt', 'new-model', 'new-perm',
     'new-test', 'new-test-row', 'new-go',
-    'del-scrim', 'del-what', 'del-meta', 'del-go']) {
+    'del-scrim', 'del-what', 'del-meta', 'del-go',
+    'btn-pair', 'pair-scrim', 'pair-url', 'pair-host', 'pair-hosts', 'pair-note',
+    'pair-copy']) {
     dom[id.replace(/-(\w)/g, (_, c) => c.toUpperCase())] = $(id);
 }
 
@@ -4701,6 +4704,140 @@ for (const n of dom.delScrim.querySelectorAll('[data-close-del]')) {
 }
 dom.delScrim.addEventListener('click', (e) => { if (e.target === dom.delScrim) closeDelete(); });
 
+// ── connect a phone ──────────────────────────────────────────────────────
+//
+// The bridge hands this page the token in a <meta> tag when the page was fetched
+// over loopback (bridge/auth.js injectToken), which is the only reason a link can
+// be built here at all — the cookie that actually authenticates is HttpOnly and
+// deliberately unreadable.
+//
+// The host is a guess, and says so. This page is being served on 127.0.0.1, and
+// 127.0.0.1 is the one address that is useless to a phone; the bridge cannot know
+// what name a proxy in front of it answers to. So: offer the shapes that are
+// likely, let them be edited, and explain rather than pretend.
+
+function pairToken() {
+    const meta = document.querySelector('meta[name="cs-token"]');
+    return meta ? meta.content : null;
+}
+
+// Remembered because it is the one thing this dialog cannot work out for itself
+// and the one thing that is tedious to retype. localStorage rather than the flags
+// file: it is a property of this browser, not of the machine.
+const PAIR_HOST_KEY = 'cs.pairHost';
+
+function refreshPairUrl() {
+    const token = pairToken();
+    const base = dom.pairHost.value.trim().replace(/\/+$/, '');
+    if (!token) {
+        dom.pairUrl.value = '';
+        dom.pairNote.textContent = 'This page was not served over loopback, so it '
+            + 'was not given the token. Open the desktop window on 127.0.0.1.';
+        return;
+    }
+    if (!base) {
+        dom.pairUrl.value = '';
+        dom.pairNote.textContent = 'Enter the address the phone will use.';
+        return;
+    }
+    dom.pairUrl.value = `${base}/pair?token=${token}`;
+    dom.pairNote.textContent = pairNote(base);
+}
+
+/**
+ * What is true about this address, rather than what is generally true.
+ *
+ * The useful thing to say is almost never "here is how tunnels work" — it is the
+ * one step still missing. Reaching a .ts.net name does nothing until
+ * `tailscale serve` is pointed at this port, and that is the step people forget,
+ * so it is the step this says out loud.
+ */
+function pairNote(base) {
+    const info = state.pairInfo || {};
+    const ts = info.tailscale;
+    const isTailnet = /^https:\/\/[^/]+\.ts\.net/.test(base);
+
+    // Already proxying to this port, so there is no next step to nag about.
+    if (info.served && base === info.served) {
+        return 'Already published to your tailnet and pointing at this bridge. The '
+            + 'phone needs the Tailscale app and the same tailnet.';
+    }
+
+    if (isTailnet && ts && ts.name && base.includes(ts.name)) {
+        if (!ts.https) {
+            return 'HTTPS certificates are not enabled for this tailnet yet — turn '
+                + 'them on in the admin console (DNS → HTTPS Certificates), or the '
+                + 'link will not resolve.';
+        }
+        return 'Publish it first, from a Windows shell: tailscale serve --bg '
+            + `--https=443 http://127.0.0.1:${location.port || 45888}`;
+    }
+    if (isTailnet) {
+        return 'A tailnet address. The phone needs the Tailscale app and the same '
+            + 'tailnet, and `tailscale serve` must point at this port.';
+    }
+    if (/^https:/.test(base)) {
+        return 'Anything terminating TLS in front of the bridge works. Add its '
+            + 'hostname to CLAUDE_SESSIONS_ORIGINS if the origin check refuses it.';
+    }
+    return 'Plain HTTP: the phone view will work, but it cannot be installed as an '
+        + 'app and the service worker will not run.';
+}
+
+async function openPair() {
+    dom.pairScrim.hidden = false;
+
+    // Only ever real values here. An earlier version offered
+    // `https://<machine>.<tailnet>.ts.net` as a datalist entry meaning "type your
+    // name over this", and picking it from the dropdown produced a URL with
+    // literal angle brackets in it. A suggestion you must correct is worse than
+    // none — so the bridge is asked what this machine is actually called, and the
+    // list is empty when it cannot say.
+    if (!dom.pairHost.value) {
+        dom.pairHost.value = localStorage.getItem(PAIR_HOST_KEY) || '';
+    }
+    refreshPairUrl();
+    dom.pairHost.focus();
+
+    try {
+        const info = await get('/api/pairing');
+        dom.pairHosts.replaceChildren(
+            ...info.hosts.map(h => el('option', { value: h.url })));
+        // Prefill only if the user has no preference yet: a host they typed and
+        // used before is a better answer than a detected one they rejected.
+        if (!dom.pairHost.value && info.hosts.length) {
+            dom.pairHost.value = info.hosts[0].url;
+        }
+        state.pairInfo = info;
+        refreshPairUrl();
+        if (dom.pairHost.value) { dom.pairUrl.focus(); dom.pairUrl.select(); }
+    } catch { /* leave the field to be filled in by hand */ }
+}
+
+function closePair() { dom.pairScrim.hidden = true; }
+
+dom.btnPair.addEventListener('click', openPair);
+dom.pairHost.addEventListener('input', refreshPairUrl);
+dom.pairCopy.addEventListener('click', async () => {
+    if (!dom.pairUrl.value) { dom.pairHost.focus(); return; }
+    // Remembered on use rather than on every keystroke, so a half-typed host does
+    // not become the default.
+    try { localStorage.setItem(PAIR_HOST_KEY, dom.pairHost.value.trim()); } catch { /* private mode */ }
+    dom.pairUrl.select();
+    try {
+        await navigator.clipboard.writeText(dom.pairUrl.value);
+        toast('Pairing link copied');
+    } catch {
+        // Clipboard access can be refused; the text is selected either way, so
+        // Ctrl+C still works and saying so beats a silent failure.
+        toast('Could not copy — the link is selected, press Ctrl+C');
+    }
+});
+for (const n of dom.pairScrim.querySelectorAll('[data-close-pair]')) {
+    n.addEventListener('click', closePair);
+}
+dom.pairScrim.addEventListener('click', (e) => { if (e.target === dom.pairScrim) closePair(); });
+
 dom.btnLive.addEventListener('click', () => showLive(!state.live.open));
 dom.liveFocus.addEventListener('click', () => setFocus(!state.focus));
 dom.focusExit.addEventListener('click', () => setFocus(false));
@@ -4726,6 +4863,7 @@ document.addEventListener('keydown', (e) => {
     // The confirm sits over the new-session dialog, so it answers Escape first.
     if (e.key === 'Escape' && !dom.bellMenu.hidden) { showBell(false); dom.btnBell.focus(); return; }
     if (e.key === 'Escape' && !dom.delScrim.hidden) { closeDelete(); return; }
+    if (e.key === 'Escape' && !dom.pairScrim.hidden) { closePair(); dom.btnPair.focus(); return; }
     if (e.key === 'Escape' && !dom.newScrim.hidden) { closeNew(); return; }
     if (e.key === 'Escape' && state.dash.open) { showDash(false); return; }
     // Out of focus mode before out of the board: focus mode is the deeper state,

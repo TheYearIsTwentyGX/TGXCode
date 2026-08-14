@@ -62,7 +62,9 @@ const { spawn } = require('child_process');
 const { randomUUID } = require('crypto');
 const { EventEmitter } = require('events');
 
-const { CLAUDE_BIN } = require('./config');
+const cfg = require('./config');
+
+const { CLAUDE_BIN } = cfg;
 const { describeTool } = require('./transcript');
 
 // Queue entry ids only have to be unique per process; the UI never persists one.
@@ -1166,6 +1168,12 @@ class RunnerPool extends EventEmitter {
     create({ cwd, model, permissionMode, prompt }) {
         if (!cwd || !fs.existsSync(cwd)) {
             throw new Error(`Working directory does not exist: ${cwd}`);
+        }
+        // Existing is not the same as allowed. /etc exists. This is the last point
+        // before a process is spawned, so it is the right place for the check —
+        // every route that can start a session comes through here.
+        if (!cfg.withinRoots(cwd)) {
+            throw new Error(`Working directory is outside the allowed roots: ${cwd}`);
         }
         const sessionId = randomUUID();
         const r = this.ensure(sessionId, { cwd, model, permissionMode, isNew: true });
