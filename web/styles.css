@@ -1116,12 +1116,6 @@ a:hover { text-decoration: underline; }
     color: var(--yellow);
 }
 .perm-title { color: var(--text-3); }
-.perm-left {
-    margin-left: auto;
-    font-size: 11.5px;
-    color: var(--text-4);
-    font-variant-numeric: tabular-nums;
-}
 
 .perm-arg {
     margin-top: 7px;

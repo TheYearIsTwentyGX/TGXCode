@@ -93,27 +93,22 @@ const IDLE_EVICT_MS = 15 * 60 * 1000;
 
 const PERMISSION_MODES = ['auto', 'acceptEdits', 'plan', 'manual', 'dontAsk', 'bypassPermissions'];
 
-// How long an approval card may sit unanswered before the ask is denied for you.
-// A blocked turn holds a process open indefinitely otherwise, and the person who
-// would have answered may have closed the window hours ago.
-const PERMISSION_TIMEOUT_MS =
-    Number(process.env.CLAUDE_SESSIONS_PERMISSION_TIMEOUT_MS) || 120_000;
-
 /**
  * Which tools are a conversation rather than a permission question.
  * @type {Record<string, 'plan'|'question'>}
  */
 const ASK_KINDS = { ExitPlanMode: 'plan', AskUserQuestion: 'question' };
 
-// A plan or a question deserves longer than a tool call does. Two minutes is
-// right for "may I run this?" — you are watching the turn or you are not — but
-// a plan is something you read, and being made to re-read it because the card
-// expired while you were thinking is its own kind of rude. It still expires:
-// something has to, or the process is held open for good.
-const ANSWER_TIMEOUT_MS =
-    Number(process.env.CLAUDE_SESSIONS_ANSWER_TIMEOUT_MS) || 15 * 60_000;
-
-const askTimeout = (kind) => (kind === 'tool' ? PERMISSION_TIMEOUT_MS : ANSWER_TIMEOUT_MS);
+// An outstanding ask never expires. It used to: two minutes for a tool call,
+// fifteen for a plan or a question, on the theory that a blocked turn holds a
+// process open and nobody may be there to answer. But the cost landed on the
+// person who *was* there — you read a plan, thought about it, and the card was
+// denied out from under you. Claude Code itself does not do that, so neither
+// does this. The case that mattered is still covered, and covered up front
+// rather than on a clock: _handlePermission denies immediately when no window
+// is open to answer. Once a card is on screen it waits as long as you do, and
+// a window that closes and comes back finds it again — statuses() hands the
+// pending ask to every viewer that attaches.
 
 // Requests we make of the CLI, where no answer means the version in front of us
 // does not speak this part of the protocol. Short, because every one of them has
@@ -167,7 +162,7 @@ class Runner extends EventEmitter {
         this.caps = opts.caps || { permissionPrompt: true, interrupt: true };
         /** Is anyone actually in a position to answer an approval card? */
         this.hasViewer = opts.hasViewer || (() => false);
-        /** @type {null | {id:string, tool:string, input:object, askedAt:number, expiresAt:number}} */
+        /** @type {null | {id:string, tool:string, input:object, askedAt:number}} */
         this.pendingPermission = null;
         this._ctlSeq = 0;
         this._pending = new Map();     // request_id -> {resolve, reject, timer}
@@ -487,7 +482,6 @@ class Runner extends EventEmitter {
         this._pending.clear();
         // Nothing can answer it now, and nothing is waiting for the answer.
         if (this.pendingPermission) {
-            clearTimeout(this.pendingPermission.timer);
             const { id } = this.pendingPermission;
             this.pendingPermission = null;
             this.emit('permission-resolved', {
@@ -556,8 +550,6 @@ class Runner extends EventEmitter {
             // A call made by a subagent, not by the session itself.
             agentId: req.agent_id || null,
             askedAt: Date.now(),
-            expiresAt: Date.now() + askTimeout(kind),
-            timer: null,
         };
 
         // Said yes to this tool earlier in the session, before the process was
@@ -594,15 +586,6 @@ class Runner extends EventEmitter {
             });
             this._clearPermission('superseded');
         }
-
-        const mins = Math.round(askTimeout(kind) / 60_000);
-        ask.timer = setTimeout(
-            () => this._autoDeny(ask, kind === 'tool'
-                ? `Nobody answered within ${Math.round(PERMISSION_TIMEOUT_MS / 1000)}s, so it was denied.`
-                : `Nobody answered within ${mins} minutes, so this went unanswered. Ask again `
-                    + 'if you still need it.'),
-            askTimeout(kind));
-        ask.timer.unref();
 
         this.pendingPermission = ask;
         this._setState('busy', kind === 'plan' ? 'Waiting for you: a plan to approve'
@@ -764,7 +747,6 @@ class Runner extends EventEmitter {
     _clearPermission(outcome) {
         const ask = this.pendingPermission;
         if (!ask) return;
-        clearTimeout(ask.timer);
         this.pendingPermission = null;
         this.emit('permission-resolved', {
             sessionId: this.sessionId, requestId: ask.id, outcome,
@@ -1034,7 +1016,6 @@ function publicAsk(ask) {
         blockedPath: ask.blockedPath,
         agentId: ask.agentId,
         askedAt: ask.askedAt,
-        expiresAt: ask.expiresAt,
     };
 }
 

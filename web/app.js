@@ -91,7 +91,6 @@ const state = {
     queueSig: '',           // what the chips were last built from, to avoid churn
     queueFocus: null,       // the chip holding the queue's single tab stop
     ask: null,              // the approval this session is blocked on, if any
-    askTimer: null,         // ticks the countdown on the approval card
     // The mode the bridge last reported, per session, so that a mode which moves
     // under a session can be told apart from one being seen for the first time.
     runnerMode: new Map(),
@@ -1158,8 +1157,6 @@ const isTyping = (t) => !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA
 
 /** Show, replace or clear the card for whatever the session is blocked on. */
 function renderAsk() {
-    clearInterval(state.askTimer);
-    state.askTimer = null;
     const old = dom.log.querySelector('.perm');
     if (old) old.remove();
     if (!state.ask || state.agent) return;
@@ -1170,12 +1167,10 @@ function renderAsk() {
     const card = el('div', { class: `perm perm-${kind}`, tabindex: '0',
         role: 'group', 'aria-label': ASK_LABEL[kind] || `Permission needed for ${ask.displayName}` });
 
-    const clock = el('span', { class: 'perm-left' });
     card.append(
         el('div', { class: 'perm-head' },
             el('span', { class: 'perm-tool' }, head.name),
-            el('span', { class: 'perm-title' }, head.title),
-            clock),
+            el('span', { class: 'perm-title' }, head.title)),
     );
 
     if (ask.agentId) {
@@ -1187,17 +1182,6 @@ function renderAsk() {
     else fillToolAsk(card, ask);
 
     dom.log.append(card);
-
-    // The countdown is not decoration: the ask is denied for you when it runs
-    // out, and that should never arrive as a surprise.
-    const tick = () => {
-        const remaining = ask.expiresAt - Date.now();
-        if (remaining <= 0) { clock.textContent = 'expired'; return; }
-        const s = Math.ceil(remaining / 1000);
-        clock.textContent = `${Math.floor(s / 60)}:${pad(s % 60)} left`;
-    };
-    tick();
-    state.askTimer = setInterval(tick, 1000);
 
     // Taking focus makes the single-key answers work without a click, but only
     // when the user is actually here — stealing focus from another window, or
@@ -3200,8 +3184,8 @@ const askTag = (sessionId) => `claude-ask:${sessionId}`;
 
 /**
  * Take the toast down once the ask is no longer waiting — answered in a
- * window, answered from another toast, or expired into an auto-deny. A
- * notification offering to allow something that has already been decided is
+ * window, answered from another toast, or resolved by the turn being stopped.
+ * A notification offering to allow something that has already been decided is
  * worse than no notification at all.
  */
 function clearAsk(sessionId) {

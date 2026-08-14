@@ -38,9 +38,9 @@ self.addEventListener('notificationclick', (event) => {
  * Answer over the same route the card uses.
  *
  * A failure here is quiet on purpose. Losing the race — the ask already
- * answered in a window, or expired into an auto-deny — comes back 409, and
- * that is an ordinary outcome, not something to shout about from a worker
- * with nowhere to shout. The card is the durable surface either way.
+ * answered in a window, or the turn stopped out from under it — comes back
+ * 409, and that is an ordinary outcome, not something to shout about from a
+ * worker with nowhere to shout. The card is the durable surface either way.
  */
 async function answer(data, decision) {
     if (!data.sessionId || !data.requestId) return;

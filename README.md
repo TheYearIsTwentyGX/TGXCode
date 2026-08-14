@@ -320,11 +320,12 @@ about the same thing and a newer one.
 session is the one written with the least idea of what it will touch. Switch the
 composer to another mode once you have read the plan back.
 
-Two things to know about the edges. A card nobody answers is **denied for you**
-after two minutes — the countdown says when — because a blocked turn otherwise
-holds a process open forever; and if no window is open at all, the ask is denied
-immediately, which is what the app did before any of this existed. Two auto-denials
-in a row stop the turn rather than let it spin.
+One thing to know about the edges: a card on screen **waits as long as you do**.
+There is no countdown and nothing is ever answered on your behalf for having
+taken too long — an approval that expires while you are reading it is worse than
+a turn that stays blocked. If no window is open at all the ask is denied
+immediately, which is what the app did before any of this existed, and two of
+those in a row stop the turn rather than let it spin.
 
 Approvals ride a control channel on the same stream that carries the session, and
 that channel is not a documented, stable surface. If the installed `claude` turns
@@ -380,10 +381,9 @@ it. Send stays disabled until every question has an answer — Claude asked them
 all, and leaving some to guesswork is what this card exists to avoid. **Skip**
 answers nothing and lets it carry on unaided.
 
-Both cards wait 15 minutes rather than the two an approval gets: a plan is
-something you read, and being made to re-read it because a countdown ran out
-while you were thinking is its own kind of rude. Both still expire, because a
-blocked turn holds a process open otherwise.
+Neither card expires — a plan is something you read, and being made to re-read it
+because a countdown ran out while you were thinking is its own kind of rude. They
+once waited fifteen minutes; now they wait.
 
 Before this, both were denied outright — they arrive flagged as needing an
 interactive prompt, which for any other tool means "a dialog this app cannot
