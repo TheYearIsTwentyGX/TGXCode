@@ -74,11 +74,21 @@ const HOST = process.env.CLAUDE_SESSIONS_HOST || '127.0.0.1';
 // able to publish the bridge to the building.
 const ALLOW_REMOTE_BIND = process.env.CLAUDE_SESSIONS_ALLOW_REMOTE_BIND === '1';
 
+/**
+ * `~` and `~/thing` mean the home directory; `~other` is somebody else's and is
+ * left alone. Used for the roots below and for any path a person may have typed
+ * rather than clicked — a shell expands this before the program ever sees it, so
+ * a path box that does not is a box that lies about what it accepts.
+ */
+function expandHome(p) {
+    return String(p || '').replace(/^~(?=$|\/)/, HOME);
+}
+
 // Where a session may be started, and how far /api/fs will list. Defaults to the
 // home directory: without it, one authenticated call can start an agent in /etc.
 // Colon-separated, like PATH.
 const ALLOWED_ROOTS = (process.env.CLAUDE_SESSIONS_ROOTS || HOME)
-    .split(':').filter(Boolean).map(p => path.resolve(p.replace(/^~(?=$|\/)/, HOME)));
+    .split(':').filter(Boolean).map(p => path.resolve(expandHome(p)));
 
 // Extra browser origins allowed to call the API, for a reverse proxy on a hostname
 // this code cannot guess. Loopback and *.ts.net are accepted without configuration.
@@ -110,7 +120,10 @@ const PORT_DENYLIST = new Set([
  */
 function withinRoots(dir) {
     if (!dir) return false;
-    const target = path.resolve(dir);
+    // Expanded here as well as at the callers, so that a route which forgets to
+    // cannot accidentally widen the check: `~/x` unexpanded resolves against the
+    // process cwd, which is not where the caller meant and not what will be used.
+    const target = path.resolve(expandHome(dir));
     return ALLOWED_ROOTS.some(root =>
         target === root || target.startsWith(root + path.sep));
 }
@@ -121,7 +134,7 @@ module.exports = {
     HOME, PROJECTS_DIR, REGISTRY_DIR, CACHE_DIR, PORT, HOST, VERSION,
     ROOT, IS_WORKTREE,
     STATE_DIR, TOKEN_FILE,
-    ALLOW_REMOTE_BIND, ALLOWED_ROOTS, EXTRA_ORIGINS, withinRoots,
+    ALLOW_REMOTE_BIND, ALLOWED_ROOTS, EXTRA_ORIGINS, withinRoots, expandHome,
     DEFAULT_PORT, DEV_PORT, IS_DEV,
     DEVBROWSER_DEFAULT_PORT, CLAUDE_BIN, PORT_DENYLIST,
 };

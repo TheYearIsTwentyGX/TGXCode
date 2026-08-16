@@ -1147,17 +1147,29 @@ class RunnerPool extends EventEmitter {
 
     /** Create a brand-new session and deliver its first prompt. */
     create({ cwd, model, permissionMode, prompt }) {
-        if (!cwd || !fs.existsSync(cwd)) {
+        // Every route that can start a session comes through here, so this is
+        // also the one place worth normalising the path: a `~` typed into the
+        // directory box should mean what it means in a shell, and the expanded
+        // form is what gets stored and handed to spawn().
+        const dir = cwd && cfg.expandHome(cwd);
+        // A regular file passes existsSync perfectly happily, and the session then
+        // dies at spawn with a bare ENOTDIR long after anyone could act on it.
+        // Asking the question properly here turns that into a 400 that says so.
+        let st = null;
+        try { st = fs.statSync(dir); } catch { /* reported below */ }
+        if (!dir || !st) {
             throw new Error(`Working directory does not exist: ${cwd}`);
         }
+        if (!st.isDirectory()) {
+            throw new Error(`Not a directory: ${cwd}`);
+        }
         // Existing is not the same as allowed. /etc exists. This is the last point
-        // before a process is spawned, so it is the right place for the check —
-        // every route that can start a session comes through here.
-        if (!cfg.withinRoots(cwd)) {
+        // before a process is spawned, so it is the right place for the check.
+        if (!cfg.withinRoots(dir)) {
             throw new Error(`Working directory is outside the allowed roots: ${cwd}`);
         }
         const sessionId = randomUUID();
-        const r = this.ensure(sessionId, { cwd, model, permissionMode, isNew: true });
+        const r = this.ensure(sessionId, { cwd: dir, model, permissionMode, isNew: true });
         r.send(prompt);
         return { sessionId, status: r.status() };
     }
