@@ -661,6 +661,7 @@ function forgetSession(sessionId) {
     state.order.delete(sessionId);
     state.unsent.delete(sessionId);
     saveDraft(sessionId, '');
+    setTermOpen(sessionId, false);
     if (state.pendingDelete && state.pendingDelete.sessionId === sessionId) closeDelete();
     if (state.current && state.current.sessionId === sessionId) clearCurrent();
     renderRail();
@@ -796,7 +797,9 @@ function beginOpen(summary) {
     dom.scroll.scrollTop = 0;
     renderRail();       // the clicked row takes the current-session mark now
     applyRunner(null);
-    syncTerm();         // an open pane follows the session onto its directory
+    // Whether the pane is open is this session's answer, not the last one's —
+    // and showTerm syncs it, so an open one still arrives on its own directory.
+    showTerm(termOpen(summary.sessionId));
 
     // Anything typed here before, or handed back by a failed turn — but only what
     // is genuinely still owed to the composer. state.unsent is insurance against a
@@ -4425,10 +4428,14 @@ function handleSendFailure(f) {
 
 // ── terminal ─────────────────────────────────────────────────────────────
 
-// The pane is a property of the window, not of a session: leave it open and
-// every session you move to shows its own shell in its own directory, which is
-// what you want when the pane is open because you are comparing two of them.
-// Its height is remembered for the same reason.
+// The pane is a property of the session, not of the window: a shell is opened
+// to do something in one conversation's directory, and a session you never
+// wanted one in should not inherit it just because the last one had it open.
+// So the open flag is remembered per session, the way a draft is.
+//
+// The height is the other way round — that really is a property of the window,
+// and a pane that resized itself as you moved between sessions would be worse
+// than one that did not.
 const TERM_MIN = 120;
 
 const termPane = new TerminalPane({
@@ -4449,7 +4456,21 @@ function setTermHeight(px) {
     localStorage.setItem('termHeight', String(h));
 }
 
-function termOpen() { return localStorage.getItem('termOpen') === '1'; }
+// Only a session with the pane open holds a key, so closing it leaves nothing
+// behind and the storage grows with shells you are actually using.
+const termKey = (id) => `term:${id}`;
+
+function termOpen(id) {
+    try { return !!id && localStorage.getItem(termKey(id)) === '1'; } catch { return false; }
+}
+
+function setTermOpen(id, on) {
+    if (!id) return;
+    try {
+        if (on) localStorage.setItem(termKey(id), '1');
+        else localStorage.removeItem(termKey(id));
+    } catch { /* storage unavailable; the pane is still right for this window */ }
+}
 
 /** A path the way a shell prompt writes it: ~ for home, and only the tail. */
 function homely(cwd) {
@@ -4491,7 +4512,7 @@ function paintTermHead(info) {
 
 /** Show or hide the pane. The shell itself is unaffected either way. */
 function showTerm(on, { focus = false } = {}) {
-    localStorage.setItem('termOpen', on ? '1' : '0');
+    setTermOpen(state.current && state.current.sessionId, on);
     dom.termPane.hidden = !on;
     dom.btnTerm.classList.toggle('on', on);
     dom.btnTerm.setAttribute('aria-pressed', String(on));
@@ -5311,9 +5332,10 @@ applyViewParams();
 primeWaiting();
 openFromHash();
 refreshDevBrowser();
-// Restore the pane before the first session lands, so it opens with the window
-// already the right shape rather than growing one out from under the transcript.
-showTerm(termOpen());
+// Nothing to restore here any more: the pane belongs to a session, and the
+// first beginOpen is what shows it — for the session it was opened in. The
+// window-wide flag this used to read is dropped so it cannot come back.
+try { localStorage.removeItem('termOpen'); } catch { /* storage unavailable */ }
 setInterval(refreshDevBrowser, 20_000);
 // Not while a chip is armed or working: rebuilding the strip there would either
 // take back a stop the user is halfway through asking for, or drop the label off
