@@ -67,6 +67,23 @@
       <span id="dash-badge" class="bar-badge" hidden></span>
     </button>
 
+    <!-- What already reached you, after the fact. A toast is gone the moment
+         Windows decides it is, and then there is nothing anywhere that says what
+         it was — so the bridge writes every one of these down and this is where
+         you read them back. -->
+    <button id="btn-notes" class="bar-btn" type="button" aria-pressed="false"
+            title="Everything that has reached out to you (Ctrl+4)">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="5" cy="6.5" r="1.5" fill="currentColor"/>
+        <circle cx="5" cy="12" r="1.5" fill="currentColor"/>
+        <circle cx="5" cy="17.5" r="1.5" fill="currentColor"/>
+        <path d="M10 6.5h10M10 12h10M10 17.5h6.5" stroke="currentColor"
+              stroke-width="1.7" stroke-linecap="round"/>
+      </svg>
+      <span>History</span>
+      <span id="notes-badge" class="bar-badge" hidden></span>
+    </button>
+
     <!-- The same sessions, on a phone. Icon-only: it is a setup step you do once
          per device, not something to give a word of the bar to forever. -->
     <button id="btn-pair" class="bar-btn icon-only" type="button"
@@ -372,6 +389,31 @@ checks, and merge it once they pass.">LGTM</button>
         </button>
       </header>
       <div id="live-body" class="live-body"></div>
+    </section>
+
+    <!-- The log of everything that wanted you, newest first. Written by the
+         bridge rather than by this page, so it covers the hours when no window
+         was open — which are the hours a history is for. `Notable` is what
+         cleared the bar for interrupting somebody; `Everything` also has the
+         quiet rows, which nothing ever notified about. -->
+    <section id="notes" class="notes" hidden aria-label="Notification history">
+      <header class="notes-head">
+        <div>
+          <h1 class="notes-title">History</h1>
+          <p id="notes-sub" class="notes-sub">Everything that has reached out to
+            you, newest first.</p>
+        </div>
+        <div class="notes-tools">
+          <div class="seg" role="group" aria-label="How much to show">
+            <button id="notes-notable" class="seg-btn" type="button" aria-pressed="true"
+                    title="Only what cleared the bar for interrupting you">Notable</button>
+            <button id="notes-all" class="seg-btn" type="button" aria-pressed="false"
+                    title="Also the quiet ones — short turns, subagents finishing">Everything</button>
+          </div>
+          <button id="notes-clear" class="dash-btn" type="button">Clear</button>
+        </div>
+      </header>
+      <div id="notes-body" class="notes-body"></div>
     </section>
 
     <div id="placeholder" class="empty">

@@ -103,6 +103,11 @@ const state = {
     // The board of unfinished work. `at` is when the bridge last answered, so
     // opening it again does not re-run git over every worktree on the machine.
     dash: { open: false, data: null, at: 0, loading: false, error: null, files: new Set() },
+    // The notification log. `seen` is when the view was last opened, kept in
+    // localStorage so the badge does not come back full after a reload — the
+    // rows themselves live in the bridge, which is the whole point of them.
+    notes: { open: false, rows: [], at: 0, loading: false, error: null,
+        scope: 'notable', seen: Number(localStorage.getItem('notesSeenAt')) || 0 },
     // The live board. `watching` is what the bridge has been told, kept apart
     // from `open` so that a re-subscribe for some other reason does not turn the
     // board's timer on for a window that closed it.
@@ -146,6 +151,8 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'term-pane', 'term-grip', 'term-dir', 'term-moved', 'term-body', 'term-restart', 'term-close',
     'agents', 'agent-scroll', 'agent-log', 'btn-back', 'btn-back-label',
     'btn-dash', 'dash-badge', 'dash', 'dash-sub', 'dash-body', 'dash-refresh',
+    'btn-notes', 'notes-badge', 'notes', 'notes-sub', 'notes-body',
+    'notes-notable', 'notes-all', 'notes-clear',
     'lock', 'lock-text', 'lock-fork', 'lock-anyway',
     'btn-live', 'live-badge', 'live', 'live-sub', 'live-body', 'live-focus', 'focus-exit',
     'live-side', 'live-side-label', 'live-side-a', 'live-side-b',
@@ -702,7 +709,8 @@ function clearCurrent() {
 // ── conversation ─────────────────────────────────────────────────────────
 
 async function openSession(id, { quiet = false } = {}) {
-    if (state.current && state.current.sessionId === id) return true;
+    // Already here — but a history row may still have somewhere to put you.
+    if (state.current && state.current.sessionId === id) { takePendingJump(); return true; }
     // Keep whatever is half-typed for the session being left behind.
     if (state.current) saveDraft(state.current.sessionId, dom.input.value);
 
@@ -741,6 +749,8 @@ async function openSession(id, { quiet = false } = {}) {
         renderRail();
         applyRunner(data.runner);
         scrollToEnd(true);
+        // After the scroll, not before: it would be undone by it.
+        takePendingJump();
 
         subscribe();
         loadChannels();
@@ -2743,12 +2753,12 @@ async function stopFromCard(sessionId, btn) {
 const DASH_STALE_MS = 45_000;
 
 /**
- * Which of the three things `main` can hold is on screen.
+ * Which of the things `main` can hold is on screen.
  *
- * Two full-height panels now cover the conversation — Live and Work in flight —
- * and they used to each set `conv.hidden` themselves, which meant whichever
- * closed last decided what the other was doing. One function owns it instead:
- * the panels say what they want, this works out the consequences.
+ * Three full-height panels now cover the conversation — Live, Work in flight and
+ * History — and they used to each set `conv.hidden` themselves, which meant
+ * whichever closed last decided what the other was doing. One function owns it
+ * instead: the panels say what they want, this works out the consequences.
  *
  * The conversation is covered, never closed. Its tail keeps running, its scroll
  * position is untouched, and coming back out lands exactly where it was.
@@ -2765,19 +2775,25 @@ function paintPanels() {
     const docked = state.live.open && Boolean(state.current) && !state.focus;
     const full = state.live.open && !docked;
 
+    // Two whole-screen panels, and showDash/showNotes keep them exclusive, so
+    // "one of them is up" is the only thing anything below has to ask.
+    const covered = state.dash.open || state.notes.open;
+
     dom.dash.hidden = !state.dash.open;
-    dom.live.hidden = !state.live.open || state.dash.open;
+    dom.notes.hidden = !state.notes.open;
+    dom.live.hidden = !state.live.open || covered;
     dom.live.dataset.mode = docked ? 'dock' : 'full';
     // The orientation lives on both: `main` has to change its flex direction,
     // and the board has to know whether it is a strip or a column.
     dom.live.dataset.dock = state.live.dock;
     dom.main.dataset.dock = docked ? state.live.dock : 'bottom';
-    // The conversation stays up under a docked board; the work-in-flight board
-    // is a whole screen and still covers it.
-    dom.conv.hidden = state.dash.open || full || !state.current;
-    dom.placeholder.hidden = state.dash.open || state.live.open || Boolean(state.current);
+    // The conversation stays up under a docked board; a whole-screen panel
+    // still covers it.
+    dom.conv.hidden = covered || full || !state.current;
+    dom.placeholder.hidden = covered || state.live.open || Boolean(state.current);
 
-    for (const [btn, on] of [[dom.btnDash, state.dash.open], [dom.btnLive, state.live.open]]) {
+    for (const [btn, on] of [[dom.btnDash, state.dash.open], [dom.btnLive, state.live.open],
+        [dom.btnNotes, state.notes.open]]) {
         btn.classList.toggle('on', on);
         btn.setAttribute('aria-pressed', String(on));
     }
@@ -2788,6 +2804,7 @@ function paintPanels() {
 
 function showDash(on) {
     state.dash.open = on;
+    if (on) state.notes.open = false;   // two whole screens; one at a time
     // The live board is not closed by this, only covered. It is a strip you
     // leave up; the work-in-flight board is a whole screen you go and read and
     // then come back from, and coming back should find things as you left them.
@@ -3001,6 +3018,214 @@ function statusWord(xy) {
     if (xy[0] === 'A') return 'added';
     if (xy[0] === 'R' || xy[1] === 'R') return 'renamed';
     return xy[0] !== '.' ? 'staged' : 'modified';
+}
+
+// ── notification history ─────────────────────────────────────────────────
+//
+// The section below is what reaches you. This is what you read afterwards to
+// find out what it was.
+//
+// A toast lives as long as Windows feels like letting it, and on this machine
+// that is not long or reliable — so "something pinged me and I have no idea
+// where from" was the normal experience rather than the rare one. The rows come
+// from the bridge, not from anything this page kept, because the page only
+// exists while a window is open and the hours you were away are exactly the ones
+// worth having a record of. See bridge/notifications.js.
+//
+// Two things follow from recording there. The bridge cannot know you were
+// looking straight at a session when its turn landed, so `loud` means "cleared
+// the bar for interrupting somebody", not "a toast definitely appeared" — which
+// is why the filter is called Notable and not something that claims more. And a
+// row survives its session being renamed or deleted, because the title was
+// copied onto it when it was filed.
+
+const NOTES_STALE_MS = 30_000;
+
+const NOTE_LABEL = {
+    permission: 'Permission',
+    plan: 'Plan to review',
+    question: 'Question',
+    finished: 'Finished',
+    failed: 'Failed',
+    'agent-done': 'Subagent done',
+};
+
+// The runner's vocabulary for how an ask ended, said the way a person would.
+const NOTE_OUTCOME = {
+    allow: 'allowed',
+    'allow-always': 'allowed for the session',
+    deny: 'denied',
+    answered: 'answered',
+    'plan-approved': 'approved',
+    'plan-approved-note': 'approved with a note',
+    'plan-rejected': 'kept planning',
+    dismissed: 'dismissed',
+    'auto-denied': 'denied — no window was open',
+    superseded: 'replaced by a later ask',
+    cancelled: 'withdrawn',
+    abandoned: 'abandoned — the bridge stopped',
+    stopped: 'the turn was stopped',
+};
+
+// Set just before openSession by a history row that knows which tool call it is
+// about, and consumed once the transcript has been drawn. Module-level rather
+// than an argument because openSession is called from a dozen places that have
+// no business knowing about this.
+let pendingJump = null;
+
+function showNotes(on) {
+    state.notes.open = on;
+    if (on) state.dash.open = false;
+    paintPanels();
+    syncBoardWatch();
+
+    if (on) {
+        markNotesSeen();
+        if (Date.now() - state.notes.at > NOTES_STALE_MS) loadNotes();
+        else renderNotes();
+    } else if (state.live.open) {
+        // The board was left switched on underneath and has been ignoring its
+        // pushes; catch it up before it comes back into view.
+        renderLive();
+        if (state.current) termPane.refit();
+    } else if (state.current) {
+        termPane.refit();
+    }
+}
+
+async function loadNotes() {
+    if (state.notes.loading) return;
+    state.notes.loading = true;
+    state.notes.error = null;
+    renderNotes();
+    try {
+        const data = await get(`/api/notifications?scope=${state.notes.scope}&limit=300`);
+        state.notes.rows = data.notifications;
+        state.notes.at = Date.now();
+    } catch (err) {
+        state.notes.error = err.message;
+    } finally {
+        state.notes.loading = false;
+        renderNotes();
+        paintNotesBadge();
+    }
+}
+
+function setNotesScope(scope) {
+    if (state.notes.scope === scope) return;
+    state.notes.scope = scope;
+    dom.notesNotable.setAttribute('aria-pressed', String(scope === 'notable'));
+    dom.notesAll.setAttribute('aria-pressed', String(scope === 'all'));
+    state.notes.at = 0;   // the other scope is a different set of rows
+    loadNotes();
+}
+
+/**
+ * How many things have wanted you since you last looked.
+ *
+ * Counted over the loud rows only, whichever scope is showing: a badge is an
+ * interruption in its own right, and a six-second turn finishing is not one.
+ */
+function paintNotesBadge() {
+    const n = state.notes.rows.filter(r => r.loud && r.at > state.notes.seen).length;
+    dom.notesBadge.hidden = !n;
+    dom.notesBadge.textContent = String(n);
+    dom.btnNotes.title = n
+        ? `${n} ${n === 1 ? 'notification' : 'notifications'} since you last looked`
+        : 'Everything that has reached out to you (Ctrl+4)';
+}
+
+function markNotesSeen() {
+    state.notes.seen = Date.now();
+    localStorage.setItem('notesSeenAt', String(state.notes.seen));
+    paintNotesBadge();
+}
+
+function renderNotes() {
+    const rows = state.notes.rows;
+    dom.notesClear.disabled = state.notes.loading || !rows.length;
+
+    const body = dom.notesBody;
+    if (state.notes.error) {
+        body.replaceChildren(el('div', { class: 'dash-note error' },
+            el('p', {}, `Could not read the notification log: ${state.notes.error}`),
+            el('button', { class: 'more-btn', type: 'button', onclick: () => loadNotes() },
+                'Try again')));
+        return;
+    }
+    if (state.notes.loading && !rows.length) {
+        body.replaceChildren(el('div', { class: 'dash-note' }, el('p', {}, 'Reading the log…')));
+        return;
+    }
+    if (!rows.length) {
+        body.replaceChildren(el('div', { class: 'dash-note' },
+            el('p', {}, state.notes.scope === 'notable'
+                ? 'Nothing has wanted you. Everything switches to the quiet rows too — '
+                    + 'short turns, subagents finishing.'
+                : 'Nothing yet. Anything that wants you from now on is written down here, '
+                    + 'whether or not a window was open to hear it.')));
+        return;
+    }
+
+    dom.notesSub.textContent = `${rows.length} ${rows.length === 1 ? 'entry' : 'entries'}`
+        + (state.notes.scope === 'notable' ? ' worth interrupting you for.' : ', including the quiet ones.');
+    body.replaceChildren(...rows.map(noteRow));
+}
+
+function noteRow(n) {
+    const meta = [n.project, n.outcome ? (NOTE_OUTCOME[n.outcome] || n.outcome) : null]
+        .filter(Boolean);
+    return el('div', {
+        class: 'note-row',
+        'data-type': n.type,
+        'data-loud': String(n.loud),
+        'data-id': n.id,
+    },
+        el('button', {
+            class: 'note-main', type: 'button',
+            title: `Open ${n.title}`,
+            onclick: () => openFromNote(n),
+        },
+            el('span', { class: 'note-head' },
+                el('span', { class: 'note-kind' }, NOTE_LABEL[n.type] || n.type),
+                el('span', { class: 'note-title' }, n.title),
+                el('span', { class: 'note-when', title: new Date(n.at).toLocaleString() },
+                    ago(n.at)),
+            ),
+            el('span', { class: 'note-summary' }, n.summary || ''),
+            meta.length
+                ? el('span', { class: 'note-meta' },
+                    n.outcome
+                        ? el('span', { class: 'note-outcome', 'data-outcome': n.outcome },
+                            NOTE_OUTCOME[n.outcome] || n.outcome)
+                        : null,
+                    n.project ? el('span', { class: 'note-project' }, n.project) : null)
+                : null,
+        ));
+}
+
+/**
+ * Back to where it came from — which is the whole reason for the list.
+ *
+ * An ask carries the id of the tool call it was about, and that is a real node
+ * in the transcript, so the row can put you on the exact line rather than at the
+ * bottom of a long conversation. Where there is no anchor — a finished turn, a
+ * subagent — opening the session at the end is the right answer anyway.
+ */
+function openFromNote(n) {
+    pendingJump = n.anchorId || null;
+    showNotes(false);
+    openSession(n.sessionId);
+}
+
+function takePendingJump() {
+    const id = pendingJump;
+    pendingJump = null;
+    if (!id) return;
+    const entry = state.tools.get(id);
+    // Gone from the transcript, or never in it: the session is open and scrolled
+    // to the end, which is the honest fallback rather than a guess.
+    if (entry) jumpToTurn(entry);
 }
 
 // ── notifications ────────────────────────────────────────────────────────
@@ -3559,6 +3784,32 @@ function connect() {
     es.addEventListener('notice', (e) => {
         const n = JSON.parse(e.data);
         toast(n.text, n.level === 'warn' ? 'warn' : 'info', 7000);
+    });
+
+    // The bridge filed a row. Kept up to date rather than re-fetched, so a
+    // history left open in a second window stays live.
+    es.addEventListener('notification', (e) => {
+        const row = JSON.parse(e.data);
+        if (state.notes.scope === 'notable' && !row.loud) return;
+        state.notes.rows.unshift(row);
+        if (state.notes.open) { renderNotes(); markNotesSeen(); }
+        else paintNotesBadge();
+    });
+
+    es.addEventListener('notification-resolved', (e) => {
+        const { id, outcome, outcomeAt } = JSON.parse(e.data);
+        const row = state.notes.rows.find(r => r.id === id);
+        if (!row) return;
+        // The answer belongs on the question, not on a second row underneath it.
+        row.outcome = outcome;
+        row.outcomeAt = outcomeAt;
+        if (state.notes.open) renderNotes();
+    });
+
+    es.addEventListener('notifications-cleared', () => {
+        state.notes.rows = [];
+        if (state.notes.open) renderNotes();
+        paintNotesBadge();
     });
 
     es.addEventListener('turn-complete', (e) => {
@@ -5392,6 +5643,20 @@ dom.liveBody.addEventListener('wheel', onDockWheel, { passive: false });
 dom.btnDash.addEventListener('click', () => showDash(!state.dash.open));
 dom.dashRefresh.addEventListener('click', () => loadDash({ refresh: true }));
 
+dom.btnNotes.addEventListener('click', () => showNotes(!state.notes.open));
+dom.notesNotable.addEventListener('click', () => setNotesScope('notable'));
+dom.notesAll.addEventListener('click', () => setNotesScope('all'));
+dom.notesClear.addEventListener('click', async () => {
+    // No confirm: this throws away a record of things that already happened, not
+    // the things themselves, and everything in it is derived from transcripts
+    // that are still there.
+    try {
+        await del('/api/notifications');
+    } catch (err) {
+        toast(`Could not clear the history: ${err.message}`, 'error');
+    }
+});
+
 // The safe way past the lock: a copy of the conversation with a process of its
 // own. sendMessage already does the whole thing — the original keeps running
 // wherever it is, and the window follows the fork.
@@ -5413,6 +5678,7 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !dom.pairScrim.hidden) { closePair(); dom.btnPair.focus(); return; }
     if (e.key === 'Escape' && !dom.newScrim.hidden) { closeNew(); return; }
     if (e.key === 'Escape' && state.dash.open) { showDash(false); return; }
+    if (e.key === 'Escape' && state.notes.open) { showNotes(false); return; }
     // Out of focus mode before out of the board: focus mode is the deeper state,
     // and leaving it should not also take the board away.
     if (e.key === 'Escape' && state.focus) { setFocus(false); return; }
@@ -5421,13 +5687,14 @@ document.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); dom.search.focus(); }
     if ((e.ctrlKey || e.metaKey) && e.key === 'n') { e.preventDefault(); openNew(); }
 
-    // The three things `main` can show. Ctrl rather than a bare digit because
+    // The four things `main` can show. Ctrl rather than a bare digit because
     // the composer is a textarea and these have to work while it has the focus.
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && '123'.includes(e.key)) {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && '1234'.includes(e.key)) {
         e.preventDefault();
-        if (e.key === '1') { showLive(false); showDash(false); }
+        if (e.key === '1') { showLive(false); showDash(false); showNotes(false); }
         else if (e.key === '2') showLive(true);
-        else showDash(true);
+        else if (e.key === '3') showDash(true);
+        else showNotes(true);
     }
 });
 
@@ -5497,6 +5764,11 @@ setInterval(() => {
 // board is actually on screen.
 setTimeout(() => loadDash(), 3000);
 setInterval(() => { if (state.dash.open) loadDash(); }, 60_000);
+
+// Same reasoning for the History badge, and the same delay: the number of things
+// that wanted you while this window was shut is the one piece of news the button
+// carries, and nothing else would go and find it out.
+setTimeout(() => loadNotes(), 3200);
 
 // A running subagent writes to its own file, which the parent transcript says
 // nothing about — so the only way its activity line moves is to go and look.
