@@ -869,6 +869,24 @@ class Runner extends EventEmitter {
                         level: 'warn', kind: 'permission_denied',
                         text: msg.content || 'A tool call was denied by the permission mode.',
                     });
+                } else if (msg.subtype === 'task_notification') {
+                    // A background subagent finished.
+                    //
+                    // The conversation gets this as an injected *user* message,
+                    // which is the form transcript.js parses to draw the row —
+                    // but the stream carries it structured, and the stream is
+                    // here whether or not anybody is watching the session. A log
+                    // that only filled up while somebody was looking would miss
+                    // exactly the hours it exists for.
+                    const u = msg.usage || {};
+                    this.emit('agent-done', {
+                        sessionId: this.sessionId,
+                        taskId: msg.task_id,
+                        toolUseId: msg.tool_use_id || null,
+                        status: msg.status || 'completed',
+                        summary: msg.summary || null,
+                        durationMs: u.duration_ms || null,
+                    });
                 } else if (msg.subtype === 'api_retry') {
                     // The CLI retries a failing API call up to ten times with
                     // exponential backoff, which can run for several minutes.
@@ -1130,6 +1148,7 @@ class RunnerPool extends EventEmitter {
         r.on('permission-resolved', (p) => this.emit('permission-resolved', p));
         r.on('turn-complete', (res) => this.emit('turn-complete', { sessionId: r.sessionId, ...res }));
         r.on('failed', (f) => this.emit('failed', { sessionId: r.sessionId, ...f }));
+        r.on('agent-done', (a) => this.emit('agent-done', a));
         r.on('exit', () => this.emit('status', r.status()));
         r.on('forked', ({ from, to }) => {
             // Re-key so a later send reaches the copy, not the original.

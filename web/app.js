@@ -103,6 +103,11 @@ const state = {
     // The board of unfinished work. `at` is when the bridge last answered, so
     // opening it again does not re-run git over every worktree on the machine.
     dash: { open: false, data: null, at: 0, loading: false, error: null, files: new Set() },
+    // The notification log. `seen` is when the view was last opened, kept in
+    // localStorage so the badge does not come back full after a reload — the
+    // rows themselves live in the bridge, which is the whole point of them.
+    notes: { open: false, rows: [], at: 0, loading: false, error: null,
+        scope: 'notable', seen: Number(localStorage.getItem('notesSeenAt')) || 0 },
     // The live board. `watching` is what the bridge has been told, kept apart
     // from `open` so that a re-subscribe for some other reason does not turn the
     // board's timer on for a window that closed it.
@@ -140,12 +145,14 @@ const dom = {};
 for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-sub',
     'channels', 'scroll', 'log', 'status-line', 'status-text', 'btn-stop', 'input',
     'btn-send', 'btn-lgtm', 'queue', 'queue-list', 'queue-count', 'queue-clear',
-    'model', 'perm', 'btn-new', 'db-status', 'db-label', 'toasts',
+    'model', 'perm', 'btn-new', 'btn-new-menu', 'new-menu', 'db-status', 'db-label', 'toasts',
     'btn-bell', 'bell-menu', 'opt-desktop', 'opt-sound', 'bell-note', 'bell-try',
     'btn-pin', 'btn-folder', 'btn-term', 'btn-archive', 'btn-delete', 'turns', 'turn-pop',
     'term-pane', 'term-grip', 'term-dir', 'term-moved', 'term-body', 'term-restart', 'term-close',
     'agents', 'agent-scroll', 'agent-log', 'btn-back', 'btn-back-label',
     'btn-dash', 'dash-badge', 'dash', 'dash-sub', 'dash-body', 'dash-refresh',
+    'btn-notes', 'notes-badge', 'notes', 'notes-sub', 'notes-body',
+    'notes-notable', 'notes-all', 'notes-clear',
     'lock', 'lock-text', 'lock-fork', 'lock-anyway',
     'btn-live', 'live-badge', 'live', 'live-sub', 'live-body', 'live-focus', 'focus-exit',
     'live-side', 'live-side-label', 'live-side-a', 'live-side-b',
@@ -661,6 +668,7 @@ function forgetSession(sessionId) {
     state.order.delete(sessionId);
     state.unsent.delete(sessionId);
     saveDraft(sessionId, '');
+    setTermOpen(sessionId, false);
     if (state.pendingDelete && state.pendingDelete.sessionId === sessionId) closeDelete();
     if (state.current && state.current.sessionId === sessionId) clearCurrent();
     renderRail();
@@ -702,7 +710,8 @@ function clearCurrent() {
 // ── conversation ─────────────────────────────────────────────────────────
 
 async function openSession(id, { quiet = false, keepDash = false } = {}) {
-    if (state.current && state.current.sessionId === id) return true;
+    // Already here — but a history row may still have somewhere to put you.
+    if (state.current && state.current.sessionId === id) { takePendingJump(); return true; }
     // Keep whatever is half-typed for the session being left behind.
     if (state.current) saveDraft(state.current.sessionId, dom.input.value);
 
@@ -741,6 +750,8 @@ async function openSession(id, { quiet = false, keepDash = false } = {}) {
         renderRail();
         applyRunner(data.runner);
         scrollToEnd(true);
+        // After the scroll, not before: it would be undone by it.
+        takePendingJump();
 
         subscribe();
         loadChannels();
@@ -801,7 +812,9 @@ function beginOpen(summary, { keepDash = false } = {}) {
     dom.scroll.scrollTop = 0;
     renderRail();       // the clicked row takes the current-session mark now
     applyRunner(null);
-    syncTerm();         // an open pane follows the session onto its directory
+    // Whether the pane is open is this session's answer, not the last one's —
+    // and showTerm syncs it, so an open one still arrives on its own directory.
+    showTerm(termOpen(summary.sessionId));
 
     // Anything typed here before, or handed back by a failed turn — but only what
     // is genuinely still owed to the composer. state.unsent is insurance against a
@@ -2258,6 +2271,10 @@ function setFocus(on) {
     if (on) dom.app.dataset.focus = '1';
     else delete dom.app.dataset.focus;
 
+    // Focus mode hides the rail, and with it the menu — but not its state, which
+    // would come back open and out of step with the caret.
+    if (on) showNewMenu(false);
+
     dom.liveFocus.setAttribute('aria-pressed', String(on));
     dom.liveFocus.classList.toggle('on', on);
     // Focus mode is the board, full height, so turning it on turns the board on.
@@ -2803,12 +2820,12 @@ async function stopFromCard(sessionId, btn) {
 const DASH_STALE_MS = 45_000;
 
 /**
- * Which of the three things `main` can hold is on screen.
+ * Which of the things `main` can hold is on screen.
  *
- * Two full-height panels now cover the conversation — Live and Work in flight —
- * and they used to each set `conv.hidden` themselves, which meant whichever
- * closed last decided what the other was doing. One function owns it instead:
- * the panels say what they want, this works out the consequences.
+ * Three full-height panels now cover the conversation — Live, Work in flight and
+ * History — and they used to each set `conv.hidden` themselves, which meant
+ * whichever closed last decided what the other was doing. One function owns it
+ * instead: the panels say what they want, this works out the consequences.
  *
  * The conversation is covered, never closed. Its tail keeps running, its scroll
  * position is untouched, and coming back out lands exactly where it was.
@@ -2825,19 +2842,25 @@ function paintPanels() {
     const docked = state.live.open && Boolean(state.current) && !state.focus;
     const full = state.live.open && !docked;
 
+    // Two whole-screen panels, and showDash/showNotes keep them exclusive, so
+    // "one of them is up" is the only thing anything below has to ask.
+    const covered = state.dash.open || state.notes.open;
+
     dom.dash.hidden = !state.dash.open;
-    dom.live.hidden = !state.live.open || state.dash.open;
+    dom.notes.hidden = !state.notes.open;
+    dom.live.hidden = !state.live.open || covered;
     dom.live.dataset.mode = docked ? 'dock' : 'full';
     // The orientation lives on both: `main` has to change its flex direction,
     // and the board has to know whether it is a strip or a column.
     dom.live.dataset.dock = state.live.dock;
     dom.main.dataset.dock = docked ? state.live.dock : 'bottom';
-    // The conversation stays up under a docked board; the work-in-flight board
-    // is a whole screen and still covers it.
-    dom.conv.hidden = state.dash.open || full || !state.current;
-    dom.placeholder.hidden = state.dash.open || state.live.open || Boolean(state.current);
+    // The conversation stays up under a docked board; a whole-screen panel
+    // still covers it.
+    dom.conv.hidden = covered || full || !state.current;
+    dom.placeholder.hidden = covered || state.live.open || Boolean(state.current);
 
-    for (const [btn, on] of [[dom.btnDash, state.dash.open], [dom.btnLive, state.live.open]]) {
+    for (const [btn, on] of [[dom.btnDash, state.dash.open], [dom.btnLive, state.live.open],
+        [dom.btnNotes, state.notes.open]]) {
         btn.classList.toggle('on', on);
         btn.setAttribute('aria-pressed', String(on));
     }
@@ -2848,6 +2871,7 @@ function paintPanels() {
 
 function showDash(on) {
     state.dash.open = on;
+    if (on) state.notes.open = false;   // two whole screens; one at a time
     // The live board is not closed by this, only covered. It is a strip you
     // leave up; the work-in-flight board is a whole screen you go and read and
     // then come back from, and coming back should find things as you left them.
@@ -3062,6 +3086,214 @@ function statusWord(xy) {
     if (xy[0] === 'A') return 'added';
     if (xy[0] === 'R' || xy[1] === 'R') return 'renamed';
     return xy[0] !== '.' ? 'staged' : 'modified';
+}
+
+// ── notification history ─────────────────────────────────────────────────
+//
+// The section below is what reaches you. This is what you read afterwards to
+// find out what it was.
+//
+// A toast lives as long as Windows feels like letting it, and on this machine
+// that is not long or reliable — so "something pinged me and I have no idea
+// where from" was the normal experience rather than the rare one. The rows come
+// from the bridge, not from anything this page kept, because the page only
+// exists while a window is open and the hours you were away are exactly the ones
+// worth having a record of. See bridge/notifications.js.
+//
+// Two things follow from recording there. The bridge cannot know you were
+// looking straight at a session when its turn landed, so `loud` means "cleared
+// the bar for interrupting somebody", not "a toast definitely appeared" — which
+// is why the filter is called Notable and not something that claims more. And a
+// row survives its session being renamed or deleted, because the title was
+// copied onto it when it was filed.
+
+const NOTES_STALE_MS = 30_000;
+
+const NOTE_LABEL = {
+    permission: 'Permission',
+    plan: 'Plan to review',
+    question: 'Question',
+    finished: 'Finished',
+    failed: 'Failed',
+    'agent-done': 'Subagent done',
+};
+
+// The runner's vocabulary for how an ask ended, said the way a person would.
+const NOTE_OUTCOME = {
+    allow: 'allowed',
+    'allow-always': 'allowed for the session',
+    deny: 'denied',
+    answered: 'answered',
+    'plan-approved': 'approved',
+    'plan-approved-note': 'approved with a note',
+    'plan-rejected': 'kept planning',
+    dismissed: 'dismissed',
+    'auto-denied': 'denied — no window was open',
+    superseded: 'replaced by a later ask',
+    cancelled: 'withdrawn',
+    abandoned: 'abandoned — the bridge stopped',
+    stopped: 'the turn was stopped',
+};
+
+// Set just before openSession by a history row that knows which tool call it is
+// about, and consumed once the transcript has been drawn. Module-level rather
+// than an argument because openSession is called from a dozen places that have
+// no business knowing about this.
+let pendingJump = null;
+
+function showNotes(on) {
+    state.notes.open = on;
+    if (on) state.dash.open = false;
+    paintPanels();
+    syncBoardWatch();
+
+    if (on) {
+        markNotesSeen();
+        if (Date.now() - state.notes.at > NOTES_STALE_MS) loadNotes();
+        else renderNotes();
+    } else if (state.live.open) {
+        // The board was left switched on underneath and has been ignoring its
+        // pushes; catch it up before it comes back into view.
+        renderLive();
+        if (state.current) termPane.refit();
+    } else if (state.current) {
+        termPane.refit();
+    }
+}
+
+async function loadNotes() {
+    if (state.notes.loading) return;
+    state.notes.loading = true;
+    state.notes.error = null;
+    renderNotes();
+    try {
+        const data = await get(`/api/notifications?scope=${state.notes.scope}&limit=300`);
+        state.notes.rows = data.notifications;
+        state.notes.at = Date.now();
+    } catch (err) {
+        state.notes.error = err.message;
+    } finally {
+        state.notes.loading = false;
+        renderNotes();
+        paintNotesBadge();
+    }
+}
+
+function setNotesScope(scope) {
+    if (state.notes.scope === scope) return;
+    state.notes.scope = scope;
+    dom.notesNotable.setAttribute('aria-pressed', String(scope === 'notable'));
+    dom.notesAll.setAttribute('aria-pressed', String(scope === 'all'));
+    state.notes.at = 0;   // the other scope is a different set of rows
+    loadNotes();
+}
+
+/**
+ * How many things have wanted you since you last looked.
+ *
+ * Counted over the loud rows only, whichever scope is showing: a badge is an
+ * interruption in its own right, and a six-second turn finishing is not one.
+ */
+function paintNotesBadge() {
+    const n = state.notes.rows.filter(r => r.loud && r.at > state.notes.seen).length;
+    dom.notesBadge.hidden = !n;
+    dom.notesBadge.textContent = String(n);
+    dom.btnNotes.title = n
+        ? `${n} ${n === 1 ? 'notification' : 'notifications'} since you last looked`
+        : 'Everything that has reached out to you (Ctrl+4)';
+}
+
+function markNotesSeen() {
+    state.notes.seen = Date.now();
+    localStorage.setItem('notesSeenAt', String(state.notes.seen));
+    paintNotesBadge();
+}
+
+function renderNotes() {
+    const rows = state.notes.rows;
+    dom.notesClear.disabled = state.notes.loading || !rows.length;
+
+    const body = dom.notesBody;
+    if (state.notes.error) {
+        body.replaceChildren(el('div', { class: 'dash-note error' },
+            el('p', {}, `Could not read the notification log: ${state.notes.error}`),
+            el('button', { class: 'more-btn', type: 'button', onclick: () => loadNotes() },
+                'Try again')));
+        return;
+    }
+    if (state.notes.loading && !rows.length) {
+        body.replaceChildren(el('div', { class: 'dash-note' }, el('p', {}, 'Reading the log…')));
+        return;
+    }
+    if (!rows.length) {
+        body.replaceChildren(el('div', { class: 'dash-note' },
+            el('p', {}, state.notes.scope === 'notable'
+                ? 'Nothing has wanted you. Everything switches to the quiet rows too — '
+                    + 'short turns, subagents finishing.'
+                : 'Nothing yet. Anything that wants you from now on is written down here, '
+                    + 'whether or not a window was open to hear it.')));
+        return;
+    }
+
+    dom.notesSub.textContent = `${rows.length} ${rows.length === 1 ? 'entry' : 'entries'}`
+        + (state.notes.scope === 'notable' ? ' worth interrupting you for.' : ', including the quiet ones.');
+    body.replaceChildren(...rows.map(noteRow));
+}
+
+function noteRow(n) {
+    const meta = [n.project, n.outcome ? (NOTE_OUTCOME[n.outcome] || n.outcome) : null]
+        .filter(Boolean);
+    return el('div', {
+        class: 'note-row',
+        'data-type': n.type,
+        'data-loud': String(n.loud),
+        'data-id': n.id,
+    },
+        el('button', {
+            class: 'note-main', type: 'button',
+            title: `Open ${n.title}`,
+            onclick: () => openFromNote(n),
+        },
+            el('span', { class: 'note-head' },
+                el('span', { class: 'note-kind' }, NOTE_LABEL[n.type] || n.type),
+                el('span', { class: 'note-title' }, n.title),
+                el('span', { class: 'note-when', title: new Date(n.at).toLocaleString() },
+                    ago(n.at)),
+            ),
+            el('span', { class: 'note-summary' }, n.summary || ''),
+            meta.length
+                ? el('span', { class: 'note-meta' },
+                    n.outcome
+                        ? el('span', { class: 'note-outcome', 'data-outcome': n.outcome },
+                            NOTE_OUTCOME[n.outcome] || n.outcome)
+                        : null,
+                    n.project ? el('span', { class: 'note-project' }, n.project) : null)
+                : null,
+        ));
+}
+
+/**
+ * Back to where it came from — which is the whole reason for the list.
+ *
+ * An ask carries the id of the tool call it was about, and that is a real node
+ * in the transcript, so the row can put you on the exact line rather than at the
+ * bottom of a long conversation. Where there is no anchor — a finished turn, a
+ * subagent — opening the session at the end is the right answer anyway.
+ */
+function openFromNote(n) {
+    pendingJump = n.anchorId || null;
+    showNotes(false);
+    openSession(n.sessionId);
+}
+
+function takePendingJump() {
+    const id = pendingJump;
+    pendingJump = null;
+    if (!id) return;
+    const entry = state.tools.get(id);
+    // Gone from the transcript, or never in it: the session is open and scrolled
+    // to the end, which is the honest fallback rather than a guess.
+    if (entry) jumpToTurn(entry);
 }
 
 // ── notifications ────────────────────────────────────────────────────────
@@ -3455,7 +3687,10 @@ function renderBell() {
 function showBell(on) {
     dom.bellMenu.hidden = !on;
     dom.btnBell.setAttribute('aria-expanded', String(on));
-    if (on) renderBell();
+    // Both triggers stop the click from reaching the document, so neither
+    // popover's outside-click listener sees the other one being opened. Without
+    // this the two sit on screen together.
+    if (on) { renderBell(); showNewMenu(false); }
 }
 
 dom.btnBell.addEventListener('click', (e) => {
@@ -3622,6 +3857,32 @@ function connect() {
     es.addEventListener('notice', (e) => {
         const n = JSON.parse(e.data);
         toast(n.text, n.level === 'warn' ? 'warn' : 'info', 7000);
+    });
+
+    // The bridge filed a row. Kept up to date rather than re-fetched, so a
+    // history left open in a second window stays live.
+    es.addEventListener('notification', (e) => {
+        const row = JSON.parse(e.data);
+        if (state.notes.scope === 'notable' && !row.loud) return;
+        state.notes.rows.unshift(row);
+        if (state.notes.open) { renderNotes(); markNotesSeen(); }
+        else paintNotesBadge();
+    });
+
+    es.addEventListener('notification-resolved', (e) => {
+        const { id, outcome, outcomeAt } = JSON.parse(e.data);
+        const row = state.notes.rows.find(r => r.id === id);
+        if (!row) return;
+        // The answer belongs on the question, not on a second row underneath it.
+        row.outcome = outcome;
+        row.outcomeAt = outcomeAt;
+        if (state.notes.open) renderNotes();
+    });
+
+    es.addEventListener('notifications-cleared', () => {
+        state.notes.rows = [];
+        if (state.notes.open) renderNotes();
+        paintNotesBadge();
     });
 
     es.addEventListener('turn-complete', (e) => {
@@ -4498,10 +4759,14 @@ function handleSendFailure(f) {
 
 // ── terminal ─────────────────────────────────────────────────────────────
 
-// The pane is a property of the window, not of a session: leave it open and
-// every session you move to shows its own shell in its own directory, which is
-// what you want when the pane is open because you are comparing two of them.
-// Its height is remembered for the same reason.
+// The pane is a property of the session, not of the window: a shell is opened
+// to do something in one conversation's directory, and a session you never
+// wanted one in should not inherit it just because the last one had it open.
+// So the open flag is remembered per session, the way a draft is.
+//
+// The height is the other way round — that really is a property of the window,
+// and a pane that resized itself as you moved between sessions would be worse
+// than one that did not.
 const TERM_MIN = 120;
 
 const termPane = new TerminalPane({
@@ -4522,7 +4787,21 @@ function setTermHeight(px) {
     localStorage.setItem('termHeight', String(h));
 }
 
-function termOpen() { return localStorage.getItem('termOpen') === '1'; }
+// Only a session with the pane open holds a key, so closing it leaves nothing
+// behind and the storage grows with shells you are actually using.
+const termKey = (id) => `term:${id}`;
+
+function termOpen(id) {
+    try { return !!id && localStorage.getItem(termKey(id)) === '1'; } catch { return false; }
+}
+
+function setTermOpen(id, on) {
+    if (!id) return;
+    try {
+        if (on) localStorage.setItem(termKey(id), '1');
+        else localStorage.removeItem(termKey(id));
+    } catch { /* storage unavailable; the pane is still right for this window */ }
+}
 
 /** A path the way a shell prompt writes it: ~ for home, and only the tail. */
 function homely(cwd) {
@@ -4564,7 +4843,7 @@ function paintTermHead(info) {
 
 /** Show or hide the pane. The shell itself is unaffected either way. */
 function showTerm(on, { focus = false } = {}) {
-    localStorage.setItem('termOpen', on ? '1' : '0');
+    setTermOpen(state.current && state.current.sessionId, on);
     dom.termPane.hidden = !on;
     dom.btnTerm.classList.toggle('on', on);
     dom.btnTerm.setAttribute('aria-pressed', String(on));
@@ -4617,17 +4896,35 @@ function startTermDrag(e) {
 
 // ── new session ──────────────────────────────────────────────────────────
 
-async function openNew() {
+/**
+ * Every directory a session has run in, newest first — the one list the dialog's
+ * Recent tab and the rail's split menu both answer from.
+ */
+async function loadProjects() {
+    const { projects } = await get('/api/projects');
+    // The same list, keyed by path, so a browsed row can say "you have worked
+    // here" without a second request. It quietly joins the two tabs together.
+    state.browse.known = new Map(projects.map(p => [p.cwd, p]));
+    return projects;
+}
+
+/**
+ * @param {{cwd?: string, tab?: 'recent'|'browse'}} [opts] `cwd` is a caller that
+ *   has already answered "where" — the split menu passes the row you clicked.
+ *   Without one the dialog opens where it always has: the session on screen,
+ *   else the most recent project.
+ */
+async function openNew({ cwd = '', tab = null } = {}) {
     dom.newScrim.hidden = false;
     dom.newPrompt.value = '';
     growPrompt();
     dom.newTest.checked = false;
-    dom.newCwd.value = state.current
+    dom.newCwd.value = cwd || (state.current
         ? (state.current.worktree ? state.current.worktree.originalCwd : state.current.cwd)
-        : '';
+        : '');
     cancelMkdir();
     try {
-        const { projects } = await get('/api/projects');
+        const projects = await loadProjects();
         dom.newPicker.replaceChildren(...projects.slice(0, 40).map(p =>
             el('button', {
                 class: 'picker-row', type: 'button',
@@ -4637,18 +4934,137 @@ async function openNew() {
                 el('span', { class: 'path' }, clip(p.cwd, 44)),
                 p.active ? el('span', { class: 'tag' }, `${p.active} live`) : null,
             )));
+        // Only for a dialog that opened with nothing in the box. A caller that
+        // named a directory has already answered this, and the box was filled
+        // before the await precisely so this cannot overwrite it.
         if (!dom.newCwd.value && projects[0]) dom.newCwd.value = projects[0].cwd;
-        // The same list, keyed by path, so a browsed row can say "you have worked
-        // here" without a second request. It quietly joins the two tabs together.
-        state.browse.known = new Map(projects.map(p => [p.cwd, p]));
     } catch (err) {
         toast(`Could not list projects: ${err.message}`, 'error');
     }
-    setPickerTab(state.browse.tab, { load: true });
+    setPickerTab(tab || state.browse.tab, { load: true });
     dom.newPrompt.focus();
 }
 
 function closeNew() { dom.newScrim.hidden = true; }
+
+// ── the recent-directories menu ──────────────────────────────────────────
+
+// Six, so the whole menu — including the way out of it — fits without
+// scrolling. The dialog's Recent tab is still there for the long tail; this is
+// meant to be the handful of directories you are actually in this week.
+const NEW_MENU_MAX = 6;
+let newMenuSeq = 0;
+
+function showNewMenu(on, { focusFirst = false } = {}) {
+    dom.newMenu.hidden = !on;
+    dom.btnNewMenu.setAttribute('aria-expanded', String(on));
+    if (on) { showBell(false); fillNewMenu({ focusFirst }); }
+}
+
+/**
+ * Asked for on every open rather than cached.
+ *
+ * The endpoint is one pass over an index already in memory; the ordering is the
+ * whole point of the menu and moves whenever a session writes a line; and
+ * `state.browse.known` — the only list this page holds — is filled solely by
+ * openNew(), so a cache-first menu would be empty on a fresh load where the
+ * dialog has never been opened. That is the one click that has to work.
+ */
+async function fillNewMenu({ focusFirst = false } = {}) {
+    const seq = ++newMenuSeq;
+    dom.newMenu.replaceChildren(el('div', { class: 'menu-note' }, 'Loading…'));
+
+    let projects;
+    try {
+        projects = await loadProjects();
+    } catch (err) {
+        if (seq === newMenuSeq) {
+            dom.newMenu.replaceChildren(
+                el('div', { class: 'menu-note' }, `Could not list projects: ${err.message}`));
+        }
+        return;
+    }
+    // Closed, or opened again behind this request.
+    if (seq !== newMenuSeq || dom.newMenu.hidden) return;
+
+    const rows = projects.slice(0, NEW_MENU_MAX).map((p, i) => el('button', {
+        class: 'picker-row', type: 'button', role: 'menuitem', tabindex: -1,
+        onclick: () => { showNewMenu(false); openNew({ cwd: p.cwd }); },
+        onkeydown: (e) => onNewMenuKey(e, i),
+    },
+        el('span', {}, clip(p.name, 26)),
+        // Green stays reserved for something actually running, as everywhere
+        // else; the session count is the quieter fact.
+        p.active
+            ? el('span', { class: 'tag' }, `${p.active} live`)
+            : el('span', { class: 'tag dim' }, String(p.sessions)),
+        el('span', { class: 'path' }, clip(p.cwd, 44)),
+    ));
+
+    // The way out of a short list, for a directory with no history. It writes
+    // `newPickerTab`, so the dialog opens on Browse next time too — which is
+    // right: the app already remembers your last tab, and asking for Browse is
+    // a statement about where you are working now.
+    const browse = el('button', {
+        class: 'picker-row', type: 'button', role: 'menuitem', tabindex: -1,
+        onclick: () => { showNewMenu(false); openNew({ tab: 'browse' }); },
+        onkeydown: (e) => onNewMenuKey(e, rows.length),
+    }, el('span', {}, 'Another directory…'));
+
+    // Flat, so every menuitem is a direct child of the menu.
+    dom.newMenu.replaceChildren(
+        ...(rows.length ? rows : [el('div', { class: 'menu-note' }, 'No directories yet.')]),
+        el('div', { class: 'sep' }),
+        browse,
+    );
+    const first = setNewMenuTab(0);
+    if (focusFirst && first) first.focus();
+}
+
+// One tab stop for the whole menu, arrows to move within it — the folder tree's
+// shape (setTreeTab), with wrapping, because a menu is a ring and a tree is not.
+const newMenuRows = () => [...dom.newMenu.querySelectorAll('.picker-row')];
+
+function setNewMenuTab(i = 0) {
+    const rows = newMenuRows();
+    rows.forEach((r, n) => { r.tabIndex = n === i ? 0 : -1; });
+    return rows[i] || null;
+}
+
+function focusNewMenuAt(i) {
+    const rows = newMenuRows();
+    if (!rows.length) return;
+    const n = ((i % rows.length) + rows.length) % rows.length;
+    setNewMenuTab(n);
+    rows[n].focus();
+}
+
+/** Escape is deliberately absent — the central ladder closes the menu. */
+function onNewMenuKey(e, i) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); focusNewMenuAt(i + 1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); focusNewMenuAt(i - 1); }
+    else if (e.key === 'Home') { e.preventDefault(); focusNewMenuAt(0); }
+    else if (e.key === 'End') { e.preventDefault(); focusNewMenuAt(-1); }
+    else if (e.key === 'Tab') showNewMenu(false);
+}
+
+dom.btnNewMenu.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showNewMenu(dom.newMenu.hidden);
+});
+
+// Down on the caret is the keyboard's "open this and start choosing". The fill
+// is async, so the intent is carried into it rather than acted on here.
+dom.btnNewMenu.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    if (dom.newMenu.hidden) showNewMenu(true, { focusFirst: true });
+    else focusNewMenuAt(e.key === 'ArrowDown' ? 0 : -1);
+});
+
+document.addEventListener('click', (e) => {
+    if (!dom.newMenu.hidden && !e.target.closest('.new-wrap')) showNewMenu(false);
+});
 
 // ── the directory picker ─────────────────────────────────────────────────
 //
@@ -4966,7 +5382,9 @@ dom.btnSend.addEventListener('click', () => sendMessage());
 // and the session still asks for whatever its permission mode makes it ask for
 // before anything is pushed or merged.
 dom.btnLgtm.addEventListener('click', () => sendMessage({ text: LGTM_PROMPT, canned: true }));
-dom.btnNew.addEventListener('click', openNew);
+// Wrapped, not passed: openNew now takes an options bag, and a MouseEvent is
+// not one.
+dom.btnNew.addEventListener('click', () => openNew());
 
 dom.btnPin.addEventListener('click', () => {
     if (state.current) setFlags(state.current, { pinned: !state.current.pinned });
@@ -5298,6 +5716,20 @@ dom.liveBody.addEventListener('wheel', onDockWheel, { passive: false });
 dom.btnDash.addEventListener('click', () => showDash(!state.dash.open));
 dom.dashRefresh.addEventListener('click', () => loadDash({ refresh: true }));
 
+dom.btnNotes.addEventListener('click', () => showNotes(!state.notes.open));
+dom.notesNotable.addEventListener('click', () => setNotesScope('notable'));
+dom.notesAll.addEventListener('click', () => setNotesScope('all'));
+dom.notesClear.addEventListener('click', async () => {
+    // No confirm: this throws away a record of things that already happened, not
+    // the things themselves, and everything in it is derived from transcripts
+    // that are still there.
+    try {
+        await del('/api/notifications');
+    } catch (err) {
+        toast(`Could not clear the history: ${err.message}`, 'error');
+    }
+});
+
 // The safe way past the lock: a copy of the conversation with a process of its
 // own. sendMessage already does the whole thing — the original keeps running
 // wherever it is, and the window follows the fork.
@@ -5314,10 +5746,12 @@ dom.lockAnyway.addEventListener('click', () => {
 document.addEventListener('keydown', (e) => {
     // The confirm sits over the new-session dialog, so it answers Escape first.
     if (e.key === 'Escape' && !dom.bellMenu.hidden) { showBell(false); dom.btnBell.focus(); return; }
+    if (e.key === 'Escape' && !dom.newMenu.hidden) { showNewMenu(false); dom.btnNewMenu.focus(); return; }
     if (e.key === 'Escape' && !dom.delScrim.hidden) { closeDelete(); return; }
     if (e.key === 'Escape' && !dom.pairScrim.hidden) { closePair(); dom.btnPair.focus(); return; }
     if (e.key === 'Escape' && !dom.newScrim.hidden) { closeNew(); return; }
     if (e.key === 'Escape' && state.dash.open) { showDash(false); return; }
+    if (e.key === 'Escape' && state.notes.open) { showNotes(false); return; }
     // Out of focus mode before out of the board: focus mode is the deeper state,
     // and leaving it should not also take the board away.
     if (e.key === 'Escape' && state.focus) { setFocus(false); return; }
@@ -5326,13 +5760,14 @@ document.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); dom.search.focus(); }
     if ((e.ctrlKey || e.metaKey) && e.key === 'n') { e.preventDefault(); openNew(); }
 
-    // The three things `main` can show. Ctrl rather than a bare digit because
+    // The four things `main` can show. Ctrl rather than a bare digit because
     // the composer is a textarea and these have to work while it has the focus.
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && '123'.includes(e.key)) {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && '1234'.includes(e.key)) {
         e.preventDefault();
-        if (e.key === '1') { showLive(false); showDash(false); }
+        if (e.key === '1') { showLive(false); showDash(false); showNotes(false); }
         else if (e.key === '2') showLive(true);
-        else showDash(true);
+        else if (e.key === '3') showDash(true);
+        else showNotes(true);
     }
 });
 
@@ -5437,9 +5872,10 @@ paintDockButton();      // the remembered arrangement, before anything is drawn
 restoreView();          // and where we were, from the address that survived the refresh
 primeWaiting();
 refreshDevBrowser();
-// Restore the pane before the first session lands, so it opens with the window
-// already the right shape rather than growing one out from under the transcript.
-showTerm(termOpen());
+// Nothing to restore here any more: the pane belongs to a session, and the
+// first beginOpen is what shows it — for the session it was opened in. The
+// window-wide flag this used to read is dropped so it cannot come back.
+try { localStorage.removeItem('termOpen'); } catch { /* storage unavailable */ }
 setInterval(refreshDevBrowser, 20_000);
 // Not while a chip is armed or working: rebuilding the strip there would either
 // take back a stop the user is halfway through asking for, or drop the label off
@@ -5454,6 +5890,11 @@ setInterval(() => {
 // board is actually on screen.
 setTimeout(() => loadDash(), 3000);
 setInterval(() => { if (state.dash.open) loadDash(); }, 60_000);
+
+// Same reasoning for the History badge, and the same delay: the number of things
+// that wanted you while this window was shut is the one piece of news the button
+// carries, and nothing else would go and find it out.
+setTimeout(() => loadNotes(), 3200);
 
 // A running subagent writes to its own file, which the parent transcript says
 // nothing about — so the only way its activity line moves is to go and look.

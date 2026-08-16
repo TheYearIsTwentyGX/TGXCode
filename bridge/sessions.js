@@ -215,6 +215,7 @@ class SessionIndex extends EventEmitter {
         for (const rec of this.sessions.values()) {
             const m = rec.meta;
             if (project && m.projectCwd !== project) continue;
+            if (inTemp(m)) continue;
             if (!includeTest && this.flags && this.flags.test.has(m.sessionId)) continue;
             if (q) {
                 const hay = [m.title, m.firstPrompt, m.lastPrompt, m.cwd,
@@ -289,6 +290,7 @@ class SessionIndex extends EventEmitter {
     projects() {
         const byCwd = new Map();
         for (const rec of this.sessions.values()) {
+            if (inTemp(rec.meta)) continue;
             const cwd = rec.meta.projectCwd || rec.meta.cwd;
             if (!cwd) continue;
             const cur = byCwd.get(cwd) || {
@@ -557,4 +559,43 @@ function projectName(cwd) {
     return parts[parts.length - 1] || cwd;
 }
 
-module.exports = { SessionIndex, projectName, ACTIVE_WINDOW_MS };
+/**
+ * Scratch space is not work.
+ *
+ * Agents run in /tmp constantly — a probe, a scratchpad a hook made, one of the
+ * per-session /tmp/claude-<uid>/… directories — and every one of them arrived in
+ * the rail as a project of its own, sitting beside real checkouts. Worse, they
+ * are by definition recent, so the newest of them became the directory the new
+ * session dialog offered first.
+ *
+ * The transcripts stay indexed and reachable by id; this decides only what the
+ * *lists* offer, exactly as the `test` flag does.
+ *
+ * /tmp itself counts and /tmp/anything counts; /tmpfoo does not, which is why
+ * the separator is spelled out rather than left to startsWith.
+ *
+ * Deliberately the literal path and not os.tmpdir(): that reads TMPDIR from the
+ * environment the *bridge* was launched in, not the one the session ran in, so
+ * two bridges over the same ~/.claude/projects could disagree about the same
+ * transcript.
+ */
+const TEMP_ROOT = '/tmp';
+
+function isTemp(p) {
+    return !!p && (p === TEMP_ROOT || p.startsWith(`${TEMP_ROOT}/`));
+}
+
+/**
+ * Does this session live in scratch space, by either path it carries?
+ *
+ * Both, because the two differ for a worktree session and each one is what some
+ * surface shows: `cwd` is the rail's label and what the dashboard groups by,
+ * `projectCwd` is what projects() keys on. It does not catch a session that
+ * merely started in /tmp and walked into a checkout — trailCheckout() resolves
+ * projectCwd to the checkout and cwd follows it, so neither field is /tmp.
+ */
+function inTemp(meta) {
+    return isTemp(meta.projectCwd) || isTemp(meta.cwd);
+}
+
+module.exports = { SessionIndex, projectName, isTemp, ACTIVE_WINDOW_MS };
