@@ -118,13 +118,34 @@
   </header>
 
   <nav class="rail" aria-label="Sessions">
+    <!-- The rail's one control, split. The wide half is the everyday act. The
+         narrow half is the dialog's Recent tab spent once instead of every time,
+         for the three or four directories you are actually in this week — it
+         answers "where" and then hands over to the same dialog, because the
+         first message still has to be typed. -->
     <div class="rail-head">
-      <button id="btn-new" class="btn-new" type="button">
-        <svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-          <path d="M8 2.5v11M2.5 8h11" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-        </svg>
-        New session
-      </button>
+      <div class="new-wrap">
+        <button id="btn-new" class="btn-new" type="button">
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M8 2.5v11M2.5 8h11" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          New session
+        </button>
+        <button id="btn-new-menu" class="btn-new-caret" type="button"
+                aria-haspopup="menu" aria-expanded="false" aria-controls="new-menu"
+                aria-label="Start in a recent directory"
+                title="Start in a recent directory">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="m4 6 4 4 4-4" stroke="currentColor" stroke-width="1.8"
+                  stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+
+        <!-- A list of actions, so role="menu" rather than the bell's dialog:
+             it is what makes arrow keys the expected way through it. -->
+        <div id="new-menu" class="new-menu" role="menu"
+             aria-label="Recent directories" hidden></div>
+      </div>
     </div>
     <div id="rail" class="rail-scroll"></div>
   </nav>

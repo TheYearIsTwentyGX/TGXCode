@@ -140,7 +140,7 @@ const dom = {};
 for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-sub',
     'channels', 'scroll', 'log', 'status-line', 'status-text', 'btn-stop', 'input',
     'btn-send', 'btn-lgtm', 'queue', 'queue-list', 'queue-count', 'queue-clear',
-    'model', 'perm', 'btn-new', 'db-status', 'db-label', 'toasts',
+    'model', 'perm', 'btn-new', 'btn-new-menu', 'new-menu', 'db-status', 'db-label', 'toasts',
     'btn-bell', 'bell-menu', 'opt-desktop', 'opt-sound', 'bell-note', 'bell-try',
     'btn-pin', 'btn-folder', 'btn-term', 'btn-archive', 'btn-delete', 'turns', 'turn-pop',
     'term-pane', 'term-grip', 'term-dir', 'term-moved', 'term-body', 'term-restart', 'term-close',
@@ -2236,6 +2236,10 @@ function setFocus(on) {
     if (on) dom.app.dataset.focus = '1';
     else delete dom.app.dataset.focus;
 
+    // Focus mode hides the rail, and with it the menu — but not its state, which
+    // would come back open and out of step with the caret.
+    if (on) showNewMenu(false);
+
     dom.liveFocus.setAttribute('aria-pressed', String(on));
     dom.liveFocus.classList.toggle('on', on);
     // Focus mode is the board, full height, so turning it on turns the board on.
@@ -3385,7 +3389,10 @@ function renderBell() {
 function showBell(on) {
     dom.bellMenu.hidden = !on;
     dom.btnBell.setAttribute('aria-expanded', String(on));
-    if (on) renderBell();
+    // Both triggers stop the click from reaching the document, so neither
+    // popover's outside-click listener sees the other one being opened. Without
+    // this the two sit on screen together.
+    if (on) { renderBell(); showNewMenu(false); }
 }
 
 dom.btnBell.addEventListener('click', (e) => {
@@ -4565,17 +4572,35 @@ function startTermDrag(e) {
 
 // ── new session ──────────────────────────────────────────────────────────
 
-async function openNew() {
+/**
+ * Every directory a session has run in, newest first — the one list the dialog's
+ * Recent tab and the rail's split menu both answer from.
+ */
+async function loadProjects() {
+    const { projects } = await get('/api/projects');
+    // The same list, keyed by path, so a browsed row can say "you have worked
+    // here" without a second request. It quietly joins the two tabs together.
+    state.browse.known = new Map(projects.map(p => [p.cwd, p]));
+    return projects;
+}
+
+/**
+ * @param {{cwd?: string, tab?: 'recent'|'browse'}} [opts] `cwd` is a caller that
+ *   has already answered "where" — the split menu passes the row you clicked.
+ *   Without one the dialog opens where it always has: the session on screen,
+ *   else the most recent project.
+ */
+async function openNew({ cwd = '', tab = null } = {}) {
     dom.newScrim.hidden = false;
     dom.newPrompt.value = '';
     growPrompt();
     dom.newTest.checked = false;
-    dom.newCwd.value = state.current
+    dom.newCwd.value = cwd || (state.current
         ? (state.current.worktree ? state.current.worktree.originalCwd : state.current.cwd)
-        : '';
+        : '');
     cancelMkdir();
     try {
-        const { projects } = await get('/api/projects');
+        const projects = await loadProjects();
         dom.newPicker.replaceChildren(...projects.slice(0, 40).map(p =>
             el('button', {
                 class: 'picker-row', type: 'button',
@@ -4585,18 +4610,137 @@ async function openNew() {
                 el('span', { class: 'path' }, clip(p.cwd, 44)),
                 p.active ? el('span', { class: 'tag' }, `${p.active} live`) : null,
             )));
+        // Only for a dialog that opened with nothing in the box. A caller that
+        // named a directory has already answered this, and the box was filled
+        // before the await precisely so this cannot overwrite it.
         if (!dom.newCwd.value && projects[0]) dom.newCwd.value = projects[0].cwd;
-        // The same list, keyed by path, so a browsed row can say "you have worked
-        // here" without a second request. It quietly joins the two tabs together.
-        state.browse.known = new Map(projects.map(p => [p.cwd, p]));
     } catch (err) {
         toast(`Could not list projects: ${err.message}`, 'error');
     }
-    setPickerTab(state.browse.tab, { load: true });
+    setPickerTab(tab || state.browse.tab, { load: true });
     dom.newPrompt.focus();
 }
 
 function closeNew() { dom.newScrim.hidden = true; }
+
+// ── the recent-directories menu ──────────────────────────────────────────
+
+// Six, so the whole menu — including the way out of it — fits without
+// scrolling. The dialog's Recent tab is still there for the long tail; this is
+// meant to be the handful of directories you are actually in this week.
+const NEW_MENU_MAX = 6;
+let newMenuSeq = 0;
+
+function showNewMenu(on, { focusFirst = false } = {}) {
+    dom.newMenu.hidden = !on;
+    dom.btnNewMenu.setAttribute('aria-expanded', String(on));
+    if (on) { showBell(false); fillNewMenu({ focusFirst }); }
+}
+
+/**
+ * Asked for on every open rather than cached.
+ *
+ * The endpoint is one pass over an index already in memory; the ordering is the
+ * whole point of the menu and moves whenever a session writes a line; and
+ * `state.browse.known` — the only list this page holds — is filled solely by
+ * openNew(), so a cache-first menu would be empty on a fresh load where the
+ * dialog has never been opened. That is the one click that has to work.
+ */
+async function fillNewMenu({ focusFirst = false } = {}) {
+    const seq = ++newMenuSeq;
+    dom.newMenu.replaceChildren(el('div', { class: 'menu-note' }, 'Loading…'));
+
+    let projects;
+    try {
+        projects = await loadProjects();
+    } catch (err) {
+        if (seq === newMenuSeq) {
+            dom.newMenu.replaceChildren(
+                el('div', { class: 'menu-note' }, `Could not list projects: ${err.message}`));
+        }
+        return;
+    }
+    // Closed, or opened again behind this request.
+    if (seq !== newMenuSeq || dom.newMenu.hidden) return;
+
+    const rows = projects.slice(0, NEW_MENU_MAX).map((p, i) => el('button', {
+        class: 'picker-row', type: 'button', role: 'menuitem', tabindex: -1,
+        onclick: () => { showNewMenu(false); openNew({ cwd: p.cwd }); },
+        onkeydown: (e) => onNewMenuKey(e, i),
+    },
+        el('span', {}, clip(p.name, 26)),
+        // Green stays reserved for something actually running, as everywhere
+        // else; the session count is the quieter fact.
+        p.active
+            ? el('span', { class: 'tag' }, `${p.active} live`)
+            : el('span', { class: 'tag dim' }, String(p.sessions)),
+        el('span', { class: 'path' }, clip(p.cwd, 44)),
+    ));
+
+    // The way out of a short list, for a directory with no history. It writes
+    // `newPickerTab`, so the dialog opens on Browse next time too — which is
+    // right: the app already remembers your last tab, and asking for Browse is
+    // a statement about where you are working now.
+    const browse = el('button', {
+        class: 'picker-row', type: 'button', role: 'menuitem', tabindex: -1,
+        onclick: () => { showNewMenu(false); openNew({ tab: 'browse' }); },
+        onkeydown: (e) => onNewMenuKey(e, rows.length),
+    }, el('span', {}, 'Another directory…'));
+
+    // Flat, so every menuitem is a direct child of the menu.
+    dom.newMenu.replaceChildren(
+        ...(rows.length ? rows : [el('div', { class: 'menu-note' }, 'No directories yet.')]),
+        el('div', { class: 'sep' }),
+        browse,
+    );
+    const first = setNewMenuTab(0);
+    if (focusFirst && first) first.focus();
+}
+
+// One tab stop for the whole menu, arrows to move within it — the folder tree's
+// shape (setTreeTab), with wrapping, because a menu is a ring and a tree is not.
+const newMenuRows = () => [...dom.newMenu.querySelectorAll('.picker-row')];
+
+function setNewMenuTab(i = 0) {
+    const rows = newMenuRows();
+    rows.forEach((r, n) => { r.tabIndex = n === i ? 0 : -1; });
+    return rows[i] || null;
+}
+
+function focusNewMenuAt(i) {
+    const rows = newMenuRows();
+    if (!rows.length) return;
+    const n = ((i % rows.length) + rows.length) % rows.length;
+    setNewMenuTab(n);
+    rows[n].focus();
+}
+
+/** Escape is deliberately absent — the central ladder closes the menu. */
+function onNewMenuKey(e, i) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); focusNewMenuAt(i + 1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); focusNewMenuAt(i - 1); }
+    else if (e.key === 'Home') { e.preventDefault(); focusNewMenuAt(0); }
+    else if (e.key === 'End') { e.preventDefault(); focusNewMenuAt(-1); }
+    else if (e.key === 'Tab') showNewMenu(false);
+}
+
+dom.btnNewMenu.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showNewMenu(dom.newMenu.hidden);
+});
+
+// Down on the caret is the keyboard's "open this and start choosing". The fill
+// is async, so the intent is carried into it rather than acted on here.
+dom.btnNewMenu.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    if (dom.newMenu.hidden) showNewMenu(true, { focusFirst: true });
+    else focusNewMenuAt(e.key === 'ArrowDown' ? 0 : -1);
+});
+
+document.addEventListener('click', (e) => {
+    if (!dom.newMenu.hidden && !e.target.closest('.new-wrap')) showNewMenu(false);
+});
 
 // ── the directory picker ─────────────────────────────────────────────────
 //
@@ -4914,7 +5058,9 @@ dom.btnSend.addEventListener('click', () => sendMessage());
 // and the session still asks for whatever its permission mode makes it ask for
 // before anything is pushed or merged.
 dom.btnLgtm.addEventListener('click', () => sendMessage({ text: LGTM_PROMPT, canned: true }));
-dom.btnNew.addEventListener('click', openNew);
+// Wrapped, not passed: openNew now takes an options bag, and a MouseEvent is
+// not one.
+dom.btnNew.addEventListener('click', () => openNew());
 
 dom.btnPin.addEventListener('click', () => {
     if (state.current) setFlags(state.current, { pinned: !state.current.pinned });
@@ -5262,6 +5408,7 @@ dom.lockAnyway.addEventListener('click', () => {
 document.addEventListener('keydown', (e) => {
     // The confirm sits over the new-session dialog, so it answers Escape first.
     if (e.key === 'Escape' && !dom.bellMenu.hidden) { showBell(false); dom.btnBell.focus(); return; }
+    if (e.key === 'Escape' && !dom.newMenu.hidden) { showNewMenu(false); dom.btnNewMenu.focus(); return; }
     if (e.key === 'Escape' && !dom.delScrim.hidden) { closeDelete(); return; }
     if (e.key === 'Escape' && !dom.pairScrim.hidden) { closePair(); dom.btnPair.focus(); return; }
     if (e.key === 'Escape' && !dom.newScrim.hidden) { closeNew(); return; }
