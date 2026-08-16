@@ -69,8 +69,13 @@ HEAD and moves you there.
   working directory; an agent launched in `~` reports "not in a git repository
   and no WorktreeCreate hooks are configured", which looks like a missing hook
   but is just the wrong directory.
-- `baseRef` is pinned to `head` in `.claude/settings.json` because this repo has
-  no remote — there is no `origin/main` to branch from.
+- `baseRef` is pinned to `head` in `.claude/settings.json`, so a worktree branches
+  from local HEAD rather than `origin/<default-branch>`. The pin dates from when
+  this repo had no remote. It has one now — `origin` is
+  `github.com/TheYearIsTwentyGX/TGXCode` and `main` tracks `origin/main` — so the
+  `fresh` default would resolve too. Leaving it at `head` keeps a worktree based on
+  the checkout in front of you, which is the predictable thing while several agents
+  are committing to main; the choice is now a real one rather than forced.
 - **Enter it before you start editing, not after.** Moving mid-session works, but
   every edit you have already made stays behind in the main checkout and has to
   be carried across by hand — which is a merge you did not need to do.
@@ -83,6 +88,36 @@ Not everything is an edit. Reading transcripts, diagnosing, querying a bridge an
 running `npm run dev` are fine from wherever you are. The rule is about writing
 to tracked files: if you are about to change one, be in a worktree. When in
 doubt, make one — it costs a second and nothing is lost by it.
+
+## Landing what you finished
+
+`npm run land`, from the worktree you worked in, merges the pull request for the
+branch you are on and then fast-forwards the main checkout at
+`~/Other/claude-sessions` — so the checkout the user actually runs the app from
+has your work in it, rather than the work sitting on origin where nobody sees it.
+
+```bash
+npm run land -- --status    # what would land, and whether it can
+npm run land -- --dry-run   # say what would happen, change nothing
+npm run land                # merge the PR, then pull the main checkout
+```
+
+It refuses rather than guesses, and every refusal says what to do next:
+uncommitted files in your worktree (they are not in the PR, so landing would
+leave them behind), commits you have not pushed, a PR that conflicts or is
+blocked, a main checkout that is dirty or on some other branch. A refusal that
+comes *after* the merge says so, so you always know which half happened.
+
+**It does not restart the bridge.** The everyday instance usually has live turns
+in it and a restart ends them, so picking up merged code stays the user's call.
+When the merge touched `bridge/` the script says the running bridge is now on old
+code and leaves `npm run restart` to them; `--restart` opts in, and delegates to
+the script that has the turn-in-flight guard rather than reimplementing it.
+
+It is also the sanctioned way to reach the main checkout at all: a worktree-isolated
+session is refused `git -C ~/Other/claude-sessions` by its own harness, which is
+why the gap existed. The script is narrow so that being sanctioned is safe — it
+fast-forwards and nothing else, and never commits there.
 
 ## Clean up the sessions you start
 
@@ -150,6 +185,23 @@ The bridge also refuses to bind a non-loopback interface without
 remote callers. See `docs/remote.md` for the reasoning and `docs/api.md` for the
 contract.
 
+## There are tests, and they are quick
+
+```bash
+npm test               # starts a bridge on a free port, runs everything, stops it
+npm test -- 45901      # run against a bridge you already have on that port
+```
+
+`test/run.js` refuses 45888 the same way everything else here does — these tests
+start and delete sessions, so pointing them at the everyday instance is exactly
+the accident the rest of this file is about.
+
+The suite is `auth.test.js` on its own, plus four that need a live bridge —
+`gate`, `browser`, `refusals`, `unpaired`. Between them they cover the token, what
+a remote caller is refused, and what an unpaired phone sees before and after
+pairing. If you touch `bridge/auth.js` or any route's local/remote rule, run it:
+that is the part of this codebase with tests around it.
+
 ## Never rebuild without asking
 
 `install.ps1` force-closes any running ClaudeSessions and replaces the
@@ -167,6 +219,17 @@ other, since the staging directory is wiped and rebuilt.
 - Running `npm run dev` and restarting it as often as you like.
 - Reading transcripts: both instances read the same `~/.claude/projects`, so a
   session you start in dev is visible in the everyday window and vice versa.
+
+## Finding your way around
+
+`README.md` **§Layout** is the file map — one line per module, and it is kept
+current. `docs/api.md` is the bridge API as a contract, and `docs/remote.md` the
+reasoning behind the local/remote split; `docs/plans/` holds the design notes the
+features were built from.
+
+Every module under `bridge/` opens with a header comment saying why it exists and
+what it decided — read that before grepping the body. `server.js` is 71KB and
+sectioned by comment headers, so search for the section name rather than scrolling.
 
 ## Notes that save time
 
@@ -187,6 +250,11 @@ other, since the staging directory is wiped and rebuilt.
 - **A login shell has neither node nor `claude` on PATH** — nvm and `~/.local/bin`
   both come from `~/.bashrc`, which `bash -lc` never reads. `bridge/launch.sh`
   resolves node itself; that is why it exists.
+- **Commit messages are prose, not prefixes.** The log is uniform: an imperative
+  sentence-case subject describing the change as the user meets it — "Give each
+  session its own terminal pane", "Let an approval card wait as long as you do" —
+  and a body explaining why, including what was rejected and what still holds. No
+  `feat:` or `fix:` prefixes appear anywhere in this repo.
 - **Killing a bridge kills its turns.** This is measured, not assumed: `claude`
   reads stdin for input, so when the bridge exits and that pipe closes it treats
   it as end-of-input and stops, mid-turn. Running it detached with its output on
