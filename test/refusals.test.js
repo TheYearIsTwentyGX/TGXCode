@@ -110,6 +110,16 @@ const HOME = os.homedir();
         headers: LOCAL, body: { cwd: `${HOME}-evil`, prompt: 'x' },
     })).status, 400);
     check('listing /etc', (await call('GET', '/api/fs?path=/etc', { headers: LOCAL })).status, 403);
+    // Same rule, same reason: a directory no session may start in is one whose
+    // commands are nobody's business either, and the route takes a path.
+    check('commands for /etc', (await call('GET', '/api/commands?cwd=/etc',
+        { headers: LOCAL })).status, 403);
+    check('commands for home', (await call('GET',
+        `/api/commands?cwd=${encodeURIComponent(HOME)}`, { headers: LOCAL })).status, 200);
+    // Naming neither is a bad request, not an empty answer — the two parameters
+    // are the whole interface.
+    check('commands with no target', (await call('GET', '/api/commands',
+        { headers: LOCAL })).status, 400);
     check('listing home', (await call('GET', `/api/fs?path=${encodeURIComponent(HOME)}`, { headers: LOCAL })).status, 200);
     const home = await call('GET', `/api/fs?path=${encodeURIComponent(HOME)}`, { headers: LOCAL });
     check('and home reports no parent to climb to', home.body.parent, null);

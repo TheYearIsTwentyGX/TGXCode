@@ -159,6 +159,29 @@ Also pushed as the `overview` SSE event, so most clients never call this — but
 the right answer to "what is happening right now", and anything that wants that
 should read it rather than growing a second answer.
 
+### `GET /api/commands?session=<id>` · `GET /api/commands?cwd=<path>`
+
+What slash commands a working directory can run, for a composer that completes
+them: `{ cwd, at, exact, source, commands: [{ name, description?, argumentHint? }] }`.
+
+Addressed either way because both callers exist — a composer knows a session id
+and a dialog that has not started one knows only a path. The session form
+resolves the cwd exactly as `POST /api/sessions/:id/send` does, which a client
+cannot do for itself, having no way to ask whether a path still exists. The
+`cwd` form is roots-scoped like `GET /api/fs`.
+
+The list is whatever the CLI reported in its `system`/`init` message, **minus
+`terminal_slash_commands`** — commands whose UX is bound to a terminal, which
+that field exists to let remote UIs hide. Filtered here rather than by the
+client, so every surface gets it. `description` and `argumentHint` are read from
+the command's own frontmatter and are simply absent for the built-ins, which
+have no file.
+
+`source` is `runner` (a process reported it this bridge lifetime), `cache`
+(read back from disk at startup), `fallback` (another directory's list, with
+`exact: false`) or `none`. An unknown directory is `commands: []` and 200, never
+a 404: the caller pressed a key, and an empty list is a real answer.
+
 ## The live channel
 
 `GET /api/events` — SSE, `text/event-stream`. Then tell it what to follow:
@@ -193,6 +216,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `turn-complete` | `{sessionId, isError, detail, costUsd, durationMs, …}` |
 | `send-failed` | `{sessionId, kind, message, unsent: [text]}` — hand the text back to the user |
 | `session-forked` | `{from, to}` — follow the new id |
+| `commands` | `{cwd, at}` — that directory's slash commands changed; drop what you cached |
 
 `runner-status`: `{sessionId, state, activity, model, permissionMode, cwd, error,
 errorKind, queued, queue[], pendingPermission, canPrompt, busySince}` where `state`

@@ -275,8 +275,17 @@
           </div>
 
           <div class="input-row">
+            <!-- Slash-command completion. Anchored to the input row and drawn
+                 upward, so it opens into the log rather than pushing the box
+                 you are typing in down the screen. Focus never moves here —
+                 the caret stays in the textarea and the highlight is carried
+                 by aria-activedescendant, because the list filters as you
+                 type and taking focus would end the typing. -->
+            <div id="cmd-menu" class="cmd-menu" role="listbox" hidden
+                 aria-label="Slash commands"></div>
             <textarea id="input" rows="1" placeholder="Send a message to this session…"
-                      aria-label="Message"></textarea>
+                      aria-label="Message" role="combobox" aria-expanded="false"
+                      aria-controls="cmd-menu" aria-autocomplete="list"></textarea>
             <button id="btn-send" class="btn-send" type="button" disabled>Send</button>
             <!-- The end of a review in one click. It sends a written instruction
                  like any other message, so the transcript records what was asked

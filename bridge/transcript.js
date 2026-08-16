@@ -587,12 +587,17 @@ function parseTaskNotification(text) {
 }
 
 // Slash-command invocations arrive as XML-ish tags inside a user message.
+//
+// The tag carries the leading slash — `<command-name>/context</command-name>` —
+// and every renderer puts one back on, so the name is stored without it and
+// there is one answer to whether it is there. Left in, the log drew `//context`.
+// `<command-args>` is absent for a command that takes none.
 function parseCommand(text) {
     if (!text) return null;
     const name = /<command-name>([\s\S]*?)<\/command-name>/.exec(text);
     if (!name) return null;
     const args = /<command-args>([\s\S]*?)<\/command-args>/.exec(text);
-    return { name: name[1].trim(), args: args ? args[1].trim() : '' };
+    return { name: name[1].trim().replace(/^\/+/, ''), args: args ? args[1].trim() : '' };
 }
 
 /** The renderable half of a tool call: status, output, diff, subagent link. */

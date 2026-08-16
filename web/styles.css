@@ -1998,7 +1998,63 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 .lock-btn:hover { background: var(--s5); }
 .lock-btn.primary { background: var(--blue-cont); color: var(--blue); }
 
+/* ── slash-command completion ─────────────────────────────────────────────
+   The new-session menu's shape, anchored the other way up: it hangs off the
+   bottom of the input row and grows into the log, because the composer is
+   already at the foot of the window and a menu below it would be off-screen. */
+.cmd-menu {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 0;
+    right: 0;
+    z-index: 60;
+    /* Eight rows and no more — see CMD_MAX in app.js. Tall enough to be worth
+       arrowing through, short enough not to bury the turn you are replying to. */
+    max-height: 320px;
+    overflow-y: auto;
+    padding: 6px;
+    background: var(--s3);
+    border-radius: var(--r);
+    box-shadow: 0 10px 30px #000a;
+    animation: bell-in var(--t-fast) var(--ease);
+    transform-origin: bottom left;
+}
+.cmd-menu[hidden] { display: none; }
+
+.cmd-menu .picker-row { gap: 10px; padding: 7px 10px; }
+.cmd-menu .picker-row:hover { background: var(--s4); }
+/* aria-selected, not aria-current: the folder picker already claims that one
+   for "where the input points", which is a different question from "which row
+   would Enter take". Both can be on screen at once. */
+.cmd-menu .picker-row[aria-selected="true"] { background: var(--blue-cont); color: var(--blue); }
+.cmd-menu .picker-row .name { font-family: var(--mono); font-size: 12.5px; flex: none; }
+.cmd-menu .picker-row .desc {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: 12px;
+    color: var(--text-4);
+}
+.cmd-menu .picker-row .hint {
+    margin-left: auto;
+    flex: none;
+    padding-left: 8px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--text-4);
+}
+.cmd-menu .menu-note {
+    padding: 9px 10px;
+    font: 400 12px/1.5 var(--sans);
+    color: var(--text-4);
+}
+
+@media (prefers-reduced-motion: reduce) { .cmd-menu { animation: none; } }
+
 .input-row {
+    /* The menu above is absolute against this. */
+    position: relative;
     display: flex;
     align-items: flex-end;
     gap: 10px;

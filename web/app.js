@@ -89,6 +89,11 @@ const state = {
     queue: [],              // the current session's waiting messages, from the bridge
     queueDrag: null,        // id of the chip being dragged
     queueOpen: new Set(),   // ids of chips expanded to their full text
+    // Slash commands the composer can complete, per working directory — the
+    // bridge keys them that way because that is what decides them. Held here so
+    // that pressing `/` draws from memory rather than waiting on a fetch; the
+    // `commands` SSE event drops an entry when a process reports a new list.
+    commands: new Map(),    // cwd -> {commands, at, exact, loading}
     queueSig: '',           // what the chips were last built from, to avoid churn
     queueFocus: null,       // the chip holding the queue's single tab stop
     ask: null,              // the approval this session is blocked on, if any
@@ -144,7 +149,7 @@ const $ = (id) => document.getElementById(id);
 const dom = {};
 for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-sub',
     'channels', 'scroll', 'log', 'status-line', 'status-text', 'btn-stop', 'input',
-    'btn-send', 'btn-lgtm', 'queue', 'queue-list', 'queue-count', 'queue-clear',
+    'btn-send', 'btn-lgtm', 'cmd-menu', 'queue', 'queue-list', 'queue-count', 'queue-clear',
     'model', 'perm', 'btn-new', 'btn-new-menu', 'new-menu', 'db-status', 'db-label', 'toasts',
     'btn-bell', 'bell-menu', 'opt-desktop', 'opt-sound', 'bell-note', 'bell-try',
     'btn-pin', 'btn-folder', 'btn-term', 'btn-archive', 'btn-delete', 'turns', 'turn-pop',
@@ -714,6 +719,9 @@ async function openSession(id, { quiet = false, keepDash = false } = {}) {
     if (state.current && state.current.sessionId === id) { takePendingJump(); return true; }
     // Keep whatever is half-typed for the session being left behind.
     if (state.current) saveDraft(state.current.sessionId, dom.input.value);
+    // The menu belongs to the directory being left, and the draft arriving in
+    // the box is not something anybody typed.
+    closeCommandMenu();
 
     // Switching should feel like switching, not like waiting: a long transcript
     // is megabytes and the fetch is most of the delay. The rail summary is the
@@ -3859,6 +3867,16 @@ function connect() {
         toast(n.text, n.level === 'warn' ? 'warn' : 'info', 7000);
     });
 
+    // A process reported a command list that differs from the one we hold —
+    // a plugin installed, a command file added. Dropped rather than refetched:
+    // the list is only wanted when somebody presses `/`, and most windows never
+    // will for this directory.
+    es.addEventListener('commands', (e) => {
+        const d = JSON.parse(e.data);
+        state.commands.delete(d.cwd);
+        if (cmdOpen()) updateCommandMenu();
+    });
+
     // The bridge filed a row. Kept up to date rather than re-fetched, so a
     // history left open in a second window stays live.
     es.addEventListener('notification', (e) => {
@@ -5456,6 +5474,239 @@ dom.input.addEventListener('keydown', (e) => {
     if (e.shiftKey && !(e.ctrlKey || e.metaKey)) return;
     e.preventDefault();
     sendMessage();
+});
+
+// ── slash-command completion ─────────────────────────────────────────────
+//
+// Typing `/` in the composer offers the commands this session can actually run.
+// The list comes from the bridge, which gets it from the CLI's own init message
+// — so it covers built-ins, plugins, skills and the project's own commands
+// without this file knowing anything about how any of them resolve.
+//
+// What is inserted is plain text: `/name `. Claude Code expands it on the way
+// in, and the transcript comes back with the command already parsed, which is
+// why renderUser has drawn these properly since long before you could type one.
+
+const CMD_MAX = 8;
+
+// The menu is open **iff** the whole composer is one slash-word. Not "a `/` was
+// pressed": deriving it from the text rather than from a keystroke means paste,
+// IME and autocorrect all behave, backspacing from `/revi` to `/re` re-opens it
+// with no special case, and there is no open/closed flag to fall out of sync
+// with what is on screen.
+//
+// Anchoring to the *whole* value rather than to a line start is not a
+// simplification — it is the rule the CLI enforces. Its dispatch tests
+// `text.startsWith("/")` on the last text block, untrimmed, so a `/command` on
+// line three of a message is sent as prose. A menu that offered one there would
+// be promising something that will not happen.
+const CMD_RE = /^\/[A-Za-z0-9_:-]*$/;
+
+const cmd = { rows: [], index: 0, seq: 0 };
+
+const cmdOpen = () => !dom.cmdMenu.hidden;
+
+/** The typed fragment after the slash, or null when this is not a command. */
+function cmdFragment() {
+    const v = dom.input.value;
+    return CMD_RE.test(v) ? v.slice(1) : null;
+}
+
+/**
+ * Cached per working directory, because that is what decides the answer — every
+ * session in a checkout shares a list, so one session's fetch warms the rest.
+ */
+async function loadCommands() {
+    const cur = state.current;
+    if (!cur) return [];
+    const key = cur.cwd || cur.sessionId;
+    const hit = state.commands.get(key);
+    if (hit) return hit.commands;
+
+    const r = await get(`/api/commands?session=${cur.sessionId}`);
+    const entry = { commands: r.commands || [], at: r.at, exact: r.exact };
+    state.commands.set(key, entry);
+    // The bridge resolves a cwd that no longer exists to the project directory,
+    // so its answer can differ from the summary's. Store both, and the SSE
+    // event — which speaks in the bridge's cwd — invalidates the right one.
+    if (r.cwd) state.commands.set(r.cwd, entry);
+    return entry.commands;
+}
+
+/** Prefix matches first, then anything containing the fragment. */
+function matchCommands(items, frag) {
+    if (!frag) return items.slice(0, CMD_MAX);
+    const q = frag.toLowerCase();
+    const pre = [];
+    const sub = [];
+    for (const c of items) {
+        const name = c.name.toLowerCase();
+        // Also match the part after the namespace: a plugin command reads as
+        // `code-review:code-review` but everyone thinks of it as `/code-review`.
+        const tail = name.slice(name.lastIndexOf(':') + 1);
+        if (name.startsWith(q) || tail.startsWith(q)) pre.push(c);
+        else if (name.includes(q)) sub.push(c);
+    }
+    return pre.concat(sub).slice(0, CMD_MAX);
+}
+
+function closeCommandMenu() {
+    if (dom.cmdMenu.hidden) return;
+    dom.cmdMenu.hidden = true;
+    dom.cmdMenu.replaceChildren();
+    dom.input.setAttribute('aria-expanded', 'false');
+    dom.input.removeAttribute('aria-activedescendant');
+    cmd.rows = [];
+    cmd.index = 0;
+}
+
+/** Re-read the composer and show, filter or hide the menu to match. */
+async function updateCommandMenu() {
+    const frag = cmdFragment();
+    if (frag === null || !state.current) return closeCommandMenu();
+
+    const seq = ++cmd.seq;
+    const key = state.current.cwd || state.current.sessionId;
+    let items = state.commands.has(key) ? state.commands.get(key).commands : null;
+
+    if (!items) {
+        // First `/` in this directory. Show the box rather than nothing, so a
+        // slow bridge reads as loading instead of as no commands.
+        drawCommandMenu(null, 'Loading commands…');
+        try {
+            items = await loadCommands();
+        } catch {
+            // Not a toast: the person pressed a key, they did not ask for this.
+            if (seq === cmd.seq) drawCommandMenu(null, 'Could not load commands.');
+            return;
+        }
+        // Typed on, or moved away, while that was in flight.
+        if (seq !== cmd.seq) return;
+        if (cmdFragment() === null) return closeCommandMenu();
+    }
+
+    const rows = matchCommands(items, cmdFragment() || '');
+    // Nothing matches, so there is nothing to choose: get out of the way
+    // entirely rather than showing an empty box that also swallows Enter.
+    if (!rows.length) return closeCommandMenu();
+
+    cmd.rows = rows;
+    cmd.index = 0;
+    drawCommandMenu(rows, null);
+}
+
+function drawCommandMenu(rows, note) {
+    // Two popovers on screen at once is nobody's intention. Only on the way
+    // open: this redraws on every keystroke, and the others are already shut.
+    if (dom.cmdMenu.hidden) { showBell(false); showNewMenu(false); }
+
+    // A note is a message, not a list. Clearing the rows behind it matters:
+    // otherwise Enter during "Loading…" would accept whatever the *previous*
+    // fragment had highlighted, which is not what is on screen.
+    if (note) { cmd.rows = []; cmd.index = 0; }
+
+    dom.cmdMenu.replaceChildren(...(note
+        ? [el('div', { class: 'menu-note' }, note)]
+        : rows.map((c, i) => el('button', {
+            class: 'picker-row', type: 'button', role: 'option',
+            id: `cmd-row-${i}`, tabindex: -1,
+            'aria-selected': String(i === cmd.index),
+            // Keeps the caret in the textarea, so clicking a row neither blurs
+            // the box nor fires the blur-to-close below.
+            onmousedown: (e) => e.preventDefault(),
+            onclick: () => acceptCommand(i),
+        },
+        el('span', { class: 'name' }, `/${c.name}`),
+        c.description ? el('span', { class: 'desc' }, clip(c.description, 90)) : null,
+        c.argumentHint ? el('span', { class: 'hint' }, clip(c.argumentHint, 24)) : null,
+        ))));
+
+    dom.cmdMenu.hidden = false;
+    dom.input.setAttribute('aria-expanded', 'true');
+    if (rows && rows.length) paintCommandSelection();
+    else dom.input.removeAttribute('aria-activedescendant');
+}
+
+/** The highlight is a property of the list, never of focus — see below. */
+function paintCommandSelection() {
+    const rows = [...dom.cmdMenu.querySelectorAll('.picker-row')];
+    rows.forEach((r, i) => r.setAttribute('aria-selected', String(i === cmd.index)));
+    const on = rows[cmd.index];
+    if (!on) return;
+    dom.input.setAttribute('aria-activedescendant', on.id);
+    on.scrollIntoView({ block: 'nearest' });
+}
+
+function moveCommandSelection(delta) {
+    const n = cmd.rows.length;
+    if (!n) return;
+    cmd.index = ((cmd.index + delta) % n + n) % n;   // a menu is a ring
+    paintCommandSelection();
+}
+
+/**
+ * Put the command in the box — and never send it.
+ *
+ * One behaviour for every command, including those that take no arguments: a
+ * menu that sometimes sends is a menu that fires `/clear` on a mistyped Enter.
+ * The trailing space is so that arguments can be typed straight on.
+ *
+ * The whole value is replaced, which is safe precisely because the menu is only
+ * open when the whole value was the fragment. Dispatching `input` rather than
+ * calling autoGrow() and saveDraft() by hand runs the listeners that are already
+ * wired to the box, so every draft guarantee holds by construction instead of by
+ * a second copy of the logic that can drift from the first.
+ */
+function acceptCommand(i) {
+    const c = cmd.rows[i == null ? cmd.index : i];
+    if (!c) return;
+    closeCommandMenu();
+    dom.input.value = `/${c.name} `;
+    dom.input.setSelectionRange(dom.input.value.length, dom.input.value.length);
+    dom.input.dispatchEvent(new Event('input'));
+    dom.input.focus();
+}
+
+/**
+ * Keys, on the document in the capture phase.
+ *
+ * Deliberately not a second listener on the textarea: those run in registration
+ * order, so "register ours first" would work today and break silently the day
+ * somebody moves a block in this file. Capturing on an ancestor provably runs
+ * before any listener on the target, so stopping propagation here reliably keeps
+ * Enter-to-send from also firing. The target check keeps this off the queue
+ * chips, whose own Enter/Escape map is a few hundred lines up.
+ */
+document.addEventListener('keydown', (e) => {
+    if (!cmdOpen() || e.target !== dom.input) return;
+    if (e.isComposing || e.keyCode === 229) return;
+    // Open but with nothing to choose — a note, or a list still loading. Every
+    // key belongs to the composer then; swallowing Enter here would lose a
+    // message to a box that had no answer for it.
+    if (!cmd.rows.length) return;
+
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        e.stopPropagation();
+        moveCommandSelection(e.key === 'ArrowDown' ? 1 : -1);
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
+        if (e.shiftKey && e.key === 'Tab') return;   // still a way out of the box
+        e.preventDefault();
+        e.stopPropagation();
+        acceptCommand();
+    } else if (e.key === 'Escape') {
+        // Leaves the text exactly as typed. Stopped so it closes the menu rather
+        // than whatever Escape means to the panel behind it.
+        e.preventDefault();
+        e.stopPropagation();
+        closeCommandMenu();
+    }
+}, true);
+
+dom.input.addEventListener('input', updateCommandMenu);
+dom.input.addEventListener('blur', closeCommandMenu);
+document.addEventListener('click', (e) => {
+    if (cmdOpen() && !e.target.closest('.input-row')) closeCommandMenu();
 });
 
 // Two stops, because the consequences differ. The first asks the turn to end

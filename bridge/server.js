@@ -20,6 +20,7 @@ const { SessionIndex } = require('./sessions');
 const { SessionRegistry } = require('./registry');
 const { RunnerPool, PERMISSION_MODES } = require('./runner');
 const { Flags } = require('./flags');
+const { CommandCache } = require('./commands');
 const { NotificationLog } = require('./notifications');
 const devbrowser = require('./devbrowser');
 const tailscale = require('./tailscale');
@@ -37,6 +38,7 @@ const index = new SessionIndex(flags);
 const registry = new SessionRegistry();
 const pool = new RunnerPool();
 const terminals = new TerminalPool();
+const commands = new CommandCache();
 // Titles are copied onto an entry as it is filed, so the log still reads
 // properly after a session is renamed or deleted; the test flag is asked for at
 // read time, so labelling a session as scratch afterwards takes its rows out of
@@ -825,10 +827,7 @@ async function api(req, res, url, pathname, who) {
 
             const summary = index.summary(sessionId);
             if (!summary) return send(res, 404, { error: 'session not found' });
-            const cwd = summary.cwd && fs.existsSync(summary.cwd)
-                ? summary.cwd
-                : (summary.projectCwd && fs.existsSync(summary.projectCwd)
-                    ? summary.projectCwd : cfg.HOME);
+            const cwd = sessionCwd(summary);
 
             const r = pool.ensure(sessionId, {
                 cwd,
@@ -1100,6 +1099,40 @@ async function api(req, res, url, pathname, who) {
         return send(res, 200, info);
     }
 
+    // --- slash commands (composer completion) ------------------------------
+    //
+    // Addressed by session or by directory, because both callers exist: the
+    // composer knows a session id and nothing else, while a dialog that has not
+    // started one yet knows only a path. Answering both here keeps the cwd
+    // resolution — which needs the filesystem — on this side.
+    if (pathname === '/api/commands' && req.method === 'GET') {
+        const session = url.searchParams.get('session');
+        let cwd;
+
+        if (session) {
+            const summary = index.summary(session);
+            if (!summary) return send(res, 404, { error: 'session not found' });
+            cwd = sessionCwd(summary);
+        } else {
+            cwd = cfg.expandHome(url.searchParams.get('cwd') || '');
+            if (!cwd) return send(res, 400, { error: 'session or cwd is required' });
+            // Same rule as /api/fs: a directory a session could not be started in
+            // is one whose commands are not this caller's business either.
+            if (!cfg.withinRoots(cwd)) {
+                return send(res, 403, {
+                    error: 'that directory is outside the allowed roots',
+                    path: path.resolve(cwd),
+                    roots: cfg.ALLOWED_ROOTS,
+                });
+            }
+        }
+
+        // Never a 404 for "nothing recorded yet": an empty list is a real answer,
+        // and it lets the menu say so quietly instead of raising an error at
+        // somebody who only pressed a key.
+        return send(res, 200, commands.for(cwd));
+    }
+
     // --- filesystem (new-session directory picker) -------------------------
     if (pathname === '/api/fs' && req.method === 'GET') {
         const dir = url.searchParams.get('path') || cfg.HOME;
@@ -1187,6 +1220,22 @@ async function api(req, res, url, pathname, who) {
     }
 
     return send(res, 404, { error: 'no such endpoint', pathname });
+}
+
+/**
+ * Where a session's process should run.
+ *
+ * The transcript's own cwd, unless it has since been deleted — a worktree that
+ * has been landed and removed is the common case — in which case the project
+ * directory it belonged to, and failing that home. Shared by the send route and
+ * by /api/commands so the two can never disagree about which directory a
+ * session belongs to; a client cannot work this out for itself, having no way to
+ * ask whether a path still exists.
+ */
+function sessionCwd(summary) {
+    if (summary.cwd && fs.existsSync(summary.cwd)) return summary.cwd;
+    if (summary.projectCwd && fs.existsSync(summary.projectCwd)) return summary.projectCwd;
+    return cfg.HOME;
 }
 
 // An unrecognised mode falls back to the app's default rather than erroring: the
@@ -1489,6 +1538,14 @@ pool.on('permission-resolved', (p) => {
     tickBoard();
 });
 pool.on('notice', (n) => broadcast('notice', n));
+// Every process announces what slash commands its directory has. Recorded so a
+// composer can offer them without a process of its own, and broadcast only when
+// the list actually moved — otherwise each session start would push an identical
+// list to every open window for nothing.
+pool.on('init', ({ cwd, init }) => {
+    const entry = commands.note(cwd, init);
+    if (entry) broadcast('commands', { cwd, at: entry.at });
+});
 pool.on('turn-complete', (r) => { broadcast('turn-complete', r); filed(notifications.turn(r)); });
 pool.on('failed', (f) => { broadcast('send-failed', f); filed(notifications.sendFailed(f)); });
 // Nothing notifies for a subagent finishing; it is logged so that "what has been
