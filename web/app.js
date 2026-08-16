@@ -42,6 +42,7 @@ const DEFAULT_PERM = 'auto';
 const state = {
     clientId: null,
     dev: false,             // talking to a development bridge
+    pairInfo: null,         // what /api/pairing said this machine is reachable as
     sessions: [],
     query: '',
     current: null,          // session summary
@@ -113,12 +114,30 @@ const state = {
     live: { open: false, watching: false, data: null, at: 0, clock: null,
         // Half-written messages per card, held here rather than in the DOM so
         // they outlive the redraws the board does while agents work.
-        drafts: new Map() },
+        drafts: new Map(),
+        // Which way the board and the conversation divide the window:
+        // 'bottom' stacks them, 'side' puts them next to each other. A property
+        // of the window rather than of a session, like the terminal pane, so it
+        // is remembered and every session you move to keeps it.
+        dock: localStorage.getItem('liveDock') === 'side' ? 'side' : 'bottom' },
     // Sessions blocked on an answer, kept whether or not the board is open, so
     // the badge on a shut board still says how many people are waiting.
     waiting: new Set(),
     // A second-monitor window: no rail, no composer, just cards.
     focus: false,
+    // The Browse tab of the new-session picker. `dir` is the folder on screen,
+    // which is also the folder Start will use — walking into one is how you pick
+    // it, and #new-cwd is written on every step. `seq` is the openSeq trick:
+    // clicking down a tree faster than the listings come back would otherwise let
+    // an older one paint over a newer one.
+    browse: {
+        tab: localStorage.getItem('newPickerTab') === 'browse' ? 'browse' : 'recent',
+        dir: null, parent: null, roots: [], entries: [],
+        truncated: false, error: null, seq: 0,
+        known: new Map(),   // cwd -> project, from /api/projects, for the row tags
+        focus: null,        // path holding the tree's single tab stop
+        naming: false,      // the New folder name box is open
+    },
 };
 
 const $ = (id) => document.getElementById(id);
@@ -136,11 +155,20 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'notes-notable', 'notes-all', 'notes-clear',
     'lock', 'lock-text', 'lock-fork', 'lock-anyway',
     'btn-live', 'live-badge', 'live', 'live-sub', 'live-body', 'live-focus', 'focus-exit',
+    'live-side', 'live-side-label', 'live-side-a', 'live-side-b',
     'new-scrim', 'new-cwd', 'new-picker', 'new-prompt', 'new-model', 'new-perm',
     'new-test', 'new-test-row', 'new-go',
-    'del-scrim', 'del-what', 'del-meta', 'del-go']) {
+    'new-tab-recent', 'new-tab-browse', 'new-browse', 'new-roots', 'new-crumbs',
+    'new-tree', 'new-mkdir', 'new-mkdir-name', 'new-mkdir-go', 'new-browse-note',
+    'del-scrim', 'del-what', 'del-meta', 'del-go',
+    'btn-pair', 'pair-scrim', 'pair-url', 'pair-host', 'pair-hosts', 'pair-note',
+    'pair-copy']) {
     dom[id.replace(/-(\w)/g, (_, c) => c.toUpperCase())] = $(id);
 }
+// The two containers that carry layout state as data attributes rather than
+// holding content of their own, so they have classes instead of ids.
+dom.main = document.querySelector('.main');
+dom.app = document.querySelector('.app');
 
 // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -640,6 +668,7 @@ function forgetSession(sessionId) {
     state.order.delete(sessionId);
     state.unsent.delete(sessionId);
     saveDraft(sessionId, '');
+    setTermOpen(sessionId, false);
     if (state.pendingDelete && state.pendingDelete.sessionId === sessionId) closeDelete();
     if (state.current && state.current.sessionId === sessionId) clearCurrent();
     renderRail();
@@ -778,7 +807,9 @@ function beginOpen(summary) {
     dom.scroll.scrollTop = 0;
     renderRail();       // the clicked row takes the current-session mark now
     applyRunner(null);
-    syncTerm();         // an open pane follows the session onto its directory
+    // Whether the pane is open is this session's answer, not the last one's —
+    // and showTerm syncs it, so an open one still arrives on its own directory.
+    showTerm(termOpen(summary.sessionId));
 
     // Anything typed here before, or handed back by a failed turn — but only what
     // is genuinely still owed to the composer. state.unsent is insurance against a
@@ -2160,6 +2191,48 @@ function showLive(on) {
 }
 
 /**
+ * Which way the window divides between the board and the conversation.
+ *
+ * Under it, the cards are a strip and the transcript keeps the full width — good
+ * for reading one session while the others tick along. Beside it, the cards are
+ * a column: fewer of them fit across, but many more fit down, which is the
+ * arrangement for an afternoon spent watching rather than reading.
+ */
+function setDockSide(side) {
+    state.live.dock = side ? 'side' : 'bottom';
+    localStorage.setItem('liveDock', state.live.dock);
+    paintDockButton();
+    paintPanels();
+    // A card is built differently for a strip than for a column — the strip is
+    // short of height and the column is short of width — so this is a rebuild.
+    if (liveVisible()) renderLive();
+}
+
+function paintDockButton() {
+    const side = state.live.dock === 'side';
+    dom.liveSide.setAttribute('aria-pressed', String(side));
+    dom.liveSide.classList.toggle('on', side);
+    dom.liveSideLabel.textContent = side ? 'Side by side' : 'Stacked';
+    dom.liveSide.title = side
+        ? 'Put the board under the conversation'
+        : 'Put the board beside the conversation';
+    // The icon is the arrangement itself: two boxes above one another, or two
+    // next to each other.
+    const [a, b] = [dom.liveSideA, dom.liveSideB];
+    if (side) {
+        a.setAttribute('x', '3.5'); a.setAttribute('y', '4');
+        a.setAttribute('width', '7'); a.setAttribute('height', '16');
+        b.setAttribute('x', '13.5'); b.setAttribute('y', '4');
+        b.setAttribute('width', '7'); b.setAttribute('height', '16');
+    } else {
+        a.setAttribute('x', '3.5'); a.setAttribute('y', '4');
+        a.setAttribute('width', '17'); a.setAttribute('height', '7');
+        b.setAttribute('x', '3.5'); b.setAttribute('y', '13');
+        b.setAttribute('width', '17'); b.setAttribute('height', '7');
+    }
+}
+
+/**
  * Focus mode: the board with the window to itself.
  *
  * It began as a URL — `?view=live&focus=1`, for a browser left open on a second
@@ -2170,9 +2243,8 @@ function showLive(on) {
  */
 function setFocus(on) {
     state.focus = on;
-    const app = document.querySelector('.app');
-    if (on) app.dataset.focus = '1';
-    else delete app.dataset.focus;
+    if (on) dom.app.dataset.focus = '1';
+    else delete dom.app.dataset.focus;
 
     dom.liveFocus.setAttribute('aria-pressed', String(on));
     dom.liveFocus.classList.toggle('on', on);
@@ -2204,7 +2276,9 @@ function rememberView() {
  * cards are on. Down is right, which is the direction the row runs.
  */
 function onDockWheel(e) {
-    if (dom.live.dataset.mode !== 'dock') return;
+    // Only the strip runs sideways. As a column it scrolls the ordinary way and
+    // the wheel needs no help at all.
+    if (dom.live.dataset.mode !== 'dock' || state.live.dock !== 'bottom') return;
     // A trackpad swiped sideways already says so; leave that alone.
     if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
 
@@ -2307,11 +2381,14 @@ function renderLive() {
     const typing = active && active.dataset && active.dataset.sendFor
         ? { id: active.dataset.sendFor, at: active.selectionStart, to: active.selectionEnd }
         : null;
-    const scroll = dom.liveBody.scrollLeft;
+    const scroll = { x: dom.liveBody.scrollLeft, y: dom.liveBody.scrollTop };
 
-    const docked = dom.live.dataset.mode === 'dock';
-    dom.liveBody.replaceChildren(...d.sessions.map(s => liveCard(s, docked)));
-    dom.liveBody.scrollLeft = scroll;
+    // Only the bottom strip is short of room. As a column, or with the window to
+    // itself, the board has the height for a fuller card.
+    const compact = dom.live.dataset.mode === 'dock' && state.live.dock === 'bottom';
+    dom.liveBody.replaceChildren(...d.sessions.map(s => liveCard(s, compact)));
+    dom.liveBody.scrollLeft = scroll.x;
+    dom.liveBody.scrollTop = scroll.y;
 
     if (typing) {
         const box = dom.liveBody.querySelector(
@@ -2332,15 +2409,16 @@ function renderLive() {
  * The risk with a view like this is two renderers of one state drifting apart,
  * and sharing the small parts is what keeps them honest.
  */
-function liveCard(s, docked = false) {
+function liveCard(s, compact = false) {
     const r = s.runner;
     const busy = r && (r.state === 'busy' || r.state === 'starting');
     const away = s.live && s.live.running && !r;
-    // Docked, the card is sharing the window with the conversation and every
-    // row it gives up is a row of transcript. So it drops what is duplicated
-    // elsewhere: one line of history, and the Open button — the title above it
-    // already opens the session, and the rail is right there.
-    const lines = docked ? 2 : HEADLINES_SHOWN;
+    // In the bottom strip every row a card gives up is a row of transcript, so
+    // it drops what is duplicated elsewhere: one line of history, and the Open
+    // button — the title above it already opens the session, and the rail is
+    // right there. Beside the conversation there is height to spare and the
+    // fuller card is free.
+    const lines = compact ? 2 : HEADLINES_SHOWN;
 
     return el('article', {
         class: 'lcard', 'data-reason': s.reason, 'data-id': s.sessionId,
@@ -2381,8 +2459,8 @@ function liveCard(s, docked = false) {
 
         cardComposer(s, busy, away),
 
-        (!docked || busy) ? el('div', { class: 'lcard-acts' },
-            docked ? null : el('button', {
+        (!compact || busy) ? el('div', { class: 'lcard-acts' },
+            compact ? null : el('button', {
                 class: 'lbtn', type: 'button',
                 onclick: () => openSession(s.sessionId),
             }, 'Open'),
@@ -2671,12 +2749,12 @@ async function stopFromCard(sessionId, btn) {
 const DASH_STALE_MS = 45_000;
 
 /**
- * Which of the three things `main` can hold is on screen.
+ * Which of the things `main` can hold is on screen.
  *
- * Two full-height panels now cover the conversation — Live and Work in flight —
- * and they used to each set `conv.hidden` themselves, which meant whichever
- * closed last decided what the other was doing. One function owns it instead:
- * the panels say what they want, this works out the consequences.
+ * Three full-height panels now cover the conversation — Live, Work in flight and
+ * History — and they used to each set `conv.hidden` themselves, which meant
+ * whichever closed last decided what the other was doing. One function owns it
+ * instead: the panels say what they want, this works out the consequences.
  *
  * The conversation is covered, never closed. Its tail keeps running, its scroll
  * position is untouched, and coming back out lands exactly where it was.
@@ -2701,6 +2779,10 @@ function paintPanels() {
     dom.notes.hidden = !state.notes.open;
     dom.live.hidden = !state.live.open || covered;
     dom.live.dataset.mode = docked ? 'dock' : 'full';
+    // The orientation lives on both: `main` has to change its flex direction,
+    // and the board has to know whether it is a strip or a column.
+    dom.live.dataset.dock = state.live.dock;
+    dom.main.dataset.dock = docked ? state.live.dock : 'bottom';
     // The conversation stays up under a docked board; a whole-screen panel
     // still covers it.
     dom.conv.hidden = covered || full || !state.current;
@@ -4597,10 +4679,14 @@ function handleSendFailure(f) {
 
 // ── terminal ─────────────────────────────────────────────────────────────
 
-// The pane is a property of the window, not of a session: leave it open and
-// every session you move to shows its own shell in its own directory, which is
-// what you want when the pane is open because you are comparing two of them.
-// Its height is remembered for the same reason.
+// The pane is a property of the session, not of the window: a shell is opened
+// to do something in one conversation's directory, and a session you never
+// wanted one in should not inherit it just because the last one had it open.
+// So the open flag is remembered per session, the way a draft is.
+//
+// The height is the other way round — that really is a property of the window,
+// and a pane that resized itself as you moved between sessions would be worse
+// than one that did not.
 const TERM_MIN = 120;
 
 const termPane = new TerminalPane({
@@ -4621,7 +4707,21 @@ function setTermHeight(px) {
     localStorage.setItem('termHeight', String(h));
 }
 
-function termOpen() { return localStorage.getItem('termOpen') === '1'; }
+// Only a session with the pane open holds a key, so closing it leaves nothing
+// behind and the storage grows with shells you are actually using.
+const termKey = (id) => `term:${id}`;
+
+function termOpen(id) {
+    try { return !!id && localStorage.getItem(termKey(id)) === '1'; } catch { return false; }
+}
+
+function setTermOpen(id, on) {
+    if (!id) return;
+    try {
+        if (on) localStorage.setItem(termKey(id), '1');
+        else localStorage.removeItem(termKey(id));
+    } catch { /* storage unavailable; the pane is still right for this window */ }
+}
 
 /** A path the way a shell prompt writes it: ~ for home, and only the tail. */
 function homely(cwd) {
@@ -4663,7 +4763,7 @@ function paintTermHead(info) {
 
 /** Show or hide the pane. The shell itself is unaffected either way. */
 function showTerm(on, { focus = false } = {}) {
-    localStorage.setItem('termOpen', on ? '1' : '0');
+    setTermOpen(state.current && state.current.sessionId, on);
     dom.termPane.hidden = !on;
     dom.btnTerm.classList.toggle('on', on);
     dom.btnTerm.setAttribute('aria-pressed', String(on));
@@ -4724,6 +4824,7 @@ async function openNew() {
     dom.newCwd.value = state.current
         ? (state.current.worktree ? state.current.worktree.originalCwd : state.current.cwd)
         : '';
+    cancelMkdir();
     try {
         const { projects } = await get('/api/projects');
         dom.newPicker.replaceChildren(...projects.slice(0, 40).map(p =>
@@ -4736,13 +4837,294 @@ async function openNew() {
                 p.active ? el('span', { class: 'tag' }, `${p.active} live`) : null,
             )));
         if (!dom.newCwd.value && projects[0]) dom.newCwd.value = projects[0].cwd;
+        // The same list, keyed by path, so a browsed row can say "you have worked
+        // here" without a second request. It quietly joins the two tabs together.
+        state.browse.known = new Map(projects.map(p => [p.cwd, p]));
     } catch (err) {
         toast(`Could not list projects: ${err.message}`, 'error');
     }
+    setPickerTab(state.browse.tab, { load: true });
     dom.newPrompt.focus();
 }
 
 function closeNew() { dom.newScrim.hidden = true; }
+
+// ── the directory picker ─────────────────────────────────────────────────
+//
+// Two tabs over one decision. *Recent* is the list this app has always had —
+// every directory a session has ever run in. *Browse* is for the case it cannot
+// answer: a directory with no history, or one that does not exist yet.
+//
+// The rule that keeps the two from fighting is that **walking into a folder is
+// how you choose it**. There is no select-versus-descend distinction, no
+// checkmark, and no second click: every navigation writes #new-cwd, and #new-cwd
+// stays the single answer to "where will this run". So "how do I pick the folder
+// I am looking at?" answers itself — you already have, and the box above says so.
+
+function setPickerTab(tab, { load = false } = {}) {
+    const browsing = tab === 'browse';
+    state.browse.tab = browsing ? 'browse' : 'recent';
+    try { localStorage.setItem('newPickerTab', state.browse.tab); } catch { /* private mode */ }
+
+    dom.newTabRecent.setAttribute('aria-selected', String(!browsing));
+    dom.newTabBrowse.setAttribute('aria-selected', String(browsing));
+    dom.newPicker.hidden = browsing;
+    dom.newBrowse.hidden = !browsing;
+    if (!browsing) cancelMkdir();
+    if (browsing && (load || !state.browse.dir)) browseTo(startDir());
+}
+
+/** Where Browse should open: whatever the box says, else wherever we were. */
+function startDir() {
+    return dom.newCwd.value.trim() || state.browse.dir || '';
+}
+
+/** Strip a trailing slash so a typed path can be compared with a listed one. */
+const tidyPath = (p) => String(p || '').trim().replace(/(?!^)\/+$/, '');
+
+/**
+ * List a directory and — because navigating is selecting — point #new-cwd at it.
+ *
+ * `select: false` is for the one case where that would be wrong: a first load
+ * that lands somewhere other than where the box already says.
+ */
+async function browseTo(dir, { select = true, fromKeyboard = false } = {}) {
+    const seq = ++state.browse.seq;
+    let data;
+    try {
+        data = await get(`/api/fs?path=${encodeURIComponent(dir)}`);
+    } catch (err) {
+        // A 403 for a path outside the roots is the bridge's call, not ours to
+        // predict — the roots live in one place. Say what it said and stay put.
+        toast(`Could not open that folder: ${err.message}`, 'error');
+        if (!state.browse.dir && dir) browseTo('', { select: false });
+        return;
+    }
+    if (seq !== state.browse.seq) return;   // a later click already won
+
+    Object.assign(state.browse, {
+        dir: data.path,
+        parent: data.parent || null,
+        roots: data.roots || [],
+        entries: data.entries || [],
+        truncated: !!data.truncated,
+        // A readdir that failed comes back 200 with this set — the path and the
+        // way back up are still good, so the pane keeps working around it.
+        error: data.error || null,
+        focus: null,
+    });
+    if (select) dom.newCwd.value = data.path;
+    cancelMkdir();
+    renderBrowse();
+    if (fromKeyboard) focusRowAt(0);
+}
+
+function renderBrowse() {
+    const b = state.browse;
+
+    // More than one root configured means the second one is otherwise unreachable
+    // from here: the trail stops at the top of whichever root you are inside.
+    dom.newRoots.hidden = b.roots.length < 2;
+    if (b.roots.length >= 2) {
+        dom.newRoots.replaceChildren(
+            el('span', {}, 'Roots:'),
+            ...b.roots.map(r => el('button', {
+                class: 'crumb', type: 'button', onclick: () => browseTo(r),
+            }, homely(r))));
+    }
+
+    dom.newCrumbs.replaceChildren(...crumbsFor(b));
+
+    // The way back up is rendered whatever happened below it, so an unreadable
+    // folder is somewhere you can leave rather than somewhere you are stuck.
+    const rows = b.parent ? [upRow()] : [];
+    if (b.error) {
+        rows.push(el('div', { class: 'picker-msg' }, `Cannot read this folder — ${b.error}`));
+    } else {
+        rows.push(...b.entries.map((e, i) => treeRow(e, i)));
+        if (!b.entries.length) {
+            // The sentence that answers "so how do I pick where I am?", at the
+            // moment somebody standing in an empty folder asks it.
+            rows.push(el('div', { class: 'picker-msg' },
+                'No sub-folders here. Start uses this one.'));
+        }
+    }
+    dom.newTree.replaceChildren(...rows);
+    setTreeTab();
+
+    dom.newMkdir.textContent = `New folder in ${clip(baseName(b.dir), 24)}`;
+    dom.newBrowseNote.textContent = browseNote(b);
+}
+
+function baseName(p) {
+    const parts = String(p || '').split('/').filter(Boolean);
+    return parts.length ? parts[parts.length - 1] : '/';
+}
+
+/** What the pane wants to say under itself, if anything. */
+function browseNote(b) {
+    const typed = tidyPath(dom.newCwd.value);
+    if (typed && b.dir && typed !== b.dir) {
+        return `Showing ${homely(b.dir)} — press Enter in the box to browse to what you typed.`;
+    }
+    if (b.truncated) return `Showing the first 500 folders — type a path to go straight there.`;
+    return '';
+}
+
+/**
+ * The trail, stopping at the top of whichever root contains this directory
+ * rather than walking on to `/` — every crumb has to be somewhere you may go.
+ */
+function crumbsFor(b) {
+    if (!b.dir) return [];
+    const root = b.roots
+        .filter(r => b.dir === r || b.dir.startsWith(`${r}/`))
+        .sort((x, y) => y.length - x.length)[0] || '/';
+
+    const rest = b.dir.slice(root.length).split('/').filter(Boolean);
+    const out = [crumb(homely(root), root, !rest.length)];
+    let at = root === '/' ? '' : root;
+    rest.forEach((seg, i) => {
+        at += `/${seg}`;
+        const here = at;
+        out.push(el('span', {}, '/'), crumb(seg, here, i === rest.length - 1));
+    });
+    return out;
+}
+
+function crumb(label, target, current) {
+    return el('button', {
+        class: 'crumb', type: 'button',
+        // The last crumb re-lists rather than doing nothing, which doubles as the
+        // refresh you want after making a folder outside the app.
+        'aria-current': current ? 'page' : null,
+        onclick: () => browseTo(target),
+    }, label);
+}
+
+function upRow() {
+    return el('button', {
+        class: 'picker-row up', type: 'button', 'data-path': state.browse.parent,
+        onclick: () => browseTo(state.browse.parent),
+        onkeydown: (e) => onTreeKey(e, -1),
+    }, el('span', {}, '↑ ..'), el('span', { class: 'path' }, homely(state.browse.parent)));
+}
+
+function treeRow(entry, i) {
+    const seen = state.browse.known.get(entry.path);
+    // Having worked here is the stronger signal, so it wins the one tag slot.
+    // Green is kept for a session actually running, as it is everywhere else —
+    // "you have been here before" is a quieter fact than "something is happening".
+    const tag = seen
+        ? (seen.active
+            ? el('span', { class: 'tag' }, `${seen.active} live`)
+            : el('span', { class: 'tag dim' }, 'seen'))
+        : (entry.git ? el('span', { class: 'tag dim' }, 'git') : null);
+    return el('button', {
+        class: 'picker-row', type: 'button', 'data-path': entry.path,
+        'aria-current': entry.path === tidyPath(dom.newCwd.value) ? 'true' : null,
+        onclick: () => browseTo(entry.path),
+        onkeydown: (e) => onTreeKey(e, i),
+    }, el('span', {}, clip(entry.name, 48)), tag);
+}
+
+// One tab stop for the whole list, arrows to move within it — the same shape as
+// the send queue, which is the only other long list of buttons in this file.
+function setTreeTab() {
+    const rows = [...dom.newTree.querySelectorAll('.picker-row')];
+    const want = rows.find(r => r.dataset.path === state.browse.focus) || rows[0];
+    for (const r of rows) r.tabIndex = r === want ? 0 : -1;
+}
+
+function focusRowAt(i) {
+    const rows = [...dom.newTree.querySelectorAll('.picker-row')];
+    const row = rows[Math.max(0, Math.min(i, rows.length - 1))];
+    if (!row) { dom.newTree.focus?.(); return false; }
+    state.browse.focus = row.dataset.path;
+    setTreeTab();
+    row.focus({ preventScroll: false });
+    return true;
+}
+
+/**
+ * `i` is the row's index, or -1 for the Up row that sits above them all.
+ *
+ * Escape is deliberately absent: a row has nothing of its own to cancel, so the
+ * central ladder should get it and close the dialog. The only thing here that
+ * stops Escape is the New folder box.
+ */
+function onTreeKey(e, i) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); focusRowAt(rowIndex(i) + 1); return; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); focusRowAt(rowIndex(i) - 1); return; }
+    if (e.key === 'ArrowLeft' || e.key === 'Backspace') {
+        if (!state.browse.parent) return;
+        e.preventDefault();
+        browseTo(state.browse.parent, { fromKeyboard: true });
+        return;
+    }
+    if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        const target = i < 0 ? state.browse.parent : state.browse.entries[i]?.path;
+        if (target) browseTo(target, { fromKeyboard: true });
+    }
+    // Enter and Space are a button's own job — the click handler navigates.
+}
+
+/** Position in the rendered list, where the Up row (i === -1) is index 0. */
+function rowIndex(i) {
+    const offset = state.browse.parent ? 1 : 0;
+    return i < 0 ? 0 : i + offset;
+}
+
+// ── new folder ───────────────────────────────────────────────────────────
+
+function startMkdir() {
+    state.browse.naming = true;
+    dom.newMkdir.hidden = true;
+    dom.newMkdirName.hidden = false;
+    dom.newMkdirGo.hidden = false;
+    dom.newMkdirName.value = '';
+    dom.newMkdirName.focus();
+}
+
+function cancelMkdir() {
+    state.browse.naming = false;
+    dom.newMkdir.hidden = false;
+    dom.newMkdirName.hidden = true;
+    dom.newMkdirGo.hidden = true;
+    dom.newMkdirName.value = '';
+}
+
+async function submitMkdir() {
+    const name = dom.newMkdirName.value.trim();
+    const parent = state.browse.dir;
+    if (!name) { dom.newMkdirName.focus(); return; }
+    if (!parent) return;
+
+    // Pre-empt the duplicate the pane can already see. The server still answers
+    // for the one it cannot — something else may have created it meanwhile.
+    if (state.browse.entries.some(e => e.name === name)) {
+        toast(`${name} is already here.`, 'warn');
+        return;
+    }
+
+    dom.newMkdirGo.disabled = true;
+    try {
+        const r = await post('/api/fs/mkdir', { parent, name });
+        cancelMkdir();
+        // Walking in is what selects it, so this is also the pick.
+        await browseTo(r.path);
+        toast(r.created ? `Created ${name}.` : `${name} was already there.`, 'ok');
+        dom.newPrompt.focus();
+    } catch (err) {
+        // The name box stays open with the text in it — retyping a rejected name
+        // is the one thing that should not be part of fixing it.
+        toast(`Could not create the folder: ${err.message}`, 'error');
+        dom.newMkdirName.focus();
+    } finally {
+        dom.newMkdirGo.disabled = false;
+    }
+}
 
 async function startNew() {
     const cwd = dom.newCwd.value.trim();
@@ -4931,12 +5313,183 @@ for (const n of dom.newScrim.querySelectorAll('[data-close]')) {
 }
 dom.newScrim.addEventListener('click', (e) => { if (e.target === dom.newScrim) closeNew(); });
 
+dom.newTabRecent.addEventListener('click', () => setPickerTab('recent'));
+dom.newTabBrowse.addEventListener('click', () => setPickerTab('browse', { load: true }));
+
+// Two tabs, so both stay in the tab order and the arrows activate on move —
+// a roving rule would be machinery for a pair of buttons.
+for (const [tab, other] of [[dom.newTabRecent, 'browse'], [dom.newTabBrowse, 'recent']]) {
+    tab.addEventListener('keydown', (e) => {
+        if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+        e.preventDefault();
+        setPickerTab(other, { load: other === 'browse' });
+        (other === 'browse' ? dom.newTabBrowse : dom.newTabRecent).focus();
+    });
+}
+
+dom.newMkdir.addEventListener('click', startMkdir);
+dom.newMkdirGo.addEventListener('click', submitMkdir);
+dom.newMkdirName.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); submitMkdir(); return; }
+    // Without stopPropagation the central Escape ladder closes the whole dialog,
+    // when all this key meant was "never mind the folder".
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancelMkdir(); dom.newMkdir.focus(); }
+});
+
+// Typing a path does not walk the tree on every keystroke — that is a request per
+// character, and it fights the typist. Enter is the commit, and until it comes the
+// pane says plainly that it is showing somewhere else.
+dom.newCwd.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    setPickerTab('browse');
+    browseTo(dom.newCwd.value.trim());
+});
+dom.newCwd.addEventListener('input', () => {
+    if (state.browse.tab === 'browse') dom.newBrowseNote.textContent = browseNote(state.browse);
+});
+
 for (const n of dom.delScrim.querySelectorAll('[data-close-del]')) {
     n.addEventListener('click', closeDelete);
 }
 dom.delScrim.addEventListener('click', (e) => { if (e.target === dom.delScrim) closeDelete(); });
 
+// ── connect a phone ──────────────────────────────────────────────────────
+//
+// The bridge hands this page the token in a <meta> tag when the page was fetched
+// over loopback (bridge/auth.js injectToken), which is the only reason a link can
+// be built here at all — the cookie that actually authenticates is HttpOnly and
+// deliberately unreadable.
+//
+// The host is a guess, and says so. This page is being served on 127.0.0.1, and
+// 127.0.0.1 is the one address that is useless to a phone; the bridge cannot know
+// what name a proxy in front of it answers to. So: offer the shapes that are
+// likely, let them be edited, and explain rather than pretend.
+
+function pairToken() {
+    const meta = document.querySelector('meta[name="cs-token"]');
+    return meta ? meta.content : null;
+}
+
+// Remembered because it is the one thing this dialog cannot work out for itself
+// and the one thing that is tedious to retype. localStorage rather than the flags
+// file: it is a property of this browser, not of the machine.
+const PAIR_HOST_KEY = 'cs.pairHost';
+
+function refreshPairUrl() {
+    const token = pairToken();
+    const base = dom.pairHost.value.trim().replace(/\/+$/, '');
+    if (!token) {
+        dom.pairUrl.value = '';
+        dom.pairNote.textContent = 'This page was not served over loopback, so it '
+            + 'was not given the token. Open the desktop window on 127.0.0.1.';
+        return;
+    }
+    if (!base) {
+        dom.pairUrl.value = '';
+        dom.pairNote.textContent = 'Enter the address the phone will use.';
+        return;
+    }
+    dom.pairUrl.value = `${base}/pair?token=${token}`;
+    dom.pairNote.textContent = pairNote(base);
+}
+
+/**
+ * What is true about this address, rather than what is generally true.
+ *
+ * The useful thing to say is almost never "here is how tunnels work" — it is the
+ * one step still missing. Reaching a .ts.net name does nothing until
+ * `tailscale serve` is pointed at this port, and that is the step people forget,
+ * so it is the step this says out loud.
+ */
+function pairNote(base) {
+    const info = state.pairInfo || {};
+    const ts = info.tailscale;
+    const isTailnet = /^https:\/\/[^/]+\.ts\.net/.test(base);
+
+    // Already proxying to this port, so there is no next step to nag about.
+    if (info.served && base === info.served) {
+        return 'Already published to your tailnet and pointing at this bridge. The '
+            + 'phone needs the Tailscale app and the same tailnet.';
+    }
+
+    if (isTailnet && ts && ts.name && base.includes(ts.name)) {
+        if (!ts.https) {
+            return 'HTTPS certificates are not enabled for this tailnet yet — turn '
+                + 'them on in the admin console (DNS → HTTPS Certificates), or the '
+                + 'link will not resolve.';
+        }
+        return 'Publish it first, from a Windows shell: tailscale serve --bg '
+            + `--https=443 http://127.0.0.1:${location.port || 45888}`;
+    }
+    if (isTailnet) {
+        return 'A tailnet address. The phone needs the Tailscale app and the same '
+            + 'tailnet, and `tailscale serve` must point at this port.';
+    }
+    if (/^https:/.test(base)) {
+        return 'Anything terminating TLS in front of the bridge works. Add its '
+            + 'hostname to CLAUDE_SESSIONS_ORIGINS if the origin check refuses it.';
+    }
+    return 'Plain HTTP: the phone view will work, but it cannot be installed as an '
+        + 'app and the service worker will not run.';
+}
+
+async function openPair() {
+    dom.pairScrim.hidden = false;
+
+    // Only ever real values here. An earlier version offered
+    // `https://<machine>.<tailnet>.ts.net` as a datalist entry meaning "type your
+    // name over this", and picking it from the dropdown produced a URL with
+    // literal angle brackets in it. A suggestion you must correct is worse than
+    // none — so the bridge is asked what this machine is actually called, and the
+    // list is empty when it cannot say.
+    if (!dom.pairHost.value) {
+        dom.pairHost.value = localStorage.getItem(PAIR_HOST_KEY) || '';
+    }
+    refreshPairUrl();
+    dom.pairHost.focus();
+
+    try {
+        const info = await get('/api/pairing');
+        dom.pairHosts.replaceChildren(
+            ...info.hosts.map(h => el('option', { value: h.url })));
+        // Prefill only if the user has no preference yet: a host they typed and
+        // used before is a better answer than a detected one they rejected.
+        if (!dom.pairHost.value && info.hosts.length) {
+            dom.pairHost.value = info.hosts[0].url;
+        }
+        state.pairInfo = info;
+        refreshPairUrl();
+        if (dom.pairHost.value) { dom.pairUrl.focus(); dom.pairUrl.select(); }
+    } catch { /* leave the field to be filled in by hand */ }
+}
+
+function closePair() { dom.pairScrim.hidden = true; }
+
+dom.btnPair.addEventListener('click', openPair);
+dom.pairHost.addEventListener('input', refreshPairUrl);
+dom.pairCopy.addEventListener('click', async () => {
+    if (!dom.pairUrl.value) { dom.pairHost.focus(); return; }
+    // Remembered on use rather than on every keystroke, so a half-typed host does
+    // not become the default.
+    try { localStorage.setItem(PAIR_HOST_KEY, dom.pairHost.value.trim()); } catch { /* private mode */ }
+    dom.pairUrl.select();
+    try {
+        await navigator.clipboard.writeText(dom.pairUrl.value);
+        toast('Pairing link copied');
+    } catch {
+        // Clipboard access can be refused; the text is selected either way, so
+        // Ctrl+C still works and saying so beats a silent failure.
+        toast('Could not copy — the link is selected, press Ctrl+C');
+    }
+});
+for (const n of dom.pairScrim.querySelectorAll('[data-close-pair]')) {
+    n.addEventListener('click', closePair);
+}
+dom.pairScrim.addEventListener('click', (e) => { if (e.target === dom.pairScrim) closePair(); });
+
 dom.btnLive.addEventListener('click', () => showLive(!state.live.open));
+dom.liveSide.addEventListener('click', () => setDockSide(state.live.dock !== 'side'));
 dom.liveFocus.addEventListener('click', () => setFocus(!state.focus));
 dom.focusExit.addEventListener('click', () => setFocus(false));
 // The dock runs sideways and a mouse wheel only goes up and down.
@@ -4975,6 +5528,7 @@ document.addEventListener('keydown', (e) => {
     // The confirm sits over the new-session dialog, so it answers Escape first.
     if (e.key === 'Escape' && !dom.bellMenu.hidden) { showBell(false); dom.btnBell.focus(); return; }
     if (e.key === 'Escape' && !dom.delScrim.hidden) { closeDelete(); return; }
+    if (e.key === 'Escape' && !dom.pairScrim.hidden) { closePair(); dom.btnPair.focus(); return; }
     if (e.key === 'Escape' && !dom.newScrim.hidden) { closeNew(); return; }
     if (e.key === 'Escape' && state.dash.open) { showDash(false); return; }
     if (e.key === 'Escape' && state.notes.open) { showNotes(false); return; }
@@ -5040,13 +5594,15 @@ loadSessions();
 markInstance();
 renderBell();
 registerWorker();
+paintDockButton();      // the remembered arrangement, before anything is drawn
 applyViewParams();
 primeWaiting();
 openFromHash();
 refreshDevBrowser();
-// Restore the pane before the first session lands, so it opens with the window
-// already the right shape rather than growing one out from under the transcript.
-showTerm(termOpen());
+// Nothing to restore here any more: the pane belongs to a session, and the
+// first beginOpen is what shows it — for the session it was opened in. The
+// window-wide flag this used to read is dropped so it cannot come back.
+try { localStorage.removeItem('termOpen'); } catch { /* storage unavailable */ }
 setInterval(refreshDevBrowser, 20_000);
 // Not while a chip is armed or working: rebuilding the strip there would either
 // take back a stop the user is halfway through asking for, or drop the label off

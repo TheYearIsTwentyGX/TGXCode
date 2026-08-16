@@ -15,12 +15,14 @@ const os = require('os');
 const { randomUUID } = require('crypto');
 
 const cfg = require('./config');
+const auth = require('./auth');
 const { SessionIndex } = require('./sessions');
 const { SessionRegistry } = require('./registry');
 const { RunnerPool, PERMISSION_MODES } = require('./runner');
 const { Flags } = require('./flags');
 const { NotificationLog } = require('./notifications');
 const devbrowser = require('./devbrowser');
+const tailscale = require('./tailscale');
 const devservers = require('./devservers');
 const dashboard = require('./dashboard');
 const overview = require('./overview');
@@ -274,28 +276,210 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1');
     const pathname = decodeURIComponent(url.pathname);
 
+    // Where this request came from and whether it carries the token. One object,
+    // computed once, because three separate things below need the same answer.
+    const who = auth.classify(req, url);
+
     // Same guard DevBrowser uses: reject cross-origin callers outright. A page in
     // some other tab must not be able to drive Claude on this machine.
     const origin = req.headers.origin;
-    if (origin && !isOwnOrigin(origin)) return send(res, 403, { error: 'forbidden origin' });
+    if (origin && !isOwnOrigin(origin, req)) return send(res, 403, { error: 'forbidden origin' });
+
+    // A name we do not answer to means somebody else's DNS is pointing at this
+    // port — the rebinding case, where a page on a public hostname resolves to
+    // 127.0.0.1 and then talks to us as same-origin. Only checked for remote
+    // requests: a local Host is the one we already know is ours.
+    if (who.remote && !isKnownHost(who.host)) {
+        return send(res, 403, { error: 'unexpected host', host: who.host });
+    }
+
     if (pathname.startsWith('/api/') && pathname !== '/api/health'
         && req.method !== 'GET' && !req.headers[CLIENT_HEADER]) {
         return send(res, 403, { error: 'missing client header' });
     }
 
+    // The token. /api/health stays open: app/main.js pings it to decide whether a
+    // bridge is up and serving the right checkout, before it could know a token,
+    // and it gives away only counts and a pid. Everything else needs the token,
+    // loopback included — "any process on this machine" is precisely the hole this
+    // closes. A local *browser* is spared a login step by injectToken(), not by an
+    // exemption here.
+    if (pathname.startsWith('/api/') && pathname !== '/api/health' && !who.ok) {
+        if (who.remote) {
+            console.warn(`[claude-sessions] rejected ${req.method} ${pathname} from `
+                + `${who.peer} — no valid token`);
+        }
+        return send(res, 401, {
+            error: 'unauthorized',
+            hint: 'send the token from ~/.local/share/claude-sessions/token as '
+                + 'Authorization: Bearer <token>',
+        });
+    }
+
+    if (who.remote && who.ok && pathname.startsWith('/api/')) logRemote(req, pathname, who);
+
+    // Powers a phone does not get, even holding a valid token.
+    if (who.remote) {
+        const refusal = remoteRefusal(pathname, req.method);
+        if (refusal) {
+            console.warn(`[claude-sessions] refused ${req.method} ${pathname} from `
+                + `${who.peer} — ${refusal}`);
+            return send(res, 403, { error: refusal, remote: true });
+        }
+    }
+
     try {
-        if (pathname.startsWith('/api/')) return await api(req, res, url, pathname);
-        return serveStatic(res, pathname);
+        if (pathname === '/pair' || pathname === '/pair/forget') {
+            return pair(req, res, url, pathname, who);
+        }
+        if (pathname.startsWith('/api/')) return await api(req, res, url, pathname, who);
+        return serveStatic(req, res, pathname, who);
     } catch (err) {
-        send(res, 500, { error: err.message, stack: err.stack });
+        // The stack goes to the log, not to the client. It names paths on this
+        // machine and the shape of the code, and a client can do nothing with it.
+        console.error(`[claude-sessions] ${req.method} ${pathname} failed:`, err.stack || err);
+        send(res, 500, { error: err.message });
     }
 });
 
-function isOwnOrigin(origin) {
-    return /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(origin);
+/**
+ * Is this origin one of ours?
+ *
+ * The check exists to stop a page in another tab driving Claude, and that intent is
+ * what decides how far it can widen. "The origin matching the host this request was
+ * addressed to" preserves it exactly: our own page, served by us, always matches,
+ * and a page on any other origin never does — whatever hostname the bridge is
+ * reached by. So a reverse proxy needs no configuration to work, and adds no hole.
+ *
+ * Loopback stays accepted outright because the Electron shell and `npm run dev`
+ * reach us on 127.0.0.1 while the page may say localhost, or a different port.
+ */
+function isOwnOrigin(origin, req) {
+    if (/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(origin)) return true;
+    if (cfg.EXTRA_ORIGINS.includes(origin)) return true;
+
+    let host;
+    try { host = new URL(origin).hostname.toLowerCase(); } catch { return false; }
+    if (host === auth.effectiveHost(req)) return true;
+    // Tailscale's own names, so `tailscale serve` works out of the box.
+    return /^[a-z0-9-]+(\.[a-z0-9-]+)*\.ts\.net$/.test(host);
 }
 
-async function api(req, res, url, pathname) {
+/** Hostnames this bridge will answer to when reached from off-machine. */
+function isKnownHost(host) {
+    if (auth.hostIsLocal(host)) return true;
+    if (/\.ts\.net$/.test(host)) return true;
+    // An IP address is the LAN-bind case: there is no name to spoof, so there is
+    // nothing for a rebinding attack to gain.
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(':')) return true;
+    return cfg.EXTRA_ORIGINS.some((o) => {
+        try { return new URL(o).hostname.toLowerCase() === host; } catch { return false; }
+    });
+}
+
+/**
+ * What a request from off-machine may not do, and why — or null if it may.
+ *
+ * The principle, from docs/plans/14-C: a phone should be able to *watch*, and to
+ * answer the questions a session is blocked on. It should not be able to reach past
+ * the app into the machine. So this is not a general permission system; it is a
+ * short list of the routes that stop being reasonable once the caller is not in the
+ * room, and every entry earns its place:
+ *
+ *   - **Terminals** are a raw pty. Everything else here is mediated by the app —
+ *     you answer an ask, you send a prompt — but this is a shell, and a leaked
+ *     token that reaches it has the machine. A phone has no use for one.
+ *   - **Shutdown** and **stopping a dev server** act on processes the person at the
+ *     desk is using, and are trivially a denial of service from anywhere else.
+ *   - **Reveal** and **DevBrowser** drive windows on the Windows host. Opening
+ *     Explorer on a desktop nobody is sitting at is at best pointless.
+ *   - **Making a folder** writes to the filesystem. Note the asymmetry with the
+ *     listing beside it, which stays allowed: reading the tree answers "where
+ *     could a session start", and a phone may already start one. Creating a
+ *     directory is reaching past the app into the machine, which is the line
+ *     above — so the refusal is on the exact path, not on /api/fs.
+ *
+ * Refusing at the route rather than in the UI is the point: /m not drawing a button
+ * is a courtesy, and this is the rule.
+ */
+function remoteRefusal(pathname, method) {
+    if (pathname.startsWith('/api/terminals')) {
+        return 'terminals are not available remotely';
+    }
+    if (pathname === '/api/shutdown') {
+        return 'the bridge can only be shut down from the machine it runs on';
+    }
+    if (pathname === '/api/devservers/stop') {
+        return 'dev servers can only be stopped from the machine they run on';
+    }
+    if (pathname.startsWith('/api/devbrowser')) {
+        return 'DevBrowser is only reachable from the machine it runs on';
+    }
+    if (/^\/api\/sessions\/[^/]+\/reveal$/.test(pathname) && method === 'POST') {
+        return 'opening a folder only makes sense on the machine itself';
+    }
+    // Exact equality, not a prefix: GET /api/fs stays readable remotely.
+    if (pathname === '/api/fs/mkdir') {
+        return 'folders can only be created on the machine they live on';
+    }
+    return null;
+}
+
+/**
+ * Modes a remote caller may not start a session in.
+ *
+ * bypassPermissions runs everything unasked, which is a reasonable thing to choose
+ * deliberately while sitting in front of the machine and not a reasonable thing to
+ * be one tap away from on a phone that might be in someone else's hand. dontAsk is
+ * the same argument with a quieter name.
+ *
+ * This is a refusal rather than a silent downgrade: quietly running in a safer mode
+ * than the one asked for would be its own kind of lie.
+ */
+const REMOTE_FORBIDDEN_MODES = new Set(['bypassPermissions', 'dontAsk']);
+
+function modeRefusal(mode, who) {
+    if (!who.remote || !REMOTE_FORBIDDEN_MODES.has(mode)) return null;
+    return `${mode} cannot be started remotely — choose it at the machine itself`;
+}
+
+/**
+ * A very small token bucket on session creation.
+ *
+ * Not a security boundary; a brake. `POST /api/sessions` spawns a process, and
+ * nothing else stops a loop — or a retrying client — from spawning them as fast as
+ * the machine will allow. The pool caps how many stay *live* (MAX_LIVE), which is a
+ * different thing from how many get started.
+ */
+const CREATE_LIMIT = { max: 8, windowMs: 60_000, hits: [] };
+
+function tooManyCreates() {
+    const now = Date.now();
+    CREATE_LIMIT.hits = CREATE_LIMIT.hits.filter(t => now - t < CREATE_LIMIT.windowMs);
+    if (CREATE_LIMIT.hits.length >= CREATE_LIMIT.max) return true;
+    CREATE_LIMIT.hits.push(now);
+    return false;
+}
+
+/**
+ * Log a remote request, once per minute per source rather than per request.
+ *
+ * Plan 14-B asks for the source address of every authenticated request when the
+ * bridge is reachable from off-machine. Taken literally that is a line per SSE
+ * poll, which buries the one line that matters. Per source, per minute, plus every
+ * write, keeps it readable and still answers "who has been talking to this bridge".
+ */
+const remoteSeen = new Map();
+function logRemote(req, pathname, who) {
+    const writes = req.method !== 'GET';
+    const last = remoteSeen.get(who.peer) || 0;
+    if (!writes && Date.now() - last < 60_000) return;
+    remoteSeen.set(who.peer, Date.now());
+    console.log(`[claude-sessions] remote ${req.method} ${pathname} from ${who.peer} `
+        + `via ${who.host}`);
+}
+
+async function api(req, res, url, pathname, who) {
     const seg = pathname.split('/').filter(Boolean); // ['api', ...]
 
     // --- events -----------------------------------------------------------
@@ -352,15 +536,26 @@ async function api(req, res, url, pathname) {
 
     // --- health / meta ----------------------------------------------------
     if (pathname === '/api/health') {
+        // The one route with no token, so it is also the one route that has to
+        // think about what it gives away. Everything below is a count, a pid or a
+        // flag — except root/home, which are paths on this machine and are only
+        // here for the Windows shell's benefit. It always asks over loopback, so a
+        // remote caller can be told less without costing anything.
+        const local = !who.remote;
         return send(res, 200, {
             ok: true, app: 'claude-sessions', version: cfg.VERSION,
             pid: process.pid, port: cfg.PORT, dev: cfg.IS_DEV, ready: index.ready,
             sessions: index.sessions.size, host: os.hostname(),
+            // Whether this request arrived from off-machine, and whether the bridge
+            // is asking for a token at all. The UI reads both: the first raises the
+            // remote banner, the second tells an older client why it is getting 401s.
+            remote: who.remote, authRequired: true,
             // Which checkout is being served, and the home directory to expand a
             // `~` in the shell's configured bridgeDir against. The Windows shell
             // compares these before it adopts a bridge it did not start: a port
             // answering is not proof it is answering for the right tree.
-            root: cfg.ROOT, home: cfg.HOME, worktree: cfg.IS_WORKTREE,
+            ...(local ? { root: cfg.ROOT, home: cfg.HOME } : {}),
+            worktree: cfg.IS_WORKTREE,
             // Live SSE connections — a quick way to tell whether a UI attached.
             clients: clients.size, runners: Object.keys(pool.statuses()).length,
             terminals: terminals.live().length,
@@ -476,12 +671,24 @@ async function api(req, res, url, pathname) {
         const prompt = body.prompt && String(body.prompt).trim();
         if (!cwd) return send(res, 400, { error: 'cwd is required' });
         if (!prompt) return send(res, 400, { error: 'prompt is required' });
+
+        const mode = normalizeMode(body.permissionMode);
+        const refusal = modeRefusal(mode, who);
+        if (refusal) return send(res, 403, { error: refusal, remote: true });
+
+        if (tooManyCreates()) {
+            return send(res, 429, {
+                error: `more than ${CREATE_LIMIT.max} sessions started in a minute — `
+                    + 'slow down, or start the rest from the machine itself',
+            });
+        }
+
         try {
             const out = pool.create({
                 cwd,
                 prompt,
                 model: body.model || null,
-                permissionMode: normalizeMode(body.permissionMode),
+                permissionMode: mode,
             });
             // Label it before it exists on disk, so it is never briefly visible
             // in the everyday window while the first rescan catches up.
@@ -502,6 +709,28 @@ async function api(req, res, url, pathname) {
             const data = index.read(sessionId);
             if (!data) return send(res, 404, { error: 'session not found' });
             const st = pool.statuses()[sessionId];
+
+            // `?tail=N` sends only the last N events, and says how many it left
+            // behind so a client can offer to go and get them.
+            //
+            // For the desktop this would be pointless — it is on loopback and wants
+            // the whole conversation anyway. For a phone it is the difference
+            // between opening a long session and not: a 60-turn transcript is
+            // ~1,800 events and half a megabyte of JSON, over a relay, before
+            // anything appears. Slicing here rather than in the client is the whole
+            // point; serializing all of it and then throwing most away would save
+            // nothing. `offset` is deliberately left as-is — it is a byte position
+            // in the file, so the live tail still resumes correctly from it.
+            const want = Number(url.searchParams.get('tail'));
+            if (Number.isFinite(want) && want > 0 && data.events.length > want) {
+                const dropped = data.events.length - want;
+                return send(res, 200, {
+                    ...data,
+                    events: data.events.slice(-want),
+                    truncated: { dropped, total: data.events.length },
+                    runner: st || null,
+                });
+            }
             return send(res, 200, { ...data, runner: st || null });
         }
 
@@ -583,6 +812,17 @@ async function api(req, res, url, pathname) {
             const text = body.text && String(body.text).trim();
             if (!text) return send(res, 400, { error: 'text is required' });
 
+            // Sending is also how a mode changes, so the same refusal applies here
+            // as on creation — otherwise a phone could start a session in `auto` and
+            // escalate it to bypassPermissions with the next message.
+            //
+            // Checked before the session is looked up, so that the answer does not
+            // depend on whether the session exists: a refusal that 404s for an
+            // unknown id and 403s for a real one is a way to ask which ids are real.
+            const sendMode = normalizeMode(body.permissionMode);
+            const sendRefusal = modeRefusal(sendMode, who);
+            if (sendRefusal) return send(res, 403, { error: sendRefusal, remote: true });
+
             const summary = index.summary(sessionId);
             if (!summary) return send(res, 404, { error: 'session not found' });
             const cwd = summary.cwd && fs.existsSync(summary.cwd)
@@ -593,7 +833,7 @@ async function api(req, res, url, pathname) {
             const r = pool.ensure(sessionId, {
                 cwd,
                 model: body.model || null,
-                permissionMode: normalizeMode(body.permissionMode),
+                permissionMode: sendMode,
                 fork: !!body.fork,
             });
             const entry = r.send(text);
@@ -847,10 +1087,103 @@ async function api(req, res, url, pathname) {
         return send(res, r.ok ? 200 : 502, { ok: r.ok });
     }
 
+    // --- pairing -----------------------------------------------------------
+    // What the "Connect a phone" dialog needs to build a link that works: the
+    // machine's real tailnet name, and whether HTTPS is available on it yet.
+    //
+    // Local callers only — not because it is secret, but because it is answering
+    // "how would a *different* device reach this bridge", and a device that is
+    // already talking to it remotely has its answer.
+    if (pathname === '/api/pairing' && req.method === 'GET') {
+        if (who.remote) return send(res, 403, { error: 'local callers only' });
+        const info = await tailscale.pairingHosts(cfg.PORT);
+        return send(res, 200, info);
+    }
+
     // --- filesystem (new-session directory picker) -------------------------
     if (pathname === '/api/fs' && req.method === 'GET') {
         const dir = url.searchParams.get('path') || cfg.HOME;
+        // This exists for the new-session directory picker, and a session can only
+        // start inside the allowed roots — so listing outside them offers a choice
+        // that cannot be taken, on top of enumerating the machine to a caller who
+        // has no business doing so.
+        if (!cfg.withinRoots(dir)) {
+            return send(res, 403, {
+                error: 'that directory is outside the allowed roots',
+                path: path.resolve(dir),
+                roots: cfg.ALLOWED_ROOTS,
+            });
+        }
         return send(res, 200, listDir(dir));
+    }
+
+    // Somewhere to put a project that does not exist yet. The picker can navigate,
+    // so this only ever has to make one directory in a place you are already
+    // standing — which is why the body is {parent, name} rather than one joined
+    // path. A separate `name` can be refused outright for containing a separator,
+    // instead of being sanitised after the fact and hoping nothing was missed.
+    if (pathname === '/api/fs/mkdir' && req.method === 'POST') {
+        const body = await readJson(req);
+        const parent = cfg.expandHome(body.parent || '');
+        const name = String(body.name == null ? '' : body.name).trim();
+
+        if (!parent) return send(res, 400, { error: 'parent is required' });
+        if (!cfg.withinRoots(parent)) {
+            return send(res, 403, {
+                error: 'that directory is outside the allowed roots',
+                path: path.resolve(parent),
+                roots: cfg.ALLOWED_ROOTS,
+            });
+        }
+
+        // Asked before mkdir so a missing or file-shaped parent is a sentence
+        // rather than a bare ENOENT/ENOTDIR arriving from two layers down.
+        if (!isDirectory(parent)) {
+            return send(res, 400, { error: `No such directory: ${parent}` });
+        }
+
+        const bad = folderNameProblem(name);
+        if (bad) return send(res, 400, { error: bad });
+
+        const target = path.join(path.resolve(parent), name);
+        // Belt and braces. The separator refusal above already makes this
+        // unreachable, and it is still the check that must not be the one that
+        // was left out.
+        if (!cfg.withinRoots(target)) {
+            return send(res, 403, {
+                error: 'that directory is outside the allowed roots',
+                path: target, roots: cfg.ALLOWED_ROOTS,
+            });
+        }
+
+        try {
+            // Deliberately not recursive: one segment is all the button offers, and
+            // a non-recursive mkdir is what makes EEXIST below mean something.
+            fs.mkdirSync(target);
+            return send(res, 200, { ok: true, path: target, created: true });
+        } catch (err) {
+            if (err.code === 'EEXIST') {
+                // The caller wanted a directory here by this name, and there is
+                // one. Saying "already exists" would be technically true and
+                // practically unhelpful — so this is idempotent, and the client
+                // navigates into it either way.
+                let st = null;
+                try { st = fs.statSync(target); } catch { /* raced away */ }
+                if (st && st.isDirectory()) {
+                    return send(res, 200, { ok: true, path: target, created: false });
+                }
+                return send(res, 409, {
+                    error: `${target} already exists and is not a directory`,
+                });
+            }
+            if (err.code === 'ENOENT' || err.code === 'ENOTDIR') {
+                return send(res, 404, { error: `${parent} is no longer a directory` });
+            }
+            if (err.code === 'EACCES' || err.code === 'EPERM' || err.code === 'EROFS') {
+                return send(res, 403, { error: `Not allowed to create a folder in ${parent}` });
+            }
+            return send(res, 500, { error: err.message });
+        }
     }
 
     return send(res, 404, { error: 'no such endpoint', pathname });
@@ -887,23 +1220,73 @@ function workingDir(summary) {
         .find(d => d && fs.existsSync(d)) || null;
 }
 
+/**
+ * Why this is not a usable folder name, or null if it is one.
+ *
+ * The leading-dot refusal is not prudishness: listDir() hides dotfiles, so a
+ * `.foo` created here would be invisible in the very picker that made it. A name
+ * the app will not show is worse than a name it will not accept.
+ */
+function folderNameProblem(name) {
+    if (!name) return 'a name is required';
+    if (name === '.' || name === '..') return `"${name}" is not a name`;
+    if (name.includes('/')) return 'a folder name cannot contain "/" — make one level at a time';
+    if (name.includes('\0')) return 'that name contains a null byte';
+    if (name.startsWith('.')) return 'names starting with "." are hidden, and the picker would not show it';
+    if (Buffer.byteLength(name) > 255) return 'that name is too long';
+    return null;
+}
+
+/** Does this path exist and is it a directory? Follows symlinks, unlike a Dirent. */
+function isDirectory(p) {
+    try { return fs.statSync(p).isDirectory(); } catch { return false; }
+}
+
+const LIST_CAP = 500;
+
 function listDir(dir) {
-    const resolved = path.resolve(dir);
+    const resolved = path.resolve(cfg.expandHome(dir));
     let entries = [];
+    let truncated = false;
     try {
-        entries = fs.readdirSync(resolved, { withFileTypes: true })
-            .filter(e => e.isDirectory() && !e.name.startsWith('.'))
+        const all = fs.readdirSync(resolved, { withFileTypes: true })
+            .filter(e => !e.name.startsWith('.'))
+            // A symlink pointing at a directory reports isDirectory() false, so
+            // without the second arm browsing cannot see a project tree that was
+            // linked into place — and people do link them in. Only links pay for
+            // the stat, and a dangling one drops out of the list by failing it.
+            .filter(e => e.isDirectory()
+                || (e.isSymbolicLink() && isDirectory(path.join(resolved, e.name))))
             .map(e => ({ name: e.name, path: path.join(resolved, e.name) }))
-            .sort((a, b) => a.name.localeCompare(b.name))
-            .slice(0, 500);
+            .sort((a, b) => a.name.localeCompare(b.name));
+        // The cap used to be silent, which reads as "this is all of it". Saying so
+        // costs a boolean and stops the picker implying something false.
+        truncated = all.length > LIST_CAP;
+        entries = all.slice(0, LIST_CAP)
+            // Which of these is a project, without having to click in. One stat
+            // per row, capped, and all of it local.
+            .map(e => ({ ...e, git: fs.existsSync(path.join(e.path, '.git')) }));
     } catch (err) {
-        return { path: resolved, error: err.message, entries: [], parent: path.dirname(resolved) };
+        return {
+            path: resolved, error: err.message, entries: [],
+            parent: path.dirname(resolved), roots: cfg.ALLOWED_ROOTS,
+        };
     }
     const isGit = fs.existsSync(path.join(resolved, '.git'));
+    // Stop "up" at the edge of the allowed roots rather than offering a step the
+    // route above will refuse. A dead end you can see is better than a button that
+    // returns 403.
+    const up = resolved === '/' ? null : path.dirname(resolved);
     return {
         path: resolved,
-        parent: resolved === '/' ? null : path.dirname(resolved),
+        parent: up && cfg.withinRoots(up) ? up : null,
+        // The breadcrumb needs to know where the trail stops and what to call the
+        // top of it, and when more than one root is configured this is the only
+        // way a client can offer the second one at all. Learning the roots by
+        // making a request that fails is backwards.
+        roots: cfg.ALLOWED_ROOTS,
         isGit,
+        truncated,
         entries,
     };
 }
@@ -947,22 +1330,124 @@ const MIME = {
     '.svg': 'image/svg+xml',
     '.json': 'application/json; charset=utf-8',
     '.woff2': 'font/woff2',
+    // Added for the phone surface: a PWA that cannot fetch its own manifest or
+    // icons is not installable, and both would otherwise be served as
+    // application/octet-stream and ignored.
+    '.png': 'image/png',
+    '.ico': 'image/x-icon',
+    '.webmanifest': 'application/manifest+json',
 };
 
-function serveStatic(res, pathname) {
-    const rel = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
+// The two HTML entry points, and what each is reached by.
+const PAGES = new Map([
+    ['/', 'index.html'],
+    ['/m', 'mobile.html'],
+    ['/m/', 'mobile.html'],
+]);
+
+function serveStatic(req, res, pathname, who) {
+    const rel = PAGES.get(pathname) || pathname.replace(/^\/+/, '');
     const file = path.resolve(WEB_DIR, rel);
     if (file !== WEB_DIR && !file.startsWith(WEB_DIR + path.sep)) {
         return send(res, 403, { error: 'forbidden' });
     }
     let body;
     try { body = fs.readFileSync(file); } catch { return send(res, 404, { error: 'not found' }); }
-    res.writeHead(200, {
+
+    // Hand our own page its credentials, so opening 127.0.0.1 in a browser — or the
+    // Electron shell doing the same — needs no login step. Only for a local
+    // navigation to a page of ours: see auth.localPageRequest.
+    //
+    // Two forms, for two different jobs.
+    //
+    // The **cookie** is what authenticates. It means nothing in web/ has to change
+    // for the UI to keep working: `fetch` defaults to credentials:'same-origin' and
+    // EventSource sends same-origin cookies too, so every existing call — including
+    // the two SSE streams and the service worker's, which is the one place a header
+    // could not have been threaded through — carries it already. It also puts the
+    // desktop on exactly the path a paired phone uses, rather than a second one.
+    //
+    // The **<meta> tag** is not for authentication; it is so the page can *read* the
+    // token, which it needs to build the pairing URL for "Connect a phone". An
+    // HttpOnly cookie is deliberately unreadable, and that is the right trade for a
+    // credential — hence both.
+    const headers = {
         'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
-        'Content-Length': body.length,
         'Cache-Control': 'no-store',
-    });
+    };
+    if (file.endsWith('.html')) {
+        // Even same-origin: the token is in this response body, and a referrer is
+        // the one way it could leave the page by accident.
+        headers['Referrer-Policy'] = 'same-origin';
+        if (auth.localPageRequest(req)) {
+            body = Buffer.from(auth.injectToken(body.toString('utf8')), 'utf8');
+            headers['Set-Cookie'] = auth.pairCookie(auth.current(), { secure: who.secure });
+        }
+    }
+    headers['Content-Length'] = body.length;
+
+    res.writeHead(200, headers);
     res.end(body);
+}
+
+// ---------------------------------------------------------------------------
+// Pairing
+// ---------------------------------------------------------------------------
+//
+// The handshake that gets a phone onto the bridge. You open one long URL — the
+// token in the query — and it comes back as an HttpOnly cookie and a redirect to
+// /m. Afterwards nothing carries the token in a URL: fetches send the cookie, and
+// so does EventSource, which is the point. EventSource cannot set headers, so
+// without a cookie the only way to authenticate a stream is `?token=` on the
+// stream's URL, in the page, forever.
+//
+// The gate above has already validated the token — /pair is not under /api/, so it
+// is checked here rather than there.
+
+function pair(req, res, url, pathname, who) {
+    if (pathname === '/pair/forget') {
+        res.writeHead(303, {
+            Location: '/m',
+            'Set-Cookie': auth.pairCookie('', { secure: who.secure }),
+            'Cache-Control': 'no-store',
+        });
+        return res.end();
+    }
+
+    if (!who.ok) {
+        // Deliberately plain, and deliberately not a JSON error: this is a page a
+        // person just opened on a phone, and "unauthorized" in a monospace blob
+        // tells them nothing about what to do.
+        const body = Buffer.from('<!DOCTYPE html><meta charset="utf-8">'
+            + '<meta name="viewport" content="width=device-width,initial-scale=1">'
+            + '<title>Claude Sessions — pairing failed</title>'
+            + '<style>body{font:16px/1.5 system-ui;margin:0;padding:2rem;'
+            + 'background:#131314;color:#e8e8e8}code{background:#232325;padding:.15em .4em;'
+            + 'border-radius:4px;font-size:.9em}</style>'
+            + '<h1>That link did not work</h1>'
+            + '<p>The token is missing, mistyped, or from before the bridge last '
+            + 'created one.</p>'
+            + '<p>Get a fresh link from <b>Connect a phone</b> in the desktop window, '
+            + 'or read the token with <code>cat ~/.local/share/claude-sessions/token</code>.</p>',
+            'utf8');
+        res.writeHead(401, {
+            'Content-Type': 'text/html; charset=utf-8',
+            'Content-Length': body.length,
+            'Cache-Control': 'no-store',
+        });
+        return res.end(body);
+    }
+
+    console.log(`[claude-sessions] paired ${who.peer} via ${who.host}`);
+    res.writeHead(303, {
+        // 303 with the token stripped, so the address bar and history keep the
+        // bare /m rather than the credential.
+        Location: '/m',
+        'Set-Cookie': auth.pairCookie(auth.current(), { secure: who.secure }),
+        'Cache-Control': 'no-store',
+        'Referrer-Policy': 'no-referrer',
+    });
+    res.end();
 }
 
 // ---------------------------------------------------------------------------
@@ -1067,6 +1552,28 @@ if (cfg.PORT === cfg.DEFAULT_PORT && cfg.IS_WORKTREE) {
     process.exit(4);
 }
 
+// Binding anything but loopback publishes the bridge, and on this machine that
+// means publishing it to a /24 shared with the building — AT&T Community Wi-Fi for
+// Apartments, with client isolation misconfigured. A token stands in front of it,
+// but a token is not a reason to offer the socket to strangers when there is a
+// better way: `tailscale serve` reaches a phone from anywhere while the socket stays
+// on loopback. So this takes a second, explicit env var, and says what to do
+// instead. Plan 14-B asked for a refusal when no token file existed; a token now
+// always exists, so the refusal that still earns its place is this one.
+if (!auth.hostIsLocal(cfg.HOST.replace(/^\[|\]$/g, '')) && !cfg.ALLOW_REMOTE_BIND) {
+    console.error(`[claude-sessions] refusing to bind ${cfg.HOST} — that offers this `
+        + 'bridge to the network, and this machine is on a shared apartment subnet.');
+    console.error('  For a phone, prefer `tailscale serve` on the Windows host: it '
+        + 'reaches you from anywhere and the bridge never leaves loopback.');
+    console.error('  See docs/remote.md. To bind anyway, set '
+        + 'CLAUDE_SESSIONS_ALLOW_REMOTE_BIND=1.');
+    process.exit(5);
+}
+
+// Before the socket, so the first request cannot arrive before there is a token to
+// check it against.
+auth.ensureToken();
+
 server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
         console.error(`[claude-sessions] port ${cfg.PORT} is already in use — `
@@ -1092,6 +1599,11 @@ server.listen(cfg.PORT, cfg.HOST, async () => {
     if (cfg.IS_DEV) {
         console.log('[claude-sessions] development instance — the everyday one on '
             + `${cfg.DEFAULT_PORT} is untouched.`);
+    }
+
+    if (!auth.hostIsLocal(cfg.HOST.replace(/^\[|\]$/g, ''))) {
+        console.warn(`[claude-sessions] bound ${cfg.HOST} — reachable from the network. `
+            + 'Every remote request is logged below.');
     }
 
     // This port shows up in DevBrowser's detected list; name it so it isn't just

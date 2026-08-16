@@ -84,6 +84,17 @@
       <span id="notes-badge" class="bar-badge" hidden></span>
     </button>
 
+    <!-- The same sessions, on a phone. Icon-only: it is a setup step you do once
+         per device, not something to give a word of the bar to forever. -->
+    <button id="btn-pair" class="bar-btn icon-only" type="button"
+            title="Connect a phone to this bridge">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <rect x="7" y="2.5" width="10" height="19" rx="2.6"
+              stroke="currentColor" stroke-width="1.7"/>
+        <path d="M11 18.6h2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+      </svg>
+    </button>
+
     <!-- What reaches you when the window is not the thing you are looking at.
          The rules it obeys are in announceTurn(); the note inside says them out
          loud, because a notification you cannot predict is one you switch off. -->
@@ -330,6 +341,20 @@ checks, and merge it once they pass.">LGTM</button>
           <p id="live-sub" class="live-sub">Every session with a process, and what
             it is waiting on.</p>
         </div>
+        <!-- Which way the board and the conversation divide the window. Under it
+             suits a wide screen and a long transcript; beside it suits watching
+             a lot of cards at once. -->
+        <button id="live-side" class="live-btn" type="button" aria-pressed="false"
+                title="Put the board beside the conversation">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <rect id="live-side-a" x="3.5" y="4" width="17" height="7" rx="1.8"
+                  stroke="currentColor" stroke-width="1.8"/>
+            <rect id="live-side-b" x="3.5" y="13" width="17" height="7" rx="1.8"
+                  stroke="currentColor" stroke-width="1.8"/>
+          </svg>
+          <span id="live-side-label">Stacked</span>
+        </button>
+
         <!-- The stripped-down layout, without having to type a URL: this window
              has no address bar, so ?view=live&focus=1 was unreachable from it. -->
         <button id="live-focus" class="live-btn" type="button" aria-pressed="false"
@@ -390,11 +415,32 @@ checks, and merge it once they pass.">LGTM</button>
       <div class="field">
         <label for="new-cwd">Working directory</label>
         <input id="new-cwd" type="text" spellcheck="false">
-        <div class="note">The agent runs here. Recent projects are listed below.</div>
+        <div class="note">The agent runs here. Pick one below, or type a path —
+          <code>~</code> works, and Enter browses to it.</div>
       </div>
       <div class="field">
-        <label>Recent projects</label>
-        <div id="new-picker" class="picker"></div>
+        <div class="picker-tabs" role="tablist" aria-label="Pick a working directory">
+          <button id="new-tab-recent" class="picker-tab" type="button" role="tab"
+                  aria-selected="true" aria-controls="new-picker">Recent</button>
+          <button id="new-tab-browse" class="picker-tab" type="button" role="tab"
+                  aria-selected="false" aria-controls="new-browse">Browse</button>
+        </div>
+        <div id="new-picker" class="picker" role="tabpanel"
+             aria-labelledby="new-tab-recent"></div>
+        <!-- Browsing and selecting are one gesture: walking into a folder is how
+             you choose it, and #new-cwd above always says which one that is. -->
+        <div id="new-browse" role="tabpanel" aria-labelledby="new-tab-browse" hidden>
+          <div id="new-roots" class="crumbs" hidden></div>
+          <div id="new-crumbs" class="crumbs"></div>
+          <div id="new-tree" class="picker" aria-label="Folders"></div>
+          <div class="browse-foot">
+            <button id="new-mkdir" class="btn small" type="button">New folder</button>
+            <input id="new-mkdir-name" class="mkdir-name" type="text" spellcheck="false"
+                   hidden placeholder="Folder name" aria-label="New folder name">
+            <button id="new-mkdir-go" class="btn small primary" type="button" hidden>Create</button>
+            <span id="new-browse-note" class="note"></span>
+          </div>
+        </div>
       </div>
       <div class="field">
         <label for="new-prompt">First message</label>
@@ -467,6 +513,37 @@ checks, and merge it once they pass.">LGTM</button>
       <span class="spacer"></span>
       <button class="btn" data-close-del type="button">Cancel</button>
       <button id="del-go" class="btn destructive" type="button">Delete permanently</button>
+    </div>
+  </div>
+</div>
+
+<!-- Connect a phone. The token is 43 characters, so the useful thing this dialog
+     does is let you copy the whole pairing URL rather than read it out. -->
+<div id="pair-scrim" class="scrim" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pair-title">
+    <div class="modal-head">
+      <span id="pair-title">Connect a phone</span>
+      <button class="modal-close" data-close-pair type="button" aria-label="Close">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="note">Open this once on the phone. It signs the device in for a
+        year and lands on the phone view; the token is not in any URL after that.</p>
+      <div class="field">
+        <label for="pair-url">Pairing link</label>
+        <input id="pair-url" type="text" spellcheck="false" readonly>
+      </div>
+      <div class="field">
+        <label for="pair-host">Reachable at</label>
+        <input id="pair-host" type="text" spellcheck="false"
+               placeholder="https://machine.tailnet.ts.net" list="pair-hosts">
+        <datalist id="pair-hosts"></datalist>
+        <div class="note" id="pair-note"></div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="spacer"></span>
+      <button class="btn" data-close-pair type="button">Close</button>
+      <button id="pair-copy" class="btn primary" type="button">Copy link</button>
     </div>
   </div>
 </div>

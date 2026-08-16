@@ -96,6 +96,7 @@ through. **Do not leave them there.** Either:
 
   ```bash
   curl -sX POST http://127.0.0.1:45899/api/sessions \
+    -H "Authorization: Bearer $(cat ~/.local/share/claude-sessions/token)" \
     -H 'X-Claude-Sessions-Client: 1' -H 'Content-Type: application/json' \
     -d '{"cwd":"'"$PWD"'","prompt":"…","test":true}'
   ```
@@ -108,13 +109,46 @@ through. **Do not leave them there.** Either:
 
   ```bash
   curl -sX DELETE http://127.0.0.1:45899/api/sessions/$ID \
+    -H "Authorization: Bearer $(cat ~/.local/share/claude-sessions/token)" \
     -H 'X-Claude-Sessions-Client: 1'
   ```
 
   This is a hard delete — the transcript and its sidecar directory. Do it to
   sessions *you* created, never to one you found.
 
+  If the session's process is still shutting down, the exiting `claude` can write
+  its bookkeeping back to the path you just unlinked, and the session reappears as
+  an empty row with 0 turns. Stop it, wait a moment, then delete — or delete twice.
+
 Best is both: label it on the way in, delete it on the way out.
+
+## The API needs a token now
+
+Every `/api/` route but `/api/health` requires the token at
+`~/.local/share/claude-sessions/token`, created on first run with mode `0600`. So
+any `curl` against the bridge needs:
+
+```bash
+-H "Authorization: Bearer $(cat ~/.local/share/claude-sessions/token)"
+```
+
+Without it you get `401 {"error":"unauthorized"}`, which is easy to misread as a
+broken bridge.
+
+**Nothing in `web/` had to change for this, and nor should yours.** A page fetched
+over loopback is served with the token in a `<meta name="cs-token">` tag *and* with
+an `HttpOnly` cookie set; `fetch` and `EventSource` both send same-origin cookies
+on their own. So the browser and the Electron shell need no login step, and the
+service worker keeps working. Loopback is not otherwise trusted — "any process on
+this machine" is the hole the token closes.
+
+`/api/health` stays open because `app/main.js` pings it before it could know a
+token. It reports `remote`, which is what raises the banner in the UI.
+
+The bridge also refuses to bind a non-loopback interface without
+`CLAUDE_SESSIONS_ALLOW_REMOTE_BIND=1`, and refuses several routes outright to
+remote callers. See `docs/remote.md` for the reasoning and `docs/api.md` for the
+contract.
 
 ## Never rebuild without asking
 
