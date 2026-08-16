@@ -89,6 +89,36 @@ running `npm run dev` are fine from wherever you are. The rule is about writing
 to tracked files: if you are about to change one, be in a worktree. When in
 doubt, make one — it costs a second and nothing is lost by it.
 
+## Landing what you finished
+
+`npm run land`, from the worktree you worked in, merges the pull request for the
+branch you are on and then fast-forwards the main checkout at
+`~/Other/claude-sessions` — so the checkout the user actually runs the app from
+has your work in it, rather than the work sitting on origin where nobody sees it.
+
+```bash
+npm run land -- --status    # what would land, and whether it can
+npm run land -- --dry-run   # say what would happen, change nothing
+npm run land                # merge the PR, then pull the main checkout
+```
+
+It refuses rather than guesses, and every refusal says what to do next:
+uncommitted files in your worktree (they are not in the PR, so landing would
+leave them behind), commits you have not pushed, a PR that conflicts or is
+blocked, a main checkout that is dirty or on some other branch. A refusal that
+comes *after* the merge says so, so you always know which half happened.
+
+**It does not restart the bridge.** The everyday instance usually has live turns
+in it and a restart ends them, so picking up merged code stays the user's call.
+When the merge touched `bridge/` the script says the running bridge is now on old
+code and leaves `npm run restart` to them; `--restart` opts in, and delegates to
+the script that has the turn-in-flight guard rather than reimplementing it.
+
+It is also the sanctioned way to reach the main checkout at all: a worktree-isolated
+session is refused `git -C ~/Other/claude-sessions` by its own harness, which is
+why the gap existed. The script is narrow so that being sanctioned is safe — it
+fast-forwards and nothing else, and never commits there.
+
 ## Clean up the sessions you start
 
 Every session you start to try something out lands in the user's sidebar, because
