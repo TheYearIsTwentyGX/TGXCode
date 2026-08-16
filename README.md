@@ -60,6 +60,7 @@ All of these run from WSL, in this directory.
 | `npm run dev` | A **separate** instance on 45899 plus its own window, for working on this app without disturbing the one you actually use. |
 | `npm run dev:headless` | The same, bridge only — open the printed URL in a browser. The fastest loop for UI work: edit `web/`, hit refresh. |
 | `npm run bridge` | The bridge in the foreground on 45888. This is the everyday instance; use `dev` instead unless you mean it. |
+| `npm test` | The auth and remote-access tests. Starts a bridge on a free port, runs everything, stops it; `npm test -- 45901` runs against one you already have. It will not use 45888. |
 | `npm run build` | Build and install the app (calls `install.ps1` through PowerShell). Pass options after `--`, e.g. `npm run build -- -NoInstall`. |
 | `npm run icon` | Regenerate `app/icon.ico`. |
 
@@ -666,11 +667,13 @@ window reconnects on its own.
 
 ## Working on this with agents
 
-`.claude/settings.json` pins `worktree.baseRef` to `head`. The global default is
-`fresh`, which branches a new worktree from `origin/<default-branch>` — and this
-repo has no remote, so there is no `origin/master` to branch from. Pinning it to
-the local HEAD avoids that whole question. Add a remote later and either setting
-works.
+`.claude/settings.json` pins `worktree.baseRef` to `head`, so a new worktree
+branches from local HEAD. The global default is `fresh`, which branches from
+`origin/<default-branch>`. The pin dates from when this repo had no remote; it has
+one now — `origin` is `github.com/TheYearIsTwentyGX/TGXCode`, and `main` tracks
+`origin/main` — so either setting resolves. `head` is kept because it bases a
+worktree on the checkout in front of you, which is the predictable thing while
+several agents are committing to main.
 
 Two other things that trip agents up here:
 
