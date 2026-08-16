@@ -2017,13 +2017,14 @@ body.term-resizing { user-select: none; cursor: row-resize; }
    the eye can run down the right edge for "what needs doing" and down the left
    for "where". */
 
-.dash, .live {
+.dash, .live, .notes {
     display: flex;
     flex-direction: column;
     flex: 1;
     min-height: 0;
 }
-.dash[hidden], .live[hidden] { display: none; }
+/* Not optional: `display: flex` above beats the `hidden` attribute on its own. */
+.dash[hidden], .live[hidden], .notes[hidden] { display: none; }
 
 /* ── the live board ──────────────────────────────────────────────────────
    A card per running session. The grid decides its own column count so that a
@@ -2731,6 +2732,164 @@ body.term-resizing { user-select: none; cursor: row-resize; }
    colour, so it can never be mistaken for the confirm it sits next to. */
 .btn.destructive { background: var(--red); color: #4a0d09; }
 .btn.destructive:hover { background: var(--red); filter: brightness(1.08); }
+
+/* ── notification history ────────────────────────────────────────────────
+   A log, so it reads down the left edge: the kind first, always in the same
+   place, because scanning for "was there a permission I missed" is what this
+   list is for. The accent stripe carries the same meaning as the kind word and
+   is there to be read at arm's length; the quiet rows give theirs up, which is
+   how Everything stays readable once it fills with short turns. */
+
+.notes-head {
+    flex: none;
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    padding: 22px 28px 16px;
+}
+.notes-title { margin: 0; font: 400 21px/1.3 var(--sans); color: var(--text); }
+.notes-sub {
+    margin: 5px 0 0;
+    max-width: 640px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text-3);
+}
+
+.notes-tools {
+    margin-left: auto;
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.notes-tools .dash-btn { margin-left: 0; }
+
+/* Two states of one control, so they share a track rather than sitting apart
+   as a pair of buttons that happen to be next to each other. */
+.seg {
+    display: flex;
+    padding: 3px;
+    border-radius: var(--pill);
+    background: var(--s2);
+}
+.seg-btn {
+    height: 28px;
+    padding: 0 14px;
+    border-radius: var(--pill);
+    color: var(--text-3);
+    font: 500 12.5px/1 var(--sans);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.seg-btn:hover { color: var(--text); }
+.seg-btn[aria-pressed="true"] { background: var(--s4); color: var(--text); }
+
+.notes-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 28px 32px;
+}
+
+.note-row {
+    position: relative;
+    margin-bottom: 6px;
+    border-radius: var(--r);
+    background: var(--s2);
+    overflow: hidden;
+}
+.note-row::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 3px;
+    background: var(--accent);
+}
+
+.note-main {
+    display: block;
+    width: 100%;
+    padding: 11px 16px 12px 19px;
+    text-align: left;
+    transition: background var(--t-fast) var(--ease);
+}
+.note-main:hover { background: var(--s3); }
+
+.note-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+}
+.note-kind {
+    flex: none;
+    /* Fixed width so every kind word starts and ends in the same place and the
+       titles line up beside them. */
+    width: 104px;
+    font: 500 11.5px/1.4 var(--sans);
+    color: var(--accent);
+    letter-spacing: 0.01em;
+}
+.note-title {
+    flex: 1;
+    min-width: 0;
+    font: 500 13.5px/1.4 var(--sans);
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.note-when {
+    flex: none;
+    font: 400 11.5px/1.4 var(--sans);
+    color: var(--text-4);
+}
+
+.note-summary {
+    display: block;
+    margin-top: 2px;
+    padding-left: 114px;
+    font: 400 12.5px/1.5 var(--sans);
+    color: var(--text-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.note-meta {
+    display: flex;
+    gap: 10px;
+    margin-top: 4px;
+    padding-left: 114px;
+    font: 400 11.5px/1.4 var(--sans);
+    color: var(--text-4);
+}
+.note-outcome { color: var(--text-3); }
+/* How an ask ended, where the ending is the news: denied by a rule you did not
+   see, or denied because nothing was open to ask. */
+.note-outcome[data-outcome="deny"],
+.note-outcome[data-outcome="auto-denied"],
+.note-outcome[data-outcome="abandoned"] { color: var(--yellow); }
+
+.note-row { --accent: var(--blue); }
+.note-row[data-type="plan"] { --accent: var(--purple); }
+.note-row[data-type="question"] { --accent: var(--peach); }
+.note-row[data-type="finished"] { --accent: var(--green); }
+.note-row[data-type="failed"] { --accent: var(--red); }
+.note-row[data-type="agent-done"] { --accent: var(--text-4); }
+
+/* Nothing ever interrupted you for these, so they do not get to shout here
+   either. They are in the list to answer "what has been going on", which is a
+   question you ask by reading rather than by glancing. */
+.note-row[data-loud="false"] { background: transparent; }
+.note-row[data-loud="false"]::before { opacity: 0.4; }
+.note-row[data-loud="false"] .note-title { color: var(--text-2); font-weight: 400; }
+.note-row[data-loud="false"] .note-kind { color: var(--text-4); }
+.note-row[data-loud="false"] .note-main:hover { background: var(--s2); }
+
+@media (max-width: 700px) {
+    .note-kind { width: auto; }
+    .note-summary, .note-meta { padding-left: 0; }
+}
 
 /* ── delete confirm ──────────────────────────────────────────────────── */
 

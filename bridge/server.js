@@ -19,6 +19,7 @@ const { SessionIndex } = require('./sessions');
 const { SessionRegistry } = require('./registry');
 const { RunnerPool, PERMISSION_MODES } = require('./runner');
 const { Flags } = require('./flags');
+const { NotificationLog } = require('./notifications');
 const devbrowser = require('./devbrowser');
 const devservers = require('./devservers');
 const dashboard = require('./dashboard');
@@ -34,6 +35,14 @@ const index = new SessionIndex(flags);
 const registry = new SessionRegistry();
 const pool = new RunnerPool();
 const terminals = new TerminalPool();
+// Titles are copied onto an entry as it is filed, so the log still reads
+// properly after a session is renamed or deleted; the test flag is asked for at
+// read time, so labelling a session as scratch afterwards takes its rows out of
+// the everyday window too.
+const notifications = new NotificationLog({
+    describe: (id) => index.summary(id),
+    isTest: (id) => flags.get(id).test,
+});
 
 // Which sessions are running, from Claude Code's own registry rather than from
 // how recently a file changed. The index works without it; every summary simply
@@ -379,6 +388,31 @@ async function api(req, res, url, pathname) {
         send(res, 200, { ok: true });
         setTimeout(() => shutdown(0), 100);
         return;
+    }
+
+    // --- notification history ---------------------------------------------
+    if (pathname === '/api/notifications' && req.method === 'GET') {
+        return send(res, 200, {
+            notifications: notifications.list({
+                limit: Math.min(Number(url.searchParams.get('limit')) || 200, 1000),
+                // 'notable' is the default view: the entries that cleared the bar
+                // for interrupting somebody. 'all' also has the quiet ones — a
+                // six-second turn, a subagent finishing — which nothing ever
+                // notified about but which answer "what has been going on".
+                scope: url.searchParams.get('scope') === 'all' ? 'all' : 'notable',
+                type: url.searchParams.get('type') || null,
+                sessionId: url.searchParams.get('sessionId') || null,
+                // Same rule as /api/sessions: a scratch session belongs to the
+                // instance that started it.
+                includeTest: cfg.IS_DEV,
+            }),
+        });
+    }
+
+    if (pathname === '/api/notifications' && req.method === 'DELETE') {
+        notifications.clear();
+        broadcast('notifications-cleared', { at: Date.now() });
+        return send(res, 200, { ok: true });
     }
 
     // --- projects & sessions ----------------------------------------------
@@ -950,14 +984,36 @@ index.on('changed', () => broadcast('sessions-changed', { at: Date.now() }));
 // so the registry is the only thing that notices — the rail would otherwise wait
 // for the next thing that happened to change a file.
 registry.on('changed', () => broadcast('sessions-changed', { at: Date.now() }));
-pool.on('status', (s) => broadcast('runner-status', s));
+// Every status carries `busySince`, which is how the log measures a turn — see
+// NotificationLog#noteRunner for why the result's own duration will not do.
+pool.on('status', (s) => { notifications.noteRunner(s); broadcast('runner-status', s); });
 // A card is answered from the board, so the board must not be up to a second
 // behind on an ask appearing or being taken away.
-pool.on('permission-request', (p) => { broadcast('permission-request', p); tickBoard(); });
-pool.on('permission-resolved', (p) => { broadcast('permission-resolved', p); tickBoard(); });
+pool.on('permission-request', (p) => {
+    broadcast('permission-request', p);
+    filed(notifications.ask(p));
+    tickBoard();
+});
+pool.on('permission-resolved', (p) => {
+    broadcast('permission-resolved', p);
+    const row = notifications.resolve(p.requestId, p.outcome);
+    if (row) {
+        broadcast('notification-resolved',
+            { id: row.id, outcome: row.outcome, outcomeAt: row.outcomeAt });
+    }
+    tickBoard();
+});
 pool.on('notice', (n) => broadcast('notice', n));
-pool.on('turn-complete', (r) => broadcast('turn-complete', r));
-pool.on('failed', (f) => broadcast('send-failed', f));
+pool.on('turn-complete', (r) => { broadcast('turn-complete', r); filed(notifications.turn(r)); });
+pool.on('failed', (f) => { broadcast('send-failed', f); filed(notifications.sendFailed(f)); });
+// Nothing notifies for a subagent finishing; it is logged so that "what has been
+// happening" has an answer at all.
+pool.on('agent-done', (a) => filed(notifications.agentDone(a)));
+
+/** Tell any open history view about a new row, so it does not have to re-fetch. */
+function filed(row) {
+    if (row) broadcast('notification', row);
+}
 pool.on('forked', ({ from, to }) => {
     index.note(to);
     broadcast('session-forked', { from, to });
