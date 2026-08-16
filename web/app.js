@@ -704,11 +704,12 @@ function clearCurrent() {
     // and is there again the moment the session is.
     termPane.detach();
     subscribe();            // stop the bridge tailing a file that is gone
+    rememberView();         // and the address stops naming it too
 }
 
 // ── conversation ─────────────────────────────────────────────────────────
 
-async function openSession(id, { quiet = false } = {}) {
+async function openSession(id, { quiet = false, keepDash = false } = {}) {
     // Already here — but a history row may still have somewhere to put you.
     if (state.current && state.current.sessionId === id) { takePendingJump(); return true; }
     // Keep whatever is half-typed for the session being left behind.
@@ -723,7 +724,7 @@ async function openSession(id, { quiet = false } = {}) {
     // the old behaviour of arriving all at once.
     const known = state.sessions.find(s => s.sessionId === id) || null;
     const seq = ++state.openSeq;
-    if (known) beginOpen(known);
+    if (known) beginOpen(known, { keepDash });
 
     try {
         const data = await get(`/api/sessions/${id}`);
@@ -732,7 +733,7 @@ async function openSession(id, { quiet = false } = {}) {
         if (seq !== state.openSeq) return true;
 
         if (known) state.current = data.summary;   // the index may have moved on
-        else beginOpen(data.summary);              // nothing was drawn yet
+        else beginOpen(data.summary, { keepDash }); // nothing was drawn yet
         state.offset = data.offset;
 
         renderHeader();
@@ -772,8 +773,12 @@ async function openSession(id, { quiet = false } = {}) {
  * Everything here is derivable from the summary alone. What needs the fetch —
  * the events, the byte offset, the runner state — is deliberately left cleared
  * so nothing downstream reads the session it just left.
+ *
+ * `keepDash` is for a restore, where the session is not being picked but put
+ * back: a window that was on the work-in-flight board over an open conversation
+ * should return to the board, not be walked off it by the conversation arriving.
  */
-function beginOpen(summary) {
+function beginOpen(summary, { keepDash = false } = {}) {
     state.current = summary;
     state.offset = 0;
     state.runner = null;
@@ -793,7 +798,7 @@ function beginOpen(summary) {
     // Picking a session is done with the work-in-flight board, whichever way you
     // got there. The live board is not a place you leave — it docks under the
     // conversation you just opened, which is the whole point of it.
-    if (state.dash.open) showDash(false);
+    if (state.dash.open && !keepDash) showDash(false);
     // Through paintPanels rather than by hand: opening a session is what turns a
     // full-height board into a docked one, and setting `conv.hidden` here
     // directly left the two disagreeing — the conversation drawn underneath a
@@ -820,6 +825,13 @@ function beginOpen(summary) {
     dom.input.value = loadDraft(summary.sessionId);
     autoGrow();
     dom.input.focus();
+
+    // Last, and here rather than in openSession: this is the one place both
+    // paths through openSession converge on a session, so every way of getting
+    // to a conversation — a rail row, a card, the dashboard, a notification, a
+    // fork still being written — writes the address once, with everything the
+    // showDash above may have changed on the way already settled.
+    rememberView();
 }
 
 function showOpenFailed(id, err) {
@@ -1883,8 +1895,15 @@ function renderAgents() {
     }
 }
 
-/** Switch the conversation pane over to one subagent's transcript. */
-async function openAgent(toolUseId) {
+/**
+ * Switch the conversation pane over to one subagent's transcript.
+ *
+ * `quiet` is for a restore. A subagent is a detail of a session rather than a
+ * place of its own, so an id that has gone should drop you back into the parent
+ * transcript without saying anything — the session itself is fine, and the
+ * address stops naming the subagent a moment later.
+ */
+async function openAgent(toolUseId, { quiet = false } = {}) {
     if (!state.current) return;
     if (state.agent === toolUseId) return;
     const sessionId = state.current.sessionId;
@@ -1915,8 +1934,12 @@ async function openAgent(toolUseId) {
 
         subscribe();    // start following the agent's file as well
         loadAgents();
+        rememberView();
     } catch (err) {
-        toast(`Could not open the subagent: ${err.message}`, 'error');
+        if (!quiet) toast(`Could not open the subagent: ${err.message}`, 'error');
+        // state.agent is still null, so this drops the id that did not work
+        // rather than leaving the next refresh to try it again.
+        else rememberView();
     }
 }
 
@@ -1941,6 +1964,7 @@ function closeAgent() {
     renderHeader();
     renderAgents();
     subscribe();        // stop the bridge following a file nobody is reading
+    rememberView();
 }
 
 function renderAgentHeader() {
@@ -2206,6 +2230,7 @@ function setDockSide(side) {
     // A card is built differently for a strip than for a column — the strip is
     // short of height and the column is short of width — so this is a rebuild.
     if (liveVisible()) renderLive();
+    rememberView();
 }
 
 function paintDockButton() {
@@ -2263,12 +2288,54 @@ function setFocus(on) {
     rememberView();
 }
 
-/** Keep the address bar honest, so the view can be reopened or copied. */
+// What the address last said, so that a redraw on a timer does not touch history
+// sixty times a minute to write down the same thing. Starts as null rather than
+// the empty string, because the empty string is a real view — nothing open — and
+// starting there would swallow the write that clears a session which has gone.
+let lastView = null;
+
+// Set while restoreView is putting the window back together at boot. Turning the
+// board on is a view change like any other, so it would write the address — but
+// the session it names has not been fetched yet, and the write would drop it
+// from the very address still being read. Nothing needs writing during a restore
+// in any case: the address is already what we are trying to reproduce.
+let restoring = false;
+
+/**
+ * Keep the address bar honest, so the view can be reopened or copied — and so a
+ * refresh lands where you were.
+ *
+ * The address is the whole of the memory here. Ctrl+R reloads the document URL,
+ * and replaceState has been keeping that URL current all along, so a refresh
+ * restores everything for free. A fresh shell launch loads the bare origin
+ * (app/main.js) and therefore starts clean, which is the intended difference:
+ * opening the app is not the same gesture as refreshing it.
+ *
+ * `view` is the panel with the screen. `live=1` is the one thing it cannot say:
+ * the work-in-flight board covers the live board without closing it, so a board
+ * left switched on underneath has to be written down separately or closing the
+ * dashboard would reveal nothing where there was something.
+ */
 function rememberView() {
+    if (restoring) return;
     const q = new URLSearchParams();
-    if (state.live.open) q.set('view', 'live');
+    if (state.dash.open) {
+        q.set('view', 'dashboard');
+        if (state.live.open) q.set('live', '1');
+    } else if (state.live.open) {
+        q.set('view', 'live');
+    }
     if (state.focus) q.set('focus', '1');
+    if (state.current) q.set('session', state.current.sessionId);
+    if (state.agent) q.set('agent', state.agent);
+    // Only while the board is up. The arrangement is not part of where you are
+    // when there is no board to arrange, and a ?dock= hanging off a plain
+    // conversation is noise in an address somebody might read.
+    if (state.live.open) q.set('dock', state.live.dock);
+
     const search = q.toString();
+    if (search === lastView) return;
+    lastView = search;
     history.replaceState(null, '', search ? `${location.pathname}?${search}` : location.pathname);
 }
 
@@ -2824,6 +2891,7 @@ function showDash(on) {
         // itself to a box it could not measure then.
         termPane.refit();
     }
+    rememberView();
 }
 
 async function loadDash({ refresh = false } = {}) {
@@ -3574,7 +3642,12 @@ navigator.serviceWorker?.addEventListener('message', (e) => {
 function openFromHash() {
     const m = /^#\/session\/([0-9a-f-]{8,})$/i.exec(location.hash || '');
     if (!m) return false;
-    history.replaceState(null, '', location.pathname);   // don't reopen on refresh
+    // The hash is a click that happened once, not a place: consume it so a
+    // refresh does not keep re-opening the same session forever. What a refresh
+    // lands on instead is the query string, which the open below is about to
+    // write through rememberView. Only the hash goes — the search is the durable
+    // half and dropping it here would undo the view restored a moment ago.
+    history.replaceState(null, '', location.pathname + location.search);
     openSession(m[1]);
     return true;
 }
@@ -5717,21 +5790,75 @@ function debounce(fn, ms) {
 }
 
 /**
- * `?view=live` opens on the board, and `&focus=1` strips the window down to it.
+ * Open the window on whatever the address says, which after a refresh is
+ * wherever you were.
  *
- * For the second monitor: a browser window left up all afternoon showing what
- * every agent is doing, with no rail, no composer and no chrome to click past.
- * The README already treats browser use as first-class, and this is the case it
- * is best at.
+ * `?view=live` opens on the board and `&focus=1` strips the window down to it —
+ * the second-monitor address, a browser window left up all afternoon showing
+ * what every agent is doing, with no rail, no composer and no chrome to click
+ * past. `session` and `agent` are what make a refresh land where it left off;
+ * rememberView has been writing them all along.
+ *
+ * Deliberately not async. The boot block below is a list of synchronous
+ * statements and the first paint must not wait on a transcript fetch, so the
+ * session is started and left to arrive.
  */
-function applyViewParams() {
+function restoreView() {
     const q = new URLSearchParams(location.search);
+    restoring = true;
+
+    // The arrangement first, so the board is painted once into the shape it is
+    // going to keep. setDockSide writes it through to liveDock, which is what a
+    // launch at the bare origin reads, so the two cannot be found disagreeing
+    // after this. renderLive inside it is a no-op — the board is not open yet.
+    if (q.has('dock')) setDockSide(q.get('dock') === 'side');
+
     // Focus mode has nothing else to show, so it implies the board. Order
     // matters: showLive first, then setFocus, or setFocus turns the board on
-    // itself and paints twice.
-    if (q.get('view') === 'live' || q.get('focus') === '1') showLive(true);
-    else if (q.get('view') === 'dashboard') showDash(true);
+    // itself and paints twice. And when the work-in-flight board is up over a
+    // live board that was left switched on, the live board has to go on first —
+    // showLive clears dash.open, so the other order loses it.
+    const dash = q.get('view') === 'dashboard';
+    if (q.get('view') === 'live' || q.get('live') === '1' || q.get('focus') === '1') showLive(true);
+    if (dash) showDash(true);
     if (q.get('focus') === '1') setFocus(true);
+
+    // The panels are up and the address they came from is untouched, so from
+    // here on the ordinary bookkeeping applies: opening the session below runs
+    // through beginOpen, which writes the address exactly as it found it.
+    restoring = false;
+
+    // Three things can name a conversation and they are not equals. A
+    // `#/session/<id>` is a click that happened a second ago — someone pressed a
+    // notification — so it beats the address, which is only where this window
+    // happened to be before the refresh.
+    if (openFromHash()) {
+        // A deep link asks for a conversation and focus mode is the one view
+        // with none in it, so staying would open the session into a pane
+        // paintPanels keeps hidden, and the click would look like it did nothing.
+        if (state.focus) setFocus(false);
+        return;
+    }
+
+    const id = q.get('session');
+    if (!id) return;
+    const agentId = q.get('agent');
+    // Not quiet: the address is the only thing being restored from, and it is in
+    // front of you. A conversation that has gone should say so rather than leave
+    // an empty window with no account of itself. And keepDash, because the
+    // session arriving is the restore finishing, not a session being chosen.
+    const opening = openSession(id, { keepDash: true });
+    opening.then((ok) => {
+        // A failed open never reached beginOpen, so nothing has written the
+        // address down; drop the dead id rather than retry it every refresh.
+        if (!ok && !state.current) rememberView();
+        // `ok` alone is not enough. openSession also answers true when a newer
+        // open overtook it, which is exactly what a click during the fetch looks
+        // like — and that click's session is not the one this subagent belongs to.
+        if (ok && agentId && state.current && state.current.sessionId === id) {
+            openAgent(agentId, { quiet: true });
+        }
+    });
 }
 
 // ── go ───────────────────────────────────────────────────────────────────
@@ -5742,9 +5869,8 @@ markInstance();
 renderBell();
 registerWorker();
 paintDockButton();      // the remembered arrangement, before anything is drawn
-applyViewParams();
+restoreView();          // and where we were, from the address that survived the refresh
 primeWaiting();
-openFromHash();
 refreshDevBrowser();
 // Nothing to restore here any more: the pane belongs to a session, and the
 // first beginOpen is what shows it — for the session it was opened in. The
