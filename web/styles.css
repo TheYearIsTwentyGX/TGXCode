@@ -311,21 +311,91 @@ a:hover { text-decoration: underline; }
 
 .rail-head { padding: 0 4px 10px; }
 
+/* Two buttons that read as one control: one height, one outer radius, and a
+   hairline of the rail showing between them. Each half lights on its own, so the
+   thing about to be hit is the thing that highlights. The pair fills the rail —
+   at ~200px a content-width split button leaves dead space beside it and forces
+   its own menu wider than the thing it came out of. */
+.new-wrap { position: relative; display: flex; gap: 1px; }
+
 .btn-new {
     display: flex;
     align-items: center;
     gap: 11px;
+    flex: 1;
+    min-width: 0;
     height: 46px;
-    padding: 0 22px 0 18px;
+    padding: 0 18px;
     background: var(--s3);
     color: var(--text);
     font: 500 14px/1 var(--sans);
-    border-radius: var(--r-lg);
+    border-radius: var(--r-lg) 0 0 var(--r-lg);
     transition: background var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
 }
 .btn-new:hover { background: var(--s4); box-shadow: 0 1px 3px #0006; }
 .btn-new:active { background: var(--s5); }
-.btn-new svg { color: var(--blue); }
+.btn-new svg { color: var(--blue); flex: none; }
+
+.btn-new-caret {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 40px;
+    height: 46px;
+    background: var(--s3);
+    color: var(--text-3);
+    border-radius: 0 var(--r-lg) var(--r-lg) 0;
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.btn-new-caret:hover { background: var(--s4); color: var(--text); }
+.btn-new-caret:active { background: var(--s5); }
+.btn-new-caret[aria-expanded="true"] { background: var(--s4); color: var(--text); }
+.btn-new-caret svg { transition: transform var(--t-fast) var(--ease); }
+.btn-new-caret[aria-expanded="true"] svg { transform: rotate(180deg); }
+
+/* Anchored to the control, so it is exactly as wide as the thing it came out of.
+   --s3 rather than the dialog picker's --bg: a popover has to sit above its rail
+   rather than sink into it. .rail-head is a sibling of .rail-scroll, the only
+   thing here that clips, so absolute positioning is all this needs. */
+.new-menu {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 0;
+    right: 0;
+    z-index: 60;
+    /* Six rows, a rule and the escape hatch, so nothing that matters sits below
+       a fold. It still scrolls on a window too short to hold that. */
+    max-height: 420px;
+    overflow-y: auto;
+    padding: 6px;
+    background: var(--s3);
+    border-radius: var(--r);
+    box-shadow: 0 10px 30px #000a;
+    animation: bell-in var(--t-fast) var(--ease);
+    transform-origin: top left;
+}
+.new-menu[hidden] { display: none; }
+
+/* The dialog's row folded onto two lines: the rail cannot hold a name, a count
+   and a path side by side, and the path is the half that tells two projects of
+   the same name apart. */
+.new-menu .picker-row { flex-wrap: wrap; gap: 8px; padding: 7px 10px; }
+.new-menu .picker-row:hover { background: var(--s4); }
+.new-menu .picker-row .path {
+    flex-basis: 100%;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+.new-menu .sep { height: 1px; margin: 5px 8px; background: var(--outline-soft); }
+.new-menu .menu-note {
+    padding: 9px 10px;
+    font: 400 12px/1.5 var(--sans);
+    color: var(--text-4);
+}
+
+@media (prefers-reduced-motion: reduce) { .new-menu { animation: none; } }
 
 .rail-scroll { flex: 1; overflow-y: auto; min-height: 0; padding-bottom: 12px; }
 
