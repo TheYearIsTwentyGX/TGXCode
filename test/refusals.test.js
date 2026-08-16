@@ -64,6 +64,14 @@ const HOME = os.homedir();
     check('devservers stop', (await call('POST', '/api/devservers/stop', { headers: PHONE, body: { port: 1 } })).status, 403);
     check('devbrowser status', (await call('GET', '/api/devbrowser/status', { headers: PHONE })).status, 403);
     check('reveal', (await call('POST', '/api/sessions/abc/reveal', { headers: PHONE, body: {} })).status, 403);
+    check('mkdir', (await call('POST', '/api/fs/mkdir', {
+        headers: PHONE, body: { parent: HOME, name: 'x' },
+    })).status, 403);
+    // The asymmetry that decision rests on: reading the tree stays allowed, and
+    // this is the line that pins it. A phone may already start a session, so it
+    // may see where one could start; writing to the filesystem is the other side.
+    check('listing home from a phone', (await call('GET',
+        `/api/fs?path=${encodeURIComponent(HOME)}`, { headers: PHONE })).status, 200);
 
     console.log('\n--- and the same routes from the desk ---');
     // Not 403: they may fail for their own reasons (404, 409), but the gate must
@@ -105,6 +113,50 @@ const HOME = os.homedir();
     check('listing home', (await call('GET', `/api/fs?path=${encodeURIComponent(HOME)}`, { headers: LOCAL })).status, 200);
     const home = await call('GET', `/api/fs?path=${encodeURIComponent(HOME)}`, { headers: LOCAL });
     check('and home reports no parent to climb to', home.body.parent, null);
+    // The breadcrumb needs these to know where the trail stops.
+    check('and reports the roots it is bounded by', Array.isArray(home.body.roots), true);
+    check('a tilde is expanded rather than resolved against cwd',
+        (await call('GET', '/api/fs?path=~', { headers: LOCAL })).body.path, HOME);
+
+    console.log('\n--- making a folder ---');
+    // The only test in this suite that writes to disk. It creates one directory
+    // under $HOME — it has to be inside a root, so os.tmpdir() is not an option —
+    // and removes it again in the finally below.
+    const made = `${HOME}/cs-mkdir-test-${process.pid}`;
+    try {
+        const first = await call('POST', '/api/fs/mkdir', {
+            headers: LOCAL, body: { parent: HOME, name: `cs-mkdir-test-${process.pid}` },
+        });
+        check('creating one', first.status, 200);
+        check('says it created it', first.body && first.body.created, true);
+        check('and hands back the path', first.body && first.body.path, made);
+
+        const again = await call('POST', '/api/fs/mkdir', {
+            headers: LOCAL, body: { parent: HOME, name: `cs-mkdir-test-${process.pid}` },
+        });
+        check('creating it twice is not an error', again.status, 200);
+        check('but it says it made nothing', again.body && again.body.created, false);
+    } finally {
+        try { fs.rmdirSync(made); } catch { /* never created */ }
+    }
+
+    check('a slash in the name', (await call('POST', '/api/fs/mkdir', {
+        headers: LOCAL, body: { parent: HOME, name: '../evil' },
+    })).status, 400);
+    check('a dotted name the picker could not show', (await call('POST', '/api/fs/mkdir', {
+        headers: LOCAL, body: { parent: HOME, name: '.hidden' },
+    })).status, 400);
+    check('no name at all', (await call('POST', '/api/fs/mkdir', {
+        headers: LOCAL, body: { parent: HOME, name: '  ' },
+    })).status, 400);
+    const outside = await call('POST', '/api/fs/mkdir', {
+        headers: LOCAL, body: { parent: '/etc', name: 'x' },
+    });
+    check('a parent outside the roots', outside.status, 403);
+    console.log(`       said: ${outside.body && outside.body.error}`);
+    check('a parent that is a file', (await call('POST', '/api/fs/mkdir', {
+        headers: LOCAL, body: { parent: `${HOME}/.bashrc`, name: 'x' },
+    })).status, 400);
 
     console.log('\n--- what a phone may still do ---');
     check('read sessions', (await call('GET', '/api/sessions?limit=1', { headers: PHONE })).status, 200);

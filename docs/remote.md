@@ -190,10 +190,12 @@ an ordinary session.
 | `/api/terminals/*` | A raw pty. Everything else is mediated by the app; this is a shell, and a leaked token that reaches it has the machine. |
 | `/api/shutdown`, `/api/devservers/stop` | Acts on processes the person at the desk is using. |
 | `/api/sessions/:id/reveal`, `/api/devbrowser/*` | Drives windows on the Windows host. Pointless from a phone. |
+| `POST /api/fs/mkdir` | Writes to the filesystem. `GET /api/fs` stays allowed, and the asymmetry is the point: reading the tree answers "where could a session start", and a phone may already start one. Creating a directory is reaching past the app into the machine. |
 
 Independent of remoteness, and applying to every caller: a session can only start
-inside `CLAUDE_SESSIONS_ROOTS` (default `$HOME`), `/api/fs` only lists inside the
-same roots, and session creation is capped at 8 a minute.
+inside `CLAUDE_SESSIONS_ROOTS` (default `$HOME`), `/api/fs` only lists and
+`/api/fs/mkdir` only creates inside the same roots, and session creation is capped
+at 8 a minute.
 
 ## Authentication, in one paragraph
 

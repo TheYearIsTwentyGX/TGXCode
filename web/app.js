@@ -120,6 +120,19 @@ const state = {
     waiting: new Set(),
     // A second-monitor window: no rail, no composer, just cards.
     focus: false,
+    // The Browse tab of the new-session picker. `dir` is the folder on screen,
+    // which is also the folder Start will use — walking into one is how you pick
+    // it, and #new-cwd is written on every step. `seq` is the openSeq trick:
+    // clicking down a tree faster than the listings come back would otherwise let
+    // an older one paint over a newer one.
+    browse: {
+        tab: localStorage.getItem('newPickerTab') === 'browse' ? 'browse' : 'recent',
+        dir: null, parent: null, roots: [], entries: [],
+        truncated: false, error: null, seq: 0,
+        known: new Map(),   // cwd -> project, from /api/projects, for the row tags
+        focus: null,        // path holding the tree's single tab stop
+        naming: false,      // the New folder name box is open
+    },
 };
 
 const $ = (id) => document.getElementById(id);
@@ -138,6 +151,8 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'live-side', 'live-side-label', 'live-side-a', 'live-side-b',
     'new-scrim', 'new-cwd', 'new-picker', 'new-prompt', 'new-model', 'new-perm',
     'new-test', 'new-test-row', 'new-go',
+    'new-tab-recent', 'new-tab-browse', 'new-browse', 'new-roots', 'new-crumbs',
+    'new-tree', 'new-mkdir', 'new-mkdir-name', 'new-mkdir-go', 'new-browse-note',
     'del-scrim', 'del-what', 'del-meta', 'del-go',
     'btn-pair', 'pair-scrim', 'pair-url', 'pair-host', 'pair-hosts', 'pair-note',
     'pair-copy']) {
@@ -4537,6 +4552,7 @@ async function openNew() {
     dom.newCwd.value = state.current
         ? (state.current.worktree ? state.current.worktree.originalCwd : state.current.cwd)
         : '';
+    cancelMkdir();
     try {
         const { projects } = await get('/api/projects');
         dom.newPicker.replaceChildren(...projects.slice(0, 40).map(p =>
@@ -4549,13 +4565,294 @@ async function openNew() {
                 p.active ? el('span', { class: 'tag' }, `${p.active} live`) : null,
             )));
         if (!dom.newCwd.value && projects[0]) dom.newCwd.value = projects[0].cwd;
+        // The same list, keyed by path, so a browsed row can say "you have worked
+        // here" without a second request. It quietly joins the two tabs together.
+        state.browse.known = new Map(projects.map(p => [p.cwd, p]));
     } catch (err) {
         toast(`Could not list projects: ${err.message}`, 'error');
     }
+    setPickerTab(state.browse.tab, { load: true });
     dom.newPrompt.focus();
 }
 
 function closeNew() { dom.newScrim.hidden = true; }
+
+// ── the directory picker ─────────────────────────────────────────────────
+//
+// Two tabs over one decision. *Recent* is the list this app has always had —
+// every directory a session has ever run in. *Browse* is for the case it cannot
+// answer: a directory with no history, or one that does not exist yet.
+//
+// The rule that keeps the two from fighting is that **walking into a folder is
+// how you choose it**. There is no select-versus-descend distinction, no
+// checkmark, and no second click: every navigation writes #new-cwd, and #new-cwd
+// stays the single answer to "where will this run". So "how do I pick the folder
+// I am looking at?" answers itself — you already have, and the box above says so.
+
+function setPickerTab(tab, { load = false } = {}) {
+    const browsing = tab === 'browse';
+    state.browse.tab = browsing ? 'browse' : 'recent';
+    try { localStorage.setItem('newPickerTab', state.browse.tab); } catch { /* private mode */ }
+
+    dom.newTabRecent.setAttribute('aria-selected', String(!browsing));
+    dom.newTabBrowse.setAttribute('aria-selected', String(browsing));
+    dom.newPicker.hidden = browsing;
+    dom.newBrowse.hidden = !browsing;
+    if (!browsing) cancelMkdir();
+    if (browsing && (load || !state.browse.dir)) browseTo(startDir());
+}
+
+/** Where Browse should open: whatever the box says, else wherever we were. */
+function startDir() {
+    return dom.newCwd.value.trim() || state.browse.dir || '';
+}
+
+/** Strip a trailing slash so a typed path can be compared with a listed one. */
+const tidyPath = (p) => String(p || '').trim().replace(/(?!^)\/+$/, '');
+
+/**
+ * List a directory and — because navigating is selecting — point #new-cwd at it.
+ *
+ * `select: false` is for the one case where that would be wrong: a first load
+ * that lands somewhere other than where the box already says.
+ */
+async function browseTo(dir, { select = true, fromKeyboard = false } = {}) {
+    const seq = ++state.browse.seq;
+    let data;
+    try {
+        data = await get(`/api/fs?path=${encodeURIComponent(dir)}`);
+    } catch (err) {
+        // A 403 for a path outside the roots is the bridge's call, not ours to
+        // predict — the roots live in one place. Say what it said and stay put.
+        toast(`Could not open that folder: ${err.message}`, 'error');
+        if (!state.browse.dir && dir) browseTo('', { select: false });
+        return;
+    }
+    if (seq !== state.browse.seq) return;   // a later click already won
+
+    Object.assign(state.browse, {
+        dir: data.path,
+        parent: data.parent || null,
+        roots: data.roots || [],
+        entries: data.entries || [],
+        truncated: !!data.truncated,
+        // A readdir that failed comes back 200 with this set — the path and the
+        // way back up are still good, so the pane keeps working around it.
+        error: data.error || null,
+        focus: null,
+    });
+    if (select) dom.newCwd.value = data.path;
+    cancelMkdir();
+    renderBrowse();
+    if (fromKeyboard) focusRowAt(0);
+}
+
+function renderBrowse() {
+    const b = state.browse;
+
+    // More than one root configured means the second one is otherwise unreachable
+    // from here: the trail stops at the top of whichever root you are inside.
+    dom.newRoots.hidden = b.roots.length < 2;
+    if (b.roots.length >= 2) {
+        dom.newRoots.replaceChildren(
+            el('span', {}, 'Roots:'),
+            ...b.roots.map(r => el('button', {
+                class: 'crumb', type: 'button', onclick: () => browseTo(r),
+            }, homely(r))));
+    }
+
+    dom.newCrumbs.replaceChildren(...crumbsFor(b));
+
+    // The way back up is rendered whatever happened below it, so an unreadable
+    // folder is somewhere you can leave rather than somewhere you are stuck.
+    const rows = b.parent ? [upRow()] : [];
+    if (b.error) {
+        rows.push(el('div', { class: 'picker-msg' }, `Cannot read this folder — ${b.error}`));
+    } else {
+        rows.push(...b.entries.map((e, i) => treeRow(e, i)));
+        if (!b.entries.length) {
+            // The sentence that answers "so how do I pick where I am?", at the
+            // moment somebody standing in an empty folder asks it.
+            rows.push(el('div', { class: 'picker-msg' },
+                'No sub-folders here. Start uses this one.'));
+        }
+    }
+    dom.newTree.replaceChildren(...rows);
+    setTreeTab();
+
+    dom.newMkdir.textContent = `New folder in ${clip(baseName(b.dir), 24)}`;
+    dom.newBrowseNote.textContent = browseNote(b);
+}
+
+function baseName(p) {
+    const parts = String(p || '').split('/').filter(Boolean);
+    return parts.length ? parts[parts.length - 1] : '/';
+}
+
+/** What the pane wants to say under itself, if anything. */
+function browseNote(b) {
+    const typed = tidyPath(dom.newCwd.value);
+    if (typed && b.dir && typed !== b.dir) {
+        return `Showing ${homely(b.dir)} — press Enter in the box to browse to what you typed.`;
+    }
+    if (b.truncated) return `Showing the first 500 folders — type a path to go straight there.`;
+    return '';
+}
+
+/**
+ * The trail, stopping at the top of whichever root contains this directory
+ * rather than walking on to `/` — every crumb has to be somewhere you may go.
+ */
+function crumbsFor(b) {
+    if (!b.dir) return [];
+    const root = b.roots
+        .filter(r => b.dir === r || b.dir.startsWith(`${r}/`))
+        .sort((x, y) => y.length - x.length)[0] || '/';
+
+    const rest = b.dir.slice(root.length).split('/').filter(Boolean);
+    const out = [crumb(homely(root), root, !rest.length)];
+    let at = root === '/' ? '' : root;
+    rest.forEach((seg, i) => {
+        at += `/${seg}`;
+        const here = at;
+        out.push(el('span', {}, '/'), crumb(seg, here, i === rest.length - 1));
+    });
+    return out;
+}
+
+function crumb(label, target, current) {
+    return el('button', {
+        class: 'crumb', type: 'button',
+        // The last crumb re-lists rather than doing nothing, which doubles as the
+        // refresh you want after making a folder outside the app.
+        'aria-current': current ? 'page' : null,
+        onclick: () => browseTo(target),
+    }, label);
+}
+
+function upRow() {
+    return el('button', {
+        class: 'picker-row up', type: 'button', 'data-path': state.browse.parent,
+        onclick: () => browseTo(state.browse.parent),
+        onkeydown: (e) => onTreeKey(e, -1),
+    }, el('span', {}, '↑ ..'), el('span', { class: 'path' }, homely(state.browse.parent)));
+}
+
+function treeRow(entry, i) {
+    const seen = state.browse.known.get(entry.path);
+    // Having worked here is the stronger signal, so it wins the one tag slot.
+    // Green is kept for a session actually running, as it is everywhere else —
+    // "you have been here before" is a quieter fact than "something is happening".
+    const tag = seen
+        ? (seen.active
+            ? el('span', { class: 'tag' }, `${seen.active} live`)
+            : el('span', { class: 'tag dim' }, 'seen'))
+        : (entry.git ? el('span', { class: 'tag dim' }, 'git') : null);
+    return el('button', {
+        class: 'picker-row', type: 'button', 'data-path': entry.path,
+        'aria-current': entry.path === tidyPath(dom.newCwd.value) ? 'true' : null,
+        onclick: () => browseTo(entry.path),
+        onkeydown: (e) => onTreeKey(e, i),
+    }, el('span', {}, clip(entry.name, 48)), tag);
+}
+
+// One tab stop for the whole list, arrows to move within it — the same shape as
+// the send queue, which is the only other long list of buttons in this file.
+function setTreeTab() {
+    const rows = [...dom.newTree.querySelectorAll('.picker-row')];
+    const want = rows.find(r => r.dataset.path === state.browse.focus) || rows[0];
+    for (const r of rows) r.tabIndex = r === want ? 0 : -1;
+}
+
+function focusRowAt(i) {
+    const rows = [...dom.newTree.querySelectorAll('.picker-row')];
+    const row = rows[Math.max(0, Math.min(i, rows.length - 1))];
+    if (!row) { dom.newTree.focus?.(); return false; }
+    state.browse.focus = row.dataset.path;
+    setTreeTab();
+    row.focus({ preventScroll: false });
+    return true;
+}
+
+/**
+ * `i` is the row's index, or -1 for the Up row that sits above them all.
+ *
+ * Escape is deliberately absent: a row has nothing of its own to cancel, so the
+ * central ladder should get it and close the dialog. The only thing here that
+ * stops Escape is the New folder box.
+ */
+function onTreeKey(e, i) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); focusRowAt(rowIndex(i) + 1); return; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); focusRowAt(rowIndex(i) - 1); return; }
+    if (e.key === 'ArrowLeft' || e.key === 'Backspace') {
+        if (!state.browse.parent) return;
+        e.preventDefault();
+        browseTo(state.browse.parent, { fromKeyboard: true });
+        return;
+    }
+    if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        const target = i < 0 ? state.browse.parent : state.browse.entries[i]?.path;
+        if (target) browseTo(target, { fromKeyboard: true });
+    }
+    // Enter and Space are a button's own job — the click handler navigates.
+}
+
+/** Position in the rendered list, where the Up row (i === -1) is index 0. */
+function rowIndex(i) {
+    const offset = state.browse.parent ? 1 : 0;
+    return i < 0 ? 0 : i + offset;
+}
+
+// ── new folder ───────────────────────────────────────────────────────────
+
+function startMkdir() {
+    state.browse.naming = true;
+    dom.newMkdir.hidden = true;
+    dom.newMkdirName.hidden = false;
+    dom.newMkdirGo.hidden = false;
+    dom.newMkdirName.value = '';
+    dom.newMkdirName.focus();
+}
+
+function cancelMkdir() {
+    state.browse.naming = false;
+    dom.newMkdir.hidden = false;
+    dom.newMkdirName.hidden = true;
+    dom.newMkdirGo.hidden = true;
+    dom.newMkdirName.value = '';
+}
+
+async function submitMkdir() {
+    const name = dom.newMkdirName.value.trim();
+    const parent = state.browse.dir;
+    if (!name) { dom.newMkdirName.focus(); return; }
+    if (!parent) return;
+
+    // Pre-empt the duplicate the pane can already see. The server still answers
+    // for the one it cannot — something else may have created it meanwhile.
+    if (state.browse.entries.some(e => e.name === name)) {
+        toast(`${name} is already here.`, 'warn');
+        return;
+    }
+
+    dom.newMkdirGo.disabled = true;
+    try {
+        const r = await post('/api/fs/mkdir', { parent, name });
+        cancelMkdir();
+        // Walking in is what selects it, so this is also the pick.
+        await browseTo(r.path);
+        toast(r.created ? `Created ${name}.` : `${name} was already there.`, 'ok');
+        dom.newPrompt.focus();
+    } catch (err) {
+        // The name box stays open with the text in it — retyping a rejected name
+        // is the one thing that should not be part of fixing it.
+        toast(`Could not create the folder: ${err.message}`, 'error');
+        dom.newMkdirName.focus();
+    } finally {
+        dom.newMkdirGo.disabled = false;
+    }
+}
 
 async function startNew() {
     const cwd = dom.newCwd.value.trim();
@@ -4743,6 +5040,42 @@ for (const n of dom.newScrim.querySelectorAll('[data-close]')) {
     n.addEventListener('click', closeNew);
 }
 dom.newScrim.addEventListener('click', (e) => { if (e.target === dom.newScrim) closeNew(); });
+
+dom.newTabRecent.addEventListener('click', () => setPickerTab('recent'));
+dom.newTabBrowse.addEventListener('click', () => setPickerTab('browse', { load: true }));
+
+// Two tabs, so both stay in the tab order and the arrows activate on move —
+// a roving rule would be machinery for a pair of buttons.
+for (const [tab, other] of [[dom.newTabRecent, 'browse'], [dom.newTabBrowse, 'recent']]) {
+    tab.addEventListener('keydown', (e) => {
+        if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+        e.preventDefault();
+        setPickerTab(other, { load: other === 'browse' });
+        (other === 'browse' ? dom.newTabBrowse : dom.newTabRecent).focus();
+    });
+}
+
+dom.newMkdir.addEventListener('click', startMkdir);
+dom.newMkdirGo.addEventListener('click', submitMkdir);
+dom.newMkdirName.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); submitMkdir(); return; }
+    // Without stopPropagation the central Escape ladder closes the whole dialog,
+    // when all this key meant was "never mind the folder".
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancelMkdir(); dom.newMkdir.focus(); }
+});
+
+// Typing a path does not walk the tree on every keystroke — that is a request per
+// character, and it fights the typist. Enter is the commit, and until it comes the
+// pane says plainly that it is showing somewhere else.
+dom.newCwd.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    setPickerTab('browse');
+    browseTo(dom.newCwd.value.trim());
+});
+dom.newCwd.addEventListener('input', () => {
+    if (state.browse.tab === 'browse') dom.newBrowseNote.textContent = browseNote(state.browse);
+});
 
 for (const n of dom.delScrim.querySelectorAll('[data-close-del]')) {
     n.addEventListener('click', closeDelete);

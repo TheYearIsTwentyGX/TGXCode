@@ -373,11 +373,32 @@ checks, and merge it once they pass.">LGTM</button>
       <div class="field">
         <label for="new-cwd">Working directory</label>
         <input id="new-cwd" type="text" spellcheck="false">
-        <div class="note">The agent runs here. Recent projects are listed below.</div>
+        <div class="note">The agent runs here. Pick one below, or type a path —
+          <code>~</code> works, and Enter browses to it.</div>
       </div>
       <div class="field">
-        <label>Recent projects</label>
-        <div id="new-picker" class="picker"></div>
+        <div class="picker-tabs" role="tablist" aria-label="Pick a working directory">
+          <button id="new-tab-recent" class="picker-tab" type="button" role="tab"
+                  aria-selected="true" aria-controls="new-picker">Recent</button>
+          <button id="new-tab-browse" class="picker-tab" type="button" role="tab"
+                  aria-selected="false" aria-controls="new-browse">Browse</button>
+        </div>
+        <div id="new-picker" class="picker" role="tabpanel"
+             aria-labelledby="new-tab-recent"></div>
+        <!-- Browsing and selecting are one gesture: walking into a folder is how
+             you choose it, and #new-cwd above always says which one that is. -->
+        <div id="new-browse" role="tabpanel" aria-labelledby="new-tab-browse" hidden>
+          <div id="new-roots" class="crumbs" hidden></div>
+          <div id="new-crumbs" class="crumbs"></div>
+          <div id="new-tree" class="picker" aria-label="Folders"></div>
+          <div class="browse-foot">
+            <button id="new-mkdir" class="btn small" type="button">New folder</button>
+            <input id="new-mkdir-name" class="mkdir-name" type="text" spellcheck="false"
+                   hidden placeholder="Folder name" aria-label="New folder name">
+            <button id="new-mkdir-go" class="btn small primary" type="button" hidden>Create</button>
+            <span id="new-browse-note" class="note"></span>
+          </div>
+        </div>
       </div>
       <div class="field">
         <label for="new-prompt">First message</label>

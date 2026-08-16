@@ -384,6 +384,11 @@ function isKnownHost(host) {
  *     desk is using, and are trivially a denial of service from anywhere else.
  *   - **Reveal** and **DevBrowser** drive windows on the Windows host. Opening
  *     Explorer on a desktop nobody is sitting at is at best pointless.
+ *   - **Making a folder** writes to the filesystem. Note the asymmetry with the
+ *     listing beside it, which stays allowed: reading the tree answers "where
+ *     could a session start", and a phone may already start one. Creating a
+ *     directory is reaching past the app into the machine, which is the line
+ *     above — so the refusal is on the exact path, not on /api/fs.
  *
  * Refusing at the route rather than in the UI is the point: /m not drawing a button
  * is a courtesy, and this is the rule.
@@ -403,6 +408,10 @@ function remoteRefusal(pathname, method) {
     }
     if (/^\/api\/sessions\/[^/]+\/reveal$/.test(pathname) && method === 'POST') {
         return 'opening a folder only makes sense on the machine itself';
+    }
+    // Exact equality, not a prefix: GET /api/fs stays readable remotely.
+    if (pathname === '/api/fs/mkdir') {
+        return 'folders can only be created on the machine they live on';
     }
     return null;
 }
@@ -1044,7 +1053,7 @@ async function api(req, res, url, pathname, who) {
         return send(res, r.ok ? 200 : 502, { ok: r.ok });
     }
 
-    // --- filesystem (new-session directory picker) -------------------------
+    // --- pairing -----------------------------------------------------------
     // What the "Connect a phone" dialog needs to build a link that works: the
     // machine's real tailnet name, and whether HTTPS is available on it yet.
     //
@@ -1057,6 +1066,7 @@ async function api(req, res, url, pathname, who) {
         return send(res, 200, info);
     }
 
+    // --- filesystem (new-session directory picker) -------------------------
     if (pathname === '/api/fs' && req.method === 'GET') {
         const dir = url.searchParams.get('path') || cfg.HOME;
         // This exists for the new-session directory picker, and a session can only
@@ -1071,6 +1081,75 @@ async function api(req, res, url, pathname, who) {
             });
         }
         return send(res, 200, listDir(dir));
+    }
+
+    // Somewhere to put a project that does not exist yet. The picker can navigate,
+    // so this only ever has to make one directory in a place you are already
+    // standing — which is why the body is {parent, name} rather than one joined
+    // path. A separate `name` can be refused outright for containing a separator,
+    // instead of being sanitised after the fact and hoping nothing was missed.
+    if (pathname === '/api/fs/mkdir' && req.method === 'POST') {
+        const body = await readJson(req);
+        const parent = cfg.expandHome(body.parent || '');
+        const name = String(body.name == null ? '' : body.name).trim();
+
+        if (!parent) return send(res, 400, { error: 'parent is required' });
+        if (!cfg.withinRoots(parent)) {
+            return send(res, 403, {
+                error: 'that directory is outside the allowed roots',
+                path: path.resolve(parent),
+                roots: cfg.ALLOWED_ROOTS,
+            });
+        }
+
+        // Asked before mkdir so a missing or file-shaped parent is a sentence
+        // rather than a bare ENOENT/ENOTDIR arriving from two layers down.
+        if (!isDirectory(parent)) {
+            return send(res, 400, { error: `No such directory: ${parent}` });
+        }
+
+        const bad = folderNameProblem(name);
+        if (bad) return send(res, 400, { error: bad });
+
+        const target = path.join(path.resolve(parent), name);
+        // Belt and braces. The separator refusal above already makes this
+        // unreachable, and it is still the check that must not be the one that
+        // was left out.
+        if (!cfg.withinRoots(target)) {
+            return send(res, 403, {
+                error: 'that directory is outside the allowed roots',
+                path: target, roots: cfg.ALLOWED_ROOTS,
+            });
+        }
+
+        try {
+            // Deliberately not recursive: one segment is all the button offers, and
+            // a non-recursive mkdir is what makes EEXIST below mean something.
+            fs.mkdirSync(target);
+            return send(res, 200, { ok: true, path: target, created: true });
+        } catch (err) {
+            if (err.code === 'EEXIST') {
+                // The caller wanted a directory here by this name, and there is
+                // one. Saying "already exists" would be technically true and
+                // practically unhelpful — so this is idempotent, and the client
+                // navigates into it either way.
+                let st = null;
+                try { st = fs.statSync(target); } catch { /* raced away */ }
+                if (st && st.isDirectory()) {
+                    return send(res, 200, { ok: true, path: target, created: false });
+                }
+                return send(res, 409, {
+                    error: `${target} already exists and is not a directory`,
+                });
+            }
+            if (err.code === 'ENOENT' || err.code === 'ENOTDIR') {
+                return send(res, 404, { error: `${parent} is no longer a directory` });
+            }
+            if (err.code === 'EACCES' || err.code === 'EPERM' || err.code === 'EROFS') {
+                return send(res, 403, { error: `Not allowed to create a folder in ${parent}` });
+            }
+            return send(res, 500, { error: err.message });
+        }
     }
 
     return send(res, 404, { error: 'no such endpoint', pathname });
@@ -1107,17 +1186,57 @@ function workingDir(summary) {
         .find(d => d && fs.existsSync(d)) || null;
 }
 
+/**
+ * Why this is not a usable folder name, or null if it is one.
+ *
+ * The leading-dot refusal is not prudishness: listDir() hides dotfiles, so a
+ * `.foo` created here would be invisible in the very picker that made it. A name
+ * the app will not show is worse than a name it will not accept.
+ */
+function folderNameProblem(name) {
+    if (!name) return 'a name is required';
+    if (name === '.' || name === '..') return `"${name}" is not a name`;
+    if (name.includes('/')) return 'a folder name cannot contain "/" — make one level at a time';
+    if (name.includes('\0')) return 'that name contains a null byte';
+    if (name.startsWith('.')) return 'names starting with "." are hidden, and the picker would not show it';
+    if (Buffer.byteLength(name) > 255) return 'that name is too long';
+    return null;
+}
+
+/** Does this path exist and is it a directory? Follows symlinks, unlike a Dirent. */
+function isDirectory(p) {
+    try { return fs.statSync(p).isDirectory(); } catch { return false; }
+}
+
+const LIST_CAP = 500;
+
 function listDir(dir) {
-    const resolved = path.resolve(dir);
+    const resolved = path.resolve(cfg.expandHome(dir));
     let entries = [];
+    let truncated = false;
     try {
-        entries = fs.readdirSync(resolved, { withFileTypes: true })
-            .filter(e => e.isDirectory() && !e.name.startsWith('.'))
+        const all = fs.readdirSync(resolved, { withFileTypes: true })
+            .filter(e => !e.name.startsWith('.'))
+            // A symlink pointing at a directory reports isDirectory() false, so
+            // without the second arm browsing cannot see a project tree that was
+            // linked into place — and people do link them in. Only links pay for
+            // the stat, and a dangling one drops out of the list by failing it.
+            .filter(e => e.isDirectory()
+                || (e.isSymbolicLink() && isDirectory(path.join(resolved, e.name))))
             .map(e => ({ name: e.name, path: path.join(resolved, e.name) }))
-            .sort((a, b) => a.name.localeCompare(b.name))
-            .slice(0, 500);
+            .sort((a, b) => a.name.localeCompare(b.name));
+        // The cap used to be silent, which reads as "this is all of it". Saying so
+        // costs a boolean and stops the picker implying something false.
+        truncated = all.length > LIST_CAP;
+        entries = all.slice(0, LIST_CAP)
+            // Which of these is a project, without having to click in. One stat
+            // per row, capped, and all of it local.
+            .map(e => ({ ...e, git: fs.existsSync(path.join(e.path, '.git')) }));
     } catch (err) {
-        return { path: resolved, error: err.message, entries: [], parent: path.dirname(resolved) };
+        return {
+            path: resolved, error: err.message, entries: [],
+            parent: path.dirname(resolved), roots: cfg.ALLOWED_ROOTS,
+        };
     }
     const isGit = fs.existsSync(path.join(resolved, '.git'));
     // Stop "up" at the edge of the allowed roots rather than offering a step the
@@ -1127,7 +1246,13 @@ function listDir(dir) {
     return {
         path: resolved,
         parent: up && cfg.withinRoots(up) ? up : null,
+        // The breadcrumb needs to know where the trail stops and what to call the
+        // top of it, and when more than one root is configured this is the only
+        // way a client can offer the second one at all. Learning the roots by
+        // making a request that fails is backwards.
+        roots: cfg.ALLOWED_ROOTS,
         isGit,
+        truncated,
         entries,
     };
 }

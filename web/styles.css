@@ -2794,6 +2794,60 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 .picker-row:hover { background: var(--s3); }
 .picker-row .path { font-family: var(--mono); font-size: 11.5px; color: var(--text-4); }
 .picker-row .tag { margin-left: auto; font-size: 11.5px; color: var(--green); }
+/* Where the input currently points — so the folder you just climbed out of is
+   findable in the list you land back in. */
+.picker-row[aria-current="true"] { background: var(--blue-cont); color: var(--blue); }
+.picker-row[aria-current="true"]:hover { background: #26406c; }
+.picker-row .tag.dim { color: var(--text-4); }
+.picker-row.up { color: var(--text-3); }
+
+/* Recent / Browse. These sit where a `.field > label` would, and replace it. */
+.picker-tabs { display: flex; gap: 4px; margin-bottom: 7px; }
+.picker-tab {
+    padding: 6px 12px;
+    border-radius: var(--pill);
+    font: 500 12.5px/1 var(--sans);
+    color: var(--text-3);
+    transition: background var(--t-fast) var(--ease);
+}
+.picker-tab:hover { background: var(--s3); }
+.picker-tab[aria-selected="true"] { background: var(--blue-cont); color: var(--blue); }
+
+.crumbs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px;
+    padding: 0 2px 7px;
+    font: 400 11.5px/1.6 var(--mono);
+    color: var(--text-4);
+}
+.crumb {
+    padding: 2px 6px;
+    border-radius: var(--r-xs);
+    font: inherit;
+    color: var(--text-3);
+    transition: background var(--t-fast) var(--ease);
+}
+.crumb:hover { background: var(--s3); color: var(--text); }
+.crumb[aria-current="page"] { color: var(--text); }
+
+.browse-foot { display: flex; align-items: center; gap: 8px; padding-top: 10px; }
+.btn.small { height: 30px; padding: 0 14px; font-size: 12.5px; }
+.browse-foot .note { margin-top: 0; flex: 1; min-width: 0; }
+.mkdir-name {
+    flex: 1;
+    min-width: 0;
+    background: var(--bg);
+    border-radius: var(--r);
+    padding: 7px 12px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+}
+.mkdir-name:focus { outline: none; box-shadow: inset 0 0 0 2px var(--blue); }
+
+/* Nothing to list, or nothing readable. Sits inside .picker in place of rows. */
+.picker-msg { padding: 10px 12px; font-size: 12px; line-height: 1.5; color: var(--text-4); }
 
 .btn {
     height: 40px;

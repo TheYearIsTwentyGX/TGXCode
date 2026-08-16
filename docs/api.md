@@ -73,11 +73,18 @@ the thing you are about to approve is running on a machine you are sitting at.
 **Refused for remote callers** (403, with `{"error": …, "remote": true}`):
 `permissionMode` of `bypassPermissions` or `dontAsk` on both create and send; all
 of `/api/terminals/*`; `/api/shutdown`; `/api/devservers/stop`;
-`/api/devbrowser/*`; `POST /api/sessions/:id/reveal`.
+`/api/devbrowser/*`; `POST /api/sessions/:id/reveal`; `POST /api/fs/mkdir`.
+
+Note the asymmetry in that last one: `GET /api/fs` stays readable remotely, so the
+refusal is on the exact path rather than the `/api/fs` prefix. Reading the tree
+answers "where could a session start", and a phone may already start one. Creating
+a directory is reaching past the app into the machine.
 
 **For every caller:** a session may only start inside `CLAUDE_SESSIONS_ROOTS`
-(default `$HOME`); `/api/fs` lists only inside the same roots; session creation is
-capped at 8 per minute (`429`).
+(default `$HOME`); `/api/fs` lists and `/api/fs/mkdir` writes only inside the same
+roots; session creation is capped at 8 per minute (`429`). A leading `~` in any
+path — a session's `cwd`, `/api/fs?path=`, a mkdir `parent` — means `$HOME`, as it
+would in a shell.
 
 ## Reading
 
@@ -281,7 +288,25 @@ nobody to ask.
 | `POST /api/sessions/:id/flags` | `{pinned?, archived?, test?}` | |
 | `DELETE /api/sessions/:id` | | hard delete; `409` if a turn is running |
 | `GET /api/fs?path=` | | directory picker; roots-scoped |
+| `POST /api/fs/mkdir` | `{parent, name}` | one new folder; roots-scoped, local callers only |
 | `GET /api/pairing` | | local callers only — what this machine is reachable as |
+
+`/api/fs` returns `{path, parent, roots, isGit, truncated, entries[]}`, where each
+entry is `{name, path, git}`. Directories only, dotfiles omitted, symlinks to
+directories included, sorted, and capped at 500 with `truncated` saying when the
+cap bit. `parent` is null at the edge of the roots rather than offering a step the
+route would refuse, and `roots` is there so a breadcrumb knows where the trail
+stops. A directory that cannot be read comes back **200** with an `error` field
+and no entries — the path and the way back up are still good, so a client should
+check `error` on success.
+
+`/api/fs/mkdir` makes exactly one directory: `name` is a single segment, and a
+slash in it is a `400` rather than an implied `mkdir -p`. Also `400`: an empty
+name, `.` or `..`, a leading `.` (the listing hides those, so it would vanish the
+moment it was made), a name over 255 bytes, and a `parent` that is not a
+directory. `403` for a `parent` outside the roots or an unwritable one, `409` when
+a *file* of that name is in the way. Creating one that is already a directory is
+**200** with `created: false` — the caller wanted a folder there and there is one.
 
 `/api/pairing` returns `{hosts: [{url, kind}], tailscale: {name, https, running},
 served, port}`, by shelling out to `tailscale.exe` on the Windows host. `served` is
