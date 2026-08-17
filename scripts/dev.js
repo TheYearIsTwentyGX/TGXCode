@@ -12,32 +12,26 @@
 // is separate is the process: restarting this one leaves the other alone.
 
 const fs = require('fs');
-const net = require('net');
 const path = require('path');
 const { spawn, execFile } = require('child_process');
 const { toWindowsPath, winEnvAsWslPath } = require('./win');
 
 const { DEFAULT_PORT, DEV_PORT } = require('../bridge/config');
+const ports = require('../bridge/ports');
 
 const repo = path.join(__dirname, '..');
 const wantsWindow = !process.argv.includes('--no-window');
 
-function portFree(port) {
-    return new Promise((resolve) => {
-        const s = net.createServer();
-        s.once('error', () => resolve(false));
-        s.once('listening', () => s.close(() => resolve(true)));
-        s.listen(port, '127.0.0.1');
-    });
-}
-
-/** First free port at or above `from`, so two agents can each have their own. */
-async function pickPort(from) {
-    for (let p = from; p < from + 20; p++) {
-        if (p === DEFAULT_PORT) continue;      // never the everyday instance
-        if (await portFree(p)) return p;
-    }
-    return null;
+/**
+ * First free port at or above `from`, so two agents can each have their own.
+ *
+ * `denylist: null` because this is picking a port for a *bridge*, not for a
+ * project's dev server: the config denylist contains the bridge port, and
+ * `CLAUDE_SESSIONS_PORT=45899 npm run dev` is a request for that exact one.
+ */
+function pickPort(from) {
+    return ports.allocate(
+        { lo: from, hi: from + 19, skip: [DEFAULT_PORT], denylist: null }, 'npm run dev');
 }
 
 function findExe() {
