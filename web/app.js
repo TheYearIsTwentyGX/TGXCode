@@ -5531,15 +5531,31 @@ async function loadCommands() {
     return entry.commands;
 }
 
+// By the name as displayed, rather than by anything cleverer. Sorting a list on
+// a key the reader cannot see is how a sorted list comes to look broken — so a
+// namespaced command files under its plugin, where the text says it is, and not
+// under the command's own name.
+const byName = (a, b) => a.name.localeCompare(b.name);
+
 /**
- * Prefix matches first, then anything containing the fragment.
+ * Prefix matches first, then anything containing the fragment; alphabetical
+ * within each of those.
  *
  * Every match is returned, not a first handful: a bare `/` is a request to see
  * what there is, and a list that stops at eight answers a different question.
- * The menu scrolls, and the keys below page through it.
+ * The menu scrolls, and the keys page through it.
+ *
+ * The CLI reports its commands in an order of its own — roughly by where each
+ * came from — which is no order at all to somebody looking for one. Alphabetical
+ * is the only arrangement you can search without reading every row.
+ *
+ * The two groups are kept apart rather than sorted as one, because ranking a
+ * command you are part-way through typing above one that merely contains those
+ * letters is worth more than a single unbroken A-to-Z: `/co` should offer
+ * `/compact` before `/autocompact`.
  */
 function matchCommands(items, frag) {
-    if (!frag) return items.slice();
+    if (!frag) return items.slice().sort(byName);
     const q = frag.toLowerCase();
     const pre = [];
     const sub = [];
@@ -5551,7 +5567,7 @@ function matchCommands(items, frag) {
         if (name.startsWith(q) || tail.startsWith(q)) pre.push(c);
         else if (name.includes(q)) sub.push(c);
     }
-    return pre.concat(sub);
+    return pre.sort(byName).concat(sub.sort(byName));
 }
 
 function closeCommandMenu() {
