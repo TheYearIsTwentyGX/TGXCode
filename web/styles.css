@@ -2008,10 +2008,16 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     left: 0;
     right: 0;
     z-index: 60;
-    /* Eight rows and no more — see CMD_MAX in app.js. Tall enough to be worth
-       arrowing through, short enough not to bury the turn you are replying to. */
-    max-height: 320px;
+    /* Every matching command is rendered — `/` on its own is a request to see
+       what there is — so this is the window onto the list rather than the whole
+       of it. Tall enough that a dozen are in view and paging feels like paging,
+       short enough to leave the turn you are replying to on screen. */
+    max-height: 400px;
     overflow-y: auto;
+    /* The keys move a highlight the scrollbar has to follow, so the jumps are
+       driven by scrollIntoView and should not be animated on top of that. */
+    scroll-behavior: auto;
+    overscroll-behavior: contain;
     padding: 6px;
     background: var(--s3);
     border-radius: var(--r);

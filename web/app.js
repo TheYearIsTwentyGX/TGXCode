@@ -5487,8 +5487,6 @@ dom.input.addEventListener('keydown', (e) => {
 // in, and the transcript comes back with the command already parsed, which is
 // why renderUser has drawn these properly since long before you could type one.
 
-const CMD_MAX = 8;
-
 // The menu is open **iff** the whole composer is one slash-word. Not "a `/` was
 // pressed": deriving it from the text rather than from a keystroke means paste,
 // IME and autocorrect all behave, backspacing from `/revi` to `/re` re-opens it
@@ -5533,9 +5531,15 @@ async function loadCommands() {
     return entry.commands;
 }
 
-/** Prefix matches first, then anything containing the fragment. */
+/**
+ * Prefix matches first, then anything containing the fragment.
+ *
+ * Every match is returned, not a first handful: a bare `/` is a request to see
+ * what there is, and a list that stops at eight answers a different question.
+ * The menu scrolls, and the keys below page through it.
+ */
 function matchCommands(items, frag) {
-    if (!frag) return items.slice(0, CMD_MAX);
+    if (!frag) return items.slice();
     const q = frag.toLowerCase();
     const pre = [];
     const sub = [];
@@ -5547,7 +5551,7 @@ function matchCommands(items, frag) {
         if (name.startsWith(q) || tail.startsWith(q)) pre.push(c);
         else if (name.includes(q)) sub.push(c);
     }
-    return pre.concat(sub).slice(0, CMD_MAX);
+    return pre.concat(sub);
 }
 
 function closeCommandMenu() {
@@ -5645,6 +5649,36 @@ function moveCommandSelection(delta) {
 }
 
 /**
+ * How many rows a Page key should travel: what is actually on screen, less one.
+ *
+ * Measured rather than assumed, because the menu's height is a CSS decision and
+ * a row's height depends on the font — hard-coding a number here would drift
+ * from what the eye sees the moment either changes. The overlap of one row is
+ * the usual paging convention: it leaves something recognisable behind.
+ */
+function cmdPageSize() {
+    const first = dom.cmdMenu.querySelector('.picker-row');
+    if (!first) return 1;
+    const rowH = first.offsetHeight || 32;
+    return Math.max(1, Math.floor(dom.cmdMenu.clientHeight / rowH) - 1);
+}
+
+/**
+ * Page and Home/End clamp rather than wrap.
+ *
+ * Deliberately unlike the arrows: pressing Page Down at the foot of a long list
+ * should settle on the last command, not reappear at the top having skipped
+ * everything in between. Wrapping is a nicety when you are stepping one at a
+ * time and a way to lose your place when you are moving in chunks.
+ */
+function jumpCommandSelection(to) {
+    const n = cmd.rows.length;
+    if (!n) return;
+    cmd.index = Math.max(0, Math.min(n - 1, to));
+    paintCommandSelection();
+}
+
+/**
  * Put the command in the box — and never send it.
  *
  * One behaviour for every command, including those that take no arguments: a
@@ -5689,6 +5723,18 @@ document.addEventListener('keydown', (e) => {
         e.preventDefault();
         e.stopPropagation();
         moveCommandSelection(e.key === 'ArrowDown' ? 1 : -1);
+    } else if (e.key === 'PageDown' || e.key === 'PageUp') {
+        e.preventDefault();
+        e.stopPropagation();
+        const step = cmdPageSize();
+        jumpCommandSelection(cmd.index + (e.key === 'PageDown' ? step : -step));
+    } else if (e.key === 'Home' || e.key === 'End') {
+        // Only worth taking while the menu is open, and only because the box it
+        // sits on is one line: Home and End in a one-line composer move the
+        // caret somewhere it already effectively is.
+        e.preventDefault();
+        e.stopPropagation();
+        jumpCommandSelection(e.key === 'Home' ? 0 : cmd.rows.length - 1);
     } else if (e.key === 'Enter' || e.key === 'Tab') {
         if (e.shiftKey && e.key === 'Tab') return;   // still a way out of the box
         e.preventDefault();
