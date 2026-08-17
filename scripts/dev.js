@@ -43,11 +43,28 @@ function findExe() {
     ].find(p => fs.existsSync(p)) || null;
 }
 
+/**
+ * A port asked for on the command line, ahead of the environment.
+ *
+ * The flag exists because the environment is not a channel that reaches here
+ * from everywhere: a run started from the app's own buttons has
+ * CLAUDE_SESSIONS_PORT deleted before the process starts — deliberately, see
+ * bridge/terminal.js — so `.tgxcode/commands.json` has no way to hand a port
+ * over except this. It is worth having by itself, too: `npm run dev --
+ * --port=45905` says what it means where `CLAUDE_SESSIONS_PORT=45905 npm run
+ * dev` reads like it is aiming at the everyday instance.
+ */
+function askedPort() {
+    const arg = process.argv.find(a => a.startsWith('--port='));
+    const n = arg ? Number(arg.slice('--port='.length)) : NaN;
+    return Number.isInteger(n) && n > 0 && n < 65536 ? n : 0;
+}
+
 (async () => {
-    const requested = Number(process.env.CLAUDE_SESSIONS_PORT) || DEV_PORT;
+    const requested = askedPort() || Number(process.env.CLAUDE_SESSIONS_PORT) || DEV_PORT;
     if (requested === DEFAULT_PORT) {
         console.error(`Refusing to run development on ${DEFAULT_PORT} — that is the `
-            + 'everyday instance. Leave CLAUDE_SESSIONS_PORT unset.');
+            + 'everyday instance. Leave CLAUDE_SESSIONS_PORT unset and --port off.');
         process.exit(1);
     }
 

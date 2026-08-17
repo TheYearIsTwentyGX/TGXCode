@@ -12,13 +12,24 @@ below exist because breaking them destroys that work.
 Use your own instance instead:
 
 ```bash
-npm run dev            # bridge on 45899 (or the next free port) + a window
-npm run dev:headless   # bridge only; open the printed URL in a browser
+npm run dev                  # bridge on 45899 (or the next free port) + a window
+npm run dev:headless         # bridge only; open the printed URL in a browser
+npm run dev -- --port=45905  # ask for a particular one
 ```
 
 `npm run dev` refuses to bind 45888 and picks a free port near 45899, so two
 agents can each have one. The window it opens is titled `dev :45899` and carries
 an amber badge, so it is never confused with the everyday one.
+
+`--port` is refused for 45888 exactly like the environment variable is, and it
+wins over it. Prefer it when you want a specific port: `CLAUDE_SESSIONS_PORT=…`
+in front of a command reads like the thing the section below is about, and it is
+also the variable a run started from the app never receives.
+
+The **Dev instance** button in the conversation header does all of this for you —
+it is `.tgxcode/commands.json` in this repo, and it picks a free port in
+45899–45918, names the DevBrowser tab for your worktree, and gives the name back
+when you stop it.
 
 `pkill -f bridge/server.js` matches *every* bridge including the user's. If you
 must stop your own, Ctrl-C the `npm run dev` you started, or kill it by port:

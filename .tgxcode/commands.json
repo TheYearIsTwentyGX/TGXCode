@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "commands": [
+    {
+      "id": "dev",
+      "label": "Dev instance",
+      "run": "npm run dev -- --port=${port}",
+      "port": { "range": [45899, 45918] },
+      "devbrowser": "${worktree}"
+    }
+  ]
+}
