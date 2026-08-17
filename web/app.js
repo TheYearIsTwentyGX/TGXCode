@@ -92,6 +92,8 @@ const state = {
     queueSig: '',           // what the chips were last built from, to avoid churn
     queueFocus: null,       // the chip holding the queue's single tab stop
     ask: null,              // the approval this session is blocked on, if any
+    planAside: false,       // the plan view is collapsed to its one-line bar
+    planFor: null,          // which requestId that was decided about
     // The mode the bridge last reported, per session, so that a mode which moves
     // under a session can be told apart from one being seen for the first time.
     runnerMode: new Map(),
@@ -150,6 +152,8 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'btn-pin', 'btn-folder', 'btn-term', 'btn-archive', 'btn-delete', 'turns', 'turn-pop',
     'term-pane', 'term-grip', 'term-dir', 'term-moved', 'term-body', 'term-restart', 'term-close',
     'agents', 'agent-scroll', 'agent-log', 'btn-back', 'btn-back-label',
+    'ask-dock', 'plan-pane', 'plan-bar', 'plan-aside', 'plan-agent', 'plan-title',
+    'plan-body', 'plan-doc', 'plan-foot',
     'btn-dash', 'dash-badge', 'dash', 'dash-sub', 'dash-body', 'dash-refresh',
     'btn-notes', 'notes-badge', 'notes', 'notes-sub', 'notes-body',
     'notes-notable', 'notes-all', 'notes-clear',
@@ -1154,21 +1158,24 @@ function renderSystem(ev) {
 }
 
 // ── approvals, plans and questions ───────────────────────────────────────
-// A blocked turn, drawn at the foot of the transcript rather than as a toast:
-// toasts are dismissible and this is not — the turn is waiting on the answer.
-// The card is deliberately built from the same vocabulary as a tool block, so
-// what you approve looks like what you will see once it has run.
+// A blocked turn, never a toast: toasts are dismissible and this is not — the
+// turn is waiting on the answer.
 //
-// Three things arrive down this channel and only one of them is a permission:
+// Three things arrive down this channel and only one of them is a permission,
+// so each gets the surface its answer actually needs:
 //
-//   tool      may I run this? — yes, yes-always, or no.
-//   plan      here is the plan. Approving it starts the work and decides the
-//             mode it runs under; turning it down is feedback, not a refusal,
-//             so the card offers somewhere to say what was wrong with it.
-//   question  a multiple-choice question, answered by picking.
+//   tool      may I run this? — yes, yes-always, or no. One line about one
+//             call, and where in the transcript it happened is part of what
+//             you are judging, so it stays a card at the foot of the log.
+//   question  a multiple-choice question, or several. Docked above the
+//             composer, one at a time, everything about each option open.
+//   plan      a document. It takes the conversation over, because reading one
+//             through a card-sized porthole is how plans get approved unread.
+//             Turning it down is feedback, not a refusal, so there is
+//             somewhere to say what was wrong with it.
 //
-// They share the card chrome because they share the thing that matters about
-// it: the turn does not move until you answer.
+// One ask per session at a time — the bridge guarantees that — so exactly one
+// of the three surfaces is ever up, and renderAsk clears all of them first.
 
 const DECISION_WORD = {
     allow: 'Allowed.', 'allow-always': 'Allowed for the rest of this session.',
@@ -1190,51 +1197,116 @@ const ASK_HEAD = {
     question: { name: 'Question', title: 'waiting on you' },
 };
 
-const ASK_LABEL = {
-    plan: 'A plan waiting for your approval',
-    question: 'A question waiting for your answer',
-};
-
 /** Don't fire single-key shortcuts at somebody who is writing a sentence. */
 const isTyping = (t) => !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA');
 
-/** Show, replace or clear the card for whatever the session is blocked on. */
+/**
+ * A plan waiting in the transcript of a session this bridge does not own.
+ *
+ * `ExitPlanMode` is a tool call like any other, so the moment Claude asks the
+ * question the call — plan text and all — is in the JSONL, and it stays
+ * `pending` until the answer produces a result. Any window reading the file can
+ * therefore *read* a plan belonging to a session running somewhere else: the
+ * everyday window, a second window, an agent's dev bridge.
+ *
+ * Answering is a different matter and deliberately not attempted here. The
+ * control request lives in the process that raised it, and only the bridge that
+ * owns that process can respond — which is why what comes back is marked
+ * read-only and the view drops its buttons.
+ *
+ * A live runner here is the authority on what it is blocked on, so this is only
+ * consulted when there is no runner. Otherwise a plan just approved would
+ * reappear read-only for the moment between the answer and its tool result.
+ */
+function transcriptPlan() {
+    if (!state.current || state.runner) return null;
+    let found = null;
+    for (const { ev } of state.tools.values()) {
+        if (ev.name !== 'ExitPlanMode' || ev.status !== 'pending') continue;
+        if (!found || Date.parse(ev.ts) >= Date.parse(found.ts)) found = ev;
+    }
+    if (!found) return null;
+    return {
+        // Stable across ticks, and unmistakable for a real request id — nothing
+        // may be POSTed against it.
+        requestId: `transcript:${found.id}`,
+        kind: 'plan',
+        tool: 'ExitPlanMode',
+        displayName: 'ExitPlanMode',
+        input: found.input || {},
+        readOnly: true,
+    };
+}
+
+/**
+ * Settle what the session is blocked on: the live ask if we own the process,
+ * and otherwise whatever the transcript says is still waiting.
+ */
+function refreshAsk(runnerAsk) {
+    const ask = runnerAsk || transcriptPlan();
+    const same = ask && state.ask && ask.requestId === state.ask.requestId;
+    // Redraw on any change, and also when the surface should be up but is not —
+    // coming back from a subagent leaves the pane without one. Never otherwise:
+    // this runs on every status tick and every tail, and rebuilding the question
+    // dock would throw away answers that are half typed.
+    if (!same || (ask && !askShowing())) {
+        state.ask = ask;
+        renderAsk();
+    }
+}
+
+/** Is the surface for the ask on screen already? */
+const askShowing = () => Boolean(
+    dom.log.querySelector('.perm') || !dom.askDock.hidden || !dom.planPane.hidden);
+
+/** Whichever element is currently carrying the ask, for disabling and dimming. */
+function askRoot() {
+    const kind = state.ask && state.ask.kind;
+    if (kind === 'plan') return dom.planPane;
+    if (kind === 'question') return dom.askDock;
+    return dom.log.querySelector('.perm');
+}
+
+/** Show, replace or clear whatever the session is blocked on. */
 function renderAsk() {
     const old = dom.log.querySelector('.perm');
     if (old) old.remove();
-    if (!state.ask || state.agent) return;
+    dom.askDock.hidden = true;
+    delete dom.askDock.dataset.pending;
+    dom.planPane.hidden = true;
+    delete dom.planPane.dataset.pending;
 
+    // The dock's controls are where the answers live, so it is emptied only
+    // once it is no longer the dock for the ask in hand. Going to read a
+    // subagent hides it, and must not cost you the options you had picked.
     const ask = state.ask;
-    const kind = ask.kind || 'tool';
-    const head = ASK_HEAD[kind] || { name: ask.displayName, title: 'permission needed' };
-    const card = el('div', { class: `perm perm-${kind}`, tabindex: '0',
-        role: 'group', 'aria-label': ASK_LABEL[kind] || `Permission needed for ${ask.displayName}` });
-
-    card.append(
-        el('div', { class: 'perm-head' },
-            el('span', { class: 'perm-tool' }, head.name),
-            el('span', { class: 'perm-title' }, head.title)),
-    );
-
-    if (ask.agentId) {
-        card.append(el('div', { class: 'perm-why' }, 'Asked by a subagent.'));
+    const keep = ask && ask.kind === 'question' && dom.askDock.dataset.request === ask.requestId;
+    if (!keep) {
+        dom.askDock.replaceChildren();
+        delete dom.askDock.dataset.request;
     }
 
-    if (kind === 'plan') fillPlanAsk(card, ask);
-    else if (kind === 'question') fillQuestionAsk(card, ask);
-    else fillToolAsk(card, ask);
+    if (!ask || state.agent) return;
 
-    dom.log.append(card);
-
-    // Taking focus makes the single-key answers work without a click, but only
-    // when the user is actually here — stealing focus from another window, or
-    // from something being typed, would be worse than a click.
-    if (document.hasFocus() && !dom.input.matches(':focus')) card.focus({ preventScroll: true });
-    if (state.pinned) scrollToEnd(false);
+    const kind = ask.kind || 'tool';
+    if (kind === 'plan') renderPlanPane(ask);
+    else if (kind === 'question') {
+        if (keep) dom.askDock.hidden = false;
+        else renderQuestionDock(ask);
+    } else renderToolCard(ask);
 }
 
-/** "May I run this?" — the original card, unchanged. */
-function fillToolAsk(card, ask) {
+/** "May I run this?" — the original card, in the original place. */
+function renderToolCard(ask) {
+    const card = el('div', { class: 'perm perm-tool-ask', tabindex: '0', role: 'group',
+        'aria-label': `Permission needed for ${ask.displayName}` });
+
+    card.append(el('div', { class: 'perm-head' },
+        el('span', { class: 'perm-tool' }, ask.displayName),
+        el('span', { class: 'perm-title' }, 'permission needed')));
+
+    if (ask.agentId) card.append(el('div', { class: 'perm-why' }, 'Asked by a subagent.'));
+
     // toolSummary is the collapsed-row text of an ordinary tool block. Shape
     // the ask like the event it reads and the two render identically.
     card.append(el('div', { class: 'perm-arg' },
@@ -1262,53 +1334,97 @@ function fillToolAsk(card, ask) {
         e.preventDefault();
         answerAsk({ decision });
     });
+
+    dom.log.append(card);
+
+    // Taking focus makes the single-key answers work without a click, but only
+    // when the user is actually here — stealing focus from another window, or
+    // from something being typed, would be worse than a click.
+    if (document.hasFocus() && !dom.input.matches(':focus')) card.focus({ preventScroll: true });
+    if (state.pinned) scrollToEnd(false);
 }
 
 /**
  * A plan, and the two things approving one actually decides: that the work
  * starts, and what it is allowed to do once it has.
  *
- * The session is in plan mode while this card is up, so approving without
- * changing the mode would agree to the plan and then refuse every edit in it.
- * That is why these are one button and not two steps.
+ * The session is in plan mode while this is up, so approving without changing
+ * the mode would agree to the plan and then refuse every edit in it. That is
+ * why these are one button and not two steps.
+ *
+ * The pane itself is markup, not built here — it persists across renders, so
+ * its listeners are wired once at the foot of this file rather than stacked up
+ * one deep per status tick.
  */
-function fillPlanAsk(card, ask) {
-    const plan = (ask.input && ask.input.plan) || ask.description || '';
-    card.append(el('div', { class: 'perm-plan prose', html: renderMarkdown(plan) }));
+function renderPlanPane(ask) {
+    dom.planDoc.innerHTML = renderMarkdown((ask.input && ask.input.plan) || ask.description || '');
+    dom.planAgent.hidden = !ask.agentId;
+    dom.planTitle.textContent = ask.readOnly ? 'waiting in another window' : 'ready to start';
+    dom.planPane.dataset.readonly = ask.readOnly ? '1' : '';
+    if (!ask.readOnly) delete dom.planPane.dataset.readonly;
 
-    // `auto` is the default because it is how these sessions run when you are
-    // sitting in front of one: Claude judges each call and asks when a call
-    // warrants it. Blanket-accepting edits is the deliberate second choice.
-    const approve = (mode) => answerAsk({ decision: 'allow', mode });
-    const btns = el('div', { class: 'perm-btns' },
+    // A new plan always arrives open. Setting one aside is a decision about
+    // that plan, and it should not carry over to the next one.
+    if (state.planFor !== ask.requestId) {
+        state.planFor = ask.requestId;
+        state.planAside = false;
+    }
+
+    dom.planFoot.replaceChildren(...(ask.readOnly
+        // Read here, answered there. Which window is not something that can be
+        // said — the registry names the process, not the bridge in front of it —
+        // so it says what is true and stops.
+        ? [el('div', { class: 'plan-elsewhere' },
+            el('span', { class: 'plan-elsewhere-mark' }, '◇'),
+            'This session is running in another window. The plan can be read here,'
+            + ' and has to be approved where it is running.')]
+        : [planButtons(), el('div', { class: 'perm-why' },
+            'Approving leaves plan mode and sets the permission mode under the composer.')]));
+
+    dom.planPane.hidden = false;
+    setPlanAside(state.planAside);
+    if (!state.planAside) dom.planBody.scrollTop = 0;
+}
+
+/** `auto` is the default because it is how these sessions run when you are
+ *  sitting in front of one: Claude judges each call and asks when a call
+ *  warrants it. Blanket-accepting edits is the deliberate second choice. */
+function planButtons() {
+    return el('div', { class: 'perm-btns' },
         el('button', { class: 'perm-btn allow', type: 'button',
             title: 'Start work, asking about calls that warrant it',
-            onclick: () => approve('auto') },
+            onclick: () => answerAsk({ decision: 'allow', mode: 'auto' }) },
             'Approve ', el('kbd', {}, 'Y')),
         el('button', { class: 'perm-btn', type: 'button',
             title: 'Start work, and let file edits through without asking',
-            onclick: () => approve('acceptEdits') },
+            onclick: () => answerAsk({ decision: 'allow', mode: 'acceptEdits' }) },
             'Approve — auto-accept edits ', el('kbd', {}, 'A')),
         el('button', { class: 'perm-btn', type: 'button',
             title: 'Approve the plan, with something to bear in mind while doing it',
-            onclick: () => openFeedback(card, 'approve') },
+            onclick: () => openFeedback(dom.planFoot, 'approve') },
             'Approve with feedback ', el('kbd', {}, 'F')),
         el('button', { class: 'perm-btn deny', type: 'button',
-            onclick: () => openFeedback(card, 'reject') },
+            onclick: () => openFeedback(dom.planFoot, 'reject') },
             'Keep planning ', el('kbd', {}, 'N')),
     );
-    card.append(btns,
-        el('div', { class: 'perm-why' },
-            'Approving leaves plan mode and sets the permission mode under the composer.'));
+}
 
-    card.addEventListener('keydown', (e) => {
-        if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return;
-        const k = e.key.toLowerCase();
-        if (k === 'y') { e.preventDefault(); approve('auto'); }
-        else if (k === 'a') { e.preventDefault(); approve('acceptEdits'); }
-        else if (k === 'f') { e.preventDefault(); openFeedback(card, 'approve'); }
-        else if (k === 'n') { e.preventDefault(); openFeedback(card, 'reject'); }
-    });
+/**
+ * Fold the plan away to a line, or open it back up.
+ *
+ * Set aside, the ask is still outstanding — this is not an answer and does not
+ * tell the bridge anything. It is for the times the plan only makes sense
+ * against what was said before it, which is directly underneath.
+ */
+function setPlanAside(aside) {
+    state.planAside = aside;
+    if (aside) dom.planPane.dataset.collapsed = '1';
+    else delete dom.planPane.dataset.collapsed;
+    // Focus so Y/A/F/N answer without a click — same rule as everywhere else,
+    // never taking it from another window or from something being typed.
+    if (!aside && document.hasFocus() && !dom.input.matches(':focus')) {
+        dom.planPane.focus({ preventScroll: true });
+    }
 }
 
 /**
@@ -1321,11 +1437,15 @@ function fillPlanAsk(card, ask) {
  * is usually just re-sent shorter. Approved, it is appended to the plan itself,
  * because a condition you attach to a yes is part of what was agreed to.
  *
+ * It swaps the button row in place, wherever that row lives — the plan view's
+ * pinned footer today — so the answer stays where the eye already is.
+ *
+ * @param {HTMLElement} host the element holding the `.perm-btns` row
  * @param {'approve'|'reject'} how
  */
-function openFeedback(card, how) {
-    const btns = card.querySelector('.perm-btns');
-    if (!btns || card.querySelector('.perm-feedback')) return;
+function openFeedback(host, how) {
+    const btns = host.querySelector('.perm-btns');
+    if (!btns || host.querySelector('.perm-feedback')) return;
     const approving = how === 'approve';
 
     const ta = el('textarea', { class: 'perm-fb', rows: '3',
@@ -1337,7 +1457,12 @@ function openFeedback(card, how) {
     const send = () => answerAsk(approving
         ? { decision: 'allow', mode: 'auto', feedback: ta.value }
         : { decision: 'deny', feedback: ta.value });
-    const cancel = () => { box.remove(); btns.hidden = false; card.focus({ preventScroll: true }); };
+    const cancel = () => {
+        box.remove();
+        btns.hidden = false;
+        const back = host.closest('[tabindex]') || host;
+        back.focus({ preventScroll: true });
+    };
 
     const box = el('div', { class: 'perm-feedback' }, ta,
         el('div', { class: 'perm-btns' },
@@ -1347,8 +1472,13 @@ function openFeedback(card, how) {
             el('button', { class: 'perm-btn', type: 'button', onclick: cancel }, 'Cancel')));
 
     ta.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
-        else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+        if (e.key !== 'Escape' && !(e.key === 'Enter' && !e.shiftKey)) return;
+        e.preventDefault();
+        // The surface behind this box answers Escape too — by setting a plan
+        // aside. Closing the box must not also do that, and cancel() has
+        // already removed the box the surface would have tested for.
+        e.stopPropagation();
+        if (e.key === 'Escape') cancel(); else send();
     });
 
     btns.hidden = true;
@@ -1357,17 +1487,29 @@ function openFeedback(card, how) {
 }
 
 /**
- * A multiple-choice question, or several.
+ * A multiple-choice question, or several, docked above the composer.
  *
  * Native radios and checkboxes rather than clickable divs: arrow keys, space,
  * groups and labels all work without being reimplemented, and a question is
  * exactly the moment not to have reinvented a form control. Every question has
  * an "Other" row, because the honest answer is often none of the above.
+ *
+ * All of them are built at once and all of them stay in the DOM — only the one
+ * you are on is shown. That is what makes browsing free: the controls hold the
+ * answers, so there is nothing to save and restore on the way past.
  */
-function fillQuestionAsk(card, ask) {
+function renderQuestionDock(ask) {
     const questions = (ask.input && ask.input.questions) || [];
     const readers = [];
-    const wrap = el('div', { class: 'perm-qs' });
+    const groups = [];
+    const dots = [];
+    // A question moves you on once. Coming back to change an answer must not
+    // fling you forward again — that is the moment you wanted to stay.
+    const advanced = new Set();
+    let at = 0;
+
+    const body = el('div', { class: 'ask-dock-body' }, el('div', { class: 'perm-qs' }));
+    const wrap = body.firstChild;
 
     questions.forEach((q, qi) => {
         const group = el('div', { class: 'perm-q', role: 'group',
@@ -1382,20 +1524,22 @@ function fillQuestionAsk(card, ask) {
 
         for (const [oi, opt] of (q.options || []).entries()) {
             const box = el('input', { type, name, id: `${name}-o${oi}`, value: opt.label || '' });
-            box.addEventListener('change', update);
+            box.addEventListener('change', () => picked(qi, q));
             picks.push({ box, label: opt.label || '' });
             group.append(el('label', { class: 'perm-opt', for: `${name}-o${oi}` }, box,
                 el('span', { class: 'perm-opt-body' },
                     el('span', { class: 'perm-opt-label' }, opt.label || ''),
                     opt.description ? el('span', { class: 'perm-opt-desc' }, opt.description) : null,
-                    // Previews are for comparing, so they are readable on hover
-                    // and focus too — not only once you have already chosen.
+                    // Simply there. A preview is what you are comparing, and one
+                    // that only appears under the pointer cannot be compared.
                     opt.preview ? el('pre', { class: 'perm-opt-preview' }, opt.preview) : null)));
         }
 
         const otherBox = el('input', { type, name, id: `${name}-other` });
         const otherText = el('input', { type: 'text', class: 'perm-other', autocomplete: 'off',
             'aria-label': `A different answer to "${q.question || ''}"`, placeholder: 'Something else…' });
+        // Choosing "Other" is the one pick that never moves you on: the answer
+        // is the sentence you are about to type, not the radio.
         otherBox.addEventListener('change', update);
         // Typing is choosing; making people also click the radio is a trap.
         otherText.addEventListener('input', () => {
@@ -1415,12 +1559,75 @@ function fillQuestionAsk(card, ask) {
             return { question: q.question, answer: chosen.join(', ') };
         });
 
+        groups.push(group);
         wrap.append(group);
     });
 
+    // ── the answer row ───────────────────────────────────────────────────
     const submit = el('button', { class: 'perm-btn allow', type: 'button',
         onclick: () => answerAsk({ decision: 'allow', answers: collect() }) },
         questions.length > 1 ? 'Send answers ' : 'Send answer ', el('kbd', {}, '⏎'));
+    const remain = el('span', { class: 'ask-remain' });
+    const btns = el('div', { class: 'perm-btns' }, submit,
+        el('button', { class: 'perm-btn deny', type: 'button',
+            title: 'Answer nothing and let Claude decide for itself',
+            onclick: () => answerAsk({ decision: 'deny' }) },
+            'Skip'),
+        remain);
+
+    // ── browsing ─────────────────────────────────────────────────────────
+    const prev = el('button', { class: 'ask-step', type: 'button',
+        'aria-label': 'The question before this one', onclick: () => show(at - 1) }, '‹');
+    const next = el('button', { class: 'ask-step', type: 'button',
+        'aria-label': 'The next question', onclick: () => show(at + 1) }, '›');
+    const count = el('span', { class: 'ask-nav-count' });
+    const dotWrap = el('div', { class: 'ask-dots' });
+    questions.forEach((q, qi) => {
+        const dot = el('button', { class: 'ask-dot', type: 'button',
+            title: q.header || clip(q.question || '', 60) || `Question ${qi + 1}`,
+            'aria-label': `Question ${qi + 1}: ${q.header || q.question || ''}`,
+            onclick: () => show(qi) });
+        dots.push(dot);
+        dotWrap.append(dot);
+    });
+    const nav = el('div', { class: 'ask-nav' }, prev, dotWrap, count, next);
+
+    function show(i) {
+        if (i < 0 || i >= groups.length) return;
+        at = i;
+        groups.forEach((g, gi) => { g.hidden = gi !== i; });
+        body.scrollTop = 0;
+        update();
+        // Landing on the first control makes the arrow keys pick options and
+        // Enter send, so a set of questions can be answered without the mouse.
+        const first = groups[i].querySelector('input');
+        if (first && document.hasFocus() && !dom.input.matches(':focus')) {
+            first.focus({ preventScroll: true });
+        }
+    }
+
+    /** The next question with no answer yet, wrapping — or -1 if there is none. */
+    function nextOpen(from) {
+        for (let n = 1; n < readers.length; n++) {
+            const i = (from + n) % readers.length;
+            if (!readers[i]().answer) return i;
+        }
+        return -1;
+    }
+
+    function picked(qi, q) {
+        update();
+        if (q.multiSelect || advanced.has(qi)) return;
+        advanced.add(qi);
+        // Long enough that the option you chose is seen to be chosen before the
+        // question changes under you — at half this it read as the question
+        // being yanked away rather than as an answer landing.
+        setTimeout(() => {
+            if (at !== qi) return;
+            const to = nextOpen(qi);
+            if (to >= 0) show(to);
+        }, 450);
+    }
 
     function collect() {
         const out = {};
@@ -1432,30 +1639,52 @@ function fillQuestionAsk(card, ask) {
     }
 
     // Claude asked all of them; answering some and leaving the rest to guesswork
-    // is the outcome this card exists to avoid.
+    // is the outcome this dock exists to avoid. Which ones are still open is on
+    // the dots and spelled out beside the button — it used to be a tooltip on a
+    // disabled control, which is to say nowhere.
     function update() {
         const done = Object.keys(collect()).length;
         submit.disabled = done !== readers.length;
-        submit.title = submit.disabled
-            ? `${readers.length - done} still to answer`
-            : '';
+        dots.forEach((dot, di) => {
+            if (readers[di]().answer) dot.dataset.done = '1';
+            else delete dot.dataset.done;
+            dot.setAttribute('aria-current', di === at ? 'true' : 'false');
+        });
+        count.textContent = `${at + 1} of ${groups.length}`;
+        prev.disabled = at === 0;
+        next.disabled = at === groups.length - 1;
+        const left = readers.length - done;
+        remain.textContent = left ? `${left} still to answer` : '';
     }
 
-    card.append(wrap, el('div', { class: 'perm-btns' }, submit,
-        el('button', { class: 'perm-btn deny', type: 'button',
-            title: 'Answer nothing and let Claude decide for itself',
-            onclick: () => answerAsk({ decision: 'deny' }) },
-            'Skip'),
-    ));
+    const inner = el('div', { class: 'ask-dock-inner' },
+        el('div', { class: 'ask-dock-head' },
+            el('span', { class: 'perm-tool' }, 'Question'),
+            el('span', { class: 'perm-title' },
+                ask.agentId ? 'from a subagent' : 'waiting on you'),
+            el('span', { class: 'spacer' }),
+            questions.length > 1 ? nav : null),
+        body, btns);
 
-    card.addEventListener('keydown', (e) => {
-        if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.metaKey) return;
-        if (submit.disabled) return;
-        e.preventDefault();
-        submit.click();
+    inner.addEventListener('keydown', (e) => {
+        if (e.ctrlKey || e.metaKey) return;
+        if (e.key === 'Enter' && !e.shiftKey) {
+            if (submit.disabled) return;
+            e.preventDefault();
+            submit.click();
+        // Plain arrows belong to the radio group under the cursor; the modifier
+        // is what makes these about the set rather than the options.
+        } else if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+            e.preventDefault();
+            show(at + (e.key === 'ArrowRight' ? 1 : -1));
+        }
     });
 
-    update();
+    dom.askDock.replaceChildren(inner);
+    dom.askDock.dataset.request = ask.requestId;
+    dom.askDock.hidden = false;
+    dom.askDock.setAttribute('aria-label', 'A question waiting for your answer');
+    show(0);
 }
 
 /**
@@ -1481,25 +1710,49 @@ function answerAskFor(sessionId, requestId, payload) {
 async function answerAsk(payload) {
     const ask = state.ask;
     if (!ask || !state.current) return;
-    const card = dom.log.querySelector('.perm');
-    if (card) {
-        for (const b of card.querySelectorAll('button')) b.disabled = true;
-        card.dataset.pending = '1';
+    // Read out of a transcript, not raised by a process here: there is nothing
+    // on this bridge to answer, and its requestId is not one.
+    if (ask.readOnly) return;
+    const root = askRoot();
+    if (root) {
+        for (const b of root.querySelectorAll('button')) b.disabled = true;
+        root.dataset.pending = '1';
     }
     try {
         await answerAskFor(state.current.sessionId, ask.requestId, payload);
+        if (payload.mode) adoptMode(payload.mode);
     } catch (err) {
         // 409 means another window got there first; the resolved event that
-        // follows takes the card down with the right reason on it.
+        // follows takes the surface down with the right reason on it.
         toast(`Could not answer: ${err.message}`, 'error');
-        if (card) {
-            delete card.dataset.pending;
-            for (const b of card.querySelectorAll('button')) b.disabled = false;
+        if (root) {
+            delete root.dataset.pending;
+            for (const b of root.querySelectorAll('button')) b.disabled = false;
         }
     }
 }
 
-/** Take the card down and leave a line saying how it ended. */
+/**
+ * Approving a plan decides the mode the work runs in, so the selector has to
+ * agree at once rather than after the next status tick — and to keep agreeing
+ * once the process behind it has gone.
+ *
+ * Three caches, and all three have to move together: a mode picked from the
+ * dropdown before the plan arrived is spent and must not win afterwards; the
+ * per-session record of what a bridge last reported is the only lasting
+ * evidence the switch happened; and the summary is corrected so a repaint
+ * before the next tick does not flicker back.
+ */
+function adoptMode(mode) {
+    const id = state.current && state.current.sessionId;
+    if (!id || !mode) return;
+    state.permChoice.delete(id);
+    state.runnerMode.set(id, mode);
+    state.current.permissionMode = mode;
+    paintPerm();
+}
+
+/** Take the surface down and leave a line in the transcript saying how it ended. */
 function resolveAsk(outcome) {
     if (!state.ask) return;
     const head = ASK_HEAD[state.ask.kind];
@@ -2003,6 +2256,9 @@ function applyComposerScope() {
         ? 'Subagents do not take messages — go back to the session to reply.'
         : 'Send a message to this session…';
     dom.conv.dataset.scope = onAgent ? 'agent' : 'session';
+    // The dock and the plan view sit outside the scroller that swaps for a
+    // subagent, so unlike the transcript they do not go away on their own.
+    renderAsk();
     if (onAgent) {
         enableSend(false);
         dom.btnStop.hidden = true;
@@ -3764,6 +4020,10 @@ function connect() {
         state.offset = d.offset;
         const stick = state.pinned;
         appendEvents(d.events, SESSION_VIEW);
+        // A plan belonging to a session running elsewhere is read out of these
+        // events, so it arrives — and goes away once answered over there — with
+        // the transcript rather than with a status tick.
+        refreshAsk(state.runner && state.runner.pendingPermission);
         // The session pane keeps growing behind a subagent; don't yank the
         // subagent's scroll position around for it.
         if (stick && !state.agent) scrollToEnd(false);
@@ -3950,13 +4210,7 @@ function applyRunner(s) {
     // The status carries the pending ask too, so a window opening onto a session
     // that is already blocked draws the card without having seen the event.
     const ask = (s && s.pendingPermission) || null;
-    const same = ask && state.ask && ask.requestId === state.ask.requestId;
-    // Redraw on any change, and also when the card should be up but is not —
-    // coming back from a subagent leaves the log without one.
-    if (!same || (ask && !dom.log.querySelector('.perm'))) {
-        state.ask = ask;
-        renderAsk();
-    }
+    refreshAsk(ask);
 
     // Approving a plan changes the mode out from under the selector, so a change
     // the bridge reports outranks a mode picked here and not yet sent: what the
@@ -4071,6 +4325,11 @@ function paintPerm() {
     const id = state.current && state.current.sessionId;
     const mode = (id && state.permChoice.get(id))
         || (state.runner && state.runner.permissionMode)
+        // The last mode a bridge actually reported, which outranks the file:
+        // the transcript records the mode each *message* was sent in, and
+        // approving a plan sends no message, so a session approved out of plan
+        // mode reads as `plan` from the file for as long as it exists.
+        || (id && state.runnerMode.get(id))
         || (state.current && state.current.permissionMode)
         || DEFAULT_PERM;
     // A mode this build does not offer — an older CLI's vocabulary, or a newer
@@ -5431,6 +5690,28 @@ dom.termGrip.addEventListener('keydown', (e) => {
 dom.newGo.addEventListener('click', startNew);
 dom.dbStatus.addEventListener('click', refreshDevBrowser);
 dom.btnBack.addEventListener('click', closeAgent);
+
+// The plan view outlives any one plan, so its listeners are bound here once
+// rather than in the render — bound there they would stack up one deep per
+// status tick, and every key would answer the ask several times over.
+dom.planAside.addEventListener('click', () => setPlanAside(true));
+dom.planBar.addEventListener('click', () => setPlanAside(false));
+dom.planPane.addEventListener('keydown', (e) => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    // While the feedback box is open it owns the keyboard: Enter sends it, Esc
+    // closes it, and Y/A/F/N are letters somebody is in the middle of typing.
+    if (dom.planFoot.querySelector('.perm-feedback')) return;
+    if (e.key === 'Escape') { e.preventDefault(); setPlanAside(true); return; }
+    if (isTyping(e.target)) return;
+    // Setting a plan aside is about this window. Answering one is not ours to do
+    // when the process raising it belongs to another.
+    if (state.ask && state.ask.readOnly) return;
+    const k = e.key.toLowerCase();
+    if (k === 'y') { e.preventDefault(); answerAsk({ decision: 'allow', mode: 'auto' }); }
+    else if (k === 'a') { e.preventDefault(); answerAsk({ decision: 'allow', mode: 'acceptEdits' }); }
+    else if (k === 'f') { e.preventDefault(); openFeedback(dom.planFoot, 'approve'); }
+    else if (k === 'n') { e.preventDefault(); openFeedback(dom.planFoot, 'reject'); }
+});
 
 // A mode is picked for the conversation in front of you, so it is remembered
 // against that session rather than against the window — see paintPerm.

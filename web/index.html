@@ -232,90 +232,130 @@
         <div id="channels" class="channels"></div>
       </div>
 
-      <div class="conv-body">
-        <div id="scroll" class="scroll">
-          <div id="log" class="log"></div>
-        </div>
-        <div id="agent-scroll" class="scroll" hidden>
-          <div id="agent-log" class="log"></div>
-        </div>
-        <nav id="turns" class="turns" aria-label="Your messages in this session"></nav>
-      </div>
+      <!-- The transcript, the question dock and the composer, wrapped so a plan
+           can be laid over exactly them: everything below the subagent pills,
+           down to the bottom of the permission selector, and no further. The
+           terminal below stays where it is. -->
+      <div class="conv-main">
 
-      <div class="composer">
-        <div class="composer-inner">
-          <div id="status-line" class="status-line" data-state="idle">
-            <span class="led"></span>
-            <span id="status-text">Ready</span>
-            <button id="btn-stop" class="btn-stop" type="button" hidden>Stop</button>
+        <!-- A plan, in the two shapes it takes: laid over this whole box while
+             you read it, and a single line at the top of it once you have set
+             it aside. One element rather than two, so the plan itself is not
+             rebuilt — and so there is only one place the ask can live. -->
+        <section id="plan-pane" class="plan-pane" hidden tabindex="-1"
+                 aria-label="A plan waiting for your approval">
+          <button id="plan-bar" class="plan-bar" type="button">
+            <span class="plan-bar-led"></span>
+            <span class="plan-bar-text">A plan is waiting for you</span>
+            <span class="plan-bar-go">Show plan</span>
+          </button>
+          <header class="plan-head">
+            <span class="perm-tool">Plan</span>
+            <span id="plan-title" class="perm-title">ready to start</span>
+            <span id="plan-agent" class="plan-agent" hidden>Asked by a subagent.</span>
+            <span class="spacer"></span>
+            <button id="plan-aside" class="plan-aside" type="button"
+                    title="Read the conversation underneath — the plan is still waiting">
+              Set aside <kbd>Esc</kbd>
+            </button>
+          </header>
+          <div id="plan-body" class="plan-body">
+            <div id="plan-doc" class="plan-doc prose"></div>
           </div>
+          <footer id="plan-foot" class="plan-foot"></footer>
+        </section>
 
-          <!-- Messages waiting behind the turn in flight, in the order they will
-               be sent. Reads top to bottom into the composer below it. -->
-          <div id="queue" class="queue" hidden>
-            <div class="queue-head">
-              <span id="queue-count" class="queue-count"></span>
-              <!-- Only while a chip has the focus: the keys are worth knowing
-                   exactly then, and clutter the rest of the time. -->
-              <span class="queue-keys" aria-hidden="true">
-                <b>↑↓</b> pick <b>Alt+↑↓</b> move <b>Enter</b> edit <b>Esc</b> drop
-              </span>
-              <button id="queue-clear" class="queue-clear" type="button">Clear</button>
+        <div class="conv-body">
+          <div id="scroll" class="scroll">
+            <div id="log" class="log"></div>
+          </div>
+          <div id="agent-scroll" class="scroll" hidden>
+            <div id="agent-log" class="log"></div>
+          </div>
+          <nav id="turns" class="turns" aria-label="Your messages in this session"></nav>
+        </div>
+
+        <!-- A question is answered here rather than in the transcript: the turn
+             is stopped on it, so it belongs next to the box you would otherwise
+             be typing in, not somewhere you can scroll away from. -->
+        <div id="ask-dock" class="ask-dock" hidden></div>
+
+        <div class="composer">
+          <div class="composer-inner">
+            <div id="status-line" class="status-line" data-state="idle">
+              <span class="led"></span>
+              <span id="status-text">Ready</span>
+              <button id="btn-stop" class="btn-stop" type="button" hidden>Stop</button>
             </div>
-            <ol id="queue-list" class="queue-list" aria-label="Messages waiting to be sent"></ol>
-          </div>
 
-          <!-- This session already has a process somewhere else, so sending from
-               here would put two writers on one transcript. Offered before
-               anything is sent, rather than caught afterwards by the error. -->
-          <div id="lock" class="lock" hidden>
-            <span id="lock-text" class="lock-text"></span>
-            <button id="lock-fork" class="lock-btn primary" type="button">Branch off a copy</button>
-            <button id="lock-anyway" class="lock-btn" type="button">Send anyway</button>
-          </div>
+            <!-- Messages waiting behind the turn in flight, in the order they will
+                 be sent. Reads top to bottom into the composer below it. -->
+            <div id="queue" class="queue" hidden>
+              <div class="queue-head">
+                <span id="queue-count" class="queue-count"></span>
+                <!-- Only while a chip has the focus: the keys are worth knowing
+                     exactly then, and clutter the rest of the time. -->
+                <span class="queue-keys" aria-hidden="true">
+                  <b>↑↓</b> pick <b>Alt+↑↓</b> move <b>Enter</b> edit <b>Esc</b> drop
+                </span>
+                <button id="queue-clear" class="queue-clear" type="button">Clear</button>
+              </div>
+              <ol id="queue-list" class="queue-list" aria-label="Messages waiting to be sent"></ol>
+            </div>
 
-          <div class="input-row">
-            <textarea id="input" rows="1" placeholder="Send a message to this session…"
-                      aria-label="Message"></textarea>
-            <button id="btn-send" class="btn-send" type="button" disabled>Send</button>
-            <!-- The end of a review in one click. It sends a written instruction
-                 like any other message, so the transcript records what was asked
-                 for rather than a button having happened.
+            <!-- This session already has a process somewhere else, so sending from
+                 here would put two writers on one transcript. Offered before
+                 anything is sent, rather than caught afterwards by the error. -->
+            <div id="lock" class="lock" hidden>
+              <span id="lock-text" class="lock-text"></span>
+              <button id="lock-fork" class="lock-btn primary" type="button">Branch off a copy</button>
+              <button id="lock-anyway" class="lock-btn" type="button">Send anyway</button>
+            </div>
 
-                 Outside Send rather than between Send and the box: the hand
-                 leaving the textarea reaches Send first, and the button that
-                 merges things is the one you have to travel past it to hit. -->
-            <button id="btn-lgtm" class="btn-lgtm" type="button" disabled
-                    title="Send: open a PR for this work if there isn't one, run the
+            <div class="input-row">
+              <textarea id="input" rows="1" placeholder="Send a message to this session…"
+                        aria-label="Message"></textarea>
+              <button id="btn-send" class="btn-send" type="button" disabled>Send</button>
+              <!-- The end of a review in one click. It sends a written instruction
+                   like any other message, so the transcript records what was asked
+                   for rather than a button having happened.
+
+                   Outside Send rather than between Send and the box: the hand
+                   leaving the textarea reaches Send first, and the button that
+                   merges things is the one you have to travel past it to hit. -->
+              <button id="btn-lgtm" class="btn-lgtm" type="button" disabled
+                      title="Send: open a PR for this work if there isn't one, run the
 checks, and merge it once they pass.">LGTM</button>
-          </div>
+            </div>
 
-          <div class="opts">
-            <label for="model">Model</label>
-            <select id="model" aria-label="Model">
-              <option value="">inherit</option>
-              <option value="opus">opus</option>
-              <option value="sonnet">sonnet</option>
-              <option value="haiku">haiku</option>
-              <option value="fable">fable</option>
-            </select>
-            <label for="perm">Permissions</label>
-            <select id="perm" aria-label="Permission mode">
-              <option value="acceptEdits">acceptEdits</option>
-              <!-- The default: it is the mode these sessions run in when you
-                   drive them from a terminal, so a conversation continued here
-                   behaves the way the same conversation would there. -->
-              <option value="auto" selected>auto</option>
-              <!-- Worth having now that a prompt is a real question rather than
-                   a silent denial: manual asks about everything. -->
-              <option value="manual">manual</option>
-              <option value="plan">plan</option>
-              <option value="dontAsk">dontAsk</option>
-              <option value="bypassPermissions">bypassPermissions</option>
-            </select>
-            <span class="hint">Enter to send · Shift+Enter for a newline</span>
+            <div class="opts">
+              <label for="model">Model</label>
+              <select id="model" aria-label="Model">
+                <option value="">inherit</option>
+                <option value="opus">opus</option>
+                <option value="sonnet">sonnet</option>
+                <option value="haiku">haiku</option>
+                <option value="fable">fable</option>
+              </select>
+              <label for="perm">Permissions</label>
+              <select id="perm" aria-label="Permission mode">
+                <option value="acceptEdits">acceptEdits</option>
+                <!-- The default: it is the mode these sessions run in when you
+                     drive them from a terminal, so a conversation continued here
+                     behaves the way the same conversation would there. -->
+                <option value="auto" selected>auto</option>
+                <!-- Worth having now that a prompt is a real question rather than
+                     a silent denial: manual asks about everything. -->
+                <option value="manual">manual</option>
+                <option value="plan">plan</option>
+                <option value="dontAsk">dontAsk</option>
+                <option value="bypassPermissions">bypassPermissions</option>
+              </select>
+              <span class="hint">Enter to send · Shift+Enter for a newline</span>
+            </div>
           </div>
         </div>
+
       </div>
 
       <!-- A shell in the session's working directory. Last in the pane, below
