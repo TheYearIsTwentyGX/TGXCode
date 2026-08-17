@@ -26,7 +26,10 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execFile } = require('child_process');
+// Synchronous on purpose: both calls are `git` answering about a directory it
+// has already indexed, they are cached for ten seconds, and load() is on the
+// path of a route that has to return a whole answer anyway.
+const { execFileSync } = require('child_process');
 
 const cfg = require('./config');
 const { projectRootOf, worktreeNameOf } = require('./transcript');
@@ -276,7 +279,6 @@ function cached(map, key, ttl, compute) {
 function branchOf(dir) {
     return cached(branchCache, dir, BRANCH_CACHE_MS, () => {
         try {
-            const { execFileSync } = require('child_process');
             const out = execFileSync('git', ['-C', dir, 'rev-parse', '--abbrev-ref', 'HEAD'],
                 { timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] });
             const name = String(out).trim();
@@ -297,7 +299,6 @@ function ignored(dir, relative) {
     const key = path.join(dir, relative);
     return cached(ignoreCache, key, BRANCH_CACHE_MS, () => {
         try {
-            const { execFileSync } = require('child_process');
             execFileSync('git', ['-C', dir, 'check-ignore', '-q', '--', relative],
                 { timeout: 3000, stdio: 'ignore' });
             return true;
