@@ -180,6 +180,11 @@
         <div class="conv-title-row">
           <h1 id="conv-title" class="conv-title"></h1>
           <div class="conv-actions">
+            <!-- What this project declares in .tgxcode/, filled by renderCommands.
+                 Before the icons because these are the buttons with words on
+                 them: a row of labels reads as a toolbar, and putting them after
+                 the icons would read as an afterthought. -->
+            <div id="cmds" class="cmds"></div>
             <button id="btn-pin" class="icon-btn" type="button" title="Pin this session">
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                 <path d="M9 3h6l-.7 5.2 3 2.6V13H6.7v-2.2l3-2.6L9 3Z"
@@ -318,16 +323,24 @@ checks, and merge it once they pass.">LGTM</button>
         </div>
       </div>
 
-      <!-- A shell in the session's working directory. Last in the pane, below
-           the composer and its controls: it is a workbench you pull open under
-           everything else, not something that pushes the composer around. -->
+      <!-- A shell in the session's working directory, and the output of any
+           command this project declared. Last in the pane, below the composer
+           and its controls: it is a workbench you pull open under everything
+           else, not something that pushes the composer around.
+
+           One pane with tabs rather than a second pane: the bridge replays a
+           run's scrollback on attach, so switching back redraws correctly, and
+           a second draggable pane would mean a second height to remember and a
+           second xterm to keep in memory. -->
       <section id="term-pane" class="term-pane" aria-label="Terminal" hidden>
         <div id="term-grip" class="term-grip" role="separator" aria-orientation="horizontal"
              tabindex="0" aria-label="Resize the terminal"></div>
         <div class="term-head">
+          <div id="term-tabs" class="term-tabs" role="tablist" aria-label="Terminal and runs"></div>
           <span class="term-dir" id="term-dir"></span>
           <span class="term-moved" id="term-moved" hidden></span>
           <span class="spacer"></span>
+          <button id="term-stop" class="term-btn" type="button" hidden>Stop</button>
           <button id="term-restart" class="term-btn" type="button"
                   title="End this shell and start a new one">Restart</button>
           <button id="term-close" class="term-btn" type="button"

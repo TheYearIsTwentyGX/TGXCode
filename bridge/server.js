@@ -28,6 +28,8 @@ const dashboard = require('./dashboard');
 const overview = require('./overview');
 const { openInExplorer } = require('./explorer');
 const { TerminalPool } = require('./terminal');
+const commands = require('./commands');
+const { RunPool } = require('./runs');
 
 const WEB_DIR = path.join(__dirname, '..', 'web');
 const CLIENT_HEADER = 'x-claude-sessions-client';
@@ -37,6 +39,9 @@ const index = new SessionIndex(flags);
 const registry = new SessionRegistry();
 const pool = new RunnerPool();
 const terminals = new TerminalPool();
+// State only, never bytes: a run's output goes down its own stream. This is what
+// lets every open window paint a button green off one small payload.
+const runs = new RunPool({ onChange: (e) => broadcast('run-changed', e) });
 // Titles are copied onto an entry as it is filed, so the log still reads
 // properly after a session is renamed or deleted; the test flag is asked for at
 // read time, so labelling a session as scratch afterwards takes its rows out of
@@ -72,6 +77,34 @@ function sseSend(client, event, data) {
 
 function broadcast(event, data) {
     for (const c of clients.values()) sseSend(c, event, data);
+}
+
+/**
+ * A pty's output, on a connection of its own.
+ *
+ * Shared by terminals and by runs, because a run is a terminal underneath. It is
+ * deliberately *not* the app's SSE channel: a noisy build moves megabytes and
+ * has no business sharing a connection with transcript tailing.
+ *
+ * `opened` differs between the two — a terminal describes a shell, a run
+ * describes a command — so the caller passes it.
+ */
+function streamBytes(req, res, term, opened) {
+    res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+    });
+    const emit = (event, data) => {
+        try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); }
+        catch { /* the socket went away; the close handler cleans up */ }
+    };
+    emit('opened', opened);
+    const detach = term.attach(emit);
+    const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* closed */ } }, 25_000);
+    ping.unref();
+    req.on('close', () => { clearInterval(ping); detach(); });
 }
 
 function dropClient(id) {
@@ -398,6 +431,11 @@ function isKnownHost(host) {
  *     could a session start", and a phone may already start one. Creating a
  *     directory is reaching past the app into the machine, which is the line
  *     above — so the refusal is on the exact path, not on /api/fs.
+ *   - **Runs** are a terminal wearing a config file's clothes: /api/runs/:id/input
+ *     writes bytes to a pty, so the terminal clause above settles it without a
+ *     new argument. Starting one is refused on the exact path, the same asymmetry
+ *     as /api/fs — a phone reading what a project declares learns nothing it
+ *     could not learn by reading the repo; a phone running it does not.
  *
  * Refusing at the route rather than in the UI is the point: /m not drawing a button
  * is a courtesy, and this is the rule.
@@ -405,6 +443,13 @@ function isKnownHost(host) {
 function remoteRefusal(pathname, method) {
     if (pathname.startsWith('/api/terminals')) {
         return 'terminals are not available remotely';
+    }
+    if (pathname.startsWith('/api/runs')) {
+        return 'project commands can only be run from the machine they run on';
+    }
+    // Exact equality, not a prefix: GET /api/commands stays readable remotely.
+    if (pathname === '/api/commands/run') {
+        return 'project commands can only be started from the machine they run on';
     }
     if (pathname === '/api/shutdown') {
         return 'the bridge can only be shut down from the machine it runs on';
@@ -558,7 +603,7 @@ async function api(req, res, url, pathname, who) {
             worktree: cfg.IS_WORKTREE,
             // Live SSE connections — a quick way to tell whether a UI attached.
             clients: clients.size, runners: Object.keys(pool.statuses()).length,
-            terminals: terminals.live().length,
+            terminals: terminals.live().length, runs: runs.live().length,
             // Sessions with a process, from Claude Code's registry — including
             // every one running in a terminal, which no other count here sees.
             live: registry.liveCount, registered: registry.size,
@@ -933,8 +978,9 @@ async function api(req, res, url, pathname, who) {
                 archived: typeof body.archived === 'boolean' ? body.archived : undefined,
                 test: typeof body.test === 'boolean' ? body.test : undefined,
             });
+            const stopped = next.archived ? archiveStoppedRuns(summary) : 0;
             broadcast('sessions-changed', { at: Date.now() });
-            return send(res, 200, { ok: true, sessionId, ...next });
+            return send(res, 200, { ok: true, sessionId, ...next, runsStopped: stopped });
         }
 
         // Show the session's working directory in Windows File Explorer.
@@ -968,6 +1014,88 @@ async function api(req, res, url, pathname, who) {
         }
     }
 
+    // --- project commands --------------------------------------------------
+    // What a directory declares in .tgxcode/, and the runs started from it. See
+    // bridge/commands.js for why reading a file out of a project is new ground,
+    // and bridge/runs.js for why a run is a terminal underneath.
+    if (seg[1] === 'commands') {
+        if (!seg[2] && req.method === 'GET') {
+            const dir = url.searchParams.get('cwd');
+            if (!dir) return send(res, 400, { error: 'cwd is required' });
+            const listed = commands.load(dir);
+            if (!listed) return send(res, 403, { error: 'that directory is outside the allowed roots' });
+            // The live run travels with the command so one request paints the
+            // whole row: a button that does not know it is already running is
+            // a button that starts a second server.
+            return send(res, 200, {
+                ...listed,
+                commands: listed.commands.map((c) => {
+                    const run = runs.forCommand(listed.workspace, c.id);
+                    return { ...c, run: run ? run.info() : null };
+                }),
+            });
+        }
+
+        if (seg[2] === 'run' && req.method === 'POST') {
+            const body = await readJson(req);
+            if (!body.cwd || !body.id) return send(res, 400, { error: 'cwd and id are required' });
+            if (!cfg.withinRoots(body.cwd)) {
+                return send(res, 403, { error: 'that directory is outside the allowed roots' });
+            }
+            const out = await runs.start(body.cwd, body.id);
+            if (out.error) {
+                return send(res, out.status || 400,
+                    { error: out.error, run: out.run ? out.run.info() : undefined });
+            }
+            return send(res, 200, { run: out.run.info() });
+        }
+    }
+
+    if (seg[1] === 'runs') {
+        if (!seg[2] && req.method === 'GET') return send(res, 200, { runs: runs.list() });
+
+        if (seg[2]) {
+            const run = runs.get(seg[2]);
+            if (!run) return send(res, 404, { error: 'no such run' });
+            const tail = seg[3];
+
+            if (!tail && req.method === 'GET') return send(res, 200, { run: run.info() });
+
+            // The same byte pipe a terminal uses, for the same reason.
+            if (tail === 'stream' && req.method === 'GET') {
+                return streamBytes(req, res, run.term, run.info());
+            }
+
+            if (tail === 'input' && req.method === 'POST') {
+                const body = await readJson(req);
+                if (typeof body.b64 !== 'string') return send(res, 400, { error: 'b64 is required' });
+                // Writable on purpose: vite's `r`, jest's watch keys, and Ctrl-C
+                // as a gentler stop than the SIGHUP the stop button sends.
+                const ok = run.term.write(Buffer.from(body.b64, 'base64'));
+                return send(res, 200, { ok, exited: run.term.exited });
+            }
+
+            if (tail === 'resize' && req.method === 'POST') {
+                const body = await readJson(req);
+                run.term.resize(body.rows, body.cols);
+                return send(res, 200, { ok: true, rows: run.term.rows, cols: run.term.cols });
+            }
+
+            if (tail === 'stop' && req.method === 'POST') {
+                return send(res, 200, { ok: runs.stop(run.id), run: run.info() });
+            }
+
+            // Forgetting is not stopping. Conflating them is how somebody kills
+            // a dev server by tidying a list.
+            if (!tail && req.method === 'DELETE') {
+                if (!run.exitedAt) {
+                    return send(res, 409, { error: 'still running — stop it first', run: run.info() });
+                }
+                return send(res, 200, { ok: runs.forget(run.id) });
+            }
+        }
+    }
+
     // --- terminals ---------------------------------------------------------
     // Keyed by terminal rather than by session so a pane keeps talking to the
     // shell it opened even if the session list moves underneath it.
@@ -979,24 +1107,7 @@ async function api(req, res, url, pathname, who) {
         // Its own stream, not the app's SSE channel: this is a byte pipe that
         // can move megabytes when a build is noisy, and it has no business
         // sharing a connection with transcript tailing.
-        if (tail === 'stream' && req.method === 'GET') {
-            res.writeHead(200, {
-                'Content-Type': 'text/event-stream',
-                'Cache-Control': 'no-cache, no-transform',
-                Connection: 'keep-alive',
-                'X-Accel-Buffering': 'no',
-            });
-            const emit = (event, data) => {
-                try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); }
-                catch { /* the socket went away; the close handler cleans up */ }
-            };
-            emit('opened', term.info());
-            const detach = term.attach(emit);
-            const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* closed */ } }, 25_000);
-            ping.unref();
-            req.on('close', () => { clearInterval(ping); detach(); });
-            return;
-        }
+        if (tail === 'stream' && req.method === 'GET') return streamBytes(req, res, term, term.info());
 
         if (tail === 'input' && req.method === 'POST') {
             const body = await readJson(req);
@@ -1218,6 +1329,39 @@ function stopMessage(out, port) {
 function workingDir(summary) {
     return [summary.cwd, summary.worktree && summary.worktree.path, summary.projectCwd]
         .find(d => d && fs.existsSync(d)) || null;
+}
+
+/**
+ * Archiving a session stops the commands running in its directory — but only
+ * once nothing else is using it.
+ *
+ * Archiving is how you say you are done with a piece of work, and a dev server
+ * for a branch nobody is looking at any more is exactly the thing that ends up
+ * holding a port for a week. Runs are keyed by directory rather than by session
+ * though, and several sessions share a worktree routinely, so archiving one of
+ * three would otherwise pull the server out from under the other two. The last
+ * one out turns the lights off.
+ *
+ * @returns {number} how many runs were stopped
+ */
+function archiveStoppedRuns(summary) {
+    const dir = workingDir(summary);
+    // Asked first, and cheap: almost every archive is of a session in a
+    // directory nothing is running in, and the scan below is not free.
+    if (!dir || !runs.forWorkspace(dir).some(r => !r.exitedAt)) return 0;
+
+    // Compared as strings rather than through workingDir(), which stats up to
+    // three paths per session — a few thousand of those on every archive click,
+    // to answer a question the recorded paths already answer.
+    const others = index.list({ includeTest: true, limit: 1000 }).some(s =>
+        s.sessionId !== summary.sessionId && !s.archived
+        && (s.cwd === dir || (s.worktree && s.worktree.path === dir) || s.projectCwd === dir));
+    if (others) return 0;
+    const stopped = runs.stopWorkspace(dir);
+    if (stopped) {
+        console.log(`[claude-sessions] archived ${summary.sessionId}: stopped ${stopped} run(s) in ${dir}`);
+    }
+    return stopped;
 }
 
 /**
@@ -1516,8 +1660,11 @@ function shutdown(code = 0) {
         }
     } catch { /* nothing to clean */ }
     // Terminals run in their own process groups, so unlike turns they would
-    // outlive us if we did not take them with us.
+    // outlive us if we did not take them with us. A run is the same, and worse
+    // if left: its stdout is a pipe nobody is reading any more, so it would fill
+    // the buffer, block on write() and go on holding its port while hung.
     try { terminals.shutdown(); } catch { /* nothing to clean */ }
+    try { runs.shutdown(); } catch { /* nothing to clean */ }
     try { index.stop(); } catch { /* nothing to clean */ }
     try { registry.stop(); } catch { /* nothing to clean */ }
     try { server.close(); } catch { /* already closed */ }

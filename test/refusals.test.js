@@ -67,6 +67,17 @@ const HOME = os.homedir();
     check('mkdir', (await call('POST', '/api/fs/mkdir', {
         headers: PHONE, body: { parent: HOME, name: 'x' },
     })).status, 403);
+    check('runs list', (await call('GET', '/api/runs', { headers: PHONE })).status, 403);
+    check('runs stream', (await call('GET', '/api/runs/x/stream', { headers: PHONE })).status, 403);
+    check('runs input', (await call('POST', '/api/runs/x/input', { headers: PHONE, body: {} })).status, 403);
+    check('starting a project command', (await call('POST', '/api/commands/run', {
+        headers: PHONE, body: { cwd: HOME, id: 'dev' },
+    })).status, 403);
+    // The same asymmetry as /api/fs below: what a project *declares* is in its
+    // repository already, so reading it from a phone gives away nothing. Running
+    // it is reaching past the app into the machine.
+    check('reading what a project declares', (await call('GET',
+        `/api/commands?cwd=${encodeURIComponent(HOME)}`, { headers: PHONE })).status, 200);
     // The asymmetry that decision rests on: reading the tree stays allowed, and
     // this is the line that pins it. A phone may already start a session, so it
     // may see where one could start; writing to the filesystem is the other side.
@@ -80,6 +91,10 @@ const HOME = os.homedir();
     check('terminals locally is not a refusal', localTerm.status === 403, false);
     const localDb = await call('GET', '/api/devbrowser/status', { headers: LOCAL });
     check('devbrowser locally is not a refusal', localDb.status === 403, false);
+    // 404 rather than 403: the gate lets it through and it fails on its own
+    // terms, which is the distinction being tested.
+    check('a run locally reaches its own not-found',
+        (await call('GET', '/api/runs/nope', { headers: LOCAL })).status, 404);
 
     console.log('\n--- permission modes ---');
     const bypass = await call('POST', '/api/sessions', {

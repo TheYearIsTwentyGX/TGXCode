@@ -72,13 +72,16 @@ the thing you are about to approve is running on a machine you are sitting at.
 
 **Refused for remote callers** (403, with `{"error": …, "remote": true}`):
 `permissionMode` of `bypassPermissions` or `dontAsk` on both create and send; all
-of `/api/terminals/*`; `/api/shutdown`; `/api/devservers/stop`;
-`/api/devbrowser/*`; `POST /api/sessions/:id/reveal`; `POST /api/fs/mkdir`.
+of `/api/terminals/*`; all of `/api/runs/*`; `POST /api/commands/run`;
+`/api/shutdown`; `/api/devservers/stop`; `/api/devbrowser/*`;
+`POST /api/sessions/:id/reveal`; `POST /api/fs/mkdir`.
 
-Note the asymmetry in that last one: `GET /api/fs` stays readable remotely, so the
-refusal is on the exact path rather than the `/api/fs` prefix. Reading the tree
-answers "where could a session start", and a phone may already start one. Creating
-a directory is reaching past the app into the machine.
+Note the asymmetry in the last two: `GET /api/fs` and `GET /api/commands` stay
+readable remotely, so those refusals are on the exact path rather than the
+prefix. Reading the tree answers "where could a session start", and a phone may
+already start one; reading what a project declares gives away nothing that is not
+in its repository. Creating a directory, or running one of those commands, is
+reaching past the app into the machine.
 
 **For every caller:** a session may only start inside `CLAUDE_SESSIONS_ROOTS`
 (default `$HOME`); `/api/fs` lists and `/api/fs/mkdir` writes only inside the same
@@ -193,6 +196,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `turn-complete` | `{sessionId, isError, detail, costUsd, durationMs, …}` |
 | `send-failed` | `{sessionId, kind, message, unsent: [text]}` — hand the text back to the user |
 | `session-forked` | `{from, to}` — follow the new id |
+| `run-changed` | `{runId, workspace, commandId, label, state, port, exit, stopped, at}` — a project command moved; state only, never output |
 
 `runner-status`: `{sessionId, state, activity, model, permissionMode, cwd, error,
 errorKind, queued, queue[], pendingPermission, canPrompt, busySince}` where `state`
@@ -313,6 +317,61 @@ served, port}`, by shelling out to `tailscale.exe` on the Windows host. `served`
 the origin `tailscale serve` is already proxying to this port, or null. Every `url`
 is a real value a client can use directly — never a placeholder to be edited. When
 nothing can be determined, `hosts` is empty and the caller should ask.
+
+## Project commands
+
+What a directory declares in `.tgxcode/commands.json`, and the processes started
+from it. See `bridge/commands.js` for the file format and where it is read from,
+and `docs/plans/17-project-commands.md` for why.
+
+| Route | Body / query | Notes |
+|---|---|---|
+| `GET /api/commands?cwd=` | | what this directory declares; readable remotely |
+| `POST /api/commands/run` | `{cwd, id}` | start one; local callers only |
+| `GET /api/runs` | | every run this bridge knows of |
+| `GET /api/runs/:id` | | one of them |
+| `GET /api/runs/:id/stream` | | SSE byte pipe — see below |
+| `POST /api/runs/:id/input` | `{b64}` | bytes to the pty |
+| `POST /api/runs/:id/resize` | `{rows, cols}` | |
+| `POST /api/runs/:id/stop` | | SIGHUP to the job, SIGKILL after 2s |
+| `DELETE /api/runs/:id` | | forget an exited record; `409` if still running |
+
+`GET /api/commands` answers `{workspace, project, projectName, worktree, branch,
+commands[], problems[]}`. Each command is `{id, label, command, cwd, port,
+devbrowser, from, run}` — `command` is the string that will run, with everything
+expanded *except* `${port}`, which is not known until one is allocated. `run` is
+the live or last record for that command in that directory, or null.
+
+`problems[]` is `{file?, id?, message, informational?}`. A file that will not
+parse contributes nothing and reports once; a single bad command is dropped and
+its siblings survive. Both are worth showing: silently offering fewer buttons
+than the file asks for is how a typo goes unnoticed for a week.
+
+A run record is `{id, workspace, commandId, label, command, cwd, port,
+devbrowser, state, pid, startedAt, listeningAt, exitedAt, exit, stopped,
+terminalId}` with `state ∈ starting | listening | running | stopping | exited`.
+`stopped` says somebody pressed Stop, as against the process ending on its own —
+worth distinguishing, because SIGHUP escalates to SIGKILL for anything that
+shrugs it off, so the signal a run died of says nothing about whether it was
+asked to.
+
+**Starting is not idempotent and does not reattach.** One run per
+`(cwd, commandId)`; asking for a second is `409` with the live one in the body,
+so a client can open its output rather than quietly start nothing. `409` also
+covers no free port in the range and too many runs at once. Restart is stop, wait
+for `exited`, start.
+
+**Runs die with their bridge**, like terminals and unlike nothing else here. The
+child's stdout is a pipe whose only reader is the bridge, so one that outlived it
+would fill the buffer, block on `write()` and go on holding its port while hung.
+A client should say so rather than imply otherwise.
+
+`/api/runs/:id/stream` is byte-for-byte the terminal stream — `opened` (once,
+carrying the run record), `data` (`{b64}`), `exit` (`{code, signal}`), base64 in
+both directions, `: ping` every 25s. It is a connection of its own for the reason
+the terminal one is: a noisy build moves megabytes and has no business sharing
+with transcript tailing. **Nothing about a run's output ever appears on
+`/api/events`** — that channel carries `run-changed` and `run-changed` only.
 
 ## Decisions locked in for a native client
 

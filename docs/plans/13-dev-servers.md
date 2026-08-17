@@ -18,6 +18,12 @@ most common thing: it died and needs restarting.
 
 ### A. Restart, stop, start
 
+> **Superseded by 17, except for stop.** A project declaring its commands in
+> `.tgxcode/` is strictly better than re-running a string scraped out of Bash
+> traffic — see the Risks below, which say as much. Do not build the start half.
+> Stop already shipped and stays: it works from the socket rather than the
+> transcript, so it is the right tool for a server this app did not start.
+
 The chip gains a menu. The command is not guessed — `devservers.js` already
 captures the evidence that identified the port, and the chip already shows it in
 a tooltip (`app.js:781`):
@@ -42,6 +48,11 @@ So "restart" means: re-run *that command*, in the session's cwd.
   restart one you can see.
 
 ### B. Log tail
+
+> **Superseded by 17.** A run's log keys on the run, not on the port: ports get
+> reused across worktrees, so `<port>.log` would interleave two projects. It is
+> `~/.cache/claude-sessions/runs/<runId>.log`, and the pane that reads it is the
+> terminal pane with a tab strip rather than a panel of its own.
 
 A server started by the app writes to
 `~/.cache/claude-sessions/devservers/<port>.log`. The chip menu opens a tail
