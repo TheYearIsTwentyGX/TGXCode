@@ -1,6 +1,12 @@
 node_modules/
 dist/
 *.log
+sidebar.png
 
 # Agent worktrees are full checkouts of this repo; never commit them into it.
 .claude/worktrees/
+
+# Personal overrides of the commands this project declares. The shared file
+# beside it is checked in; this one is yours, and the app says so out loud if
+# this line ever goes missing.
+.tgxcode/commands.local.json

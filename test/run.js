@@ -23,6 +23,14 @@ if (given === 45888) {
     process.exit(2);
 }
 
+/**
+ * Deliberately not bridge/ports.js, though it looks like the same helper.
+ *
+ * `listen(0)` asks the kernel, which needs no range, no denylist and no
+ * reservation — it is simply better for what this does. And the harness should
+ * not depend on the module the suite exercises: a bug in ports.js that stopped
+ * the tests from starting would look like a passing run.
+ */
 function freePort() {
     return new Promise((resolve, reject) => {
         const s = net.createServer();

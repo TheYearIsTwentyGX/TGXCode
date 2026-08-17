@@ -17,6 +17,13 @@
 // ~/.bashrc is where nvm and ~/.local/bin land on this machine, and a login
 // shell never reads it. See the note in launch.sh — the bridge itself may well
 // have been started without node on PATH for that reason.
+//
+// A Terminal is also what a *run* is made of — a command a project declared,
+// started from a button rather than typed. See bridge/runs.js. Everything that
+// differs is an option here, and every option defaults to the shell's behaviour,
+// so nothing in this file changed shape for it: a run is a terminal whose first
+// command is not a prompt, which stays alive with nobody watching, and which
+// keeps a copy of its output on disk.
 
 const fs = require('fs');
 const os = require('os');
@@ -40,6 +47,11 @@ const MAX_TERMINALS = 24;
 // ended, then dropped.
 const REAP_MS = 60_000;
 
+// How much of a run's output is kept on disk, and how many generations. A dev
+// server that has been up for a week is mostly request logs; the recent end is
+// the part anyone reads.
+const LOG_BYTES = 8 * 1024 * 1024;
+
 /** Only ever used unquoted inside the pty command line, so keep it boring. */
 function safeShell(candidate) {
     if (candidate && /^\/[\w.+/-]+$/.test(candidate)) {
@@ -48,19 +60,48 @@ function safeShell(candidate) {
     return '/bin/bash';
 }
 
+/**
+ * Quote a string for the one place this file puts somebody else's text on a
+ * command line.
+ *
+ * The comment on the boot string below says the only shell metacharacters in it
+ * are ones written here. A declared command breaks that on purpose, so it goes
+ * through this: single quotes stop everything, and the `'\''` dance is how you
+ * get a single quote inside them. A NUL would truncate the line at the exec, so
+ * commands.js rejects one before it reaches here — belt and braces, refuse it
+ * again rather than quote something that cannot be quoted.
+ */
+function shq(s) {
+    const str = String(s);
+    if (str.includes('\0')) throw new Error('command contains a NUL byte');
+    return `'${str.replace(/'/g, `'\\''`)}'`;
+}
+
 function clampDim(n, fallback, max) {
     const v = Math.floor(Number(n));
     return Number.isFinite(v) && v > 0 ? Math.min(v, max) : fallback;
 }
 
 class Terminal {
-    constructor({ sessionId, cwd, rows, cols }) {
+    /**
+     * @param {object}   opt
+     * @param {string}  [opt.command]   run this instead of an interactive prompt
+     * @param {object}  [opt.env]       extra environment, applied over the defaults
+     * @param {string}  [opt.logFile]   keep a copy of the output here
+     * @param {Function}[opt.onExit]    called once, with {code, signal}
+     */
+    constructor({ sessionId, cwd, rows, cols, command, env: extraEnv, logFile, onExit }) {
         this.id = randomUUID();
         this.sessionId = sessionId;
         this.cwd = cwd;
         this.rows = clampDim(rows, 24, 500);
         this.cols = clampDim(cols, 80, 1000);
-        this.shell = safeShell(process.env.SHELL);
+        this.command = command || null;
+        this.onExit = typeof onExit === 'function' ? onExit : null;
+        // A declared command assumes bash — it was written in a config file, not
+        // typed by whoever's $SHELL this is. A prompt somebody is going to type
+        // into should be the shell they chose.
+        this.shell = this.command ? '/bin/bash' : safeShell(process.env.SHELL);
 
         this.chunks = [];        // scrollback, whole writes only
         this.bytes = 0;
@@ -69,25 +110,42 @@ class Terminal {
         this.exitedAt = 0;
         this.lastSeen = Date.now();
 
+        this.logFile = logFile || null;
+        this.log = null;         // opened on the first write, not before
+        this.logBytes = 0;
+        this.closed = false;
+
         // Where the shell reports its pty. Read lazily on the first resize —
         // by then it has certainly been written, and nothing needs it before.
         this.ttyFile = path.join(os.tmpdir(), `${TTY_PREFIX}${this.id}`);
         this.tty = null;
 
         // `script` copies our stdin to the pty and the pty to our stdout, so
-        // the only shell metacharacters in this line are ones written here.
+        // the only shell metacharacters in this line are ones written here —
+        // except a declared command, which goes through shq() for that reason.
         // Setting the size from inside means the very first draw is correct;
         // afterwards it is stty -F from the outside.
+        //
+        // `-i` is load-bearing in both forms, not decoration: nvm and
+        // ~/.local/bin come from ~/.bashrc and only an interactive shell reads
+        // it, so `npm run dev` without it fails with `node: not found`.
+        const tail = this.command
+            ? `exec ${this.shell} -i -c ${shq(this.command)}`
+            : `exec ${this.shell} -i`;
         const boot = `printf %s "$(tty)" > ${this.ttyFile}; `
             + `stty rows ${this.rows} cols ${this.cols} 2>/dev/null; `
-            + `exec ${this.shell} -i`;
+            + tail;
 
         const env = {
             ...process.env,
             TERM: 'xterm-256color',
             COLORTERM: 'truecolor',
             LANG: process.env.LANG || 'C.UTF-8',
+            ...(extraEnv || {}),
         };
+        // Both deletions are after the caller's env on purpose: they are not
+        // defaults to be overridden.
+        //
         // A shell opened from here is a place to run commands by hand. If the
         // bridge was itself started from inside a session, nothing downstream
         // should go on believing it is the agent's own environment.
@@ -95,7 +153,11 @@ class Terminal {
         // And this pane is the likeliest place of all for someone to type
         // `bash bridge/launch.sh`. Inheriting the port would aim that at the
         // everyday instance without saying so — see sessionEnv in runner.js.
+        // A declared `npm run dev` in *this* repo is the same accident with
+        // nobody typing anything, which is why it is unconditional.
         delete env.CLAUDE_SESSIONS_PORT;
+        // Nothing to delete for the API token: auth.js reads it from TOKEN_FILE
+        // and never puts it in the environment, so a child cannot inherit it.
 
         this.proc = spawn('script', ['-qfec', boot, '/dev/null'], {
             cwd,
@@ -123,7 +185,42 @@ class Terminal {
         while (this.bytes > SCROLLBACK_BYTES && this.chunks.length > 1) {
             this.bytes -= this.chunks.shift().length;
         }
+        this.tee(buf);
         for (const send of this.listeners) send('data', { b64: buf.toString('base64') });
+    }
+
+    /**
+     * Keep a copy on disk, for runs.
+     *
+     * Scrollback is half a megabyte and lives in this process, which is the
+     * right size for redrawing a pane and the wrong one for "why did the build
+     * fail an hour ago". The file is 0600 because a dev server's output
+     * routinely contains tokens and connection strings.
+     *
+     * Opened on the first byte rather than at construction, so a run that never
+     * says anything leaves nothing behind.
+     */
+    tee(buf) {
+        if (!this.logFile || this.closed) return;
+        try {
+            if (!this.log) {
+                this.log = fs.createWriteStream(this.logFile, { flags: 'a', mode: 0o600 });
+                this.log.on('error', () => { this.log = null; this.logFile = null; });
+            }
+            this.log.write(buf);
+            this.logBytes += buf.length;
+            if (this.logBytes > LOG_BYTES) this.rotate();
+        } catch { this.log = null; this.logFile = null; }
+    }
+
+    /** One generation kept: the current file, and the one before it. */
+    rotate() {
+        const file = this.logFile;
+        const stream = this.log;
+        this.log = null;
+        this.logBytes = 0;
+        try { stream.end(); } catch { /* already closed */ }
+        try { fs.renameSync(file, `${file}.1`); } catch { this.logFile = null; }
     }
 
     finish(code, signal) {
@@ -132,17 +229,29 @@ class Terminal {
         this.exitedAt = Date.now();
         this.cleanup();
         for (const send of this.listeners) send('exit', { code, signal });
+        // Last, and outside the listener loop: a run releases its port and
+        // clears its DevBrowser title here, and neither should depend on whether
+        // anyone happened to be watching.
+        if (this.onExit) {
+            const fn = this.onExit;
+            this.onExit = null;
+            try { fn({ code, signal }); } catch (err) {
+                console.error(`[claude-sessions] terminal onExit failed: ${err.message}`);
+            }
+        }
     }
 
     /**
-     * Drop the file the shell reported its pty in.
+     * Drop the file the shell reported its pty in, and close the log.
      *
      * Called from kill() as well as from finish(), because a shell killed as the
      * bridge exits never gets as far as its own exit event — the process is gone
      * before the event loop turns again, and the file would outlive us.
      */
     cleanup() {
+        this.closed = true;
         try { fs.unlinkSync(this.ttyFile); } catch { /* already gone */ }
+        if (this.log) { try { this.log.end(); } catch { /* already closed */ } this.log = null; }
     }
 
     /** Replay what is on screen, then follow. Returns a detach function. */
@@ -225,6 +334,8 @@ class Terminal {
             exited: this.exited,
         };
     }
+
+    get pid() { return (this.proc && this.proc.pid) || null; }
 }
 
 const TTY_PREFIX = 'claude-sessions-tty-';
@@ -306,6 +417,17 @@ class TerminalPool {
         if (this.bySession.get(term.sessionId) === term.id) this.bySession.delete(term.sessionId);
     }
 
+    /**
+     * Only ever the shells this pool opened.
+     *
+     * Worth saying because a run (bridge/runs.js) is a Terminal too, and both
+     * rules here would be wrong for one: the idle rule assumes a shell nobody
+     * has typed into is dead weight, which is exactly backwards for a dev
+     * server, and REAP_MS would drop the record the button needs to go on saying
+     * "stopped, exit 1" tomorrow morning. RunPool holds its terminals itself and
+     * reaps on its own terms, which is why they never reach this loop — an
+     * opt-out flag here would only be a second place to get it wrong.
+     */
     reap() {
         const now = Date.now();
         for (const term of [...this.byId.values()]) {
@@ -329,4 +451,4 @@ class TerminalPool {
     }
 }
 
-module.exports = { TerminalPool, MAX_TERMINALS };
+module.exports = { Terminal, TerminalPool, MAX_TERMINALS, shq };

@@ -928,4 +928,8 @@ function todoProgress(file) {
 module.exports = {
     parseLines, scanMeta, buildEvents, readSubagentIndex, readSubagentTranscript,
     lastActivity, recentActivity, todoProgress, describeTool, stripEnvelope, firstLine,
+    // Exported for bridge/commands.js, which has to answer the same question
+    // about a directory that scanMeta answers about a transcript: which checkout
+    // is this, and is it a worktree of one.
+    projectRootOf, worktreeNameOf, worktreeBaseOf, isCheckout,
 };

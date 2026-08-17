@@ -31,6 +31,19 @@ const STATE_DIR = path.join(
 // run with mode 0600; see bridge/auth.js.
 const TOKEN_FILE = path.join(STATE_DIR, 'token');
 
+// Where a project declares the commands this app will offer a button for — see
+// bridge/commands.js. The shared file is checked in; the .local one is meant to
+// be gitignored, and commands.js says so out loud when it is not.
+const TGX_DIR = '.tgxcode';
+const COMMANDS_FILE = 'commands.json';
+const COMMANDS_LOCAL_FILE = 'commands.local.json';
+
+// A run's output, kept past the end of the run so "why did it die" survives
+// longer than the pane. Under the cache rather than the state directory: losing
+// it costs nothing a rerun would not recover. Created 0700; the files inside are
+// 0600, because a dev server prints tokens.
+const RUNS_LOG_DIR = path.join(CACHE_DIR, 'runs');
+
 // 45888 is the everyday instance — the one you leave open with real sessions in
 // it. Development runs on 45899 instead (`npm run dev`), so an agent working on
 // this codebase can start, restart and kill its own bridge all day without
@@ -134,6 +147,7 @@ module.exports = {
     HOME, PROJECTS_DIR, REGISTRY_DIR, CACHE_DIR, PORT, HOST, VERSION,
     ROOT, IS_WORKTREE,
     STATE_DIR, TOKEN_FILE,
+    TGX_DIR, COMMANDS_FILE, COMMANDS_LOCAL_FILE, RUNS_LOG_DIR,
     ALLOW_REMOTE_BIND, ALLOWED_ROOTS, EXTRA_ORIGINS, withinRoots, expandHome,
     DEFAULT_PORT, DEV_PORT, IS_DEV,
     DEVBROWSER_DEFAULT_PORT, CLAUDE_BIN, PORT_DENYLIST,
