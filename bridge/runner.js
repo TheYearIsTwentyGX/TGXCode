@@ -1149,6 +1149,15 @@ class RunnerPool extends EventEmitter {
         r.on('turn-complete', (res) => this.emit('turn-complete', { sessionId: r.sessionId, ...res }));
         r.on('failed', (f) => this.emit('failed', { sessionId: r.sessionId, ...f }));
         r.on('agent-done', (a) => this.emit('agent-done', a));
+        // The only route by which the app learns what slash commands a directory
+        // has. It arrives once per process start and is worth keeping: a session
+        // sitting idle in the rail has no process of its own, and its composer
+        // still has to be able to offer a menu. The CLI reports its own cwd, so
+        // there is nothing to infer. On a fork, `forked` is emitted just above
+        // this in the same handler, so `r.sessionId` is already the copy's.
+        r.on('init', (msg) => this.emit('init', {
+            sessionId: r.sessionId, cwd: msg.cwd || r.cwd, init: msg,
+        }));
         r.on('exit', () => this.emit('status', r.status()));
         r.on('forked', ({ from, to }) => {
             // Re-key so a later send reaches the copy, not the original.

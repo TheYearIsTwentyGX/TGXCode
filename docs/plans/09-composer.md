@@ -9,6 +9,17 @@ input element, the keyboard map, and the draft-persistence machinery.
 The existing draft handling (`app.js:140-166`) is careful work — text survives a
 reload, a crash, and a failed turn. Everything here must preserve that.
 
+> **Status.** The `/` half of A is built; C shipped some time ago. What is left
+> here is `@` mentions, B, D and E.
+>
+> One thing this plan got wrong, worth keeping written down: it said to read the
+> command list out of `~/.claude/commands`, the project's `.claude/commands` and
+> the plugin directories. Do not. The CLI announces the whole resolved list —
+> built-ins included, `userInvocable` and terminal-bound ones already sorted — in
+> the `system`/`init` message of every process, and `bridge/runner.js` was
+> already receiving and discarding it. Disk is read only for descriptions. See
+> `bridge/slash-commands.js`.
+
 ## A. `@` file mentions and `/` command completion
 
 **Why.** The transcript *renders* slash commands (`parseCommand`,

@@ -581,6 +581,7 @@ not.
 | `bridge/explorer.js` | Opens a WSL directory in File Explorer |
 | `bridge/notifications.js` | The notification log, and what is worth raising |
 | `bridge/flags.js` | Pinned, archived and test state |
+| `bridge/slash-commands.js` | What slash commands a directory has, for composer completion |
 | `bridge/auth.js` | The access token, and telling local from remote apart |
 | `bridge/tailscale.js` | What this machine is reachable as, for pairing |
 | `bridge/launch.sh` | Finds a node, then starts the bridge |

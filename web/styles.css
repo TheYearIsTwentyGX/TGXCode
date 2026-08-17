@@ -2308,7 +2308,69 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 .lock-btn:hover { background: var(--s5); }
 .lock-btn.primary { background: var(--blue-cont); color: var(--blue); }
 
+/* ── slash-command completion ─────────────────────────────────────────────
+   The new-session menu's shape, anchored the other way up: it hangs off the
+   bottom of the input row and grows into the log, because the composer is
+   already at the foot of the window and a menu below it would be off-screen. */
+.slash-menu {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 0;
+    right: 0;
+    z-index: 60;
+    /* Every matching command is rendered — `/` on its own is a request to see
+       what there is — so this is the window onto the list rather than the whole
+       of it. Tall enough that a dozen are in view and paging feels like paging,
+       short enough to leave the turn you are replying to on screen. */
+    max-height: 400px;
+    overflow-y: auto;
+    /* The keys move a highlight the scrollbar has to follow, so the jumps are
+       driven by scrollIntoView and should not be animated on top of that. */
+    scroll-behavior: auto;
+    overscroll-behavior: contain;
+    padding: 6px;
+    background: var(--s3);
+    border-radius: var(--r);
+    box-shadow: 0 10px 30px #000a;
+    animation: bell-in var(--t-fast) var(--ease);
+    transform-origin: bottom left;
+}
+.slash-menu[hidden] { display: none; }
+
+.slash-menu .picker-row { gap: 10px; padding: 7px 10px; }
+.slash-menu .picker-row:hover { background: var(--s4); }
+/* aria-selected, not aria-current: the folder picker already claims that one
+   for "where the input points", which is a different question from "which row
+   would Enter take". Both can be on screen at once. */
+.slash-menu .picker-row[aria-selected="true"] { background: var(--blue-cont); color: var(--blue); }
+.slash-menu .picker-row .name { font-family: var(--mono); font-size: 12.5px; flex: none; }
+.slash-menu .picker-row .desc {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: 12px;
+    color: var(--text-4);
+}
+.slash-menu .picker-row .hint {
+    margin-left: auto;
+    flex: none;
+    padding-left: 8px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--text-4);
+}
+.slash-menu .menu-note {
+    padding: 9px 10px;
+    font: 400 12px/1.5 var(--sans);
+    color: var(--text-4);
+}
+
+@media (prefers-reduced-motion: reduce) { .slash-menu { animation: none; } }
+
 .input-row {
+    /* The menu above is absolute against this. */
+    position: relative;
     display: flex;
     align-items: flex-end;
     gap: 10px;
