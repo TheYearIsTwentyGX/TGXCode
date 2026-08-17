@@ -1,6 +1,7 @@
 node_modules/
 dist/
 *.log
+sidebar.png
 
 # Agent worktrees are full checkouts of this repo; never commit them into it.
 .claude/worktrees/
