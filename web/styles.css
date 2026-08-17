@@ -709,6 +709,49 @@ a:hover { text-decoration: underline; }
 .icon-btn:disabled { opacity: 0.4; cursor: default; background: none; }
 .icon-btn.danger:hover { background: #3a2422; color: var(--red); }
 
+/* What the project declares in .tgxcode/ — a button each, words rather than an
+   icon, because "Dev server" is not a thing anybody draws. */
+.cmds {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-right: 6px;
+}
+.cmds:empty { display: none; }
+/* A config file with a typo in it should be findable, not shouty: the row picks
+   up a hairline and carries the parser's message in its tooltip. */
+.cmds.has-problems { border-bottom: 1px dotted var(--yellow); }
+
+.cmd-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 11px;
+    border-radius: var(--pill);
+    font: 400 12.5px/1.4 var(--sans);
+    color: var(--text-3);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.cmd-btn:hover { background: var(--s3); color: var(--text); }
+
+.cmd-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--text-4);
+    transition: background var(--t-fast) var(--ease);
+}
+/* Green is reserved in this UI for something actually running, so `starting`
+   does not get it — it pulses in the colour it is about to leave. */
+.cmd-btn.pending .cmd-dot { background: var(--yellow); animation: cmd-pulse 1.1s ease-in-out infinite; }
+.cmd-btn.on { color: var(--text); }
+.cmd-btn.on .cmd-dot { background: var(--green); }
+.cmd-btn.failed .cmd-dot { background: var(--red); }
+
+.cmd-port { font: 400 11.5px/1.4 var(--mono); color: var(--text-4); }
+.cmd-btn.on .cmd-port { color: var(--green); }
+
+@keyframes cmd-pulse { 50% { opacity: 0.35; } }
+
 .conv-sub {
     display: flex;
     align-items: center;
@@ -1954,12 +1997,16 @@ a:hover { text-decoration: underline; }
     gap: 10px;
     padding: 2px 12px 4px;
 }
+/* Shrinkable, not fixed: this holds the shell's directory, which homely() has
+   already shortened, but also a run's whole command line, which nothing has. */
 .term-dir {
-    flex: none;
+    flex: 0 1 auto;
+    min-width: 0;
     font: 400 11.5px/1.5 var(--mono);
     color: var(--text-4);
     white-space: nowrap;
     overflow: hidden;
+    text-overflow: ellipsis;
 }
 /* Only shown when the session has moved on from where this shell opened —
    a worktree it entered after the pane was already running. */
@@ -1984,6 +2031,42 @@ a:hover { text-decoration: underline; }
     transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
 .term-btn:hover { background: var(--s3); color: var(--text); }
+.term-btn[hidden] { display: none; }
+
+/* The shell, then a run per declared command that has been started. Absent
+   entirely until there is a run, so a project that declares nothing sees the
+   pane exactly as it was. */
+.term-tabs {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+.term-tabs[hidden] { display: none; }
+
+.term-tab {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 9px;
+    border-radius: var(--pill);
+    font: 400 11.5px/1.5 var(--sans);
+    color: var(--text-4);
+    white-space: nowrap;
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.term-tab:hover { background: var(--s3); color: var(--text-2); }
+.term-tab.on { background: var(--s3); color: var(--text); }
+/* Green only for something actually answering on its port. */
+.term-tab.on-air::before,
+.term-tab.dead::before {
+    content: '';
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: var(--green);
+}
+.term-tab.dead::before { background: var(--text-4); }
 
 /* xterm measures itself against this box, so it has to be the one that scrolls
    and it has to have a real height of its own. */

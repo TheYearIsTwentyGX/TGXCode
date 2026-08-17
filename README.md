@@ -563,17 +563,29 @@ not.
 | Path | |
 |---|---|
 | `bridge/server.js` | HTTP + SSE, routing, static files |
+| `bridge/config.js` | Paths, ports, allowed roots — every constant with a reason attached |
 | `bridge/dashboard.js` | Uncommitted changes and open PRs, per project |
+| `bridge/overview.js` | The live board: what every session is doing right now |
 | `bridge/sessions.js` | The session index — incremental, cached, watched |
+| `bridge/registry.js` | Which sessions have a process, from Claude Code's own registry |
 | `bridge/transcript.js` | JSONL → render events; pairs tool calls with results; reads subagent transcripts |
+| `bridge/tasks.js` | Subagent task records |
+| `bridge/memo.js` | Small notes the UI keeps against a session |
 | `bridge/runner.js` | `claude` processes, one per active conversation |
+| `bridge/terminal.js` | The pty, out of `script(1)` — a shell to type into, or a declared command |
+| `bridge/commands.js` | What a project declares in `.tgxcode/` |
+| `bridge/runs.js` | Running those commands, and keeping the record |
+| `bridge/ports.js` | Finding a free port, and holding it until something takes it |
 | `bridge/devservers.js` | Port detection, ranking, and stopping a server |
 | `bridge/devbrowser.js` | DevBrowser control client |
 | `bridge/explorer.js` | Opens a WSL directory in File Explorer |
-| `bridge/flags.js` | Pinned and archived state |
+| `bridge/notifications.js` | The notification log, and what is worth raising |
+| `bridge/flags.js` | Pinned, archived and test state |
 | `bridge/auth.js` | The access token, and telling local from remote apart |
+| `bridge/tailscale.js` | What this machine is reachable as, for pairing |
 | `bridge/launch.sh` | Finds a node, then starts the bridge |
 | `web/` | The UI. No build step, no dependencies |
+| `web/terminal.js` | The terminal pane — a shell, or a run's output |
 | `web/mobile.*` | The phone surface at `/m` — a second client of the same API |
 | `app/main.js` | The Electron shell |
 | `app/make-icon.js` | Generates `app/icon.ico` and the PWA icons in `web/` |

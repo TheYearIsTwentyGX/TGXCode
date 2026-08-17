@@ -63,6 +63,15 @@ const state = {
     // only exists so that looking away and back does not quietly drop a choice.
     permChoice: new Map(),
     channels: [],
+    // What the session's directory declares in .tgxcode/, and what is running
+    // from it. Keyed by nothing — there is only ever one conversation on screen,
+    // and the payload is re-fetched when it changes. `cmdsFor` is the directory
+    // they were read for, so a late answer for a session you have left is
+    // dropped rather than drawn.
+    cmds: null,
+    cmdsFor: null,
+    runs: new Map(),        // run id -> the bridge's record
+    termTab: 'shell',       // 'shell', or the id of a run whose output is shown
     pinned: true,           // stick to the bottom as new events arrive
     // Which rail groups are shut. Storing the collapsed ones rather than the
     // open ones means a project seen for the first time defaults to open.
@@ -151,6 +160,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'btn-bell', 'bell-menu', 'opt-desktop', 'opt-sound', 'bell-note', 'bell-try',
     'btn-pin', 'btn-folder', 'btn-term', 'btn-archive', 'btn-delete', 'turns', 'turn-pop',
     'term-pane', 'term-grip', 'term-dir', 'term-moved', 'term-body', 'term-restart', 'term-close',
+    'term-tabs', 'term-stop', 'cmds',
     'agents', 'agent-scroll', 'agent-log', 'btn-back', 'btn-back-label',
     'ask-dock', 'plan-pane', 'plan-bar', 'plan-aside', 'plan-agent', 'plan-title',
     'plan-body', 'plan-doc', 'plan-foot',
@@ -707,6 +717,14 @@ function clearCurrent() {
     // The pane lives inside .conv, so it goes with it; the shell keeps running
     // and is there again the moment the session is.
     termPane.detach();
+    // The buttons belonged to a conversation that is gone. The runs themselves
+    // are untouched — they belong to a directory, not to a session, and the next
+    // session opened there picks them up again from /api/commands.
+    state.cmds = null;
+    state.cmdsFor = null;
+    state.runs.clear();
+    state.termTab = 'shell';
+    renderCommands();
     subscribe();            // stop the bridge tailing a file that is gone
     rememberView();         // and the address stops naming it too
 }
@@ -816,9 +834,16 @@ function beginOpen(summary, { keepDash = false } = {}) {
     dom.scroll.scrollTop = 0;
     renderRail();       // the clicked row takes the current-session mark now
     applyRunner(null);
+    // Back to the shell: a run tab belongs to the directory it was started in,
+    // and carrying it across to another session would show one project's dev
+    // server under another project's name.
+    state.termTab = 'shell';
     // Whether the pane is open is this session's answer, not the last one's —
     // and showTerm syncs it, so an open one still arrives on its own directory.
     showTerm(termOpen(summary.sessionId));
+    // Not awaited: the buttons appear a moment after the header, and nothing
+    // else in the open is waiting on them.
+    loadCommands();
 
     // Anything typed here before, or handed back by a failed turn — but only what
     // is genuinely still owed to the composer. state.unsent is insurance against a
@@ -4119,6 +4144,10 @@ function connect() {
         toast(n.text, n.level === 'warn' ? 'warn' : 'info', 7000);
     });
 
+    // A declared command started, took its port, or ended — possibly in another
+    // window. State only; the output has its own stream.
+    es.addEventListener('run-changed', (e) => applyRunChange(JSON.parse(e.data)));
+
     // The bridge filed a row. Kept up to date rather than re-fetched, so a
     // history left open in a second window stays live.
     es.addEventListener('notification', (e) => {
@@ -5016,6 +5045,157 @@ function handleSendFailure(f) {
     }
 }
 
+// ── project commands ─────────────────────────────────────────────────────
+// What the session's directory declares in .tgxcode/, as a button each. The
+// directory is the session's own, so a session inside a worktree gets that
+// worktree's dev server on its own port rather than the main checkout's.
+//
+// Nothing here ever starts anything on its own — the declaration is read on
+// open, and a command runs when it is clicked and not before. The exact string
+// that will run is on every button's tooltip, because a checked-in file can
+// change what a familiar button does and the honest answer to that is to show
+// it rather than to ask about it every time.
+
+/** Where commands for the session on screen are read from. */
+function cmdDir() {
+    return (state.current && state.current.cwd) || null;
+}
+
+const runFor = (commandId) => {
+    const dir = cmdDir();
+    if (!dir) return null;
+    for (const run of state.runs.values()) {
+        if (run.workspace === dir && run.commandId === commandId) return run;
+    }
+    return null;
+};
+
+const liveRuns = () => [...state.runs.values()].filter(r => r.workspace === cmdDir());
+
+async function loadCommands() {
+    const dir = cmdDir();
+    state.cmdsFor = dir;
+    if (!dir) { state.cmds = null; renderCommands(); return; }
+    let payload;
+    try {
+        payload = await get(`/api/commands?cwd=${encodeURIComponent(dir)}`);
+    } catch {
+        // A directory outside the allowed roots, or a bridge that has gone
+        // away. Either way there is nothing to offer and no news in saying so.
+        payload = null;
+    }
+    // The session moved while this was in flight.
+    if (state.cmdsFor !== dir) return;
+    state.cmds = payload;
+    // Replaced, not merged. The bridge drops a run's record when the same button
+    // is clicked again, and merging kept the dead one alive on this side — which
+    // showed as two tabs for one command, one of them a run that no longer
+    // existed. The payload is the whole truth about this directory.
+    state.runs = new Map();
+    if (payload) {
+        for (const c of payload.commands) if (c.run) state.runs.set(c.run.id, c.run);
+    }
+    renderCommands();
+}
+
+/**
+ * A command's button, coloured by what its run is doing.
+ *
+ * Green is reserved in this UI for something actually running, so it goes on
+ * `listening` and on `running` — not on `starting`, where the honest answer is
+ * "asked for, not there yet".
+ */
+function commandButton(cmd) {
+    const run = runFor(cmd.id);
+    const state_ = run ? run.state : 'idle';
+    // Red is for something that fell over, not for something you stopped.
+    const failed = !!run && run.state === 'exited' && !run.stopped
+        && !!run.exit && !!(run.exit.code || run.exit.signal);
+    const up = state_ === 'listening' || state_ === 'running';
+
+    const bits = [`${cmd.command}`, `in ${cmd.cwd}`];
+    if (run && run.port) bits.push(up ? `on port ${run.port}` : `port ${run.port}`);
+    if (failed) bits.push(`exited ${run.exit.signal || run.exit.code}`);
+
+    return el('button', {
+        class: `cmd-btn${up ? ' on' : ''}${failed ? ' failed' : ''}`
+            + (state_ === 'starting' || state_ === 'stopping' ? ' pending' : ''),
+        type: 'button',
+        title: bits.join('\n'),
+        'data-id': cmd.id,
+        onclick: () => clickCommand(cmd),
+    },
+    el('span', { class: 'cmd-dot' }),
+    el('span', { class: 'cmd-label' }, cmd.label),
+    up && run.port ? el('span', { class: 'cmd-port' }, `:${run.port}`) : null);
+}
+
+function renderCommands() {
+    const payload = state.cmds;
+    const list = payload ? payload.commands : [];
+    dom.cmds.replaceChildren(...list.map(commandButton));
+
+    // Problems go on the container rather than into a row of their own: a
+    // config file with a typo in it should be findable, not shouty.
+    const problems = (payload && payload.problems) || [];
+    const loud = problems.filter(p => !p.informational);
+    dom.cmds.classList.toggle('has-problems', loud.length > 0);
+    if (loud.length) {
+        dom.cmds.title = loud.map(p =>
+            `${p.file || ''}${p.id ? ` [${p.id}]` : ''}: ${p.message}`).join('\n');
+    } else {
+        dom.cmds.removeAttribute('title');
+    }
+    renderTermTabs();
+}
+
+/**
+ * Start it, or show what it is already doing.
+ *
+ * A live run is never restarted by clicking its button — that would take a dev
+ * server down because somebody meant to look at its log. Stopping is a separate,
+ * labelled button in the pane.
+ */
+async function clickCommand(cmd) {
+    const existing = runFor(cmd.id);
+    if (existing && existing.state !== 'exited') {
+        showTerm(true);
+        setTermTab(existing.id);
+        return;
+    }
+    try {
+        const { run } = await post('/api/commands/run', { cwd: cmdDir(), id: cmd.id });
+        // One run per command per directory, the same rule the bridge enforces:
+        // whatever was here before has just been replaced, record and log alike.
+        const stale = runFor(cmd.id);
+        if (stale) state.runs.delete(stale.id);
+        state.runs.set(run.id, run);
+        renderCommands();
+        showTerm(true);
+        setTermTab(run.id);
+    } catch (err) {
+        toast(`${cmd.label}: ${err.message}`, 'error');
+    }
+}
+
+/** A run's state changed somewhere — possibly in another window. */
+function applyRunChange(e) {
+    const known = state.runs.get(e.runId);
+    if (known) {
+        state.runs.set(e.runId,
+            { ...known, state: e.state, port: e.port, exit: e.exit, stopped: e.stopped });
+    } else if (e.workspace === cmdDir()) {
+        // Started from another window, in the directory on screen. Ask for the
+        // whole record rather than inventing one from a state change.
+        loadCommands();
+        return;
+    } else {
+        return;
+    }
+    renderCommands();
+    if (state.termTab === e.runId) paintTermHead(termPane.info);
+}
+
 // ── terminal ─────────────────────────────────────────────────────────────
 
 // The pane is a property of the session, not of the window: a shell is opened
@@ -5085,6 +5265,12 @@ function homely(cwd) {
  * quietly contradicts the prompt two lines below it.
  */
 function paintTermHead(info) {
+    // A run tab describes a command, not a directory, and has its own controls.
+    if (state.termTab !== 'shell') return paintRunHead();
+
+    dom.termRestart.hidden = false;
+    dom.termStop.hidden = true;
+
     const shellCwd = (info && info.cwd) || '';
     dom.termDir.textContent = homely(shellCwd);
     dom.termDir.title = shellCwd;
@@ -5098,6 +5284,94 @@ function paintTermHead(info) {
     }
     dom.termRestart.title = moved
         ? `Restart the shell in ${now}` : 'End this shell and start a new one';
+}
+
+/**
+ * The head, when the pane is showing a run.
+ *
+ * The command itself goes where the shell's directory would be, because that is
+ * what the tab is: not "a place" but "this exact string, which you can read
+ * before and after it runs".
+ */
+function paintRunHead() {
+    const run = state.runs.get(state.termTab);
+    dom.termRestart.hidden = true;
+    if (!run) {
+        dom.termDir.textContent = '';
+        dom.termMoved.hidden = true;
+        dom.termStop.hidden = true;
+        return;
+    }
+
+    dom.termDir.textContent = run.command;
+    dom.termDir.title = `${run.command}\nin ${run.cwd}`;
+
+    const live = run.state !== 'exited';
+    const bits = [];
+    if (run.port) bits.push(`port ${run.port}`);
+    if (run.state === 'starting') bits.push('starting…');
+    if (!live) {
+        // A run somebody stopped just says so. The signal it actually died of is
+        // a detail of how hard the bridge had to insist, not something that
+        // happened to it.
+        if (run.stopped) bits.push('stopped');
+        else if (run.exit && run.exit.signal) bits.push(`killed (${run.exit.signal})`);
+        else if (run.exit) bits.push(`exited ${run.exit.code}`);
+        else bits.push('gone');
+    }
+    // Said out loud rather than discovered: a run belongs to the bridge that
+    // started it, and there is no way to make one outlive its process.
+    if (live) bits.push('stops when the bridge restarts');
+    dom.termMoved.hidden = !bits.length;
+    dom.termMoved.textContent = bits.length ? `· ${bits.join(' · ')}` : '';
+    dom.termMoved.removeAttribute('title');
+
+    dom.termStop.hidden = false;
+    dom.termStop.textContent = live ? 'Stop' : 'Start again';
+    dom.termStop.title = live
+        ? `Stop ${run.label} — SIGHUP to the whole job, then SIGKILL`
+        : `Run ${run.command} again`;
+}
+
+/**
+ * The tab strip: the shell, then a tab per run in this directory.
+ *
+ * Absent entirely when there are no runs, so a session in a project that
+ * declares nothing sees exactly the pane it saw before.
+ */
+function renderTermTabs() {
+    const runs = liveRuns().sort((a, b) => a.startedAt - b.startedAt);
+    if (!runs.length) {
+        dom.termTabs.replaceChildren();
+        dom.termTabs.hidden = true;
+        if (state.termTab !== 'shell') setTermTab('shell');
+        return;
+    }
+    dom.termTabs.hidden = false;
+
+    const tab = (key, label, extra) => el('button', {
+        class: `term-tab${state.termTab === key ? ' on' : ''}${extra || ''}`,
+        type: 'button', role: 'tab',
+        'aria-selected': String(state.termTab === key),
+        onclick: () => setTermTab(key),
+    }, label);
+
+    dom.termTabs.replaceChildren(
+        tab('shell', 'Shell'),
+        ...runs.map((r) => {
+            const up = r.state === 'listening' || r.state === 'running';
+            const label = r.port && up ? `${r.label} :${r.port}` : r.label;
+            return tab(r.id, label, up ? ' on-air' : (r.state === 'exited' ? ' dead' : ''));
+        }),
+    );
+}
+
+/** Point the pane at a tab. The other tab's process is untouched either way. */
+function setTermTab(key) {
+    state.termTab = key;
+    renderTermTabs();
+    if (dom.termPane.hidden) return;
+    syncTerm();
 }
 
 /** Show or hide the pane. The shell itself is unaffected either way. */
@@ -5114,15 +5388,24 @@ function showTerm(on, { focus = false } = {}) {
     if (focus) termPane.focus();
 }
 
-/** Point the pane at whatever session is on screen. */
+/** Point the pane at whatever session — or run — is on screen. */
 function syncTerm() {
     if (dom.termPane.hidden) return;
     if (!state.current) { termPane.detach(); paintTermHead(null); return; }
+
+    if (state.termTab !== 'shell') {
+        paintRunHead();
+        termPane.attachRun(state.termTab);
+        return;
+    }
+
     // Already attached: the shell is known, so the head can be right now rather
     // than after a round trip. Otherwise stand in with where it is about to open.
     if (termPane.info && termPane.sessionId === state.current.sessionId) {
         paintTermHead(termPane.info);
     } else {
+        dom.termRestart.hidden = false;
+        dom.termStop.hidden = true;
         dom.termDir.textContent = homely(state.current.cwd);
         dom.termDir.title = state.current.cwd || '';
         dom.termMoved.hidden = true;
@@ -5678,6 +5961,23 @@ dom.termRestart.addEventListener('click', async () => {
     await termPane.kill();
     syncTerm();
     termPane.focus();
+});
+// Stop, or start again — the same button, because for a run those are the two
+// halves of one question and the label says which one it is asking.
+dom.termStop.addEventListener('click', async () => {
+    const run = state.runs.get(state.termTab);
+    if (!run) return;
+    if (run.state !== 'exited') {
+        try { await post(`/api/runs/${run.id}/stop`, {}); }
+        catch (err) { toast(`Stopping ${run.label}: ${err.message}`, 'error'); }
+        return;
+    }
+    const cmd = (state.cmds && state.cmds.commands.find(c => c.id === run.commandId));
+    if (!cmd) { toast(`${run.label} is no longer declared here`, 'warn'); return; }
+    // The old record goes as the new one takes its place: same button, same tab
+    // slot, and the bridge has already dropped the log with it.
+    state.runs.delete(run.id);
+    clickCommand(cmd);
 });
 dom.termGrip.addEventListener('pointerdown', startTermDrag);
 // Keyboard equivalent of the drag, so the pane is not mouse-only.

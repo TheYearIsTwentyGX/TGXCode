@@ -1,9 +1,17 @@
-// The terminal pane — a real shell in the session's working directory.
+// The terminal pane — a real shell in the session's working directory, or the
+// output of a command the project declared.
 //
 // The emulator is xterm.js, vendored under web/vendor. Everything below is the
 // wiring: one xterm instance reused across sessions, output over its own SSE
 // stream, input posted back in order, and the pty resized to whatever the pane
 // happens to be.
+//
+// A run is the same pty with a different first command (see bridge/runs.js), so
+// it is the same pane with a different pair of endpoints behind it. That is what
+// `base` is: everything after the open — stream, input, resize — is addressed
+// relative to it, and only `attach` and `attachRun` know which is which. The
+// pane stays writable for a run on purpose, because vite's `r`, jest's watch
+// keys and a plain Ctrl-C are all things you want to reach a dev server with.
 
 // Vendored as .js rather than the .mjs the packages ship, so that adding them
 // needed no change to the bridge's MIME table — a web/ change should never
@@ -94,6 +102,8 @@ export class TerminalPane {
         this.stream = null;         // EventSource
         this.info = null;           // the bridge's record of the live terminal
         this.sessionId = null;      // the session the pane is showing
+        this.runId = null;          // …or the run, if it is showing one of those
+        this.base = null;           // where stream/input/resize live for it
         this.pending = [];          // keystrokes waiting for the in-flight POST
         this.sending = false;
         this.reopening = false;
@@ -174,15 +184,50 @@ export class TerminalPane {
         // than wiring a pane that has already moved on.
         if (this.sessionId !== sessionId) return;
 
+        this.follow(`/api/terminals/${info.id}`, info);
+    }
+
+    /**
+     * Show a run's output.
+     *
+     * No open step: bridge/runs.js started the process when the button was
+     * clicked, and this only asks what it turned into. A run that has already
+     * exited is a legitimate thing to attach to — its scrollback is still there,
+     * which is the whole reason the record outlives the process.
+     */
+    async attachRun(runId) {
+        this.build();
+        if (this.runId === runId && this.stream) { this.refit(); return; }
+        this.detach();
+        this.runId = runId;
+
+        let info;
+        try {
+            const r = await fetch(`/api/runs/${runId}`, { headers: HEADERS });
+            const body = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
+            info = body.run;
+        } catch (err) {
+            this.onError(err.message);
+            return;
+        }
+        if (this.runId !== runId) return;
+
+        this.follow(`/api/runs/${runId}`, info);
+    }
+
+    /** Everything after the open, for either kind. */
+    follow(base, info) {
+        this.base = base;
         this.info = info;
         this.onOpen(info);
-        this.listen(info.id);
+        this.listen(base);
         this.refit();
         this.flush();       // anything typed while the open was in flight
     }
 
-    listen(id) {
-        const es = new EventSource(`/api/terminals/${id}/stream`);
+    listen(base) {
+        const es = new EventSource(`${base}/stream`);
         this.stream = es;
 
         // Sent once per connection, so it doubles as the signal that a dropped
@@ -197,21 +242,31 @@ export class TerminalPane {
         es.addEventListener('exit', (e) => {
             const { code, signal } = JSON.parse(e.data);
             const how = signal ? `signal ${signal}` : `status ${code}`;
-            this.term.write(`\r\n\x1b[2m[shell exited — ${how}]\x1b[0m\r\n`);
+            const what = this.runId ? 'command' : 'shell';
+            this.term.write(`\r\n\x1b[2m[${what} exited — ${how}]\x1b[0m\r\n`);
             this.onExit({ code, signal });
         });
         es.onerror = () => {
             // A closed stream means the terminal is gone, usually because the
             // bridge restarted. Reattaching gets a fresh shell in the same
             // directory, which beats a dead pane with no explanation.
+            //
+            // A run is not reopened the same way: there is nothing to reopen,
+            // because a run dies with its bridge and starting another would run
+            // the command again without anyone asking for it. Ask what became of
+            // it instead, and let attachRun report if it is gone.
             if (es.readyState !== EventSource.CLOSED || this.stream !== es) return;
             es.close();
             this.stream = null;
-            if (this.reopening || !this.sessionId) return;
+            if (this.reopening) return;
+            const session = this.sessionId;
+            const run = this.runId;
+            if (!session && !run) return;
             this.reopening = true;
             setTimeout(() => {
                 this.reopening = false;
-                if (this.sessionId) this.attach(this.sessionId);
+                if (run && this.runId === run) this.attachRun(run);
+                else if (session && this.sessionId === session) this.attach(session);
             }, 1200);
         };
     }
@@ -220,13 +275,21 @@ export class TerminalPane {
     detach() {
         if (this.stream) { this.stream.close(); this.stream = null; }
         this.info = null;
+        this.base = null;
         this.sessionId = null;
+        this.runId = null;
         this.pending = [];
     }
 
-    /** End the shell for good. */
+    /**
+     * End the shell for good.
+     *
+     * Only ever a shell: a run is stopped through its own button, which goes to
+     * /api/runs/:id/stop and leaves the record behind so you can read why it
+     * ended. DELETE on a run means "forget this", which is a different verb.
+     */
     async kill() {
-        const id = this.info && this.info.id;
+        const id = this.sessionId && this.info && this.info.id;
         this.detach();
         if (!id) return;
         try {
@@ -239,7 +302,7 @@ export class TerminalPane {
         // takes focus the moment it is shown, which is well before the bridge
         // has answered, so the first thing typed reliably beats the answer
         // home — and losing it looks exactly like a dead terminal.
-        if (!this.sessionId || !bytes.length) return;
+        if ((!this.sessionId && !this.runId) || !bytes.length) return;
         this.pending.push(bytes);
         this.flush();
     }
@@ -250,7 +313,7 @@ export class TerminalPane {
      * what follows rather than racing it.
      */
     async flush() {
-        if (this.sending || !this.pending.length || !this.info) return;
+        if (this.sending || !this.pending.length || !this.base) return;
         this.sending = true;
         const batch = this.pending;
         this.pending = [];
@@ -262,7 +325,7 @@ export class TerminalPane {
         for (const b of batch) { joined.set(b, at); at += b.length; }
 
         try {
-            await fetch(`/api/terminals/${this.info.id}/input`, {
+            await fetch(`${this.base}/input`, {
                 method: 'POST', headers: HEADERS, body: JSON.stringify({ b64: encode(joined) }),
             });
         } catch { /* the stream's error handling covers a dead bridge */ }
@@ -284,11 +347,11 @@ export class TerminalPane {
     }
 
     pushSize(rows, cols) {
-        if (!this.info) return;
+        if (!this.base) return;
         const sig = `${rows}x${cols}`;
         if (sig === this.lastSize) return;
         this.lastSize = sig;
-        fetch(`/api/terminals/${this.info.id}/resize`, {
+        fetch(`${this.base}/resize`, {
             method: 'POST', headers: HEADERS, body: JSON.stringify({ rows, cols }),
         }).catch(() => { /* the stream's error handling covers a dead bridge */ });
     }

@@ -12,32 +12,26 @@
 // is separate is the process: restarting this one leaves the other alone.
 
 const fs = require('fs');
-const net = require('net');
 const path = require('path');
 const { spawn, execFile } = require('child_process');
 const { toWindowsPath, winEnvAsWslPath } = require('./win');
 
 const { DEFAULT_PORT, DEV_PORT } = require('../bridge/config');
+const ports = require('../bridge/ports');
 
 const repo = path.join(__dirname, '..');
 const wantsWindow = !process.argv.includes('--no-window');
 
-function portFree(port) {
-    return new Promise((resolve) => {
-        const s = net.createServer();
-        s.once('error', () => resolve(false));
-        s.once('listening', () => s.close(() => resolve(true)));
-        s.listen(port, '127.0.0.1');
-    });
-}
-
-/** First free port at or above `from`, so two agents can each have their own. */
-async function pickPort(from) {
-    for (let p = from; p < from + 20; p++) {
-        if (p === DEFAULT_PORT) continue;      // never the everyday instance
-        if (await portFree(p)) return p;
-    }
-    return null;
+/**
+ * First free port at or above `from`, so two agents can each have their own.
+ *
+ * `denylist: null` because this is picking a port for a *bridge*, not for a
+ * project's dev server: the config denylist contains the bridge port, and
+ * `CLAUDE_SESSIONS_PORT=45899 npm run dev` is a request for that exact one.
+ */
+function pickPort(from) {
+    return ports.allocate(
+        { lo: from, hi: from + 19, skip: [DEFAULT_PORT], denylist: null }, 'npm run dev');
 }
 
 function findExe() {
@@ -49,11 +43,28 @@ function findExe() {
     ].find(p => fs.existsSync(p)) || null;
 }
 
+/**
+ * A port asked for on the command line, ahead of the environment.
+ *
+ * The flag exists because the environment is not a channel that reaches here
+ * from everywhere: a run started from the app's own buttons has
+ * CLAUDE_SESSIONS_PORT deleted before the process starts — deliberately, see
+ * bridge/terminal.js — so `.tgxcode/commands.json` has no way to hand a port
+ * over except this. It is worth having by itself, too: `npm run dev --
+ * --port=45905` says what it means where `CLAUDE_SESSIONS_PORT=45905 npm run
+ * dev` reads like it is aiming at the everyday instance.
+ */
+function askedPort() {
+    const arg = process.argv.find(a => a.startsWith('--port='));
+    const n = arg ? Number(arg.slice('--port='.length)) : NaN;
+    return Number.isInteger(n) && n > 0 && n < 65536 ? n : 0;
+}
+
 (async () => {
-    const requested = Number(process.env.CLAUDE_SESSIONS_PORT) || DEV_PORT;
+    const requested = askedPort() || Number(process.env.CLAUDE_SESSIONS_PORT) || DEV_PORT;
     if (requested === DEFAULT_PORT) {
         console.error(`Refusing to run development on ${DEFAULT_PORT} — that is the `
-            + 'everyday instance. Leave CLAUDE_SESSIONS_PORT unset.');
+            + 'everyday instance. Leave CLAUDE_SESSIONS_PORT unset and --port off.');
         process.exit(1);
     }
 
