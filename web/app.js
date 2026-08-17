@@ -101,8 +101,9 @@ const state = {
     // Slash commands the composer can complete, per working directory — the
     // bridge keys them that way because that is what decides them. Held here so
     // that pressing `/` draws from memory rather than waiting on a fetch; the
-    // `commands` SSE event drops an entry when a process reports a new list.
-    commands: new Map(),    // cwd -> {commands, at, exact, loading}
+    // `slash-commands` SSE event drops an entry when a process reports a new
+    // list. Not `commands`, which is `cmds` above — the project's own.
+    slashCommands: new Map(),   // cwd -> {commands, at, exact}
     queueSig: '',           // what the chips were last built from, to avoid churn
     queueFocus: null,       // the chip holding the queue's single tab stop
     ask: null,              // the approval this session is blocked on, if any
