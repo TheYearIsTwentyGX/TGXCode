@@ -571,7 +571,7 @@ not.
 | `bridge/devbrowser.js` | DevBrowser control client |
 | `bridge/explorer.js` | Opens a WSL directory in File Explorer |
 | `bridge/flags.js` | Pinned and archived state |
-| `bridge/commands.js` | What slash commands a directory has, for composer completion |
+| `bridge/slash-commands.js` | What slash commands a directory has, for composer completion |
 | `bridge/auth.js` | The access token, and telling local from remote apart |
 | `bridge/launch.sh` | Finds a node, then starts the bridge |
 | `web/` | The UI. No build step, no dependencies |

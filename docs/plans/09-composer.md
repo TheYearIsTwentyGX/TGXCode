@@ -18,7 +18,7 @@ reload, a crash, and a failed turn. Everything here must preserve that.
 > built-ins included, `userInvocable` and terminal-bound ones already sorted — in
 > the `system`/`init` message of every process, and `bridge/runner.js` was
 > already receiving and discarding it. Disk is read only for descriptions. See
-> `bridge/commands.js`.
+> `bridge/slash-commands.js`.
 
 ## A. `@` file mentions and `/` command completion
 

@@ -20,7 +20,7 @@ const { SessionIndex } = require('./sessions');
 const { SessionRegistry } = require('./registry');
 const { RunnerPool, PERMISSION_MODES } = require('./runner');
 const { Flags } = require('./flags');
-const { CommandCache } = require('./commands');
+const { SlashCommandCache } = require('./slash-commands');
 const { NotificationLog } = require('./notifications');
 const devbrowser = require('./devbrowser');
 const tailscale = require('./tailscale');
@@ -38,7 +38,7 @@ const index = new SessionIndex(flags);
 const registry = new SessionRegistry();
 const pool = new RunnerPool();
 const terminals = new TerminalPool();
-const commands = new CommandCache();
+const slashCommands = new SlashCommandCache();
 // Titles are copied onto an entry as it is filed, so the log still reads
 // properly after a session is renamed or deleted; the test flag is asked for at
 // read time, so labelling a session as scratch afterwards takes its rows out of
@@ -1101,11 +1101,14 @@ async function api(req, res, url, pathname, who) {
 
     // --- slash commands (composer completion) ------------------------------
     //
+    // Not /api/commands: that is the project's own declared commands, a
+    // different feature with a different payload. See bridge/slash-commands.js.
+    //
     // Addressed by session or by directory, because both callers exist: the
     // composer knows a session id and nothing else, while a dialog that has not
     // started one yet knows only a path. Answering both here keeps the cwd
     // resolution — which needs the filesystem — on this side.
-    if (pathname === '/api/commands' && req.method === 'GET') {
+    if (pathname === '/api/slash-commands' && req.method === 'GET') {
         const session = url.searchParams.get('session');
         let cwd;
 
@@ -1130,7 +1133,7 @@ async function api(req, res, url, pathname, who) {
         // Never a 404 for "nothing recorded yet": an empty list is a real answer,
         // and it lets the menu say so quietly instead of raising an error at
         // somebody who only pressed a key.
-        return send(res, 200, commands.for(cwd));
+        return send(res, 200, slashCommands.for(cwd));
     }
 
     // --- filesystem (new-session directory picker) -------------------------
@@ -1228,7 +1231,7 @@ async function api(req, res, url, pathname, who) {
  * The transcript's own cwd, unless it has since been deleted — a worktree that
  * has been landed and removed is the common case — in which case the project
  * directory it belonged to, and failing that home. Shared by the send route and
- * by /api/commands so the two can never disagree about which directory a
+ * by /api/slash-commands so the two can never disagree about which directory a
  * session belongs to; a client cannot work this out for itself, having no way to
  * ask whether a path still exists.
  */
@@ -1543,8 +1546,8 @@ pool.on('notice', (n) => broadcast('notice', n));
 // the list actually moved — otherwise each session start would push an identical
 // list to every open window for nothing.
 pool.on('init', ({ cwd, init }) => {
-    const entry = commands.note(cwd, init);
-    if (entry) broadcast('commands', { cwd, at: entry.at });
+    const entry = slashCommands.note(cwd, init);
+    if (entry) broadcast('slash-commands', { cwd, at: entry.at });
 });
 pool.on('turn-complete', (r) => { broadcast('turn-complete', r); filed(notifications.turn(r)); });
 pool.on('failed', (f) => { broadcast('send-failed', f); filed(notifications.sendFailed(f)); });

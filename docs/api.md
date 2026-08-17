@@ -159,7 +159,7 @@ Also pushed as the `overview` SSE event, so most clients never call this — but
 the right answer to "what is happening right now", and anything that wants that
 should read it rather than growing a second answer.
 
-### `GET /api/commands?session=<id>` · `GET /api/commands?cwd=<path>`
+### `GET /api/slash-commands?session=<id>` · `GET /api/slash-commands?cwd=<path>`
 
 What slash commands a working directory can run, for a composer that completes
 them: `{ cwd, at, exact, source, commands: [{ name, description?, argumentHint? }] }`.
@@ -216,7 +216,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `turn-complete` | `{sessionId, isError, detail, costUsd, durationMs, …}` |
 | `send-failed` | `{sessionId, kind, message, unsent: [text]}` — hand the text back to the user |
 | `session-forked` | `{from, to}` — follow the new id |
-| `commands` | `{cwd, at}` — that directory's slash commands changed; drop what you cached |
+| `slash-commands` | `{cwd, at}` — that directory's slash commands changed; drop what you cached |
 
 `runner-status`: `{sessionId, state, activity, model, permissionMode, cwd, error,
 errorKind, queued, queue[], pendingPermission, canPrompt, busySince}` where `state`

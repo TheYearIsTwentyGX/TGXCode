@@ -2,6 +2,12 @@
 
 // What slash commands a directory can run, so the composer can offer them.
 //
+// Named for the slash and not just "commands" because bridge/commands.js is a
+// different feature entirely — what a project declares in .tgxcode/ and draws as
+// a row of buttons. The two arrived in the same week and collided on this
+// filename and on /api/commands; this is the one that moved, because these
+// really are slash commands and the other really is the project's commands.
+//
 // The list comes from the CLI itself. Every `claude` process opens its stream
 // with a system/init message carrying `slash_commands` — built-ins, the user's
 // ~/.claude/commands, the project's .claude/commands, plugins and skills, all
@@ -40,7 +46,7 @@ const path = require('path');
 
 const { CACHE_DIR, HOME } = require('./config');
 
-const CACHE_FILE = path.join(CACHE_DIR, 'commands.json');
+const SLASH_CACHE_FILE = path.join(CACHE_DIR, 'slash-commands.json');
 const VERSION = 1;
 
 // Enough for every directory anyone is realistically moving between, and small
@@ -53,7 +59,7 @@ const MAX_ENTRIES = 50;
 // without a restart; long enough that holding a key down does not walk the disk.
 const DOC_TTL_MS = 30_000;
 
-class CommandCache {
+class SlashCommandCache {
     constructor() {
         /** cwd -> { cwd, commands: string[], at: number, source: 'runner'|'cache' } */
         this.entries = new Map();
@@ -172,7 +178,7 @@ class CommandCache {
 
     load() {
         let raw;
-        try { raw = fs.readFileSync(CACHE_FILE, 'utf8'); } catch { return; }
+        try { raw = fs.readFileSync(SLASH_CACHE_FILE, 'utf8'); } catch { return; }
         try {
             const data = JSON.parse(raw.replace(/^﻿/, ''));
             if (data.version !== VERSION || !Array.isArray(data.entries)) return;
@@ -183,13 +189,13 @@ class CommandCache {
                     commands: e.commands.filter(n => typeof n === 'string'),
                     at: Number(e.at) || 0,
                     // Not 'runner': no process has confirmed this list since the
-                    // bridge started, and /api/commands says so.
+                    // bridge started, and /api/slash-commands says so.
                     source: 'cache',
                 });
             }
             this._evict();
         } catch (err) {
-            console.error(`[claude-sessions] ignoring unreadable ${CACHE_FILE}: ${err.message}`);
+            console.error(`[claude-sessions] ignoring unreadable ${SLASH_CACHE_FILE}: ${err.message}`);
         }
     }
 
@@ -200,14 +206,14 @@ class CommandCache {
             this._saveTimer = null;
             try {
                 fs.mkdirSync(CACHE_DIR, { recursive: true });
-                const tmp = CACHE_FILE + '.tmp';
+                const tmp = SLASH_CACHE_FILE + '.tmp';
                 fs.writeFileSync(tmp, JSON.stringify({
                     version: VERSION,
                     entries: [...this.entries.values()].map(e => ({
                         cwd: e.cwd, commands: e.commands, at: e.at,
                     })),
                 }, null, 2));
-                fs.renameSync(tmp, CACHE_FILE);
+                fs.renameSync(tmp, SLASH_CACHE_FILE);
             } catch (err) {
                 console.error(`[claude-sessions] could not save commands: ${err.message}`);
             }
@@ -335,4 +341,4 @@ function readDoc(file) {
     return (out.description || out.argumentHint) ? out : null;
 }
 
-module.exports = { CommandCache, CACHE_FILE };
+module.exports = { SlashCommandCache, SLASH_CACHE_FILE };

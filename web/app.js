@@ -149,7 +149,7 @@ const $ = (id) => document.getElementById(id);
 const dom = {};
 for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-sub',
     'channels', 'scroll', 'log', 'status-line', 'status-text', 'btn-stop', 'input',
-    'btn-send', 'btn-lgtm', 'cmd-menu', 'queue', 'queue-list', 'queue-count', 'queue-clear',
+    'btn-send', 'btn-lgtm', 'slash-menu', 'queue', 'queue-list', 'queue-count', 'queue-clear',
     'model', 'perm', 'btn-new', 'btn-new-menu', 'new-menu', 'db-status', 'db-label', 'toasts',
     'btn-bell', 'bell-menu', 'opt-desktop', 'opt-sound', 'bell-note', 'bell-try',
     'btn-pin', 'btn-folder', 'btn-term', 'btn-archive', 'btn-delete', 'turns', 'turn-pop',
@@ -721,7 +721,7 @@ async function openSession(id, { quiet = false, keepDash = false } = {}) {
     if (state.current) saveDraft(state.current.sessionId, dom.input.value);
     // The menu belongs to the directory being left, and the draft arriving in
     // the box is not something anybody typed.
-    closeCommandMenu();
+    closeSlashMenu();
 
     // Switching should feel like switching, not like waiting: a long transcript
     // is megabytes and the fetch is most of the delay. The rail summary is the
@@ -3871,10 +3871,10 @@ function connect() {
     // a plugin installed, a command file added. Dropped rather than refetched:
     // the list is only wanted when somebody presses `/`, and most windows never
     // will for this directory.
-    es.addEventListener('commands', (e) => {
+    es.addEventListener('slash-commands', (e) => {
         const d = JSON.parse(e.data);
-        state.commands.delete(d.cwd);
-        if (cmdOpen()) updateCommandMenu();
+        state.slashCommands.delete(d.cwd);
+        if (slashMenuOpen()) updateSlashMenu();
     });
 
     // The bridge filed a row. Kept up to date rather than re-fetched, so a
@@ -5498,36 +5498,36 @@ dom.input.addEventListener('keydown', (e) => {
 // `text.startsWith("/")` on the last text block, untrimmed, so a `/command` on
 // line three of a message is sent as prose. A menu that offered one there would
 // be promising something that will not happen.
-const CMD_RE = /^\/[A-Za-z0-9_:-]*$/;
+const SLASH_RE = /^\/[A-Za-z0-9_:-]*$/;
 
-const cmd = { rows: [], index: 0, seq: 0 };
+const slashMenu = { rows: [], index: 0, seq: 0 };
 
-const cmdOpen = () => !dom.cmdMenu.hidden;
+const slashMenuOpen = () => !dom.slashMenu.hidden;
 
 /** The typed fragment after the slash, or null when this is not a command. */
-function cmdFragment() {
+function slashFragment() {
     const v = dom.input.value;
-    return CMD_RE.test(v) ? v.slice(1) : null;
+    return SLASH_RE.test(v) ? v.slice(1) : null;
 }
 
 /**
  * Cached per working directory, because that is what decides the answer — every
  * session in a checkout shares a list, so one session's fetch warms the rest.
  */
-async function loadCommands() {
+async function loadSlashCommands() {
     const cur = state.current;
     if (!cur) return [];
     const key = cur.cwd || cur.sessionId;
-    const hit = state.commands.get(key);
+    const hit = state.slashCommands.get(key);
     if (hit) return hit.commands;
 
-    const r = await get(`/api/commands?session=${cur.sessionId}`);
+    const r = await get(`/api/slash-commands?session=${cur.sessionId}`);
     const entry = { commands: r.commands || [], at: r.at, exact: r.exact };
-    state.commands.set(key, entry);
+    state.slashCommands.set(key, entry);
     // The bridge resolves a cwd that no longer exists to the project directory,
     // so its answer can differ from the summary's. Store both, and the SSE
     // event — which speaks in the bridge's cwd — invalidates the right one.
-    if (r.cwd) state.commands.set(r.cwd, entry);
+    if (r.cwd) state.slashCommands.set(r.cwd, entry);
     return entry.commands;
 }
 
@@ -5535,7 +5535,7 @@ async function loadCommands() {
 // a key the reader cannot see is how a sorted list comes to look broken — so a
 // namespaced command files under its plugin, where the text says it is, and not
 // under the command's own name.
-const byName = (a, b) => a.name.localeCompare(b.name);
+const bySlashName = (a, b) => a.name.localeCompare(b.name);
 
 /**
  * Prefix matches first, then anything containing the fragment; alphabetical
@@ -5554,8 +5554,8 @@ const byName = (a, b) => a.name.localeCompare(b.name);
  * letters is worth more than a single unbroken A-to-Z: `/co` should offer
  * `/compact` before `/autocompact`.
  */
-function matchCommands(items, frag) {
-    if (!frag) return items.slice().sort(byName);
+function matchSlashCommands(items, frag) {
+    if (!frag) return items.slice().sort(bySlashName);
     const q = frag.toLowerCase();
     const pre = [];
     const sub = [];
@@ -5567,101 +5567,101 @@ function matchCommands(items, frag) {
         if (name.startsWith(q) || tail.startsWith(q)) pre.push(c);
         else if (name.includes(q)) sub.push(c);
     }
-    return pre.sort(byName).concat(sub.sort(byName));
+    return pre.sort(bySlashName).concat(sub.sort(bySlashName));
 }
 
-function closeCommandMenu() {
-    if (dom.cmdMenu.hidden) return;
-    dom.cmdMenu.hidden = true;
-    dom.cmdMenu.replaceChildren();
+function closeSlashMenu() {
+    if (dom.slashMenu.hidden) return;
+    dom.slashMenu.hidden = true;
+    dom.slashMenu.replaceChildren();
     dom.input.setAttribute('aria-expanded', 'false');
     dom.input.removeAttribute('aria-activedescendant');
-    cmd.rows = [];
-    cmd.index = 0;
+    slashMenu.rows = [];
+    slashMenu.index = 0;
 }
 
 /** Re-read the composer and show, filter or hide the menu to match. */
-async function updateCommandMenu() {
-    const frag = cmdFragment();
-    if (frag === null || !state.current) return closeCommandMenu();
+async function updateSlashMenu() {
+    const frag = slashFragment();
+    if (frag === null || !state.current) return closeSlashMenu();
 
-    const seq = ++cmd.seq;
+    const seq = ++slashMenu.seq;
     const key = state.current.cwd || state.current.sessionId;
-    let items = state.commands.has(key) ? state.commands.get(key).commands : null;
+    let items = state.slashCommands.has(key) ? state.slashCommands.get(key).commands : null;
 
     if (!items) {
         // First `/` in this directory. Show the box rather than nothing, so a
         // slow bridge reads as loading instead of as no commands.
-        drawCommandMenu(null, 'Loading commands…');
+        drawSlashMenu(null, 'Loading commands…');
         try {
-            items = await loadCommands();
+            items = await loadSlashCommands();
         } catch {
             // Not a toast: the person pressed a key, they did not ask for this.
-            if (seq === cmd.seq) drawCommandMenu(null, 'Could not load commands.');
+            if (seq === slashMenu.seq) drawSlashMenu(null, 'Could not load commands.');
             return;
         }
         // Typed on, or moved away, while that was in flight.
-        if (seq !== cmd.seq) return;
-        if (cmdFragment() === null) return closeCommandMenu();
+        if (seq !== slashMenu.seq) return;
+        if (slashFragment() === null) return closeSlashMenu();
     }
 
-    const rows = matchCommands(items, cmdFragment() || '');
+    const rows = matchSlashCommands(items, slashFragment() || '');
     // Nothing matches, so there is nothing to choose: get out of the way
     // entirely rather than showing an empty box that also swallows Enter.
-    if (!rows.length) return closeCommandMenu();
+    if (!rows.length) return closeSlashMenu();
 
-    cmd.rows = rows;
-    cmd.index = 0;
-    drawCommandMenu(rows, null);
+    slashMenu.rows = rows;
+    slashMenu.index = 0;
+    drawSlashMenu(rows, null);
 }
 
-function drawCommandMenu(rows, note) {
+function drawSlashMenu(rows, note) {
     // Two popovers on screen at once is nobody's intention. Only on the way
     // open: this redraws on every keystroke, and the others are already shut.
-    if (dom.cmdMenu.hidden) { showBell(false); showNewMenu(false); }
+    if (dom.slashMenu.hidden) { showBell(false); showNewMenu(false); }
 
     // A note is a message, not a list. Clearing the rows behind it matters:
     // otherwise Enter during "Loading…" would accept whatever the *previous*
     // fragment had highlighted, which is not what is on screen.
-    if (note) { cmd.rows = []; cmd.index = 0; }
+    if (note) { slashMenu.rows = []; slashMenu.index = 0; }
 
-    dom.cmdMenu.replaceChildren(...(note
+    dom.slashMenu.replaceChildren(...(note
         ? [el('div', { class: 'menu-note' }, note)]
         : rows.map((c, i) => el('button', {
             class: 'picker-row', type: 'button', role: 'option',
-            id: `cmd-row-${i}`, tabindex: -1,
-            'aria-selected': String(i === cmd.index),
+            id: `slash-row-${i}`, tabindex: -1,
+            'aria-selected': String(i === slashMenu.index),
             // Keeps the caret in the textarea, so clicking a row neither blurs
             // the box nor fires the blur-to-close below.
             onmousedown: (e) => e.preventDefault(),
-            onclick: () => acceptCommand(i),
+            onclick: () => acceptSlashCommand(i),
         },
         el('span', { class: 'name' }, `/${c.name}`),
         c.description ? el('span', { class: 'desc' }, clip(c.description, 90)) : null,
         c.argumentHint ? el('span', { class: 'hint' }, clip(c.argumentHint, 24)) : null,
         ))));
 
-    dom.cmdMenu.hidden = false;
+    dom.slashMenu.hidden = false;
     dom.input.setAttribute('aria-expanded', 'true');
-    if (rows && rows.length) paintCommandSelection();
+    if (rows && rows.length) paintSlashSelection();
     else dom.input.removeAttribute('aria-activedescendant');
 }
 
 /** The highlight is a property of the list, never of focus — see below. */
-function paintCommandSelection() {
-    const rows = [...dom.cmdMenu.querySelectorAll('.picker-row')];
-    rows.forEach((r, i) => r.setAttribute('aria-selected', String(i === cmd.index)));
-    const on = rows[cmd.index];
+function paintSlashSelection() {
+    const rows = [...dom.slashMenu.querySelectorAll('.picker-row')];
+    rows.forEach((r, i) => r.setAttribute('aria-selected', String(i === slashMenu.index)));
+    const on = rows[slashMenu.index];
     if (!on) return;
     dom.input.setAttribute('aria-activedescendant', on.id);
     on.scrollIntoView({ block: 'nearest' });
 }
 
-function moveCommandSelection(delta) {
-    const n = cmd.rows.length;
+function moveSlashSelection(delta) {
+    const n = slashMenu.rows.length;
     if (!n) return;
-    cmd.index = ((cmd.index + delta) % n + n) % n;   // a menu is a ring
-    paintCommandSelection();
+    slashMenu.index = ((slashMenu.index + delta) % n + n) % n;   // a menu is a ring
+    paintSlashSelection();
 }
 
 /**
@@ -5672,11 +5672,11 @@ function moveCommandSelection(delta) {
  * from what the eye sees the moment either changes. The overlap of one row is
  * the usual paging convention: it leaves something recognisable behind.
  */
-function cmdPageSize() {
-    const first = dom.cmdMenu.querySelector('.picker-row');
+function slashPageSize() {
+    const first = dom.slashMenu.querySelector('.picker-row');
     if (!first) return 1;
     const rowH = first.offsetHeight || 32;
-    return Math.max(1, Math.floor(dom.cmdMenu.clientHeight / rowH) - 1);
+    return Math.max(1, Math.floor(dom.slashMenu.clientHeight / rowH) - 1);
 }
 
 /**
@@ -5687,11 +5687,11 @@ function cmdPageSize() {
  * everything in between. Wrapping is a nicety when you are stepping one at a
  * time and a way to lose your place when you are moving in chunks.
  */
-function jumpCommandSelection(to) {
-    const n = cmd.rows.length;
+function jumpSlashSelection(to) {
+    const n = slashMenu.rows.length;
     if (!n) return;
-    cmd.index = Math.max(0, Math.min(n - 1, to));
-    paintCommandSelection();
+    slashMenu.index = Math.max(0, Math.min(n - 1, to));
+    paintSlashSelection();
 }
 
 /**
@@ -5707,10 +5707,10 @@ function jumpCommandSelection(to) {
  * wired to the box, so every draft guarantee holds by construction instead of by
  * a second copy of the logic that can drift from the first.
  */
-function acceptCommand(i) {
-    const c = cmd.rows[i == null ? cmd.index : i];
+function acceptSlashCommand(i) {
+    const c = slashMenu.rows[i == null ? slashMenu.index : i];
     if (!c) return;
-    closeCommandMenu();
+    closeSlashMenu();
     dom.input.value = `/${c.name} `;
     dom.input.setSelectionRange(dom.input.value.length, dom.input.value.length);
     dom.input.dispatchEvent(new Event('input'));
@@ -5728,47 +5728,47 @@ function acceptCommand(i) {
  * chips, whose own Enter/Escape map is a few hundred lines up.
  */
 document.addEventListener('keydown', (e) => {
-    if (!cmdOpen() || e.target !== dom.input) return;
+    if (!slashMenuOpen() || e.target !== dom.input) return;
     if (e.isComposing || e.keyCode === 229) return;
     // Open but with nothing to choose — a note, or a list still loading. Every
     // key belongs to the composer then; swallowing Enter here would lose a
     // message to a box that had no answer for it.
-    if (!cmd.rows.length) return;
+    if (!slashMenu.rows.length) return;
 
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
         e.stopPropagation();
-        moveCommandSelection(e.key === 'ArrowDown' ? 1 : -1);
+        moveSlashSelection(e.key === 'ArrowDown' ? 1 : -1);
     } else if (e.key === 'PageDown' || e.key === 'PageUp') {
         e.preventDefault();
         e.stopPropagation();
-        const step = cmdPageSize();
-        jumpCommandSelection(cmd.index + (e.key === 'PageDown' ? step : -step));
+        const step = slashPageSize();
+        jumpSlashSelection(slashMenu.index + (e.key === 'PageDown' ? step : -step));
     } else if (e.key === 'Home' || e.key === 'End') {
         // Only worth taking while the menu is open, and only because the box it
         // sits on is one line: Home and End in a one-line composer move the
         // caret somewhere it already effectively is.
         e.preventDefault();
         e.stopPropagation();
-        jumpCommandSelection(e.key === 'Home' ? 0 : cmd.rows.length - 1);
+        jumpSlashSelection(e.key === 'Home' ? 0 : slashMenu.rows.length - 1);
     } else if (e.key === 'Enter' || e.key === 'Tab') {
         if (e.shiftKey && e.key === 'Tab') return;   // still a way out of the box
         e.preventDefault();
         e.stopPropagation();
-        acceptCommand();
+        acceptSlashCommand();
     } else if (e.key === 'Escape') {
         // Leaves the text exactly as typed. Stopped so it closes the menu rather
         // than whatever Escape means to the panel behind it.
         e.preventDefault();
         e.stopPropagation();
-        closeCommandMenu();
+        closeSlashMenu();
     }
 }, true);
 
-dom.input.addEventListener('input', updateCommandMenu);
-dom.input.addEventListener('blur', closeCommandMenu);
+dom.input.addEventListener('input', updateSlashMenu);
+dom.input.addEventListener('blur', closeSlashMenu);
 document.addEventListener('click', (e) => {
-    if (cmdOpen() && !e.target.closest('.input-row')) closeCommandMenu();
+    if (slashMenuOpen() && !e.target.closest('.input-row')) closeSlashMenu();
 });
 
 // Two stops, because the consequences differ. The first asks the turn to end
