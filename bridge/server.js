@@ -20,6 +20,7 @@ const { SessionIndex } = require('./sessions');
 const { SessionRegistry } = require('./registry');
 const { RunnerPool, PERMISSION_MODES } = require('./runner');
 const { Flags } = require('./flags');
+const { Suggestions, STATUSES: SUGGESTION_STATUSES } = require('./suggestions');
 const { SlashCommandCache } = require('./slash-commands');
 const { NotificationLog } = require('./notifications');
 const devbrowser = require('./devbrowser');
@@ -36,6 +37,9 @@ const WEB_DIR = path.join(__dirname, '..', 'web');
 const CLIENT_HEADER = 'x-claude-sessions-client';
 
 const flags = new Flags();
+// What you did about a suggested follow-up — started it, or waved it away. The
+// suggestion itself is in the transcript; only the decision is ours to keep.
+const suggestions = new Suggestions();
 const index = new SessionIndex(flags);
 const registry = new SessionRegistry();
 const pool = new RunnerPool();
@@ -57,6 +61,9 @@ const notifications = new NotificationLog({
 // how recently a file changed. The index works without it; every summary simply
 // carries `live: null` and the mtime window is all anyone has to go on.
 index.registry = registry;
+// So a decision about a suggestion goes when its transcript does, the way a pin
+// or an archive does.
+index.suggestions = suggestions;
 
 /**
  * @type {Map<string, {
@@ -217,6 +224,51 @@ async function tickDevServers() {
     try {
         if (await overview.refreshDevServers(index, ids)) tickBoard();
     } catch { /* nothing here is worth failing a tick over */ }
+}
+
+// ---------------------------------------------------------------------------
+// Peers
+// ---------------------------------------------------------------------------
+//
+// Sessions an agent here could message, newest first. See the route for why
+// this reads the registry rather than the session index.
+//
+// The session this list is for is *not* filtered out here, and that is on
+// purpose: whether to hide yourself is a question about a composer, which knows
+// which session it is in, and this route is also read by the renderer to put a
+// name to a message that has already arrived — where dropping an entry would
+// mean failing to name the one session that definitely sent something.
+
+/** @returns {Array<object>} one entry per addressable live session. */
+function listPeers() {
+    const peers = [];
+    for (const entry of registry.running()) {
+        // A session with no name cannot be addressed, because the name is the
+        // address. One with no inbox is a Claude Code too old for any of this.
+        if (!entry.name || !entry.addressable) continue;
+        const summary = index.summary(entry.sessionId);
+        peers.push({
+            name: entry.name,
+            // 'derived' means Claude Code made this up from the directory rather
+            // than anybody choosing it — worth showing beside a name somebody is
+            // about to paste into a message.
+            nameSource: entry.nameSource,
+            sessionId: entry.sessionId,
+            cwd: entry.cwd || (summary && summary.cwd) || null,
+            kind: entry.kind,
+            entrypoint: entry.entrypoint,
+            status: entry.status,
+            startedAt: entry.startedAt,
+            // Absent for a peer with no transcript indexed here — a background
+            // agent, or one working somewhere this app does not look. It is
+            // still perfectly reachable, so it is still listed; the client shows
+            // the name on its own.
+            title: summary ? summary.title : null,
+            project: summary ? summary.projectName : null,
+        });
+    }
+    peers.sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
+    return peers;
 }
 
 function stopAgentWatch(client) {
@@ -682,6 +734,24 @@ async function api(req, res, url, pathname, who) {
         return send(res, 200, { sessions, ready: index.ready });
     }
 
+    // Who an agent in this session could send a message to.
+    //
+    // Claude Code gives every live session a name and an inbox, and agents
+    // address each other by that name — `SendMessage({to: "<name>"})`, with no
+    // other form of address. This route is the list of names that are real,
+    // which is what the composer's `@` picker offers.
+    //
+    // Read out of the registry rather than out of the session index, because
+    // they answer different questions. The index knows about transcripts, and
+    // filters some of them out — test sessions on the everyday bridge, anything
+    // under /tmp. The registry knows about *processes*, and a background agent
+    // with no indexed transcript is still perfectly able to receive a message.
+    // Titles are joined on from the index where there is one; a peer without one
+    // is still listed, because being unnamed here does not make it unreachable.
+    if (pathname === '/api/peers' && req.method === 'GET') {
+        return send(res, 200, { peers: listPeers(), at: Date.now() });
+    }
+
     // Every live session at once: what it is doing, how far through its tasks it
     // is, and what it is blocked on. State rather than content, which is what
     // makes one payload enough for a screenful of sessions — see overview.js.
@@ -768,6 +838,12 @@ async function api(req, res, url, pathname, who) {
             // point; serializing all of it and then throwing most away would save
             // nothing. `offset` is deliberately left as-is — it is a byte position
             // in the file, so the live tail still resumes correctly from it.
+            // What was already done about each suggested follow-up in here.
+            // Sent whole rather than per event: it is a handful of keys, and a
+            // card that arrives on the live tail — after this payload — still
+            // needs to know whether it was acted on in another window.
+            const acted = suggestions.forSession(sessionId);
+
             const want = Number(url.searchParams.get('tail'));
             if (Number.isFinite(want) && want > 0 && data.events.length > want) {
                 const dropped = data.events.length - want;
@@ -776,9 +852,10 @@ async function api(req, res, url, pathname, who) {
                     events: data.events.slice(-want),
                     truncated: { dropped, total: data.events.length },
                     runner: st || null,
+                    suggestions: acted,
                 });
             }
-            return send(res, 200, { ...data, runner: st || null });
+            return send(res, 200, { ...data, runner: st || null, suggestions: acted });
         }
 
         // Hard delete. Everywhere else in this app "remove" means archive; this
@@ -980,6 +1057,51 @@ async function api(req, res, url, pathname, who) {
             const stopped = next.archived ? archiveStoppedRuns(summary) : 0;
             broadcast('sessions-changed', { at: Date.now() });
             return send(res, 200, { ok: true, sessionId, ...next, runsStopped: stopped });
+        }
+
+        // Just the decisions, for a client that has the conversation already and
+        // only needs to know what moved. Refetching the whole transcript to
+        // learn that one card was dismissed would be megabytes for two fields.
+        if (tail === 'suggestions' && !seg[4] && req.method === 'GET') {
+            if (!index.summary(sessionId)) return send(res, 404, { error: 'session not found' });
+            return send(res, 200, { sessionId, suggestions: suggestions.forSession(sessionId) });
+        }
+
+        // What you did about one suggested follow-up.
+        //
+        // The suggestion itself is never written here — it is a tool call in the
+        // transcript and stays the only copy. This records the *decision*, which
+        // is the one part of it that is yours: `started`, with the session it
+        // produced so the card can become a link, or `dismissed`. Posting with no
+        // status takes the decision back and the card offers itself again, which
+        // matters because dismiss is the easy one to hit by accident.
+        //
+        // Broadcast, so a second window showing the same conversation stops
+        // offering something that has already been started.
+        if (tail === 'suggestions' && seg[4] && req.method === 'POST') {
+            const summary = index.summary(sessionId);
+            if (!summary) return send(res, 404, { error: 'session not found' });
+            const toolUseId = seg[4];
+            const body = await readJson(req);
+            const status = body.status == null ? null : String(body.status);
+
+            if (status === null) {
+                suggestions.clear(sessionId, toolUseId);
+                broadcast('suggestion-changed', { at: Date.now(), sessionId, toolUseId });
+                return send(res, 200, { ok: true, sessionId, toolUseId, status: null });
+            }
+            if (!SUGGESTION_STATUSES.has(status)) {
+                return send(res, 400, {
+                    error: `status must be one of ${[...SUGGESTION_STATUSES].join(', ')}, `
+                        + 'or absent to undo',
+                });
+            }
+            const next = suggestions.set(sessionId, toolUseId, {
+                status,
+                startedId: typeof body.startedId === 'string' ? body.startedId : null,
+            });
+            broadcast('suggestion-changed', { at: Date.now(), sessionId, toolUseId });
+            return send(res, 200, { ok: true, sessionId, toolUseId, ...next });
         }
 
         // Show the session's working directory in Windows File Explorer.
@@ -1661,6 +1783,16 @@ function pair(req, res, url, pathname, who) {
 pool.hasViewer = () => clients.size > 0;
 
 index.on('changed', () => broadcast('sessions-changed', { at: Date.now() }));
+
+// A message from another Claude session, noticed in the transcript rather than
+// in a process stream — see SessionIndex#rescan for why that is the only place
+// it can be noticed. Broadcast as well as logged, so a window already showing
+// that conversation does not have to wait for the rail to tell it something
+// happened.
+index.on('peer-message', (p) => {
+    broadcast('peer-message', p);
+    filed(notifications.peerMessage(p));
+});
 // A session starting or stopping in a terminal writes nothing to a transcript,
 // so the registry is the only thing that notices — the rail would otherwise wait
 // for the next thing that happened to change a file.
