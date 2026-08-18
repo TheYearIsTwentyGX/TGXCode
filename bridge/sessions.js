@@ -18,10 +18,14 @@ const { scanMeta, parseLines, buildEvents, readSubagentIndex,
 const CACHE_FILE = path.join(CACHE_DIR, 'index.json');
 // Bump whenever scanMeta's output shape or derivation changes, so a stale cache
 // is discarded rather than silently serving metadata from the old rules.
-const CACHE_VERSION = 9;
+const CACHE_VERSION = 10;
 
 // A transcript touched this recently is treated as live.
 const ACTIVE_WINDOW_MS = 90_000;
+
+// How long a session created here is allowed to exist without a transcript
+// before the state attached to it is treated as orphaned. See note().
+const PENDING_TTL_MS = 5 * 60_000;
 
 class SessionIndex extends EventEmitter {
     /** @param {import('./flags').Flags} [flags] user pin/archive state */
@@ -36,6 +40,13 @@ class SessionIndex extends EventEmitter {
          * @type {import('./registry').SessionRegistry|null}
          */
         this.registry = null;
+        /**
+         * What was done about each suggested follow-up. Set from server.js for
+         * the same reason as the registry: this is a store the index does not
+         * need to work, and one that is absent must change nothing.
+         * @type {import('./suggestions').Suggestions|null}
+         */
+        this.suggestions = null;
         /** @type {Map<string, {file, dir, size, mtimeMs, meta}>} keyed by sessionId */
         this.sessions = new Map();
         /**
@@ -45,6 +56,12 @@ class SessionIndex extends EventEmitter {
          * @type {Map<string, {file, dir, size, mtimeMs, meta}>}
          */
         this.byFile = new Map();
+        /**
+         * Sessions created through this bridge whose transcript has not appeared
+         * yet, as id -> when. See note() for what goes wrong without it.
+         * @type {Map<string, number>}
+         */
+        this.pending = new Map();
         this.watchers = [];
         this.ready = false;
         this._saveTimer = null;
@@ -116,20 +133,46 @@ class SessionIndex extends EventEmitter {
         }
 
         let changed = 0;
+        // Messages that arrived from another session since the last pass.
+        //
+        // Detected here rather than anywhere nicer because this is the only
+        // place that holds both the old metadata and the new. A peer message is
+        // not a runner event — it can land in a session running in somebody's
+        // terminal, with no process of ours anywhere near it — so the transcript
+        // is the only thing that knows, and the count scanMeta already keeps is
+        // the cheapest way to ask.
+        const arrived = [];
         for (const [id, rec] of chosen) {
             const prev = this.sessions.get(id);
             if (!prev || prev.file !== rec.file || prev.size !== rec.size
                 || prev.mtimeMs !== rec.mtimeMs) changed++;
+            // A session seen for the first time says nothing: a cold start would
+            // otherwise announce every message this machine has ever received.
+            if (prev && rec.meta.peerMessages > (prev.meta.peerMessages || 0)) {
+                arrived.push({
+                    sessionId: id,
+                    from: rec.meta.lastPeerFrom,
+                    at: rec.meta.lastPeerTs,
+                    count: rec.meta.peerMessages - (prev.meta.peerMessages || 0),
+                });
+            }
         }
         // Sessions whose files disappeared.
         for (const id of this.sessions.keys()) if (!chosen.has(id)) changed++;
 
         this.sessions = chosen;
         this.byFile = byFile;
-        // Don't accumulate pins and archives for transcripts that are long gone.
-        if (this.flags) this.flags.prune(new Set(this.sessions.keys()));
+        // Don't accumulate pins and archives for transcripts that are long gone —
+        // but knownIds(), not the index alone, or a session created a moment ago
+        // loses its flags before it has written anything. See note().
+        const known = this.knownIds();
+        if (this.flags) this.flags.prune(known);
+        if (this.suggestions) this.suggestions.prune(known);
 
         if (changed) { this._scheduleSave(); this.emit('changed'); }
+        // After the index is in place, so a listener asking for the summary of
+        // the session that was messaged gets the current one.
+        for (const a of arrived) this.emit('peer-message', a);
         return { scanned, changed };
     }
 
@@ -437,9 +480,42 @@ class SessionIndex extends EventEmitter {
         } catch { return null; }
     }
 
-    /** Register a session created outside a rescan so it appears immediately. */
+    /**
+     * Register a session created outside a rescan so it appears immediately.
+     *
+     * It also has to be held against pruning, and that is not a nicety. A
+     * session is created, flagged — `test: true` is the one that matters — and
+     * only *then* does `claude` write its first line, seconds later. The rescan
+     * this schedules therefore runs while the transcript does not exist, and
+     * prune() concluded the flags belonged to a session that was gone and threw
+     * them away. Every test session an agent started has been arriving in the
+     * everyday window ever since, which is the exact opposite of what the label
+     * is for.
+     */
     note(sessionId) {
+        if (sessionId) this.pending.set(sessionId, Date.now());
         this._scheduleRescan();
+    }
+
+    /**
+     * Ids that exist as far as anything owning per-session state is concerned:
+     * everything indexed, plus everything created in the last few minutes that
+     * has not shown up on disk yet.
+     *
+     * The window matters in both directions. Too short and the race above comes
+     * back on a busy machine; too long and a session that never wrote anything —
+     * `claude` failed to start, the directory was wrong — keeps its flags
+     * forever. A few minutes is far longer than a first line takes and far
+     * shorter than anyone would notice.
+     */
+    knownIds() {
+        const ids = new Set(this.sessions.keys());
+        const cutoff = Date.now() - PENDING_TTL_MS;
+        for (const [id, at] of this.pending) {
+            if (ids.has(id) || at < cutoff) this.pending.delete(id);
+            else ids.add(id);
+        }
+        return ids;
     }
 
     /**
@@ -482,7 +558,12 @@ class SessionIndex extends EventEmitter {
         }
 
         this.sessions.delete(sessionId);
-        if (this.flags) this.flags.prune(new Set(this.sessions.keys()));
+        // Deleting is deliberate, so it takes the reprieve with it: a session
+        // removed on purpose must not be held alive by having been recent.
+        this.pending.delete(sessionId);
+        const left = this.knownIds();
+        if (this.flags) this.flags.prune(left);
+        if (this.suggestions) this.suggestions.prune(left);
         this._scheduleSave();
         this.emit('changed');
         return removed;

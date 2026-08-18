@@ -115,6 +115,8 @@ create one in `%APPDATA%\claude-sessions\`:
 | **Composer** | Sends to the session, resuming it in place — the same transcript a terminal would append to. |
 | **LGTM** | Beside *Send*, for when you have read the work and it is done: it sends a written instruction to put the change on a pull request if it is not on one already, run the project's checks, and merge once they pass — and to stop and say so if something blocks it. One click, no confirmation over the top; the session still asks for what its permission mode makes it ask for. |
 | **Send queue** | Write while an agent is working and the message waits, listed above the composer in send order. Each one can be expanded, reordered, pulled back for editing, or dropped, right up until its turn starts. `Shift+Tab` out of the composer to work through them without the mouse. |
+| **Suggested follow-ups** | An agent that notices work outside what it was asked to do files it as a card, with the prompt already written. *Start this* runs it, *Edit first* opens it in the Start dialog, *Dismiss* puts it away. |
+| **Mentions** | `@` in the composer lists the other sessions running on this machine and inserts the one you pick as `@[name]` — the name an agent addresses it by. |
 
 Shortcuts: `Ctrl+Enter` send, `Ctrl+K` filter, `Ctrl+N` new session, `Esc` leave
 a subagent, `Ctrl+R` reload, `Ctrl+±` zoom, `F12` devtools.
@@ -169,6 +171,77 @@ Subagents don't take messages — the composer greys out while you are reading o
 A subagent that spawned its own subagents shows them inside its transcript, at
 the `Task` call that spawned them, rather than flattening them into the session's
 chip row where they did not happen.
+
+### Suggested follow-ups
+
+Agents notice things. "There's a shortcoming here, but that's outside the scope
+of this PR" is a sentence every long session produces at least once, and until
+now it went nowhere: the agent had already written the prompt for the session
+that would fix it, and there was no way to hand that over.
+
+So sessions this app starts get one tool they would not otherwise have —
+`suggest_session`, from a small MCP server in `bridge/suggest-mcp.js` that the
+runner attaches with `--mcp-config`. The agent calls it with a prompt, a reason,
+and optionally a directory; the call lands in the transcript like any other tool
+call; the conversation draws it as a card you can start in one click.
+
+**The server stores nothing, and that is the design.** The offer is already in the
+transcript, which is the copy that survives a restart, shows up in a second
+window, and can be read out of a session this bridge does not own — the same way
+a pending plan already is. A second copy would only be something to drift.
+
+What *is* the app's is what you did about it. Started or dismissed is a decision
+you made rather than something the agent said, so it lives in
+`~/.local/share/claude-sessions/suggestions.json` beside `flags.json`, and it is
+pruned when the transcript goes. Both are undoable: dismiss is the easy one to
+hit by accident, and the suggestion is still sitting in the transcript either way.
+
+A started suggestion runs in `plan` mode regardless of the mode it was raised in.
+A prompt written by one agent for another has had no human read it as an
+instruction yet, and the first thing the new session should do is say what it
+intends to do about it.
+
+The tool is on `--allowedTools`, so filing one never raises an approval card —
+a permission prompt for "may I suggest this?" is noise. Only sessions the bridge
+starts have it; a session you started in a terminal will not.
+
+### Sessions can talk to each other
+
+Claude Code gives every running session a name and an inbox of its own, and an
+agent reaches another with `SendMessage({to: "<name>"})`. That is all its own
+work — the socket, the delivery, the loop guards. **This app builds no transport
+and dials no socket.** What it does is make the conversation visible, which it
+was not.
+
+- **`@` in the composer** lists the sessions that are actually running, from
+  Claude Code's own process registry, and inserts the one you pick as
+  `@[name]`. The name is the whole address — there is no separate addressing
+  syntax — so getting the exact one into the message is the entire job. Rows
+  show the title you know the session by and the name that gets inserted, since
+  those are often not the same thing.
+- **The brackets are ours, not the CLI's.** Nothing parses them; the agent reads
+  them as prose. They exist so a session mention cannot be mistaken for
+  `@path/to/file`, which the CLI *does* resolve on its own — which is what keeps
+  the file half of that menu free for later.
+- **A message that arrives now renders.** It used to render as nothing at all:
+  Claude Code delivers one as a user message flagged `isMeta`, and
+  `bridge/transcript.js` skipped those wholesale, so a session that had been
+  messaged showed an empty gap where the message was. It is now recognised by its
+  `<cross-session-message>` wrapper and drawn as what it is, with the sender
+  named and a way into their session.
+- **It is still not a turn you took.** Peer messages stay out of the turn count
+  and out of `lastUserTs`, which the rail sorts on — otherwise two agents
+  talking would quietly reorder your session list.
+- **The notification is filed by the bridge**, not the page, because a message
+  can land in a session with no window open on it and no process of ours anywhere
+  near it. That is noticed in the transcript during the index rescan, which is
+  the only place that knows.
+
+One thing to know if messages seem to vanish: Claude Code has a
+`crossSessionInbound` setting — `accept`, `hold`, or `refuse`. On `hold` an
+inbound message waits for an interactive approval that a headless session has
+nobody to give, so it never arrives. That is the CLI's setting in your own
+`~/.claude/settings.json`, and not something this app writes.
 
 ### The send queue holds messages back on purpose
 
@@ -581,6 +654,8 @@ not.
 | `bridge/explorer.js` | Opens a WSL directory in File Explorer |
 | `bridge/notifications.js` | The notification log, and what is worth raising |
 | `bridge/flags.js` | Pinned, archived and test state |
+| `bridge/suggestions.js` | What you did about a suggested follow-up |
+| `bridge/suggest-mcp.js` | The one tool this app gives a session: offer the next piece of work |
 | `bridge/slash-commands.js` | What slash commands a directory has, for composer completion |
 | `bridge/auth.js` | The access token, and telling local from remote apart |
 | `bridge/tailscale.js` | What this machine is reachable as, for pairing |

@@ -326,9 +326,17 @@
                    type and taking focus would end the typing. -->
               <div id="slash-menu" class="slash-menu" role="listbox" hidden
                    aria-label="Slash commands"></div>
+              <!-- Session mentions, on the same anchor and the same class, so the
+                   two popovers are one shape in two places rather than two
+                   things that look alike. Only ever one is open — each closes
+                   the other on the way up. Grouped, because files join this
+                   menu later and a group heading arriving with them would move
+                   every row the day it shipped. -->
+              <div id="mention-menu" class="slash-menu" role="listbox" hidden
+                   aria-label="Mentions"></div>
               <textarea id="input" rows="1" placeholder="Send a message to this session…"
                         aria-label="Message" role="combobox" aria-expanded="false"
-                        aria-controls="slash-menu" aria-autocomplete="list"></textarea>
+                        aria-controls="slash-menu mention-menu" aria-autocomplete="list"></textarea>
               <button id="btn-send" class="btn-send" type="button" disabled>Send</button>
               <!-- The end of a review in one click. It sends a written instruction
                    like any other message, so the transcript records what was asked

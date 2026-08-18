@@ -703,6 +703,8 @@ function renderEvent(ev) {
         case 'system': return renderSystem(ev);
         case 'agent-done': return row(ev, 'agent-done',
             el('div', { text: `Subagent ${ev.status || 'finished'}${ev.summary ? ` — ${ev.summary}` : ''}` }));
+        case 'suggestion': return renderSuggestion(ev);
+        case 'peer-message': return renderPeerMessage(ev);
         case 'compact': return row(ev, 'compact', el('div', { text: 'Conversation compacted' }));
         default: return null;
     }
@@ -725,6 +727,33 @@ function renderUser(ev) {
 
 function renderAssistant(ev) {
     return row(ev, 'assistant', el('div', { html: renderMarkdown(ev.text || '') }));
+}
+
+/**
+ * Work an agent suggested and did not do.
+ *
+ * Read-only here, unlike the desktop. Starting one is a decision about where and
+ * how a session runs — a directory, a permission mode — and this surface exists
+ * for answering things away from the desk, not for setting work going with a
+ * thumb. What matters is that it is visible, so it is not a surprise later.
+ */
+function renderSuggestion(ev) {
+    const body = el('div', { text: ev.title || firstLine(ev.prompt || '') });
+    body.append(el('div', { class: 'row-meta', text: ev.why || 'Suggested follow-up' }));
+    return row(ev, 'suggestion', body);
+}
+
+/**
+ * A message from another Claude session.
+ *
+ * Rendered at all, which is the point: these arrive flagged as meta, so before
+ * this they were dropped and a session that had been messaged showed a gap.
+ */
+function renderPeerMessage(ev) {
+    const who = ev.fromName || ev.from || 'another session';
+    const body = el('div', { html: renderMarkdown(ev.text || '') });
+    body.prepend(el('div', { class: 'row-meta', text: `Message from ${who}` }));
+    return row(ev, 'peer-message', body);
 }
 
 function renderSystem(ev) {

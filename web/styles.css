@@ -1091,6 +1091,80 @@ a:hover { text-decoration: underline; }
 }
 .ev-agent-done .subagent-btns { margin-top: 2px; }
 
+/* work an agent noticed and did not do — an offer, so it is boxed rather than
+   left inline: everything else in the log is a record of what happened, and
+   this is the one thing in it that is still a decision. */
+.ev-suggestion .ev-body {
+    background: var(--blue-tint);
+    border-left: 2px solid var(--blue);
+    border-radius: var(--r);
+    padding: 11px 16px 13px;
+    margin: 8px 0;
+}
+.ev-suggestion .ev-label { color: var(--blue); }
+.ev-suggestion .sugg-title {
+    margin-top: 3px;
+    font: 500 13.5px/1.5 var(--sans);
+    color: var(--text-2);
+}
+.ev-suggestion .sugg-why {
+    margin-top: 2px;
+    font: 400 12.5px/1.55 var(--sans);
+    color: var(--text-4);
+}
+/* The prompt is the thing being offered, so it is the readable part of the card
+   — not clipped, and not in the quieter colour the reason gets. */
+.ev-suggestion .sugg-prompt { margin-top: 8px; font-size: 13.5px; }
+.ev-suggestion .sugg-cwd {
+    margin-top: 6px;
+    font: 400 11.5px/1.5 var(--mono);
+    color: var(--text-4);
+    overflow-wrap: anywhere;
+}
+.ev-suggestion .sugg-btns {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 11px;
+}
+/* Acted on: the card stays, because the agent's reasoning is still worth
+   reading, but it stops competing with the offers that are still open. */
+.ev-suggestion .sugg-done {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 10px;
+    font: 400 12.5px/1.5 var(--sans);
+    color: var(--text-4);
+}
+.linky {
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    color: var(--blue);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    cursor: pointer;
+}
+.linky:hover { color: #dbe6fb; }
+
+/* a message from another session — somebody else's agent talking to yours.
+   Coloured apart from both your turns and Claude's, because it is neither. */
+.ev-peer-message .ev-body {
+    border-left: 2px solid var(--peach);
+    padding: 4px 0 10px 12px;
+    margin: 6px 0;
+}
+.ev-peer-message .ev-label { color: var(--peach); }
+.ev-peer-message .peer-sub {
+    margin: 1px 0 4px;
+    font: 400 12px/1.5 var(--sans);
+    color: var(--text-4);
+}
+.ev-peer-message .subagent-btns { margin-top: 8px; }
+
 /* system notices */
 .ev-system .ev-body {
     background: var(--blue-tint);
@@ -2366,6 +2440,35 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     color: var(--text-4);
 }
 
+/* A heading between groups. Deliberately not a `.picker-row`: the keyboard map
+   counts those, so a heading that were one would be a row you could land on. */
+.slash-menu .menu-group {
+    padding: 8px 10px 4px;
+    font: 500 10.5px/1.4 var(--sans);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-4);
+}
+.slash-menu .menu-group:first-child { padding-top: 3px; }
+
+/* A session is found by its title and sent to by its name, so the row leads
+   with the title in the reading face and follows with the name in the mono one
+   — which is also the shape of what gets inserted. */
+#mention-menu .picker-row .name {
+    font-family: var(--sans);
+    font-size: 13px;
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+#mention-menu .picker-row .desc {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    flex: none;
+}
+
 @media (prefers-reduced-motion: reduce) { .slash-menu { animation: none; } }
 
 .input-row {
@@ -3453,6 +3556,7 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 .note-row[data-type="finished"] { --accent: var(--green); }
 .note-row[data-type="failed"] { --accent: var(--red); }
 .note-row[data-type="agent-done"] { --accent: var(--text-4); }
+.note-row[data-type="peer-message"] { --accent: var(--peach); }
 
 /* Nothing ever interrupted you for these, so they do not get to shout here
    either. They are in the list to answer "what has been going on", which is a

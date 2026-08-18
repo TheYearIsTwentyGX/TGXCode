@@ -107,6 +107,13 @@ function scanMeta(filePath) {
         userMessages: 0,
         assistantMessages: 0,
         toolCalls: 0,
+        // Messages from other Claude sessions. Counted separately from
+        // userMessages and deliberately not added to it — see the skip below.
+        // The count is what lets the bridge notice a new one arriving without
+        // reading the file twice, and the last sender is what the row says.
+        peerMessages: 0,
+        lastPeerTs: null,
+        lastPeerFrom: null,
         firstTs: null,
         lastTs: null,
         lastUserTs: null,
@@ -117,10 +124,33 @@ function scanMeta(filePath) {
     };
 
     const titles = {};
+    const peerIds = new Set();
     let cwdTries = 0;
 
     for (const line of text.split('\n')) {
         if (!line) continue;
+
+        // A message from another session, in either of the shapes peerOriginOf
+        // describes. Ahead of the conversation classification because one of
+        // those shapes is an `attachment`, which is bookkeeping by every other
+        // measure and would never be looked at down there.
+        //
+        // Counted by distinct `msg_id` rather than by line: one message can reach
+        // disk twice, and this count is what the bridge watches to decide that
+        // something new arrived. Counting the same message twice would notify
+        // twice. The gate is a substring so the parse only happens on the handful
+        // of lines that could possibly be one.
+        if (line.includes(PEER_ORIGIN_MARK)) {
+            const parsed = safeParse(line);
+            const o = peerOriginOf(parsed);
+            if (o) {
+                peerIds.add(o.msg_id || `${parsed.uuid || peerIds.size}`);
+                meta.peerMessages = peerIds.size;
+                const at = matchField(line, 'timestamp');
+                if (at) meta.lastPeerTs = at;
+                meta.lastPeerFrom = o.name || o.from || meta.lastPeerFrom;
+            }
+        }
 
         // Cheap classification first. Conversation lines are the big ones and we
         // only need counts and timestamps from them.
@@ -152,6 +182,10 @@ function scanMeta(filePath) {
             if (isUser) {
                 // A tool_result is mechanically a user message; don't count it as one.
                 if (line.includes('"type":"tool_result"')) continue;
+                // A message from another session is meta, and stays meta: it is
+                // not a turn you took, so it must not reach userMessages or
+                // lastUserTs, which the rail sorts on. It is counted above this
+                // loop's classification instead, where both of its shapes land.
                 if (line.includes('"isMeta":true')) continue;
                 // Nor is a background task reporting in. Counting it would both
                 // inflate the turn count and, because lastUserTs is what the
@@ -410,9 +444,32 @@ function stripEnvelope(s) {
 function buildEvents(entries, ctx = {}) {
     const events = [];
     const toolsById = new Map();
+    // Calls that became a card instead of a tool block, so their result can be
+    // dropped rather than emitted as a patch aimed at a node that was never
+    // rendered. The tool answers with a fixed sentence and the card shows the
+    // arguments, so there is nothing in the result a reader would want.
+    const cardToolIds = new Set();
+    // Peer messages already drawn, by `msg_id` — see peerOriginOf for why one
+    // message can reach disk twice.
+    const seenPeerIds = new Set();
     let lastAssistantModel = null;
 
     for (const e of entries) {
+        // Before the content-type gate, because an `attachment` is bookkeeping by
+        // every other measure and would never get this far otherwise.
+        const peerOrigin = peerOriginOf(e);
+        if (peerOrigin) {
+            // One message, one card, however many entries the CLI wrote for it.
+            const key = peerOrigin.msg_id || null;
+            if (key && seenPeerIds.has(key)) continue;
+            if (key) seenPeerIds.add(key);
+            const peer = parsePeerMessage(userText(e), e);
+            if (peer) {
+                events.push({ id: e.uuid, kind: 'peer-message', ts: e.timestamp, ...peer });
+                continue;
+            }
+        }
+
         if (!CONTENT_TYPES.has(e.type)) {
             if (e.type === 'system' || e.type === 'attachment') { /* handled below */ }
             continue;
@@ -444,6 +501,21 @@ function buildEvents(entries, ctx = {}) {
                         text: b.text, model: e.message.model,
                     });
                 } else if (b.type === 'tool_use') {
+                    // A suggested follow-up is a card, not a tool call. It is
+                    // mechanically a tool call and could render as one, but a
+                    // collapsed grey block saying `suggest_session` is exactly
+                    // how an offer goes unread — and there is nothing to inspect
+                    // in it anyway, because the arguments *are* the content.
+                    //
+                    // Emitted from the call rather than waiting for the result,
+                    // for the reason the subagent link below gives: the result
+                    // adds nothing and waiting only delays the card.
+                    const suggestion = parseSuggestion(b, e);
+                    if (suggestion) {
+                        cardToolIds.add(b.id);
+                        events.push(suggestion);
+                        continue;
+                    }
                     const ev = {
                         id: b.id, kind: 'tool', ts: e.timestamp,
                         name: b.name, input: b.input || {},
@@ -464,12 +536,22 @@ function buildEvents(entries, ctx = {}) {
         }
 
         // e.type === 'user'
-        if (e.isMeta) continue;
+        //
+        // `isMeta` means "not something the user typed", and skipping it is right
+        // for everything it marks. A message from another session is marked too —
+        // which is why one used to render as nothing at all — but it is caught at
+        // the top of this loop now, before anything here can drop it.
+        //
+        // The one belt-and-braces case: an entry with the wrapper but no `origin`
+        // to recognise it by, which is possible because whether `origin` reaches
+        // disk is Claude Code's business rather than a contract.
+        if (e.isMeta && !isPeerMessage(userText(e))) continue;
 
         if (Array.isArray(content)) {
             const resultBlocks = content.filter(b => b.type === 'tool_result');
             if (resultBlocks.length) {
                 for (const b of resultBlocks) {
+                    if (cardToolIds.has(b.tool_use_id)) continue;
                     const payload = resultPayload(b, e, ctx);
                     const target = toolsById.get(b.tool_use_id);
                     if (target) {
@@ -505,6 +587,19 @@ function buildEvents(entries, ctx = {}) {
         if (notification) {
             events.push({
                 id: e.uuid, kind: 'agent-done', ts: e.timestamp, ...notification,
+            });
+            continue;
+        }
+
+        // The belt-and-braces path for a peer message: an entry carrying the
+        // wrapper but no `origin` to be recognised by at the top of the loop.
+        // Anchored at the start, so an agent quoting a message it received is
+        // still a turn somebody took — the same trade the notification tag makes
+        // a few lines up.
+        const peer = parsePeerMessage(text, e);
+        if (peer) {
+            events.push({
+                id: e.uuid, kind: 'peer-message', ts: e.timestamp, ...peer,
             });
             continue;
         }
@@ -557,6 +652,148 @@ function isTaskNotification(text) {
     const t = String(text || '').trimStart();
     if (!t.includes(NOTIFICATION_TAG)) return false;
     return t.startsWith(NOTIFICATION_TAG) || t.startsWith(NOTIFICATION_PREFIX);
+}
+
+// The tool bridge/suggest-mcp.js provides, as the CLI names it once it has been
+// resolved through an MCP server. Matched on the suffix rather than the whole
+// string: the middle segment is the server's name in --mcp-config, which is ours
+// to choose today and could reasonably be namespaced differently tomorrow.
+const SUGGEST_TOOL_SUFFIX = '__suggest_session';
+
+/**
+ * A `suggest_session` call as a card, or null for any other tool.
+ *
+ * `cwd` falls back to the entry's own working directory rather than being left
+ * empty: the agent is being asked for the exception, not the rule, and a card
+ * with nowhere to run is a card with a broken button.
+ */
+function parseSuggestion(block, entry) {
+    const name = String(block.name || '');
+    if (!name.endsWith(SUGGEST_TOOL_SUFFIX)) return null;
+    const input = block.input || {};
+    const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+    const prompt = str(input.prompt);
+    // Structurally not one of these after all. The tool refuses an empty prompt,
+    // so this is a call that never should have been written — rendering an
+    // offer with nothing behind it would be worse than rendering the tool block.
+    if (!prompt) return null;
+    return {
+        id: block.id,
+        kind: 'suggestion',
+        ts: entry.timestamp,
+        prompt,
+        why: str(input.why),
+        title: str(input.title),
+        cwd: str(input.cwd) || (typeof entry.cwd === 'string' ? entry.cwd : null),
+    };
+}
+
+// A message from another Claude session is the same problem as a task
+// notification, and gets the same treatment: it arrives as a *user* entry —
+// there is still no other channel into a conversation — and it is not something
+// you said. Claude Code also marks it `isMeta`, which is why buildEvents used to
+// drop these on the floor; a session that got messaged showed nothing at all.
+// See the guard there for what changed and what did not.
+//
+// What lands on disk is three parts, and only the middle one is the message:
+//
+//   Another Claude session sent a message:
+//   <cross-session-message from="uds:/run/user/1000/cc-socks/1234.sock"
+//                          from-name="dedupe-prod-a4" from-mode="prompting">
+//   …the message…
+//   </cross-session-message>
+//
+//   This came from another Claude session — not typed by your user, but …
+//
+// Both wrappers are addressed to the model rather than to a reader, and the
+// trailer in particular is a paragraph of standing instructions about permission
+// laundering that would be absurd to render under somebody's name.
+//
+// **`origin` is the copy to believe, and the text is the fallback.** The entry
+// carries `origin: {kind:"peer", from, name, body, msg_id, verifiedPeerPid, …}`
+// where `body` is the message with none of the wrapper and `name` is the peer
+// name — the thing `SendMessage` takes as `to`, so it is what a reply needs.
+// That is exact, where pulling the middle out of the prose is a parse the next
+// CLI release could quietly break. The parse stays as the fallback because
+// whether `origin` reaches disk is Claude Code's business, not a contract.
+const PEER_TAG = '<cross-session-message';
+
+// The openings seen in front of the tag. Anchoring on one of these, or on the
+// tag itself, is what keeps a *quoted* message from being taken for a received
+// one: an agent pasting a message it got back into a conversation is a turn
+// somebody took, exactly as for a task notification.
+const PEER_PREFIXES = [
+    'Another Claude session sent a message',
+    'A peer session sent a message while you were working',
+];
+
+// A message arrives in one of two shapes, depending on what the session was
+// doing when it landed, and both have to be recognised or half of them vanish:
+//
+//   idle      the message is delivered straight away and becomes a `user` entry
+//             carrying `origin: {kind:"peer", …}`.
+//   mid-turn  it is queued, and the transcript records
+//             `{type:"attachment", attachment:{type:"queued_command", origin, …}}`
+//             — and if the running turn absorbs it, **no `user` entry is ever
+//             written**. That is the case this was found in: an agent replied to
+//             a message that, without this, nothing had drawn.
+//
+// Both carry the same `origin`, so both are the same event with the same
+// `msg_id`, which is what buildEvents deduplicates on.
+const PEER_ORIGIN_MARK = '"kind":"peer"';
+
+/** The peer origin on an entry, whichever shape it came in, or null. */
+function peerOriginOf(entry) {
+    if (!entry) return null;
+    if (entry.origin && entry.origin.kind === 'peer') return entry.origin;
+    const att = entry.type === 'attachment' && entry.attachment;
+    if (att && att.type === 'queued_command' && att.origin && att.origin.kind === 'peer') {
+        return att.origin;
+    }
+    return null;
+}
+
+function isPeerMessage(text) {
+    const t = String(text || '').trimStart();
+    if (!t.includes(PEER_TAG)) return false;
+    return t.startsWith(PEER_TAG) || PEER_PREFIXES.some(pre => t.startsWith(pre));
+}
+
+/**
+ * Pull the sender and the message out of a peer message, or null if it isn't one.
+ *
+ * @param {string} text the entry's user text
+ * @param {object} [entry] the whole entry, for its `origin` — see above
+ */
+function parsePeerMessage(text, entry) {
+    const origin = peerOriginOf(entry);
+    if (origin && typeof origin.body === 'string') {
+        return {
+            from: origin.from || null,
+            fromName: origin.name || null,
+            text: origin.body.trim(),
+        };
+    }
+    if (!isPeerMessage(text)) return null;
+
+    const t = String(text);
+    const at = t.indexOf(PEER_TAG);
+    const open = /<cross-session-message([^>]*)>/.exec(t.slice(at));
+    if (!open) return null;
+    const attr = (name) => {
+        const m = new RegExp(`${name}="([^"]*)"`).exec(open[1]);
+        return m ? m[1] : null;
+    };
+    // Everything between the tags, which is also what drops the trailer. A
+    // closing tag is expected but not required: a truncated final line is a
+    // routine thing to read here, and half a message beats none.
+    const rest = t.slice(at + open[0].length);
+    const close = rest.lastIndexOf('</cross-session-message>');
+    return {
+        from: attr('from'),
+        fromName: attr('from-name'),
+        text: (close === -1 ? rest : rest.slice(0, close)).trim(),
+    };
 }
 
 /** Pull the useful fields out of a task notification, or null if it isn't one. */
@@ -928,6 +1165,9 @@ function todoProgress(file) {
 module.exports = {
     parseLines, scanMeta, buildEvents, readSubagentIndex, readSubagentTranscript,
     lastActivity, recentActivity, todoProgress, describeTool, stripEnvelope, firstLine,
+    // For bridge/notifications.js, which decides whether a message from another
+    // session is worth interrupting you for, and needs to recognise one first.
+    parsePeerMessage,
     // Exported for bridge/commands.js, which has to answer the same question
     // about a directory that scanMeta answers about a transcript: which checkout
     // is this, and is it a worktree of one.

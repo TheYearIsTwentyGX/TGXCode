@@ -58,6 +58,7 @@
 // interrupt that does not land falls through to the signal path.
 
 const fs = require('fs');
+const path = require('path');
 const { spawn } = require('child_process');
 const { randomUUID } = require('crypto');
 const { EventEmitter } = require('events');
@@ -88,6 +89,28 @@ function sessionEnv() {
     delete env.CLAUDE_SESSIONS_PORT;
     return env;
 }
+
+// The one tool this app gives a session that it would not otherwise have: a way
+// to hand the next piece of work over as a suggestion. See bridge/suggest-mcp.js
+// for what it does and why it stores nothing.
+//
+// Passed as a JSON *string* rather than a file — `--mcp-config` takes either, and
+// a string means there is no temp file to write, collide on between two bridges,
+// or leave behind. `process.execPath` rather than `node`, because the node that
+// is already running us is the only one we know exists: a login shell has none
+// on PATH, which is the whole reason bridge/launch.sh exists.
+//
+// Deliberately *not* `--strict-mcp-config`, which would switch off every MCP
+// server the user configured for themselves. We are adding one, not taking over.
+const SUGGEST_TOOL = 'mcp__claude-sessions__suggest_session';
+const MCP_CONFIG = JSON.stringify({
+    mcpServers: {
+        'claude-sessions': {
+            command: process.execPath,
+            args: [path.join(__dirname, 'suggest-mcp.js')],
+        },
+    },
+});
 
 // Processes are cheap to restart (resume is a warm cache hit), so don't hoard them.
 const MAX_LIVE = 4;
@@ -192,6 +215,13 @@ class Runner extends EventEmitter {
         // `stdio` is the CLI's sentinel for "ask over this stream" rather than
         // the name of an MCP tool.
         if (this.caps.permissionPrompt) args.push('--permission-prompt-tool', 'stdio');
+        // Filing a suggestion is the agent offering the user something, not the
+        // agent doing anything, so it must never raise an approval card — a
+        // permission prompt for "may I suggest this?" is noise nobody wants.
+        // `--allowedTools` is an auto-approve list, not a restriction on which
+        // tools exist; `--tools` is the one that would narrow the set.
+        args.push('--mcp-config', MCP_CONFIG);
+        args.push('--allowedTools', SUGGEST_TOOL);
         if (this.isNew) args.push('--session-id', this.sessionId);
         else args.push('--resume', this.sessionId);
         if (this.fork) args.push('--fork-session');

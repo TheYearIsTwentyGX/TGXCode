@@ -122,7 +122,12 @@ than hardcoding the list; a remote client should drop `bypassPermissions` and
 
 ### `GET /api/sessions/:id[?tail=N]`
 
-`{ summary, events: [...], offset, runner }`.
+`{ summary, events: [...], offset, runner, suggestions }`.
+
+`suggestions` maps the id of a `suggestion` event to what was already done about
+it — `{status: "started"|"dismissed", startedId, at}`. The suggestion itself is in
+the transcript; only the decision is the app's, so only the decision is sent
+separately. See `POST /api/sessions/:id/suggestions/:toolUseId`.
 
 `offset` is a **byte position in the transcript file**, not an event count. Hold it;
 it is what resumes the live tail.
@@ -142,6 +147,8 @@ Event kinds, all with `id`, `kind`, `ts`:
 | `tool` | `name`, `input{}`, `status` (`ok`/`error`/absent while running), `result{text,stdout,stderr,patch,filePath,interrupted}`, `agent`, `persistedPath`, `durationMs` |
 | `system` | `subtype`, `isError`, `text` |
 | `agent-done` | `taskId`, `toolUseId`, `status`, `summary` |
+| `suggestion` | `prompt`, `why`, `title`, `cwd` — follow-up work an agent offered rather than did |
+| `peer-message` | `from` (socket address), `fromName` (the peer's name, which is its address), `text` |
 | `compact` | `text` |
 
 A `tool` event arrives once as a call and again with its result. Render idempotently
@@ -154,6 +161,24 @@ shrank — it was compacted or forked — and the client should reload from scra
 
 This is how a mobile client resumes after a network change, and it is much cheaper
 than refetching.
+
+### `GET /api/peers`
+
+`{ peers: [{name, nameSource, sessionId, cwd, kind, entrypoint, status, startedAt,
+title, project}], at }` — the live sessions an agent could send a message to,
+newest first.
+
+Read from Claude Code's own process registry rather than from the session index,
+because they answer different questions: the index is about transcripts and hides
+some of them (test sessions on the everyday bridge, anything under `/tmp`), while a
+background agent with no indexed transcript is still perfectly able to receive a
+message. `title` and `project` are joined on where there is an indexed transcript
+and are null where there is not.
+
+**`name` is the address.** `SendMessage({to: "<name>"})` is how one session reaches
+another and there is no other form of address, which is what this route is for:
+getting the exact name in front of somebody. Only sessions that are running *and*
+have an inbox are listed.
 
 ### `GET /api/overview`
 
@@ -217,6 +242,8 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `agent-tail` / `agent-reset` | as above, for a subagent |
 | `overview` | the board; sent only when it has actually changed |
 | `sessions-changed` | `{at}` — a nudge to refetch the list |
+| `peer-message` | `{at, sessionId, from, count}` — another session messaged this one. The message itself is in the transcript, so a client tailing it has already drawn it; this is for everything that is not the open pane |
+| `suggestion-changed` | `{at, sessionId, toolUseId}` — a suggested follow-up was started, dismissed, or undone, possibly in another window |
 | `session-deleted` | `{sessionId, title}` |
 | `runner-status` | see below |
 | `permission-request` | `{sessionId, ...ask}` |
@@ -320,6 +347,8 @@ nobody to ask.
 | `GET/DELETE /api/sessions/:id/queue[/:qid]` | | inspect, drop one, clear |
 | `POST /api/sessions/:id/queue/reorder` | `{ids}` | |
 | `POST /api/sessions/:id/flags` | `{pinned?, archived?, test?}` | |
+| `GET /api/sessions/:id/suggestions` | | `{sessionId, suggestions}` — the decisions alone |
+| `POST /api/sessions/:id/suggestions/:toolUseId` | `{status, startedId?}` | `status` of `started`, `dismissed`, or absent to undo |
 | `DELETE /api/sessions/:id` | | hard delete; `409` if a turn is running |
 | `GET /api/fs?path=` | | directory picker; roots-scoped |
 | `POST /api/fs/mkdir` | `{parent, name}` | one new folder; roots-scoped, local callers only |

@@ -104,6 +104,19 @@ const state = {
     // `slash-commands` SSE event drops an entry when a process reports a new
     // list. Not `commands`, which is `cmds` above — the project's own.
     slashCommands: new Map(),   // cwd -> {commands, at, exact}
+    // Sessions an agent here could message, from GET /api/peers. One list for
+    // the whole window rather than one per session, because it is a fact about
+    // the machine — every composer offers the same names.
+    //
+    // Refetched when the rail changes rather than held forever: a peer that has
+    // exited cannot be messaged, and offering its name would be offering a
+    // failure. `at` is when it was answered, so opening the picker twice in a
+    // row does not ask twice.
+    peers: { list: [], at: 0 },
+    // What has already been done about each suggested follow-up in the open
+    // conversation, keyed by the id of the tool call that raised it. Arrives
+    // whole on the session payload; changes arrive over SSE.
+    suggestions: new Map(),   // toolUseId -> {status, startedId, at}
     queueSig: '',           // what the chips were last built from, to avoid churn
     queueFocus: null,       // the chip holding the queue's single tab stop
     ask: null,              // the approval this session is blocked on, if any
@@ -161,7 +174,7 @@ const $ = (id) => document.getElementById(id);
 const dom = {};
 for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-sub',
     'channels', 'scroll', 'log', 'status-line', 'status-text', 'btn-stop', 'input',
-    'btn-send', 'btn-lgtm', 'slash-menu', 'queue', 'queue-list', 'queue-count', 'queue-clear',
+    'btn-send', 'btn-lgtm', 'slash-menu', 'mention-menu', 'queue', 'queue-list', 'queue-count', 'queue-clear',
     'model', 'perm', 'btn-new', 'btn-new-menu', 'new-menu', 'db-status', 'db-label', 'toasts',
     'btn-bell', 'bell-menu', 'opt-desktop', 'opt-sound', 'bell-note', 'bell-try',
     'btn-pin', 'btn-folder', 'btn-term', 'btn-archive', 'btn-delete', 'turns', 'turn-pop',
@@ -745,6 +758,7 @@ async function openSession(id, { quiet = false, keepDash = false } = {}) {
     // The menu belongs to the directory being left, and the draft arriving in
     // the box is not something anybody typed.
     closeSlashMenu();
+    closeMentionMenu();
 
     // Switching should feel like switching, not like waiting: a long transcript
     // is megabytes and the fetch is most of the delay. The rail summary is the
@@ -766,6 +780,10 @@ async function openSession(id, { quiet = false, keepDash = false } = {}) {
         if (known) state.current = data.summary;   // the index may have moved on
         else beginOpen(data.summary, { keepDash }); // nothing was drawn yet
         state.offset = data.offset;
+        // Before appendEvents, because a suggestion card reads this as it is
+        // built — a card drawn first and corrected afterwards would offer to
+        // start something that was started days ago.
+        state.suggestions = new Map(Object.entries(data.suggestions || {}));
 
         renderHeader();
         // Drops the skeleton — and with it a row drawn at Send while this fetch was
@@ -777,6 +795,7 @@ async function openSession(id, { quiet = false, keepDash = false } = {}) {
         dom.log.replaceChildren();
         clearPendingSend();
         appendEvents(data.events);
+        warmPeers();        // not awaited: it only adds a name and a link
         renderTurns();      // a session with no turns of your own still clears the rail
         renderRail();
         applyRunner(data.runner);
@@ -820,6 +839,7 @@ function beginOpen(summary, { keepDash = false } = {}) {
     state.pinned = true;
     state.agents = [];  // the previous session's agents are not this one's
     state.ask = null;   // approvals belong to the session that is blocked on them
+    state.suggestions.clear();  // what was acted on belongs to the session it was raised in
     // A row drawn for one session is not evidence about another. The log is
     // replaced below in any case; this is what disarms the timer holding it.
     clearPendingSend();
@@ -1088,6 +1108,8 @@ function renderEvent(ev) {
         case 'thinking': return renderThinking(ev);
         case 'tool': return renderTool(ev);
         case 'agent-done': return renderAgentDone(ev);
+        case 'suggestion': return renderSuggestion(ev);
+        case 'peer-message': return renderPeerMessage(ev);
         case 'system': return renderSystem(ev);
         case 'compact': return row(ev, 'compact', 'context compacted');
         default: return null;
@@ -1171,6 +1193,209 @@ function renderAgentDone(ev) {
     }
 
     return row(ev, 'agent-done', ...body);
+}
+
+/**
+ * Work an agent noticed and did not do.
+ *
+ * The agent files these through a tool this app gives it (bridge/suggest-mcp.js),
+ * so the offer is a tool call in the transcript like any other — which is why it
+ * survives a reload, shows up in a second window, and can be read out of a
+ * session this bridge does not own. Nothing about it is stored here.
+ *
+ * A card rather than a collapsed tool block, because a collapsed grey row saying
+ * `suggest_session` is exactly how an offer goes unread, and because the
+ * arguments *are* the content: there is nothing inside to go and look at.
+ *
+ * It is not a dock and it does not block. The turn is over, the work is
+ * optional, and where in the conversation it was raised is part of judging
+ * whether it is worth doing — the same reasoning the tool asks use for staying
+ * in the log.
+ */
+function renderSuggestion(ev) {
+    const acted = state.suggestions.get(ev.id) || null;
+    const body = [el('div', { class: 'ev-label' }, 'Suggested follow-up')];
+
+    if (ev.title) body.push(el('div', { class: 'sugg-title' }, ev.title));
+    if (ev.why) body.push(el('div', { class: 'sugg-why' }, ev.why));
+
+    // The prompt in full, not clipped. It is the thing being offered and the
+    // only way to judge the offer; a preview would mean starting a session on
+    // a message you have not read.
+    body.push(el('div', { class: 'sugg-prompt prose', html: renderMarkdown(ev.prompt) }));
+    if (ev.cwd) body.push(el('div', { class: 'sugg-cwd' }, ev.cwd));
+
+    if (acted && acted.status === 'started') {
+        body.push(el('div', { class: 'sugg-done' },
+            el('span', {}, 'Started'),
+            acted.startedId
+                ? el('button', { class: 'linky', type: 'button',
+                    onclick: () => openSession(acted.startedId) }, 'open it')
+                : null,
+            // Undo, because a card that has gone quiet with no way back is a card
+            // that lies after the session it names has been deleted.
+            el('button', { class: 'linky', type: 'button',
+                onclick: () => actOnSuggestion(ev, null) }, 'offer again'),
+        ));
+    } else if (acted && acted.status === 'dismissed') {
+        body.push(el('div', { class: 'sugg-done' },
+            el('span', {}, 'Dismissed'),
+            el('button', { class: 'linky', type: 'button',
+                onclick: () => actOnSuggestion(ev, null) }, 'undo'),
+        ));
+    } else {
+        body.push(el('div', { class: 'sugg-btns' },
+            el('button', { class: 'more-btn primary', type: 'button',
+                onclick: (e) => startSuggestion(ev, e.currentTarget) }, 'Start this'),
+            el('button', { class: 'more-btn', type: 'button',
+                onclick: () => openNew({ cwd: ev.cwd || '', prompt: ev.prompt }) }, 'Edit first'),
+            el('button', { class: 'more-btn', type: 'button',
+                onclick: () => actOnSuggestion(ev, 'dismissed') }, 'Dismiss'),
+        ));
+    }
+
+    return row(ev, 'suggestion', ...body);
+}
+
+/**
+ * Start the session a suggestion describes, exactly as the dialog would.
+ *
+ * `plan` rather than the mode this session is in: a prompt written by an agent
+ * for an agent has had no human read it as an instruction yet, and the first
+ * thing the new session should do is say what it intends. It is also what the
+ * Start dialog defaults to.
+ */
+async function startSuggestion(ev, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = 'Starting'; }
+    try {
+        const r = await post('/api/sessions', {
+            cwd: ev.cwd || (state.current && state.current.cwd),
+            prompt: ev.prompt,
+            permissionMode: 'plan',
+            // A suggestion raised inside a test session is scratch work too.
+            test: state.dev && !!(state.current && state.current.test),
+        });
+        await actOnSuggestion(ev, 'started', r.sessionId);
+        toast('Session started.', 'ok');
+        openSessionSoon(r.sessionId);
+    } catch (err) {
+        if (btn) { btn.disabled = false; btn.textContent = 'Start this'; }
+        toast(`Could not start it: ${err.message}`, 'error');
+    }
+}
+
+/**
+ * Record what happened to a suggestion, and redraw its card.
+ *
+ * `status` of null undoes — the card goes back to offering itself. Optimistic,
+ * then corrected from the bridge's answer, because these are single clicks on
+ * something already on screen and a round trip before anything moves reads as a
+ * dead button.
+ */
+async function actOnSuggestion(ev, status, startedId = null) {
+    const sessionId = state.current && state.current.sessionId;
+    if (!sessionId) return;
+    const before = state.suggestions.get(ev.id) || null;
+
+    if (status) state.suggestions.set(ev.id, { status, startedId, at: Date.now() });
+    else state.suggestions.delete(ev.id);
+    redrawEvent(ev);
+
+    try {
+        await post(`/api/sessions/${sessionId}/suggestions/${ev.id}`, { status, startedId });
+    } catch (err) {
+        if (before) state.suggestions.set(ev.id, before);
+        else state.suggestions.delete(ev.id);
+        redrawEvent(ev);
+        toast(`Could not save that: ${err.message}`, 'error');
+    }
+}
+
+/**
+ * Replace one already-rendered event's node with a freshly built one.
+ *
+ * Only the suggestion card needs this today: it is the one event whose drawing
+ * depends on state that changes after it was drawn. Everything else in the log
+ * is a fact about the transcript and never moves.
+ *
+ * Both views are searched, because a subagent can file a suggestion too and its
+ * transcript is a pane of its own. Which one holds the card is not worth asking
+ * about — the id is unique either way, and both panes stay mounted.
+ */
+function redrawEvent(ev) {
+    for (const nodes of [state.nodes, state.agentNodes]) {
+        const entry = nodes.get(ev.id);
+        if (!entry || !entry.node.isConnected) continue;
+        const next = renderEvent(ev);
+        if (!next) return;
+        entry.node.replaceWith(next);
+        nodes.set(ev.id, { ev, node: next });
+        return;
+    }
+}
+
+/**
+ * Put names to the sessions this conversation talked to.
+ *
+ * A message card and a `SendMessage` block both want to say *which* session,
+ * and to offer a way into it — which needs the peer list, which is fetched
+ * lazily because most conversations never mention another session at all. So
+ * the cards draw without it and are redrawn once it lands, rather than every
+ * conversation paying for a request it does not need.
+ *
+ * Only when something in the log actually refers to a peer, and only when the
+ * fetch told us something new: a list already in hand means the cards were
+ * drawn right the first time and redrawing them would collapse a tool block
+ * somebody had just opened.
+ */
+async function warmPeers() {
+    const cards = [...state.nodes.values()].filter(({ ev }) =>
+        ev.kind === 'peer-message' || (ev.kind === 'tool' && ev.name === 'SendMessage'));
+    if (!cards.length) return;
+    const before = state.peers.at;
+    try { await loadPeers(); } catch { return; }
+    if (state.peers.at === before) return;
+    for (const { ev } of cards) redrawEvent(ev);
+}
+
+/**
+ * A message from another Claude session.
+ *
+ * Claude Code delivers one as a user message, because a conversation still has
+ * no other channel — so left alone it renders as though somebody had pasted it
+ * at you. It is marked meta as well, which is why until now it rendered as
+ * nothing at all: a session that got messaged showed an empty gap.
+ *
+ * The sender's name is also its address — `SendMessage` takes a name and there
+ * is no other way to say who you mean — so Reply seeds the composer with it
+ * rather than trying to send anything itself. What happens next is the agent's
+ * to decide, which is the point of the feature.
+ */
+function renderPeerMessage(ev) {
+    const who = ev.fromName || ev.from || 'another session';
+    const peer = ev.fromName ? peerByName(ev.fromName) : null;
+
+    const body = [el('div', { class: 'ev-label' }, `Message from ${who}`)];
+    if (peer && peer.title && peer.title !== who) {
+        body.push(el('div', { class: 'peer-sub' }, peer.title));
+    }
+    body.push(el('div', { class: 'prose', html: renderMarkdown(ev.text || '') }));
+
+    const btns = [];
+    // Only when that session is one this app can show. A peer is often a
+    // background agent with no transcript indexed here, and a button that
+    // 404s is worse than no button.
+    if (peer && peer.sessionId) {
+        btns.push(el('button', { class: 'more-btn', type: 'button',
+            onclick: () => openSession(peer.sessionId) }, 'Open that session'));
+    }
+    if (ev.fromName) {
+        btns.push(el('button', { class: 'more-btn', type: 'button',
+            onclick: () => insertMention(ev.fromName) }, 'Reply'));
+    }
+    if (btns.length) body.push(el('div', { class: 'subagent-btns' }, ...btns));
+
+    return row(ev, 'peer-message', ...body);
 }
 
 function renderSystem(ev) {
@@ -1822,7 +2047,16 @@ function toolSummary(ev) {
         case 'ExitPlanMode': return clip((i.plan || '').replace(/^#+\s*/, ''), 80);
         case 'AskUserQuestion':
             return (i.questions || []).map(q => q.header || q.question).join(' · ');
-        case 'SendMessage': return `to ${i.to || i.recipient || '?'}`;
+        // The recipient is a peer's name, which is its address but not always
+        // what you call it — so the row shows the session's title when this app
+        // knows one, and the raw name when it does not.
+        case 'SendMessage': {
+            const to = i.to || i.recipient || '?';
+            const peer = peerByName(to);
+            const who = peer && peer.title && peer.title !== to ? `${to} — ${peer.title}` : to;
+            const said = typeof i.message === 'string' ? i.message : (i.summary || '');
+            return said ? `to ${who}: ${clip(said, 60)}` : `to ${who}`;
+        }
         default: {
             const first = Object.values(i)[0];
             return typeof first === 'string' ? clip(first, 80) : '';
@@ -1893,6 +2127,22 @@ function toolBody(ev) {
         out.push(section('Plan', el('div', { class: 'prose', html: renderMarkdown(i.plan || '') })));
     } else if (ev.name === 'AskUserQuestion') {
         out.push(section('Questions', questionsView(i.questions || [])));
+    } else if (ev.name === 'SendMessage') {
+        // One half of a conversation between two sessions. Rendered as prose
+        // rather than as a key-value dump because it is a message somebody
+        // wrote, and the other half — the arrival — renders that way too.
+        const said = typeof i.message === 'string' ? i.message : JSON.stringify(i.message, null, 2);
+        if (i.summary) out.push(section('Summary', el('div', { class: 'prose' }, i.summary)));
+        out.push(section('Message', el('div', { class: 'prose', html: renderMarkdown(said || '') })));
+        const peer = peerByName(i.to || i.recipient || '');
+        // Only when that session is one this app can show. Peers are often
+        // background agents with no transcript indexed here, and a button that
+        // 404s is worse than no button.
+        if (peer && peer.sessionId) {
+            out.push(el('div', { class: 'subagent-btns' },
+                el('button', { class: 'more-btn', type: 'button',
+                    onclick: () => openSession(peer.sessionId) }, 'Open that session')));
+        }
     } else if (Object.keys(i).length) {
         out.push(section('Input', kvView(i)));
     }
@@ -3406,6 +3656,7 @@ const NOTE_LABEL = {
     finished: 'Finished',
     failed: 'Failed',
     'agent-done': 'Subagent done',
+    'peer-message': 'From another session',
 };
 
 // The runner's vocabulary for how an ask ended, said the way a person would.
@@ -4161,6 +4412,38 @@ function connect() {
         const d = JSON.parse(e.data);
         state.slashCommands.delete(d.cwd);
         if (slashMenuOpen()) updateSlashMenu();
+    });
+
+    // A message arrived from another session — possibly at the conversation on
+    // screen, possibly at one three projects away.
+    //
+    // The message itself is not in here and does not need to be: it is in the
+    // transcript, and a session being watched is already tailing it, so it has
+    // drawn itself by now. What this is for is everything that is not the open
+    // pane — the rail's counts, and the peer list, whose usefulness depends on
+    // being about sessions that are still running.
+    es.addEventListener('peer-message', () => {
+        // The sender may be a session this window has never heard of, and the
+        // card that has just drawn itself off the transcript wants its name.
+        state.peers.at = 0;
+        warmPeers();
+        if (mentionMenuOpen()) updateMentionMenu();
+    });
+
+    // A suggested follow-up was started or waved away, here or in another
+    // window. The card is drawn from the transcript and the decision is not, so
+    // this is the only thing that would tell a second window about it.
+    es.addEventListener('suggestion-changed', async (e) => {
+        const d = JSON.parse(e.data);
+        if (!state.current || state.current.sessionId !== d.sessionId) return;
+        try {
+            const r = await get(`/api/sessions/${d.sessionId}/suggestions`);
+            state.suggestions = new Map(Object.entries(r.suggestions || {}));
+        } catch { return; }
+        // Redraw only the card that moved. Everything else in the log is a fact
+        // about the transcript and has not changed.
+        const entry = state.nodes.get(d.toolUseId) || state.agentNodes.get(d.toolUseId);
+        if (entry) redrawEvent(entry.ev);
     });
 
     // A declared command started, took its port, or ended — possibly in another
@@ -5470,14 +5753,17 @@ async function loadProjects() {
 }
 
 /**
- * @param {{cwd?: string, tab?: 'recent'|'browse'}} [opts] `cwd` is a caller that
- *   has already answered "where" — the split menu passes the row you clicked.
- *   Without one the dialog opens where it always has: the session on screen,
- *   else the most recent project.
+ * @param {{cwd?: string, tab?: 'recent'|'browse', prompt?: string}} [opts] `cwd`
+ *   is a caller that has already answered "where" — the split menu passes the
+ *   row you clicked. Without one the dialog opens where it always has: the
+ *   session on screen, else the most recent project. `prompt` fills the first
+ *   message, for a caller that has already written one — Edit first on a
+ *   suggested follow-up, where the whole point is that the prompt exists and
+ *   you want a look at it before it runs.
  */
-async function openNew({ cwd = '', tab = null } = {}) {
+async function openNew({ cwd = '', tab = null, prompt = '' } = {}) {
     dom.newScrim.hidden = false;
-    dom.newPrompt.value = '';
+    dom.newPrompt.value = prompt;
     growPrompt();
     dom.newTest.checked = false;
     dom.newCwd.value = cwd || (state.current
@@ -5504,6 +5790,9 @@ async function openNew({ cwd = '', tab = null } = {}) {
     }
     setPickerTab(tab || state.browse.tab, { load: true });
     dom.newPrompt.focus();
+    // A prompt that arrived already written is there to be read and edited, so
+    // put the caret at the end of it rather than in front of the first word.
+    if (prompt) dom.newPrompt.setSelectionRange(prompt.length, prompt.length);
 }
 
 function closeNew() { dom.newScrim.hidden = true; }
@@ -6082,9 +6371,24 @@ dom.input.addEventListener('keydown', (e) => {
 // be promising something that will not happen.
 const SLASH_RE = /^\/[A-Za-z0-9_:-]*$/;
 
-const slashMenu = { rows: [], index: 0, seq: 0 };
+// Two popovers now hang off the composer — `/` commands and `@` mentions — and
+// they share everything except what opens them and what accepting one inserts.
+// So the selection, the paging and the keyboard map below take a menu rather
+// than reaching for one: `node` is the element it draws into, `id` prefixes its
+// rows' DOM ids so aria-activedescendant can name one unambiguously.
+const slashMenu = { rows: [], index: 0, seq: 0, node: dom.slashMenu, id: 'slash' };
+const mentionMenu = { rows: [], index: 0, seq: 0, node: dom.mentionMenu, id: 'mention' };
 
-const slashMenuOpen = () => !dom.slashMenu.hidden;
+const menuOpen = (m) => !m.node.hidden;
+const slashMenuOpen = () => menuOpen(slashMenu);
+const mentionMenuOpen = () => menuOpen(mentionMenu);
+
+/** Whichever popover is up, or null. Only ever one — each closes the other. */
+function openMenu() {
+    if (slashMenuOpen()) return slashMenu;
+    if (mentionMenuOpen()) return mentionMenu;
+    return null;
+}
 
 /** The typed fragment after the slash, or null when this is not a command. */
 function slashFragment() {
@@ -6200,7 +6504,7 @@ async function updateSlashMenu() {
 function drawSlashMenu(rows, note) {
     // Two popovers on screen at once is nobody's intention. Only on the way
     // open: this redraws on every keystroke, and the others are already shut.
-    if (dom.slashMenu.hidden) { showBell(false); showNewMenu(false); }
+    if (dom.slashMenu.hidden) { showBell(false); showNewMenu(false); closeMentionMenu(); }
 
     // A note is a message, not a list. Clearing the rows behind it matters:
     // otherwise Enter during "Loading…" would accept whatever the *previous*
@@ -6225,25 +6529,30 @@ function drawSlashMenu(rows, note) {
 
     dom.slashMenu.hidden = false;
     dom.input.setAttribute('aria-expanded', 'true');
-    if (rows && rows.length) paintSlashSelection();
+    if (rows && rows.length) paintSelection(slashMenu);
     else dom.input.removeAttribute('aria-activedescendant');
 }
 
-/** The highlight is a property of the list, never of focus — see below. */
-function paintSlashSelection() {
-    const rows = [...dom.slashMenu.querySelectorAll('.picker-row')];
-    rows.forEach((r, i) => r.setAttribute('aria-selected', String(i === slashMenu.index)));
-    const on = rows[slashMenu.index];
+/**
+ * The highlight is a property of the list, never of focus — see below.
+ *
+ * `.picker-row` and nothing else, so a group heading in the mention menu can sit
+ * among the rows without becoming one you can land on.
+ */
+function paintSelection(menu) {
+    const rows = [...menu.node.querySelectorAll('.picker-row')];
+    rows.forEach((r, i) => r.setAttribute('aria-selected', String(i === menu.index)));
+    const on = rows[menu.index];
     if (!on) return;
     dom.input.setAttribute('aria-activedescendant', on.id);
     on.scrollIntoView({ block: 'nearest' });
 }
 
-function moveSlashSelection(delta) {
-    const n = slashMenu.rows.length;
+function moveSelection(menu, delta) {
+    const n = menu.rows.length;
     if (!n) return;
-    slashMenu.index = ((slashMenu.index + delta) % n + n) % n;   // a menu is a ring
-    paintSlashSelection();
+    menu.index = ((menu.index + delta) % n + n) % n;   // a menu is a ring
+    paintSelection(menu);
 }
 
 /**
@@ -6254,11 +6563,11 @@ function moveSlashSelection(delta) {
  * from what the eye sees the moment either changes. The overlap of one row is
  * the usual paging convention: it leaves something recognisable behind.
  */
-function slashPageSize() {
-    const first = dom.slashMenu.querySelector('.picker-row');
+function menuPageSize(menu) {
+    const first = menu.node.querySelector('.picker-row');
     if (!first) return 1;
     const rowH = first.offsetHeight || 32;
-    return Math.max(1, Math.floor(dom.slashMenu.clientHeight / rowH) - 1);
+    return Math.max(1, Math.floor(menu.node.clientHeight / rowH) - 1);
 }
 
 /**
@@ -6269,11 +6578,11 @@ function slashPageSize() {
  * everything in between. Wrapping is a nicety when you are stepping one at a
  * time and a way to lose your place when you are moving in chunks.
  */
-function jumpSlashSelection(to) {
-    const n = slashMenu.rows.length;
+function jumpSelection(menu, to) {
+    const n = menu.rows.length;
     if (!n) return;
-    slashMenu.index = Math.max(0, Math.min(n - 1, to));
-    paintSlashSelection();
+    menu.index = Math.max(0, Math.min(n - 1, to));
+    paintSelection(menu);
 }
 
 /**
@@ -6310,48 +6619,307 @@ function acceptSlashCommand(i) {
  * chips, whose own Enter/Escape map is a few hundred lines up.
  */
 document.addEventListener('keydown', (e) => {
-    if (!slashMenuOpen() || e.target !== dom.input) return;
+    const menu = openMenu();
+    if (!menu || e.target !== dom.input) return;
     if (e.isComposing || e.keyCode === 229) return;
     // Open but with nothing to choose — a note, or a list still loading. Every
     // key belongs to the composer then; swallowing Enter here would lose a
     // message to a box that had no answer for it.
-    if (!slashMenu.rows.length) return;
+    if (!menu.rows.length) return;
+
+    const accept = () => (menu === slashMenu ? acceptSlashCommand() : acceptMention());
+    const close = () => (menu === slashMenu ? closeSlashMenu() : closeMentionMenu());
 
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
         e.stopPropagation();
-        moveSlashSelection(e.key === 'ArrowDown' ? 1 : -1);
+        moveSelection(menu, e.key === 'ArrowDown' ? 1 : -1);
     } else if (e.key === 'PageDown' || e.key === 'PageUp') {
         e.preventDefault();
         e.stopPropagation();
-        const step = slashPageSize();
-        jumpSlashSelection(slashMenu.index + (e.key === 'PageDown' ? step : -step));
+        const step = menuPageSize(menu);
+        jumpSelection(menu, menu.index + (e.key === 'PageDown' ? step : -step));
     } else if (e.key === 'Home' || e.key === 'End') {
         // Only worth taking while the menu is open, and only because the box it
         // sits on is one line: Home and End in a one-line composer move the
         // caret somewhere it already effectively is.
         e.preventDefault();
         e.stopPropagation();
-        jumpSlashSelection(e.key === 'Home' ? 0 : slashMenu.rows.length - 1);
+        jumpSelection(menu, e.key === 'Home' ? 0 : menu.rows.length - 1);
     } else if (e.key === 'Enter' || e.key === 'Tab') {
         if (e.shiftKey && e.key === 'Tab') return;   // still a way out of the box
         e.preventDefault();
         e.stopPropagation();
-        acceptSlashCommand();
+        accept();
     } else if (e.key === 'Escape') {
         // Leaves the text exactly as typed. Stopped so it closes the menu rather
         // than whatever Escape means to the panel behind it.
         e.preventDefault();
         e.stopPropagation();
-        closeSlashMenu();
+        close();
     }
 }, true);
 
-dom.input.addEventListener('input', updateSlashMenu);
-dom.input.addEventListener('blur', closeSlashMenu);
+// One listener feeding both, because both are derived from the text rather than
+// from a keystroke — see the note above SLASH_RE. Order matters only in that a
+// composer holding one slash-word is never also holding an `@` fragment.
+dom.input.addEventListener('input', () => { updateSlashMenu(); updateMentionMenu(); });
+dom.input.addEventListener('blur', () => { closeSlashMenu(); closeMentionMenu(); });
 document.addEventListener('click', (e) => {
-    if (slashMenuOpen() && !e.target.closest('.input-row')) closeSlashMenu();
+    if (e.target.closest('.input-row')) return;
+    closeSlashMenu();
+    closeMentionMenu();
 });
+
+// ── @ mentions ───────────────────────────────────────────────────────────
+//
+// Typing `@` offers the other Claude sessions running on this machine, so you
+// can name one to the agent you are talking to.
+//
+// Claude Code gives every session a name and an inbox of its own, and an agent
+// reaches another with `SendMessage({to: "<name>"})`. **The name is the whole
+// address — there is no separate addressing syntax.** So what this menu is for
+// is not sending anything; it is getting the exact name into the message,
+// because a name spelt approximately reaches nobody and an agent cannot guess
+// which of your fourteen sessions you meant.
+//
+// What is inserted is `@[name]`, and the brackets are load-bearing. They are not
+// CLI syntax — nothing parses them, and the agent reads them as prose — but they
+// keep session mentions from colliding with `@path/to/file`, which the CLI *does*
+// resolve on its own. That leaves the file half of the menu free to insert the
+// bare path the CLI already understands, which is why the group headings exist
+// before there is a second group to head.
+//
+// Anchored to the caret rather than to the whole composer value, which is the one
+// real difference from the slash menu above. `/` is anchored to the whole value
+// because the CLI dispatches on `text.startsWith("/")`, so a command anywhere else
+// is prose; `@` carries no such rule and belongs mid-sentence — "ask @[importer]
+// whether it has finished" is the normal shape of it.
+
+// The fragment under the caret: an `@` at a word boundary, then the name being
+// typed. Spaces are allowed inside the brackets — derived names have none, but
+// they are permitted, and a menu that stopped matching at the first space would
+// be unusable for one that did.
+const MENTION_RE = /(?:^|[\s(])@\[?([^\]\n]*)$/;
+
+// How stale the peer list may be before the picker refetches. Short, because the
+// answer is "which sessions are running", and offering one that has since exited
+// is offering a message that will not arrive.
+const PEERS_TTL_MS = 5_000;
+
+/**
+ * The typed fragment and where it starts, or null when the caret is not in one.
+ *
+ * `start` is the index of the `@`, so accepting can replace exactly the fragment
+ * and leave everything either side of it alone.
+ */
+function mentionFragment() {
+    const caret = dom.input.selectionStart;
+    // Only with no selection: `@` with a range selected is somebody about to
+    // overtype it, not somebody addressing a session.
+    if (caret !== dom.input.selectionEnd) return null;
+    const before = dom.input.value.slice(0, caret);
+    const m = MENTION_RE.exec(before);
+    if (!m) return null;
+    // m[0] may open with the whitespace that made the `@` a word boundary, and
+    // that character is not part of what gets replaced.
+    const lead = m[0].startsWith('@') ? 0 : 1;
+    return { text: m[1], start: caret - m[0].length + lead };
+}
+
+/** Peers, from memory when the answer is fresh enough to still be true. */
+async function loadPeers() {
+    if (Date.now() - state.peers.at < PEERS_TTL_MS) return state.peers.list;
+    const r = await get('/api/peers');
+    state.peers.list = r.peers || [];
+    state.peers.at = Date.now();
+    return state.peers.list;
+}
+
+/** A peer by the name that is also its address, or null. */
+function peerByName(name) {
+    return state.peers.list.find(p => p.name === name) || null;
+}
+
+/**
+ * Rows for a fragment, as a flat list where each carries the group it belongs to.
+ *
+ * Flat rather than nested so that the index arithmetic in the shared keyboard map
+ * keeps working untouched — headings are drawn between rows but are not rows, and
+ * `.picker-row` is what the selection counts.
+ *
+ * The session you are in is dropped: it is running, so the bridge lists it, but
+ * telling an agent to message itself is never the intention.
+ */
+function matchPeers(peers, frag) {
+    const q = frag.trim().toLowerCase();
+    const mine = state.current && state.current.sessionId;
+    const usable = peers.filter(p => p.sessionId !== mine);
+
+    // Matched on the title and the project as well as the name, because the title
+    // is what you remember a session by and the name is what has to be sent.
+    // Looking one up by the thing you know is the entire job of this menu.
+    const hit = (p) => !q
+        || p.name.toLowerCase().includes(q)
+        || (p.title || '').toLowerCase().includes(q)
+        || (p.project || '').toLowerCase().includes(q);
+
+    // Prefix on the name first — you may be part-way through typing one — then
+    // everything else that matches, each alphabetical by what the row shows.
+    const byLabel = (a, b) => (a.title || a.name).localeCompare(b.title || b.name);
+    const pre = [];
+    const rest = [];
+    for (const p of usable) {
+        if (!hit(p)) continue;
+        (q && p.name.toLowerCase().startsWith(q) ? pre : rest).push(p);
+    }
+    return [...pre.sort(byLabel), ...rest.sort(byLabel)]
+        .map(p => ({ group: 'Sessions', peer: p, insert: `@[${p.name}] ` }));
+}
+
+function closeMentionMenu() {
+    if (dom.mentionMenu.hidden) return;
+    dom.mentionMenu.hidden = true;
+    dom.mentionMenu.replaceChildren();
+    // Only give up the combobox state if the other menu is not the one using it.
+    if (!slashMenuOpen()) {
+        dom.input.setAttribute('aria-expanded', 'false');
+        dom.input.removeAttribute('aria-activedescendant');
+    }
+    mentionMenu.rows = [];
+    mentionMenu.index = 0;
+}
+
+/** Re-read the composer and show, filter or hide the menu to match. */
+async function updateMentionMenu() {
+    const frag = mentionFragment();
+    if (frag === null || !state.current) return closeMentionMenu();
+
+    const seq = ++mentionMenu.seq;
+    let peers = (Date.now() - state.peers.at < PEERS_TTL_MS) ? state.peers.list : null;
+
+    if (!peers) {
+        // Something on screen straight away, because the fetch is a round trip and
+        // an `@` that does nothing for a moment reads as an `@` that does nothing.
+        drawMentionMenu(null, 'Looking for sessions…');
+        try {
+            peers = await loadPeers();
+        } catch {
+            if (seq === mentionMenu.seq) drawMentionMenu(null, 'Could not list sessions.');
+            return;
+        }
+        // Typed on, or moved away, while that was in flight.
+        if (seq !== mentionMenu.seq) return;
+        if (mentionFragment() === null) return closeMentionMenu();
+    }
+
+    const now = mentionFragment();
+    if (!now) return closeMentionMenu();
+
+    const rows = matchPeers(peers, now.text);
+    if (!rows.length) {
+        // A bare `@` with nothing to offer is worth saying, because the reason is
+        // interesting — one session running is a normal state, and the silent
+        // alternative is a menu that mysteriously never appears. A fragment that
+        // matches nothing is just a typo, and gets out of the way.
+        if (!now.text.trim()) return drawMentionMenu(null, 'No other sessions are running.');
+        return closeMentionMenu();
+    }
+
+    mentionMenu.rows = rows;
+    mentionMenu.index = 0;
+    drawMentionMenu(rows, null);
+}
+
+function drawMentionMenu(rows, note) {
+    if (dom.mentionMenu.hidden) { showBell(false); showNewMenu(false); closeSlashMenu(); }
+    if (note) { mentionMenu.rows = []; mentionMenu.index = 0; }
+
+    const kids = [];
+    let group = null;
+    (rows || []).forEach((r, i) => {
+        if (r.group !== group) {
+            group = r.group;
+            // Not a `.picker-row`, deliberately: the shared selection code counts
+            // those, so a heading that were one would be a row you could land on
+            // and press Enter at.
+            kids.push(el('div', { class: 'menu-group', role: 'presentation' }, group));
+        }
+        kids.push(mentionRow(r, i));
+    });
+
+    dom.mentionMenu.replaceChildren(...(note ? [el('div', { class: 'menu-note' }, note)] : kids));
+    dom.mentionMenu.hidden = false;
+    dom.input.setAttribute('aria-expanded', 'true');
+    if (rows && rows.length) paintSelection(mentionMenu);
+    else dom.input.removeAttribute('aria-activedescendant');
+}
+
+/**
+ * One session.
+ *
+ * The title leads and the name follows, because the title is what you are looking
+ * for and the name is what gets inserted — showing both is what stops the box
+ * filling with something you did not expect. A session with no transcript indexed
+ * here has no title, and shows its name alone rather than an empty row.
+ */
+function mentionRow(r, i) {
+    const p = r.peer;
+    return el('button', {
+        class: 'picker-row', type: 'button', role: 'option',
+        id: `mention-row-${i}`, tabindex: -1,
+        'aria-selected': String(i === mentionMenu.index),
+        onmousedown: (e) => e.preventDefault(),
+        onclick: () => acceptMention(i),
+    },
+    el('span', { class: 'name' }, p.title || p.name),
+    el('span', { class: 'desc' }, p.name),
+    el('span', { class: 'hint' }, p.project || p.kind || ''),
+    );
+}
+
+/**
+ * Replace the fragment under the caret with the mention, and never send.
+ *
+ * A splice rather than the whole-value replace the slash menu does, because a
+ * mention belongs mid-sentence: the words either side of it are the message.
+ */
+function acceptMention(i) {
+    const r = mentionMenu.rows[i == null ? mentionMenu.index : i];
+    const frag = mentionFragment();
+    if (!r || !frag) return closeMentionMenu();
+    closeMentionMenu();
+    insertAt(frag.start, dom.input.selectionStart, r.insert);
+}
+
+/**
+ * Put a mention in the composer from somewhere other than the menu.
+ *
+ * Reply on a received message is the caller. It goes to the front rather than to
+ * the caret: replying is the first thing the message is for, so the sentence
+ * being written is the reply and the name belongs at the start of it.
+ */
+function insertMention(name) {
+    const text = `@[${name}] `;
+    if (dom.input.value.startsWith(text)) { dom.input.focus(); return; }
+    insertAt(0, 0, text);
+}
+
+/**
+ * Splice `text` over [from, to) in the composer, caret after it.
+ *
+ * Dispatching `input` rather than calling autoGrow() and saveDraft() by hand runs
+ * the listeners already wired to the box, so every draft guarantee holds by
+ * construction instead of by a second copy of the logic that can drift.
+ */
+function insertAt(from, to, text) {
+    const v = dom.input.value;
+    dom.input.value = v.slice(0, from) + text + v.slice(to);
+    const caret = from + text.length;
+    dom.input.setSelectionRange(caret, caret);
+    dom.input.dispatchEvent(new Event('input'));
+    dom.input.focus();
+}
 
 // Two stops, because the consequences differ. The first asks the turn to end
 // where it is, which leaves the session resumable and the transcript coherent.
