@@ -15,24 +15,27 @@
 //     unit that holds uncommitted work, not a session — several sessions share
 //     one, and one session can leave work in a worktree it has since left — so
 //     rows are keyed by directory and sessions hang off them.
-//   * `gh pr list` per repository. Listing the open ones and matching against
-//     them answers "not merged yet" in a single call per repo; asking after each
-//     PR the transcripts mention would be a call each and would still have to
-//     read the same field.
+//   * the open pull requests per repository, via `pulls.js`. Listing them and
+//     matching against them answers "not merged yet" in a single call per repo;
+//     asking after each PR the transcripts mention would be a call each and
+//     would still have to read the same field. The conversation header does ask
+//     per PR, because it wants merged ones too — which is why that code lives in
+//     `pulls.js` and not here, and why the cache it uses is shared.
 //
 // Everything here shells out, so all of it is cached: a dashboard left on screen
-// re-reads working trees every fifteen seconds and GitHub every minute.
+// re-reads working trees every fifteen seconds, and GitHub every minute over in
+// `pulls.js`.
 
 const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
 
 const { cached, mapLimit } = require('./memo');
+const pulls = require('./pulls');
 
-// Working trees are local and cheap; GitHub is neither.
+// Working trees are local and cheap. GitHub is neither, and its cache lives in
+// `pulls.js` along with everything else that asks it questions.
 const STATUS_TTL_MS = 15_000;
-const PR_TTL_MS = 60_000;
-const REPO_TTL_MS = 10 * 60_000;
 
 // Enough to see who has been in here without the row becoming a list.
 const SESSIONS_PER_WORKSPACE = 6;
@@ -40,19 +43,12 @@ const SESSIONS_PER_WORKSPACE = 6;
 const FILE_SAMPLE = 10;
 
 const GIT_TIMEOUT_MS = 10_000;
-const GH_TIMEOUT_MS = 20_000;
 const GIT_CONCURRENCY = 8;
 const GH_CONCURRENCY = 4;
-
-const PR_FIELDS = 'number,title,url,headRefName,isDraft,updatedAt,createdAt,reviewDecision,author';
 
 const cache = {
     /** @type {Map<string, {value?: any, pending?: Promise<any>, at: number}>} dir -> working state */
     status: new Map(),
-    /** @type {Map<string, {value?: any, pending?: Promise<any>, at: number}>} repo -> open PRs */
-    prs: new Map(),
-    /** @type {Map<string, {value?: any, pending?: Promise<any>, at: number}>} checkout -> owner/name */
-    repo: new Map(),
 };
 
 // ---------------------------------------------------------------------------
@@ -187,58 +183,6 @@ function afterFields(line, n) {
 const statusOf = (dir) => cached(cache.status, dir, STATUS_TTL_MS, () => workingState(dir));
 
 // ---------------------------------------------------------------------------
-// Pull requests
-// ---------------------------------------------------------------------------
-
-/** `owner/name` for a GitHub remote, or null for anything else. */
-function githubRepo(url) {
-    const m = /github\.com[:/]+([^/]+)\/(.+?)(?:\.git)?\/?$/.exec(String(url || '').trim());
-    return m ? `${m[1]}/${m[2]}` : null;
-}
-
-const repoOf = (dir) => cached(cache.repo, dir, REPO_TTL_MS, async () => {
-    const r = await run('git', ['-C', dir, 'remote', 'get-url', 'origin']);
-    return r.ok ? githubRepo(r.stdout) : null;
-});
-
-/**
- * The open pull requests on one repository.
- *
- * "Open" is the whole answer to "not merged yet": a PR the transcripts know
- * about that is absent from this list has been merged or closed, and is not this
- * dashboard's business either way.
- */
-const openPulls = (repo) => cached(cache.prs, repo, PR_TTL_MS, async () => {
-    const r = await run('gh', [
-        'pr', 'list', '--repo', repo, '--state', 'open', '--limit', '100', '--json', PR_FIELDS,
-    ], { timeout: GH_TIMEOUT_MS });
-
-    if (!r.ok) {
-        const why = r.code === 'ENOENT'
-            ? 'the gh CLI is not installed'
-            : firstLine(r.stderr) || 'gh failed';
-        return { ok: false, error: why, pulls: [] };
-    }
-    try {
-        const pulls = JSON.parse(r.stdout).map(p => ({
-            number: p.number,
-            title: p.title,
-            url: p.url,
-            branch: p.headRefName,
-            draft: !!p.isDraft,
-            reviewDecision: p.reviewDecision || null,
-            author: (p.author && (p.author.login || p.author.name)) || null,
-            createdAt: p.createdAt || null,
-            updatedAt: p.updatedAt || null,
-            repo,
-        }));
-        return { ok: true, error: null, pulls };
-    } catch (err) {
-        return { ok: false, error: `could not read gh output: ${err.message}`, pulls: [] };
-    }
-});
-
-// ---------------------------------------------------------------------------
 // Assembly
 // ---------------------------------------------------------------------------
 
@@ -280,7 +224,7 @@ const chipTime = (c) => (c.lastTs ? Date.parse(c.lastTs) : 0);
  * @param {{includeTest?: boolean, refresh?: boolean}} opts
  */
 async function build(index, { includeTest = false, refresh = false } = {}) {
-    if (refresh) { cache.status.clear(); cache.prs.clear(); }
+    if (refresh) { cache.status.clear(); pulls.clearCache(); }
 
     const sessions = index.list({ limit: 100_000, includeTest });
 
@@ -336,17 +280,17 @@ async function build(index, { includeTest = false, refresh = false } = {}) {
     // to read a remote from, but its PR link still says which repo it is.
     const roots = [...projects.values()];
     await mapLimit(roots, GIT_CONCURRENCY, async (p) => {
-        p.repo = here(p.cwd) ? await repoOf(p.cwd) : null;
+        p.repo = here(p.cwd) ? await pulls.repoOf(p.cwd) : null;
     });
 
     const repos = new Set();
     for (const p of roots) if (p.repo) repos.add(p.repo);
-    for (const s of sessions) if (s.pr && s.pr.repo) repos.add(s.pr.repo);
+    for (const s of sessions) for (const pr of s.prs || []) if (pr.repo) repos.add(pr.repo);
 
     const pullsByRepo = new Map();
     const ghErrors = new Set();
     await mapLimit([...repos], GH_CONCURRENCY, async (repo) => {
-        const r = await openPulls(repo);
+        const r = await pulls.openPulls(repo);
         pullsByRepo.set(repo, r);
         if (!r.ok) ghErrors.add(r.error);
     });
@@ -392,25 +336,30 @@ async function build(index, { includeTest = false, refresh = false } = {}) {
         const byPr = new Map();
         for (const s of sessions) {
             if ((s.projectCwd || s.cwd) !== p.cwd) continue;
-            if (!s.pr || !s.pr.number) continue;
-            const pr = openPr(s.pr.repo || p.repo, s.pr.number);
-            if (!pr || claimed.has(pr.url)) continue;
+            // Every PR the session raised, not just its newest: a session that
+            // lands one and opens another has left two things behind, and only
+            // one of them used to reach this board.
+            for (const own of s.prs || []) {
+                if (!own.number) continue;
+                const pr = openPr(own.repo || p.repo, own.number);
+                if (!pr || claimed.has(pr.url)) continue;
 
-            let row = byPr.get(pr.url);
-            if (!row) {
-                row = {
-                    dir: null,
-                    kind: 'gone',
-                    name: pr.branch || `PR #${pr.number}`,
-                    git: { ok: false, reason: 'gone' },
-                    prs: [{ ...pr, matched: 'session' }],
-                    sessions: [],
-                    moreSessions: 0,
-                    lastTs: null,
-                };
-                byPr.set(pr.url, row);
+                let row = byPr.get(pr.url);
+                if (!row) {
+                    row = {
+                        dir: null,
+                        kind: 'gone',
+                        name: pr.branch || `PR #${pr.number}`,
+                        git: { ok: false, reason: 'gone' },
+                        prs: [{ ...pr, matched: 'session' }],
+                        sessions: [],
+                        moreSessions: 0,
+                        lastTs: null,
+                    };
+                    byPr.set(pr.url, row);
+                }
+                row.sessions.push(sessionChip(s));
             }
-            row.sessions.push(sessionChip(s));
         }
         for (const row of byPr.values()) {
             row.sessions.sort((a, b) => chipTime(b) - chipTime(a));
@@ -453,4 +402,4 @@ async function build(index, { includeTest = false, refresh = false } = {}) {
     };
 }
 
-module.exports = { build, parseStatus, githubRepo };
+module.exports = { build, parseStatus };

@@ -94,6 +94,9 @@ const state = {
     // only exists so that looking away and back does not quietly drop a choice.
     permChoice: new Map(),
     channels: [],
+    // url -> {status, label, detail, title, updatedAt} from /api/sessions/:id/prs.
+    // Null until that answers; the header draws its PRs from the summary either way.
+    prStatus: null,
     // What the session's directory declares in .tgxcode/, and what is running
     // from it. Keyed by nothing — there is only ever one conversation on screen,
     // and the payload is re-fetched when it changes. `cmdsFor` is the directory
@@ -160,6 +163,10 @@ const state = {
     // of a session, like the terminal pane's height — you either want these in
     // view while you work or you do not.
     tasksShut: localStorage.getItem('tasksShut') === '1',
+    // The task the big dialog is showing, if it is open. Held by id rather than
+    // by object so a decision taken inside it can find its way back to the same
+    // task after the panel behind has been rebuilt.
+    taskDialog: null,
     queueSig: '',           // what the chips were last built from, to avoid churn
     queueFocus: null,       // the chip holding the queue's single tab stop
     ask: null,              // the approval this session is blocked on, if any
@@ -225,6 +232,8 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'term-tabs', 'term-stop', 'cmds',
     'tasks', 'tasks-strip', 'tasks-strip-count', 'tasks-open', 'tasks-count',
     'tasks-collapse', 'tasks-list',
+    'task-scrim', 'task-dlg-title', 'task-dlg-why', 'task-dlg-prompt', 'task-dlg-cwd',
+    'task-dlg-copy', 'task-dlg-acts',
     'agents', 'agent-scroll', 'agent-log', 'btn-back', 'btn-back-label',
     'ask-dock', 'plan-pane', 'plan-bar', 'plan-aside', 'plan-agent', 'plan-title',
     'plan-body', 'plan-doc', 'plan-foot',
@@ -428,11 +437,74 @@ const ICON = {
     power: '<path d="M12 3.4v7.2" stroke="currentColor" stroke-width="2.1" '
         + 'stroke-linecap="round"/><path d="M7.5 6.6a6.4 6.4 0 1 0 9 0" stroke="currentColor" '
         + 'stroke-width="2.1" stroke-linecap="round"/>',
+    // The pull-request statuses. Drawn as three families so that the icon carries
+    // the state on its own and the colour only reinforces it: the branch shape is
+    // the PR's own lifecycle, a speech bubble is a human's verdict on it, and a
+    // bare mark is CI's. Two reds and two yellows are otherwise indistinguishable
+    // to anyone who cannot separate them by hue.
+    pr: '<circle cx="6.5" cy="17.5" r="2.6" stroke="currentColor" stroke-width="1.8"/>'
+        + '<circle cx="17.5" cy="6.5" r="2.6" stroke="currentColor" stroke-width="1.8"/>'
+        + '<path d="M6.5 14.9V8.5a2 2 0 0 1 2-2h6.4" stroke="currentColor" '
+        + 'stroke-width="1.8" stroke-linecap="round"/>',
+    // The same branch, not joined up yet. Dotted rather than dashed: a dash pattern
+    // on a path this short is invisible at 13px, where round caps with gaps wider
+    // than the marks change the outline instead of just its texture — and the
+    // outline is the only thing that still reads at this size.
+    prDraft: '<circle cx="6.5" cy="17.5" r="2.6" stroke="currentColor" stroke-width="1.8"/>'
+        + '<circle cx="17.5" cy="6.5" r="2.6" stroke="currentColor" stroke-width="1.8"/>'
+        + '<path d="M6.5 14.9V8.5a2 2 0 0 1 2-2h6.4" stroke="currentColor" '
+        + 'stroke-width="1.9" stroke-linecap="round" stroke-dasharray="0.1 3.5"/>',
+    // Landed: an arrow arriving at the trunk. Deliberately not another two-dots-and-
+    // an-elbow — a curve is all that separated it from `pr` and at 13px that is
+    // nothing, so merged leaves the branch family and takes a silhouette of its own.
+    // The two still-open states keep the family; the two settled ones each stand apart.
+    prMerged: '<path d="M18.8 4.6v14.8" stroke="currentColor" stroke-width="2" '
+        + 'stroke-linecap="round"/>'
+        + '<path d="M4.4 12h9.8" stroke="currentColor" stroke-width="1.8" '
+        + 'stroke-linecap="round"/>'
+        + '<path d="m10.6 8.3 3.9 3.7-3.9 3.7" stroke="currentColor" stroke-width="1.8" '
+        + 'stroke-linecap="round" stroke-linejoin="round"/>',
+    prClosed: '<circle cx="12" cy="12" r="7.6" stroke="currentColor" stroke-width="1.8"/>'
+        + '<path d="M8.3 15.7 15.7 8.3" stroke="currentColor" stroke-width="1.8" '
+        + 'stroke-linecap="round"/>',
+    reviewOk: '<path d="M20 14.4a2.5 2.5 0 0 1-2.5 2.5H9.3L5 20.3V6.1a2.5 2.5 0 0 1 2.5-2.5h10A2.5 '
+        + '2.5 0 0 1 20 6.1Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>'
+        + '<path d="m9.4 10.1 2 2 3.5-3.7" stroke="currentColor" stroke-width="1.8" '
+        + 'stroke-linecap="round" stroke-linejoin="round"/>',
+    reviewChanges: '<path d="M20 14.4a2.5 2.5 0 0 1-2.5 2.5H9.3L5 20.3V6.1a2.5 2.5 0 0 1 2.5-2.5h10A2.5 '
+        + '2.5 0 0 1 20 6.1Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>'
+        + '<path d="M9.3 10.2h6.4" stroke="currentColor" stroke-width="1.8" '
+        + 'stroke-linecap="round"/>',
+    checkFail: '<path d="m6.8 6.8 10.4 10.4" stroke="currentColor" stroke-width="2.2" '
+        + 'stroke-linecap="round"/><path d="M17.2 6.8 6.8 17.2" stroke="currentColor" '
+        + 'stroke-width="2.2" stroke-linecap="round"/>',
+    checkWait: '<circle cx="12" cy="12" r="7.6" stroke="currentColor" stroke-width="1.8" '
+        + 'stroke-linecap="round" stroke-dasharray="3.3 2.9"/>',
+    conflict: '<path d="M12 4.3 21 19.5H3Z" stroke="currentColor" stroke-width="1.8" '
+        + 'stroke-linejoin="round"/><path d="M12 9.9v3.7" stroke="currentColor" '
+        + 'stroke-width="1.8" stroke-linecap="round"/><path d="M12 16.6h.01" '
+        + 'stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
     trash: '<path d="M4.5 6.8h15" stroke="currentColor" stroke-width="1.8" '
         + 'stroke-linecap="round"/><path d="M6.6 6.8 7.7 19a1.5 1.5 0 0 0 1.5 1.4h5.6A1.5 1.5 0 0 0 '
         + '16.3 19l1.1-12.2" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>'
         + '<path d="M9.6 6.8V4.6a1 1 0 0 1 1-1h2.8a1 1 0 0 1 1 1v2.2" stroke="currentColor" '
         + 'stroke-width="1.8" stroke-linejoin="round"/>',
+};
+
+// Which glyph says each PR status. `unknown` is gh being unreachable rather than a
+// state a PR can be in, so it borrows the plain branch and the CSS leaves it grey:
+// a header that cannot reach GitHub says no less than it used to, and claims no more.
+const PR_ICON = {
+    open: 'pr',
+    unknown: 'pr',
+    draft: 'prDraft',
+    merged: 'prMerged',
+    closed: 'prClosed',
+    approved: 'reviewOk',
+    changes: 'reviewChanges',
+    'checks-failed': 'checkFail',
+    'checks-pending': 'checkWait',
+    conflicting: 'conflict',
 };
 
 function icon(name, size = 15) {
@@ -863,6 +935,7 @@ async function openSession(id, { quiet = false, keepDash = false } = {}) {
 
         subscribe();
         loadChannels();
+        loadPrStatus();
         loadAgents();
         return true;
     } catch (err) {
@@ -898,10 +971,12 @@ function beginOpen(summary, { keepDash = false } = {}) {
     state.activeTurn = -1;
     state.pinned = true;
     state.agents = [];  // the previous session's agents are not this one's
+    state.prStatus = null;      // nor are its pull requests
     state.ask = null;   // approvals belong to the session that is blocked on them
     state.suggestions.clear();  // what was acted on belongs to the session it was raised in
     state.tasks.clear();        // and so do the offers themselves
     state.taskOpen.clear();
+    closeTaskDialog();          // it was showing a task belonging to the old one
     renderTasks();              // empties the aside, and hides it
     // A row drawn for one session is not evidence about another. The log is
     // replaced below in any case; this is what disarms the timer holding it.
@@ -1039,16 +1114,80 @@ function renderHeader() {
     }
     bits.push(el('span', { class: 'sep' }, '·'));
     bits.push(el('span', {}, `${s.userMessages} turns`));
-    if (s.pr) {
+    for (const pr of headerPrs()) {
         bits.push(el('span', { class: 'sep' }, '·'));
-        bits.push(el('a', { class: 'pr', href: s.pr.url, target: '_blank', rel: 'noreferrer' },
-            `PR #${s.pr.number}`));
+        bits.push(prLink(pr));
     }
     bits.push(el('span', { class: 'sep' }, '·'));
     bits.push(el('span', { class: 'cwd', title: s.cwd }, clip(s.cwd, 42)));
 
     dom.convSub.replaceChildren(...bits);
     renderHeaderActions();
+}
+
+/**
+ * Which pull requests the header draws.
+ *
+ * The status fetch wins over the summary where it has an answer, because the two
+ * are not equally fresh: `state.current` is the summary from the moment the session
+ * was opened and nothing refreshes it in place, while the bridge reads its index
+ * per request. A PR raised during the conversation reaches the header this way and
+ * no other. The summary is what makes the first paint instant, and the fallback
+ * whenever the fetch has not answered or could not.
+ */
+function headerPrs() {
+    if (state.prStatus && state.prStatus.size) return [...state.prStatus.values()];
+    return (state.current && state.current.prs) || [];
+}
+
+/**
+ * One of the session's pull requests, with its status as an icon and a colour.
+ *
+ * Drawn from the transcript, so it appears with the header rather than after a
+ * round trip to GitHub — `status` starts as `unknown` and the fetch below fills it
+ * in. The status is spelled out in the tooltip because an icon can be recognised
+ * without being read, and these get small.
+ */
+function prLink(pr) {
+    const live = (state.prStatus && state.prStatus.get(pr.url)) || null;
+    const status = (live && live.status) || 'unknown';
+
+    const tip = [
+        live && live.label,
+        live && live.title,
+        ...((live && live.detail) || []),
+        [`#${pr.number}`, pr.repo, live && live.updatedAt && `updated ${ago(live.updatedAt)} ago`]
+            .filter(Boolean).join(' · '),
+    ].filter(Boolean).join('\n');
+
+    return el('a', {
+        class: 'pr', 'data-status': status, title: tip,
+        href: pr.url, target: '_blank', rel: 'noreferrer',
+    }, icon(PR_ICON[status] || 'pr', 13), `PR #${pr.number}`);
+}
+
+/**
+ * Ask GitHub what became of this session's PRs.
+ *
+ * Its own request rather than part of the session payload, because that one is
+ * also the rail's and must not wait on a network call. Failure is silent for the
+ * same reason a missing channel strip is: the links are already on screen and
+ * still work, they simply stay grey.
+ */
+async function loadPrStatus() {
+    if (!state.current) return;
+    // No guard on the summary having PRs: a session that had none when it was
+    // opened is exactly the one that raises its first mid-conversation, and the
+    // bridge answers a session with none from its index without asking GitHub.
+    const id = state.current.sessionId;
+    try {
+        const { prs } = await get(`/api/sessions/${id}/prs`);
+        if (!state.current || state.current.sessionId !== id) return;
+        state.prStatus = new Map((prs || []).map(pr => [pr.url, pr]));
+        renderHeader();
+    } catch {
+        // Leaves whatever was known before, which is better than blanking it.
+    }
 }
 
 function renderHeaderActions() {
@@ -1496,12 +1635,21 @@ function taskCard(ev) {
 
     const det = el('details', {
         class: 'task', 'data-status': acted ? acted.status : 'open',
+        'data-task': ev.id,
         open,
         ontoggle: (e) => state.taskOpen.set(ev.id, e.currentTarget.open),
     },
     el('summary', {},
         el('span', { class: 'caret' }, '▶'),
         el('span', { class: 'task-name' }, ev.title || firstLine(ev.prompt)),
+        // A button inside the summary, which is legal and works — but the click
+        // has to be stopped, or it reaches the summary and folds the card at the
+        // same moment the dialog opens over it.
+        el('button', {
+            class: 'task-open', type: 'button', title: 'Read this at full width',
+            'aria-label': 'Read this at full width',
+            onclick: (e) => { e.preventDefault(); e.stopPropagation(); openTaskDialog(ev); },
+        }, '⤢'),
     ));
 
     const body = el('div', { class: 'task-body' });
@@ -1518,37 +1666,98 @@ function taskCard(ev) {
         body.append(el('div', { class: 'task-cwd' }, ev.cwd));
     }
 
+    body.append(taskActions(ev));
+
+    det.append(body);
+    return det;
+}
+
+/**
+ * What you can do about a task: the same three buttons wherever it is shown.
+ *
+ * Built fresh each time rather than moved between the card and the dialog, so
+ * the two can be on screen at once and neither steals the other's controls.
+ */
+function taskActions(ev) {
+    const acted = state.suggestions.get(ev.id) || null;
+
     if (acted && acted.status === 'started') {
-        body.append(el('div', { class: 'task-done' },
+        return el('div', { class: 'task-done' },
             el('span', {}, 'Started'),
             acted.startedId
                 ? el('button', { class: 'linky', type: 'button',
-                    onclick: () => openSession(acted.startedId) }, 'open it')
+                    onclick: () => { closeTaskDialog(); openSession(acted.startedId); } }, 'open it')
                 : null,
             // Undo, because a task that has gone quiet with no way back is a task
             // that lies once the session it names has been deleted.
             el('button', { class: 'linky', type: 'button',
                 onclick: () => actOnSuggestion(ev, null) }, 'offer again'),
-        ));
-    } else if (acted && acted.status === 'dismissed') {
-        body.append(el('div', { class: 'task-done' },
+        );
+    }
+    if (acted && acted.status === 'dismissed') {
+        return el('div', { class: 'task-done' },
             el('span', {}, 'Dismissed'),
             el('button', { class: 'linky', type: 'button',
                 onclick: () => actOnSuggestion(ev, null) }, 'undo'),
-        ));
-    } else {
-        body.append(el('div', { class: 'task-btns' },
-            el('button', { class: 'more-btn primary', type: 'button',
-                onclick: (e) => startSuggestion(ev, e.currentTarget) }, 'Start'),
-            el('button', { class: 'more-btn', type: 'button',
-                onclick: () => openNew({ cwd: ev.cwd || '', prompt: ev.prompt }) }, 'Edit first'),
-            el('button', { class: 'more-btn', type: 'button',
-                onclick: () => actOnSuggestion(ev, 'dismissed') }, 'Dismiss'),
-        ));
+        );
     }
+    return el('div', { class: 'task-btns' },
+        el('button', { class: 'more-btn primary', type: 'button',
+            onclick: (e) => startSuggestion(ev, e.currentTarget) }, 'Start'),
+        el('button', { class: 'more-btn', type: 'button',
+            onclick: () => { closeTaskDialog(); openNew({ cwd: ev.cwd || '', prompt: ev.prompt }); } },
+        'Edit first'),
+        el('button', { class: 'more-btn', type: 'button',
+            onclick: () => actOnSuggestion(ev, 'dismissed') }, 'Dismiss'),
+    );
+}
 
-    det.append(body);
-    return det;
+// ── a task at a readable width ───────────────────────────────────────────
+//
+// The panel is 300px, which is right for scanning a list and wrong for reading
+// a prompt written to brief an agent that has none of your context — those run
+// to paragraphs, and judging one means reading all of it rather than the first
+// two lines. So the panel keeps the list, and this is where you read the thing.
+//
+// The same three buttons are here as well as there. A dialog you have to close
+// before you can act on what it told you is a dialog that made you read twice.
+
+/** Show one task in the dialog. */
+function openTaskDialog(ev) {
+    state.taskDialog = ev.id;
+    dom.taskDlgTitle.textContent = ev.title || 'Suggested follow-up';
+
+    dom.taskDlgWhy.textContent = ev.why || '';
+    dom.taskDlgWhy.hidden = !ev.why;
+
+    dom.taskDlgPrompt.innerHTML = renderMarkdown(ev.prompt);
+
+    // Named unconditionally here, unlike on the card. The card leaves it out when
+    // it is the obvious directory because three copies of one path down a narrow
+    // column is noise; this is the place you came to read the whole thing, and
+    // "where would this run" is part of that.
+    dom.taskDlgCwd.textContent = ev.cwd || '';
+    dom.taskDlgCwd.hidden = !ev.cwd;
+
+    paintTaskDialogActions(ev);
+    dom.taskScrim.hidden = false;
+    dom.taskDlgCopy.focus();
+}
+
+/** Rebuild just the buttons, for a decision taken while the dialog is open. */
+function paintTaskDialogActions(ev) {
+    dom.taskDlgActs.replaceChildren(taskActions(ev));
+}
+
+function closeTaskDialog() {
+    if (dom.taskScrim.hidden) return;
+    dom.taskScrim.hidden = true;
+    const id = state.taskDialog;
+    state.taskDialog = null;
+    // Back to the summary the dialog was opened from, so the keyboard does not
+    // land on the body. It may have been rebuilt underneath — find it by id.
+    const back = id && dom.tasksList.querySelector(`[data-task="${CSS.escape(id)}"] summary`);
+    if (back) back.focus();
 }
 
 /**
@@ -1570,6 +1779,7 @@ async function startSuggestion(ev, btn) {
             test: state.dev && !!(state.current && state.current.test),
         });
         await actOnSuggestion(ev, 'started', r.sessionId);
+        closeTaskDialog();
         toast('Session started.', 'ok');
         openSessionSoon(r.sessionId);
     } catch (err) {
@@ -1598,6 +1808,7 @@ async function actOnSuggestion(ev, status, startedId = null) {
     // is the one place the remembered state would be actively unhelpful.
     state.taskOpen.delete(ev.id);
     renderTasks();
+    if (state.taskDialog === ev.id) paintTaskDialogActions(ev);
 
     try {
         await post(`/api/sessions/${sessionId}/suggestions/${ev.id}`, { status, startedId });
@@ -1605,6 +1816,7 @@ async function actOnSuggestion(ev, status, startedId = null) {
         if (before) state.suggestions.set(ev.id, before);
         else state.suggestions.delete(ev.id);
         renderTasks();
+        if (state.taskDialog === ev.id) paintTaskDialogActions(ev);
         toast(`Could not save that: ${err.message}`, 'error');
     }
 }
@@ -2821,6 +3033,9 @@ function closeAgent() {
     rememberView();
 }
 
+// Writes the same `.conv-sub` as renderHeader, and deliberately without the
+// session's pull requests: a subagent did not raise them, and the line is about
+// the agent you are looking at. They come back when you leave it.
 function renderAgentHeader() {
     const a = agentRows().find(r => r.toolUseId === state.agent);
     if (!a) return;
@@ -4859,6 +5074,10 @@ function connect() {
         if (!state.current || r.sessionId !== state.current.sessionId) return;
         // The dev servers a turn started only become visible once it finishes.
         loadChannels();
+        // A finished turn is the likeliest moment for a PR to have been raised, or
+        // for a review to have landed on one. This is where a PR opened during the
+        // conversation first appears — see headerPrs.
+        loadPrStatus();
         loadAgents();
     });
 
@@ -5569,7 +5788,12 @@ const LGTM_PROMPT = `LGTM — take it from here and land it.
 - Once they pass, merge it.
 
 If something genuinely blocks the merge — checks you cannot fix, conflicts, a
-review asking for changes — stop and tell me instead of working around it.`;
+review asking for changes — stop and tell me instead of working around it.
+
+If you noticed work along the way that this change is not the place for, file it
+with your suggest_session tool before you finish, one call each — the refactor
+you left alone, the test that should exist, the thing you had to work around. If
+you noticed nothing, say nothing; this is not a box to fill.`;
 
 const LGTM_TITLE = 'Send: open a PR for this work if there is not one, run the '
     + 'checks, and merge it once they pass.';
@@ -6624,6 +6848,26 @@ dom.btnLgtm.addEventListener('click', () => sendMessage({ text: LGTM_PROMPT, can
 dom.tasksCollapse.addEventListener('click', () => showTasks(false));
 dom.tasksStrip.addEventListener('click', () => showTasks(true));
 
+for (const n of dom.taskScrim.querySelectorAll('[data-close-task]')) {
+    n.addEventListener('click', closeTaskDialog);
+}
+dom.taskScrim.addEventListener('click', (e) => {
+    if (e.target === dom.taskScrim) closeTaskDialog();
+});
+// The prompt is the thing worth having elsewhere — pasted into a terminal, into
+// another tool, into a message to somebody. The rendered markdown is not it, so
+// the source is what goes on the clipboard.
+dom.taskDlgCopy.addEventListener('click', async () => {
+    const ev = state.tasks.get(state.taskDialog);
+    if (!ev) return;
+    try {
+        await navigator.clipboard.writeText(ev.prompt);
+        toast('Prompt copied.', 'ok');
+    } catch {
+        toast('Could not reach the clipboard.', 'error');
+    }
+});
+
 dom.btnNew.addEventListener('click', () => openNew());
 
 dom.btnPin.addEventListener('click', () => {
@@ -7602,6 +7846,7 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !dom.newMenu.hidden) { showNewMenu(false); dom.btnNewMenu.focus(); return; }
     if (e.key === 'Escape' && !dom.delScrim.hidden) { closeDelete(); return; }
     if (e.key === 'Escape' && !dom.pairScrim.hidden) { closePair(); dom.btnPair.focus(); return; }
+    if (e.key === 'Escape' && !dom.taskScrim.hidden) { closeTaskDialog(); return; }
     if (e.key === 'Escape' && !dom.newScrim.hidden) { closeNew(); return; }
     if (e.key === 'Escape' && state.dash.open) { showDash(false); return; }
     if (e.key === 'Escape' && state.notes.open) { showNotes(false); return; }
@@ -7736,6 +7981,11 @@ setInterval(refreshDevBrowser, 20_000);
 setInterval(() => {
     if (state.current && !dom.channels.querySelector('[data-arm="true"], .busy')) loadChannels();
 }, 25_000);
+
+// A PR changes under you — a review lands, checks finish — with nothing in this
+// session to say so. Matched to the bridge's own minute of cache, so a window left
+// open on a conversation costs one `gh pr list` a minute at most.
+setInterval(loadPrStatus, 60_000);
 
 // The count on the Dashboard button is the only thing that says there is
 // anything to look at, so it is read once at startup — a few seconds in, where

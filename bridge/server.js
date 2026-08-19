@@ -28,6 +28,7 @@ const devbrowser = require('./devbrowser');
 const tailscale = require('./tailscale');
 const devservers = require('./devservers');
 const dashboard = require('./dashboard');
+const pulls = require('./pulls');
 const overview = require('./overview');
 const { openInExplorer } = require('./explorer');
 const { TerminalPool } = require('./terminal');
@@ -933,6 +934,27 @@ async function api(req, res, url, pathname, who) {
                 lastTs: s.lastTs,
             });
             return send(res, 200, out);
+        }
+
+        // The status of the pull requests this session raised.
+        //
+        // Its own route rather than a field on the summary, because it asks
+        // GitHub and the session list must never wait on GitHub — the same reason
+        // `/api/dashboard` is not on that path either. The header renders its PRs
+        // from the summary immediately and fills the statuses in when this
+        // answers, so a slow or absent gh only ever costs the colour.
+        if (tail === 'prs' && req.method === 'GET') {
+            const summary = index.summary(sessionId);
+            if (!summary) return send(res, 404, { error: 'session not found' });
+
+            // A `pr-link` entry usually names its repository. Where one did not,
+            // the session's own directory is the best guess available.
+            const list = summary.prs || [];
+            const repo = list.some(pr => !pr.repo) && summary.cwd
+                ? await pulls.repoOf(summary.cwd)
+                : null;
+
+            return send(res, 200, await pulls.forSession(list, repo));
         }
 
         if (tail === 'subagents' && req.method === 'GET') {

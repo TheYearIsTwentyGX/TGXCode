@@ -877,6 +877,44 @@ a:hover { text-decoration: underline; }
 .conv-sub .agent-state.failed { color: var(--red); }
 .conv-sub .pulse { color: var(--yellow); }
 
+/* A pull request the session raised, and what has become of it. Colour and glyph
+   say the same thing twice on purpose — two of these are red and two are yellow,
+   so hue alone would not separate them. The word itself is in the tooltip.
+
+   `flex: none` because .conv-sub wraps: the icon and the number are one thing and
+   must not be broken across lines. The svg takes its colour from currentColor, so
+   every rule below sets it on the anchor and none of them touch the svg. */
+.conv-sub .pr {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex: none;
+    font: 500 12px/1 var(--sans);
+    text-decoration: none;
+    color: var(--text-3);
+    transition: color var(--t-fast) var(--ease), opacity var(--t-fast) var(--ease);
+}
+.conv-sub .pr[data-status="open"] { color: var(--blue); }
+.conv-sub .pr[data-status="approved"] { color: var(--green); }
+.conv-sub .pr[data-status="changes"],
+.conv-sub .pr[data-status="checks-failed"] { color: var(--red); }
+.conv-sub .pr[data-status="conflicting"],
+.conv-sub .pr[data-status="checks-pending"] { color: var(--yellow); }
+.conv-sub .pr[data-status="draft"] { color: var(--text-3); }
+/* Settled, and kept only as a record that the work landed — so it is here, but it
+   is not competing with the PRs that still want something. */
+.conv-sub .pr[data-status="merged"] { color: var(--purple); opacity: 0.62; }
+.conv-sub .pr[data-status="closed"] { color: var(--text-4); opacity: 0.62; }
+/* gh could not be reached. Says nothing rather than guessing. */
+.conv-sub .pr[data-status="unknown"] { color: var(--text-4); }
+/* Lifts the dimming off a settled PR without taking its colour away: the status is
+   the point, and losing it on the way to clicking the link would be a poor trade. */
+.conv-sub .pr:hover { opacity: 1; text-decoration: none; }
+/* Still moving, so it breathes — the same light every in-flight thing here uses. */
+.conv-sub .pr[data-status="checks-pending"] svg {
+    animation: breathe 1.6s var(--ease) infinite;
+}
+
 /* Dev servers: a row of chips, each one a switch into DevBrowser. */
 .channels {
     display: flex;
@@ -1226,7 +1264,25 @@ a:hover { text-decoration: underline; }
 }
 .task[open] > summary .caret { transform: rotate(90deg); }
 @media (prefers-reduced-motion: reduce) { .task > summary .caret { transition: none; } }
-.task-name { min-width: 0; overflow-wrap: anywhere; }
+.task-name { min-width: 0; overflow-wrap: anywhere; flex: 1; }
+
+/* Opens the task at a readable width. Faint until the row is under the cursor,
+   because the summary's own job — folding — is the common one. */
+.task-open {
+    flex: none;
+    padding: 0 2px;
+    border: 0;
+    border-radius: var(--r-xs);
+    background: none;
+    color: var(--text-4);
+    font-size: 12px;
+    line-height: 1.2;
+    opacity: 0;
+    cursor: pointer;
+}
+.task:hover .task-open,
+.task-open:focus-visible { opacity: 1; }
+.task-open:hover { color: var(--text-2); background: var(--s4); }
 
 .task-body { padding: 9px 10px 11px; }
 .task-why {
@@ -1276,6 +1332,27 @@ a:hover { text-decoration: underline; }
     cursor: pointer;
 }
 .linky:hover { color: #dbe6fb; }
+
+/* The same task, at a width you can actually read a briefing at. */
+.task-dlg-why {
+    margin-bottom: 12px;
+    font: 400 13px/1.55 var(--sans);
+    color: var(--text-4);
+}
+.task-dlg-why[hidden] { display: none; }
+.task-dlg-prompt { font-size: 14px; line-height: 1.65; color: var(--text-2); }
+.task-dlg-cwd {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--outline-soft);
+    font: 400 11.5px/1.5 var(--mono);
+    color: var(--text-4);
+    overflow-wrap: anywhere;
+}
+.task-dlg-cwd[hidden] { display: none; }
+/* The buttons keep the shape they have on the card, so the decision looks the
+   same wherever it is taken. */
+.task-dlg-acts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
 /* a message from another session — somebody else's agent talking to yours.
    Coloured apart from both your turns and Claude's, because it is neither. */
@@ -2343,6 +2420,7 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 @media (prefers-reduced-motion: reduce) {
     .status-line[data-state="busy"] .led,
     .status-line[data-state="ask"] .led,
+    .conv-sub .pr[data-status="checks-pending"] svg,
     .tool[data-status="pending"] > summary::before,
     .strip[data-state="running"] .strip-meta::before { animation: none; }
 }

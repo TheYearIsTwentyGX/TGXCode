@@ -109,13 +109,14 @@ create one in `%APPDATA%\claude-sessions\`:
 | **Conversation** | Your turns, Claude's replies with syntax-highlighted code, and one collapsible block per tool call. A run of tool calls between one message and the next folds into a single row — *16 tool calls · Bash ×6 · Read ×7* — which opens to the rows themselves; see *Folded tool calls*. Edits render as diffs, and output too large to inline loads on demand. |
 | **Plans & questions** | When Claude presents a plan or asks a multiple-choice question, the turn stops on a card at the foot of the transcript. A plan can be approved, approved with a note to bear in mind, or sent back with what to change; approving picks the mode the work continues in. Questions are answered by picking, with an *Other* row for none-of-the-above. |
 | **Subagents** | The first chip row under the title, one per subagent, with a light for how it is going and a line of what it is doing. Click to switch the pane over to it; `Esc` or the breadcrumb comes back. |
+| **Pull requests** | Every PR the session raised, on the line under the title, each with a glyph and a colour for where it has got to — draft, open, approved, changes requested, checks running or failing, conflicting, merged, closed. Hover for the status in words, the title, and how the checks stand. Merged and closed ones stay, dimmed, so the line is the session's whole PR history rather than only its newest. |
 | **Dev servers** | The second chip row. Green means the port is answering right now; click to switch DevBrowser to that tab, starting DevBrowser if it isn't running. The button on the end shuts the server down — one click arms it, the next signals. |
 | **Dashboard** | The button in the top bar, with a count of how many places are unfinished. It lists, per project, every directory holding uncommitted changes and every pull request still open, with the sessions that worked there as links back into the conversation. |
 | **Open folder** | The folder button by the title shows the session's working directory in Windows File Explorer, through the `\\wsl.localhost` share. |
 | **Composer** | Sends to the session, resuming it in place — the same transcript a terminal would append to. |
-| **LGTM** | Beside *Send*, for when you have read the work and it is done: it sends a written instruction to put the change on a pull request if it is not on one already, run the project's checks, and merge once they pass — and to stop and say so if something blocks it. One click, no confirmation over the top; the session still asks for what its permission mode makes it ask for. |
+| **LGTM** | Beside *Send*, for when you have read the work and it is done: it sends a written instruction to put the change on a pull request if it is not on one already, run the project's checks, merge once they pass, and file anything it noticed along the way as a suggested task — and to stop and say so if something blocks it. One click, no confirmation over the top; the session still asks for what its permission mode makes it ask for. |
 | **Send queue** | Write while an agent is working and the message waits, listed above the composer in send order. Each one can be expanded, reordered, pulled back for editing, or dropped, right up until its turn starts. `Shift+Tab` out of the composer to work through them without the mouse. |
-| **Suggested** | The panel beside the transcript. An agent that notices work outside what it was asked to do files it there, with the prompt already written. Each one folds to its title; *Start* runs it, *Edit first* opens it in the Start dialog, *Dismiss* puts it away. *Hide* collapses the whole panel to a strip. |
+| **Suggested** | The panel beside the transcript. An agent that notices work outside what it was asked to do files it there, with the prompt already written. Each one folds to its title, and the ⤢ on a row opens it at full width to read; *Start* runs it, *Edit first* opens it in the Start dialog, *Dismiss* puts it away. *Hide* collapses the whole panel to a strip. |
 | **Mentions** | `@` in the composer lists the other sessions running on this machine and inserts the one you pick as `@[name]` — the name an agent addresses it by. |
 
 Shortcuts: `Ctrl+Enter` send, `Ctrl+K` filter, `Ctrl+N` new session, `Esc` leave
@@ -196,6 +197,14 @@ suggested six things is not permanently narrower than one that suggested none.
 Whether the panel is open is remembered across sessions, like the terminal pane's
 height; which tasks are open is not, because the useful default changes as you
 deal with them.
+
+**The ⤢ on a row opens the task at a readable width.** 300px is right for
+scanning a list and wrong for reading a prompt written to brief an agent that has
+none of your context — those run to paragraphs, and judging one means reading all
+of it rather than the first two lines. The same three buttons are in the dialog as
+on the card, because a dialog you have to close before you can act on what it told
+you is a dialog that made you read twice. *Copy prompt* puts the source on the
+clipboard rather than the rendered markdown.
 
 **The server stores nothing, and that is the design.** The offer is already in the
 transcript, which is the copy that survives a restart, shows up in a second
@@ -642,7 +651,12 @@ and it reads none of it from the transcripts:
   share one, and a session that has left a worktree still left its changes in it.
 - **Open pull requests** come from one `gh pr list --state open` per repository.
   Being absent from that list *is* the answer to "has it been merged": a PR the
-  transcripts mention that is not open any more needs nothing from you.
+  transcripts mention that is not open any more needs nothing from you. This board
+  stops there. A conversation header wants the opposite — it keeps a merged PR on
+  screen as the record that the work landed — so it asks after that one PR by
+  number, once, and remembers the answer for good: merged and closed are the two
+  states nothing can move a PR out of. Both go through `bridge/pulls.js` and share
+  its cache, so the extra question costs one call per settled PR and no more.
 
 A workspace shows the PRs raised from the branch it has checked out, and only
 those — a session that raises a PR from a worktree and then leaves reports the
@@ -706,6 +720,7 @@ not.
 | `bridge/server.js` | HTTP + SSE, routing, static files |
 | `bridge/config.js` | Paths, ports, allowed roots — every constant with a reason attached |
 | `bridge/dashboard.js` | Uncommitted changes and open PRs, per project |
+| `bridge/pulls.js` | Everything that asks GitHub about a pull request, and what its status *is* |
 | `bridge/overview.js` | The live board: what every session is doing right now |
 | `bridge/sessions.js` | The session index — incremental, cached, watched |
 | `bridge/registry.js` | Which sessions have a process, from Claude Code's own registry |
