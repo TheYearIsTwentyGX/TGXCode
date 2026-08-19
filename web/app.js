@@ -39,6 +39,29 @@ async function del(path) {
 // agree about what "no mode was chosen" means.
 const DEFAULT_PERM = 'auto';
 
+// ── settings ─────────────────────────────────────────────────────────────
+
+// What the user's own ~/.tgxcode/settings.json says, handed to the page in a
+// <meta> tag by bridge/server.js. In the page rather than behind a fetch
+// because restoreView() opens a session synchronously at startup: a transcript
+// drawn before an answer arrived would stay drawn the wrong way, since nothing
+// re-renders history. A project may override any of it, and that answer travels
+// with the transcript instead — see openSession.
+const BOOT_PREFS = (() => {
+    const fallback = {
+        transcript: { groupToolCalls: true, groupMinCalls: 3, groupIncludesThinking: true },
+    };
+    try {
+        const m = document.querySelector('meta[name="cs-prefs"]');
+        if (!m) return fallback;
+        const d = JSON.parse(decodeURIComponent(m.content));
+        return { ...fallback, ...d, transcript: { ...fallback.transcript, ...(d.transcript || {}) } };
+    } catch { return fallback; }
+})();
+
+/** The transcript settings in force — the open session's, or the user's own. */
+const grouping = () => (state.prefs || BOOT_PREFS).transcript;
+
 const state = {
     clientId: null,
     dev: false,             // talking to a development bridge
@@ -50,6 +73,14 @@ const state = {
     openSeq: 0,             // bumped per open; a slow fetch checks it before drawing
     nodes: new Map(),       // event id -> {ev, node}
     tools: new Map(),       // tool_use id -> {ev, node}
+    // Settings for the open session's directory, from the bridge. Null until a
+    // session is opened, when BOOT_PREFS is the answer.
+    prefs: null,
+    // Ids of the tool (and thinking) events seen since the last message, in
+    // order — the run that is still being worked on. Ids and not nodes: a node
+    // is replaced whenever a result lands, so a held reference goes stale.
+    run: [],
+    agentRun: [],
     turns: [],              // the user messages, in order, for the turn rail
     activeTurn: -1,
     agents: [],             // subagent records for this session, from the bridge
@@ -729,6 +760,8 @@ function clearCurrent() {
     state.runner = null;
     state.nodes.clear();
     state.tools.clear();
+    state.run.length = 0;
+    state.prefs = null;     // the next session's project may answer differently
     state.turns = [];
     state.activeTurn = -1;
     state.agents = [];
@@ -800,6 +833,15 @@ async function openSession(id, { quiet = false, keepDash = false } = {}) {
         state.suggestions = new Map(Object.entries(data.suggestions || {}));
         state.tasks.clear();
         state.taskOpen.clear();
+        // Also before appendEvents, and for the same reason: what this project
+        // says about folding runs of tool calls has to be known before the
+        // transcript is built from it. Nothing re-renders history, so an answer
+        // that arrived afterwards would be an answer for the next session.
+        state.prefs = data.prefs || BOOT_PREFS;
+        // applyRunner runs below, after the log is drawn — but the log needs to
+        // know whether a turn is in flight, because the run of tool calls at the
+        // end of a busy session is the work you are watching and must not fold.
+        state.runner = data.runner || null;
 
         renderHeader();
         // Drops the skeleton — and with it a row drawn at Send while this fetch was
@@ -850,6 +892,8 @@ function beginOpen(summary, { keepDash = false } = {}) {
     state.runner = null;
     state.nodes.clear();
     state.tools.clear();
+    state.run.length = 0;
+    state.prefs = null;     // the next session's project may answer differently
     state.turns = [];
     state.activeTurn = -1;
     state.pinned = true;
@@ -1030,6 +1074,9 @@ const SESSION_VIEW = {
     nodes: state.nodes, tools: state.tools,
     get log() { return dom.log; },
     get scroll() { return dom.scroll; },
+    // A getter, not the array: the run is emptied in place at four different
+    // places, and a copy taken here would go stale at every one of them.
+    get run() { return state.run; },
 };
 
 const AGENT_VIEW = {
@@ -1037,10 +1084,18 @@ const AGENT_VIEW = {
     nodes: state.agentNodes, tools: state.agentTools,
     get log() { return dom.agentLog; },
     get scroll() { return dom.agentScroll; },
+    get run() { return state.agentRun; },
 };
 
 function appendEvents(events, view = SESSION_VIEW) {
-    const frag = document.createDocumentFragment();
+    let frag = document.createDocumentFragment();
+    // Closing a run wraps nodes that are already in the log around nodes that
+    // are still in this fragment, so the fragment goes in first. Cheap: it
+    // happens once per message, not once per event.
+    const flush = () => {
+        if (frag.childNodes.length) view.log.append(frag);
+        frag = document.createDocumentFragment();
+    };
     let newTurn = false;
     let sawAgent = false;
     let newTasks = false;
@@ -1058,6 +1113,18 @@ function appendEvents(events, view = SESSION_VIEW) {
         const node = renderEvent(ev);
         if (!node) continue;
         view.nodes.set(ev.id, { ev, node });
+        // Where the run of tool calls begins and ends. Decided here rather than
+        // at the top of the loop because the three `continue`s above never
+        // produce a node — a tool-result patches one that exists, a suggestion
+        // is drawn in the aside, a repeat is already on screen — and treating
+        // any of them as the end of a run would split it for a reason nothing
+        // on screen accounts for.
+        if (ev.kind === 'tool' || (ev.kind === 'thinking' && grouping().groupIncludesThinking)) {
+            view.run.push(ev.id);
+        } else {
+            flush();
+            closeRun(view);
+        }
         if (ev.kind === 'tool') {
             view.tools.set(ev.id, { ev, node });
             if (ev.name === 'Task' || ev.name === 'Agent') sawAgent = true;
@@ -1083,7 +1150,12 @@ function appendEvents(events, view = SESSION_VIEW) {
         }
         frag.append(node);
     }
-    if (frag.childNodes.length) view.log.append(frag);
+    flush();
+    // A transcript that ends in tool calls has no message coming to close the
+    // last run — openSession replays a finished conversation in one call, and
+    // that run would otherwise stay unfolded forever. Only when nothing is
+    // running: mid-turn, the calls on screen are the work you are watching.
+    if (!isBusy()) closeRun(view);
     if (newTasks) renderTasks();
     if (!view.isAgent) {
         if (newTurn) renderTurns();
@@ -1116,11 +1188,151 @@ function patchTool(patch, view = SESSION_VIEW) {
     // Rebuild the body up front rather than waiting for the toggle event the
     // assignment queues, so a block that was open does not blink shut.
     if (det && wasOpen) { fillTool(det, entry.ev); det.open = true; }
+    // Read before the swap: `fresh` is not in the document yet, so asking it
+    // what it belongs to answers nothing.
+    const fold = entry.node.closest('.trun');
     entry.node.replaceWith(fresh);
     entry.node = fresh;
+    // A result landing on a run that has already folded moves its clock on and
+    // may be the error the row has to own up to.
+    if (fold) paintRunSummary(fold);
     view.nodes.set(entry.ev.id, entry);
     // A result landing on a Task call is a subagent finishing: the strip says so.
     if (!view.isAgent && entry.ev.agent) renderAgents();
+}
+
+// ── runs of tool calls ───────────────────────────────────────────────────
+//
+// Between one message and the next an agent may make thirty tool calls, and the
+// transcript printed every one of them. Scrolling back through a long session
+// meant scrolling past walls of Read/Bash/Edit to find the sentences that say
+// what actually happened.
+//
+// So a run of them folds into a single row once a message closes it — the same
+// row a tool call draws, with "16 tool calls" where the name goes and a tally
+// where the command goes. Only once it is *closed*: while the calls are still
+// arriving they are the work you are watching, and folding them as they land
+// would be taking the transcript away mid-turn.
+//
+// The rows are moved into the fold, not redrawn. That is what keeps patchTool
+// and redrawEvent working — they replace a node wherever it happens to be — and
+// it is why a tool block you had opened is still open when you open the fold.
+
+/** Is a turn in flight? While one is, the last run is still being written. */
+function isBusy() {
+    const r = state.runner;
+    return Boolean(r && (r.state === 'busy' || r.state === 'starting'));
+}
+
+/**
+ * Fold the run of tool calls that has just ended.
+ *
+ * Contiguity is checked against the DOM rather than assumed, because three
+ * things append straight to the log without going through appendEvents: the
+ * line left behind when you answer a permission, the message row drawn at Send
+ * before the transcript has it, and the permission card itself. Any of them can
+ * land in the middle of a run, and wrapping first-to-last would swallow it and
+ * reorder the conversation. Each contiguous stretch folds on its own instead,
+ * so what is on screen keeps the order it was written in.
+ */
+function closeRun(view) {
+    const ids = view.run;
+    if (!ids.length) return;
+    const opts = grouping();
+    if (!opts.groupToolCalls) { ids.length = 0; return; }
+
+    let run = [];
+    const runs = [];
+    for (const id of ids) {
+        const entry = view.nodes.get(id);
+        const node = entry && entry.node;
+        if (!node || node.parentNode !== view.log) {
+            if (run.length) runs.push(run);
+            run = [];
+            continue;
+        }
+        if (run.length && run[run.length - 1].node.nextElementSibling !== node) {
+            runs.push(run);
+            run = [];
+        }
+        run.push(entry);
+    }
+    if (run.length) runs.push(run);
+    ids.length = 0;
+
+    for (const r of runs) {
+        if (r.filter(e => e.ev.kind === 'tool').length < opts.groupMinCalls) continue;
+        foldRun(r);
+    }
+}
+
+/** Wrap one contiguous stretch of rows in a fold, in place. */
+function foldRun(entries) {
+    const det = el('details', { class: 'trun' });
+    det.append(el('summary', {}));
+    entries[0].node.before(det);
+    for (const e of entries) det.append(e.node);
+    // The events themselves, so a result arriving after the fold can redraw the
+    // row. patchTool assigns into the event object rather than replacing it, so
+    // this list stays true without being rebuilt.
+    det.runEvents = entries.map(e => e.ev);
+    paintRunSummary(det);
+    return det;
+}
+
+/**
+ * Draw the fold's own row.
+ *
+ * `.trow` wears the same clothes as a collapsed tool call's summary,
+ * deliberately: this is one more row of the same kind, and the only thing it
+ * says differently is how many.
+ */
+function paintRunSummary(det) {
+    const evs = det.runEvents || [];
+    if (!evs.length) return;
+    const tools = evs.filter(e => e.kind === 'tool');
+    const thoughts = evs.length - tools.length;
+
+    // In the order they were first used, which reads as an account of the run.
+    // Sorting by count would put the same three names at the front every time
+    // and say nothing about what the agent actually did first.
+    const byName = new Map();
+    for (const e of tools) byName.set(e.name, (byName.get(e.name) || 0) + 1);
+    const parts = [...byName].map(([name, n]) => (n > 1 ? `${name} \u00d7${n}` : name));
+    if (thoughts) parts.push(thoughts > 1 ? `${thoughts} thoughts` : '1 thought');
+
+    // Wall time across the run, which is what you would have watched. A call
+    // that was interrupted has no result and no end; the ones either side of it
+    // still bound the span.
+    const start = Date.parse(evs[0].ts);
+    let end = start;
+    for (const e of evs) {
+        const t = Date.parse(e.resultTs || e.ts);
+        if (Number.isFinite(t) && t > end) end = t;
+    }
+    const span = Number.isFinite(start) && end > start ? end - start : 0;
+
+    // Never 'pending': a closed run has nothing still running, and the dot for
+    // that one breathes.
+    const status = evs.some(e => e.status === 'error' || e.isError) ? 'error' : 'ok';
+
+    det.querySelector(':scope > summary').replaceChildren(
+        el('div', { class: 'ev ev-trun' },
+            // The clock is the row's, not the reader's: a screen reader
+            // announcing it inside the button's label would be reading out the
+            // gutter it is already skipping everywhere else.
+            el('div', { class: 'ev-time', 'aria-hidden': 'true' }, clockOf(evs[0].ts)),
+            el('div', { class: 'ev-body' },
+                el('div', { class: 'trow', 'data-status': status },
+                    el('span', { class: 'caret' }, '\u25b6'),
+                    el('span', { class: 'tname' },
+                        `${tools.length} tool call${tools.length === 1 ? '' : 's'}`),
+                    el('span', { class: 'targ' }, parts.join(' \u00b7 ')),
+                    el('span', { class: 'tmeta' }, dur(span)),
+                ),
+            ),
+        ),
+    );
 }
 
 function row(ev, kind, ...body) {
@@ -2557,6 +2769,7 @@ async function openAgent(toolUseId, { quiet = false } = {}) {
         state.agentOffset = d.offset || 0;
         state.agentNodes.clear();
         state.agentTools.clear();
+        state.agentRun.length = 0;
         dom.agentLog.replaceChildren();
 
         // Both panes stay mounted, so each keeps its own scroll position and the
@@ -2589,6 +2802,7 @@ function leaveAgent() {
     state.agentOffset = 0;
     state.agentNodes.clear();
     state.agentTools.clear();
+    state.agentRun.length = 0;
     dom.agentLog.replaceChildren();
     dom.scroll.hidden = false;
     dom.agentScroll.hidden = true;
@@ -4698,6 +4912,13 @@ function applyRunner(s) {
     const busy = s && (s.state === 'busy' || s.state === 'starting');
     const retrying = Boolean(s && s.retry);
 
+    // A turn that ends without saying anything — stopped, or an error — leaves
+    // its last run of tool calls with no message coming to close it. The turn
+    // ending is the close. Harmless while one is still in flight: closeRun does
+    // nothing when there is no run, and this is the only thing that reports the
+    // end of a turn to the log at all.
+    if (!busy) { closeRun(SESSION_VIEW); closeRun(AGENT_VIEW); }
+
     // The status carries the pending ask too, so a window opening onto a session
     // that is already blocked draws the card without having seen the event.
     const ask = (s && s.pendingPermission) || null;
@@ -4942,6 +5163,12 @@ function hideTurnPop() {
 function jumpToTurn(t) {
     hideTurnPop();
     const sc = dom.scroll;
+    // A row inside a folded run has no box to measure, so the jump would land
+    // near the top of the pane instead of on it. Turns are never in a fold —
+    // a message is what ends one — but the notification history jumps to tool
+    // calls, and those are exactly what folds.
+    const fold = t.node.closest('.trun');
+    if (fold) fold.open = true;
     const top = t.node.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop;
     sc.scrollTop = Math.max(0, top - 14);
     state.pinned = false;

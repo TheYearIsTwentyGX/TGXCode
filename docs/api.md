@@ -122,7 +122,12 @@ than hardcoding the list; a remote client should drop `bypassPermissions` and
 
 ### `GET /api/sessions/:id[?tail=N]`
 
-`{ summary, events: [...], offset, runner, suggestions }`.
+`{ summary, events: [...], offset, runner, suggestions, prefs }`.
+
+`prefs` is the settings in force **for this conversation's directory** — see
+`GET /api/prefs`. It travels with the transcript rather than being fetched
+separately because a client that draws the transcript before the settings arrive
+has drawn it the wrong way, and nothing re-renders history.
 
 `suggestions` maps the id of a `suggestion` event to what was already done about
 it — `{status: "started"|"dismissed", startedId, at}`. The suggestion itself is in
@@ -161,6 +166,28 @@ shrank — it was compacted or forked — and the client should reload from scra
 
 This is how a mobile client resumes after a network change, and it is much cheaper
 than refetching.
+
+### `GET /api/prefs?cwd=<path>`
+
+`{ version, transcript: {...}, sources: [...], problems: [...] }` — how the person
+using the app wants it to behave.
+
+`~/.tgxcode/settings.json` is the user's own, written out with the defaults on
+first run so it can be found and edited. A project overrides any key from
+`<workspace>/.tgxcode/settings.json`, with the same precedence as project
+commands: the workspace's checked-in file (falling back to the main checkout's),
+then `settings.local.json` from the main checkout, then one in the workspace.
+`sources` lists the files that were actually read, weakest first.
+
+A value that is not what the key allows is dropped and reported in `problems`
+rather than taken at face value; the default stands. Without `?cwd=` you get the
+user-level answer, which is also what every page is served in a `cs-prefs`
+`<meta>` tag (minus `sources` and `problems`).
+
+`transcript` today: `groupToolCalls` (fold a run of tool calls into one row once
+a message closes it), `groupMinCalls` (how long a run has to be — at least 2),
+`groupIncludesThinking` (whether a thinking block is part of the run or the end
+of it).
 
 ### `GET /api/peers`
 
