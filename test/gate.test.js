@@ -61,6 +61,9 @@ const PHONE = {
     check('overview needs a token', (await call('/api/overview')).status, 401);
     check('overview with a token',
         (await call('/api/overview', { headers: BEARER })).status, 200);
+    check('taskboard needs a token', (await call('/api/taskboard')).status, 401);
+    check('taskboard with a token',
+        (await call('/api/taskboard', { headers: BEARER })).status, 200);
     check('a bogus route still 404s past the gate',
         (await call('/api/nope', { headers: BEARER })).status, 404);
 

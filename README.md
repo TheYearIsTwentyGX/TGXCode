@@ -111,6 +111,7 @@ create one in `%APPDATA%\claude-sessions\`:
 | **Subagents** | The first chip row under the title, one per subagent, with a light for how it is going and a line of what it is doing. Click to switch the pane over to it; `Esc` or the breadcrumb comes back. |
 | **Pull requests** | Every PR the session raised, on the line under the title, each with a glyph and a colour for where it has got to — draft, open, approved, changes requested, checks running or failing, conflicting, merged, closed. Hover for the status in words, the title, and how the checks stand. Merged and closed ones stay, dimmed, so the line is the session's whole PR history rather than only its newest. |
 | **Dev servers** | The second chip row. Green means the port is answering right now; click to switch DevBrowser to that tab, starting DevBrowser if it isn't running. The button on the end shuts the server down — one click arms it, the next signals. |
+| **Task board** | `Ctrl+2`, or *Tasks* in the top bar with a count of how many sessions are blocked on you. Four columns over everything outstanding: **Needs you** (a permission, a plan or a question waiting, or a turn that failed), **Working**, **Suggested** — every open task from every session, not only the conversation you have open — and **Idle**. Archived sessions are not on it; that is what archiving is for. A task card starts the work or opens it to read; a session card opens the conversation, and the button that appears on hover archives it. Idle leads with what has moved today and *Show all* pages in the rest. Nothing on it reorders while you read — see *The rail is sorted on load*. |
 | **Dashboard** | The button in the top bar, with a count of how many places are unfinished. It lists, per project, every directory holding uncommitted changes and every pull request still open, with the sessions that worked there as links back into the conversation. |
 | **Open folder** | The folder button by the title shows the session's working directory in Windows File Explorer, through the `\\wsl.localhost` share. |
 | **Composer** | Sends to the session, resuming it in place — the same transcript a terminal would append to. |
@@ -342,6 +343,17 @@ A session that appears *after* that first load is genuinely new rather than
 merely busy, so it goes to the top of its group, and a project with no sessions
 in it yet gets a new card at the top of the rail. Neither disturbs the position
 of anything already placed.
+
+**The task board holds the same rule, per column.** It has the stronger version of
+the same problem: a board with every session on it, redrawn every three seconds
+while agents work, would be a page of cards swapping places under the cursor. So
+position within a column is taken once and then held, and the one thing that can
+move a card is *changing column* — which is the news the board exists to carry,
+not noise. When it does, it lands at the top of its new column, so a session that
+has just become blocked on you is the first thing in *Needs you* and nothing
+already placed shifts to make room. A card that goes idle and comes back does not
+get a fresh place: it returns to the rank it had, because appearing at the top of
+*Working* reads as a new session, and it is not.
 
 ### Archiving never deletes — deleting does
 
@@ -731,6 +743,7 @@ not.
 | `bridge/dashboard.js` | Uncommitted changes and open PRs, per project |
 | `bridge/pulls.js` | Everything that asks GitHub about a pull request, and what its status *is* |
 | `bridge/overview.js` | The live board: what every session is doing right now |
+| `bridge/taskboard.js` | The task board: everything outstanding, in a column per state |
 | `bridge/sessions.js` | The session index — incremental, cached, watched |
 | `bridge/registry.js` | Which sessions have a process, from Claude Code's own registry |
 | `bridge/transcript.js` | JSONL → render events; pairs tool calls with results; reads subagent transcripts |
