@@ -1091,51 +1091,178 @@ a:hover { text-decoration: underline; }
 }
 .ev-agent-done .subagent-btns { margin-top: 2px; }
 
-/* work an agent noticed and did not do — an offer, so it is boxed rather than
-   left inline: everything else in the log is a record of what happened, and
-   this is the one thing in it that is still a decision. */
-.ev-suggestion .ev-body {
-    background: var(--blue-tint);
-    border-left: 2px solid var(--blue);
-    border-radius: var(--r);
-    padding: 11px 16px 13px;
-    margin: 8px 0;
+/* ── suggested follow-ups ─────────────────────────────────────────────────
+   An aside beside the transcript, not part of it: the log is a record of what
+   happened, and these are the one thing in the pane that has not happened yet.
+   Collapses to a strip so a session with six offers is not permanently narrower
+   than one with none. */
+
+.tasks {
+    flex: none;
+    width: 300px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    border-left: 1px solid var(--outline-soft);
+    /* Only the width animates. Animating the whole box makes the transcript
+       reflow twice as the text inside re-wraps mid-transition. */
+    transition: width var(--t-fast) var(--ease);
 }
-.ev-suggestion .ev-label { color: var(--blue); }
-.ev-suggestion .sugg-title {
-    margin-top: 3px;
-    font: 500 13.5px/1.5 var(--sans);
-    color: var(--text-2);
+.tasks.shut { width: 34px; }
+.tasks[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) { .tasks { transition: none; } }
+
+/* Narrow windows have no room for a third column, and the transcript is the
+   one that matters. The panel is still reachable — it becomes the strip. */
+@media (max-width: 1100px) { .tasks:not(.shut) { width: 240px; } }
+@media (max-width: 900px) { .tasks { display: none; } }
+
+.tasks-open { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.tasks-open[hidden] { display: none; }
+
+.tasks-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: none;
+    padding: 10px 12px 8px;
 }
-.ev-suggestion .sugg-why {
-    margin-top: 2px;
-    font: 400 12.5px/1.55 var(--sans);
+.tasks-title {
+    font: 500 11px/1.4 var(--sans);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
     color: var(--text-4);
 }
-/* The prompt is the thing being offered, so it is the readable part of the card
-   — not clipped, and not in the quieter colour the reason gets. */
-.ev-suggestion .sugg-prompt { margin-top: 8px; font-size: 13.5px; }
-.ev-suggestion .sugg-cwd {
-    margin-top: 6px;
-    font: 400 11.5px/1.5 var(--mono);
+.tasks-count {
+    min-width: 17px;
+    padding: 0 5px;
+    border-radius: 9px;
+    background: var(--blue-cont);
+    color: var(--blue);
+    font: 500 11px/17px var(--sans);
+    text-align: center;
+}
+.tasks-collapse {
+    margin-left: auto;
+    padding: 2px 7px;
+    border: 0;
+    border-radius: var(--r-xs);
+    background: none;
+    color: var(--text-4);
+    font: 400 11.5px/1.5 var(--sans);
+    cursor: pointer;
+}
+.tasks-collapse:hover { background: var(--s3); color: var(--text-2); }
+
+.tasks-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0 8px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+/* The strip the panel becomes. Vertical text, so the label stays readable at
+   34px rather than being clipped to "Ta". */
+.tasks-strip {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 0;
+    border: 0;
+    background: none;
+    color: var(--text-4);
+    cursor: pointer;
+}
+.tasks-strip[hidden] { display: none; }
+.tasks-strip:hover { background: var(--s2); color: var(--text-2); }
+/* The strip is one tall button, so the default ring draws a box the height of
+   the window around it. Inset, it reads as the control being focused rather
+   than as a second panel border. */
+.tasks-strip:focus-visible { outline-offset: -3px; }
+.tasks-strip-label {
+    writing-mode: vertical-rl;
+    font: 500 11px/1 var(--sans);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+/* One task. A `details`, like a tool call in the log, so the caret and the
+   keyboard behaviour are the browser's rather than ours. */
+.task {
+    border: 1px solid var(--outline-soft);
+    border-left: 2px solid var(--blue);
+    border-radius: var(--r-xs);
+    background: var(--s2);
+}
+.task[data-status="started"] { border-left-color: var(--green); }
+.task[data-status="dismissed"] { border-left-color: var(--outline-soft); opacity: 0.72; }
+.task[data-status="dismissed"]:hover { opacity: 1; }
+
+.task > summary {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    padding: 8px 10px;
+    cursor: pointer;
+    list-style: none;
+    font: 400 12.5px/1.45 var(--sans);
+    color: var(--text-2);
+}
+.task > summary::-webkit-details-marker { display: none; }
+.task > summary:hover { background: var(--s3); }
+.task[open] > summary { border-bottom: 1px solid var(--outline-soft); }
+.task > summary .caret {
+    flex: none;
+    margin-top: 1px;
+    font-size: 8px;
+    color: var(--text-4);
+    transition: transform var(--t-fast) var(--ease);
+}
+.task[open] > summary .caret { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .task > summary .caret { transition: none; } }
+.task-name { min-width: 0; overflow-wrap: anywhere; }
+
+.task-body { padding: 9px 10px 11px; }
+.task-why {
+    font: 400 11.5px/1.5 var(--sans);
+    color: var(--text-4);
+    margin-bottom: 7px;
+}
+/* The prompt in full — it is the thing being offered, and the only way to judge
+   the offer. Scrolls rather than stretching the panel to the height of an essay. */
+.task-prompt {
+    max-height: 320px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    font-size: 12.5px;
+    color: var(--text-3);
+}
+.task-cwd {
+    margin-top: 7px;
+    font: 400 11px/1.45 var(--mono);
     color: var(--text-4);
     overflow-wrap: anywhere;
 }
-.ev-suggestion .sugg-btns {
+.task-btns {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+}
+.task-done {
     display: flex;
     align-items: center;
     gap: 8px;
     flex-wrap: wrap;
-    margin-top: 11px;
-}
-/* Acted on: the card stays, because the agent's reasoning is still worth
-   reading, but it stops competing with the offers that are still open. */
-.ev-suggestion .sugg-done {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-top: 10px;
-    font: 400 12.5px/1.5 var(--sans);
+    margin-top: 9px;
+    font: 400 12px/1.5 var(--sans);
     color: var(--text-4);
 }
 .linky {

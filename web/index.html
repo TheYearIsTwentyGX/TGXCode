@@ -277,6 +277,31 @@
           <div id="agent-scroll" class="scroll" hidden>
             <div id="agent-log" class="log"></div>
           </div>
+          <!-- Work an agent suggested and did not do. An aside rather than part
+               of the transcript: the conversation is a record of what happened,
+               and these are the one thing in the pane that is still a decision —
+               so they sit beside it, out of the way until you want them, rather
+               than interrupting the reading.
+
+               Collapses to a strip, because a session that suggested six things
+               should not be permanently narrower than one that suggested none.
+               The strip is a button, so the whole thing is one tab stop when it
+               is shut. -->
+          <aside id="tasks" class="tasks" hidden aria-label="Suggested follow-ups">
+            <button id="tasks-strip" class="tasks-strip" type="button" hidden>
+              <span class="tasks-strip-label">Suggested</span>
+              <span id="tasks-strip-count" class="tasks-count"></span>
+            </button>
+            <div id="tasks-open" class="tasks-open">
+              <div class="tasks-head">
+                <span class="tasks-title">Suggested</span>
+                <span id="tasks-count" class="tasks-count"></span>
+                <button id="tasks-collapse" class="tasks-collapse" type="button"
+                        title="Put these to one side">Hide</button>
+              </div>
+              <div id="tasks-list" class="tasks-list"></div>
+            </div>
+          </aside>
           <nav id="turns" class="turns" aria-label="Your messages in this session"></nav>
         </div>
 
