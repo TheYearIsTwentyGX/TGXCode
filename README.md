@@ -726,6 +726,7 @@ not.
 | `bridge/registry.js` | Which sessions have a process, from Claude Code's own registry |
 | `bridge/transcript.js` | JSONL → render events; pairs tool calls with results; reads subagent transcripts |
 | `bridge/tasks.js` | Subagent task records |
+| `bridge/attachments.js` | Files pasted into the composer — where they land, and out of git |
 | `bridge/memo.js` | Small notes the UI keeps against a session |
 | `bridge/runner.js` | `claude` processes, one per active conversation |
 | `bridge/terminal.js` | The pty, out of `script(1)` — a shell to type into, or a declared command |

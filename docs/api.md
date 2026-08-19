@@ -153,7 +153,7 @@ Event kinds, all with `id`, `kind`, `ts`:
 
 | kind | Carries |
 |---|---|
-| `user` | `text`, `images[]`, `command`, `origin` (`human` or an agent) |
+| `user` | `text`, `images[]`, `files[]`, `command`, `origin` (`human` or an agent) |
 | `assistant` | `text` (markdown), `model` |
 | `thinking` | `text` |
 | `tool` | `name`, `input{}`, `status` (`ok`/`error`/absent while running), `result{text,stdout,stderr,patch,filePath,interrupted}`, `agent`, `persistedPath`, `durationMs` |
@@ -364,7 +364,8 @@ first message.
 
 ### `POST /api/sessions/:id/send`
 
-`{text, model?, permissionMode?, fork?}` → `{ok, id, cwd, fork, status, queued}`.
+`{text, attachments?, model?, permissionMode?, fork?}` →
+`{ok, id, cwd, fork, status, queued}`.
 
 **Always send `permissionMode`.** An absent one normalises to `auto`, which means
 omitting it does not mean "leave it alone" — it means "set it to auto", and would
@@ -372,6 +373,49 @@ quietly drop a session out of `acceptEdits` on every message.
 
 A model or mode change replaces the process; queued messages carry across. `queued`
 tells you whether the text is still recoverable on this side.
+
+`attachments` is a list of files already uploaded through the route below —
+`[{path, relPath?, mediaType?}]`, at most five. Each is re-derived against *this*
+session's own attachments directory and dropped if it no longer resolves, so a client
+cannot name a path by sending one. `text` may be empty when there is at least one
+attachment: a screenshot with nothing typed under it is a message.
+
+What the process receives is the text plus a trailing list of the paths, and an inline
+image block for each attachment that really is a PNG, JPEG, GIF or WebP. The list is
+parsed back off the message before the transcript renders it (`files[]` on the `user`
+event above), so the paths are not shown twice.
+
+### `POST /api/sessions/:id/attachments?name=…`
+
+Raw file bytes, one file per request, `Content-Type` as a hint —
+→ `{ok, name, path, relPath, dir, bytes, mediaType, renamed}`.
+
+Not JSON: `readJson` caps a body at 4MB and base64 is a third larger than what it
+encodes, which would put the real limit under 3MB. The cap here is **25MB**, answered
+from `Content-Length` before the bytes travel where the client sent one.
+
+The file is written to `attached_assets/` at the root of the checkout the session is
+working in — the *worktree* root for a worktree session, not the checkout that owns it.
+`attached_assets/` is added to the owning checkout's `.git/info/exclude` on first write,
+which is local and untracked; no `.gitignore` is ever edited. Nothing prunes the
+directory.
+
+`name` is refused rather than sanitised — no separator, no `..`, no control character,
+200 bytes — but a leading dot is allowed, unlike `/api/fs/mkdir`, because nothing
+browses this directory. An existing name is never overwritten: `shot.png` becomes
+`shot-2.png` and `renamed` says so, so a client can relabel its chip.
+
+`mediaType` is sniffed from the bytes, not taken from `Content-Type`, because it is what
+decides whether the turn carries an inline image block.
+
+`413` is the cap. `403` is a directory outside the allowed roots, or a remote caller.
+
+### `POST /api/sessions/:id/attachments/open`
+
+`{path}` → `{ok, path, file}`. Opens the file in whatever the Windows host opens that
+kind of file with. Only the basename is taken from the caller; the directory is
+recomputed, so `404` means "not one of this session's attachments" rather than
+"missing". Local callers only.
 
 ### `POST /api/sessions/:id/permission`
 

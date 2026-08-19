@@ -3,8 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- `blob:` is in img-src for one thing only: the thumbnail on a file you have just
+     pasted into the composer, which is a URL this page minted from a File it was
+     handed. It is not a network origin and it cannot name anything this page did not
+     create, which is why it is a smaller widening than it looks — and the alternative
+     was reading every screenshot into a base64 data URI, a third larger, held in a
+     string for as long as the chip is on screen. -->
 <meta http-equiv="Content-Security-Policy"
-      content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self'">
+      content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; connect-src 'self'">
 <title>Claude Sessions</title>
 <link rel="stylesheet" href="./vendor/xterm.css">
 <link rel="stylesheet" href="./styles.css">
@@ -310,7 +316,7 @@
              be typing in, not somewhere you can scroll away from. -->
         <div id="ask-dock" class="ask-dock" hidden></div>
 
-        <div class="composer">
+        <div class="composer" id="composer">
           <div class="composer-inner">
             <div id="status-line" class="status-line" data-state="idle">
               <span class="led"></span>
@@ -332,6 +338,18 @@
               </div>
               <ol id="queue-list" class="queue-list" aria-label="Messages waiting to be sent"></ol>
             </div>
+
+            <!-- Files staged for the next message. Already written to
+                 attached_assets/ in the session's checkout by the time a chip
+                 appears here, which is what lets a chip survive a reload and what
+                 keeps the send itself a small JSON POST.
+
+                 Above the input row and below the queue, so bottom-to-top it reads
+                 what is waiting, then what is attached, then what you are typing —
+                 and so it never lands between the lock notice and the two buttons
+                 that notice is about. -->
+            <div id="attach" class="attach" hidden
+                 aria-label="Files attached to this message"></div>
 
             <!-- This session already has a process somewhere else, so sending from
                  here would put two writers on one transcript. Offered before
@@ -362,6 +380,21 @@
               <textarea id="input" rows="1" placeholder="Send a message to this session…"
                         aria-label="Message" role="combobox" aria-expanded="false"
                         aria-controls="slash-menu mention-menu" aria-autocomplete="list"></textarea>
+              <!-- Paste and drag-drop are the gestures people actually use; this is
+                   for the times there is nothing to drag from — and it is the only
+                   way in at all on a touch screen. The input is hidden rather than
+                   styled because a file input cannot be styled, and both go through
+                   the same attachFiles() as a paste. -->
+              <input id="attach-input" type="file" multiple hidden aria-hidden="true">
+              <button id="btn-attach" class="btn-attach" type="button" disabled
+                      title="Attach files (or paste, or drop them here)"
+                      aria-label="Attach files">
+                <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+                  <path d="M9.5 3.5 5 8a2.5 2.5 0 0 0 3.5 3.5l4.5-4.5a4 4 0 0 0-5.7-5.7L2.8 5.9a5.5 5.5 0 0 0 7.8 7.8l3-3"
+                        fill="none" stroke="currentColor" stroke-width="1.4"
+                        stroke-linecap="round"/>
+                </svg>
+              </button>
               <button id="btn-send" class="btn-send" type="button" disabled>Send</button>
               <!-- The end of a review in one click. It sends a written instruction
                    like any other message, so the transcript records what was asked

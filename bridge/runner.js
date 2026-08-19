@@ -67,6 +67,7 @@ const cfg = require('./config');
 
 const { CLAUDE_BIN } = cfg;
 const { describeTool } = require('./transcript');
+const { ATTACHMENT_NOTE_HEAD, attachmentNoteLine } = require('./attachments');
 
 // Queue entry ids only have to be unique per process; the UI never persists one.
 let queueSeq = 0;
@@ -144,6 +145,67 @@ const CONTROL_TIMEOUT_MS = 8_000;
 // turn instead and say why.
 const MAX_AUTO_DENIES = 2;
 
+// Types the API accepts as an image source. Kept here rather than imported from
+// bridge/attachments.js so the runner has no opinion about where files come from —
+// it is handed a list and asked to send it.
+const INLINE_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+
+// A cap on what one turn will inline, independent of the per-file upload cap. Five
+// 25MB screenshots base64'd is a 160MB line on a pipe, and the paths are in the text
+// either way — so past this the model reads the file instead of being handed it.
+const MAX_INLINE_BYTES = 12 * 1024 * 1024;
+
+/**
+ * The content blocks for one user turn.
+ *
+ * With nothing attached this is what it always was: one text block. With files on it,
+ * three things are going on, and they are worth separating.
+ *
+ * **The note is split across blocks, one line each, with an image block sitting
+ * straight after the line that names it.** `userText` in bridge/transcript.js joins a
+ * turn's text blocks with a newline, so this reassembles into exactly the message a
+ * single block would have carried — the parser on the way back does not know or care
+ * that it arrived in pieces. What it buys is that each screenshot is labelled with the
+ * file it came from. Two anonymous images on one turn are genuinely ambiguous, and
+ * asked which was which the model said so; "the second screenshot" is a thing people
+ * say, and this is what makes it answerable.
+ *
+ * **The base64 is read here**, at flush time, rather than carried on the queue entry.
+ * A queued message is broadcast to every viewer inside `status()` on every change, and
+ * a screenshot on that path would put megabytes through an SSE stream for reasons
+ * unrelated to it.
+ *
+ * **A file that has gone missing since it was staged is skipped**, not fatal. Its path
+ * is still in the note, so the message stays true either way: it says a file was
+ * attached, and the model finds out it cannot read it in the ordinary way.
+ */
+function userContent(entry) {
+    const files = entry.attachments || [];
+    if (!files.length) return [{ type: 'text', text: entry.text }];
+
+    // The note's heading rides on the end of the typed message rather than in a block
+    // of its own, so the blank line between the two survives the rejoin.
+    const content = [{
+        type: 'text',
+        text: entry.text ? `${entry.text}\n\n${ATTACHMENT_NOTE_HEAD}` : ATTACHMENT_NOTE_HEAD,
+    }];
+
+    let budget = MAX_INLINE_BYTES;
+    for (const a of files) {
+        content.push({ type: 'text', text: attachmentNoteLine(a) });
+        if (!INLINE_IMAGE_TYPES.has(a.mediaType) || a.bytes > budget) continue;
+        let data;
+        try { data = fs.readFileSync(a.path); } catch { continue; }
+        budget -= data.length;
+        content.push({
+            type: 'image',
+            source: { type: 'base64', media_type: a.mediaType, data: data.toString('base64') },
+        });
+    }
+
+    return content;
+}
+
 class Runner extends EventEmitter {
     /**
      * @param {object} opts
@@ -178,6 +240,11 @@ class Runner extends EventEmitter {
         // written straight through, so they stay visible and cancellable — see
         // _flushQueue.
         this.queue = [];
+        // Queue *entries*, not their text. It used to hold strings, and the retry
+        // path below concatenates this straight back onto `queue` — which meant a
+        // resumed queue held strings where every reader expects `{id, text, at}`,
+        // and the next flush wrote a turn with `text: undefined` in it. Entries
+        // throughout, so the two arrays are one shape.
         this.inFlight = [];            // written to the process, not yet answered
         this._buf = '';
         this._stderr = '';
@@ -302,7 +369,7 @@ class Runner extends EventEmitter {
                 this.emit('failed', {
                     kind: classified.kind,
                     message: classified.message,
-                    unsent: this.inFlight.concat(this.queue.map(q => q.text)),
+                    unsent: this.inFlight.concat(this.queue).map(q => q.text),
                 });
                 this.inFlight.length = 0;
                 this.queue.length = 0;
@@ -327,9 +394,14 @@ class Runner extends EventEmitter {
      * Returns the queue entry, so a caller can tell whether its message went
      * out immediately or is still waiting.
      */
-    send(text) {
+    send(text, attachments = []) {
         this.lastUsedAt = Date.now();
-        const entry = { id: `q${++queueSeq}`, text, at: Date.now() };
+        // `text` stays a plain string and the files ride alongside it, rather than
+        // the entry becoming a content-block array. Everything that already reads an
+        // entry — the queue chips, the hand-back on death, dequeue, reorder, the
+        // `dropped` a stop reports — reads `.text`, and all of it keeps working
+        // untouched. Only _flushQueue knows these are here.
+        const entry = { id: `q${++queueSeq}`, text, at: Date.now(), attachments };
         this.queue.push(entry);
         if (!this.proc) this.start();
         else this._flushQueue();
@@ -354,14 +426,14 @@ class Runner extends EventEmitter {
         // ours at that point, so put it back rather than dropping it on the floor.
         if (!this._write({
             type: 'user',
-            message: { role: 'user', content: [{ type: 'text', text: entry.text }] },
+            message: { role: 'user', content: userContent(entry) },
         })) {
             this.queue.unshift(entry);
             return;
         }
         // Held until a result arrives: if the process dies first, this text
         // was never written to the transcript and would otherwise be lost.
-        this.inFlight.push(entry.text);
+        this.inFlight.push(entry);
         this._setState('busy', 'Thinking…');
         // _setState only reports when the state or activity moved; a shorter
         // queue is news on its own.
@@ -1038,7 +1110,13 @@ class Runner extends EventEmitter {
             // status event carries this, so it stays a list of what is still
             // waiting — the message being answered is on its way to the transcript
             // and is read from there like any other.
-            queue: this.queue.map(q => ({ id: q.id, text: q.text, at: q.at })),
+            // `attachments` rides along so a chip can say a message has files on it,
+            // and so editing one puts them back on the composer rather than dropping
+            // them on the floor. Metadata only — the base64 is read at flush time and
+            // never travels on a status event.
+            queue: this.queue.map(q => ({
+                id: q.id, text: q.text, at: q.at, attachments: q.attachments || [],
+            })),
             // A window opening onto a session that is already blocked on an ask
             // has to be able to draw the card without having seen the event.
             pendingPermission: this.pendingPermission ? publicAsk(this.pendingPermission) : null,
