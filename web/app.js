@@ -117,6 +117,18 @@ const state = {
     // conversation, keyed by the id of the tool call that raised it. Arrives
     // whole on the session payload; changes arrive over SSE.
     suggestions: new Map(),   // toolUseId -> {status, startedId, at}
+    // The suggestions themselves, in the order they were raised. They are pulled
+    // out of the transcript on the way past — see appendEvents — because they are
+    // drawn in the aside beside the log rather than in it.
+    tasks: new Map(),         // toolUseId -> ev
+    // Which task bodies are open. Only the ones you have actually toggled: the
+    // default is worked out per task in taskCard, so an offer you have not dealt
+    // with opens itself and one you have dealt with does not.
+    taskOpen: new Map(),      // toolUseId -> bool
+    // Whether the aside is showing at all. A property of the window rather than
+    // of a session, like the terminal pane's height — you either want these in
+    // view while you work or you do not.
+    tasksShut: localStorage.getItem('tasksShut') === '1',
     queueSig: '',           // what the chips were last built from, to avoid churn
     queueFocus: null,       // the chip holding the queue's single tab stop
     ask: null,              // the approval this session is blocked on, if any
@@ -180,6 +192,8 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'btn-pin', 'btn-folder', 'btn-term', 'btn-archive', 'btn-delete', 'turns', 'turn-pop',
     'term-pane', 'term-grip', 'term-dir', 'term-moved', 'term-body', 'term-restart', 'term-close',
     'term-tabs', 'term-stop', 'cmds',
+    'tasks', 'tasks-strip', 'tasks-strip-count', 'tasks-open', 'tasks-count',
+    'tasks-collapse', 'tasks-list',
     'agents', 'agent-scroll', 'agent-log', 'btn-back', 'btn-back-label',
     'ask-dock', 'plan-pane', 'plan-bar', 'plan-aside', 'plan-agent', 'plan-title',
     'plan-body', 'plan-doc', 'plan-foot',
@@ -784,6 +798,8 @@ async function openSession(id, { quiet = false, keepDash = false } = {}) {
         // built — a card drawn first and corrected afterwards would offer to
         // start something that was started days ago.
         state.suggestions = new Map(Object.entries(data.suggestions || {}));
+        state.tasks.clear();
+        state.taskOpen.clear();
 
         renderHeader();
         // Drops the skeleton — and with it a row drawn at Send while this fetch was
@@ -840,6 +856,9 @@ function beginOpen(summary, { keepDash = false } = {}) {
     state.agents = [];  // the previous session's agents are not this one's
     state.ask = null;   // approvals belong to the session that is blocked on them
     state.suggestions.clear();  // what was acted on belongs to the session it was raised in
+    state.tasks.clear();        // and so do the offers themselves
+    state.taskOpen.clear();
+    renderTasks();              // empties the aside, and hides it
     // A row drawn for one session is not evidence about another. The log is
     // replaced below in any case; this is what disarms the timer holding it.
     clearPendingSend();
@@ -1024,8 +1043,17 @@ function appendEvents(events, view = SESSION_VIEW) {
     const frag = document.createDocumentFragment();
     let newTurn = false;
     let sawAgent = false;
+    let newTasks = false;
     for (const ev of events) {
         if (ev.kind === 'tool-result') { patchTool(ev, view); continue; }
+        // A suggested follow-up is not part of the conversation, it is an offer
+        // about it — so it comes out here and is drawn in the aside instead.
+        // Taken from either view: a subagent that suggests something has
+        // suggested it to this session, and the panel is the session's.
+        if (ev.kind === 'suggestion') {
+            if (!state.tasks.has(ev.id)) { state.tasks.set(ev.id, ev); newTasks = true; }
+            continue;
+        }
         if (view.nodes.has(ev.id)) continue;
         const node = renderEvent(ev);
         if (!node) continue;
@@ -1056,6 +1084,7 @@ function appendEvents(events, view = SESSION_VIEW) {
         frag.append(node);
     }
     if (frag.childNodes.length) view.log.append(frag);
+    if (newTasks) renderTasks();
     if (!view.isAgent) {
         if (newTurn) renderTurns();
         // A Task call that has only just appeared belongs on the strip now, not
@@ -1108,7 +1137,6 @@ function renderEvent(ev) {
         case 'thinking': return renderThinking(ev);
         case 'tool': return renderTool(ev);
         case 'agent-done': return renderAgentDone(ev);
-        case 'suggestion': return renderSuggestion(ev);
         case 'peer-message': return renderPeerMessage(ev);
         case 'system': return renderSystem(ev);
         case 'compact': return row(ev, 'compact', 'context compacted');
@@ -1195,58 +1223,111 @@ function renderAgentDone(ev) {
     return row(ev, 'agent-done', ...body);
 }
 
+// ── suggested follow-ups ─────────────────────────────────────────────────
+//
+// Work an agent noticed and did not do, drawn beside the conversation rather
+// than in it.
+//
+// The agent files these through a tool this app gives it (bridge/suggest-mcp.js),
+// so an offer is a tool call in the transcript like any other — which is why it
+// survives a reload, appears in a second window, and can be read out of a
+// session this bridge does not own. Nothing about the offer is stored here; only
+// what you decided about it, which is the bridge's suggestions.json.
+//
+// **An aside, not part of the log.** The transcript is a record of what
+// happened, and an offer is the one thing in the pane that has not happened yet
+// — it is a decision waiting on you. Inline, it interrupted the reading and
+// scrolled away from you; here it stays put and stays optional. appendEvents
+// lifts these out of the event stream on the way past, so the log never sees one.
+//
+// The panel collapses to a strip, because a session that suggested six things
+// should not be permanently narrower than one that suggested none. Each task
+// collapses on its own too, and the default is per task rather than global: an
+// offer you have not dealt with opens itself, one you have opens to a line.
+
+/** What a task's body should do when nothing has been said about it. */
+const taskOpenByDefault = (acted) => !acted;
+
+/** The whole aside, rebuilt from state.tasks. Cheap: there are never many. */
+function renderTasks() {
+    const tasks = [...state.tasks.values()];
+    dom.tasks.hidden = !tasks.length;
+    if (!tasks.length) return;
+
+    // Only the ones still on offer are counted. A count that includes things you
+    // have already dealt with is a number that never goes down, which is the
+    // opposite of what a count on a to-do list is for.
+    const open = tasks.filter(t => !state.suggestions.get(t.id)).length;
+    const label = open ? String(open) : '✓';
+    dom.tasksCount.textContent = label;
+    dom.tasksStripCount.textContent = label;
+
+    dom.tasksStrip.hidden = !state.tasksShut;
+    dom.tasksOpen.hidden = state.tasksShut;
+    dom.tasks.classList.toggle('shut', state.tasksShut);
+    if (state.tasksShut) return;   // nothing behind the strip needs building
+
+    dom.tasksList.replaceChildren(...tasks.map(taskCard));
+}
+
 /**
- * Work an agent noticed and did not do.
+ * One task.
  *
- * The agent files these through a tool this app gives it (bridge/suggest-mcp.js),
- * so the offer is a tool call in the transcript like any other — which is why it
- * survives a reload, shows up in a second window, and can be read out of a
- * session this bridge does not own. Nothing about it is stored here.
- *
- * A card rather than a collapsed tool block, because a collapsed grey row saying
- * `suggest_session` is exactly how an offer goes unread, and because the
- * arguments *are* the content: there is nothing inside to go and look at.
- *
- * It is not a dock and it does not block. The turn is over, the work is
- * optional, and where in the conversation it was raised is part of judging
- * whether it is worth doing — the same reasoning the tool asks use for staying
- * in the log.
+ * A `details`, which is the same thing a tool call is in the log, so the caret
+ * and the keyboard behaviour are the browser's rather than ours. The summary is
+ * the title alone; everything that would make the panel wide lives inside.
  */
-function renderSuggestion(ev) {
+function taskCard(ev) {
     const acted = state.suggestions.get(ev.id) || null;
-    const body = [el('div', { class: 'ev-label' }, 'Suggested follow-up')];
+    const remembered = state.taskOpen.get(ev.id);
+    const open = remembered === undefined ? taskOpenByDefault(acted) : remembered;
 
-    if (ev.title) body.push(el('div', { class: 'sugg-title' }, ev.title));
-    if (ev.why) body.push(el('div', { class: 'sugg-why' }, ev.why));
+    const det = el('details', {
+        class: 'task', 'data-status': acted ? acted.status : 'open',
+        open,
+        ontoggle: (e) => state.taskOpen.set(ev.id, e.currentTarget.open),
+    },
+    el('summary', {},
+        el('span', { class: 'caret' }, '▶'),
+        el('span', { class: 'task-name' }, ev.title || firstLine(ev.prompt)),
+    ));
 
-    // The prompt in full, not clipped. It is the thing being offered and the
-    // only way to judge the offer; a preview would mean starting a session on
-    // a message you have not read.
-    body.push(el('div', { class: 'sugg-prompt prose', html: renderMarkdown(ev.prompt) }));
-    if (ev.cwd) body.push(el('div', { class: 'sugg-cwd' }, ev.cwd));
+    const body = el('div', { class: 'task-body' });
+    if (ev.why) body.append(el('div', { class: 'task-why' }, ev.why));
+    // The prompt in full. It is the thing being offered and the only way to
+    // judge the offer; a preview would mean starting a session on a message you
+    // have not read.
+    body.append(el('div', { class: 'task-prompt prose', html: renderMarkdown(ev.prompt) }));
+    // Only when it is somewhere other than where this conversation is happening.
+    // Almost every task runs in the session's own directory, and repeating that
+    // path down the panel is three lines of noise saying nothing — but a task
+    // pointed at a *different* checkout is worth knowing about before you start it.
+    if (ev.cwd && ev.cwd !== (state.current && state.current.cwd)) {
+        body.append(el('div', { class: 'task-cwd' }, ev.cwd));
+    }
 
     if (acted && acted.status === 'started') {
-        body.push(el('div', { class: 'sugg-done' },
+        body.append(el('div', { class: 'task-done' },
             el('span', {}, 'Started'),
             acted.startedId
                 ? el('button', { class: 'linky', type: 'button',
                     onclick: () => openSession(acted.startedId) }, 'open it')
                 : null,
-            // Undo, because a card that has gone quiet with no way back is a card
-            // that lies after the session it names has been deleted.
+            // Undo, because a task that has gone quiet with no way back is a task
+            // that lies once the session it names has been deleted.
             el('button', { class: 'linky', type: 'button',
                 onclick: () => actOnSuggestion(ev, null) }, 'offer again'),
         ));
     } else if (acted && acted.status === 'dismissed') {
-        body.push(el('div', { class: 'sugg-done' },
+        body.append(el('div', { class: 'task-done' },
             el('span', {}, 'Dismissed'),
             el('button', { class: 'linky', type: 'button',
                 onclick: () => actOnSuggestion(ev, null) }, 'undo'),
         ));
     } else {
-        body.push(el('div', { class: 'sugg-btns' },
+        body.append(el('div', { class: 'task-btns' },
             el('button', { class: 'more-btn primary', type: 'button',
-                onclick: (e) => startSuggestion(ev, e.currentTarget) }, 'Start this'),
+                onclick: (e) => startSuggestion(ev, e.currentTarget) }, 'Start'),
             el('button', { class: 'more-btn', type: 'button',
                 onclick: () => openNew({ cwd: ev.cwd || '', prompt: ev.prompt }) }, 'Edit first'),
             el('button', { class: 'more-btn', type: 'button',
@@ -1254,11 +1335,12 @@ function renderSuggestion(ev) {
         ));
     }
 
-    return row(ev, 'suggestion', ...body);
+    det.append(body);
+    return det;
 }
 
 /**
- * Start the session a suggestion describes, exactly as the dialog would.
+ * Start the session a task describes, exactly as the dialog would.
  *
  * `plan` rather than the mode this session is in: a prompt written by an agent
  * for an agent has had no human read it as an instruction yet, and the first
@@ -1272,23 +1354,23 @@ async function startSuggestion(ev, btn) {
             cwd: ev.cwd || (state.current && state.current.cwd),
             prompt: ev.prompt,
             permissionMode: 'plan',
-            // A suggestion raised inside a test session is scratch work too.
+            // A task raised inside a test session is scratch work too.
             test: state.dev && !!(state.current && state.current.test),
         });
         await actOnSuggestion(ev, 'started', r.sessionId);
         toast('Session started.', 'ok');
         openSessionSoon(r.sessionId);
     } catch (err) {
-        if (btn) { btn.disabled = false; btn.textContent = 'Start this'; }
+        if (btn) { btn.disabled = false; btn.textContent = 'Start'; }
         toast(`Could not start it: ${err.message}`, 'error');
     }
 }
 
 /**
- * Record what happened to a suggestion, and redraw its card.
+ * Record what happened to a task, and redraw the panel.
  *
- * `status` of null undoes — the card goes back to offering itself. Optimistic,
- * then corrected from the bridge's answer, because these are single clicks on
+ * `status` of null undoes — the task goes back to offering itself. Optimistic,
+ * then put back if the bridge refuses, because these are single clicks on
  * something already on screen and a round trip before anything moves reads as a
  * dead button.
  */
@@ -1299,28 +1381,49 @@ async function actOnSuggestion(ev, status, startedId = null) {
 
     if (status) state.suggestions.set(ev.id, { status, startedId, at: Date.now() });
     else state.suggestions.delete(ev.id);
-    redrawEvent(ev);
+    // Deciding about a task is also finishing with it, so it folds away — and
+    // undoing opens it again. Left to the default rather than remembered, which
+    // is the one place the remembered state would be actively unhelpful.
+    state.taskOpen.delete(ev.id);
+    renderTasks();
 
     try {
         await post(`/api/sessions/${sessionId}/suggestions/${ev.id}`, { status, startedId });
     } catch (err) {
         if (before) state.suggestions.set(ev.id, before);
         else state.suggestions.delete(ev.id);
-        redrawEvent(ev);
+        renderTasks();
         toast(`Could not save that: ${err.message}`, 'error');
     }
+}
+
+/** The first line of a block of text, for a row with room for one. */
+function firstLine(text, max = 70) {
+    const line = String(text || '').split('\n').find(l => l.trim()) || '';
+    return line.length > max ? line.slice(0, max - 1) + '…' : line;
+}
+
+/** Put the panel away, or bring it back. Remembered across sessions. */
+function showTasks(on) {
+    state.tasksShut = !on;
+    localStorage.setItem('tasksShut', state.tasksShut ? '1' : '0');
+    renderTasks();
+    // Focus follows the thing that replaced what was clicked, so the keyboard
+    // does not land on the body after either direction.
+    (state.tasksShut ? dom.tasksStrip : dom.tasksCollapse).focus();
 }
 
 /**
  * Replace one already-rendered event's node with a freshly built one.
  *
- * Only the suggestion card needs this today: it is the one event whose drawing
- * depends on state that changes after it was drawn. Everything else in the log
- * is a fact about the transcript and never moves.
+ * Almost everything in the log is a fact about the transcript and never moves.
+ * The exception is anything naming another session: a peer message and a
+ * `SendMessage` block both want the peer list, which is fetched lazily, so they
+ * are drawn once without it and again once it lands. See warmPeers.
  *
- * Both views are searched, because a subagent can file a suggestion too and its
- * transcript is a pane of its own. Which one holds the card is not worth asking
- * about — the id is unique either way, and both panes stay mounted.
+ * Both views are searched, because a subagent's transcript is a pane of its own.
+ * Which one holds the node is not worth asking about — the id is unique either
+ * way, and both panes stay mounted.
  */
 function redrawEvent(ev) {
     for (const nodes of [state.nodes, state.agentNodes]) {
@@ -4498,10 +4601,9 @@ function connect() {
             const r = await get(`/api/sessions/${d.sessionId}/suggestions`);
             state.suggestions = new Map(Object.entries(r.suggestions || {}));
         } catch { return; }
-        // Redraw only the card that moved. Everything else in the log is a fact
-        // about the transcript and has not changed.
-        const entry = state.nodes.get(d.toolUseId) || state.agentNodes.get(d.toolUseId);
-        if (entry) redrawEvent(entry.ev);
+        // The whole aside, which is a handful of nodes — the transcript beside
+        // it is untouched, because none of this was ever in it.
+        renderTasks();
     });
 
     // A declared command started, took its port, or ended — possibly in another
@@ -6292,6 +6394,9 @@ dom.btnSend.addEventListener('click', () => sendMessage());
 dom.btnLgtm.addEventListener('click', () => sendMessage({ text: LGTM_PROMPT, canned: true }));
 // Wrapped, not passed: openNew now takes an options bag, and a MouseEvent is
 // not one.
+dom.tasksCollapse.addEventListener('click', () => showTasks(false));
+dom.tasksStrip.addEventListener('click', () => showTasks(true));
+
 dom.btnNew.addEventListener('click', () => openNew());
 
 dom.btnPin.addEventListener('click', () => {

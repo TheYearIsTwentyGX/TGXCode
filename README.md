@@ -115,7 +115,7 @@ create one in `%APPDATA%\claude-sessions\`:
 | **Composer** | Sends to the session, resuming it in place — the same transcript a terminal would append to. |
 | **LGTM** | Beside *Send*, for when you have read the work and it is done: it sends a written instruction to put the change on a pull request if it is not on one already, run the project's checks, and merge once they pass — and to stop and say so if something blocks it. One click, no confirmation over the top; the session still asks for what its permission mode makes it ask for. |
 | **Send queue** | Write while an agent is working and the message waits, listed above the composer in send order. Each one can be expanded, reordered, pulled back for editing, or dropped, right up until its turn starts. `Shift+Tab` out of the composer to work through them without the mouse. |
-| **Suggested follow-ups** | An agent that notices work outside what it was asked to do files it as a card, with the prompt already written. *Start this* runs it, *Edit first* opens it in the Start dialog, *Dismiss* puts it away. |
+| **Suggested** | The panel beside the transcript. An agent that notices work outside what it was asked to do files it there, with the prompt already written. Each one folds to its title; *Start* runs it, *Edit first* opens it in the Start dialog, *Dismiss* puts it away. *Hide* collapses the whole panel to a strip. |
 | **Mentions** | `@` in the composer lists the other sessions running on this machine and inserts the one you pick as `@[name]` — the name an agent addresses it by. |
 
 Shortcuts: `Ctrl+Enter` send, `Ctrl+K` filter, `Ctrl+N` new session, `Esc` leave
@@ -183,7 +183,19 @@ So sessions this app starts get one tool they would not otherwise have —
 `suggest_session`, from a small MCP server in `bridge/suggest-mcp.js` that the
 runner attaches with `--mcp-config`. The agent calls it with a prompt, a reason,
 and optionally a directory; the call lands in the transcript like any other tool
-call; the conversation draws it as a card you can start in one click.
+call; the panel beside the conversation draws it as a task you can start in one
+click.
+
+**It sits beside the transcript rather than in it.** The log is a record of what
+happened; an offer is the one thing in the pane that has not happened yet, and it
+is a decision waiting on you rather than an event. Inline it interrupted the
+reading and scrolled away; in the aside it stays put and stays optional. Each
+task folds to its title — open by default while it is still an offer, folded once
+you have dealt with it — and the panel itself folds to a strip, so a session that
+suggested six things is not permanently narrower than one that suggested none.
+Whether the panel is open is remembered across sessions, like the terminal pane's
+height; which tasks are open is not, because the useful default changes as you
+deal with them.
 
 **The server stores nothing, and that is the design.** The offer is already in the
 transcript, which is the copy that survives a restart, shows up in a second
@@ -200,6 +212,19 @@ A started suggestion runs in `plan` mode regardless of the mode it was raised in
 A prompt written by one agent for another has had no human read it as an
 instruction yet, and the first thing the new session should do is say what it
 intends to do about it.
+
+The directory is only named on a task that would run somewhere other than where
+the conversation is happening. Almost none do, and repeating the same path down
+the panel is noise saying nothing — but one pointed at a different checkout is
+worth knowing about before you start it.
+
+**These live and die with their session, for now.** A task is a tool call in one
+transcript, so it is visible when that conversation is open and nowhere else.
+Making them outlive the session — one list of everything outstanding, across
+every session — is a further step and a small one: the decisions are already
+stored apart from the transcripts and keyed the right way, so what is missing is
+an index of the offers themselves, which the rescan that already reads every
+transcript could collect as it goes.
 
 The tool is on `--allowedTools`, so filing one never raises an approval card —
 a permission prompt for "may I suggest this?" is noise. Only sessions the bridge
