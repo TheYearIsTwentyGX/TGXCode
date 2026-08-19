@@ -1,15 +1,5 @@
 #!/usr/bin/env bash
-
-# Dylan edit:
-# This ensures that when started by cron, internal paths get expanded properly:
-set -e
-
-cd "$(dirname "$(readlink -f "$0")")"
-
-PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-
-echo "Starting bridge restart process..."
-
+#
 # Restart the everyday bridge so it picks up whatever is on main now.
 #
 #   restart-bridge              restart from the local checkout
@@ -20,6 +10,18 @@ echo "Starting bridge restart process..."
 # Deliberately narrow: it only ever touches the instance on the everyday port.
 # `pkill -f bridge/server.js` would match development bridges too, and killing
 # one of those out from under an agent is the thing this whole setup avoids.
+#
+# It already runs under cron unchanged — there is a midnight entry for it — so
+# resist "fixing" the environment at the top. Every command it needs (git, curl,
+# python3, setsid, ss) is in /usr/bin, which cron's default PATH has, and $REPO
+# comes from BASH_SOURCE rather than the working directory, so no cd is wanted.
+# Setting PATH by hand is worse than useless: it drops nvm, and hardcoding
+# /usr/local/bin does nothing for a node that lives under ~/.nvm.
+#
+# `set -e` is the one that actually breaks it. `CURRENT="$(health)"` below exits
+# non-zero whenever nothing is listening, so the script would die right there —
+# taking out --status and, worse, the bring-it-back-up path the nightly restart
+# exists for. The explicit checks against an empty $CURRENT are the handling.
 
 set -uo pipefail
 
