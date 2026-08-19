@@ -50,7 +50,7 @@ These come out of how the app already works, and every plan respects them.
 | 10 | [Code and git](docs/plans/10-code-and-git.md) | "What did this agent actually change" currently means scrolling. Part of the git side exists: `bridge/dashboard.js` already runs `git status --porcelain=v2` per directory, cached, for the dashboard — the primitives to extract into `bridge/git.js` are there. |
 | 11 | [Labels and session info](docs/plans/11-labels-and-session-info.md) | Auto-titles are often bad, and the `system/init` message knows exactly which config produced a session's behaviour. |
 | 12 | [Export](docs/plans/12-export.md) | Sharing what an agent did without screenshotting it. |
-| 13 | [Dev servers](docs/plans/13-dev-servers.md) | We detect ports but can't act on them. §A's start half and §B are **superseded by 17** — a declared command beats one scraped from Bash traffic. §C and §D still stand. |
+| 13 | [Dev servers](docs/plans/13-dev-servers.md) | We detect ports but can't act on them. §A's start half and §B are **superseded by 17** — a declared command beats one scraped from Bash traffic. §C and §D still stand. Attribution is no longer guessed: a chip is shown only when the kernel says the port's process runs in this session's workspace. |
 | 17 | ~~[Commands a project declares](docs/plans/17-project-commands.md)~~ — **built** | `.tgxcode/commands.json` gives a project a row of buttons in the conversation header. `bridge/commands.js` reads it, `bridge/ports.js` finds a free port in the declared range, `bridge/runs.js` runs it on the same pty terminals use, and the output gets a tab in the terminal pane. |
 
 ## Tier 4 — worth doing, with caveats

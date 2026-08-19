@@ -63,6 +63,9 @@ const state = {
     // only exists so that looking away and back does not quietly drop a choice.
     permChoice: new Map(),
     channels: [],
+    // Ports this session mentioned that belong to another workspace, counted
+    // so the strip can say they were left out rather than just look empty.
+    channelsElsewhere: 0,
     // What the session's directory declares in .tgxcode/, and what is running
     // from it. Keyed by nothing — there is only ever one conversation on screen,
     // and the payload is re-fetched when it changes. `cmdsFor` is the directory
@@ -2742,9 +2745,10 @@ async function loadChannels() {
     if (!state.current) return;
     const id = state.current.sessionId;
     try {
-        const { ports } = await get(`/api/sessions/${id}/devservers`);
+        const { ports, elsewhere } = await get(`/api/sessions/${id}/devservers`);
         if (!state.current || state.current.sessionId !== id) return;
         state.channels = ports;
+        state.channelsElsewhere = elsewhere || 0;
         renderChannels();
     } catch {
         // A missing channel strip is not worth interrupting the user over.
@@ -2752,7 +2756,23 @@ async function loadChannels() {
 }
 
 function renderChannels() {
-    dom.channels.replaceChildren(...state.channels.map(channelChip));
+    const chips = state.channels.map(channelChip);
+    // Say when ports were left out, rather than leaving the strip looking like
+    // nothing is running. These are servers held by another worktree — the
+    // reason chips used to bleed across sessions — and naming the count is what
+    // makes their absence legible instead of merely quiet.
+    const n = state.channelsElsewhere;
+    if (n) {
+        chips.push(el('span', {
+            class: 'chan-note',
+            title: n > 1
+                ? `${n} ports this session mentioned are held by processes in other `
+                    + 'workspaces, so they are not shown here.'
+                : 'A port this session mentioned is held by a process in another '
+                    + 'workspace, so it is not shown here.',
+        }, `${n} elsewhere`));
+    }
+    dom.channels.replaceChildren(...chips);
 }
 
 /**
@@ -2761,10 +2781,20 @@ function renderChannels() {
  */
 function channelChip(p) {
     const go = el('span', { class: 'go' }, p.listening ? 'Open' : 'Gone');
+    // Why this chip is here, which is the question the strip used to be unable
+    // to answer. `ours` is the kernel's word — the process holding the port runs
+    // in this session's directory. `unverified` is nobody's word but this
+    // session's own output: nothing on the Linux side holds the port, which on
+    // this machine means a server on the Windows side of the mirror.
+    const why = p.ours
+        ? `Running in ${p.workspace}`
+        : (p.unverified ? 'No local process holds this port — shown because this '
+            + 'session started it' : '');
     const chip = el('div', {
-        class: 'channel',
+        class: `channel${p.unverified ? ' unverified' : ''}`,
         'data-live': String(p.listening),
-        title: p.evidence ? `${p.evidence.from}: ${p.evidence.command}` : '',
+        title: [why, p.evidence ? `${p.evidence.from}: ${p.evidence.command}` : '']
+            .filter(Boolean).join('\n'),
     },
         el('button', {
             class: 'chan-open', type: 'button',

@@ -951,6 +951,26 @@ a:hover { text-decoration: underline; }
    should not first promise to open a tab. */
 .chan-open:hover .go { background: var(--blue-deep); color: #fff; }
 .channel[data-live="false"] .chan-open:hover .go { background: var(--s5); color: var(--text-2); }
+/* Shown on this session's own word rather than the kernel's: nothing on the
+   Linux side holds the port, which here means a server on the Windows side of
+   the WSL mirror. Dashed, because the claim is weaker than the others. */
+.channel.unverified .led {
+    background: none;
+    border: 1px dashed var(--text-4);
+}
+.channel[data-live="true"].unverified .led { border-color: var(--green); }
+
+/* "3 elsewhere" — ports this session named that another workspace is holding.
+   Says why the strip is shorter than the transcript suggests. */
+.chan-note {
+    align-self: center;
+    padding: 0 4px;
+    font: 400 11.5px/1.5 var(--sans);
+    color: var(--text-4);
+    white-space: nowrap;
+    cursor: help;
+}
+
 .channel.busy { opacity: 0.7; }
 .channel.busy .chan-stop { pointer-events: none; }
 

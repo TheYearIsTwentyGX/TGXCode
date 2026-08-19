@@ -903,6 +903,7 @@ async function api(req, res, url, pathname, who) {
             const candidates = devservers.detect(data.events);
             const titles = await devbrowser.titles();
             const out = await devservers.enrich(candidates, titles, {
+                workspace: workingDir(s),
                 worktreeName: s.worktree && s.worktree.name,
                 projectName: s.projectName,
                 lastTs: s.lastTs,
