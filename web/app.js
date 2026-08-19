@@ -129,6 +129,10 @@ const state = {
     // of a session, like the terminal pane's height — you either want these in
     // view while you work or you do not.
     tasksShut: localStorage.getItem('tasksShut') === '1',
+    // The task the big dialog is showing, if it is open. Held by id rather than
+    // by object so a decision taken inside it can find its way back to the same
+    // task after the panel behind has been rebuilt.
+    taskDialog: null,
     queueSig: '',           // what the chips were last built from, to avoid churn
     queueFocus: null,       // the chip holding the queue's single tab stop
     ask: null,              // the approval this session is blocked on, if any
@@ -194,6 +198,8 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'term-tabs', 'term-stop', 'cmds',
     'tasks', 'tasks-strip', 'tasks-strip-count', 'tasks-open', 'tasks-count',
     'tasks-collapse', 'tasks-list',
+    'task-scrim', 'task-dlg-title', 'task-dlg-why', 'task-dlg-prompt', 'task-dlg-cwd',
+    'task-dlg-copy', 'task-dlg-acts',
     'agents', 'agent-scroll', 'agent-log', 'btn-back', 'btn-back-label',
     'ask-dock', 'plan-pane', 'plan-bar', 'plan-aside', 'plan-agent', 'plan-title',
     'plan-body', 'plan-doc', 'plan-foot',
@@ -858,6 +864,7 @@ function beginOpen(summary, { keepDash = false } = {}) {
     state.suggestions.clear();  // what was acted on belongs to the session it was raised in
     state.tasks.clear();        // and so do the offers themselves
     state.taskOpen.clear();
+    closeTaskDialog();          // it was showing a task belonging to the old one
     renderTasks();              // empties the aside, and hides it
     // A row drawn for one session is not evidence about another. The log is
     // replaced below in any case; this is what disarms the timer holding it.
@@ -1284,12 +1291,21 @@ function taskCard(ev) {
 
     const det = el('details', {
         class: 'task', 'data-status': acted ? acted.status : 'open',
+        'data-task': ev.id,
         open,
         ontoggle: (e) => state.taskOpen.set(ev.id, e.currentTarget.open),
     },
     el('summary', {},
         el('span', { class: 'caret' }, '▶'),
         el('span', { class: 'task-name' }, ev.title || firstLine(ev.prompt)),
+        // A button inside the summary, which is legal and works — but the click
+        // has to be stopped, or it reaches the summary and folds the card at the
+        // same moment the dialog opens over it.
+        el('button', {
+            class: 'task-open', type: 'button', title: 'Read this at full width',
+            'aria-label': 'Read this at full width',
+            onclick: (e) => { e.preventDefault(); e.stopPropagation(); openTaskDialog(ev); },
+        }, '⤢'),
     ));
 
     const body = el('div', { class: 'task-body' });
@@ -1306,37 +1322,98 @@ function taskCard(ev) {
         body.append(el('div', { class: 'task-cwd' }, ev.cwd));
     }
 
+    body.append(taskActions(ev));
+
+    det.append(body);
+    return det;
+}
+
+/**
+ * What you can do about a task: the same three buttons wherever it is shown.
+ *
+ * Built fresh each time rather than moved between the card and the dialog, so
+ * the two can be on screen at once and neither steals the other's controls.
+ */
+function taskActions(ev) {
+    const acted = state.suggestions.get(ev.id) || null;
+
     if (acted && acted.status === 'started') {
-        body.append(el('div', { class: 'task-done' },
+        return el('div', { class: 'task-done' },
             el('span', {}, 'Started'),
             acted.startedId
                 ? el('button', { class: 'linky', type: 'button',
-                    onclick: () => openSession(acted.startedId) }, 'open it')
+                    onclick: () => { closeTaskDialog(); openSession(acted.startedId); } }, 'open it')
                 : null,
             // Undo, because a task that has gone quiet with no way back is a task
             // that lies once the session it names has been deleted.
             el('button', { class: 'linky', type: 'button',
                 onclick: () => actOnSuggestion(ev, null) }, 'offer again'),
-        ));
-    } else if (acted && acted.status === 'dismissed') {
-        body.append(el('div', { class: 'task-done' },
+        );
+    }
+    if (acted && acted.status === 'dismissed') {
+        return el('div', { class: 'task-done' },
             el('span', {}, 'Dismissed'),
             el('button', { class: 'linky', type: 'button',
                 onclick: () => actOnSuggestion(ev, null) }, 'undo'),
-        ));
-    } else {
-        body.append(el('div', { class: 'task-btns' },
-            el('button', { class: 'more-btn primary', type: 'button',
-                onclick: (e) => startSuggestion(ev, e.currentTarget) }, 'Start'),
-            el('button', { class: 'more-btn', type: 'button',
-                onclick: () => openNew({ cwd: ev.cwd || '', prompt: ev.prompt }) }, 'Edit first'),
-            el('button', { class: 'more-btn', type: 'button',
-                onclick: () => actOnSuggestion(ev, 'dismissed') }, 'Dismiss'),
-        ));
+        );
     }
+    return el('div', { class: 'task-btns' },
+        el('button', { class: 'more-btn primary', type: 'button',
+            onclick: (e) => startSuggestion(ev, e.currentTarget) }, 'Start'),
+        el('button', { class: 'more-btn', type: 'button',
+            onclick: () => { closeTaskDialog(); openNew({ cwd: ev.cwd || '', prompt: ev.prompt }); } },
+        'Edit first'),
+        el('button', { class: 'more-btn', type: 'button',
+            onclick: () => actOnSuggestion(ev, 'dismissed') }, 'Dismiss'),
+    );
+}
 
-    det.append(body);
-    return det;
+// ── a task at a readable width ───────────────────────────────────────────
+//
+// The panel is 300px, which is right for scanning a list and wrong for reading
+// a prompt written to brief an agent that has none of your context — those run
+// to paragraphs, and judging one means reading all of it rather than the first
+// two lines. So the panel keeps the list, and this is where you read the thing.
+//
+// The same three buttons are here as well as there. A dialog you have to close
+// before you can act on what it told you is a dialog that made you read twice.
+
+/** Show one task in the dialog. */
+function openTaskDialog(ev) {
+    state.taskDialog = ev.id;
+    dom.taskDlgTitle.textContent = ev.title || 'Suggested follow-up';
+
+    dom.taskDlgWhy.textContent = ev.why || '';
+    dom.taskDlgWhy.hidden = !ev.why;
+
+    dom.taskDlgPrompt.innerHTML = renderMarkdown(ev.prompt);
+
+    // Named unconditionally here, unlike on the card. The card leaves it out when
+    // it is the obvious directory because three copies of one path down a narrow
+    // column is noise; this is the place you came to read the whole thing, and
+    // "where would this run" is part of that.
+    dom.taskDlgCwd.textContent = ev.cwd || '';
+    dom.taskDlgCwd.hidden = !ev.cwd;
+
+    paintTaskDialogActions(ev);
+    dom.taskScrim.hidden = false;
+    dom.taskDlgCopy.focus();
+}
+
+/** Rebuild just the buttons, for a decision taken while the dialog is open. */
+function paintTaskDialogActions(ev) {
+    dom.taskDlgActs.replaceChildren(taskActions(ev));
+}
+
+function closeTaskDialog() {
+    if (dom.taskScrim.hidden) return;
+    dom.taskScrim.hidden = true;
+    const id = state.taskDialog;
+    state.taskDialog = null;
+    // Back to the summary the dialog was opened from, so the keyboard does not
+    // land on the body. It may have been rebuilt underneath — find it by id.
+    const back = id && dom.tasksList.querySelector(`[data-task="${CSS.escape(id)}"] summary`);
+    if (back) back.focus();
 }
 
 /**
@@ -1358,6 +1435,7 @@ async function startSuggestion(ev, btn) {
             test: state.dev && !!(state.current && state.current.test),
         });
         await actOnSuggestion(ev, 'started', r.sessionId);
+        closeTaskDialog();
         toast('Session started.', 'ok');
         openSessionSoon(r.sessionId);
     } catch (err) {
@@ -1386,6 +1464,7 @@ async function actOnSuggestion(ev, status, startedId = null) {
     // is the one place the remembered state would be actively unhelpful.
     state.taskOpen.delete(ev.id);
     renderTasks();
+    if (state.taskDialog === ev.id) paintTaskDialogActions(ev);
 
     try {
         await post(`/api/sessions/${sessionId}/suggestions/${ev.id}`, { status, startedId });
@@ -1393,6 +1472,7 @@ async function actOnSuggestion(ev, status, startedId = null) {
         if (before) state.suggestions.set(ev.id, before);
         else state.suggestions.delete(ev.id);
         renderTasks();
+        if (state.taskDialog === ev.id) paintTaskDialogActions(ev);
         toast(`Could not save that: ${err.message}`, 'error');
     }
 }
@@ -5342,7 +5422,12 @@ const LGTM_PROMPT = `LGTM — take it from here and land it.
 - Once they pass, merge it.
 
 If something genuinely blocks the merge — checks you cannot fix, conflicts, a
-review asking for changes — stop and tell me instead of working around it.`;
+review asking for changes — stop and tell me instead of working around it.
+
+If you noticed work along the way that this change is not the place for, file it
+with your suggest_session tool before you finish, one call each — the refactor
+you left alone, the test that should exist, the thing you had to work around. If
+you noticed nothing, say nothing; this is not a box to fill.`;
 
 const LGTM_TITLE = 'Send: open a PR for this work if there is not one, run the '
     + 'checks, and merge it once they pass.';
@@ -6397,6 +6482,26 @@ dom.btnLgtm.addEventListener('click', () => sendMessage({ text: LGTM_PROMPT, can
 dom.tasksCollapse.addEventListener('click', () => showTasks(false));
 dom.tasksStrip.addEventListener('click', () => showTasks(true));
 
+for (const n of dom.taskScrim.querySelectorAll('[data-close-task]')) {
+    n.addEventListener('click', closeTaskDialog);
+}
+dom.taskScrim.addEventListener('click', (e) => {
+    if (e.target === dom.taskScrim) closeTaskDialog();
+});
+// The prompt is the thing worth having elsewhere — pasted into a terminal, into
+// another tool, into a message to somebody. The rendered markdown is not it, so
+// the source is what goes on the clipboard.
+dom.taskDlgCopy.addEventListener('click', async () => {
+    const ev = state.tasks.get(state.taskDialog);
+    if (!ev) return;
+    try {
+        await navigator.clipboard.writeText(ev.prompt);
+        toast('Prompt copied.', 'ok');
+    } catch {
+        toast('Could not reach the clipboard.', 'error');
+    }
+});
+
 dom.btnNew.addEventListener('click', () => openNew());
 
 dom.btnPin.addEventListener('click', () => {
@@ -7375,6 +7480,7 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !dom.newMenu.hidden) { showNewMenu(false); dom.btnNewMenu.focus(); return; }
     if (e.key === 'Escape' && !dom.delScrim.hidden) { closeDelete(); return; }
     if (e.key === 'Escape' && !dom.pairScrim.hidden) { closePair(); dom.btnPair.focus(); return; }
+    if (e.key === 'Escape' && !dom.taskScrim.hidden) { closeTaskDialog(); return; }
     if (e.key === 'Escape' && !dom.newScrim.hidden) { closeNew(); return; }
     if (e.key === 'Escape' && state.dash.open) { showDash(false); return; }
     if (e.key === 'Escape' && state.notes.open) { showNotes(false); return; }

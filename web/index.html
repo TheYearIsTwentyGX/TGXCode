@@ -633,6 +633,32 @@ checks, and merge it once they pass.">LGTM</button>
   </div>
 </div>
 
+<!-- A suggested task at a readable width.
+
+     The panel it comes from is 300px, which is right for scanning a list and
+     wrong for reading a prompt written to brief an agent with no context —
+     those run to paragraphs, and judging one means reading all of it. So the
+     panel keeps the list and this is where you actually read the thing, with
+     the same three buttons so the decision can be made from here too. -->
+<div id="task-scrim" class="scrim" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="task-dlg-title">
+    <div class="modal-head">
+      <span id="task-dlg-title">Suggested follow-up</span>
+      <button class="modal-close" data-close-task type="button" aria-label="Close">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="task-dlg-why" class="task-dlg-why"></div>
+      <div id="task-dlg-prompt" class="task-dlg-prompt prose"></div>
+      <div id="task-dlg-cwd" class="task-dlg-cwd"></div>
+    </div>
+    <div class="modal-foot">
+      <button id="task-dlg-copy" class="btn" type="button">Copy prompt</button>
+      <span class="spacer"></span>
+      <div id="task-dlg-acts" class="task-dlg-acts"></div>
+    </div>
+  </div>
+</div>
+
 <!-- Connect a phone. The token is 43 characters, so the useful thing this dialog
      does is let you copy the whole pairing URL rather than read it out. -->
 <div id="pair-scrim" class="scrim" hidden>

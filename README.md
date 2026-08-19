@@ -113,9 +113,9 @@ create one in `%APPDATA%\claude-sessions\`:
 | **Dashboard** | The button in the top bar, with a count of how many places are unfinished. It lists, per project, every directory holding uncommitted changes and every pull request still open, with the sessions that worked there as links back into the conversation. |
 | **Open folder** | The folder button by the title shows the session's working directory in Windows File Explorer, through the `\\wsl.localhost` share. |
 | **Composer** | Sends to the session, resuming it in place — the same transcript a terminal would append to. |
-| **LGTM** | Beside *Send*, for when you have read the work and it is done: it sends a written instruction to put the change on a pull request if it is not on one already, run the project's checks, and merge once they pass — and to stop and say so if something blocks it. One click, no confirmation over the top; the session still asks for what its permission mode makes it ask for. |
+| **LGTM** | Beside *Send*, for when you have read the work and it is done: it sends a written instruction to put the change on a pull request if it is not on one already, run the project's checks, merge once they pass, and file anything it noticed along the way as a suggested task — and to stop and say so if something blocks it. One click, no confirmation over the top; the session still asks for what its permission mode makes it ask for. |
 | **Send queue** | Write while an agent is working and the message waits, listed above the composer in send order. Each one can be expanded, reordered, pulled back for editing, or dropped, right up until its turn starts. `Shift+Tab` out of the composer to work through them without the mouse. |
-| **Suggested** | The panel beside the transcript. An agent that notices work outside what it was asked to do files it there, with the prompt already written. Each one folds to its title; *Start* runs it, *Edit first* opens it in the Start dialog, *Dismiss* puts it away. *Hide* collapses the whole panel to a strip. |
+| **Suggested** | The panel beside the transcript. An agent that notices work outside what it was asked to do files it there, with the prompt already written. Each one folds to its title, and the ⤢ on a row opens it at full width to read; *Start* runs it, *Edit first* opens it in the Start dialog, *Dismiss* puts it away. *Hide* collapses the whole panel to a strip. |
 | **Mentions** | `@` in the composer lists the other sessions running on this machine and inserts the one you pick as `@[name]` — the name an agent addresses it by. |
 
 Shortcuts: `Ctrl+Enter` send, `Ctrl+K` filter, `Ctrl+N` new session, `Esc` leave
@@ -196,6 +196,14 @@ suggested six things is not permanently narrower than one that suggested none.
 Whether the panel is open is remembered across sessions, like the terminal pane's
 height; which tasks are open is not, because the useful default changes as you
 deal with them.
+
+**The ⤢ on a row opens the task at a readable width.** 300px is right for
+scanning a list and wrong for reading a prompt written to brief an agent that has
+none of your context — those run to paragraphs, and judging one means reading all
+of it rather than the first two lines. The same three buttons are in the dialog as
+on the card, because a dialog you have to close before you can act on what it told
+you is a dialog that made you read twice. *Copy prompt* puts the source on the
+clipboard rather than the rendered markdown.
 
 **The server stores nothing, and that is the design.** The offer is already in the
 transcript, which is the copy that survives a restart, shows up in a second

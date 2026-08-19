@@ -1226,7 +1226,25 @@ a:hover { text-decoration: underline; }
 }
 .task[open] > summary .caret { transform: rotate(90deg); }
 @media (prefers-reduced-motion: reduce) { .task > summary .caret { transition: none; } }
-.task-name { min-width: 0; overflow-wrap: anywhere; }
+.task-name { min-width: 0; overflow-wrap: anywhere; flex: 1; }
+
+/* Opens the task at a readable width. Faint until the row is under the cursor,
+   because the summary's own job — folding — is the common one. */
+.task-open {
+    flex: none;
+    padding: 0 2px;
+    border: 0;
+    border-radius: var(--r-xs);
+    background: none;
+    color: var(--text-4);
+    font-size: 12px;
+    line-height: 1.2;
+    opacity: 0;
+    cursor: pointer;
+}
+.task:hover .task-open,
+.task-open:focus-visible { opacity: 1; }
+.task-open:hover { color: var(--text-2); background: var(--s4); }
 
 .task-body { padding: 9px 10px 11px; }
 .task-why {
@@ -1276,6 +1294,27 @@ a:hover { text-decoration: underline; }
     cursor: pointer;
 }
 .linky:hover { color: #dbe6fb; }
+
+/* The same task, at a width you can actually read a briefing at. */
+.task-dlg-why {
+    margin-bottom: 12px;
+    font: 400 13px/1.55 var(--sans);
+    color: var(--text-4);
+}
+.task-dlg-why[hidden] { display: none; }
+.task-dlg-prompt { font-size: 14px; line-height: 1.65; color: var(--text-2); }
+.task-dlg-cwd {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--outline-soft);
+    font: 400 11.5px/1.5 var(--mono);
+    color: var(--text-4);
+    overflow-wrap: anywhere;
+}
+.task-dlg-cwd[hidden] { display: none; }
+/* The buttons keep the shape they have on the card, so the decision looks the
+   same wherever it is taken. */
+.task-dlg-acts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
 /* a message from another session — somebody else's agent talking to yours.
    Coloured apart from both your turns and Claude's, because it is neither. */
