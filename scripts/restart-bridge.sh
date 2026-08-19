@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
-#
+
+# Dylan edit:
+# This ensures that when started by cron, internal paths get expanded properly:
+set -e
+
+cd "$(dirname "$(readlink -f "$0")")"
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+echo "Starting bridge restart process..."
+
 # Restart the everyday bridge so it picks up whatever is on main now.
 #
 #   restart-bridge              restart from the local checkout
