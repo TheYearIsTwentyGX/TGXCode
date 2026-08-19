@@ -157,12 +157,31 @@ than refetching.
 
 ### `GET /api/overview`
 
-The live board: `{ at, ready, sessions: [card], hidden, waiting, running }`, already
-ordered needs-you-first. A card carries `reason`
-(`ask`/`error`/`here`/`elsewhere`/`pinned`), `title`, `projectName`, `worktree`,
+The live board: `{ at, ready, sessions: [card], recent: [card], hidden, recentHidden,
+waiting, running }`, already ordered needs-you-first. A card carries `reason`
+(`ask`/`error`/`here`/`elsewhere`/`pinned`/`recent`), `title`, `projectName`, `worktree`,
 `runner`, `live`, `ask`, `headlines[]`, `tasks{done,total,current}`, `devservers`.
 
 `waiting` is the count worth putting on a badge.
+
+`sessions` is "running now, plus pinned" and is the answer to *who is blocked on me*.
+`recent` is a second list, of sessions with no process at all but touched recently, for a
+surface that also has to answer *what was I doing yesterday* — a board of nothing but
+pinned cards is what the mornings looked like without it. It is a separate array rather
+than more reasons in `sessions` so that a client reading only `sessions` keeps getting
+exactly what it got before.
+
+"Recently" is not a rolling window, which is wrong at both ends of a day. Before noon it
+reaches back to noon yesterday — or to noon Friday on a Monday; after noon, only to
+midnight. Measured on `lastTs`, so an agent that worked until 2am counts as last night's
+work. Archived sessions are left out, and anything already in `sessions` cannot appear
+here. Capped at 12 with the remainder in `recentHidden`, as `sessions` is capped at 24 with
+`hidden`.
+
+`devservers` is not refreshed for a recent card: the probe behind it costs a full
+transcript read per session every 15s, and that budget goes to what is running. A session
+that has just gone quiet keeps the chips its last pass found — a dev server usually
+outlives the turn that started it — and one that was never on the board has none.
 
 Also pushed as the `overview` SSE event, so most clients never call this — but it is
 the right answer to "what is happening right now", and anything that wants that

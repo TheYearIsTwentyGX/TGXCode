@@ -207,11 +207,12 @@ npm test -- 45901      # run against a bridge you already have on that port
 start and delete sessions, so pointing them at the everyday instance is exactly
 the accident the rest of this file is about.
 
-The suite is `auth.test.js` on its own, plus four that need a live bridge —
-`gate`, `browser`, `refusals`, `unpaired`. Between them they cover the token, what
-a remote caller is refused, and what an unpaired phone sees before and after
-pairing. If you touch `bridge/auth.js` or any route's local/remote rule, run it:
-that is the part of this codebase with tests around it.
+The suite is `auth`, `temp` and `recent` on their own — pure functions, no bridge
+needed — plus four that want a live one: `gate`, `browser`, `refusals`,
+`unpaired`. Between them they cover the token, what a remote caller is refused,
+and what an unpaired phone sees before and after pairing. If you touch
+`bridge/auth.js` or any route's local/remote rule, run it: that is the part of
+this codebase with tests around it.
 
 ## Never rebuild without asking
 
