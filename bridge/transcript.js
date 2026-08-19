@@ -33,6 +33,11 @@ const WORKTREE_DIR_RE = /^(.*)\/\.claude\/worktrees\/(.+)$/;
 // of megabytes, for a field that is not in it, would cost more than the whole scan.
 const CWD_PARSE_LIMIT = 5;
 
+// How many pull requests to keep per session. A session raises one or two; this
+// is only here so that a transcript which somehow names dozens cannot inflate
+// every summary the session list sends.
+const PR_LIMIT = 10;
+
 // The permission mode a session was last seen in. Two entries state it and they
 // mean slightly different things: a `permission-mode` line is the interactive UI
 // being toggled, while the field on a prompt is the mode that turn actually ran
@@ -119,7 +124,7 @@ function scanMeta(filePath) {
         lastUserTs: null,
         worktree: null,
         inWorktree: false,
-        pr: null,
+        prs: [],
         bytes: text.length,
     };
 
@@ -257,9 +262,23 @@ function scanMeta(filePath) {
                         };
                     }
                     break;
-                case 'pr-link':
-                    meta.pr = { number: o.prNumber, url: o.prUrl, repo: o.prRepository };
+                case 'pr-link': {
+                    // Every PR the session raised, not just the last one. This
+                    // was an assignment for a long time, which silently dropped
+                    // all but the newest: a session that opens a PR, lands it and
+                    // opens another is ordinary, and the header showed one of two.
+                    //
+                    // Keyed by url because the same PR is written back more than
+                    // once — first-seen order is the order they were raised, which
+                    // is the order worth reading them in. Capped because this ends
+                    // up in every session summary the rail sends.
+                    if (!o.prUrl || meta.prs.length >= PR_LIMIT) break;
+                    if (meta.prs.some(p => p.url === o.prUrl)) break;
+                    meta.prs.push({
+                        number: o.prNumber, url: o.prUrl, repo: o.prRepository || null,
+                    });
                     break;
+                }
             }
         }
     }

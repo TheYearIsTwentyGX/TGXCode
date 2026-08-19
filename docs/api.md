@@ -120,6 +120,13 @@ than hardcoding the list; a remote client should drop `bypassPermissions` and
 `test` flags, `live` (from Claude Code's own process registry, or null), and
 `runner` (this bridge's process for it, or null).
 
+`prs` is every pull request the session raised, in the order it raised them:
+`[{number, url, repo}]`, empty for a session that raised none. Read from the
+transcript, so it is free and it is history — what has *become* of those PRs is a
+separate request, below. It is an array because a session that lands one PR and
+opens another is ordinary; it was a single `pr` object until August 2026, which
+silently kept only the newest.
+
 ### `GET /api/sessions/:id[?tail=N]`
 
 `{ summary, events: [...], offset, runner, suggestions }`.
@@ -161,6 +168,35 @@ shrank — it was compacted or forked — and the client should reload from scra
 
 This is how a mobile client resumes after a network change, and it is much cheaper
 than refetching.
+
+### `GET /api/sessions/:id/prs`
+
+`{ prs: [...], gh: {ok, error} }` — what has become of the pull requests this
+session raised, one entry per PR in `summary.prs`, same order.
+
+Each carries `number`, `url`, `repo`, `title`, `branch`, `updatedAt`, a resolved
+`status`, a `label` naming that status in words, and `detail`: extra lines the one
+status had to leave out, for a tooltip.
+
+`status` is one of `open`, `draft`, `approved`, `changes`, `checks-failed`,
+`checks-pending`, `conflicting`, `merged`, `closed`, or `unknown`. A PR is
+regularly several of those at once — open *and* approved *and* conflicting — so
+one is chosen by what most needs doing about it: settled states first, then draft,
+then a review asking for changes, a failing check, a conflict, a check still
+running, an approval, and plain open last. `resolveStatus` in `bridge/pulls.js` is
+the whole rule and `test/pulls.test.js` pins the ordering.
+
+Two answers are deliberately withheld rather than guessed. A repository with no CI
+reports no check state at all — an empty rollup is not a pending one. And GitHub
+reports mergeability as `UNKNOWN` until it has computed it, which is common on a
+freshly-pushed branch, so nothing is said about conflicts until it does.
+
+`unknown` means gh could not be reached, and `gh.error` says why in one line. The
+client is expected to keep showing the PR — it has the number and the link from the
+summary already — and simply not colour it. **This is its own route rather than a
+field on the summary on purpose**: it asks GitHub, and the session list must never
+wait on GitHub. The bridge caches one `gh pr list` per repository for a minute, and
+a merged or closed PR for the life of the process, since neither can change back.
 
 ### `GET /api/peers`
 
