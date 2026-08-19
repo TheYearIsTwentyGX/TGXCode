@@ -722,6 +722,16 @@ function renderUser(ev) {
             text: `${ev.images.length} image${ev.images.length === 1 ? '' : 's'}`,
         }));
     }
+    // Named, not drawn. Attaching is a desktop-only gesture and opening a file means
+    // nothing on a phone, but the paths used to sit in `ev.text` — the bridge now
+    // parses them out into `ev.files`, so without this a turn that carried a CSV would
+    // read here as though it carried nothing.
+    if (ev.files && ev.files.length) {
+        body.append(el('div', {
+            class: 'row-meta',
+            text: `📎 ${ev.files.map(f => f.name).join(', ')}`,
+        }));
+    }
     return row(ev, 'user', body);
 }
 

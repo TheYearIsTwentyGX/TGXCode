@@ -607,12 +607,19 @@ function buildEvents(entries, ctx = {}) {
         const images = Array.isArray(content)
             ? content.filter(b => b.type === 'image').map(imageRef)
             : [];
-        if (!text && !images.length) continue;
+        // Files this turn carried. An image is usually *both* — inlined so the model
+        // saw it without a Read, and listed so there is something to open — which is
+        // why these are two fields rather than one: the thumbnail is what was sent,
+        // the card is the file on disk.
+        const attached = parseAttachmentNote(text);
+        const body = attached ? attached.text : (text || '');
+        if (!body && !images.length && !attached) continue;
 
         events.push({
             id: e.uuid, kind: 'user', ts: e.timestamp,
-            text: text || '', images,
-            command: parseCommand(text),
+            text: body, images,
+            files: attached ? attached.files : [],
+            command: parseCommand(body),
             origin: e.origin && e.origin.kind,
         });
     }
@@ -835,6 +842,54 @@ function parseCommand(text) {
     if (!name) return null;
     const args = /<command-args>([\s\S]*?)<\/command-args>/.exec(text);
     return { name: name[1].trim().replace(/^\/+/, ''), args: args ? args[1].trim() : '' };
+}
+
+// The heading the bridge writes above a turn's attached files, and the line shape
+// under it. One definition, because it is written on the way out (see
+// `buildAttachmentNote` in bridge/attachments.js) and read back on the way in — and a
+// transcript already on disk carries the old wording forever if this ever moves.
+const ATTACHMENT_NOTE_HEAD = 'Attached files (read them):';
+const ATTACHMENT_LINE_RE = /^- (.+?) \(([^()]*)\)$/;
+
+/**
+ * The files attached to a user turn, and the message without the list of them.
+ *
+ * The paths have to travel in the text: that is the only channel a `claude` process
+ * takes a turn on, and it is the only thing a transcript reread from disk still has.
+ * But the list is bookkeeping, not something the person typed — leaving it in the
+ * rendered message means every turn with a screenshot on it ends in a paragraph of
+ * paths. So it is parsed back off here and the UI draws cards instead.
+ *
+ * Anchored at the very end of the message and required to run to the end of it,
+ * because someone quoting one of these blocks back into a conversation really is
+ * saying something, and the note this app writes is always the last thing in the turn.
+ *
+ * @returns {{text:string, files:Array<{relPath:string,name:string,size:string}>}|null}
+ */
+function parseAttachmentNote(text) {
+    if (!text || !text.includes(ATTACHMENT_NOTE_HEAD)) return null;
+    const at = text.lastIndexOf(`\n${ATTACHMENT_NOTE_HEAD}\n`);
+    const head = text.startsWith(`${ATTACHMENT_NOTE_HEAD}\n`) ? 0 : at < 0 ? -1 : at + 1;
+    if (head < 0) return null;
+
+    const lines = text.slice(head + ATTACHMENT_NOTE_HEAD.length + 1).split('\n');
+    const files = [];
+    for (const line of lines) {
+        if (!line.trim()) continue;
+        const m = ATTACHMENT_LINE_RE.exec(line);
+        // One line that is not a file line means this is not our block — a quoted
+        // one, or prose that happens to start the same way. Half a list is worse
+        // than none, because the half that is dropped is dropped silently.
+        if (!m) return null;
+        files.push({
+            relPath: m[1],
+            name: m[1].split('/').pop(),
+            size: m[2],
+        });
+    }
+    if (!files.length) return null;
+
+    return { text: text.slice(0, head).replace(/\n+$/, ''), files };
 }
 
 /** The renderable half of a tool call: status, output, diff, subagent link. */
@@ -1172,4 +1227,7 @@ module.exports = {
     // about a directory that scanMeta answers about a transcript: which checkout
     // is this, and is it a worktree of one.
     projectRootOf, worktreeNameOf, worktreeBaseOf, isCheckout,
+    // Written by bridge/attachments.js, read back by the parser above. Shared so the
+    // two halves of one format cannot drift apart.
+    ATTACHMENT_NOTE_HEAD, parseAttachmentNote,
 };

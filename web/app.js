@@ -25,6 +25,33 @@ async function post(path, body) {
     return data;
 }
 
+/**
+ * POST a file's bytes, rather than JSON.
+ *
+ * The only route that takes a body which is not JSON. Raw bytes and not
+ * base64-in-JSON because `readJson` on the bridge caps a body at 4MB and base64 is a
+ * third bigger than what it encodes — which would put the real limit at under 3MB, and
+ * a screenshot off this machine's display goes past that regularly.
+ *
+ * The client header is what `post` sets too; it is required on every non-GET under
+ * /api/, and forgetting it here would fail as a 403 that looks like an auth problem.
+ */
+async function postFile(path, file) {
+    const r = await fetch(path, {
+        method: 'POST',
+        headers: {
+            'X-Claude-Sessions-Client': '1',
+            // The bridge sniffs the real type from the bytes; this is a hint, and the
+            // fallback matters because a File dragged from some places has no type.
+            'Content-Type': file.type || 'application/octet-stream',
+        },
+        body: file,
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    return data;
+}
+
 async function del(path) {
     const r = await fetch(path, { method: 'DELETE', headers: HEADERS });
     const data = await r.json().catch(() => ({}));
@@ -97,6 +124,11 @@ const state = {
     busyTimer: null,        // ticks the elapsed-time readout while a turn runs
     queue: [],              // the current session's waiting messages, from the bridge
     queueDrag: null,        // id of the chip being dragged
+    // Files staged for the next message. Each is already on disk in the session's
+    // attached_assets/ by the time it reaches `ready` — see the attachments section
+    // below — so this holds metadata and a local preview URL, never file bytes.
+    attach: [],
+    attachSeq: 0,
     queueOpen: new Set(),   // ids of chips expanded to their full text
     // Slash commands the composer can complete, per working directory — the
     // bridge keys them that way because that is what decides them. Held here so
@@ -186,7 +218,8 @@ const $ = (id) => document.getElementById(id);
 const dom = {};
 for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-sub',
     'channels', 'scroll', 'log', 'status-line', 'status-text', 'btn-stop', 'input',
-    'btn-send', 'btn-lgtm', 'slash-menu', 'mention-menu', 'queue', 'queue-list', 'queue-count', 'queue-clear',
+    'btn-send', 'btn-lgtm', 'btn-attach', 'attach', 'attach-input', 'composer',
+    'slash-menu', 'mention-menu', 'queue', 'queue-list', 'queue-count', 'queue-clear',
     'model', 'perm', 'btn-new', 'btn-new-menu', 'new-menu', 'db-status', 'db-label', 'toasts',
     'btn-bell', 'bell-menu', 'opt-desktop', 'opt-sound', 'bell-note', 'bell-try',
     'btn-pin', 'btn-folder', 'btn-term', 'btn-archive', 'btn-delete', 'turns', 'turn-pop',
@@ -304,6 +337,10 @@ function toast(text, kind = 'info', opts = {}) {
 // transcript. Neither should be lost to a reload or a failed turn.
 
 const draftKey = (id) => `draft:${id}`;
+// A sibling key rather than a richer value under the one above. That one has to stay
+// a plain string: handleSendFailure writes into it for a session that is not on
+// screen, and every caller there is handling text.
+const attachKey = (id) => `attach:${id}`;
 
 function loadDraft(id) {
     try { return localStorage.getItem(draftKey(id)) || ''; } catch { return ''; }
@@ -316,15 +353,51 @@ function saveDraft(id, text) {
     } catch { /* storage unavailable; drafts are best effort */ }
 }
 
-/** Put text back in the composer without clobbering anything typed since. */
-function restoreToComposer(text) {
-    if (!text) return;
-    const current = dom.input.value.trim();
-    dom.input.value = current ? `${text}\n\n${current}` : text;
-    autoGrow();
-    dom.input.focus();
-    dom.input.setSelectionRange(dom.input.value.length, dom.input.value.length);
-    if (state.current) saveDraft(state.current.sessionId, dom.input.value);
+/**
+ * The files staged against a session, as metadata.
+ *
+ * This is what makes a staged attachment survive a reload, and it is only possible
+ * because the file went to disk before the chip appeared: there is a path to remember
+ * instead of bytes to store. Nothing in flight and nothing failed is saved — a chip
+ * that is still uploading has no path yet, and one that failed has nothing behind it.
+ */
+function loadAttach(id) {
+    try {
+        const raw = localStorage.getItem(attachKey(id));
+        const list = raw ? JSON.parse(raw) : [];
+        return Array.isArray(list) ? list.map(a => ({ ...a, status: 'ready' })) : [];
+    } catch { return []; }
+}
+
+function saveAttach(id, list) {
+    try {
+        const keep = (list || [])
+            .filter(a => a.status === 'ready')
+            .map(({ name, path, relPath, mediaType, bytes }) =>
+                ({ name, path, relPath, mediaType, bytes }));
+        if (keep.length) localStorage.setItem(attachKey(id), JSON.stringify(keep));
+        else localStorage.removeItem(attachKey(id));
+    } catch { /* storage unavailable; same best-effort as drafts */ }
+}
+
+/**
+ * Put text back in the composer without clobbering anything typed since.
+ *
+ * `files` is for the two callers that are handing a whole message back — a failed turn
+ * and a queued chip being edited. Without it, editing a message you had attached a
+ * screenshot to would give you the words and quietly drop the screenshot, which is the
+ * kind of loss you only notice after sending.
+ */
+function restoreToComposer(text, files) {
+    if (text) {
+        const current = dom.input.value.trim();
+        dom.input.value = current ? `${text}\n\n${current}` : text;
+        autoGrow();
+        dom.input.focus();
+        dom.input.setSelectionRange(dom.input.value.length, dom.input.value.length);
+        if (state.current) saveDraft(state.current.sessionId, dom.input.value);
+    }
+    if (files && files.length) adoptAttachments(files);
 }
 
 // ── rail ─────────────────────────────────────────────────────────────────
@@ -715,6 +788,7 @@ function forgetSession(sessionId) {
     state.order.delete(sessionId);
     state.unsent.delete(sessionId);
     saveDraft(sessionId, '');
+    saveAttach(sessionId, []);
     setTermOpen(sessionId, false);
     if (state.pendingDelete && state.pendingDelete.sessionId === sessionId) closeDelete();
     if (state.current && state.current.sessionId === sessionId) clearCurrent();
@@ -900,6 +974,12 @@ function beginOpen(summary, { keepDash = false } = {}) {
     // again then saved that copy as a real draft, which outlived the turn.
     // handleSendFailure and editQueued are the two things that hand text back.
     dom.input.value = loadDraft(summary.sessionId);
+    // The files staged against this session, from the same place. Cleared without
+    // saving first, so switching away does not write the outgoing session's chips over
+    // the incoming one's.
+    clearAttach({ save: false });
+    state.attach = loadAttach(summary.sessionId);
+    renderAttach();
     autoGrow();
     dom.input.focus();
 
@@ -1154,11 +1234,46 @@ function renderUser(ev) {
     } else {
         body.push(el('div', { class: 'prose', html: renderMarkdown(ev.text) }));
     }
-    for (const img of ev.images || []) {
-        if (img.dataUri) body.push(el('img', { src: img.dataUri, alt: 'attached image',
-            style: 'max-width:100%; margin-top:8px; border:1px solid var(--outline-soft)' }));
+    // Wrapped, and with the styling in a class. Both were fine while a turn could only
+    // ever have arrived with one image on it — now that you can paste three, two bare
+    // <img> in a row flowed together edge to edge and read as one wide picture.
+    const shots = (ev.images || []).filter(img => img.dataUri);
+    if (shots.length) {
+        body.push(el('div', { class: 'ev-images' }, ...shots.map(img =>
+            el('img', { class: 'ev-image', src: img.dataUri, alt: 'attached image' }))));
     }
+    // Files this turn attached. An image is usually both — the thumbnail above is what
+    // the model was handed, this is the file on disk — because the card is the only one
+    // of the two you can click to open, and "open the screenshot I just pasted" is a
+    // thing you want as much for a PNG as for a PDF.
+    if (ev.files && ev.files.length) body.push(attachCards(ev));
     return row(ev, 'user', ...body);
+}
+
+/**
+ * The small cards under a user turn, one per attached file.
+ *
+ * Deliberately not a preview. What you want from a file in a transcript is to know it
+ * is there and to be able to open it — rendering a PDF or a spreadsheet inline is a
+ * viewer this app has no business being. So: name, size, and a click that hands the
+ * path to whatever the machine opens that kind of file with.
+ *
+ * The paths came out of the message text (`parseAttachmentNote`, bridge/transcript.js),
+ * which is why this works for a turn sent months ago and reread off disk.
+ */
+function attachCards(ev) {
+    const sessionId = state.current && state.current.sessionId;
+    return el('div', { class: 'ev-files' }, ...ev.files.map(f => el('button', {
+        class: 'ev-file', type: 'button',
+        title: `Open ${f.relPath}`,
+        // Without a session in view there is nothing to resolve the path against.
+        disabled: !sessionId,
+        onclick: () => sessionId && openAttachment(sessionId, f.relPath),
+    },
+        el('span', { class: 'ev-file-glyph' }, attachExt(f.name)),
+        el('span', { class: 'ev-file-name' }, f.name),
+        f.size ? el('span', { class: 'ev-file-size' }, f.size) : null,
+    )));
 }
 
 function renderAssistant(ev) {
@@ -5082,6 +5197,7 @@ function focusChipAt(i) {
  * they do has a key on the row instead.
  */
 function queueItem(entry, i, roving) {
+    const files = entry.attachments || [];
     const open = state.queueOpen.has(entry.id);
     const toggleOpen = () => {
         if (open) state.queueOpen.delete(entry.id);
@@ -5100,6 +5216,13 @@ function queueItem(entry, i, roving) {
     },
         el('span', { class: 'queue-grip', title: 'Drag to reorder', 'aria-hidden': 'true' }, '⠿'),
         el('span', { class: 'queue-n' }, String(i + 1)),
+        // A count, not the names. The chip is one line and the message is what it is
+        // for; the point is only that Edit will bring files back with it, so dropping
+        // this chip is dropping them too.
+        files.length ? el('span', {
+            class: 'queue-files',
+            title: files.map(f => f.name || f.relPath).join('\n'),
+        }, `📎${files.length > 1 ? files.length : ''}`) : null,
         el('button', {
             class: 'queue-text', type: 'button', 'data-part': 'text', tabindex: '-1',
             title: open ? 'Show less' : 'Show the whole message',
@@ -5257,7 +5380,10 @@ async function editQueued(entry) {
     try {
         const r = await del(`/api/sessions/${state.current.sessionId}/queue/${entry.id}`);
         applyRunner(r.status);
-        restoreToComposer(entry.text);
+        // The files come back with the words. The message was never written to the
+        // process, so they are still staged rather than sent — and the alternative is
+        // an edit that silently drops the screenshot the message was about.
+        restoreToComposer(entry.text, (r.removed && r.removed.attachments) || entry.attachments);
     } catch (err) {
         toast(err.message, 'warn');
         refreshQueue();
@@ -5292,6 +5418,311 @@ async function refreshQueue() {
     } catch { /* the next runner-status will fix it */ }
 }
 
+// ── attachments ──────────────────────────────────────────────────────────
+// Files pasted or dropped onto the composer.
+//
+// Each one is uploaded the moment it arrives, before the message is sent. That is
+// what makes the rest of this simple: the chip shows the name the file really has on
+// disk, a staged file survives a reload because only its path has to be remembered,
+// and the send stays the same small JSON POST it always was — a list of paths, not a
+// payload. The bridge writes them into attached_assets/ at the root of the session's
+// checkout; see bridge/attachments.js for why there.
+
+// Matches the bridge, which is the side that enforces them. Checked here so that
+// dropping a video says what the limit is instead of uploading 200MB to be refused.
+const MAX_ATTACH_BYTES = 25 * 1024 * 1024;
+const MAX_ATTACH_FILES = 5;
+
+// The types the bridge will inline as an image, and so the ones a chip draws a
+// thumbnail for.
+const ATTACH_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+
+function formatBytes(n) {
+    const b = Number(n) || 0;
+    if (b < 1024) return `${b} B`;
+    if (b < 1024 * 1024) return `${(b / 1024).toFixed(b < 10 * 1024 ? 1 : 0)} KB`;
+    return `${(b / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * A name for a file that arrived without a usable one.
+ *
+ * A pasted screenshot is `image.png` in Chromium and nameless everywhere else, so the
+ * client always supplies something and the bridge always requires it — better here,
+ * where the clock and the media type are both to hand, than invented server-side.
+ */
+function attachName(file) {
+    if (file.name) return file.name;
+    const d = new Date();
+    const p = (n) => String(n).padStart(2, '0');
+    const stamp = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}`
+        + `-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+    const ext = (file.type || '').split('/')[1] || 'bin';
+    return `pasted-${stamp}.${ext === 'jpeg' ? 'jpg' : ext}`;
+}
+
+/** Does this drag carry files, as opposed to one of our own chips? */
+function dragHasFiles(dt) {
+    return Boolean(dt && Array.from(dt.types || []).includes('Files'));
+}
+
+/**
+ * Take files in — from a paste, a drop, or the paperclip. The single entry point.
+ *
+ * Uploaded one at a time rather than all at once. It keeps several 25MB bodies off the
+ * wire together, and it makes the per-chip failure story true: four succeed and the
+ * fifth goes red, instead of a batch that half-worked.
+ */
+async function attachFiles(list) {
+    if (!state.current) return;
+    const sessionId = state.current.sessionId;
+    const files = Array.from(list || []).filter(f => f && f.size !== undefined);
+    if (!files.length) return;
+
+    const room = MAX_ATTACH_FILES - state.attach.length;
+    if (room <= 0) {
+        toast(`${MAX_ATTACH_FILES} files is the limit for one message.`, 'warn');
+        return;
+    }
+    if (files.length > room) {
+        toast(`Only ${room} more file${room === 1 ? '' : 's'} fit on this message.`, 'warn');
+    }
+
+    for (const file of files.slice(0, room)) {
+        // Refused here, with the number in it. The bridge refuses it too, but a 413
+        // arriving after a 40MB upload is a worse way to learn the same thing.
+        if (file.size > MAX_ATTACH_BYTES) {
+            toast(`${file.name || 'That file'} is ${formatBytes(file.size)} — the limit `
+                + `is ${formatBytes(MAX_ATTACH_BYTES)}.`, 'warn');
+            continue;
+        }
+        if (!file.size) {
+            toast(`${file.name || 'That file'} is empty.`, 'warn');
+            continue;
+        }
+
+        const entry = {
+            key: `a${++state.attachSeq}`,
+            name: attachName(file),
+            bytes: file.size,
+            mediaType: file.type || 'application/octet-stream',
+            // Cheaper than a FileReader and it never holds the bytes in a string.
+            // Revoked on removal, on send and on leaving the session.
+            previewUrl: ATTACH_IMAGE_TYPES.has(file.type) ? URL.createObjectURL(file) : null,
+            path: null, relPath: null,
+            status: 'uploading',
+            error: null,
+            file,
+        };
+        state.attach.push(entry);
+        renderAttach();
+        await uploadAttachment(sessionId, entry);
+    }
+}
+
+async function uploadAttachment(sessionId, entry) {
+    entry.status = 'uploading';
+    entry.error = null;
+    renderAttach();
+    try {
+        const r = await postFile(
+            `/api/sessions/${sessionId}/attachments?name=${encodeURIComponent(entry.name)}`,
+            entry.file);
+        // The name on disk wins. A collision made it `shot-2.png`, and a chip still
+        // saying `shot.png` would name a file the message does not attach.
+        entry.name = r.name;
+        entry.path = r.path;
+        entry.relPath = r.relPath;
+        entry.mediaType = r.mediaType;
+        entry.bytes = r.bytes;
+        entry.status = 'ready';
+        // Nothing needs the File once the bytes are on disk, and holding it keeps a
+        // blob alive for as long as the chip does.
+        entry.file = null;
+        saveAttach(sessionId, state.attach);
+    } catch (err) {
+        entry.status = 'failed';
+        entry.error = err.message;
+    }
+    renderAttach();
+}
+
+/** Chips for files the bridge already knows about — a restored draft, or an edit. */
+function adoptAttachments(files) {
+    for (const f of files || []) {
+        if (state.attach.length >= MAX_ATTACH_FILES) break;
+        if (state.attach.some(a => a.path && a.path === f.path)) continue;
+        state.attach.push({
+            key: `a${++state.attachSeq}`,
+            name: f.name || String(f.relPath || '').split('/').pop(),
+            bytes: f.bytes || 0,
+            mediaType: f.mediaType || 'application/octet-stream',
+            // No object URL: these files were never a File in this page. A restored
+            // image chip draws the glyph rather than a broken img.
+            previewUrl: null,
+            path: f.path || null,
+            relPath: f.relPath || null,
+            status: 'ready',
+            error: null,
+            file: null,
+        });
+    }
+    renderAttach();
+    if (state.current) saveAttach(state.current.sessionId, state.attach);
+}
+
+function removeAttach(key) {
+    const i = state.attach.findIndex(a => a.key === key);
+    if (i < 0) return;
+    const [gone] = state.attach.splice(i, 1);
+    if (gone.previewUrl) URL.revokeObjectURL(gone.previewUrl);
+    // Deliberately not deleted from disk. A delete route is a second thing that
+    // writes to a checkout and a second refusal to reason about, and an unsent file
+    // in attached_assets/ is a harmless untracked file you can see — where a delete
+    // that resolves the wrong path is not harmless.
+    renderAttach();
+    if (state.current) saveAttach(state.current.sessionId, state.attach);
+}
+
+/**
+ * Everything staged, gone — on a send, or on leaving the session.
+ *
+ * `revoke: false` is for the send path, and it is not an optimisation. The row drawn
+ * at the foot of the log the instant you press Enter shows the thumbnails, and those
+ * are these object URLs; revoking them here blanked the image in the same frame it
+ * appeared. So the send hands them to the pending row, which revokes them when it
+ * goes — and every path that does not draw one revokes them itself.
+ */
+function clearAttach({ save = true, revoke = true } = {}) {
+    if (revoke) revokePreviews(state.attach.map(a => a.previewUrl));
+    state.attach = [];
+    renderAttach();
+    if (save && state.current) saveAttach(state.current.sessionId, []);
+}
+
+function revokePreviews(urls) {
+    for (const u of urls || []) if (u) URL.revokeObjectURL(u);
+}
+
+/** What a send may carry: the ones that made it to disk. */
+const readyAttachments = () => state.attach
+    .filter(a => a.status === 'ready' && a.path)
+    .map(a => ({ path: a.path, relPath: a.relPath, mediaType: a.mediaType, name: a.name }));
+
+// The extension, for the glyph on a non-image chip. Short enough to read at 10px.
+function attachExt(name) {
+    const m = /\.([A-Za-z0-9]{1,5})$/.exec(name || '');
+    return m ? m[1].toLowerCase() : 'file';
+}
+
+function renderAttach() {
+    const list = state.attach;
+    dom.attach.hidden = !list.length;
+    dom.attach.replaceChildren(...list.map((a) => {
+        const bits = [];
+        if (a.previewUrl) {
+            bits.push(el('img', { class: 'attach-thumb', src: a.previewUrl, alt: '' }));
+        } else {
+            bits.push(el('span', { class: 'attach-glyph' }, attachExt(a.name)));
+        }
+        bits.push(el('span', { class: 'attach-name', title: a.relPath || a.name }, a.name));
+        bits.push(el('span', { class: 'attach-size' },
+            a.status === 'uploading' ? 'uploading…' : formatBytes(a.bytes)));
+        if (a.status === 'failed') {
+            bits.push(el('button', {
+                class: 'attach-act', type: 'button', title: a.error || 'Upload failed',
+                onclick: () => {
+                    if (!a.file || !state.current) return;
+                    uploadAttachment(state.current.sessionId, a);
+                },
+            }, 'Retry'));
+        }
+        bits.push(el('button', {
+            class: 'attach-act danger', type: 'button', 'aria-label': `Remove ${a.name}`,
+            title: 'Remove', onclick: () => removeAttach(a.key),
+        }, '×'));
+
+        return el('div', {
+            class: `attach-chip${a.status === 'ready' ? '' : ` ${a.status}`}`,
+            title: a.status === 'failed' ? a.error : (a.relPath || a.name),
+        }, ...bits);
+    }));
+    // An attachment on its own is a message, so the buttons have to follow the strip
+    // and not only the box.
+    enableSend(Boolean(state.current));
+}
+
+/**
+ * A paste that carries files.
+ *
+ * The condition is narrow on purpose. Cancelling a paste that was only ever text is
+ * the most likely way this feature breaks something that worked, and web/terminal.js
+ * already carries a comment about the last time a paste handler in this codebase took
+ * over more than it should have. A screenshot arrives with files and no `text/plain`;
+ * a file copied out of a file manager brings `text/uri-list` alongside it; text
+ * copied out of an editor brings `text/plain` and no files at all. So: files, and
+ * either nothing textual or an actual image.
+ */
+function onComposerPaste(e) {
+    const dt = e.clipboardData;
+    if (!dt) return;
+    const items = Array.from(dt.items || []);
+    const files = Array.from(dt.files || []);
+    if (!files.length && !items.some(i => i.kind === 'file')) return;
+
+    const hasText = Array.from(dt.types || []).includes('text/plain');
+    const anyImage = files.some(f => ATTACH_IMAGE_TYPES.has(f.type));
+    if (hasText && !anyImage) return;
+
+    e.preventDefault();
+    attachFiles(files.length ? files
+        : items.filter(i => i.kind === 'file').map(i => i.getAsFile()).filter(Boolean));
+}
+
+/**
+ * Dragging files over the composer.
+ *
+ * Both gates are before `preventDefault`, and that is what keeps the queue-chip drag
+ * working without touching a line of it: a chip drag puts only `text/plain` on the
+ * transfer, so `dragHasFiles` is false, this returns early, and #queue-list's own
+ * dragover still sees the event exactly as it did before.
+ */
+function onComposerDragOver(e) {
+    if (state.queueDrag) return;
+    if (!dragHasFiles(e.dataTransfer)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    dom.composer.classList.add('drop-target');
+}
+
+function onComposerDragLeave(e) {
+    // Only when the pointer has actually left the composer. Without the check the
+    // highlight flickers off every time the drag crosses a child element.
+    if (e.relatedTarget && dom.composer.contains(e.relatedTarget)) return;
+    dom.composer.classList.remove('drop-target');
+}
+
+function onComposerDrop(e) {
+    if (state.queueDrag) return;
+    if (!dragHasFiles(e.dataTransfer)) return;
+    e.preventDefault();
+    dom.composer.classList.remove('drop-target');
+    attachFiles(e.dataTransfer.files);
+}
+
+/**
+ * Open one of a turn's attachments in whatever this machine opens that kind of file
+ * with. The bridge re-derives the path against the session's own attachments
+ * directory before launching anything — see `attachmentPath` in bridge/server.js.
+ */
+async function openAttachment(sessionId, relPath) {
+    try {
+        await post(`/api/sessions/${sessionId}/attachments/open`, { path: relPath });
+    } catch (err) {
+        toast(`Could not open ${relPath}: ${err.message}`, 'warn');
+    }
+}
+
 // ── composer ─────────────────────────────────────────────────────────────
 
 /**
@@ -5317,6 +5748,9 @@ const growPrompt = () => grow(dom.newPrompt, 62, 300);
 function enableSend(on) {
     dom.btnSend.disabled = !on;
     dom.btnLgtm.disabled = !on;
+    // Attaching needs a session for the same reason sending does — the file goes into
+    // *that* session's checkout — so it turns on and off with them.
+    dom.btnAttach.disabled = !on;
 }
 
 /**
@@ -5368,18 +5802,25 @@ const PENDING_MS = 30000;
  * Only ever one at a time: pressing Enter twice in the same moment sends a second
  * message the bridge queues, and a queued message is already shown as a chip.
  */
-function showPendingSend(sessionId, text) {
-    if (state.pendingSend) return;
+function showPendingSend(sessionId, text, files, previews) {
+    if (state.pendingSend) return revokePreviews(previews);
     // The real renderer, so the swap when the transcript catches up is one node for
     // another and not a reflow. No `ts`: clockOf gives an empty gutter for a missing
     // one, and the marker on it says what that means. Sending the local clock
     // instead would print a time the transcript is then free to disagree with —
     // a cold start really does record the entry a second or more later.
-    const node = renderUser({ kind: 'user', text, ts: null });
+    // The object URLs and the file list, so the row that appears the instant you press
+    // Enter is the row the transcript will replace it with — thumbnail, cards and all —
+    // rather than a bare line of text that grows a screenshot a second later.
+    const node = renderUser({
+        kind: 'user', text, ts: null,
+        images: (previews || []).map(url => ({ dataUri: url })),
+        files: (files || []).map(f => ({ relPath: f.relPath, name: f.name, size: null })),
+    });
     node.dataset.pending = '1';
     dom.log.append(node);
     state.pendingSend = {
-        sessionId, node, timer: setTimeout(clearPendingSend, PENDING_MS),
+        sessionId, node, previews, timer: setTimeout(clearPendingSend, PENDING_MS),
     };
     state.pinned = true;
     scrollToEnd(false);
@@ -5399,11 +5840,20 @@ function clearPendingSend() {
     clearTimeout(p.timer);
     state.pendingSend = null;
     p.node.remove();
+    // The row was the last thing holding these; the transcript's own copy of the
+    // image comes from the transcript.
+    revokePreviews(p.previews);
 }
 
 async function sendMessage({ fork = false, text: override = null, canned = false } = {}) {
     const text = override != null ? override : dom.input.value.trim();
-    if (!text || !state.current) return;
+    // Attachments only ride on a message that came out of the box. A canned send — the
+    // LGTM button, a follow-up card — must not walk off with a screenshot you staged
+    // for something else, by the same argument that leaves the half-typed text alone.
+    const files = override == null ? readyAttachments() : [];
+    // A screenshot with nothing typed under it is a message: "look at this" is the
+    // whole content of it.
+    if ((!text && !files.length) || !state.current) return;
     const sessionId = state.current.sessionId;
 
     // The lock is a rule, not a disabled button. Greying out the buttons left
@@ -5421,10 +5871,16 @@ async function sendMessage({ fork = false, text: override = null, canned = false
     // Only a message that came out of the box empties the box — and only then is
     // the saved draft gone with it. A canned send leaves a half-written message
     // where it was, rather than dropping it on the way past.
+    // Taken before the strip is emptied, because emptying it is what would revoke them.
+    const previews = files.length
+        ? state.attach.filter(a => a.previewUrl).map(a => a.previewUrl)
+        : [];
+
     if (override == null) {
         dom.input.value = '';
         autoGrow();
         saveDraft(sessionId, '');
+        clearAttach({ revoke: false });
     }
 
     // Drawn in the same frame the box empties, so the message moves from one to the
@@ -5439,13 +5895,18 @@ async function sendMessage({ fork = false, text: override = null, canned = false
     const runner = state.runner;
     const willQueue = Boolean(runner
         && (runner.state === 'busy' || runner.state === 'starting'));
-    if (!fork && !willQueue) showPendingSend(sessionId, text);
+    if (!fork && !willQueue) showPendingSend(sessionId, text, files, previews);
+    // No row was drawn, so nothing is going to hand these back.
+    else revokePreviews(previews);
 
     enableSend(false);
 
     try {
         const r = await post(`/api/sessions/${sessionId}/send`, {
             text,
+            // Paths, not bytes: every one of these is already on disk, written by the
+            // attachments route before its chip appeared.
+            attachments: files,
             fork,
             model: dom.model.value || null,
             permissionMode: dom.perm.value,
@@ -5468,7 +5929,9 @@ async function sendMessage({ fork = false, text: override = null, canned = false
         }
     } catch (err) {
         clearPendingSend();   // it never reached the bridge; the log must not claim it did
-        if (!canned) restoreToComposer(text);
+        // The files are still on disk, so handing their metadata back is enough to put
+        // the chips where they were.
+        if (!canned) restoreToComposer(text, files);
         toast(`Could not send: ${err.message}`, 'error');
     } finally {
         enableSend(Boolean(state.current));
@@ -6388,6 +6851,30 @@ dom.search.addEventListener('input', debounce(() => {
 }, 180));
 
 dom.btnSend.addEventListener('click', () => sendMessage());
+
+// Paste, drop, and the paperclip all end up in attachFiles.
+dom.input.addEventListener('paste', onComposerPaste);
+dom.composer.addEventListener('dragover', onComposerDragOver);
+dom.composer.addEventListener('dragleave', onComposerDragLeave);
+dom.composer.addEventListener('drop', onComposerDrop);
+dom.btnAttach.addEventListener('click', () => dom.attachInput.click());
+dom.attachInput.addEventListener('change', () => {
+    attachFiles(dom.attachInput.files);
+    // Cleared so that picking the same file twice in a row fires `change` both times.
+    dom.attachInput.value = '';
+});
+// A file dropped anywhere else in the window would otherwise navigate away to it,
+// which loses the conversation and every draft on screen. Gated exactly like the
+// composer's own handlers, so a queue chip being dragged is still none of our
+// business here.
+for (const type of ['dragover', 'drop']) {
+    document.addEventListener(type, (e) => {
+        if (state.queueDrag) return;
+        if (!dragHasFiles(e.dataTransfer)) return;
+        if (dom.composer.contains(e.target)) return;   // handled above
+        e.preventDefault();
+    });
+}
 // One click, and no confirmation over the top of it: the click *is* the approval,
 // and the session still asks for whatever its permission mode makes it ask for
 // before anything is pushed or merged.

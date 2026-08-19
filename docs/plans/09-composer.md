@@ -9,8 +9,9 @@ input element, the keyboard map, and the draft-persistence machinery.
 The existing draft handling (`app.js:140-166`) is careful work — text survives a
 reload, a crash, and a failed turn. Everything here must preserve that.
 
-> **Status.** The `/` half of A is built; C shipped some time ago. What is left
-> here is `@` mentions, B, D and E.
+> **Status.** The `/` half of A is built; C shipped some time ago; **B shipped**,
+> wider than it is written below — see the note under it. What is left here is `@`
+> mentions, D and E.
 >
 > One thing this plan got wrong, worth keeping written down: it said to read the
 > command list out of `~/.claude/commands`, the project's `.claude/commands` and
@@ -42,6 +43,30 @@ typing one, and there is no way to reference a file except by typing its path.
   text; a widget would just be something to get out of sync.
 
 ## B. Images
+
+> **Shipped, and as *files* rather than images.** A CSV, a log or a PDF dropped on the
+> box is the same gesture and the same plumbing, and restricting it to images would have
+> been a second feature later for no less work.
+>
+> The one real departure from the design below: **every attachment is written to disk**,
+> under `attached_assets/` at the root of the checkout the session is working in, and
+> the message names the path. This plan proposed inlining base64 only. Three things
+> pushed it the other way — a path is referenceable in a later turn where a block is
+> gone once the message scrolls past; a path is something the person can open
+> themselves; and a non-image attachment has no inline block to be sent as, so the path
+> is the only mechanism that covers everything rather than one kind. Images get both,
+> which is what keeps the "no tool call to see a screenshot" property this plan was
+> after.
+>
+> Consequences worth knowing: `runner.send` took `attachments` alongside `text` rather
+> than becoming `send(content)` — the queue, `inFlight`, `dequeue`, `reorder`,
+> `status().queue` and the chips all read `.text`, and none of them changed. The
+> downscaling this plan asks for was dropped: uploads are raw bytes on a route of their
+> own with a 25MB cap, so the 4MB `readJson` limit it was working around does not apply.
+> `bridge/attachments.js` is the new module; `parseAttachmentNote` in
+> `bridge/transcript.js` is what takes the paths back out of the message so they are not
+> rendered twice. Left out: `/m`, which is refused the route rather than half-given it,
+> and a thumbnail for a chip restored from a draft.
 
 **Why.** `renderUser` displays images from the transcript
 (`app.js:496-499`, `imageRef` in `transcript.js:373`) but you cannot send one.
