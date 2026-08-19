@@ -20,6 +20,7 @@ const { SessionIndex } = require('./sessions');
 const { SessionRegistry } = require('./registry');
 const { RunnerPool, PERMISSION_MODES } = require('./runner');
 const { Flags } = require('./flags');
+const { Prefs } = require('./prefs');
 const { Suggestions, STATUSES: SUGGESTION_STATUSES } = require('./suggestions');
 const { SlashCommandCache } = require('./slash-commands');
 const { NotificationLog } = require('./notifications');
@@ -38,6 +39,9 @@ const WEB_DIR = path.join(__dirname, '..', 'web');
 const CLIENT_HEADER = 'x-claude-sessions-client';
 
 const flags = new Flags();
+// How the person using the app wants it to behave, from their own file and from
+// whatever the project they are looking at overrides — see bridge/prefs.js.
+const prefs = new Prefs();
 // What you did about a suggested follow-up — started it, or waved it away. The
 // suggestion itself is in the transcript; only the decision is ours to keep.
 const suggestions = new Suggestions();
@@ -669,6 +673,16 @@ async function api(req, res, url, pathname, who) {
         });
     }
 
+    // Settings, for a caller that wants them fresh rather than as the page was
+    // served with them — a settings page saving, or a client checking after the
+    // file was edited by hand. `?cwd=` asks what is in force for a project;
+    // without it, the user-level answer. Not local-only: reading a preference
+    // about how a transcript looks is not a capability a phone should be
+    // refused, and prefs.forCwd() runs a cwd through cfg.withinRoots anyway.
+    if (pathname === '/api/prefs' && req.method === 'GET') {
+        return send(res, 200, prefs.forCwd(url.searchParams.get('cwd') || ''));
+    }
+
     if (pathname === '/api/shutdown' && req.method === 'POST') {
         // Only honour a shutdown aimed at this exact process. Without it, an app
         // window closing could take down a bridge somebody else started — say one
@@ -845,6 +859,15 @@ async function api(req, res, url, pathname, who) {
             // needs to know whether it was acted on in another window.
             const acted = suggestions.forSession(sessionId);
 
+            // The settings in force *for this conversation's directory*. The
+            // page was served with the user-level answer before it knew which
+            // session it was about to show, and a project may override it — so
+            // the answer travels with the transcript it applies to, and lands
+            // in the same await the client already does before it draws
+            // anything. Fetching it separately would be a race the big payload
+            // usually wins and sometimes does not.
+            const settings = prefs.forCwd(data.summary && data.summary.cwd);
+
             const want = Number(url.searchParams.get('tail'));
             if (Number.isFinite(want) && want > 0 && data.events.length > want) {
                 const dropped = data.events.length - want;
@@ -854,9 +877,11 @@ async function api(req, res, url, pathname, who) {
                     truncated: { dropped, total: data.events.length },
                     runner: st || null,
                     suggestions: acted,
+                    prefs: settings,
                 });
             }
-            return send(res, 200, { ...data, runner: st || null, suggestions: acted });
+            return send(res, 200, {
+                ...data, runner: st || null, suggestions: acted, prefs: settings });
         }
 
         // Hard delete. Everywhere else in this app "remove" means archive; this
@@ -1723,6 +1748,13 @@ function serveStatic(req, res, pathname, who) {
             body = Buffer.from(auth.injectToken(body.toString('utf8')), 'utf8');
             headers['Set-Cookie'] = auth.pairCookie(auth.current(), { secure: who.secure });
         }
+        // Settings go to every page, local or not — they are not a credential,
+        // and a remote browser renders the same transcript. In the page rather
+        // than behind a fetch because the client opens a session synchronously
+        // at startup: a transcript drawn before an async answer arrived would
+        // stay drawn the wrong way, since nothing re-renders history.
+        body = Buffer.from(auth.injectMeta(body.toString('utf8'),
+            'cs-prefs', JSON.stringify(prefs.page(''))), 'utf8');
     }
     headers['Content-Length'] = body.length;
 

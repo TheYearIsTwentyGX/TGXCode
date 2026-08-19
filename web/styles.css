@@ -1963,7 +1963,10 @@ a:hover { text-decoration: underline; }
 }
 .tool[open] { background: var(--s2); }
 
-.tool > summary {
+/* The row itself is shared with the fold a run of tool calls collapses into
+   (.trow, below) — one more row of the same kind, and it should be impossible
+   for the two to drift apart by editing only one of them. */
+:is(.tool > summary, .trow) {
     display: flex;
     align-items: center;
     gap: 11px;
@@ -1976,33 +1979,33 @@ a:hover { text-decoration: underline; }
     transition: background var(--t-fast) var(--ease);
 }
 .tool > summary::-webkit-details-marker { display: none; }
-.tool > summary:hover { background: var(--s3); }
+:is(.tool > summary, .trow):hover { background: var(--s3); }
 
 /* Status is a dot, not a coloured slab. */
-.tool > summary::before {
+:is(.tool > summary, .trow)::before {
     content: "";
     flex: none;
     width: 6px; height: 6px;
     border-radius: 50%;
     background: var(--text-4);
 }
-.tool[data-status="ok"] > summary::before { background: #4d5052; }
-.tool[data-status="error"] > summary::before { background: var(--red); }
+:is(.tool[data-status="ok"] > summary, .trow[data-status="ok"])::before { background: #4d5052; }
+:is(.tool[data-status="error"] > summary, .trow[data-status="error"])::before { background: var(--red); }
 .tool[data-status="pending"] > summary::before {
     background: var(--yellow);
     animation: breathe 1.6s var(--ease) infinite;
 }
 
-.tool .tname {
+:is(.tool, .trow) .tname {
     font-family: var(--mono);
     font-size: 12.5px;
     font-weight: 500;
     color: var(--text-2);
     flex: none;
 }
-.tool[data-status="error"] .tname { color: var(--red); }
+:is(.tool[data-status="error"], .trow[data-status="error"]) .tname { color: var(--red); }
 
-.tool .targ {
+:is(.tool, .trow) .targ {
     flex: 1;
     min-width: 0;
     overflow: hidden;
@@ -2013,14 +2016,14 @@ a:hover { text-decoration: underline; }
     color: var(--text-4);
 }
 
-.tool .tmeta {
+:is(.tool, .trow) .tmeta {
     flex: none;
     font-size: 11.5px;
     color: var(--text-4);
     font-variant-numeric: tabular-nums;
 }
 
-.tool .caret {
+:is(.tool, .trow) .caret {
     flex: none;
     width: 10px;
     font-size: 9px;
@@ -2028,6 +2031,25 @@ a:hover { text-decoration: underline; }
     transition: transform var(--t-fast) var(--ease);
 }
 .tool[open] .caret { transform: rotate(90deg); }
+
+/* A run of tool calls, folded into one row once a message closed it.
+   The <summary> is display:block and the grid lives inside it, so the rows the
+   fold holds stay top-level .ev grids: nesting them inside an .ev-body would
+   indent every one of them by a gutter they already have. */
+.trun { display: block; }
+.trun > summary {
+    display: block;
+    cursor: pointer;
+    list-style: none;
+}
+.trun > summary::-webkit-details-marker { display: none; }
+.trow {
+    margin: 3px 0;
+    background: var(--s2);
+}
+/* `> summary`, not a descendant: the fold holds tool blocks with carets of
+   their own, and those answer to their own open state. */
+.trun[open] > summary .caret { transform: rotate(90deg); }
 
 .tool-body { padding: 4px 15px 14px; }
 

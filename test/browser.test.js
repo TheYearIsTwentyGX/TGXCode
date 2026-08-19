@@ -83,6 +83,12 @@ function check(name, got, want) {
         /Secure/.test(String(page.headers['set-cookie'])), false);
     check('and the page can read the token for the pairing link',
         /name="cs-token" content="[\w-]{43}"/.test(page.body), true);
+    // The transcript decides how to draw itself from this before its first
+    // fetch, so a page served without it is a page that renders the wrong way
+    // with nothing to say so. Percent-encoded, because it is JSON in an
+    // attribute — see auth.injectMeta.
+    check('and the settings are in the page, not behind a fetch',
+        /name="cs-prefs" content="%7B%22version%22/.test(page.body), true);
 
     // Everything web/app.js does, now that the jar is warm. No header anywhere.
     console.log('\n--- and now every call web/ makes, unchanged ---');

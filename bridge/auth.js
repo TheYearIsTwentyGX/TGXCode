@@ -307,16 +307,29 @@ function localPageRequest(req) {
 }
 
 /**
+ * Hand the page a value it needs before its first script runs.
+ *
+ * Inserted after <head> rather than appended, so it is in place before any
+ * module script that might read it. Idempotent, because the same body can be
+ * served through more than one path.
+ *
+ * `content` is percent-encoded rather than HTML-escaped: the first caller
+ * interpolated a hex token and got away with quoting it, and the second passes
+ * JSON, which does not. One rule that cannot be got wrong beats two.
+ */
+function injectMeta(html, name, content) {
+    if (html.includes(`name="${name}"`)) return html;
+    const tag = `<meta name="${name}" content="${encodeURIComponent(content)}">`;
+    return html.replace(/<head([^>]*)>/i, (m) => `${m}\n${tag}`);
+}
+
+/**
  * Put the token in the page, so a loopback browser needs no login step.
  *
- * Only ever called for a request that passed localPageRequest(). The tag is
- * inserted after <head> rather than appended, so it is in place before any module
- * script that might read it.
+ * Only ever called for a request that passed localPageRequest().
  */
 function injectToken(html) {
-    const tag = `<meta name="cs-token" content="${ensureToken()}">`;
-    if (html.includes('name="cs-token"')) return html;
-    return html.replace(/<head([^>]*)>/i, (m) => `${m}\n${tag}`);
+    return injectMeta(html, 'cs-token', ensureToken());
 }
 
 /** Set-Cookie value that pairs a device, and the one that unpairs it. */
@@ -341,5 +354,5 @@ module.exports = {
     credentials, authenticate, cookies,
     isLoopback, forwarded, isSecure, effectiveHost, hostIsLocal, peer,
     classify, localPageRequest,
-    injectToken, pairCookie,
+    injectToken, injectMeta, pairCookie,
 };
