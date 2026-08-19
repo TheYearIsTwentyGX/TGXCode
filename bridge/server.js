@@ -46,6 +46,10 @@ const prefs = new Prefs();
 // What you did about a suggested follow-up — started it, or waved it away. The
 // suggestion itself is in the transcript; only the decision is ours to keep.
 const suggestions = new Suggestions();
+// What `?status=` on /api/suggestions accepts: the two decisions the store
+// knows, plus `open` for a task nobody has decided about — which is the absence
+// of an entry rather than a status, so the store has no name for it.
+const SUGGESTION_STATES = new Set(['open', ...SUGGESTION_STATUSES]);
 const index = new SessionIndex(flags);
 const registry = new SessionRegistry();
 const pool = new RunnerPool();
@@ -759,6 +763,42 @@ async function api(req, res, url, pathname, who) {
             if (st) { s.runner = { state: st.state, activity: st.activity, queued: st.queued }; }
         }
         return send(res, 200, { sessions, ready: index.ready });
+    }
+
+    // Every suggested follow-up, across every session.
+    //
+    // Until this existed a task was a tool call in one transcript and so was
+    // discoverable only while that conversation was open. The offers are now
+    // collected by the rescan that already reads every transcript, and the
+    // decision beside each one comes off the store it has always lived in.
+    //
+    // **The offers stay derived.** Nothing here is copied into state this app
+    // owns, so deleting a session removes its tasks along with its transcript —
+    // see docs/api.md for what that means and why it was chosen.
+    if (pathname === '/api/suggestions' && req.method === 'GET') {
+        const status = url.searchParams.get('status');
+        if (status) {
+            const bad = status.split(',').map(v => v.trim()).filter(Boolean)
+                .filter(v => !SUGGESTION_STATES.has(v));
+            if (bad.length) {
+                return send(res, 400, {
+                    error: `unknown status ${bad.join(', ')}; `
+                        + `expected ${[...SUGGESTION_STATES].join(', ')}`,
+                });
+            }
+        }
+        return send(res, 200, {
+            suggestions: index.listSuggestions({
+                session: url.searchParams.get('session') || null,
+                project: url.searchParams.get('project') || null,
+                status: status || null,
+                limit: Number(url.searchParams.get('limit')) || 500,
+                // Same rule as /api/sessions: a scratch session belongs to the
+                // instance that started it.
+                includeTest: cfg.IS_DEV,
+            }),
+            ready: index.ready,
+        });
     }
 
     // Who an agent in this session could send a message to.

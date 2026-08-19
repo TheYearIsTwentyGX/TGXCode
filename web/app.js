@@ -1014,6 +1014,7 @@ async function openSession(id, { quiet = false, keepDash = false } = {}) {
         loadChannels();
         loadPrStatus();
         loadAgents();
+        loadTasks();
         return true;
     } catch (err) {
         if (seq !== state.openSeq) return true;
@@ -1319,7 +1320,11 @@ const AGENT_VIEW = {
     get run() { return state.agentRun; },
 };
 
-function appendEvents(events, view = SESSION_VIEW) {
+// `live` marks events arriving on the tail rather than history being drawn. The
+// only thing it changes is whether a new suggested follow-up schedules a refetch:
+// openSession loads the panel from the bridge itself, straight after this, so
+// asking again 1.2s later would be the same answer twice.
+function appendEvents(events, view = SESSION_VIEW, { live = false } = {}) {
     let frag = document.createDocumentFragment();
     // Closing a run wraps nodes that are already in the log around nodes that
     // are still in this fragment, so the fragment goes in first. Cheap: it
@@ -1337,6 +1342,13 @@ function appendEvents(events, view = SESSION_VIEW) {
         // about it — so it comes out here and is drawn in the aside instead.
         // Taken from either view: a subagent that suggests something has
         // suggested it to this session, and the panel is the session's.
+        //
+        // The panel's source is the bridge — see loadTasks — so this only fills
+        // the gap in front of it. The index rescan is 500ms behind the file
+        // watch and falls back to a 30s poll, and a card you are waiting for
+        // must not be missing for either of those. The row and the event are the
+        // same object from the same parse, so showing it early costs nothing and
+        // the refetch below reconciles.
         if (ev.kind === 'suggestion') {
             if (!state.tasks.has(ev.id)) { state.tasks.set(ev.id, ev); newTasks = true; }
             continue;
@@ -1388,7 +1400,7 @@ function appendEvents(events, view = SESSION_VIEW) {
     // that run would otherwise stay unfolded forever. Only when nothing is
     // running: mid-turn, the calls on screen are the work you are watching.
     if (!isBusy()) closeRun(view);
-    if (newTasks) renderTasks();
+    if (newTasks) { renderTasks(); if (live) loadTasksSoon(); }
     if (!view.isAgent) {
         if (newTurn) renderTurns();
         // A Task call that has only just appeared belongs on the strip now, not
@@ -1729,7 +1741,13 @@ const taskOpenByDefault = (acted) => !acted;
 
 /** The whole aside, rebuilt from state.tasks. Cheap: there are never many. */
 function renderTasks() {
-    const tasks = [...state.tasks.values()];
+    // In the order they were raised, oldest first, which is how the aside has
+    // always read. Sorted rather than left to insertion order: the panel's rows
+    // now come from /api/suggestions, which answers newest-first because that is
+    // what a list spanning every session wants, and a card arriving on the tail
+    // is merged in beside them.
+    const tasks = [...state.tasks.values()]
+        .sort((a, b) => (Date.parse(a.ts) || 0) - (Date.parse(b.ts) || 0));
     dom.tasks.hidden = !tasks.length;
     if (!tasks.length) return;
 
@@ -3227,6 +3245,46 @@ async function loadChannels() {
     } catch {
         // A missing channel strip is not worth interrupting the user over.
     }
+}
+
+/**
+ * The suggested follow-ups raised in the open conversation.
+ *
+ * From the bridge rather than from the event stream, which is what lets a task
+ * be answered without the transcript it lives in being parsed here. It is the
+ * same index /api/suggestions answers about every session with; this asks it for
+ * one, so the panel and a cross-session view read the same rows through the same
+ * code. Scoped to the open conversation deliberately — a list of everything
+ * outstanding is a place of its own, not a longer aside.
+ */
+async function loadTasks() {
+    if (!state.current) return;
+    const id = state.current.sessionId;
+    try {
+        const { suggestions } = await get(`/api/suggestions?session=${id}`);
+        if (!state.current || state.current.sessionId !== id) return;
+        const next = new Map((suggestions || []).map(t => [t.id, t]));
+        // A card the tail brought in that the rescan has not reached yet stays.
+        // Replacing the map outright would take it away again and put it back a
+        // rescan later, which is a card blinking out of the aside while somebody
+        // is reading it. The bridge wins for everything it does know about.
+        for (const [tid, task] of state.tasks) if (!next.has(tid)) next.set(tid, task);
+        state.tasks = next;
+        renderTasks();
+    } catch {
+        // The cards already showing came off the transcript tail and are still
+        // true. Interrupting somebody over a panel that is merely not fresher
+        // than it was would be worse than the staleness.
+    }
+}
+
+// Coalesced, because a turn can file several offers in a row and the rescan they
+// are waiting on is debounced anyway — one refetch shortly after the last of
+// them is the whole need.
+let taskLoadTimer = null;
+function loadTasksSoon() {
+    if (taskLoadTimer) return;
+    taskLoadTimer = setTimeout(() => { taskLoadTimer = null; loadTasks(); }, 1200);
 }
 
 function renderChannels() {
@@ -5049,7 +5107,7 @@ function connect() {
         if (!state.current || d.sessionId !== state.current.sessionId) return;
         state.offset = d.offset;
         const stick = state.pinned;
-        appendEvents(d.events, SESSION_VIEW);
+        appendEvents(d.events, SESSION_VIEW, { live: true });
         // A plan belonging to a session running elsewhere is read out of these
         // events, so it arrives — and goes away once answered over there — with
         // the transcript rather than with a status tick.
@@ -5066,7 +5124,7 @@ function connect() {
         state.agentOffset = d.offset;
         const sc = dom.agentScroll;
         const stick = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 90;
-        appendEvents(d.events, AGENT_VIEW);
+        appendEvents(d.events, AGENT_VIEW, { live: true });
         if (stick) sc.scrollTop = sc.scrollHeight;
     });
 

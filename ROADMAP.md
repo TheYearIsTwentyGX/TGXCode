@@ -88,7 +88,10 @@ crossing a session boundary had nowhere to go.
   the prompt already written, through the one tool this app gives a session
   (`bridge/suggest-mcp.js`). The offer is a tool call in the transcript, so the
   card is derived rather than stored; only *started or dismissed* is the app's,
-  and that sits beside `flags.json`.
+  and that sits beside `flags.json`. The offers are now collected by the index
+  rescan as well, so `GET /api/suggestions` answers about every session at once
+  and a task no longer needs its conversation open to be found — still derived,
+  so it still goes when the transcript does.
 - **Sessions talking to each other.** Claude Code ships the transport — a socket
   per session, advertised in the registry `bridge/registry.js` already reads, and
   agents addressing each other by name. This app builds none of that. It offers
