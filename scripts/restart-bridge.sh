@@ -2,11 +2,6 @@
 
 # Dylan edit:
 # This ensures that when started by cron, internal paths get expanded properly:
-set -e
-
-cd "$(dirname "$(readlink -f "$0")")"
-
-PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 echo "Starting bridge restart process..."
 
