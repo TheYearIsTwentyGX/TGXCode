@@ -3021,14 +3021,14 @@ body.term-resizing { user-select: none; cursor: row-resize; }
    the eye can run down the right edge for "what needs doing" and down the left
    for "where". */
 
-.dash, .live, .notes {
+.dash, .live, .notes, .taskboard {
     display: flex;
     flex-direction: column;
     flex: 1;
     min-height: 0;
 }
 /* Not optional: `display: flex` above beats the `hidden` attribute on its own. */
-.dash[hidden], .live[hidden], .notes[hidden] { display: none; }
+.dash[hidden], .live[hidden], .notes[hidden], .taskboard[hidden] { display: none; }
 
 /* ── the live board ──────────────────────────────────────────────────────
    A card per running session. The grid decides its own column count so that a
@@ -3555,6 +3555,7 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 .app[data-focus="1"] .rail,
 .app[data-focus="1"] .bar-search,
 .app[data-focus="1"] #btn-dash,
+.app[data-focus="1"] #btn-taskboard,
 .app[data-focus="1"] .live-head { display: none; }
 .app[data-focus="1"] .live-body { padding-top: 18px; }
 
@@ -4226,6 +4227,308 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 }
 @media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
 
+/* ── the task board ──────────────────────────────────────────────────────
+   Four columns over everything outstanding. Unlike the live board, which lets
+   the grid pick its own column count, this one is exactly four: each column is
+   a state, so losing one to a narrow window would lose a state rather than a
+   row. Below the breakpoint they fold into two rows of two instead.
+
+   Colour is the live board's, deliberately: a session that is blocked shows the
+   same yellow here as it does there, and one running the same green. Two boards
+   with two vocabularies for one fact is how you end up checking both. */
+
+.tb-head {
+    flex: none;
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    padding: 22px 28px 16px;
+}
+.tb-title { margin: 0; font: 400 21px/1.3 var(--sans); color: var(--text); }
+.tb-sub {
+    margin: 5px 0 0;
+    max-width: 640px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text-3);
+}
+
+.tb-body {
+    flex: 1;
+    min-height: 0;
+    padding: 0 28px 28px;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.tb-note {
+    grid-column: 1 / -1;
+    align-self: start;
+    padding: 18px 20px;
+    background: var(--s2);
+    border-radius: var(--r);
+    color: var(--text-3);
+    font-size: 13.5px;
+}
+.tb-note p { margin: 0; }
+
+/* A column is a well, not a ruled-off area: the surface lifts where the column
+   starts, the same way a project card does in the rail. */
+.tb-col {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+    background: var(--s1);
+    border-radius: var(--r-lg);
+}
+
+.tb-col-head {
+    flex: none;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 13px 16px 10px;
+}
+.tb-col-head h2 {
+    margin: 0;
+    font: 500 13px/1.3 var(--sans);
+    color: var(--text-2);
+}
+.tb-count {
+    margin-left: auto;
+    font: 400 12px/1.3 var(--sans);
+    color: var(--text-4);
+    font-variant-numeric: tabular-nums;
+}
+/* The one column whose count is news gets to say so without being read. */
+.tb-col[data-col="needs"] .tb-col-head h2 { color: var(--yellow); }
+
+.tb-col-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.tb-empty {
+    margin: 6px 8px;
+    font-size: 12.5px;
+    color: var(--text-4);
+}
+
+/* A heading inside a column, for the projects the Suggested tasks came from. */
+.tb-sub-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: 8px 8px 0;
+    font: 500 11px/1.3 var(--sans);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-4);
+}
+.tb-sub-head:first-child { margin-top: 2px; }
+.tb-sub-head span { margin-left: auto; letter-spacing: 0; text-transform: none; }
+
+/* ── a card ─────────────────────────────────────────────────────────────── */
+
+.tb-card {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding: 11px 12px 11px;
+    background: var(--s2);
+    border-radius: var(--r);
+    min-width: 0;
+    cursor: pointer;
+    /* Which column it is in, said again in colour along its edge, so a card
+       read out of the corner of the eye still carries its state. */
+    box-shadow: inset 3px 0 0 var(--s4);
+    transition: background var(--t-fast) var(--ease);
+}
+.tb-card:hover { background: var(--s3); }
+
+.tb-card[data-col="needs"]   { box-shadow: inset 3px 0 0 var(--yellow); background: #232017; }
+.tb-card[data-col="needs"]:hover { background: #2b2719; }
+.tb-card[data-col="working"] { box-shadow: inset 3px 0 0 var(--green); }
+.tb-task                     { box-shadow: inset 3px 0 0 var(--blue); }
+/* A task whose conversation has been filed away. Still offered — dismissing is
+   the gesture for "not this", and archiving must not become a second, silent
+   one — but visibly the loose end it is. */
+.tb-task[data-archived="true"] { opacity: 0.62; box-shadow: inset 3px 0 0 var(--s5); }
+
+.tb-card-head { display: flex; align-items: flex-start; gap: 8px; }
+
+.tb-dot {
+    flex: none;
+    width: 7px; height: 7px;
+    margin-top: 5px;
+    border-radius: 50%;
+    background: var(--text-4);
+}
+.tb-card[data-col="needs"] .tb-dot   { background: var(--yellow); }
+.tb-card[data-col="working"] .tb-dot {
+    background: var(--green);
+    animation: breathe 1.6s var(--ease) infinite;
+}
+.tb-task .tb-dot { background: var(--blue); }
+
+/* Two lines, then an ellipsis. A task title is a sentence and a session title
+   is often one too; one line loses the half that says which. */
+.tb-card-title {
+    flex: 1;
+    min-width: 0;
+    padding: 0;
+    background: none;
+    border: 0;
+    text-align: left;
+    font: 500 13px/1.4 var(--sans);
+    color: var(--text);
+    cursor: pointer;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+.tb-card:hover .tb-card-title,
+.tb-card-title:hover { color: var(--blue); }
+
+/* The archive button, hidden until the card is under the pointer — the same
+   bargain the rail strikes, for the same reason: it is not what the card is
+   for, and four columns of them would read as a page of controls. */
+.tb-card-head .mini {
+    flex: none;
+    opacity: 0;
+    transition: opacity var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+}
+.tb-card:hover .mini,
+.tb-card-head .mini:focus-visible { opacity: 1; }
+
+.tb-card-meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 5px;
+    min-width: 0;
+    font: 400 11.5px/1.4 var(--sans);
+    color: var(--text-4);
+}
+.tb-card-meta .dot { opacity: 0.6; }
+.tb-card-meta .tag-pin { display: inline-flex; color: var(--text-3); }
+
+.tb-card-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+
+.tb-from {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    font: 400 11.5px/1.4 var(--sans);
+    color: var(--text-4);
+}
+.tb-from .linky { font-size: 11.5px; }
+
+.tb-tag {
+    flex: none;
+    padding: 1px 6px;
+    border-radius: var(--pill);
+    background: var(--s3);
+    font: 500 10px/1.5 var(--sans);
+    color: var(--text-4);
+}
+
+/* What it is waiting on, said rather than answered. */
+.tb-ask {
+    margin: 0;
+    padding: 7px 9px;
+    border-radius: var(--r-sm);
+    background: #2b2719;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--yellow);
+}
+
+.tb-acts { display: flex; gap: 6px; margin-top: 1px; }
+
+.tb-btn {
+    /* Two buttons across the card, as wide as the card, which is what makes a
+       column of them scan as a column of the same offer. */
+    flex: 1;
+    min-width: 0;
+    height: 28px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: var(--r-sm);
+    background: var(--s3);
+    color: var(--text-2);
+    font: 500 12px/1 var(--sans);
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.tb-btn:hover { background: var(--s4); color: var(--text); }
+.tb-btn.primary { background: var(--blue-cont); color: var(--blue); }
+.tb-btn.primary:hover { background: #27446f; color: #cfe0ff; }
+.tb-btn.quiet { flex: none; background: none; color: var(--text-4); }
+.tb-btn.quiet:hover { background: var(--s3); color: var(--text-2); }
+.tb-btn:disabled { opacity: 0.45; cursor: default; }
+
+/* ── the foot of a column ───────────────────────────────────────────────── */
+
+/* The older idle sessions, behind one press. The gradient runs up over the last
+   card so the column reads as cut rather than as ended — which is the honest
+   picture, and the reason the count in the header is the total. */
+.tb-more {
+    flex: none;
+    position: relative;
+    margin-top: -30px;
+    padding: 36px 6px 2px;
+    background: linear-gradient(to bottom, transparent, var(--s1) 55%);
+    text-align: center;
+}
+.tb-more p {
+    margin: 8px 2px 0;
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: var(--text-4);
+}
+
+/* A line for a task of your own, at the foot of the column the suggested ones
+   are in. It opens the ordinary dialog rather than starting anything, so it is
+   an entry point and is styled as one. */
+.tb-new {
+    flex: none;
+    position: sticky;
+    bottom: 0;
+    display: flex;
+    gap: 6px;
+    margin-top: auto;
+    padding: 8px 4px 2px;
+    background: linear-gradient(to bottom, transparent, var(--s1) 40%);
+}
+.tb-new-box {
+    flex: 1;
+    min-width: 0;
+    height: 30px;
+    padding: 0 11px;
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-sm);
+    background: var(--s2);
+    color: var(--text);
+    font: 400 12.5px/1 var(--sans);
+}
+.tb-new-box::placeholder { color: var(--text-4); }
+.tb-new-box:focus-visible { outline: none; border-color: var(--s5); background: var(--s3); }
+.tb-new .tb-btn { flex: none; }
+
 /* ── narrow windows ──────────────────────────────────────────────────── */
 
 @media (max-width: 980px) {
@@ -4235,4 +4538,15 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     .log { padding: 6px 16px 40px; }
     .conv-head { padding: 14px 16px 0; }
     .composer { padding: 4px calc(16px + var(--turns)) 14px 16px; }
+
+    /* Two rows of two rather than four thin strips. Every column survives —
+       losing one would lose a state — and the board scrolls as a whole instead
+       of each column scrolling in a slot too short to be worth it. */
+    .tb-head { padding: 16px 16px 12px; }
+    .tb-body {
+        padding: 0 16px 20px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        overflow-y: auto;
+    }
+    .tb-col { max-height: 60vh; }
 }

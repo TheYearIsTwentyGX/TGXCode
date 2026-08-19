@@ -315,4 +315,4 @@ async function refreshDevServers(index, ids) {
 /** Yield to the event loop, so a long pass is not one long block. */
 const breathe = () => new Promise(resolve => setImmediate(resolve));
 
-module.exports = { build, refreshDevServers, recentSince, DEVSERVER_TTL_MS };
+module.exports = { build, refreshDevServers, recentSince, activityAt, DEVSERVER_TTL_MS };

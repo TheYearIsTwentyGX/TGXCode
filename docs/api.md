@@ -320,6 +320,62 @@ Also pushed as the `overview` SSE event, so most clients never call this — but
 the right answer to "what is happening right now", and anything that wants that
 should read it rather than growing a second answer.
 
+### `GET /api/taskboard?idle=`
+
+Everything outstanding, in one payload: open suggested tasks beside every un-archived
+session, grouped by what state it is in.
+
+```json
+{
+  "at": 1787161000629, "ready": true,
+  "needs":   [sessionCard],
+  "working": [sessionCard],
+  "suggested": [task],
+  "idle":    [sessionCard],
+  "counts": { "needs": 1, "working": 3, "suggested": 3, "idle": 57 },
+  "idleHidden": 46
+}
+```
+
+`suggested` is `GET /api/suggestions?status=open` verbatim — the same rows, the same
+fields — so a client draws a task the same way wherever it meets one. A `sessionCard` is
+a trimmed `/api/overview` card: no `headlines` and no `devservers`, because both cost a
+transcript read or a port probe per session and this board is several times wider than
+that one. What is left is state, which is free.
+
+Which column a session is in is `column(s, runner)` in `bridge/taskboard.js`, and it is
+deliberately the same predicates in the same order as `why()` in `overview.js`:
+
+| | |
+|---|---|
+| off the board | `archived` — that is what archiving is for, and it is the only filter applied to a session here |
+| `needs` | a pending permission (tool, plan or question), or a runner in `error` |
+| `working` | runner `busy` or `starting`, or a queue behind a stopped turn, or a live registry entry with no runner of ours — a terminal, VS Code, a background agent |
+| `idle` | everything else |
+
+Two differences from the live board, both because every session gets a card here.
+`pinned` is not a state: on the live board a pin is a *reason to draw a card at all*, and
+here a pinned idle session is simply idle. And nothing falls through to nothing.
+
+**`counts.idle` is the total, not what was returned.** The idle column leads with the same
+working-hours window the live board's recent group uses (`recentSince`, shared rather than
+reimplemented), and `idleHidden` says how many that left out. A count describing only the
+visible slice would read as "this is everything" on a machine with several hundred
+un-archived sessions.
+
+`?idle=all` drops the window and returns all of them, newest first, with `idleHidden: 0`.
+It is answered here and **never pushed**: it is what one button asks for once, the rows it
+brings back are idle by definition, and pushing several hundred of them every few seconds
+to every window is the cost the window exists to avoid. Any other value of `?idle=` means
+`recent`; there is nothing to get wrong, so there is no 400.
+
+Test sessions appear only on the development bridge, exactly as in the session list.
+**A task from an archived session is still returned**, carrying `archived: true` — the
+reasoning is under `/api/suggestions` and it is about tasks, not sessions.
+
+Also pushed as the `taskboard` SSE event, which is how the UI reads it; the route is for
+the first load, for the Show-all button, and for anything that would rather poll.
+
 ### `GET /api/suggestions?session=&project=&status=&limit=`
 
 `{ suggestions: [task], ready: bool }`, newest first. A task is
@@ -399,11 +455,14 @@ a 404: the caller pressed a key, and an empty list is a real answer.
 `GET /api/events` — SSE, `text/event-stream`. Then tell it what to follow:
 
 ```
-POST /api/subscribe  { clientId, sessionId, offset, agent, overview }
+POST /api/subscribe  { clientId, sessionId, offset, agent, overview, taskboard }
 ```
 
-`clientId` comes from the `hello` event. One session followed at a time; `overview`
-is a separate, orthogonal follow that stays on while a session is open.
+`clientId` comes from the `hello` event. One session followed at a time; `overview` and
+`taskboard` are separate, orthogonal follows that stay on while a session is open, and
+independent of each other — the two boards answer different questions and a window is
+rarely reading both. Each has its own timer on the bridge, started only while somebody is
+watching, and its own per-client change mark.
 
 **There is no `Last-Event-ID` replay, and no `id:` field.** Nothing is buffered for
 a disconnected client. Recovery is: reconnect, re-subscribe from the offset you
@@ -419,6 +478,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `reset` | `{sessionId}` — reload from scratch |
 | `agent-tail` / `agent-reset` | as above, for a subagent |
 | `overview` | the board; sent only when it has actually changed |
+| `taskboard` | the task board; every ~3s while watched, and only when it has actually changed. Never carries `?idle=all` |
 | `sessions-changed` | `{at}` — a nudge to refetch the list |
 | `peer-message` | `{at, sessionId, from, count}` — another session messaged this one. The message itself is in the transcript, so a client tailing it has already drawn it; this is for everything that is not the open pane |
 | `suggestion-changed` | `{at, sessionId, toolUseId}` — a suggested follow-up was started, dismissed, or undone, possibly in another window |

@@ -30,6 +30,7 @@ const devservers = require('./devservers');
 const dashboard = require('./dashboard');
 const pulls = require('./pulls');
 const overview = require('./overview');
+const taskboard = require('./taskboard');
 const { openInExplorer, openFile } = require('./explorer');
 const attachments = require('./attachments');
 const { TerminalPool } = require('./terminal');
@@ -132,8 +133,9 @@ function dropClient(id) {
     for (const sub of c.subs.values()) stopWatch(sub);
     stopAgentWatch(c);
     clients.delete(id);
-    // The last window watching the board closing is what stops its timer.
+    // The last window watching a board closing is what stops its timer.
     if (c.overview) syncBoard();
+    if (c.taskboard) syncTaskboard();
 }
 
 function stopWatch(sub) {
@@ -234,6 +236,76 @@ async function tickDevServers() {
     try {
         if (await overview.refreshDevServers(index, ids)) tickBoard();
     } catch { /* nothing here is worth failing a tick over */ }
+}
+
+// ---------------------------------------------------------------------------
+// The task board
+// ---------------------------------------------------------------------------
+//
+// The same machinery as the live board above, on its own slower cycle. Separate
+// rather than folded into `tickBoard` because the two answer different questions
+// and a client watching one is usually not watching the other: the phone reads
+// `overview` and never opens this, and a window left on the task board has no
+// use for dev-server chips.
+//
+// **Three seconds rather than one.** The client takes each column's order once
+// and then holds it, so a faster tick buys nothing a person could see — only
+// JSON. What it must still be is prompt about the thing the board is *for*: a
+// session going from working to blocked shows up within a tick, which is fast
+// enough for a view you glance at and slow enough that a payload carrying every
+// un-archived session is not built sixty times a minute.
+
+const TASKBOARD_MS = 3_000;
+
+const taskBoard = { timer: null };
+
+function taskboardWatchers() {
+    return [...clients.values()].filter(c => c.taskboard);
+}
+
+/** Start or stop the tick to match how many people are looking. */
+function syncTaskboard() {
+    const watching = taskboardWatchers().length > 0;
+    if (watching && !taskBoard.timer) {
+        taskBoard.timer = setInterval(tickTaskboard, TASKBOARD_MS);
+        taskBoard.timer.unref();
+    } else if (!watching && taskBoard.timer) {
+        clearInterval(taskBoard.timer);
+        taskBoard.timer = null;
+    }
+}
+
+/**
+ * Always the windowed idle column, never `?idle=all`.
+ *
+ * Show-all is a one-off fetch behind a button: the rows it brings back are idle
+ * by definition, so nothing about them changes, and pushing all several hundred
+ * of them three times a second to a window that may never have pressed it is the
+ * cost this view was shaped to avoid.
+ */
+function buildTaskboard() {
+    return taskboard.build(index, pool, { includeTest: cfg.IS_DEV });
+}
+
+/** Same per-client mark, for the same reason `tickBoard` gives. */
+function tickTaskboard() {
+    const watchers = taskboardWatchers();
+    if (!watchers.length) return;
+
+    const data = buildTaskboard();
+    const sig = signature(data);
+    for (const c of watchers) {
+        if (c.lastTaskboard === sig) continue;
+        c.lastTaskboard = sig;
+        sseSend(c, 'taskboard', data);
+    }
+}
+
+/** The board as it stands, to one client that has just asked for it. */
+function sendTaskboardNow(client) {
+    const data = buildTaskboard();
+    client.lastTaskboard = signature(data);
+    sseSend(client, 'taskboard', data);
 }
 
 // ---------------------------------------------------------------------------
@@ -611,7 +683,7 @@ async function api(req, res, url, pathname, who) {
             Connection: 'keep-alive',
             'X-Accel-Buffering': 'no',
         });
-        const client = { res, subs: new Map(), agent: null, overview: false };
+        const client = { res, subs: new Map(), agent: null, overview: false, taskboard: false };
         clients.set(id, client);
         sseSend(client, 'hello', { clientId: id, version: cfg.VERSION });
 
@@ -635,6 +707,15 @@ async function api(req, res, url, pathname, who) {
             client.overview = wants;
             syncBoard();
             if (wants) sendBoardNow(client);
+        }
+        // The task board is a third, independent follow, for the same reason.
+        // It is not implied by `overview`: the two are different questions and a
+        // window is almost never reading both at once.
+        const wantsTb = Boolean(body.taskboard);
+        if (client.taskboard !== wantsTb) {
+            client.taskboard = wantsTb;
+            syncTaskboard();
+            if (wantsTb) sendTaskboardNow(client);
         }
         // One session in view at a time; drop other follows so we aren't polling
         // transcripts nobody is looking at.
@@ -825,6 +906,21 @@ async function api(req, res, url, pathname, who) {
     // Pollable by anything; the UI takes it over SSE instead.
     if (pathname === '/api/overview' && req.method === 'GET') {
         return send(res, 200, buildBoard());
+    }
+
+    // Everything outstanding at once: open suggested tasks beside every
+    // un-archived session, grouped by what state it is in. Derived from what is
+    // already in memory and reads no transcripts — see taskboard.js.
+    //
+    // `?idle=all` drops the recent window on the idle column and returns every
+    // un-archived session. Only ever answered here, never pushed: it is what the
+    // Show-all button asks for once, and the rows it brings back are idle by
+    // definition.
+    if (pathname === '/api/taskboard' && req.method === 'GET') {
+        return send(res, 200, taskboard.build(index, pool, {
+            includeTest: cfg.IS_DEV,
+            idle: url.searchParams.get('idle') === 'all' ? 'all' : 'recent',
+        }));
     }
 
     // Work in flight: uncommitted changes and unmerged pull requests, by project.

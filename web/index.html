@@ -33,11 +33,28 @@
 
     <span class="bar-spacer"></span>
 
+    <!-- Everything outstanding at once: open tasks beside every session that is
+         not archived, in a column per state. The widest of the four views, and
+         so the first of them. -->
+    <button id="btn-taskboard" class="bar-btn" type="button" aria-pressed="false"
+            title="Everything outstanding, by state (Ctrl+2)">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <rect x="3.2" y="4.2" width="5.2" height="15.6" rx="1.8"
+              stroke="currentColor" stroke-width="1.7"/>
+        <rect x="9.9" y="4.2" width="5.2" height="10.4" rx="1.8"
+              stroke="currentColor" stroke-width="1.7"/>
+        <rect x="16.6" y="4.2" width="4.2" height="6.6" rx="1.8"
+              stroke="currentColor" stroke-width="1.7"/>
+      </svg>
+      <span>Tasks</span>
+      <span id="tb-badge" class="bar-badge" hidden></span>
+    </button>
+
     <!-- Every session that is running right now, on one screen. The rail is one
          conversation at a time by design; this is the view for the afternoon
          when five agents are working and one of them is stuck. -->
     <button id="btn-live" class="bar-btn" type="button" aria-pressed="false"
-            title="Every session running right now (Ctrl+2)">
+            title="Every session running right now (Ctrl+3)">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
         <circle cx="12" cy="12" r="3.1" fill="currentColor"/>
         <path d="M6.6 17.4a7.6 7.6 0 0 1 0-10.8M17.4 6.6a7.6 7.6 0 0 1 0 10.8"
@@ -63,7 +80,7 @@
     <!-- Work that is finished with the conversation but not with you: changes
          nobody committed, pull requests nobody merged. -->
     <button id="btn-dash" class="bar-btn" type="button" aria-pressed="false"
-            title="Uncommitted changes and open pull requests, by project">
+            title="Uncommitted changes and open pull requests, by project (Ctrl+4)">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
         <rect x="3.2" y="4.2" width="7" height="7" rx="2" stroke="currentColor" stroke-width="1.7"/>
         <rect x="13.8" y="4.2" width="7" height="11.5" rx="2" stroke="currentColor" stroke-width="1.7"/>
@@ -78,7 +95,7 @@
          it was — so the bridge writes every one of these down and this is where
          you read them back. -->
     <button id="btn-notes" class="bar-btn" type="button" aria-pressed="false"
-            title="Everything that has reached out to you (Ctrl+4)">
+            title="Everything that has reached out to you (Ctrl+5)">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
         <circle cx="5" cy="6.5" r="1.5" fill="currentColor"/>
         <circle cx="5" cy="12" r="1.5" fill="currentColor"/>
@@ -542,6 +559,22 @@ checks, and merge it once they pass.">LGTM</button>
         </div>
       </header>
       <div id="notes-body" class="notes-body"></div>
+    </section>
+
+    <!-- Everything outstanding, in four columns. The rail is one conversation,
+         the live board is only what is running this second, and a suggested
+         follow-up used to be visible only while the conversation that raised it
+         was open. This is the view that answers "what is left". -->
+    <section id="taskboard" class="taskboard" hidden aria-label="Task board">
+      <header class="tb-head">
+        <div>
+          <h1 class="tb-title">Task board</h1>
+          <p id="tb-sub" class="tb-sub">Everything outstanding: suggested tasks,
+            and every session that is not archived.</p>
+        </div>
+        <button id="tb-refresh" class="dash-btn" type="button">Refresh</button>
+      </header>
+      <div id="tb-body" class="tb-body"></div>
     </section>
 
     <div id="placeholder" class="empty">
