@@ -877,6 +877,44 @@ a:hover { text-decoration: underline; }
 .conv-sub .agent-state.failed { color: var(--red); }
 .conv-sub .pulse { color: var(--yellow); }
 
+/* A pull request the session raised, and what has become of it. Colour and glyph
+   say the same thing twice on purpose — two of these are red and two are yellow,
+   so hue alone would not separate them. The word itself is in the tooltip.
+
+   `flex: none` because .conv-sub wraps: the icon and the number are one thing and
+   must not be broken across lines. The svg takes its colour from currentColor, so
+   every rule below sets it on the anchor and none of them touch the svg. */
+.conv-sub .pr {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex: none;
+    font: 500 12px/1 var(--sans);
+    text-decoration: none;
+    color: var(--text-3);
+    transition: color var(--t-fast) var(--ease), opacity var(--t-fast) var(--ease);
+}
+.conv-sub .pr[data-status="open"] { color: var(--blue); }
+.conv-sub .pr[data-status="approved"] { color: var(--green); }
+.conv-sub .pr[data-status="changes"],
+.conv-sub .pr[data-status="checks-failed"] { color: var(--red); }
+.conv-sub .pr[data-status="conflicting"],
+.conv-sub .pr[data-status="checks-pending"] { color: var(--yellow); }
+.conv-sub .pr[data-status="draft"] { color: var(--text-3); }
+/* Settled, and kept only as a record that the work landed — so it is here, but it
+   is not competing with the PRs that still want something. */
+.conv-sub .pr[data-status="merged"] { color: var(--purple); opacity: 0.62; }
+.conv-sub .pr[data-status="closed"] { color: var(--text-4); opacity: 0.62; }
+/* gh could not be reached. Says nothing rather than guessing. */
+.conv-sub .pr[data-status="unknown"] { color: var(--text-4); }
+/* Lifts the dimming off a settled PR without taking its colour away: the status is
+   the point, and losing it on the way to clicking the link would be a poor trade. */
+.conv-sub .pr:hover { opacity: 1; text-decoration: none; }
+/* Still moving, so it breathes — the same light every in-flight thing here uses. */
+.conv-sub .pr[data-status="checks-pending"] svg {
+    animation: breathe 1.6s var(--ease) infinite;
+}
+
 /* Dev servers: a row of chips, each one a switch into DevBrowser. */
 .channels {
     display: flex;
@@ -2360,6 +2398,7 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 @media (prefers-reduced-motion: reduce) {
     .status-line[data-state="busy"] .led,
     .status-line[data-state="ask"] .led,
+    .conv-sub .pr[data-status="checks-pending"] svg,
     .tool[data-status="pending"] > summary::before,
     .strip[data-state="running"] .strip-meta::before { animation: none; }
 }
