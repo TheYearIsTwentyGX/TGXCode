@@ -81,7 +81,7 @@ second answer to the same question.
 
 ## Landed since this was written
 
-Neither of these had a plan; both came out of the same observation, that work
+None of these had a plan; they came out of the same observation, that work
 crossing a session boundary had nowhere to go.
 
 - **Suggested follow-ups.** An agent files the next piece of work as a card with
@@ -92,6 +92,15 @@ crossing a session boundary had nowhere to go.
   rescan as well, so `GET /api/suggestions` answers about every session at once
   and a task no longer needs its conversation open to be found — still derived,
   so it still goes when the transcript does.
+- **The task board.** The view the entry above was still missing. `bridge/taskboard.js`
+  puts open tasks beside every un-archived session in a column per state — needs
+  you, working, suggested, idle — so "what is left" is one screen rather than a
+  rail, a live board and a panel that could each only answer part of it. Derived
+  like everything else: it reads the index, the runner pool and the registry, and
+  no transcripts at all, which is what lets it be several times wider than the
+  live board. It holds the rail's ordering rule per column, because a board that
+  reshuffled while you read it would repeat the exact mistake that rule exists to
+  prevent.
 - **Sessions talking to each other.** Claude Code ships the transport — a socket
   per session, advertised in the registry `bridge/registry.js` already reads, and
   agents addressing each other by name. This app builds none of that. It offers
@@ -99,7 +108,7 @@ crossing a session boundary had nowhere to go.
   conversation — including the receiving half, which `transcript.js` had been
   dropping on the floor because Claude Code marks an inbound message `isMeta`.
 
-The second is the shape 15 recommends for scheduling and got right: **do not
+The last is the shape 15 recommends for scheduling and got right: **do not
 rebuild it, build a view over it.**
 
 ## Deliberately not doing

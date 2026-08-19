@@ -235,6 +235,19 @@ const state = {
         // of the window rather than of a session, like the terminal pane, so it
         // is remembered and every session you move to keeps it.
         dock: localStorage.getItem('liveDock') === 'side' ? 'side' : 'bottom' },
+    // The task board. `watching` is what the bridge has been told, apart from
+    // `open` for the same reason the live board keeps them apart.
+    //
+    // `order` and `freshRank` are the rail's stable-ordering trick, per column:
+    // where a card sits is decided once and then held, so nothing slides out
+    // from under the cursor while an agent works. `allIdle` is what the Show-all
+    // button fetched, held separately because the push never carries it.
+    taskboard: { open: false, watching: false, data: null, at: 0,
+        loading: false, error: null, allIdle: null,
+        // Half-typed text in the Suggested column's box, held here rather than
+        // in the DOM so it survives the redraws the board does while agents work.
+        draft: '',
+        order: new Map(), freshRank: 0, tailRank: 0 },
     // Sessions blocked on an answer, kept whether or not the board is open, so
     // the badge on a shut board still says how many people are waiting.
     waiting: new Set(),
@@ -275,6 +288,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'plan-body', 'plan-doc', 'plan-foot',
     'btn-dash', 'dash-badge', 'dash', 'dash-sub', 'dash-body', 'dash-refresh',
     'btn-notes', 'notes-badge', 'notes', 'notes-sub', 'notes-body',
+    'btn-taskboard', 'tb-badge', 'taskboard', 'tb-sub', 'tb-body', 'tb-refresh',
     'notes-notable', 'notes-all', 'notes-clear',
     'lock', 'lock-text', 'lock-fork', 'lock-anyway',
     'btn-live', 'live-badge', 'live', 'live-sub', 'live-body', 'live-focus', 'focus-exit',
@@ -1062,10 +1076,13 @@ function beginOpen(summary, { keepDash = false } = {}) {
     state.stopArmed = 0;
     leaveAgent();       // a subagent belongs to the session it was spawned by
 
-    // Picking a session is done with the work-in-flight board, whichever way you
-    // got there. The live board is not a place you leave — it docks under the
-    // conversation you just opened, which is the whole point of it.
+    // Picking a session is done with the whole-screen boards, whichever way you
+    // got there — including the roundabout way, where Start on a task board card
+    // makes a session and then opens it. The live board is not a place you leave
+    // — it docks under the conversation you just opened, which is the whole
+    // point of it.
     if (state.dash.open && !keepDash) showDash(false);
+    if (state.taskboard.open && !keepDash) showTaskboard(false);
     // Through paintPanels rather than by hand: opening a session is what turns a
     // full-height board into a docked one, and setting `conv.hidden` here
     // directly left the two disagreeing — the conversation drawn underneath a
@@ -1921,8 +1938,11 @@ async function startSuggestion(ev, btn) {
             cwd: ev.cwd || (state.current && state.current.cwd),
             prompt: ev.prompt,
             permissionMode: 'plan',
-            // A task raised inside a test session is scratch work too.
-            test: state.dev && !!(state.current && state.current.test),
+            // A task raised inside a test session is scratch work too. A row
+            // from /api/suggestions says so itself, because the task board draws
+            // tasks from conversations nobody has open.
+            test: state.dev && !!(ev.session ? ev.session.test
+                : (state.current && state.current.test)),
         });
         await actOnSuggestion(ev, 'started', r.sessionId);
         closeTaskDialog();
@@ -1935,6 +1955,17 @@ async function startSuggestion(ev, btn) {
 }
 
 /**
+ * Which conversation a task belongs to.
+ *
+ * A row from `GET /api/suggestions` names its own session, and that is the whole
+ * reason the task board can act on a task raised in a conversation nobody has
+ * open. A `suggestion` event off the transcript tail carries no `sessionId`,
+ * because it could only ever have come from the session being read.
+ */
+const taskSessionId = (ev) =>
+    ev.sessionId || (state.current && state.current.sessionId) || null;
+
+/**
  * Record what happened to a task, and redraw the panel.
  *
  * `status` of null undoes — the task goes back to offering itself. Optimistic,
@@ -1943,7 +1974,7 @@ async function startSuggestion(ev, btn) {
  * dead button.
  */
 async function actOnSuggestion(ev, status, startedId = null) {
-    const sessionId = state.current && state.current.sessionId;
+    const sessionId = taskSessionId(ev);
     if (!sessionId) return;
     const before = state.suggestions.get(ev.id) || null;
 
@@ -3478,10 +3509,14 @@ function syncBoardWatch() {
 function showLive(on) {
     state.live.open = on;
     // The other way round from showDash: turning the board on gets the
-    // whole-screen board out of the way, since the two cannot both be read.
-    if (on) state.dash.open = false;
+    // whole-screen panels out of the way, since it cannot be read under one.
+    // All of them, not just the dashboard — History had the same gap all along
+    // and it only became visible once Ctrl+3 had to reach the live board past
+    // whatever was already up.
+    if (on) { state.dash.open = false; state.notes.open = false; state.taskboard.open = false; }
     paintPanels();
     syncBoardWatch();
+    syncTaskboardWatch();
 
     // The turn clocks count up between pushes rather than with them: a board of
     // sessions all doing something slow would otherwise be perfectly still, and
@@ -3604,7 +3639,10 @@ let restoring = false;
 function rememberView() {
     if (restoring) return;
     const q = new URLSearchParams();
-    if (state.dash.open) {
+    if (state.taskboard.open) {
+        q.set('view', 'taskboard');
+        if (state.live.open) q.set('live', '1');
+    } else if (state.dash.open) {
         q.set('view', 'dashboard');
         if (state.live.open) q.set('live', '1');
     } else if (state.live.open) {
@@ -3665,13 +3703,19 @@ function applyOverview(data) {
     // told us about.
     state.waiting = new Set(data.sessions.filter(s => s.ask).map(s => s.sessionId));
     paintLiveBadge();
+    paintTaskboardBadge();
     // Not while the work-in-flight board is covering it: the cards would be
     // rebuilt once a second for nobody to look at.
     if (liveVisible()) renderLive();
 }
 
 /** Whether the board is actually on screen, rather than merely switched on. */
-const liveVisible = () => state.live.open && !state.dash.open;
+// Every whole-screen panel, not just the dashboard: a board left switched on
+// under one of them is not on screen, and rebuilding it once a second while it
+// cannot be seen is what `showDash`/`showTaskboard` catch it up from on the way
+// out. History was already missed here before the task board arrived.
+const liveVisible = () => state.live.open
+    && !state.dash.open && !state.notes.open && !state.taskboard.open;
 
 /**
  * How many sessions are waiting on you, on the button that opens the board.
@@ -3692,8 +3736,8 @@ function paintLiveBadge() {
     dom.liveBadge.textContent = String(waiting);
     dom.liveBadge.classList.toggle('urgent', waiting > 0);
     dom.btnLive.title = waiting
-        ? `${waiting} session${waiting === 1 ? ' is' : 's are'} waiting for you (Ctrl+2)`
-        : 'Every session running right now (Ctrl+2)';
+        ? `${waiting} session${waiting === 1 ? ' is' : 's are'} waiting for you (Ctrl+3)`
+        : 'Every session running right now (Ctrl+3)';
 }
 
 /** Prime the badge at boot, for asks that were already outstanding. */
@@ -3702,6 +3746,7 @@ async function primeWaiting() {
         const d = await get('/api/overview');
         state.waiting = new Set(d.sessions.filter(s => s.ask).map(s => s.sessionId));
         paintLiveBadge();
+        paintTaskboardBadge();
     } catch { /* the first permission event will start the count off anyway */ }
 }
 
@@ -4185,12 +4230,14 @@ function paintPanels() {
     const docked = state.live.open && Boolean(state.current) && !state.focus;
     const full = state.live.open && !docked;
 
-    // Two whole-screen panels, and showDash/showNotes keep them exclusive, so
-    // "one of them is up" is the only thing anything below has to ask.
-    const covered = state.dash.open || state.notes.open;
+    // Three whole-screen panels, and showDash/showNotes/showTaskboard keep them
+    // exclusive, so "one of them is up" is the only thing anything below has to
+    // ask.
+    const covered = state.dash.open || state.notes.open || state.taskboard.open;
 
     dom.dash.hidden = !state.dash.open;
     dom.notes.hidden = !state.notes.open;
+    dom.taskboard.hidden = !state.taskboard.open;
     dom.live.hidden = !state.live.open || covered;
     dom.live.dataset.mode = docked ? 'dock' : 'full';
     // The orientation lives on both: `main` has to change its flex direction,
@@ -4203,7 +4250,7 @@ function paintPanels() {
     dom.placeholder.hidden = covered || state.live.open || Boolean(state.current);
 
     for (const [btn, on] of [[dom.btnDash, state.dash.open], [dom.btnLive, state.live.open],
-        [dom.btnNotes, state.notes.open]]) {
+        [dom.btnNotes, state.notes.open], [dom.btnTaskboard, state.taskboard.open]]) {
         btn.classList.toggle('on', on);
         btn.setAttribute('aria-pressed', String(on));
     }
@@ -4214,12 +4261,14 @@ function paintPanels() {
 
 function showDash(on) {
     state.dash.open = on;
-    if (on) state.notes.open = false;   // two whole screens; one at a time
+    // Three whole screens; one at a time.
+    if (on) { state.notes.open = false; state.taskboard.open = false; }
     // The live board is not closed by this, only covered. It is a strip you
     // leave up; the work-in-flight board is a whole screen you go and read and
     // then come back from, and coming back should find things as you left them.
     paintPanels();
     syncBoardWatch();
+    syncTaskboardWatch();
 
     if (on) {
         if (Date.now() - state.dash.at > DASH_STALE_MS) loadDash();
@@ -4487,9 +4536,10 @@ let pendingJump = null;
 
 function showNotes(on) {
     state.notes.open = on;
-    if (on) state.dash.open = false;
+    if (on) { state.dash.open = false; state.taskboard.open = false; }
     paintPanels();
     syncBoardWatch();
+    syncTaskboardWatch();
 
     if (on) {
         markNotesSeen();
@@ -4544,7 +4594,7 @@ function paintNotesBadge() {
     dom.notesBadge.textContent = String(n);
     dom.btnNotes.title = n
         ? `${n} ${n === 1 ? 'notification' : 'notifications'} since you last looked`
-        : 'Everything that has reached out to you (Ctrl+4)';
+        : 'Everything that has reached out to you (Ctrl+5)';
 }
 
 function markNotesSeen() {
@@ -4638,6 +4688,578 @@ function takePendingJump() {
     // Gone from the transcript, or never in it: the session is open and scrolled
     // to the end, which is the honest fallback rather than a guess.
     if (entry) jumpToTurn(entry);
+}
+
+// ── task board ───────────────────────────────────────────────────────────
+// Everything outstanding, in four columns.
+//
+// The other three views each answer a narrower question and none of them
+// answers this one. The rail is one conversation at a time. The live board is
+// only what is running this second — a session that finished an hour ago has no
+// card there and never will. A suggested follow-up used to be visible only while
+// the conversation that raised it was open, which meant the app's own mechanism
+// for handing work forward could only be read by going and looking for it.
+//
+// So: open tasks beside every un-archived session, grouped by what state it is
+// in, with needs-you first because that is why you looked.
+//
+// **Nothing on it moves while you are reading.** This is the constraint that
+// shapes the whole renderer, and it is the rail's rule for the rail's reason —
+// see README, "The rail is sorted on load, and then left alone". A board of
+// agents working would otherwise reshuffle every three seconds under the cursor
+// of somebody trying to read one card. So position within a column is taken once
+// and then held, and the only thing that moves a card is changing column, which
+// is news rather than noise.
+//
+// **One payload for the whole board.** The `taskboard` SSE event, on a three-
+// second tick the bridge only runs while somebody is watching, and only sends
+// when the answer actually moved. Nothing here fetches per card.
+
+/** Tell the bridge whether this window is watching the task board. */
+function syncTaskboardWatch() {
+    if (state.taskboard.watching === state.taskboard.open) return;
+    state.taskboard.watching = state.taskboard.open;
+    subscribe();
+}
+
+function showTaskboard(on) {
+    state.taskboard.open = on;
+    // Three whole screens; one at a time.
+    if (on) { state.dash.open = false; state.notes.open = false; }
+    paintPanels();
+    syncBoardWatch();
+    syncTaskboardWatch();
+
+    if (on) {
+        // The subscribe above brings the payload straight back, but only if the
+        // stream is up. A window that has just booted, or one whose stream is
+        // reconnecting, gets it the other way rather than an empty grid.
+        if (state.taskboard.data) renderTaskboard();
+        else loadTaskboard();
+    } else if (state.live.open) {
+        // The live board was left switched on underneath and has been ignoring
+        // its pushes; catch it up before it comes back into view.
+        renderLive();
+        if (state.current) termPane.refit();
+    } else if (state.current) {
+        termPane.refit();
+    }
+    rememberView();
+}
+
+/** Is the board both open and not covered by something else? */
+const taskboardVisible = () => state.taskboard.open;
+
+/**
+ * A payload arriving, from the stream or from a fetch.
+ *
+ * The badge is kept up to date whether or not the board is open — the same
+ * bargain the live board strikes — but the drawing only happens when there is
+ * something to draw on.
+ */
+function applyTaskboard(data, { all = false } = {}) {
+    state.taskboard.data = data;
+    state.taskboard.at = Date.now();
+    state.taskboard.error = null;
+    tbRememberOrder(data, all);
+    paintTaskboardBadge();
+    if (taskboardVisible()) renderTaskboard();
+}
+
+/**
+ * Fetch the board once.
+ *
+ * Three callers, all of them one-offs: the Refresh button, a window opening the
+ * board before its stream is up, and the Show-all button — which is the only one
+ * that passes `all`, and the only reason this takes an argument at all. The
+ * steady state is the push.
+ */
+async function loadTaskboard({ all = false } = {}) {
+    if (state.taskboard.loading) return;
+    state.taskboard.loading = true;
+    if (taskboardVisible()) renderTaskboard();
+    try {
+        const data = await get(`/api/taskboard${all ? '?idle=all' : ''}`);
+        // Held apart from the pushed payload rather than merged into it: the
+        // push never carries the older idle sessions, so merging would have them
+        // vanish again three seconds later.
+        if (all) state.taskboard.allIdle = data.idle;
+        state.taskboard.loading = false;
+        applyTaskboard(data, { all });
+    } catch (err) {
+        state.taskboard.loading = false;
+        state.taskboard.error = err.message;
+        if (taskboardVisible()) renderTaskboard();
+    }
+}
+
+/**
+ * How many sessions are blocked on you, on the button that opens the board.
+ *
+ * From `state.waiting` and **not** from `counts.needs`, though the payload
+ * carries it. The payload only arrives while the board is open — that is the
+ * point of the watcher-gated tick — so a badge fed from it would freeze at
+ * whatever the boot fetch happened to see and stay there all afternoon. The
+ * live board learnt this already: `state.waiting` is maintained from the
+ * permission events whether any board is open or not, which is exactly the
+ * property a badge needs.
+ *
+ * It therefore says the same number as the live board's badge, and should: two
+ * views of one fact, and that fact is the reason to open either of them. The
+ * one thing it misses is a session in `error`, which is in the column but not in
+ * `waiting`; being one short on something rare beats being frozen on everything.
+ */
+function paintTaskboardBadge() {
+    const n = state.waiting.size;
+    dom.tbBadge.hidden = !n;
+    dom.tbBadge.textContent = String(n);
+    // The same red the live board's badge uses: it is the same news.
+    dom.tbBadge.classList.toggle('urgent', n > 0);
+    dom.btnTaskboard.title = n
+        ? `${n} session${n === 1 ? ' is' : 's are'} waiting for you (Ctrl+2)`
+        : 'Everything outstanding, by state (Ctrl+2)';
+}
+
+// ── holding the order ────────────────────────────────────────────────────
+//
+// The rail's mechanism (`rememberOrder`, and the comment on it), applied per
+// column. Ranks from the first load count up from zero in the order the bridge
+// sent them; anything first seen after that takes a negative rank, so it lands at
+// the top of its column without moving anything already placed.
+//
+// **Keyed by column as well as by id**, which is what makes a session changing
+// state the one thing that can move a card. Its key in the new column has never
+// been seen, so it goes to the top of it — a session that has just become
+// blocked on you appearing at the top of *Needs you* is exactly the behaviour
+// wanted — while every card that did not change state keeps the rank it had.
+//
+// The old key is left behind rather than swept up. It is a few bytes per column
+// per session, it costs nothing, and clearing it would mean a session that goes
+// working → idle → working comes back at the top of *Working* having never left
+// the board, which reads as a new session when it is not.
+
+const tbKey = (col, id) => `${col}:${id}`;
+
+function tbRememberOrder(data, all = false) {
+    const first = state.taskboard.order.size === 0;
+    const rows = [
+        ...data.needs.map(c => tbKey('needs', c.sessionId)),
+        ...data.working.map(c => tbKey('working', c.sessionId)),
+        ...data.suggested.map(t => tbKey('task', t.id)),
+        // Not on an `?idle=all` answer: `data.idle` is then every un-archived
+        // session rather than today's, and putting all of it through the rule
+        // below would rank the whole history as newly arrived and stand the
+        // column on its head. The tail loop underneath is where those belong,
+        // and the ones already placed are skipped there by id.
+        ...(all ? [] : data.idle.map(c => tbKey('idle', c.sessionId))),
+    ];
+    for (const key of rows) {
+        if (state.taskboard.order.has(key)) continue;
+        state.taskboard.order.set(key,
+            first ? state.taskboard.order.size : --state.taskboard.freshRank);
+    }
+
+    // Show-all is the exception, and it has to be, because it is the one thing
+    // that adds rows which are *older* than everything already placed. Given the
+    // rule above they would each be "new", take a negative rank, and land above
+    // today's sessions — the column inverted, oldest first, and then held that
+    // way. So they count up from the high-water mark instead, which puts them
+    // under what is already there, in the order the bridge sent them.
+    for (const c of state.taskboard.allIdle || []) {
+        const key = tbKey('idle', c.sessionId);
+        if (state.taskboard.order.has(key)) continue;
+        // Above every rank handed out so far, whichever branch handed it out:
+        // `order.size` counts the negative ranks too, so it is a high-water mark
+        // that only ever rises, and taking the max of the two keeps this
+        // monotonic across several presses.
+        state.taskboard.tailRank =
+            Math.max(state.taskboard.tailRank, state.taskboard.order.size);
+        state.taskboard.order.set(key, state.taskboard.tailRank++);
+    }
+}
+
+const tbRankOf = (col, id) => state.taskboard.order.get(tbKey(col, id)) ?? 0;
+
+/** One column's rows, in the order they were first placed in. */
+function tbHold(col, rows, idOf) {
+    return [...rows].sort((a, b) => tbRankOf(col, idOf(a)) - tbRankOf(col, idOf(b)));
+}
+
+// ── drawing it ───────────────────────────────────────────────────────────
+
+const TB_COLUMNS = [
+    { key: 'needs', label: 'Needs you', empty: 'Nothing is blocked on you.' },
+    { key: 'working', label: 'Working', empty: 'Nothing is running.' },
+    { key: 'suggested', label: 'Suggested', empty: 'No open tasks.' },
+    { key: 'idle', label: 'Idle', empty: 'Nothing here.' },
+];
+
+function renderTaskboard() {
+    const d = state.taskboard.data;
+
+    dom.tbRefresh.disabled = state.taskboard.loading;
+    dom.tbRefresh.textContent = state.taskboard.loading ? 'Reading…' : 'Refresh';
+
+    if (state.taskboard.error) {
+        dom.tbBody.replaceChildren(el('div', { class: 'tb-note' },
+            el('p', {}, `Could not read the board. ${state.taskboard.error}`)));
+        return;
+    }
+    if (!d) {
+        dom.tbBody.replaceChildren(el('div', { class: 'tb-note' },
+            el('p', {}, 'Reading every session…')));
+        return;
+    }
+
+    dom.tbSub.textContent = [
+        `${d.counts.needs} blocked on you`,
+        `${d.counts.working} working`,
+        `${d.counts.suggested} open ${d.counts.suggested === 1 ? 'task' : 'tasks'}`,
+        `${d.counts.idle} idle`,
+    ].join(' · ');
+
+    // Each column scrolls on its own, and a rebuild would otherwise throw all
+    // four scroll positions away every three seconds.
+    const scrolls = new Map();
+    for (const c of dom.tbBody.querySelectorAll('.tb-col-body')) {
+        scrolls.set(c.dataset.col, c.scrollTop);
+    }
+    const bodyScroll = dom.tbBody.scrollLeft;
+
+    // Somebody typing a task into the box at the foot of the Suggested column
+    // would have it pulled out from under them mid-word, three seconds after
+    // they started. The text itself survives in `state.taskboard.draft`, which
+    // the box writes on every keystroke; this is the focus and the caret.
+    const active = document.activeElement;
+    const typing = active && active.classList.contains('tb-new-box')
+        ? { at: active.selectionStart, to: active.selectionEnd }
+        : null;
+
+    dom.tbBody.replaceChildren(...TB_COLUMNS.map(c => tbColumn(c, d)));
+
+    for (const c of dom.tbBody.querySelectorAll('.tb-col-body')) {
+        if (scrolls.has(c.dataset.col)) c.scrollTop = scrolls.get(c.dataset.col);
+    }
+    dom.tbBody.scrollLeft = bodyScroll;
+
+    if (typing) {
+        const box = dom.tbBody.querySelector('.tb-new-box');
+        if (box) {
+            box.focus({ preventScroll: true });
+            box.setSelectionRange(typing.at, typing.to);
+        }
+    }
+}
+
+function tbColumn(col, d) {
+    const cards = col.key === 'suggested'
+        ? tbTaskCards(d)
+        : tbSessionCards(col.key, d);
+
+    return el('section', { class: 'tb-col', 'data-col': col.key },
+        el('header', { class: 'tb-col-head' },
+            el('h2', {}, col.label),
+            el('span', { class: 'tb-count' }, String(d.counts[col.key])),
+        ),
+        el('div', { class: 'tb-col-body', 'data-col': col.key },
+            cards.length ? cards : el('p', { class: 'tb-empty' }, col.empty),
+            col.key === 'idle' ? tbShowAll(d) : null,
+            col.key === 'suggested' ? tbComposer() : null,
+        ),
+    );
+}
+
+/**
+ * The session columns.
+ *
+ * Idle is the one with a tail. When Show-all has been pressed, the older
+ * sessions it fetched are drawn under the ones the push keeps current — filtered
+ * against the two live columns, because a session that has started working since
+ * that fetch is on the board twice otherwise, once truthfully and once as a
+ * stale copy of itself.
+ */
+function tbSessionCards(key, d) {
+    let rows = d[key];
+    if (key === 'idle' && state.taskboard.allIdle) {
+        const elsewhere = new Set([...d.needs, ...d.working].map(c => c.sessionId));
+        const fresh = new Set(d.idle.map(c => c.sessionId));
+        rows = [...d.idle, ...state.taskboard.allIdle.filter(
+            c => !fresh.has(c.sessionId) && !elsewhere.has(c.sessionId))];
+    }
+    return tbHold(key, rows, c => c.sessionId).map(c => tbSessionCard(c));
+}
+
+/** Tasks, grouped by the project they were raised in, as the rail groups rows. */
+function tbTaskCards(d) {
+    const held = tbHold('task', d.suggested, t => t.id);
+
+    const groups = new Map();
+    for (const t of held) {
+        const name = (t.session && t.session.projectName) || 'Elsewhere';
+        if (!groups.has(name)) groups.set(name, []);
+        groups.get(name).push(t);
+    }
+    // One heading over the whole column says nothing. Grouping earns its keep
+    // only once there is more than one group to tell apart.
+    if (groups.size < 2) return held.map(tbTaskCard);
+
+    const out = [];
+    for (const [name, rows] of groups) {
+        out.push(el('h3', { class: 'tb-sub-head' }, name,
+            el('span', {}, String(rows.length))));
+        out.push(...rows.map(tbTaskCard));
+    }
+    return out;
+}
+
+/**
+ * A suggested task, as a card.
+ *
+ * Every button on it is the one the tasks panel beside a transcript already
+ * uses — `startSuggestion`, `openTaskDialog`, `actOnSuggestion` — because a task
+ * started from here and a task started from there must do the same thing, and
+ * two code paths for one gesture is how they stop doing it.
+ */
+function tbTaskCard(t) {
+    const where = t.session || {};
+    return el('article', {
+        class: 'tb-card tb-task', 'data-archived': String(!!t.archived),
+        onclick: (e) => { if (tbCardClickOpens(e)) openTaskDialog(t); },
+    },
+        el('header', { class: 'tb-card-head' },
+            el('span', { class: 'tb-dot' }),
+            el('button', {
+                class: 'tb-card-title', type: 'button',
+                title: 'Read this at full width',
+                onclick: () => openTaskDialog(t),
+            }, t.title || firstLine(t.prompt)),
+        ),
+        el('div', { class: 'tb-card-meta' },
+            el('span', {}, 'Suggested'),
+            el('span', { class: 'dot' }, '·'),
+            el('span', {}, where.worktree ? where.worktree.name
+                : (where.projectName || 'unknown')),
+            el('span', { class: 'dot' }, '·'),
+            el('span', { title: t.ts || '' }, ago(t.ts)),
+        ),
+        // Where it came from. The point of the column is that this is a task
+        // from a conversation you are not in, so saying which one is not
+        // decoration — it is how you judge the offer.
+        el('div', { class: 'tb-from' },
+            el('button', {
+                class: 'linky', type: 'button',
+                title: 'Open the conversation that raised this',
+                onclick: () => { showTaskboard(false); openSession(t.sessionId); },
+            }, clip(where.title || 'a conversation', 44)),
+            t.archived ? el('span', { class: 'tb-tag' }, 'archived') : null,
+            (t.session && t.session.test) ? el('span', { class: 'tb-tag' }, 'test') : null,
+        ),
+        el('div', { class: 'tb-acts' },
+            el('button', {
+                class: 'tb-btn primary', type: 'button',
+                onclick: (e) => tbStartTask(t, e.currentTarget),
+            }, 'Start'),
+            el('button', {
+                class: 'tb-btn', type: 'button',
+                onclick: () => openTaskDialog(t),
+            }, 'View task'),
+            el('button', {
+                class: 'tb-btn quiet', type: 'button', title: 'Not this one',
+                onclick: () => tbDecide(t, 'dismissed'),
+            }, 'Dismiss'),
+        ),
+    );
+}
+
+/**
+ * A session, as a card.
+ *
+ * Deliberately the live board's vocabulary — `liveStatusWords`, `ASK_WORD`,
+ * `taskBar`, `ago` — rather than a second set of words for the same states. A
+ * session that says "Waiting for permission" on one board and something else on
+ * the other is two boards disagreeing about one fact.
+ */
+function tbSessionCard(s) {
+    const r = s.runner;
+    const busy = r && (r.state === 'busy' || r.state === 'starting');
+    const away = s.live && s.live.running && !r;
+
+    return el('article', {
+        class: 'tb-card tb-session', 'data-col': s.column, 'data-id': s.sessionId,
+        onclick: (e) => { if (tbCardClickOpens(e)) tbOpen(s.sessionId); },
+    },
+        el('header', { class: 'tb-card-head' },
+            el('span', { class: 'tb-dot' }),
+            el('button', {
+                class: 'tb-card-title', type: 'button',
+                title: 'Open this conversation',
+                onclick: () => tbOpen(s.sessionId),
+            }, s.title),
+            el('button', {
+                class: 'mini', type: 'button', title: 'Archive',
+                onclick: (e) => { e.stopPropagation(); tbArchive(s); },
+            }, icon('archive')),
+        ),
+        el('div', { class: 'tb-card-meta' },
+            s.pinned ? el('span', { class: 'tag-pin', title: 'Pinned' }, icon('pin', 11)) : null,
+            s.test ? el('span', { class: 'tag-test' }, 'test') : null,
+            el('span', {}, s.worktree ? s.worktree.name : s.projectName),
+            el('span', { class: 'dot' }, '·'),
+            el('span', { title: s.lastTs || '' }, ago(s.lastTs)),
+            el('span', { class: 'dot' }, '·'),
+            el('span', {}, `${s.userMessages} ${s.userMessages === 1 ? 'turn' : 'turns'}`),
+            (r && r.queued) ? queuedBadge(r.queued) : null,
+        ),
+        // Nothing worth a line on an idle card: it has no runner to report an
+        // activity and no task list asked for, so `liveStatusWords` can only say
+        // "Idle" — under a column heading that already says it, to fifty-odd
+        // cards at once.
+        s.column === 'idle' ? null
+            : el('div', { class: 'tb-card-line' }, liveStatusWords(s, busy, away)),
+        s.tasks ? taskBar(s.tasks) : null,
+        s.tasks ? el('div', { class: 'tb-card-meta' },
+            el('span', {}, `${s.tasks.done} of ${s.tasks.total} tasks`)) : null,
+        // What it is waiting on, said rather than answered. Answering an ask
+        // from a tile is the live board's job and it does it well; this board is
+        // the map, and two places to approve the same thing is one too many.
+        s.ask ? el('p', { class: 'tb-ask' }, tbAskWords(s.ask)) : null,
+        el('div', { class: 'tb-acts' },
+            el('button', {
+                // Filled only where the card is asking for something. A column
+                // of fifty idle sessions each with a bright button is a wall
+                // that says nothing about which of them matters.
+                class: s.ask ? 'tb-btn primary' : 'tb-btn', type: 'button',
+                onclick: () => tbOpen(s.sessionId),
+            }, s.ask ? 'Answer it' : 'Open'),
+            busy ? el('button', {
+                class: 'tb-btn', type: 'button',
+                title: 'Interrupt the turn this session is running',
+                onclick: (e) => stopFromCard(s.sessionId, e.currentTarget),
+            }, 'Stop') : null,
+        ),
+    );
+}
+
+/** What the session is blocked on, in one line. */
+function tbAskWords(ask) {
+    if (ask.kind === 'plan') return 'A plan is waiting to be approved.';
+    if (ask.kind === 'question') return 'It asked you a question.';
+    const what = toolSummary({ name: ask.tool, input: ask.input }) || ask.displayName;
+    return `Wants to run ${clip(what, 60)}`;
+}
+
+/** The same rule the live board uses: a click on a control is not "take me there". */
+function tbCardClickOpens(e) {
+    if (e.target.closest('button, a, input, textarea, select, label')) return false;
+    const picked = window.getSelection();
+    return !(picked && picked.type === 'Range' && String(picked).trim());
+}
+
+/** Leaving the board for a conversation, which is what every card offers. */
+function tbOpen(sessionId) {
+    showTaskboard(false);
+    openSession(sessionId);
+}
+
+/** The rest of the idle sessions, once, behind a button. */
+function tbShowAll(d) {
+    if (state.taskboard.allIdle) return null;
+    if (!d.idleHidden) return null;
+    return el('div', { class: 'tb-more' },
+        el('button', {
+            class: 'tb-btn', type: 'button',
+            onclick: () => loadTaskboard({ all: true }),
+        }, `Show all ${d.counts.idle}`),
+        el('p', {}, `${d.idleHidden} older ${d.idleHidden === 1 ? 'session' : 'sessions'} `
+            + 'are not shown. The column leads with what has moved today.'),
+    );
+}
+
+/**
+ * A line at the foot of the Suggested column for a task of your own.
+ *
+ * It opens the ordinary new-session dialog with what you typed already in it,
+ * rather than starting anything: a task typed into a one-line box has had no
+ * directory chosen for it, and guessing one is how a session ends up running in
+ * the wrong checkout.
+ */
+function tbComposer() {
+    const box = el('input', {
+        class: 'tb-new-box', type: 'text', placeholder: 'Start a task…',
+        value: state.taskboard.draft,
+        oninput: (e) => { state.taskboard.draft = e.currentTarget.value; },
+        onkeydown: (e) => {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            go(e.currentTarget);
+        },
+    });
+    const go = (input) => {
+        const text = input.value.trim();
+        if (!text) return;
+        input.value = '';
+        state.taskboard.draft = '';
+        showTaskboard(false);
+        openNew({ prompt: text });
+    };
+    return el('div', { class: 'tb-new' }, box,
+        el('button', {
+            class: 'tb-btn', type: 'button',
+            onclick: () => go(box),
+        }, 'Start'),
+    );
+}
+
+// ── acting on a card ─────────────────────────────────────────────────────
+//
+// Every one of these goes through the function the rest of the app already uses
+// and then takes the card off the board itself. The push would do it within
+// three seconds, but three seconds of a button that visibly did nothing is how a
+// board teaches you to click twice.
+
+async function tbStartTask(t, btn) {
+    tbDropTask(t.id);
+    await startSuggestion(t, btn);
+}
+
+async function tbDecide(t, status) {
+    tbDropTask(t.id);
+    await actOnSuggestion(t, status);
+}
+
+/**
+ * Take one task off the board now.
+ *
+ * The column is open tasks only, so any decision removes it. Not rolled back on
+ * failure: `actOnSuggestion` rolls back its own state and says so in a toast, and
+ * the next push puts the row back where it belongs a moment later — which is
+ * more honest than this guessing at which of the two it was.
+ */
+function tbDropTask(id) {
+    const d = state.taskboard.data;
+    if (!d) return;
+    const before = d.suggested.length;
+    d.suggested = d.suggested.filter(t => t.id !== id);
+    if (d.suggested.length !== before) d.counts.suggested -= 1;
+    if (taskboardVisible()) renderTaskboard();
+}
+
+function tbArchive(s) {
+    const d = state.taskboard.data;
+    if (d) {
+        for (const key of ['needs', 'working', 'idle']) {
+            const before = d[key].length;
+            d[key] = d[key].filter(c => c.sessionId !== s.sessionId);
+            if (d[key].length !== before) d.counts[key] -= 1;
+        }
+        if (state.taskboard.allIdle) {
+            state.taskboard.allIdle =
+                state.taskboard.allIdle.filter(c => c.sessionId !== s.sessionId);
+        }
+        if (taskboardVisible()) renderTaskboard();
+    }
+    setFlags(s, { archived: true });
+    toast(`Archived “${clip(s.title, 40)}”.`, 'ok');
 }
 
 // ── notifications ────────────────────────────────────────────────────────
@@ -5084,10 +5706,21 @@ function connect() {
     es.addEventListener('hello', (e) => {
         state.clientId = JSON.parse(e.data).clientId;
         // A new client id knows nothing about what this window was following, so
-        // the board has to be asked for again — including when no session is
-        // open, which is the ordinary case for a window left on the board.
+        // the boards have to be asked for again — including when no session is
+        // open, which is the ordinary case for a window left on one of them.
+        //
+        // This is also the *first* subscribe a window ever makes. `subscribe()`
+        // does nothing without a client id, so a board opened by restoreView()
+        // during boot — `?view=taskboard`, the address a refresh leaves behind —
+        // has already asked to watch and been silently dropped. Both flags are
+        // reset to false so the sync below is a change and actually sends.
         state.live.watching = false;
-        if (state.current || state.live.open) { state.live.watching = state.live.open; subscribe(); }
+        state.taskboard.watching = false;
+        if (state.current || state.live.open || state.taskboard.open) {
+            state.live.watching = state.live.open;
+            state.taskboard.watching = state.taskboard.open;
+            subscribe();
+        }
         // Every `sessions-changed` while the stream was down was missed, and
         // nothing replays them, so the rail is however it was when the stream
         // dropped — a bridge restart used to leave rows sitting there with the
@@ -5149,6 +5782,7 @@ function connect() {
     });
 
     es.addEventListener('overview', (e) => applyOverview(JSON.parse(e.data)));
+    es.addEventListener('taskboard', (e) => applyTaskboard(JSON.parse(e.data)));
 
     es.addEventListener('sessions-changed', () => loadSessions());
 
@@ -5186,6 +5820,7 @@ function connect() {
         announceAsk(p);
         state.waiting.add(p.sessionId);
         paintLiveBadge();
+        paintTaskboardBadge();
         if (!state.current || p.sessionId !== state.current.sessionId) return;
         state.ask = p;
         renderAsk();
@@ -5198,6 +5833,7 @@ function connect() {
         clearAsk(p.sessionId);
         state.waiting.delete(p.sessionId);
         paintLiveBadge();
+        paintTaskboardBadge();
         if (!state.ask || state.ask.requestId !== p.requestId) return;
         resolveAsk(p.outcome);
     });
@@ -5335,6 +5971,7 @@ async function subscribe() {
             // read a conversation, and the conversation keeps tailing while the
             // board is on screen.
             overview: state.live.open,
+            taskboard: state.taskboard.open,
         });
     } catch { /* the SSE reconnect will re-subscribe */ }
 }
@@ -8395,6 +9032,8 @@ dom.liveFocus.addEventListener('click', () => setFocus(!state.focus));
 dom.focusExit.addEventListener('click', () => setFocus(false));
 // The dock runs sideways and a mouse wheel only goes up and down.
 dom.liveBody.addEventListener('wheel', onDockWheel, { passive: false });
+dom.btnTaskboard.addEventListener('click', () => showTaskboard(!state.taskboard.open));
+dom.tbRefresh.addEventListener('click', () => loadTaskboard());
 dom.btnDash.addEventListener('click', () => showDash(!state.dash.open));
 dom.dashRefresh.addEventListener('click', () => loadDash({ refresh: true }));
 
@@ -8433,6 +9072,7 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !dom.pairScrim.hidden) { closePair(); dom.btnPair.focus(); return; }
     if (e.key === 'Escape' && !dom.taskScrim.hidden) { closeTaskDialog(); return; }
     if (e.key === 'Escape' && !dom.newScrim.hidden) { closeNew(); return; }
+    if (e.key === 'Escape' && state.taskboard.open) { showTaskboard(false); return; }
     if (e.key === 'Escape' && state.dash.open) { showDash(false); return; }
     if (e.key === 'Escape' && state.notes.open) { showNotes(false); return; }
     // Out of focus mode before out of the board: focus mode is the deeper state,
@@ -8443,13 +9083,23 @@ document.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); dom.search.focus(); }
     if ((e.ctrlKey || e.metaKey) && e.key === 'n') { e.preventDefault(); openNew(); }
 
-    // The four things `main` can show. Ctrl rather than a bare digit because
-    // the composer is a textarea and these have to work while it has the focus.
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && '1234'.includes(e.key)) {
+    // The five things `main` can show, ordered by how wide a question each one
+    // answers: the conversation in front of you, then everything outstanding,
+    // then what is running this second, then what is unfinished in the working
+    // trees, then what already reached you. The task board arriving is what made
+    // that an ordering rather than the sequence they happened to be built in —
+    // Live and Dashboard each moved along by one, which is a real cost and worth
+    // it once, not worth paying again.
+    //
+    // Ctrl rather than a bare digit because the composer is a textarea and these
+    // have to work while it has the focus.
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && '12345'.includes(e.key)) {
         e.preventDefault();
-        if (e.key === '1') { showLive(false); showDash(false); showNotes(false); }
-        else if (e.key === '2') showLive(true);
-        else if (e.key === '3') showDash(true);
+        if (e.key === '1') {
+            showLive(false); showDash(false); showNotes(false); showTaskboard(false);
+        } else if (e.key === '2') showTaskboard(true);
+        else if (e.key === '3') showLive(true);
+        else if (e.key === '4') showDash(true);
         else showNotes(true);
     }
 });
@@ -8502,8 +9152,10 @@ function restoreView() {
     // live board that was left switched on, the live board has to go on first —
     // showLive clears dash.open, so the other order loses it.
     const dash = q.get('view') === 'dashboard';
+    const tb = q.get('view') === 'taskboard';
     if (q.get('view') === 'live' || q.get('live') === '1' || q.get('focus') === '1') showLive(true);
     if (dash) showDash(true);
+    if (tb) showTaskboard(true);
     if (q.get('focus') === '1') setFocus(true);
 
     // The panels are up and the address they came from is untouched, so from
@@ -8583,6 +9235,12 @@ setInterval(() => { if (state.dash.open) loadDash(); }, 60_000);
 // that wanted you while this window was shut is the one piece of news the button
 // carries, and nothing else would go and find it out.
 setTimeout(() => loadNotes(), 3200);
+
+// And for the task board's, which counts what is blocked on you. It doubles as
+// the board's first load: the order every column holds is taken from whichever
+// payload arrives first, so taking one at startup is what makes "sorted on load"
+// mean the page load rather than the moment somebody happened to press Ctrl+2.
+setTimeout(() => loadTaskboard(), 3400);
 
 // A running subagent writes to its own file, which the parent transcript says
 // nothing about — so the only way its activity line moves is to go and look.
