@@ -14,7 +14,7 @@ const path = require('path');
 const net = require('net');
 
 const ROOT = path.join(__dirname, '..');
-const UNIT = ['auth.test.js', 'temp.test.js'];
+const UNIT = ['auth.test.js', 'temp.test.js', 'recent.test.js'];
 const LIVE = ['gate.test.js', 'browser.test.js', 'refusals.test.js', 'unpaired.test.js'];
 
 const given = Number(process.argv[2]);

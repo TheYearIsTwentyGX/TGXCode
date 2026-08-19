@@ -2976,7 +2976,24 @@ function renderLive() {
     if (d.hidden) bits.push(`${d.hidden} more not shown`);
     dom.liveSub.textContent = bits.join(' · ');
 
-    if (!d.sessions.length) {
+    // Two separate questions about the layout, which were one flag until the
+    // groups arrived.
+    //
+    // Grouped: both docked arrangements are. Docked, the board is the thing you
+    // pick from while reading something else, and "running" against "I merely
+    // touched this today" is the distinction that makes it pickable. With the
+    // window to itself it is already a sorted grid of everything and reads as
+    // one list, so it stays one.
+    //
+    // Compact: only the bottom strip is short of room. As a column, or full
+    // screen, there is height for a fuller card.
+    const grouped = dom.live.dataset.mode === 'dock';
+    const compact = grouped && state.live.dock === 'bottom';
+
+    // Nothing to draw. `recent` counts here only where it is drawn, or the
+    // full-screen board would answer "is anything running" with an empty box on
+    // a morning when the answer is no.
+    if (!d.sessions.length && !(grouped && (d.recent || []).length)) {
         dom.liveBody.replaceChildren(el('div', { class: 'live-note' },
             el('p', {}, 'Nothing is running. Every session on this machine is idle, '
                 + 'here and in every terminal.')));
@@ -2994,10 +3011,9 @@ function renderLive() {
         : null;
     const scroll = { x: dom.liveBody.scrollLeft, y: dom.liveBody.scrollTop };
 
-    // Only the bottom strip is short of room. As a column, or with the window to
-    // itself, the board has the height for a fuller card.
-    const compact = dom.live.dataset.mode === 'dock' && state.live.dock === 'bottom';
-    dom.liveBody.replaceChildren(...d.sessions.map(s => liveCard(s, compact)));
+    dom.liveBody.replaceChildren(...(grouped
+        ? liveGroups(d, compact)
+        : d.sessions.map(s => liveCard(s, false))));
     dom.liveBody.scrollLeft = scroll.x;
     dom.liveBody.scrollTop = scroll.y;
 
@@ -3010,6 +3026,48 @@ function renderLive() {
         }
     }
     for (const box of dom.liveBody.querySelectorAll('.lsend-box')) grow(box, 30, 84);
+}
+
+/**
+ * The docked board, in three parts — along the strip, or down the column.
+ *
+ * Pinned and running are already known — they are the reasons the bridge sorts
+ * the board by — so those two groups are that one list cut in two rather than a
+ * second opinion about it, and the needs-you-first order inside each survives
+ * the cut. Recent is the array the bridge sends beside it.
+ *
+ * Empty groups are dropped rather than shown empty: three headings over one card
+ * is mostly headings, and neither arrangement has room to spare.
+ */
+function liveGroups(d, compact) {
+    const live = d.sessions.filter(s => s.reason !== 'pinned');
+    const pinned = d.sessions.filter(s => s.reason === 'pinned');
+    const recent = d.recent || [];
+
+    return [
+        // Only `recent` carries its own overflow. `hidden` is the board's cap
+        // biting, and it bites the bottom of the rank order — pinned before
+        // running — so the payload cannot say which of these two groups lost a
+        // card, and the subtitle above already reports the number for the board
+        // as a whole.
+        ['live', 'Live', live, 0],
+        ['recent', 'Recent activity', recent, d.recentHidden],
+        ['pinned', 'Pinned', pinned, 0],
+    ].filter(([, , list]) => list.length)
+        .map(([key, label, list, hidden]) => liveGroup(key, label, list, hidden, compact));
+}
+
+/** One headed segment of the board. */
+function liveGroup(key, label, list, hidden, compact) {
+    return el('section', { class: 'live-group', 'data-group': key },
+        el('h2', { class: 'lgroup-head' },
+            el('span', { class: 'lgroup-label' }, label),
+            el('span', { class: 'lgroup-count' }, String(list.length)),
+            // Same promise the subtitle makes about the board as a whole: what
+            // fell off the end is reported, because a list that silently stops
+            // reads as the end of the list.
+            hidden ? el('span', { class: 'lgroup-more' }, `+${hidden} more`) : null),
+        el('div', { class: 'lgroup-body' }, list.map(s => liveCard(s, compact))));
 }
 
 /**

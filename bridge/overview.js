@@ -43,6 +43,13 @@ const DEVSERVER_TTL_MS = 15_000;
 // quietly — a board that silently truncates reads as "this is everything".
 const MAX_CARDS = 24;
 
+// A second, smaller ceiling, for the recent-activity group alone. Separate from
+// MAX_CARDS on purpose: a day with thirty sessions behind it must not be able to
+// push the ones that are actually running off the strip. It is a cost ceiling as
+// well — every card is a tail read, and this is built once a second whether or
+// not the window looking at it draws the group.
+const MAX_RECENT = 12;
+
 /** @type {Map<string, {value?: any, pending?: Promise<any>, at: number}>} */
 const devCache = new Map();
 /**
@@ -69,18 +76,30 @@ function build(index, pool, registry, { includeTest = false } = {}) {
     const summaries = index.list({ limit: 100_000, includeTest });
 
     const cards = [];
+    // Everything the board has no reason for — the pool the recent group is
+    // drawn from. Collected here rather than filtered again afterwards, which
+    // also makes the two groups disjoint by construction: a session with a
+    // reason never reaches this list, so nothing can appear twice.
+    const idle = [];
     for (const s of summaries) {
         const runner = statuses[s.sessionId] || null;
         const reason = why(s, runner);
-        if (!reason) continue;
+        if (!reason) { idle.push(s); continue; }
         cards.push(card(index, s, runner, reason));
     }
 
     cards.sort(order);
     const shown = cards.slice(0, MAX_CARDS);
 
-    // Only the sessions actually on screen keep their caches alive.
-    const ids = new Set(shown.map(c => c.sessionId));
+    const since = recentSince();
+    const warm = idle.filter(s => !s.archived && activityAt(s) >= since)
+        .sort((a, b) => activityAt(b) - activityAt(a));
+    const recent = warm.slice(0, MAX_RECENT).map(s => card(index, s, null, 'recent'));
+
+    // Only the sessions actually on screen keep their caches alive — both
+    // groups of them. Left at `shown` alone, every recent card's task progress
+    // was thrown away and re-read on every pass.
+    const ids = new Set([...shown, ...recent].map(c => c.sessionId));
     tasks.keepOnly(ids);
     keepOnly(devCache, ids);
     keepOnly(devLast, ids);
@@ -89,11 +108,60 @@ function build(index, pool, registry, { includeTest = false } = {}) {
         at: Date.now(),
         ready: index.ready,
         sessions: shown,
+        // Beside `sessions` rather than mixed into it, so that every client which
+        // already reads this payload keeps meaning what it meant: the phone's
+        // "needs you" list is `sessions`, and it must not fill up with sessions
+        // that are merely warm.
+        recent,
         hidden: cards.length - shown.length,
+        recentHidden: warm.length - recent.length,
         // What the button in the header counts.
         waiting: shown.filter(c => c.ask).length,
         running: shown.filter(c => c.reason === 'here' || c.reason === 'elsewhere').length,
     };
+}
+
+/**
+ * How far back "recent activity" reaches, as ms since the epoch.
+ *
+ * A fixed rolling window is wrong at both ends of a day: eight hours back at 9am
+ * is the middle of the night, and the sessions wanted then are yesterday
+ * afternoon's. So the morning reaches back into the previous afternoon and the
+ * afternoon does not — by lunchtime today is its own context. Monday reaches
+ * across the weekend to Friday lunchtime, which is the same rule counted in
+ * working days rather than calendar ones.
+ *
+ * Local time, deliberately: this is a question about the user's morning, not
+ * about UTC. Going through setHours/setDate rather than arithmetic on the
+ * timestamp is what carries it over a DST boundary — one of these "days" is 23
+ * hours long twice a year.
+ */
+function recentSince(at = new Date()) {
+    const noon = new Date(at);
+    noon.setHours(12, 0, 0, 0);
+
+    if (at.getTime() >= noon.getTime()) {
+        const midnight = new Date(at);
+        midnight.setHours(0, 0, 0, 0);
+        return midnight.getTime();
+    }
+
+    const back = new Date(noon);
+    back.setDate(back.getDate() - (at.getDay() === 1 ? 3 : 1));
+    return back.getTime();
+}
+
+/**
+ * When a session was last touched by anyone.
+ *
+ * `lastTs` rather than `lastUserTs`, which is what the rail sorts on: an agent
+ * that worked until 2am on something asked for at 4pm is work from last night,
+ * and the point of the group is to find it again. `mtimeMs` covers a transcript
+ * too old to carry timestamps.
+ */
+function activityAt(s) {
+    const ts = s.lastTs ? Date.parse(s.lastTs) : NaN;
+    return Number.isNaN(ts) ? s.mtimeMs : ts;
 }
 
 /**
@@ -102,6 +170,11 @@ function build(index, pool, registry, { includeTest = false } = {}) {
  * "Running now, plus pinned" — with anything blocked on an answer and anything
  * that just failed kept as well, because those are the two states where the
  * session has stopped and is waiting for a person.
+ *
+ * A session this says nothing about may still be recent; that is a separate
+ * question, asked by `recentSince` over what is left, and answered in its own
+ * array. Keeping it out of here is what stops an idle session from ever counting
+ * as running.
  */
 function why(s, runner) {
     if (runner && runner.pendingPermission) return 'ask';
@@ -242,4 +315,4 @@ async function refreshDevServers(index, ids) {
 /** Yield to the event loop, so a long pass is not one long block. */
 const breathe = () => new Promise(resolve => setImmediate(resolve));
 
-module.exports = { build, refreshDevServers, DEVSERVER_TTL_MS };
+module.exports = { build, refreshDevServers, recentSince, DEVSERVER_TTL_MS };
