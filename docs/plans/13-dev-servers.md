@@ -62,6 +62,42 @@ file.
 For servers the app did *not* start there is no log to read. Say so plainly
 rather than showing an empty panel.
 
+### B2. Whose port is it — settled
+
+> **Built.** Not in the original plan, because the original plan did not realise
+> attribution was the problem.
+
+Everything above assumes the chips on a session are that session's ports. They
+were not. `enrich` ended in `ranked.filter(p => p.listening)`, so *any* port a
+transcript mentioned became a live chip the moment anything on the machine
+answered on it — and the ranking above it never gated the list at all. A
+`curl localhost:5001` in one worktree lit up green because another worktree's
+vite was on 5001. No amount of scoring fixes that, because "is it listening" is a
+fact about the machine and the score is a fact about a conversation.
+
+The kernel knows the answer: `ss` gives the pid holding a port, `/proc/<pid>/cwd`
+gives its directory, and `workspaceOf()` turns that into a worktree or checkout.
+A port belongs to the workspace its process is in. Sessions elsewhere do not see
+it, whatever their transcript says.
+
+Ancestry — walk the holder's parents until you reach the session's `claude` —
+looks like the better answer and is not: a backgrounded dev server is reparented
+to init the moment its launching shell exits. Measured on this machine, every
+agent-started server had systemd as its ancestor and not one was traceable.
+
+Two things the kernel cannot settle, and what they fall back to:
+
+- **No Linux pid** — a Windows-side server on the mirror. Falls back to this
+  session's own transcript, and only its strong end, marked `unverified`.
+- **A dead port** — nothing holds it. Kept only on strong own-transcript
+  evidence *and* only if DevBrowser's name for it is not another worktree's.
+  That last rule exists because `pgrep -f "vite dev --port 5002"` reads as a
+  start command to any regex looking for one.
+
+Ports held by a bridge or a `claude` are dropped outright. The everyday instance
+runs in the main checkout, so a session there was being offered a green chip —
+and a stop button — for the app it was being displayed in.
+
 ### C. Naming, taken seriously
 
 The machine notes for this box are emphatic that DevBrowser tabs are identified

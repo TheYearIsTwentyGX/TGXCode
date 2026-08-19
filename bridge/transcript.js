@@ -377,6 +377,38 @@ function projectRootOf(dir) {
     return at;
 }
 
+/**
+ * The workspace a directory belongs to: the worktree it sits inside, or the
+ * checkout above it.
+ *
+ * The mirror of projectRootOf, which walks *out* of worktrees to the owning
+ * checkout. This one answers "whose desk is this on" where that answers "which
+ * repository is this", and the difference matters for anything attributing a
+ * process to a session. A dev server running in
+ * `<proj>/.claude/worktrees/askui/web` belongs to the askui worktree — not to
+ * the project, and emphatically not to the main checkout, which contains every
+ * worktree by path and would otherwise claim all of their ports.
+ *
+ * WORKTREE_DIR_RE is greedy, so a worktree nested inside another resolves to
+ * the inner one: the desk the work is actually happening on.
+ */
+function workspaceOf(dir) {
+    if (!dir || !dir.startsWith('/')) return null;
+    const here = path.resolve(dir);
+    const m = WORKTREE_DIR_RE.exec(here);
+    if (m) return path.join(m[1], '.claude', 'worktrees', m[2].split('/')[0]);
+    // Not in a worktree, so the nearest checkout above. Bounded for the reason
+    // projectRootOf is bounded: this walks a path that came from outside.
+    let at = here;
+    for (let i = 0; i < 40; i++) {
+        if (isCheckout(at)) return at;
+        const up = path.dirname(at);
+        if (up === at) return null;
+        at = up;
+    }
+    return null;
+}
+
 // A checkout root carries `.git` — a directory in a clone, a file in a worktree,
 // so existence is the whole test. A directory that has since been deleted simply
 // is not one, which leaves the launch cwd standing; that is the right answer for
@@ -1245,7 +1277,7 @@ module.exports = {
     // Exported for bridge/commands.js, which has to answer the same question
     // about a directory that scanMeta answers about a transcript: which checkout
     // is this, and is it a worktree of one.
-    projectRootOf, worktreeNameOf, worktreeBaseOf, isCheckout,
+    projectRootOf, worktreeNameOf, worktreeBaseOf, isCheckout, workspaceOf,
     // Written by bridge/attachments.js, read back by the parser above. Shared so the
     // two halves of one format cannot drift apart.
     ATTACHMENT_NOTE_HEAD, parseAttachmentNote,

@@ -225,6 +225,47 @@ a message closes it), `groupMinCalls` (how long a run has to be — at least 2),
 `groupIncludesThinking` (whether a thinking block is part of the run or the end
 of it).
 
+### `GET /api/sessions/:id/devservers`
+
+`{ports: [...], total, elsewhere}` — the localhost ports this session's agent
+brought up, for the chip strip above the conversation.
+
+A port is shown when it belongs to **this session's workspace**, and that is
+decided by the kernel rather than by the transcript: `ss` says which pid holds
+the port, `/proc/<pid>/cwd` says where that process is running, and the worktree
+or checkout above it is the workspace. `ours: true` means that matched.
+
+This matters because the obvious alternative does not work. Evidence scraped
+from a transcript can only say a session *mentioned* a port, and "is it
+listening" is a fact about the machine — so a `curl localhost:5001` in one
+session used to light up green the moment another worktree's server took 5001.
+Ports bled across sessions constantly. Walking the holder's parents to find the
+owning `claude` does not work either: a backgrounded dev server is reparented to
+init as soon as its launching shell exits.
+
+Each port carries `port`, `title`, `listening`, `stopped`, `evidence`, plus the
+attribution: `workspace` (where its process runs, or null), `ours`, `foreign`
+(held by another workspace), `unverified`, `protectedBy` and `titledElsewhere`.
+
+Two cases the kernel cannot settle:
+
+- **No Linux process holds it.** WSL mirrored networking means a Windows-side
+  server answers on 127.0.0.1 with no pid this side. Those fall back to the
+  session's own transcript and only to its strong end — a startup banner or a
+  devbrowser call, never a bare mention — and come back `unverified: true`.
+- **The port is dead.** Nothing holds it, so nothing can speak for it. A dead
+  port is kept only if this session has strong evidence *and* DevBrowser's name
+  for it does not belong to another worktree (`titledElsewhere`).
+
+`protectedBy` marks a port held by a bridge or a `claude` process. Those are
+never offered at all: the everyday instance runs in the main checkout, so a
+session there would otherwise be shown a green chip — and a stop button — for
+the app it is being displayed in.
+
+`elsewhere` counts the live ports this session mentioned that another workspace
+is holding. The UI says so rather than leaving the strip looking empty.
+
+
 ### `GET /api/peers`
 
 `{ peers: [{name, nameSource, sessionId, cwd, kind, entrypoint, status, startedAt,
