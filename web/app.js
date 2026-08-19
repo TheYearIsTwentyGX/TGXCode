@@ -25,6 +25,33 @@ async function post(path, body) {
     return data;
 }
 
+/**
+ * POST a file's bytes, rather than JSON.
+ *
+ * The only route that takes a body which is not JSON. Raw bytes and not
+ * base64-in-JSON because `readJson` on the bridge caps a body at 4MB and base64 is a
+ * third bigger than what it encodes — which would put the real limit at under 3MB, and
+ * a screenshot off this machine's display goes past that regularly.
+ *
+ * The client header is what `post` sets too; it is required on every non-GET under
+ * /api/, and forgetting it here would fail as a 403 that looks like an auth problem.
+ */
+async function postFile(path, file) {
+    const r = await fetch(path, {
+        method: 'POST',
+        headers: {
+            'X-Claude-Sessions-Client': '1',
+            // The bridge sniffs the real type from the bytes; this is a hint, and the
+            // fallback matters because a File dragged from some places has no type.
+            'Content-Type': file.type || 'application/octet-stream',
+        },
+        body: file,
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    return data;
+}
+
 async function del(path) {
     const r = await fetch(path, { method: 'DELETE', headers: HEADERS });
     const data = await r.json().catch(() => ({}));
@@ -39,6 +66,29 @@ async function del(path) {
 // agree about what "no mode was chosen" means.
 const DEFAULT_PERM = 'auto';
 
+// ── settings ─────────────────────────────────────────────────────────────
+
+// What the user's own ~/.tgxcode/settings.json says, handed to the page in a
+// <meta> tag by bridge/server.js. In the page rather than behind a fetch
+// because restoreView() opens a session synchronously at startup: a transcript
+// drawn before an answer arrived would stay drawn the wrong way, since nothing
+// re-renders history. A project may override any of it, and that answer travels
+// with the transcript instead — see openSession.
+const BOOT_PREFS = (() => {
+    const fallback = {
+        transcript: { groupToolCalls: true, groupMinCalls: 3, groupIncludesThinking: true },
+    };
+    try {
+        const m = document.querySelector('meta[name="cs-prefs"]');
+        if (!m) return fallback;
+        const d = JSON.parse(decodeURIComponent(m.content));
+        return { ...fallback, ...d, transcript: { ...fallback.transcript, ...(d.transcript || {}) } };
+    } catch { return fallback; }
+})();
+
+/** The transcript settings in force — the open session's, or the user's own. */
+const grouping = () => (state.prefs || BOOT_PREFS).transcript;
+
 const state = {
     clientId: null,
     dev: false,             // talking to a development bridge
@@ -50,6 +100,14 @@ const state = {
     openSeq: 0,             // bumped per open; a slow fetch checks it before drawing
     nodes: new Map(),       // event id -> {ev, node}
     tools: new Map(),       // tool_use id -> {ev, node}
+    // Settings for the open session's directory, from the bridge. Null until a
+    // session is opened, when BOOT_PREFS is the answer.
+    prefs: null,
+    // Ids of the tool (and thinking) events seen since the last message, in
+    // order — the run that is still being worked on. Ids and not nodes: a node
+    // is replaced whenever a result lands, so a held reference goes stale.
+    run: [],
+    agentRun: [],
     turns: [],              // the user messages, in order, for the turn rail
     activeTurn: -1,
     agents: [],             // subagent records for this session, from the bridge
@@ -66,6 +124,9 @@ const state = {
     // Ports this session mentioned that belong to another workspace, counted
     // so the strip can say they were left out rather than just look empty.
     channelsElsewhere: 0,
+    // url -> {status, label, detail, title, updatedAt} from /api/sessions/:id/prs.
+    // Null until that answers; the header draws its PRs from the summary either way.
+    prStatus: null,
     // What the session's directory declares in .tgxcode/, and what is running
     // from it. Keyed by nothing — there is only ever one conversation on screen,
     // and the payload is re-fetched when it changes. `cmdsFor` is the directory
@@ -100,6 +161,11 @@ const state = {
     busyTimer: null,        // ticks the elapsed-time readout while a turn runs
     queue: [],              // the current session's waiting messages, from the bridge
     queueDrag: null,        // id of the chip being dragged
+    // Files staged for the next message. Each is already on disk in the session's
+    // attached_assets/ by the time it reaches `ready` — see the attachments section
+    // below — so this holds metadata and a local preview URL, never file bytes.
+    attach: [],
+    attachSeq: 0,
     queueOpen: new Set(),   // ids of chips expanded to their full text
     // Slash commands the composer can complete, per working directory — the
     // bridge keys them that way because that is what decides them. Held here so
@@ -193,7 +259,8 @@ const $ = (id) => document.getElementById(id);
 const dom = {};
 for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-sub',
     'channels', 'scroll', 'log', 'status-line', 'status-text', 'btn-stop', 'input',
-    'btn-send', 'btn-lgtm', 'slash-menu', 'mention-menu', 'queue', 'queue-list', 'queue-count', 'queue-clear',
+    'btn-send', 'btn-lgtm', 'btn-attach', 'attach', 'attach-input', 'composer',
+    'slash-menu', 'mention-menu', 'queue', 'queue-list', 'queue-count', 'queue-clear',
     'model', 'perm', 'btn-new', 'btn-new-menu', 'new-menu', 'db-status', 'db-label', 'toasts',
     'btn-bell', 'bell-menu', 'opt-desktop', 'opt-sound', 'bell-note', 'bell-try',
     'btn-pin', 'btn-folder', 'btn-term', 'btn-archive', 'btn-delete', 'turns', 'turn-pop',
@@ -313,6 +380,10 @@ function toast(text, kind = 'info', opts = {}) {
 // transcript. Neither should be lost to a reload or a failed turn.
 
 const draftKey = (id) => `draft:${id}`;
+// A sibling key rather than a richer value under the one above. That one has to stay
+// a plain string: handleSendFailure writes into it for a session that is not on
+// screen, and every caller there is handling text.
+const attachKey = (id) => `attach:${id}`;
 
 function loadDraft(id) {
     try { return localStorage.getItem(draftKey(id)) || ''; } catch { return ''; }
@@ -325,15 +396,51 @@ function saveDraft(id, text) {
     } catch { /* storage unavailable; drafts are best effort */ }
 }
 
-/** Put text back in the composer without clobbering anything typed since. */
-function restoreToComposer(text) {
-    if (!text) return;
-    const current = dom.input.value.trim();
-    dom.input.value = current ? `${text}\n\n${current}` : text;
-    autoGrow();
-    dom.input.focus();
-    dom.input.setSelectionRange(dom.input.value.length, dom.input.value.length);
-    if (state.current) saveDraft(state.current.sessionId, dom.input.value);
+/**
+ * The files staged against a session, as metadata.
+ *
+ * This is what makes a staged attachment survive a reload, and it is only possible
+ * because the file went to disk before the chip appeared: there is a path to remember
+ * instead of bytes to store. Nothing in flight and nothing failed is saved — a chip
+ * that is still uploading has no path yet, and one that failed has nothing behind it.
+ */
+function loadAttach(id) {
+    try {
+        const raw = localStorage.getItem(attachKey(id));
+        const list = raw ? JSON.parse(raw) : [];
+        return Array.isArray(list) ? list.map(a => ({ ...a, status: 'ready' })) : [];
+    } catch { return []; }
+}
+
+function saveAttach(id, list) {
+    try {
+        const keep = (list || [])
+            .filter(a => a.status === 'ready')
+            .map(({ name, path, relPath, mediaType, bytes }) =>
+                ({ name, path, relPath, mediaType, bytes }));
+        if (keep.length) localStorage.setItem(attachKey(id), JSON.stringify(keep));
+        else localStorage.removeItem(attachKey(id));
+    } catch { /* storage unavailable; same best-effort as drafts */ }
+}
+
+/**
+ * Put text back in the composer without clobbering anything typed since.
+ *
+ * `files` is for the two callers that are handing a whole message back — a failed turn
+ * and a queued chip being edited. Without it, editing a message you had attached a
+ * screenshot to would give you the words and quietly drop the screenshot, which is the
+ * kind of loss you only notice after sending.
+ */
+function restoreToComposer(text, files) {
+    if (text) {
+        const current = dom.input.value.trim();
+        dom.input.value = current ? `${text}\n\n${current}` : text;
+        autoGrow();
+        dom.input.focus();
+        dom.input.setSelectionRange(dom.input.value.length, dom.input.value.length);
+        if (state.current) saveDraft(state.current.sessionId, dom.input.value);
+    }
+    if (files && files.length) adoptAttachments(files);
 }
 
 // ── rail ─────────────────────────────────────────────────────────────────
@@ -406,11 +513,74 @@ const ICON = {
     power: '<path d="M12 3.4v7.2" stroke="currentColor" stroke-width="2.1" '
         + 'stroke-linecap="round"/><path d="M7.5 6.6a6.4 6.4 0 1 0 9 0" stroke="currentColor" '
         + 'stroke-width="2.1" stroke-linecap="round"/>',
+    // The pull-request statuses. Drawn as three families so that the icon carries
+    // the state on its own and the colour only reinforces it: the branch shape is
+    // the PR's own lifecycle, a speech bubble is a human's verdict on it, and a
+    // bare mark is CI's. Two reds and two yellows are otherwise indistinguishable
+    // to anyone who cannot separate them by hue.
+    pr: '<circle cx="6.5" cy="17.5" r="2.6" stroke="currentColor" stroke-width="1.8"/>'
+        + '<circle cx="17.5" cy="6.5" r="2.6" stroke="currentColor" stroke-width="1.8"/>'
+        + '<path d="M6.5 14.9V8.5a2 2 0 0 1 2-2h6.4" stroke="currentColor" '
+        + 'stroke-width="1.8" stroke-linecap="round"/>',
+    // The same branch, not joined up yet. Dotted rather than dashed: a dash pattern
+    // on a path this short is invisible at 13px, where round caps with gaps wider
+    // than the marks change the outline instead of just its texture — and the
+    // outline is the only thing that still reads at this size.
+    prDraft: '<circle cx="6.5" cy="17.5" r="2.6" stroke="currentColor" stroke-width="1.8"/>'
+        + '<circle cx="17.5" cy="6.5" r="2.6" stroke="currentColor" stroke-width="1.8"/>'
+        + '<path d="M6.5 14.9V8.5a2 2 0 0 1 2-2h6.4" stroke="currentColor" '
+        + 'stroke-width="1.9" stroke-linecap="round" stroke-dasharray="0.1 3.5"/>',
+    // Landed: an arrow arriving at the trunk. Deliberately not another two-dots-and-
+    // an-elbow — a curve is all that separated it from `pr` and at 13px that is
+    // nothing, so merged leaves the branch family and takes a silhouette of its own.
+    // The two still-open states keep the family; the two settled ones each stand apart.
+    prMerged: '<path d="M18.8 4.6v14.8" stroke="currentColor" stroke-width="2" '
+        + 'stroke-linecap="round"/>'
+        + '<path d="M4.4 12h9.8" stroke="currentColor" stroke-width="1.8" '
+        + 'stroke-linecap="round"/>'
+        + '<path d="m10.6 8.3 3.9 3.7-3.9 3.7" stroke="currentColor" stroke-width="1.8" '
+        + 'stroke-linecap="round" stroke-linejoin="round"/>',
+    prClosed: '<circle cx="12" cy="12" r="7.6" stroke="currentColor" stroke-width="1.8"/>'
+        + '<path d="M8.3 15.7 15.7 8.3" stroke="currentColor" stroke-width="1.8" '
+        + 'stroke-linecap="round"/>',
+    reviewOk: '<path d="M20 14.4a2.5 2.5 0 0 1-2.5 2.5H9.3L5 20.3V6.1a2.5 2.5 0 0 1 2.5-2.5h10A2.5 '
+        + '2.5 0 0 1 20 6.1Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>'
+        + '<path d="m9.4 10.1 2 2 3.5-3.7" stroke="currentColor" stroke-width="1.8" '
+        + 'stroke-linecap="round" stroke-linejoin="round"/>',
+    reviewChanges: '<path d="M20 14.4a2.5 2.5 0 0 1-2.5 2.5H9.3L5 20.3V6.1a2.5 2.5 0 0 1 2.5-2.5h10A2.5 '
+        + '2.5 0 0 1 20 6.1Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>'
+        + '<path d="M9.3 10.2h6.4" stroke="currentColor" stroke-width="1.8" '
+        + 'stroke-linecap="round"/>',
+    checkFail: '<path d="m6.8 6.8 10.4 10.4" stroke="currentColor" stroke-width="2.2" '
+        + 'stroke-linecap="round"/><path d="M17.2 6.8 6.8 17.2" stroke="currentColor" '
+        + 'stroke-width="2.2" stroke-linecap="round"/>',
+    checkWait: '<circle cx="12" cy="12" r="7.6" stroke="currentColor" stroke-width="1.8" '
+        + 'stroke-linecap="round" stroke-dasharray="3.3 2.9"/>',
+    conflict: '<path d="M12 4.3 21 19.5H3Z" stroke="currentColor" stroke-width="1.8" '
+        + 'stroke-linejoin="round"/><path d="M12 9.9v3.7" stroke="currentColor" '
+        + 'stroke-width="1.8" stroke-linecap="round"/><path d="M12 16.6h.01" '
+        + 'stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
     trash: '<path d="M4.5 6.8h15" stroke="currentColor" stroke-width="1.8" '
         + 'stroke-linecap="round"/><path d="M6.6 6.8 7.7 19a1.5 1.5 0 0 0 1.5 1.4h5.6A1.5 1.5 0 0 0 '
         + '16.3 19l1.1-12.2" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>'
         + '<path d="M9.6 6.8V4.6a1 1 0 0 1 1-1h2.8a1 1 0 0 1 1 1v2.2" stroke="currentColor" '
         + 'stroke-width="1.8" stroke-linejoin="round"/>',
+};
+
+// Which glyph says each PR status. `unknown` is gh being unreachable rather than a
+// state a PR can be in, so it borrows the plain branch and the CSS leaves it grey:
+// a header that cannot reach GitHub says no less than it used to, and claims no more.
+const PR_ICON = {
+    open: 'pr',
+    unknown: 'pr',
+    draft: 'prDraft',
+    merged: 'prMerged',
+    closed: 'prClosed',
+    approved: 'reviewOk',
+    changes: 'reviewChanges',
+    'checks-failed': 'checkFail',
+    'checks-pending': 'checkWait',
+    conflicting: 'conflict',
 };
 
 function icon(name, size = 15) {
@@ -724,6 +894,7 @@ function forgetSession(sessionId) {
     state.order.delete(sessionId);
     state.unsent.delete(sessionId);
     saveDraft(sessionId, '');
+    saveAttach(sessionId, []);
     setTermOpen(sessionId, false);
     if (state.pendingDelete && state.pendingDelete.sessionId === sessionId) closeDelete();
     if (state.current && state.current.sessionId === sessionId) clearCurrent();
@@ -738,6 +909,8 @@ function clearCurrent() {
     state.runner = null;
     state.nodes.clear();
     state.tools.clear();
+    state.run.length = 0;
+    state.prefs = null;     // the next session's project may answer differently
     state.turns = [];
     state.activeTurn = -1;
     state.agents = [];
@@ -809,6 +982,15 @@ async function openSession(id, { quiet = false, keepDash = false } = {}) {
         state.suggestions = new Map(Object.entries(data.suggestions || {}));
         state.tasks.clear();
         state.taskOpen.clear();
+        // Also before appendEvents, and for the same reason: what this project
+        // says about folding runs of tool calls has to be known before the
+        // transcript is built from it. Nothing re-renders history, so an answer
+        // that arrived afterwards would be an answer for the next session.
+        state.prefs = data.prefs || BOOT_PREFS;
+        // applyRunner runs below, after the log is drawn — but the log needs to
+        // know whether a turn is in flight, because the run of tool calls at the
+        // end of a busy session is the work you are watching and must not fold.
+        state.runner = data.runner || null;
 
         renderHeader();
         // Drops the skeleton — and with it a row drawn at Send while this fetch was
@@ -830,6 +1012,7 @@ async function openSession(id, { quiet = false, keepDash = false } = {}) {
 
         subscribe();
         loadChannels();
+        loadPrStatus();
         loadAgents();
         return true;
     } catch (err) {
@@ -859,10 +1042,13 @@ function beginOpen(summary, { keepDash = false } = {}) {
     state.runner = null;
     state.nodes.clear();
     state.tools.clear();
+    state.run.length = 0;
+    state.prefs = null;     // the next session's project may answer differently
     state.turns = [];
     state.activeTurn = -1;
     state.pinned = true;
     state.agents = [];  // the previous session's agents are not this one's
+    state.prStatus = null;      // nor are its pull requests
     state.ask = null;   // approvals belong to the session that is blocked on them
     state.suggestions.clear();  // what was acted on belongs to the session it was raised in
     state.tasks.clear();        // and so do the offers themselves
@@ -910,6 +1096,12 @@ function beginOpen(summary, { keepDash = false } = {}) {
     // again then saved that copy as a real draft, which outlived the turn.
     // handleSendFailure and editQueued are the two things that hand text back.
     dom.input.value = loadDraft(summary.sessionId);
+    // The files staged against this session, from the same place. Cleared without
+    // saving first, so switching away does not write the outgoing session's chips over
+    // the incoming one's.
+    clearAttach({ save: false });
+    state.attach = loadAttach(summary.sessionId);
+    renderAttach();
     autoGrow();
     dom.input.focus();
 
@@ -1005,16 +1197,80 @@ function renderHeader() {
     }
     bits.push(el('span', { class: 'sep' }, '·'));
     bits.push(el('span', {}, `${s.userMessages} turns`));
-    if (s.pr) {
+    for (const pr of headerPrs()) {
         bits.push(el('span', { class: 'sep' }, '·'));
-        bits.push(el('a', { class: 'pr', href: s.pr.url, target: '_blank', rel: 'noreferrer' },
-            `PR #${s.pr.number}`));
+        bits.push(prLink(pr));
     }
     bits.push(el('span', { class: 'sep' }, '·'));
     bits.push(el('span', { class: 'cwd', title: s.cwd }, clip(s.cwd, 42)));
 
     dom.convSub.replaceChildren(...bits);
     renderHeaderActions();
+}
+
+/**
+ * Which pull requests the header draws.
+ *
+ * The status fetch wins over the summary where it has an answer, because the two
+ * are not equally fresh: `state.current` is the summary from the moment the session
+ * was opened and nothing refreshes it in place, while the bridge reads its index
+ * per request. A PR raised during the conversation reaches the header this way and
+ * no other. The summary is what makes the first paint instant, and the fallback
+ * whenever the fetch has not answered or could not.
+ */
+function headerPrs() {
+    if (state.prStatus && state.prStatus.size) return [...state.prStatus.values()];
+    return (state.current && state.current.prs) || [];
+}
+
+/**
+ * One of the session's pull requests, with its status as an icon and a colour.
+ *
+ * Drawn from the transcript, so it appears with the header rather than after a
+ * round trip to GitHub — `status` starts as `unknown` and the fetch below fills it
+ * in. The status is spelled out in the tooltip because an icon can be recognised
+ * without being read, and these get small.
+ */
+function prLink(pr) {
+    const live = (state.prStatus && state.prStatus.get(pr.url)) || null;
+    const status = (live && live.status) || 'unknown';
+
+    const tip = [
+        live && live.label,
+        live && live.title,
+        ...((live && live.detail) || []),
+        [`#${pr.number}`, pr.repo, live && live.updatedAt && `updated ${ago(live.updatedAt)} ago`]
+            .filter(Boolean).join(' · '),
+    ].filter(Boolean).join('\n');
+
+    return el('a', {
+        class: 'pr', 'data-status': status, title: tip,
+        href: pr.url, target: '_blank', rel: 'noreferrer',
+    }, icon(PR_ICON[status] || 'pr', 13), `PR #${pr.number}`);
+}
+
+/**
+ * Ask GitHub what became of this session's PRs.
+ *
+ * Its own request rather than part of the session payload, because that one is
+ * also the rail's and must not wait on a network call. Failure is silent for the
+ * same reason a missing channel strip is: the links are already on screen and
+ * still work, they simply stay grey.
+ */
+async function loadPrStatus() {
+    if (!state.current) return;
+    // No guard on the summary having PRs: a session that had none when it was
+    // opened is exactly the one that raises its first mid-conversation, and the
+    // bridge answers a session with none from its index without asking GitHub.
+    const id = state.current.sessionId;
+    try {
+        const { prs } = await get(`/api/sessions/${id}/prs`);
+        if (!state.current || state.current.sessionId !== id) return;
+        state.prStatus = new Map((prs || []).map(pr => [pr.url, pr]));
+        renderHeader();
+    } catch {
+        // Leaves whatever was known before, which is better than blanking it.
+    }
 }
 
 function renderHeaderActions() {
@@ -1040,6 +1296,9 @@ const SESSION_VIEW = {
     nodes: state.nodes, tools: state.tools,
     get log() { return dom.log; },
     get scroll() { return dom.scroll; },
+    // A getter, not the array: the run is emptied in place at four different
+    // places, and a copy taken here would go stale at every one of them.
+    get run() { return state.run; },
 };
 
 const AGENT_VIEW = {
@@ -1047,10 +1306,18 @@ const AGENT_VIEW = {
     nodes: state.agentNodes, tools: state.agentTools,
     get log() { return dom.agentLog; },
     get scroll() { return dom.agentScroll; },
+    get run() { return state.agentRun; },
 };
 
 function appendEvents(events, view = SESSION_VIEW) {
-    const frag = document.createDocumentFragment();
+    let frag = document.createDocumentFragment();
+    // Closing a run wraps nodes that are already in the log around nodes that
+    // are still in this fragment, so the fragment goes in first. Cheap: it
+    // happens once per message, not once per event.
+    const flush = () => {
+        if (frag.childNodes.length) view.log.append(frag);
+        frag = document.createDocumentFragment();
+    };
     let newTurn = false;
     let sawAgent = false;
     let newTasks = false;
@@ -1068,6 +1335,18 @@ function appendEvents(events, view = SESSION_VIEW) {
         const node = renderEvent(ev);
         if (!node) continue;
         view.nodes.set(ev.id, { ev, node });
+        // Where the run of tool calls begins and ends. Decided here rather than
+        // at the top of the loop because the three `continue`s above never
+        // produce a node — a tool-result patches one that exists, a suggestion
+        // is drawn in the aside, a repeat is already on screen — and treating
+        // any of them as the end of a run would split it for a reason nothing
+        // on screen accounts for.
+        if (ev.kind === 'tool' || (ev.kind === 'thinking' && grouping().groupIncludesThinking)) {
+            view.run.push(ev.id);
+        } else {
+            flush();
+            closeRun(view);
+        }
         if (ev.kind === 'tool') {
             view.tools.set(ev.id, { ev, node });
             if (ev.name === 'Task' || ev.name === 'Agent') sawAgent = true;
@@ -1093,7 +1372,12 @@ function appendEvents(events, view = SESSION_VIEW) {
         }
         frag.append(node);
     }
-    if (frag.childNodes.length) view.log.append(frag);
+    flush();
+    // A transcript that ends in tool calls has no message coming to close the
+    // last run — openSession replays a finished conversation in one call, and
+    // that run would otherwise stay unfolded forever. Only when nothing is
+    // running: mid-turn, the calls on screen are the work you are watching.
+    if (!isBusy()) closeRun(view);
     if (newTasks) renderTasks();
     if (!view.isAgent) {
         if (newTurn) renderTurns();
@@ -1126,11 +1410,151 @@ function patchTool(patch, view = SESSION_VIEW) {
     // Rebuild the body up front rather than waiting for the toggle event the
     // assignment queues, so a block that was open does not blink shut.
     if (det && wasOpen) { fillTool(det, entry.ev); det.open = true; }
+    // Read before the swap: `fresh` is not in the document yet, so asking it
+    // what it belongs to answers nothing.
+    const fold = entry.node.closest('.trun');
     entry.node.replaceWith(fresh);
     entry.node = fresh;
+    // A result landing on a run that has already folded moves its clock on and
+    // may be the error the row has to own up to.
+    if (fold) paintRunSummary(fold);
     view.nodes.set(entry.ev.id, entry);
     // A result landing on a Task call is a subagent finishing: the strip says so.
     if (!view.isAgent && entry.ev.agent) renderAgents();
+}
+
+// ── runs of tool calls ───────────────────────────────────────────────────
+//
+// Between one message and the next an agent may make thirty tool calls, and the
+// transcript printed every one of them. Scrolling back through a long session
+// meant scrolling past walls of Read/Bash/Edit to find the sentences that say
+// what actually happened.
+//
+// So a run of them folds into a single row once a message closes it — the same
+// row a tool call draws, with "16 tool calls" where the name goes and a tally
+// where the command goes. Only once it is *closed*: while the calls are still
+// arriving they are the work you are watching, and folding them as they land
+// would be taking the transcript away mid-turn.
+//
+// The rows are moved into the fold, not redrawn. That is what keeps patchTool
+// and redrawEvent working — they replace a node wherever it happens to be — and
+// it is why a tool block you had opened is still open when you open the fold.
+
+/** Is a turn in flight? While one is, the last run is still being written. */
+function isBusy() {
+    const r = state.runner;
+    return Boolean(r && (r.state === 'busy' || r.state === 'starting'));
+}
+
+/**
+ * Fold the run of tool calls that has just ended.
+ *
+ * Contiguity is checked against the DOM rather than assumed, because three
+ * things append straight to the log without going through appendEvents: the
+ * line left behind when you answer a permission, the message row drawn at Send
+ * before the transcript has it, and the permission card itself. Any of them can
+ * land in the middle of a run, and wrapping first-to-last would swallow it and
+ * reorder the conversation. Each contiguous stretch folds on its own instead,
+ * so what is on screen keeps the order it was written in.
+ */
+function closeRun(view) {
+    const ids = view.run;
+    if (!ids.length) return;
+    const opts = grouping();
+    if (!opts.groupToolCalls) { ids.length = 0; return; }
+
+    let run = [];
+    const runs = [];
+    for (const id of ids) {
+        const entry = view.nodes.get(id);
+        const node = entry && entry.node;
+        if (!node || node.parentNode !== view.log) {
+            if (run.length) runs.push(run);
+            run = [];
+            continue;
+        }
+        if (run.length && run[run.length - 1].node.nextElementSibling !== node) {
+            runs.push(run);
+            run = [];
+        }
+        run.push(entry);
+    }
+    if (run.length) runs.push(run);
+    ids.length = 0;
+
+    for (const r of runs) {
+        if (r.filter(e => e.ev.kind === 'tool').length < opts.groupMinCalls) continue;
+        foldRun(r);
+    }
+}
+
+/** Wrap one contiguous stretch of rows in a fold, in place. */
+function foldRun(entries) {
+    const det = el('details', { class: 'trun' });
+    det.append(el('summary', {}));
+    entries[0].node.before(det);
+    for (const e of entries) det.append(e.node);
+    // The events themselves, so a result arriving after the fold can redraw the
+    // row. patchTool assigns into the event object rather than replacing it, so
+    // this list stays true without being rebuilt.
+    det.runEvents = entries.map(e => e.ev);
+    paintRunSummary(det);
+    return det;
+}
+
+/**
+ * Draw the fold's own row.
+ *
+ * `.trow` wears the same clothes as a collapsed tool call's summary,
+ * deliberately: this is one more row of the same kind, and the only thing it
+ * says differently is how many.
+ */
+function paintRunSummary(det) {
+    const evs = det.runEvents || [];
+    if (!evs.length) return;
+    const tools = evs.filter(e => e.kind === 'tool');
+    const thoughts = evs.length - tools.length;
+
+    // In the order they were first used, which reads as an account of the run.
+    // Sorting by count would put the same three names at the front every time
+    // and say nothing about what the agent actually did first.
+    const byName = new Map();
+    for (const e of tools) byName.set(e.name, (byName.get(e.name) || 0) + 1);
+    const parts = [...byName].map(([name, n]) => (n > 1 ? `${name} \u00d7${n}` : name));
+    if (thoughts) parts.push(thoughts > 1 ? `${thoughts} thoughts` : '1 thought');
+
+    // Wall time across the run, which is what you would have watched. A call
+    // that was interrupted has no result and no end; the ones either side of it
+    // still bound the span.
+    const start = Date.parse(evs[0].ts);
+    let end = start;
+    for (const e of evs) {
+        const t = Date.parse(e.resultTs || e.ts);
+        if (Number.isFinite(t) && t > end) end = t;
+    }
+    const span = Number.isFinite(start) && end > start ? end - start : 0;
+
+    // Never 'pending': a closed run has nothing still running, and the dot for
+    // that one breathes.
+    const status = evs.some(e => e.status === 'error' || e.isError) ? 'error' : 'ok';
+
+    det.querySelector(':scope > summary').replaceChildren(
+        el('div', { class: 'ev ev-trun' },
+            // The clock is the row's, not the reader's: a screen reader
+            // announcing it inside the button's label would be reading out the
+            // gutter it is already skipping everywhere else.
+            el('div', { class: 'ev-time', 'aria-hidden': 'true' }, clockOf(evs[0].ts)),
+            el('div', { class: 'ev-body' },
+                el('div', { class: 'trow', 'data-status': status },
+                    el('span', { class: 'caret' }, '\u25b6'),
+                    el('span', { class: 'tname' },
+                        `${tools.length} tool call${tools.length === 1 ? '' : 's'}`),
+                    el('span', { class: 'targ' }, parts.join(' \u00b7 ')),
+                    el('span', { class: 'tmeta' }, dur(span)),
+                ),
+            ),
+        ),
+    );
 }
 
 function row(ev, kind, ...body) {
@@ -1164,11 +1588,46 @@ function renderUser(ev) {
     } else {
         body.push(el('div', { class: 'prose', html: renderMarkdown(ev.text) }));
     }
-    for (const img of ev.images || []) {
-        if (img.dataUri) body.push(el('img', { src: img.dataUri, alt: 'attached image',
-            style: 'max-width:100%; margin-top:8px; border:1px solid var(--outline-soft)' }));
+    // Wrapped, and with the styling in a class. Both were fine while a turn could only
+    // ever have arrived with one image on it — now that you can paste three, two bare
+    // <img> in a row flowed together edge to edge and read as one wide picture.
+    const shots = (ev.images || []).filter(img => img.dataUri);
+    if (shots.length) {
+        body.push(el('div', { class: 'ev-images' }, ...shots.map(img =>
+            el('img', { class: 'ev-image', src: img.dataUri, alt: 'attached image' }))));
     }
+    // Files this turn attached. An image is usually both — the thumbnail above is what
+    // the model was handed, this is the file on disk — because the card is the only one
+    // of the two you can click to open, and "open the screenshot I just pasted" is a
+    // thing you want as much for a PNG as for a PDF.
+    if (ev.files && ev.files.length) body.push(attachCards(ev));
     return row(ev, 'user', ...body);
+}
+
+/**
+ * The small cards under a user turn, one per attached file.
+ *
+ * Deliberately not a preview. What you want from a file in a transcript is to know it
+ * is there and to be able to open it — rendering a PDF or a spreadsheet inline is a
+ * viewer this app has no business being. So: name, size, and a click that hands the
+ * path to whatever the machine opens that kind of file with.
+ *
+ * The paths came out of the message text (`parseAttachmentNote`, bridge/transcript.js),
+ * which is why this works for a turn sent months ago and reread off disk.
+ */
+function attachCards(ev) {
+    const sessionId = state.current && state.current.sessionId;
+    return el('div', { class: 'ev-files' }, ...ev.files.map(f => el('button', {
+        class: 'ev-file', type: 'button',
+        title: `Open ${f.relPath}`,
+        // Without a session in view there is nothing to resolve the path against.
+        disabled: !sessionId,
+        onclick: () => sessionId && openAttachment(sessionId, f.relPath),
+    },
+        el('span', { class: 'ev-file-glyph' }, attachExt(f.name)),
+        el('span', { class: 'ev-file-name' }, f.name),
+        f.size ? el('span', { class: 'ev-file-size' }, f.size) : null,
+    )));
 }
 
 function renderAssistant(ev) {
@@ -2640,6 +3099,7 @@ async function openAgent(toolUseId, { quiet = false } = {}) {
         state.agentOffset = d.offset || 0;
         state.agentNodes.clear();
         state.agentTools.clear();
+        state.agentRun.length = 0;
         dom.agentLog.replaceChildren();
 
         // Both panes stay mounted, so each keeps its own scroll position and the
@@ -2672,6 +3132,7 @@ function leaveAgent() {
     state.agentOffset = 0;
     state.agentNodes.clear();
     state.agentTools.clear();
+    state.agentRun.length = 0;
     dom.agentLog.replaceChildren();
     dom.scroll.hidden = false;
     dom.agentScroll.hidden = true;
@@ -2690,6 +3151,9 @@ function closeAgent() {
     rememberView();
 }
 
+// Writes the same `.conv-sub` as renderHeader, and deliberately without the
+// session's pull requests: a subagent did not raise them, and the line is about
+// the agent you are looking at. They come back when you leave it.
 function renderAgentHeader() {
     const a = agentRows().find(r => r.toolUseId === state.agent);
     if (!a) return;
@@ -4755,6 +5219,10 @@ function connect() {
         if (!state.current || r.sessionId !== state.current.sessionId) return;
         // The dev servers a turn started only become visible once it finishes.
         loadChannels();
+        // A finished turn is the likeliest moment for a PR to have been raised, or
+        // for a review to have landed on one. This is where a PR opened during the
+        // conversation first appears — see headerPrs.
+        loadPrStatus();
         loadAgents();
     });
 
@@ -4807,6 +5275,13 @@ function applyRunner(s) {
     state.runner = s;
     const busy = s && (s.state === 'busy' || s.state === 'starting');
     const retrying = Boolean(s && s.retry);
+
+    // A turn that ends without saying anything — stopped, or an error — leaves
+    // its last run of tool calls with no message coming to close it. The turn
+    // ending is the close. Harmless while one is still in flight: closeRun does
+    // nothing when there is no run, and this is the only thing that reports the
+    // end of a turn to the log at all.
+    if (!busy) { closeRun(SESSION_VIEW); closeRun(AGENT_VIEW); }
 
     // The status carries the pending ask too, so a window opening onto a session
     // that is already blocked draws the card without having seen the event.
@@ -5052,6 +5527,12 @@ function hideTurnPop() {
 function jumpToTurn(t) {
     hideTurnPop();
     const sc = dom.scroll;
+    // A row inside a folded run has no box to measure, so the jump would land
+    // near the top of the pane instead of on it. Turns are never in a fold —
+    // a message is what ends one — but the notification history jumps to tool
+    // calls, and those are exactly what folds.
+    const fold = t.node.closest('.trun');
+    if (fold) fold.open = true;
     const top = t.node.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop;
     sc.scrollTop = Math.max(0, top - 14);
     state.pinned = false;
@@ -5192,6 +5673,7 @@ function focusChipAt(i) {
  * they do has a key on the row instead.
  */
 function queueItem(entry, i, roving) {
+    const files = entry.attachments || [];
     const open = state.queueOpen.has(entry.id);
     const toggleOpen = () => {
         if (open) state.queueOpen.delete(entry.id);
@@ -5210,6 +5692,13 @@ function queueItem(entry, i, roving) {
     },
         el('span', { class: 'queue-grip', title: 'Drag to reorder', 'aria-hidden': 'true' }, '⠿'),
         el('span', { class: 'queue-n' }, String(i + 1)),
+        // A count, not the names. The chip is one line and the message is what it is
+        // for; the point is only that Edit will bring files back with it, so dropping
+        // this chip is dropping them too.
+        files.length ? el('span', {
+            class: 'queue-files',
+            title: files.map(f => f.name || f.relPath).join('\n'),
+        }, `📎${files.length > 1 ? files.length : ''}`) : null,
         el('button', {
             class: 'queue-text', type: 'button', 'data-part': 'text', tabindex: '-1',
             title: open ? 'Show less' : 'Show the whole message',
@@ -5367,7 +5856,10 @@ async function editQueued(entry) {
     try {
         const r = await del(`/api/sessions/${state.current.sessionId}/queue/${entry.id}`);
         applyRunner(r.status);
-        restoreToComposer(entry.text);
+        // The files come back with the words. The message was never written to the
+        // process, so they are still staged rather than sent — and the alternative is
+        // an edit that silently drops the screenshot the message was about.
+        restoreToComposer(entry.text, (r.removed && r.removed.attachments) || entry.attachments);
     } catch (err) {
         toast(err.message, 'warn');
         refreshQueue();
@@ -5402,6 +5894,311 @@ async function refreshQueue() {
     } catch { /* the next runner-status will fix it */ }
 }
 
+// ── attachments ──────────────────────────────────────────────────────────
+// Files pasted or dropped onto the composer.
+//
+// Each one is uploaded the moment it arrives, before the message is sent. That is
+// what makes the rest of this simple: the chip shows the name the file really has on
+// disk, a staged file survives a reload because only its path has to be remembered,
+// and the send stays the same small JSON POST it always was — a list of paths, not a
+// payload. The bridge writes them into attached_assets/ at the root of the session's
+// checkout; see bridge/attachments.js for why there.
+
+// Matches the bridge, which is the side that enforces them. Checked here so that
+// dropping a video says what the limit is instead of uploading 200MB to be refused.
+const MAX_ATTACH_BYTES = 25 * 1024 * 1024;
+const MAX_ATTACH_FILES = 5;
+
+// The types the bridge will inline as an image, and so the ones a chip draws a
+// thumbnail for.
+const ATTACH_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+
+function formatBytes(n) {
+    const b = Number(n) || 0;
+    if (b < 1024) return `${b} B`;
+    if (b < 1024 * 1024) return `${(b / 1024).toFixed(b < 10 * 1024 ? 1 : 0)} KB`;
+    return `${(b / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * A name for a file that arrived without a usable one.
+ *
+ * A pasted screenshot is `image.png` in Chromium and nameless everywhere else, so the
+ * client always supplies something and the bridge always requires it — better here,
+ * where the clock and the media type are both to hand, than invented server-side.
+ */
+function attachName(file) {
+    if (file.name) return file.name;
+    const d = new Date();
+    const p = (n) => String(n).padStart(2, '0');
+    const stamp = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}`
+        + `-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+    const ext = (file.type || '').split('/')[1] || 'bin';
+    return `pasted-${stamp}.${ext === 'jpeg' ? 'jpg' : ext}`;
+}
+
+/** Does this drag carry files, as opposed to one of our own chips? */
+function dragHasFiles(dt) {
+    return Boolean(dt && Array.from(dt.types || []).includes('Files'));
+}
+
+/**
+ * Take files in — from a paste, a drop, or the paperclip. The single entry point.
+ *
+ * Uploaded one at a time rather than all at once. It keeps several 25MB bodies off the
+ * wire together, and it makes the per-chip failure story true: four succeed and the
+ * fifth goes red, instead of a batch that half-worked.
+ */
+async function attachFiles(list) {
+    if (!state.current) return;
+    const sessionId = state.current.sessionId;
+    const files = Array.from(list || []).filter(f => f && f.size !== undefined);
+    if (!files.length) return;
+
+    const room = MAX_ATTACH_FILES - state.attach.length;
+    if (room <= 0) {
+        toast(`${MAX_ATTACH_FILES} files is the limit for one message.`, 'warn');
+        return;
+    }
+    if (files.length > room) {
+        toast(`Only ${room} more file${room === 1 ? '' : 's'} fit on this message.`, 'warn');
+    }
+
+    for (const file of files.slice(0, room)) {
+        // Refused here, with the number in it. The bridge refuses it too, but a 413
+        // arriving after a 40MB upload is a worse way to learn the same thing.
+        if (file.size > MAX_ATTACH_BYTES) {
+            toast(`${file.name || 'That file'} is ${formatBytes(file.size)} — the limit `
+                + `is ${formatBytes(MAX_ATTACH_BYTES)}.`, 'warn');
+            continue;
+        }
+        if (!file.size) {
+            toast(`${file.name || 'That file'} is empty.`, 'warn');
+            continue;
+        }
+
+        const entry = {
+            key: `a${++state.attachSeq}`,
+            name: attachName(file),
+            bytes: file.size,
+            mediaType: file.type || 'application/octet-stream',
+            // Cheaper than a FileReader and it never holds the bytes in a string.
+            // Revoked on removal, on send and on leaving the session.
+            previewUrl: ATTACH_IMAGE_TYPES.has(file.type) ? URL.createObjectURL(file) : null,
+            path: null, relPath: null,
+            status: 'uploading',
+            error: null,
+            file,
+        };
+        state.attach.push(entry);
+        renderAttach();
+        await uploadAttachment(sessionId, entry);
+    }
+}
+
+async function uploadAttachment(sessionId, entry) {
+    entry.status = 'uploading';
+    entry.error = null;
+    renderAttach();
+    try {
+        const r = await postFile(
+            `/api/sessions/${sessionId}/attachments?name=${encodeURIComponent(entry.name)}`,
+            entry.file);
+        // The name on disk wins. A collision made it `shot-2.png`, and a chip still
+        // saying `shot.png` would name a file the message does not attach.
+        entry.name = r.name;
+        entry.path = r.path;
+        entry.relPath = r.relPath;
+        entry.mediaType = r.mediaType;
+        entry.bytes = r.bytes;
+        entry.status = 'ready';
+        // Nothing needs the File once the bytes are on disk, and holding it keeps a
+        // blob alive for as long as the chip does.
+        entry.file = null;
+        saveAttach(sessionId, state.attach);
+    } catch (err) {
+        entry.status = 'failed';
+        entry.error = err.message;
+    }
+    renderAttach();
+}
+
+/** Chips for files the bridge already knows about — a restored draft, or an edit. */
+function adoptAttachments(files) {
+    for (const f of files || []) {
+        if (state.attach.length >= MAX_ATTACH_FILES) break;
+        if (state.attach.some(a => a.path && a.path === f.path)) continue;
+        state.attach.push({
+            key: `a${++state.attachSeq}`,
+            name: f.name || String(f.relPath || '').split('/').pop(),
+            bytes: f.bytes || 0,
+            mediaType: f.mediaType || 'application/octet-stream',
+            // No object URL: these files were never a File in this page. A restored
+            // image chip draws the glyph rather than a broken img.
+            previewUrl: null,
+            path: f.path || null,
+            relPath: f.relPath || null,
+            status: 'ready',
+            error: null,
+            file: null,
+        });
+    }
+    renderAttach();
+    if (state.current) saveAttach(state.current.sessionId, state.attach);
+}
+
+function removeAttach(key) {
+    const i = state.attach.findIndex(a => a.key === key);
+    if (i < 0) return;
+    const [gone] = state.attach.splice(i, 1);
+    if (gone.previewUrl) URL.revokeObjectURL(gone.previewUrl);
+    // Deliberately not deleted from disk. A delete route is a second thing that
+    // writes to a checkout and a second refusal to reason about, and an unsent file
+    // in attached_assets/ is a harmless untracked file you can see — where a delete
+    // that resolves the wrong path is not harmless.
+    renderAttach();
+    if (state.current) saveAttach(state.current.sessionId, state.attach);
+}
+
+/**
+ * Everything staged, gone — on a send, or on leaving the session.
+ *
+ * `revoke: false` is for the send path, and it is not an optimisation. The row drawn
+ * at the foot of the log the instant you press Enter shows the thumbnails, and those
+ * are these object URLs; revoking them here blanked the image in the same frame it
+ * appeared. So the send hands them to the pending row, which revokes them when it
+ * goes — and every path that does not draw one revokes them itself.
+ */
+function clearAttach({ save = true, revoke = true } = {}) {
+    if (revoke) revokePreviews(state.attach.map(a => a.previewUrl));
+    state.attach = [];
+    renderAttach();
+    if (save && state.current) saveAttach(state.current.sessionId, []);
+}
+
+function revokePreviews(urls) {
+    for (const u of urls || []) if (u) URL.revokeObjectURL(u);
+}
+
+/** What a send may carry: the ones that made it to disk. */
+const readyAttachments = () => state.attach
+    .filter(a => a.status === 'ready' && a.path)
+    .map(a => ({ path: a.path, relPath: a.relPath, mediaType: a.mediaType, name: a.name }));
+
+// The extension, for the glyph on a non-image chip. Short enough to read at 10px.
+function attachExt(name) {
+    const m = /\.([A-Za-z0-9]{1,5})$/.exec(name || '');
+    return m ? m[1].toLowerCase() : 'file';
+}
+
+function renderAttach() {
+    const list = state.attach;
+    dom.attach.hidden = !list.length;
+    dom.attach.replaceChildren(...list.map((a) => {
+        const bits = [];
+        if (a.previewUrl) {
+            bits.push(el('img', { class: 'attach-thumb', src: a.previewUrl, alt: '' }));
+        } else {
+            bits.push(el('span', { class: 'attach-glyph' }, attachExt(a.name)));
+        }
+        bits.push(el('span', { class: 'attach-name', title: a.relPath || a.name }, a.name));
+        bits.push(el('span', { class: 'attach-size' },
+            a.status === 'uploading' ? 'uploading…' : formatBytes(a.bytes)));
+        if (a.status === 'failed') {
+            bits.push(el('button', {
+                class: 'attach-act', type: 'button', title: a.error || 'Upload failed',
+                onclick: () => {
+                    if (!a.file || !state.current) return;
+                    uploadAttachment(state.current.sessionId, a);
+                },
+            }, 'Retry'));
+        }
+        bits.push(el('button', {
+            class: 'attach-act danger', type: 'button', 'aria-label': `Remove ${a.name}`,
+            title: 'Remove', onclick: () => removeAttach(a.key),
+        }, '×'));
+
+        return el('div', {
+            class: `attach-chip${a.status === 'ready' ? '' : ` ${a.status}`}`,
+            title: a.status === 'failed' ? a.error : (a.relPath || a.name),
+        }, ...bits);
+    }));
+    // An attachment on its own is a message, so the buttons have to follow the strip
+    // and not only the box.
+    enableSend(Boolean(state.current));
+}
+
+/**
+ * A paste that carries files.
+ *
+ * The condition is narrow on purpose. Cancelling a paste that was only ever text is
+ * the most likely way this feature breaks something that worked, and web/terminal.js
+ * already carries a comment about the last time a paste handler in this codebase took
+ * over more than it should have. A screenshot arrives with files and no `text/plain`;
+ * a file copied out of a file manager brings `text/uri-list` alongside it; text
+ * copied out of an editor brings `text/plain` and no files at all. So: files, and
+ * either nothing textual or an actual image.
+ */
+function onComposerPaste(e) {
+    const dt = e.clipboardData;
+    if (!dt) return;
+    const items = Array.from(dt.items || []);
+    const files = Array.from(dt.files || []);
+    if (!files.length && !items.some(i => i.kind === 'file')) return;
+
+    const hasText = Array.from(dt.types || []).includes('text/plain');
+    const anyImage = files.some(f => ATTACH_IMAGE_TYPES.has(f.type));
+    if (hasText && !anyImage) return;
+
+    e.preventDefault();
+    attachFiles(files.length ? files
+        : items.filter(i => i.kind === 'file').map(i => i.getAsFile()).filter(Boolean));
+}
+
+/**
+ * Dragging files over the composer.
+ *
+ * Both gates are before `preventDefault`, and that is what keeps the queue-chip drag
+ * working without touching a line of it: a chip drag puts only `text/plain` on the
+ * transfer, so `dragHasFiles` is false, this returns early, and #queue-list's own
+ * dragover still sees the event exactly as it did before.
+ */
+function onComposerDragOver(e) {
+    if (state.queueDrag) return;
+    if (!dragHasFiles(e.dataTransfer)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    dom.composer.classList.add('drop-target');
+}
+
+function onComposerDragLeave(e) {
+    // Only when the pointer has actually left the composer. Without the check the
+    // highlight flickers off every time the drag crosses a child element.
+    if (e.relatedTarget && dom.composer.contains(e.relatedTarget)) return;
+    dom.composer.classList.remove('drop-target');
+}
+
+function onComposerDrop(e) {
+    if (state.queueDrag) return;
+    if (!dragHasFiles(e.dataTransfer)) return;
+    e.preventDefault();
+    dom.composer.classList.remove('drop-target');
+    attachFiles(e.dataTransfer.files);
+}
+
+/**
+ * Open one of a turn's attachments in whatever this machine opens that kind of file
+ * with. The bridge re-derives the path against the session's own attachments
+ * directory before launching anything — see `attachmentPath` in bridge/server.js.
+ */
+async function openAttachment(sessionId, relPath) {
+    try {
+        await post(`/api/sessions/${sessionId}/attachments/open`, { path: relPath });
+    } catch (err) {
+        toast(`Could not open ${relPath}: ${err.message}`, 'warn');
+    }
+}
+
 // ── composer ─────────────────────────────────────────────────────────────
 
 /**
@@ -5427,6 +6224,9 @@ const growPrompt = () => grow(dom.newPrompt, 62, 300);
 function enableSend(on) {
     dom.btnSend.disabled = !on;
     dom.btnLgtm.disabled = !on;
+    // Attaching needs a session for the same reason sending does — the file goes into
+    // *that* session's checkout — so it turns on and off with them.
+    dom.btnAttach.disabled = !on;
 }
 
 /**
@@ -5483,18 +6283,25 @@ const PENDING_MS = 30000;
  * Only ever one at a time: pressing Enter twice in the same moment sends a second
  * message the bridge queues, and a queued message is already shown as a chip.
  */
-function showPendingSend(sessionId, text) {
-    if (state.pendingSend) return;
+function showPendingSend(sessionId, text, files, previews) {
+    if (state.pendingSend) return revokePreviews(previews);
     // The real renderer, so the swap when the transcript catches up is one node for
     // another and not a reflow. No `ts`: clockOf gives an empty gutter for a missing
     // one, and the marker on it says what that means. Sending the local clock
     // instead would print a time the transcript is then free to disagree with —
     // a cold start really does record the entry a second or more later.
-    const node = renderUser({ kind: 'user', text, ts: null });
+    // The object URLs and the file list, so the row that appears the instant you press
+    // Enter is the row the transcript will replace it with — thumbnail, cards and all —
+    // rather than a bare line of text that grows a screenshot a second later.
+    const node = renderUser({
+        kind: 'user', text, ts: null,
+        images: (previews || []).map(url => ({ dataUri: url })),
+        files: (files || []).map(f => ({ relPath: f.relPath, name: f.name, size: null })),
+    });
     node.dataset.pending = '1';
     dom.log.append(node);
     state.pendingSend = {
-        sessionId, node, timer: setTimeout(clearPendingSend, PENDING_MS),
+        sessionId, node, previews, timer: setTimeout(clearPendingSend, PENDING_MS),
     };
     state.pinned = true;
     scrollToEnd(false);
@@ -5514,11 +6321,20 @@ function clearPendingSend() {
     clearTimeout(p.timer);
     state.pendingSend = null;
     p.node.remove();
+    // The row was the last thing holding these; the transcript's own copy of the
+    // image comes from the transcript.
+    revokePreviews(p.previews);
 }
 
 async function sendMessage({ fork = false, text: override = null, canned = false } = {}) {
     const text = override != null ? override : dom.input.value.trim();
-    if (!text || !state.current) return;
+    // Attachments only ride on a message that came out of the box. A canned send — the
+    // LGTM button, a follow-up card — must not walk off with a screenshot you staged
+    // for something else, by the same argument that leaves the half-typed text alone.
+    const files = override == null ? readyAttachments() : [];
+    // A screenshot with nothing typed under it is a message: "look at this" is the
+    // whole content of it.
+    if ((!text && !files.length) || !state.current) return;
     const sessionId = state.current.sessionId;
 
     // The lock is a rule, not a disabled button. Greying out the buttons left
@@ -5536,10 +6352,16 @@ async function sendMessage({ fork = false, text: override = null, canned = false
     // Only a message that came out of the box empties the box — and only then is
     // the saved draft gone with it. A canned send leaves a half-written message
     // where it was, rather than dropping it on the way past.
+    // Taken before the strip is emptied, because emptying it is what would revoke them.
+    const previews = files.length
+        ? state.attach.filter(a => a.previewUrl).map(a => a.previewUrl)
+        : [];
+
     if (override == null) {
         dom.input.value = '';
         autoGrow();
         saveDraft(sessionId, '');
+        clearAttach({ revoke: false });
     }
 
     // Drawn in the same frame the box empties, so the message moves from one to the
@@ -5554,13 +6376,18 @@ async function sendMessage({ fork = false, text: override = null, canned = false
     const runner = state.runner;
     const willQueue = Boolean(runner
         && (runner.state === 'busy' || runner.state === 'starting'));
-    if (!fork && !willQueue) showPendingSend(sessionId, text);
+    if (!fork && !willQueue) showPendingSend(sessionId, text, files, previews);
+    // No row was drawn, so nothing is going to hand these back.
+    else revokePreviews(previews);
 
     enableSend(false);
 
     try {
         const r = await post(`/api/sessions/${sessionId}/send`, {
             text,
+            // Paths, not bytes: every one of these is already on disk, written by the
+            // attachments route before its chip appeared.
+            attachments: files,
             fork,
             model: dom.model.value || null,
             permissionMode: dom.perm.value,
@@ -5583,7 +6410,9 @@ async function sendMessage({ fork = false, text: override = null, canned = false
         }
     } catch (err) {
         clearPendingSend();   // it never reached the bridge; the log must not claim it did
-        if (!canned) restoreToComposer(text);
+        // The files are still on disk, so handing their metadata back is enough to put
+        // the chips where they were.
+        if (!canned) restoreToComposer(text, files);
         toast(`Could not send: ${err.message}`, 'error');
     } finally {
         enableSend(Boolean(state.current));
@@ -6503,6 +7332,30 @@ dom.search.addEventListener('input', debounce(() => {
 }, 180));
 
 dom.btnSend.addEventListener('click', () => sendMessage());
+
+// Paste, drop, and the paperclip all end up in attachFiles.
+dom.input.addEventListener('paste', onComposerPaste);
+dom.composer.addEventListener('dragover', onComposerDragOver);
+dom.composer.addEventListener('dragleave', onComposerDragLeave);
+dom.composer.addEventListener('drop', onComposerDrop);
+dom.btnAttach.addEventListener('click', () => dom.attachInput.click());
+dom.attachInput.addEventListener('change', () => {
+    attachFiles(dom.attachInput.files);
+    // Cleared so that picking the same file twice in a row fires `change` both times.
+    dom.attachInput.value = '';
+});
+// A file dropped anywhere else in the window would otherwise navigate away to it,
+// which loses the conversation and every draft on screen. Gated exactly like the
+// composer's own handlers, so a queue chip being dragged is still none of our
+// business here.
+for (const type of ['dragover', 'drop']) {
+    document.addEventListener(type, (e) => {
+        if (state.queueDrag) return;
+        if (!dragHasFiles(e.dataTransfer)) return;
+        if (dom.composer.contains(e.target)) return;   // handled above
+        e.preventDefault();
+    });
+}
 // One click, and no confirmation over the top of it: the click *is* the approval,
 // and the session still asks for whatever its permission mode makes it ask for
 // before anything is pushed or merged.
@@ -7645,6 +8498,11 @@ setInterval(refreshDevBrowser, 20_000);
 setInterval(() => {
     if (state.current && !dom.channels.querySelector('[data-arm="true"], .busy')) loadChannels();
 }, 25_000);
+
+// A PR changes under you — a review lands, checks finish — with nothing in this
+// session to say so. Matched to the bridge's own minute of cache, so a window left
+// open on a conversation costs one `gh pr list` a minute at most.
+setInterval(loadPrStatus, 60_000);
 
 // The count on the Dashboard button is the only thing that says there is
 // anything to look at, so it is read once at startup — a few seconds in, where

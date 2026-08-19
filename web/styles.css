@@ -877,6 +877,44 @@ a:hover { text-decoration: underline; }
 .conv-sub .agent-state.failed { color: var(--red); }
 .conv-sub .pulse { color: var(--yellow); }
 
+/* A pull request the session raised, and what has become of it. Colour and glyph
+   say the same thing twice on purpose — two of these are red and two are yellow,
+   so hue alone would not separate them. The word itself is in the tooltip.
+
+   `flex: none` because .conv-sub wraps: the icon and the number are one thing and
+   must not be broken across lines. The svg takes its colour from currentColor, so
+   every rule below sets it on the anchor and none of them touch the svg. */
+.conv-sub .pr {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex: none;
+    font: 500 12px/1 var(--sans);
+    text-decoration: none;
+    color: var(--text-3);
+    transition: color var(--t-fast) var(--ease), opacity var(--t-fast) var(--ease);
+}
+.conv-sub .pr[data-status="open"] { color: var(--blue); }
+.conv-sub .pr[data-status="approved"] { color: var(--green); }
+.conv-sub .pr[data-status="changes"],
+.conv-sub .pr[data-status="checks-failed"] { color: var(--red); }
+.conv-sub .pr[data-status="conflicting"],
+.conv-sub .pr[data-status="checks-pending"] { color: var(--yellow); }
+.conv-sub .pr[data-status="draft"] { color: var(--text-3); }
+/* Settled, and kept only as a record that the work landed — so it is here, but it
+   is not competing with the PRs that still want something. */
+.conv-sub .pr[data-status="merged"] { color: var(--purple); opacity: 0.62; }
+.conv-sub .pr[data-status="closed"] { color: var(--text-4); opacity: 0.62; }
+/* gh could not be reached. Says nothing rather than guessing. */
+.conv-sub .pr[data-status="unknown"] { color: var(--text-4); }
+/* Lifts the dimming off a settled PR without taking its colour away: the status is
+   the point, and losing it on the way to clicking the link would be a poor trade. */
+.conv-sub .pr:hover { opacity: 1; text-decoration: none; }
+/* Still moving, so it breathes — the same light every in-flight thing here uses. */
+.conv-sub .pr[data-status="checks-pending"] svg {
+    animation: breathe 1.6s var(--ease) infinite;
+}
+
 /* Dev servers: a row of chips, each one a switch into DevBrowser. */
 .channels {
     display: flex;
@@ -1945,7 +1983,10 @@ a:hover { text-decoration: underline; }
 }
 .tool[open] { background: var(--s2); }
 
-.tool > summary {
+/* The row itself is shared with the fold a run of tool calls collapses into
+   (.trow, below) — one more row of the same kind, and it should be impossible
+   for the two to drift apart by editing only one of them. */
+:is(.tool > summary, .trow) {
     display: flex;
     align-items: center;
     gap: 11px;
@@ -1958,33 +1999,33 @@ a:hover { text-decoration: underline; }
     transition: background var(--t-fast) var(--ease);
 }
 .tool > summary::-webkit-details-marker { display: none; }
-.tool > summary:hover { background: var(--s3); }
+:is(.tool > summary, .trow):hover { background: var(--s3); }
 
 /* Status is a dot, not a coloured slab. */
-.tool > summary::before {
+:is(.tool > summary, .trow)::before {
     content: "";
     flex: none;
     width: 6px; height: 6px;
     border-radius: 50%;
     background: var(--text-4);
 }
-.tool[data-status="ok"] > summary::before { background: #4d5052; }
-.tool[data-status="error"] > summary::before { background: var(--red); }
+:is(.tool[data-status="ok"] > summary, .trow[data-status="ok"])::before { background: #4d5052; }
+:is(.tool[data-status="error"] > summary, .trow[data-status="error"])::before { background: var(--red); }
 .tool[data-status="pending"] > summary::before {
     background: var(--yellow);
     animation: breathe 1.6s var(--ease) infinite;
 }
 
-.tool .tname {
+:is(.tool, .trow) .tname {
     font-family: var(--mono);
     font-size: 12.5px;
     font-weight: 500;
     color: var(--text-2);
     flex: none;
 }
-.tool[data-status="error"] .tname { color: var(--red); }
+:is(.tool[data-status="error"], .trow[data-status="error"]) .tname { color: var(--red); }
 
-.tool .targ {
+:is(.tool, .trow) .targ {
     flex: 1;
     min-width: 0;
     overflow: hidden;
@@ -1995,14 +2036,14 @@ a:hover { text-decoration: underline; }
     color: var(--text-4);
 }
 
-.tool .tmeta {
+:is(.tool, .trow) .tmeta {
     flex: none;
     font-size: 11.5px;
     color: var(--text-4);
     font-variant-numeric: tabular-nums;
 }
 
-.tool .caret {
+:is(.tool, .trow) .caret {
     flex: none;
     width: 10px;
     font-size: 9px;
@@ -2010,6 +2051,25 @@ a:hover { text-decoration: underline; }
     transition: transform var(--t-fast) var(--ease);
 }
 .tool[open] .caret { transform: rotate(90deg); }
+
+/* A run of tool calls, folded into one row once a message closed it.
+   The <summary> is display:block and the grid lives inside it, so the rows the
+   fold holds stay top-level .ev grids: nesting them inside an .ev-body would
+   indent every one of them by a gutter they already have. */
+.trun { display: block; }
+.trun > summary {
+    display: block;
+    cursor: pointer;
+    list-style: none;
+}
+.trun > summary::-webkit-details-marker { display: none; }
+.trow {
+    margin: 3px 0;
+    background: var(--s2);
+}
+/* `> summary`, not a descendant: the fold holds tool blocks with carets of
+   their own, and those answer to their own open state. */
+.trun[open] > summary .caret { transform: rotate(90deg); }
 
 .tool-body { padding: 4px 15px 14px; }
 
@@ -2380,6 +2440,7 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 @media (prefers-reduced-motion: reduce) {
     .status-line[data-state="busy"] .led,
     .status-line[data-state="ask"] .led,
+    .conv-sub .pr[data-status="checks-pending"] svg,
     .tool[data-status="pending"] > summary::before,
     .strip[data-state="running"] .strip-meta::before { animation: none; }
 }
@@ -2500,6 +2561,15 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     text-align: center;
 }
 
+/* A queued message carrying files. Sits next to the send-order badge because it is
+   the same kind of fact about the chip: not its content, but what happens to it. */
+.queue-files {
+    flex: none;
+    font: 400 10.5px/17px var(--sans);
+    color: var(--text-3);
+    cursor: default;
+}
+
 .queue-text {
     flex: 1;
     min-width: 0;
@@ -2531,6 +2601,197 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 .queue-act:hover { background: var(--s4); color: var(--text-2); }
 .queue-act.danger { font-size: 14px; line-height: 1; padding: 3px 8px 4px; }
 .queue-act.danger:hover { background: #33201f; color: var(--red); }
+
+/* Files staged for the next message.
+   ---------------------------------------------------------------------------
+   Built on the queue-chip tokens above rather than on a set of its own: the two
+   strips sit one above the other in the same composer, and a second visual
+   vocabulary between them would read as two unrelated features that happen to be
+   adjacent. Same surface, same pill, same act buttons. */
+.attach {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-bottom: 8px;
+    padding: 7px 8px;
+    background: var(--s1);
+    border-radius: var(--r-lg);
+}
+
+.attach-chip {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    /* Room for a name without letting one long one push the rest off the row. */
+    max-width: 260px;
+    padding: 4px 4px 4px 5px;
+    background: var(--s2);
+    border-radius: var(--r);
+    transition: background var(--t-fast) var(--ease), opacity var(--t-fast) var(--ease);
+}
+.attach-chip:hover { background: var(--s3); }
+/* Not yet on disk, so not yet something a message can carry. Dimmed rather than
+   hidden: it is the evidence that the paste landed at all. */
+.attach-chip.uploading { opacity: 0.6; }
+.attach-chip.failed { background: #33201f; }
+
+.attach-thumb {
+    flex: none;
+    width: 26px; height: 26px;
+    border-radius: var(--r-xs);
+    object-fit: cover;
+    background: var(--s4);
+}
+
+/* For everything that is not an image: the extension, which is the most useful
+   three characters available and the one people actually scan for. */
+.attach-glyph {
+    flex: none;
+    width: 26px; height: 26px;
+    border-radius: var(--r-xs);
+    background: var(--s4);
+    color: var(--text-3);
+    font: 500 9px/26px var(--mono);
+    text-align: center;
+    text-transform: uppercase;
+    overflow: hidden;
+}
+
+.attach-name {
+    flex: 1;
+    min-width: 0;
+    font: 400 12px/1.4 var(--sans);
+    color: var(--text-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.attach-size {
+    flex: none;
+    font: 400 10.5px/1.4 var(--mono);
+    color: var(--text-4);
+}
+
+.attach-act {
+    flex: none;
+    padding: 2px 7px;
+    border-radius: var(--pill);
+    font: 400 11px/1.3 var(--sans);
+    color: var(--text-4);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.attach-act:hover { background: var(--s4); color: var(--text-2); }
+.attach-act.danger { font-size: 14px; line-height: 1; padding: 3px 7px 4px; }
+.attach-act.danger:hover { background: #33201f; color: var(--red); }
+
+/* Drag a file anywhere over the composer and the whole thing is the target, not a
+   strip you have to hit. Inset so it does not shift anything: an outline that
+   changed the layout would make the box jump under the pointer mid-drag. */
+.composer.drop-target .composer-inner {
+    outline: 1.5px dashed var(--blue);
+    outline-offset: -4px;
+    border-radius: var(--r-lg);
+    background: var(--blue-tint);
+}
+
+/* The paperclip. Quieter than Send and LGTM on either side of it — pasting and
+   dropping are the gestures this feature is really for, and this is the fallback
+   for when there is nothing to drag from. */
+.btn-attach {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px; height: 38px;
+    color: var(--text-3);
+    background: transparent;
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--pill);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
+                border-color var(--t-fast) var(--ease);
+}
+.btn-attach:hover:not(:disabled) {
+    background: var(--s3);
+    color: var(--text);
+    border-color: var(--outline);
+}
+.btn-attach:disabled { color: var(--text-4); border-color: var(--s3); cursor: default; }
+
+/* Images a turn carried, inline. Was two inline properties on the <img> itself, which
+   was enough while one image per turn was the only shape there was. */
+.ev-images {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.ev-image {
+    max-width: 100%;
+    /* Several on a turn should read as several, so none of them takes the full width
+       on its own. One is unconstrained, which is the case that matters most: a
+       screenshot you pasted to be looked at. */
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-xs);
+}
+.ev-images .ev-image:not(:only-child) { max-width: calc(50% - 4px); }
+
+/* Files on a turn in the transcript.
+   ---------------------------------------------------------------------------
+   A card and not a preview. Knowing a file is there and being able to open it is
+   the whole job; rendering a PDF or a spreadsheet inline would be a viewer this
+   app has no business being. */
+.ev-files {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+}
+
+.ev-file {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    max-width: 300px;
+    padding: 6px 11px 6px 7px;
+    background: var(--s2);
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r);
+    text-align: left;
+    transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+}
+.ev-file:hover:not(:disabled) { background: var(--s3); border-color: var(--outline); }
+/* No session in view means no directory to resolve the path against. */
+.ev-file:disabled { cursor: default; opacity: 0.6; }
+
+.ev-file-glyph {
+    flex: none;
+    width: 24px; height: 24px;
+    border-radius: var(--r-xs);
+    background: var(--s4);
+    color: var(--text-3);
+    font: 500 8.5px/24px var(--mono);
+    text-align: center;
+    text-transform: uppercase;
+    overflow: hidden;
+}
+
+.ev-file-name {
+    flex: 1;
+    min-width: 0;
+    font: 400 12.5px/1.4 var(--sans);
+    color: var(--text-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ev-file-size {
+    flex: none;
+    font: 400 10.5px/1.4 var(--mono);
+    color: var(--text-4);
+}
 
 /* The live-elsewhere lock, directly above the box it is holding shut. Sits where
    the queue sits, in the warning colour, because it is the one thing between a

@@ -20,6 +20,7 @@ const { SessionIndex } = require('./sessions');
 const { SessionRegistry } = require('./registry');
 const { RunnerPool, PERMISSION_MODES } = require('./runner');
 const { Flags } = require('./flags');
+const { Prefs } = require('./prefs');
 const { Suggestions, STATUSES: SUGGESTION_STATUSES } = require('./suggestions');
 const { SlashCommandCache } = require('./slash-commands');
 const { NotificationLog } = require('./notifications');
@@ -27,8 +28,10 @@ const devbrowser = require('./devbrowser');
 const tailscale = require('./tailscale');
 const devservers = require('./devservers');
 const dashboard = require('./dashboard');
+const pulls = require('./pulls');
 const overview = require('./overview');
-const { openInExplorer } = require('./explorer');
+const { openInExplorer, openFile } = require('./explorer');
+const attachments = require('./attachments');
 const { TerminalPool } = require('./terminal');
 const commands = require('./commands');
 const { RunPool } = require('./runs');
@@ -37,6 +40,9 @@ const WEB_DIR = path.join(__dirname, '..', 'web');
 const CLIENT_HEADER = 'x-claude-sessions-client';
 
 const flags = new Flags();
+// How the person using the app wants it to behave, from their own file and from
+// whatever the project they are looking at overrides — see bridge/prefs.js.
+const prefs = new Prefs();
 // What you did about a suggested follow-up — started it, or waved it away. The
 // suggestion itself is in the transcript; only the decision is ours to keep.
 const suggestions = new Suggestions();
@@ -521,6 +527,17 @@ function remoteRefusal(pathname, method) {
     if (pathname === '/api/fs/mkdir') {
         return 'folders can only be created on the machine they live on';
     }
+    // Attaching a file writes it into a checkout, which is the mkdir clause above.
+    //
+    // This is the weakest of the refusals on this list and it is worth saying so:
+    // a phone taking a photo has nowhere *else* to put it, so "write it on the
+    // machine you are sitting at" is advice a phone cannot take. It is refused in
+    // v1 because /m has no attach affordance to refuse anything for yet. When it
+    // grows one, the answer is a smaller cap for a remote caller — not deleting
+    // this line and letting a leaked token write 25MB files into a repo.
+    if (/^\/api\/sessions\/[^/]+\/attachments(\/open)?$/.test(pathname)) {
+        return 'files can only be attached on the machine they are saved to';
+    }
     return null;
 }
 
@@ -666,6 +683,16 @@ async function api(req, res, url, pathname, who) {
             busy: pool.busyCount,
             permissionModes: PERMISSION_MODES,
         });
+    }
+
+    // Settings, for a caller that wants them fresh rather than as the page was
+    // served with them — a settings page saving, or a client checking after the
+    // file was edited by hand. `?cwd=` asks what is in force for a project;
+    // without it, the user-level answer. Not local-only: reading a preference
+    // about how a transcript looks is not a capability a phone should be
+    // refused, and prefs.forCwd() runs a cwd through cfg.withinRoots anyway.
+    if (pathname === '/api/prefs' && req.method === 'GET') {
+        return send(res, 200, prefs.forCwd(url.searchParams.get('cwd') || ''));
     }
 
     if (pathname === '/api/shutdown' && req.method === 'POST') {
@@ -844,6 +871,15 @@ async function api(req, res, url, pathname, who) {
             // needs to know whether it was acted on in another window.
             const acted = suggestions.forSession(sessionId);
 
+            // The settings in force *for this conversation's directory*. The
+            // page was served with the user-level answer before it knew which
+            // session it was about to show, and a project may override it — so
+            // the answer travels with the transcript it applies to, and lands
+            // in the same await the client already does before it draws
+            // anything. Fetching it separately would be a race the big payload
+            // usually wins and sometimes does not.
+            const settings = prefs.forCwd(data.summary && data.summary.cwd);
+
             const want = Number(url.searchParams.get('tail'));
             if (Number.isFinite(want) && want > 0 && data.events.length > want) {
                 const dropped = data.events.length - want;
@@ -853,9 +889,11 @@ async function api(req, res, url, pathname, who) {
                     truncated: { dropped, total: data.events.length },
                     runner: st || null,
                     suggestions: acted,
+                    prefs: settings,
                 });
             }
-            return send(res, 200, { ...data, runner: st || null, suggestions: acted });
+            return send(res, 200, {
+                ...data, runner: st || null, suggestions: acted, prefs: settings });
         }
 
         // Hard delete. Everywhere else in this app "remove" means archive; this
@@ -911,6 +949,27 @@ async function api(req, res, url, pathname, who) {
             return send(res, 200, out);
         }
 
+        // The status of the pull requests this session raised.
+        //
+        // Its own route rather than a field on the summary, because it asks
+        // GitHub and the session list must never wait on GitHub — the same reason
+        // `/api/dashboard` is not on that path either. The header renders its PRs
+        // from the summary immediately and fills the statuses in when this
+        // answers, so a slow or absent gh only ever costs the colour.
+        if (tail === 'prs' && req.method === 'GET') {
+            const summary = index.summary(sessionId);
+            if (!summary) return send(res, 404, { error: 'session not found' });
+
+            // A `pr-link` entry usually names its repository. Where one did not,
+            // the session's own directory is the best guess available.
+            const list = summary.prs || [];
+            const repo = list.some(pr => !pr.repo) && summary.cwd
+                ? await pulls.repoOf(summary.cwd)
+                : null;
+
+            return send(res, 200, await pulls.forSession(list, repo));
+        }
+
         if (tail === 'subagents' && req.method === 'GET') {
             const agents = index.subagents(sessionId);
             if (!agents) return send(res, 404, { error: 'session not found' });
@@ -934,8 +993,12 @@ async function api(req, res, url, pathname, who) {
 
         if (tail === 'send' && req.method === 'POST') {
             const body = await readJson(req);
-            const text = body.text && String(body.text).trim();
-            if (!text) return send(res, 400, { error: 'text is required' });
+            const text = body.text ? String(body.text).trim() : '';
+            // A screenshot with nothing typed under it is a real message — "look at
+            // this" is the whole content — so an attachment satisfies this on its own.
+            if (!text && !(Array.isArray(body.attachments) && body.attachments.length)) {
+                return send(res, 400, { error: 'text or an attachment is required' });
+            }
 
             // Sending is also how a mode changes, so the same refusal applies here
             // as on creation — otherwise a phone could start a session in `auto` and
@@ -952,13 +1015,25 @@ async function api(req, res, url, pathname, who) {
             if (!summary) return send(res, 404, { error: 'session not found' });
             const cwd = sessionCwd(summary);
 
+            // The client is telling us paths it was told a moment ago; this is what
+            // makes that safe. Anything that is not in this session's own attachments
+            // directory, or is no longer on disk, is dropped rather than refused —
+            // losing the whole message because one staged file was tidied away would
+            // be the wrong trade.
+            let files;
+            try {
+                files = resolveAttachments(cwd, body.attachments);
+            } catch (err) {
+                return send(res, 400, { error: err.message });
+            }
+
             const r = pool.ensure(sessionId, {
                 cwd,
                 model: body.model || null,
                 permissionMode: sendMode,
                 fork: !!body.fork,
             });
-            const entry = r.send(text);
+            const entry = r.send(text, files);
             // Which of the two happened matters to the caller: a message that is
             // still queued is safe on this side and will be handed back if the
             // process dies, so the UI only has to hold on to one that went out.
@@ -967,6 +1042,109 @@ async function api(req, res, url, pathname, who) {
                 ok: true, id: entry.id, cwd, fork: !!body.fork, status,
                 queued: status.queue.some(q => q.id === entry.id),
             });
+        }
+
+        // --- attachments ---------------------------------------------------
+        // A file pasted or dropped onto the composer. Written before the message is
+        // sent rather than with it: the strip shows real files with real names, the
+        // send stays a small JSON POST, and a staged file survives a reload because
+        // it is already on disk. See bridge/attachments.js for where it lands.
+        if (tail === 'attachments' && !seg[4] && req.method === 'POST') {
+            // The name first, before the session is even looked up. It is refused for
+            // reasons that have nothing to do with which session asked, and answering
+            // "session not found" to a request that also carried `../evil.png` hides
+            // the refusal that actually mattered behind an unrelated one.
+            const name = url.searchParams.get('name');
+            const bad = attachments.attachmentNameProblem(name);
+            if (bad) return send(res, 400, { error: bad });
+
+            // And the size, for the same reason and before the same lookup. Answered
+            // from Content-Length, so an oversized upload is refused before its bytes
+            // travel rather than after.
+            if (declaredOverMax(req, attachments.MAX_ATTACHMENT_BYTES)) {
+                return refuseUpload(req, res, 413, overMax(attachments.MAX_ATTACHMENT_BYTES));
+            }
+
+            const summary = index.summary(sessionId);
+            if (!summary) return send(res, 404, { error: 'session not found' });
+            const cwd = sessionCwd(summary);
+
+            const { dir, root } = attachments.attachmentsDirFor(cwd);
+            if (!cfg.withinRoots(dir)) {
+                return send(res, 403, {
+                    error: 'that directory is outside the allowed roots',
+                    path: dir, roots: cfg.ALLOWED_ROOTS,
+                });
+            }
+
+            let buffer;
+            try {
+                buffer = await readBinary(req, attachments.MAX_ATTACHMENT_BYTES);
+            } catch (err) {
+                if (err.oversized) return refuseUpload(req, res, err.status, err.message);
+                return send(res, err.status || 400, { error: err.message });
+            }
+            if (!buffer.length) return send(res, 400, { error: 'that file is empty' });
+
+            let written;
+            try {
+                written = attachments.writeAttachment({ dir, name, buffer });
+            } catch (err) {
+                if (err.code === 'ENOTDIR') {
+                    return send(res, 400, {
+                        error: `${dir} exists but is not a directory`,
+                    });
+                }
+                return send(res, 500, { error: `could not save the file: ${err.message}` });
+            }
+
+            // After the mkdir, not before: this is the check that catches an
+            // attached_assets symlinked out of the roots, which cannot be seen until
+            // the directory exists.
+            let real = dir;
+            try { real = fs.realpathSync(dir); } catch { /* just written; treat as itself */ }
+            if (!cfg.withinRoots(real)) {
+                try { fs.unlinkSync(written.path); } catch { /* nothing better to do */ }
+                return send(res, 403, {
+                    error: 'that directory resolves outside the allowed roots',
+                    path: real, roots: cfg.ALLOWED_ROOTS,
+                });
+            }
+
+            attachments.ensureExcluded(root);
+
+            return send(res, 200, {
+                ok: true,
+                name: written.name,
+                renamed: written.renamed,
+                path: written.path,
+                relPath: attachments.relativeTo(cwd, written.path),
+                dir,
+                bytes: buffer.length,
+                // Sniffed from the bytes, not taken from Content-Type — this is what
+                // decides whether the turn carries an inline image block.
+                mediaType: attachments.sniffType(buffer, req.headers['content-type']),
+            });
+        }
+
+        // Open a staged or sent attachment in whatever Windows opens that kind of
+        // file with. The path comes from the client, so it is re-derived against this
+        // session's own attachments directory before anything is launched — this is
+        // the one route here that hands a path to another program.
+        if (tail === 'attachments' && seg[4] === 'open' && req.method === 'POST') {
+            const summary = index.summary(sessionId);
+            if (!summary) return send(res, 404, { error: 'session not found' });
+            const cwd = sessionCwd(summary);
+            const body = await readJson(req);
+
+            const file = attachmentPath(cwd, body.path);
+            if (!file) {
+                return send(res, 404, {
+                    error: 'that file is not one of this session\'s attachments',
+                });
+            }
+            const out = await openFile(file);
+            return send(res, out.ok ? 200 : 502, { ...out, file });
         }
 
         if (tail === 'stop' && req.method === 'POST') {
@@ -1475,6 +1653,84 @@ function sessionCwd(summary) {
     return cfg.HOME;
 }
 
+/**
+ * One client-supplied attachment path, re-derived against this session's own
+ * attachments directory — or null.
+ *
+ * The client is handing back a path the bridge gave it a moment ago, which is not the
+ * same thing as a path the bridge is willing to act on: a different session's id with
+ * this session's file, or a path edited in flight, both arrive looking identical. So
+ * only the *basename* is taken from the caller and the directory is recomputed here.
+ * That leaves nothing for a `..` to traverse out of.
+ */
+function attachmentPath(cwd, given) {
+    const raw = String(given == null ? '' : given);
+    if (!raw) return null;
+    const name = path.basename(raw);
+    if (attachments.attachmentNameProblem(name)) return null;
+
+    const { dir } = attachments.attachmentsDirFor(cwd);
+    if (!cfg.withinRoots(dir)) return null;
+
+    const file = path.join(dir, name);
+    if (path.dirname(file) !== dir) return null;      // belt and braces
+    try {
+        if (!fs.statSync(file).isFile()) return null;
+    } catch {
+        return null;
+    }
+    return file;
+}
+
+/**
+ * The attachments a send may carry, in the order the client staged them.
+ *
+ * A path that no longer resolves is dropped rather than refused. The alternative is
+ * losing a message somebody typed because a file they staged was tidied away in the
+ * meantime, and the message is worth more than the completeness of its file list.
+ */
+function resolveAttachments(cwd, given) {
+    if (given == null) return [];
+    if (!Array.isArray(given)) throw new Error('attachments must be an array');
+    if (given.length > attachments.MAX_PER_MESSAGE) {
+        throw new Error(`at most ${attachments.MAX_PER_MESSAGE} files per message`);
+    }
+
+    const out = [];
+    for (const a of given) {
+        const file = attachmentPath(cwd, a && (a.path || a.relPath || a));
+        if (!file) continue;
+        let bytes = 0;
+        try { bytes = fs.statSync(file).size; } catch { /* raced; reported as 0 */ }
+        out.push({
+            path: file,
+            name: path.basename(file),
+            relPath: attachments.relativeTo(cwd, file),
+            // Sniffed from the file on disk rather than believed from the client, for
+            // the same reason the upload route sniffs it: this decides whether the turn
+            // carries an inline image block, and a wrong answer is a failed turn.
+            mediaType: attachments.sniffType(readHead(file), a && a.mediaType),
+            bytes,
+        });
+    }
+    return out;
+}
+
+/** The first few bytes of a file, for sniffing. Enough for every magic number. */
+function readHead(file, n = 16) {
+    let fd;
+    try {
+        fd = fs.openSync(file, 'r');
+        const buf = Buffer.alloc(n);
+        const read = fs.readSync(fd, buf, 0, n, 0);
+        return buf.subarray(0, read);
+    } catch {
+        return Buffer.alloc(0);
+    } finally {
+        if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* already gone */ } }
+    }
+}
+
 // An unrecognised mode falls back to the app's default rather than erroring: the
 // mode is a knob on a request that has real work in it, and refusing the whole
 // send over a typo in one field loses the message.
@@ -1642,6 +1898,81 @@ function readJson(req) {
     });
 }
 
+/**
+ * The whole body as bytes, for the one route that takes a file rather than JSON.
+ *
+ * A sibling of readJson rather than a generalisation of it, for two reasons. It
+ * needs a *caller-supplied* cap — 25MB for an attachment against readJson's 4MB —
+ * and it needs to fail honestly: readJson's rejection reaches the catch-all in
+ * `route`, which turns "body too large" into a 500, and that has been the answer
+ * for long enough that other routes may be relying on the shape. So the new reader
+ * throws a `status` and this route reads it, and readJson is left alone.
+ *
+ * Content-Length is checked first where the client sent one, so an oversized upload
+ * is refused before the bytes travel rather than after.
+ */
+const overMax = (max) => `that file is larger than the `
+    + `${Math.round(max / (1024 * 1024))}MB limit`;
+
+/**
+ * Refuse an upload, and hang up on the rest of it.
+ *
+ * Both halves matter and the order between them is the whole reason this is a function
+ * rather than two lines at each caller. Destroying the socket is what stops a client
+ * from spending thirty seconds sending a file that has already been refused; doing it
+ * before the response has flushed truncates the sentence that says why, which is how
+ * an oversized upload came to report a bare `100 Continue` and nothing else. `finish`
+ * is the event that says the answer is out.
+ */
+function refuseUpload(req, res, status, error) {
+    res.on('finish', () => req.destroy());
+    return send(res, status || 413, { error });
+}
+
+/**
+ * A Content-Length the caller already told us is too big.
+ *
+ * Split out so the route can ask *before* it looks a session up. Both refusals can be
+ * true of one request, and the size is the more useful of the two to hear: "session not
+ * found" in answer to a 40MB upload hides the thing that would still be wrong after
+ * the id was fixed.
+ */
+function declaredOverMax(req, max) {
+    const n = Number(req.headers['content-length']);
+    return Number.isFinite(n) && n > max;
+}
+
+function readBinary(req, max) {
+    return new Promise((resolve, reject) => {
+        // Paused, not destroyed. Destroying the socket here was the first version and
+        // it is wrong in a way worth remembering: the caller still has to write the
+        // 413 onto that socket, and a client that sent `Expect: 100-continue` — curl
+        // does, for a body this size — then sees the interim 100 and nothing else. It
+        // reports "100" as the status and never learns what the limit was. So the
+        // stream stops and the route answers; `oversized` tells it to hang up
+        // afterwards, since nothing is going to read the rest of the upload.
+        const tooBig = () => {
+            req.pause();
+            reject(Object.assign(new Error(overMax(max)), { status: 413, oversized: true }));
+        };
+
+        // Normally already handled by the caller; kept because this function's contract
+        // is the cap, not the caller's diligence.
+        if (declaredOverMax(req, max)) return tooBig();
+
+        const chunks = [];
+        let size = 0;
+        req.on('data', (c) => {
+            size += c.length;
+            // A Content-Length that lied, or a chunked body. Same answer.
+            if (size > max) return tooBig();
+            chunks.push(c);
+        });
+        req.on('end', () => resolve(Buffer.concat(chunks)));
+        req.on('error', reject);
+    });
+}
+
 const MIME = {
     '.html': 'text/html; charset=utf-8',
     '.js': 'text/javascript; charset=utf-8',
@@ -1653,6 +1984,13 @@ const MIME = {
     // icons is not installable, and both would otherwise be served as
     // application/octet-stream and ignored.
     '.png': 'image/png',
+    // The other three the composer will accept and inline. Nothing in web/ is a
+    // jpeg today; the table being one short of the set it claims to cover is the
+    // kind of gap that only shows up as a broken image months later.
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
     '.ico': 'image/x-icon',
     '.webmanifest': 'application/manifest+json',
 };
@@ -1702,6 +2040,13 @@ function serveStatic(req, res, pathname, who) {
             body = Buffer.from(auth.injectToken(body.toString('utf8')), 'utf8');
             headers['Set-Cookie'] = auth.pairCookie(auth.current(), { secure: who.secure });
         }
+        // Settings go to every page, local or not — they are not a credential,
+        // and a remote browser renders the same transcript. In the page rather
+        // than behind a fetch because the client opens a session synchronously
+        // at startup: a transcript drawn before an async answer arrived would
+        // stay drawn the wrong way, since nothing re-renders history.
+        body = Buffer.from(auth.injectMeta(body.toString('utf8'),
+            'cs-prefs', JSON.stringify(prefs.page(''))), 'utf8');
     }
     headers['Content-Length'] = body.length;
 

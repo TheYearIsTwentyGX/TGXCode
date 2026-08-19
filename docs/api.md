@@ -120,9 +120,21 @@ than hardcoding the list; a remote client should drop `bypassPermissions` and
 `test` flags, `live` (from Claude Code's own process registry, or null), and
 `runner` (this bridge's process for it, or null).
 
+`prs` is every pull request the session raised, in the order it raised them:
+`[{number, url, repo}]`, empty for a session that raised none. Read from the
+transcript, so it is free and it is history — what has *become* of those PRs is a
+separate request, below. It is an array because a session that lands one PR and
+opens another is ordinary; it was a single `pr` object until August 2026, which
+silently kept only the newest.
+
 ### `GET /api/sessions/:id[?tail=N]`
 
-`{ summary, events: [...], offset, runner, suggestions }`.
+`{ summary, events: [...], offset, runner, suggestions, prefs }`.
+
+`prefs` is the settings in force **for this conversation's directory** — see
+`GET /api/prefs`. It travels with the transcript rather than being fetched
+separately because a client that draws the transcript before the settings arrive
+has drawn it the wrong way, and nothing re-renders history.
 
 `suggestions` maps the id of a `suggestion` event to what was already done about
 it — `{status: "started"|"dismissed", startedId, at}`. The suggestion itself is in
@@ -141,7 +153,7 @@ Event kinds, all with `id`, `kind`, `ts`:
 
 | kind | Carries |
 |---|---|
-| `user` | `text`, `images[]`, `command`, `origin` (`human` or an agent) |
+| `user` | `text`, `images[]`, `files[]`, `command`, `origin` (`human` or an agent) |
 | `assistant` | `text` (markdown), `model` |
 | `thinking` | `text` |
 | `tool` | `name`, `input{}`, `status` (`ok`/`error`/absent while running), `result{text,stdout,stderr,patch,filePath,interrupted}`, `agent`, `persistedPath`, `durationMs` |
@@ -161,6 +173,57 @@ shrank — it was compacted or forked — and the client should reload from scra
 
 This is how a mobile client resumes after a network change, and it is much cheaper
 than refetching.
+
+### `GET /api/sessions/:id/prs`
+
+`{ prs: [...], gh: {ok, error} }` — what has become of the pull requests this
+session raised, one entry per PR in `summary.prs`, same order.
+
+Each carries `number`, `url`, `repo`, `title`, `branch`, `updatedAt`, a resolved
+`status`, a `label` naming that status in words, and `detail`: extra lines the one
+status had to leave out, for a tooltip.
+
+`status` is one of `open`, `draft`, `approved`, `changes`, `checks-failed`,
+`checks-pending`, `conflicting`, `merged`, `closed`, or `unknown`. A PR is
+regularly several of those at once — open *and* approved *and* conflicting — so
+one is chosen by what most needs doing about it: settled states first, then draft,
+then a review asking for changes, a failing check, a conflict, a check still
+running, an approval, and plain open last. `resolveStatus` in `bridge/pulls.js` is
+the whole rule and `test/pulls.test.js` pins the ordering.
+
+Two answers are deliberately withheld rather than guessed. A repository with no CI
+reports no check state at all — an empty rollup is not a pending one. And GitHub
+reports mergeability as `UNKNOWN` until it has computed it, which is common on a
+freshly-pushed branch, so nothing is said about conflicts until it does.
+
+`unknown` means gh could not be reached, and `gh.error` says why in one line. The
+client is expected to keep showing the PR — it has the number and the link from the
+summary already — and simply not colour it. **This is its own route rather than a
+field on the summary on purpose**: it asks GitHub, and the session list must never
+wait on GitHub. The bridge caches one `gh pr list` per repository for a minute, and
+a merged or closed PR for the life of the process, since neither can change back.
+
+### `GET /api/prefs?cwd=<path>`
+
+`{ version, transcript: {...}, sources: [...], problems: [...] }` — how the person
+using the app wants it to behave.
+
+`~/.tgxcode/settings.json` is the user's own, written out with the defaults on
+first run so it can be found and edited. A project overrides any key from
+`<workspace>/.tgxcode/settings.json`, with the same precedence as project
+commands: the workspace's checked-in file (falling back to the main checkout's),
+then `settings.local.json` from the main checkout, then one in the workspace.
+`sources` lists the files that were actually read, weakest first.
+
+A value that is not what the key allows is dropped and reported in `problems`
+rather than taken at face value; the default stands. Without `?cwd=` you get the
+user-level answer, which is also what every page is served in a `cs-prefs`
+`<meta>` tag (minus `sources` and `problems`).
+
+`transcript` today: `groupToolCalls` (fold a run of tool calls into one row once
+a message closes it), `groupMinCalls` (how long a run has to be — at least 2),
+`groupIncludesThinking` (whether a thinking block is part of the run or the end
+of it).
 
 ### `GET /api/sessions/:id/devservers`
 
@@ -201,6 +264,7 @@ the app it is being displayed in.
 
 `elsewhere` counts the live ports this session mentioned that another workspace
 is holding. The UI says so rather than leaving the strip looking empty.
+
 
 ### `GET /api/peers`
 
@@ -341,7 +405,8 @@ first message.
 
 ### `POST /api/sessions/:id/send`
 
-`{text, model?, permissionMode?, fork?}` → `{ok, id, cwd, fork, status, queued}`.
+`{text, attachments?, model?, permissionMode?, fork?}` →
+`{ok, id, cwd, fork, status, queued}`.
 
 **Always send `permissionMode`.** An absent one normalises to `auto`, which means
 omitting it does not mean "leave it alone" — it means "set it to auto", and would
@@ -349,6 +414,49 @@ quietly drop a session out of `acceptEdits` on every message.
 
 A model or mode change replaces the process; queued messages carry across. `queued`
 tells you whether the text is still recoverable on this side.
+
+`attachments` is a list of files already uploaded through the route below —
+`[{path, relPath?, mediaType?}]`, at most five. Each is re-derived against *this*
+session's own attachments directory and dropped if it no longer resolves, so a client
+cannot name a path by sending one. `text` may be empty when there is at least one
+attachment: a screenshot with nothing typed under it is a message.
+
+What the process receives is the text plus a trailing list of the paths, and an inline
+image block for each attachment that really is a PNG, JPEG, GIF or WebP. The list is
+parsed back off the message before the transcript renders it (`files[]` on the `user`
+event above), so the paths are not shown twice.
+
+### `POST /api/sessions/:id/attachments?name=…`
+
+Raw file bytes, one file per request, `Content-Type` as a hint —
+→ `{ok, name, path, relPath, dir, bytes, mediaType, renamed}`.
+
+Not JSON: `readJson` caps a body at 4MB and base64 is a third larger than what it
+encodes, which would put the real limit under 3MB. The cap here is **25MB**, answered
+from `Content-Length` before the bytes travel where the client sent one.
+
+The file is written to `attached_assets/` at the root of the checkout the session is
+working in — the *worktree* root for a worktree session, not the checkout that owns it.
+`attached_assets/` is added to the owning checkout's `.git/info/exclude` on first write,
+which is local and untracked; no `.gitignore` is ever edited. Nothing prunes the
+directory.
+
+`name` is refused rather than sanitised — no separator, no `..`, no control character,
+200 bytes — but a leading dot is allowed, unlike `/api/fs/mkdir`, because nothing
+browses this directory. An existing name is never overwritten: `shot.png` becomes
+`shot-2.png` and `renamed` says so, so a client can relabel its chip.
+
+`mediaType` is sniffed from the bytes, not taken from `Content-Type`, because it is what
+decides whether the turn carries an inline image block.
+
+`413` is the cap. `403` is a directory outside the allowed roots, or a remote caller.
+
+### `POST /api/sessions/:id/attachments/open`
+
+`{path}` → `{ok, path, file}`. Opens the file in whatever the Windows host opens that
+kind of file with. Only the basename is taken from the caller; the directory is
+recomputed, so `404` means "not one of this session's attachments" rather than
+"missing". Local callers only.
 
 ### `POST /api/sessions/:id/permission`
 

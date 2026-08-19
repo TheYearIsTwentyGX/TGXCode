@@ -22,6 +22,40 @@ const PHONE = {
     'x-forwarded-host': 'tgdylanh.tail1234.ts.net',
 };
 
+/**
+ * The attachments route takes raw bytes rather than JSON, so it needs its own caller.
+ * Deliberately close to `call` below rather than folded into it: one body encoding per
+ * function keeps the JSON path — every other route in this suite — unchanged.
+ */
+function upload(p, { headers, bytes, type = 'image/png' } = {}) {
+    return new Promise((resolve, reject) => {
+        const payload = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes || '');
+        const req = http.request({
+            host: '127.0.0.1', port: PORT, path: p, method: 'POST',
+            headers: { ...headers, 'Content-Type': type, 'Content-Length': payload.length },
+        }, (res) => {
+            const c = [];
+            res.on('data', (x) => c.push(x));
+            res.on('end', () => {
+                const text = Buffer.concat(c).toString('utf8');
+                let parsed = null;
+                try { parsed = JSON.parse(text); } catch { /* html or empty */ }
+                resolve({ status: res.statusCode, body: parsed, text });
+            });
+        });
+        // A refused upload is answered and then hung up on, deliberately — see
+        // refuseUpload in bridge/server.js. So the write end dies with EPIPE while the
+        // body is still going out, and that is the correct outcome rather than a
+        // failure: the answer has already arrived. Swallowed on the socket as well as
+        // the request, because once the response has ended node stops forwarding
+        // socket errors to the request and an unhandled one takes the process down.
+        req.on('error', () => {});
+        req.on('socket', (sock) => sock.on('error', () => {}));
+        req.write(payload);
+        req.end();
+    });
+}
+
 function call(method, p, { headers, body } = {}) {
     return new Promise((resolve, reject) => {
         const payload = body ? Buffer.from(JSON.stringify(body)) : null;
@@ -66,6 +100,14 @@ const HOME = os.homedir();
     check('reveal', (await call('POST', '/api/sessions/abc/reveal', { headers: PHONE, body: {} })).status, 403);
     check('mkdir', (await call('POST', '/api/fs/mkdir', {
         headers: PHONE, body: { parent: HOME, name: 'x' },
+    })).status, 403);
+    // Same argument as mkdir: attaching a file writes it into a checkout. Refused
+    // before the name or the session id is looked at, so this holds for any of them.
+    check('attaching a file', (await upload('/api/sessions/abc/attachments?name=x.png', {
+        headers: PHONE, bytes: 'x',
+    })).status, 403);
+    check('opening an attachment', (await call('POST', '/api/sessions/abc/attachments/open', {
+        headers: PHONE, body: { path: 'x.png' },
     })).status, 403);
     check('runs list', (await call('GET', '/api/runs', { headers: PHONE })).status, 403);
     check('runs stream', (await call('GET', '/api/runs/x/stream', { headers: PHONE })).status, 403);
@@ -182,6 +224,40 @@ const HOME = os.homedir();
     check('a parent that is a file', (await call('POST', '/api/fs/mkdir', {
         headers: LOCAL, body: { parent: `${HOME}/.bashrc`, name: 'x' },
     })).status, 400);
+
+    console.log('\n--- attaching a file ---');
+    // Nothing here needs a live session: every one of these is refused before the
+    // session id is resolved, which is itself the thing being pinned. A name refused
+    // for its own reasons must not come back as "session not found" — that hides the
+    // refusal that mattered behind an unrelated one.
+    const attachPath = '/api/sessions/abc/attachments';
+    const traversal = await upload(`${attachPath}?name=${encodeURIComponent('../evil.png')}`, {
+        headers: LOCAL, bytes: 'x',
+    });
+    check('a separator in the name', traversal.status, 400);
+    console.log(`       said: ${traversal.body && traversal.body.error}`);
+    check('a bare dot-dot', (await upload(`${attachPath}?name=..`, {
+        headers: LOCAL, bytes: 'x',
+    })).status, 400);
+    check('no name at all', (await upload(attachPath, { headers: LOCAL, bytes: 'x' })).status, 400);
+    // The one place this deliberately differs from folderNameProblem: nothing browses
+    // attached_assets, so a dotfile is a reasonable thing to drag onto a composer. It
+    // gets past the name check and fails on the session instead.
+    check('a dotfile is allowed through the name check',
+        (await upload(`${attachPath}?name=.env`, { headers: LOCAL, bytes: 'x' })).status, 404);
+    // 413 and not the 500 that readJson's own cap produces through the catch-all.
+    // Declared up front, so it is refused before the bytes travel.
+    const big = await upload(`${attachPath}?name=big.bin`, {
+        headers: LOCAL, bytes: Buffer.alloc(26 * 1024 * 1024), type: 'application/octet-stream',
+    });
+    check('a file over the cap', big.status, 413);
+    console.log(`       said: ${big.body && big.body.error}`);
+    check('a name for a session that does not exist',
+        (await upload(`${attachPath}?name=x.png`, { headers: LOCAL, bytes: 'x' })).status, 404);
+    check('opening one for a session that does not exist',
+        (await call('POST', `${attachPath}/open`, {
+            headers: LOCAL, body: { path: 'x.png' },
+        })).status, 404);
 
     console.log('\n--- what a phone may still do ---');
     check('read sessions', (await call('GET', '/api/sessions?limit=1', { headers: PHONE })).status, 200);

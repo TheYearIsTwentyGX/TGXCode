@@ -106,9 +106,10 @@ create one in `%APPDATA%\claude-sessions\`:
 | **Left rail** | Every session on disk, grouped by project. Worktrees fold under the checkout that owns them. A green dot means the transcript changed in the last 90 seconds — something is working. |
 | **Ordering** | By when *you* last wrote, not by last activity. Sorting on activity meant a busy agent kept bumping its session to the top and shuffling the rest out from under the cursor. The timestamp on each row is the one it sorts by. |
 | **Pin / archive** | Hover a row for its two buttons, or use the ones beside the session title. Pinned sessions sit in their own group at the top, across projects. Archived ones collapse into a group at the bottom. |
-| **Conversation** | Your turns, Claude's replies with syntax-highlighted code, and one collapsible block per tool call. Edits render as diffs, and output too large to inline loads on demand. |
+| **Conversation** | Your turns, Claude's replies with syntax-highlighted code, and one collapsible block per tool call. A run of tool calls between one message and the next folds into a single row — *16 tool calls · Bash ×6 · Read ×7* — which opens to the rows themselves; see *Folded tool calls*. Edits render as diffs, and output too large to inline loads on demand. |
 | **Plans & questions** | When Claude presents a plan or asks a multiple-choice question, the turn stops on a card at the foot of the transcript. A plan can be approved, approved with a note to bear in mind, or sent back with what to change; approving picks the mode the work continues in. Questions are answered by picking, with an *Other* row for none-of-the-above. |
 | **Subagents** | The first chip row under the title, one per subagent, with a light for how it is going and a line of what it is doing. Click to switch the pane over to it; `Esc` or the breadcrumb comes back. |
+| **Pull requests** | Every PR the session raised, on the line under the title, each with a glyph and a colour for where it has got to — draft, open, approved, changes requested, checks running or failing, conflicting, merged, closed. Hover for the status in words, the title, and how the checks stand. Merged and closed ones stay, dimmed, so the line is the session's whole PR history rather than only its newest. |
 | **Dev servers** | The second chip row. Green means the port is answering right now; click to switch DevBrowser to that tab, starting DevBrowser if it isn't running. The button on the end shuts the server down — one click arms it, the next signals. |
 | **Dashboard** | The button in the top bar, with a count of how many places are unfinished. It lists, per project, every directory holding uncommitted changes and every pull request still open, with the sessions that worked there as links back into the conversation. |
 | **Open folder** | The folder button by the title shows the session's working directory in Windows File Explorer, through the `\\wsl.localhost` share. |
@@ -349,10 +350,53 @@ subagent transcripts and any spilled tool output — and nothing else. A session
 with a turn in flight is refused rather than deleted out from under the turn;
 stop it first.
 
-These flags are the only state this app owns; everything else it shows is derived
-from Claude Code's own files, which it never writes to. They live in
-`~/.local/share/claude-sessions/flags.json`, and flags for transcripts that no
-longer exist are pruned automatically.
+These flags are the only state this app owns *about a conversation*; everything
+else it shows is derived from Claude Code's own files, which it never writes to.
+They live in `~/.local/share/claude-sessions/flags.json`, and flags for
+transcripts that no longer exist are pruned automatically. Settings — how you
+want the app itself to behave — are a separate file you are meant to open; see
+*Folded tool calls*.
+
+### Folded tool calls
+
+Between one message and the next an agent may make thirty tool calls, and a
+transcript that prints all of them is a wall of `Read`/`Bash`/`Edit` to scroll
+past on the way to the sentences that say what happened. So once a message
+closes a run of them, the run folds into one row — the same row a tool call
+draws, reading *16 tool calls* with a tally of what they were and how long they
+took. Open it and the rows are there, unchanged, each still opening to its own
+output.
+
+Only once the run is **closed**. While the calls are still arriving they are the
+work you are watching, so they stay where they are and fold the moment the agent
+speaks again.
+
+Three settings control it, from `~/.tgxcode/settings.json` — written out with the
+defaults the first time the bridge runs, so it is there to edit:
+
+```json
+{
+  "version": 1,
+  "transcript": {
+    "groupToolCalls": true,
+    "groupMinCalls": 3,
+    "groupIncludesThinking": true
+  }
+}
+```
+
+`groupMinCalls` is how long a run has to be before folding it is worth it — one
+or two rows collapsed into a summary loses more than it saves.
+`groupIncludesThinking` decides whether a thinking block is part of the work
+stretch or the end of it; folding it in keeps runs long, and breaking on it
+fragments a turn that thinks between every call.
+
+A project can override any of these in `<checkout>/.tgxcode/settings.json`, the
+same directory it declares its commands in and with the same precedence — see
+`docs/api.md` under `GET /api/prefs`. A value that is not what the key allows is
+ignored and the default stands, rather than being taken at face value.
+
+There is no settings page yet; the file is the interface.
 
 ### Test sessions
 
@@ -607,7 +651,12 @@ and it reads none of it from the transcripts:
   share one, and a session that has left a worktree still left its changes in it.
 - **Open pull requests** come from one `gh pr list --state open` per repository.
   Being absent from that list *is* the answer to "has it been merged": a PR the
-  transcripts mention that is not open any more needs nothing from you.
+  transcripts mention that is not open any more needs nothing from you. This board
+  stops there. A conversation header wants the opposite — it keeps a merged PR on
+  screen as the record that the work landed — so it asks after that one PR by
+  number, once, and remembers the answer for good: merged and closed are the two
+  states nothing can move a PR out of. Both go through `bridge/pulls.js` and share
+  its cache, so the extra question costs one call per settled PR and no more.
 
 A workspace shows the PRs raised from the branch it has checked out, and only
 those — a session that raises a PR from a worktree and then leaves reports the
@@ -671,11 +720,13 @@ not.
 | `bridge/server.js` | HTTP + SSE, routing, static files |
 | `bridge/config.js` | Paths, ports, allowed roots — every constant with a reason attached |
 | `bridge/dashboard.js` | Uncommitted changes and open PRs, per project |
+| `bridge/pulls.js` | Everything that asks GitHub about a pull request, and what its status *is* |
 | `bridge/overview.js` | The live board: what every session is doing right now |
 | `bridge/sessions.js` | The session index — incremental, cached, watched |
 | `bridge/registry.js` | Which sessions have a process, from Claude Code's own registry |
 | `bridge/transcript.js` | JSONL → render events; pairs tool calls with results; reads subagent transcripts |
 | `bridge/tasks.js` | Subagent task records |
+| `bridge/attachments.js` | Files pasted into the composer — where they land, and out of git |
 | `bridge/memo.js` | Small notes the UI keeps against a session |
 | `bridge/runner.js` | `claude` processes, one per active conversation |
 | `bridge/terminal.js` | The pty, out of `script(1)` — a shell to type into, or a declared command |
@@ -687,6 +738,7 @@ not.
 | `bridge/explorer.js` | Opens a WSL directory in File Explorer |
 | `bridge/notifications.js` | The notification log, and what is worth raising |
 | `bridge/flags.js` | Pinned, archived and test state |
+| `bridge/prefs.js` | Settings from `~/.tgxcode/` and from the project |
 | `bridge/suggestions.js` | What you did about a suggested follow-up |
 | `bridge/suggest-mcp.js` | The one tool this app gives a session: offer the next piece of work |
 | `bridge/slash-commands.js` | What slash commands a directory has, for composer completion |
