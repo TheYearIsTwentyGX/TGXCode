@@ -125,6 +125,15 @@ function scanMeta(filePath) {
         worktree: null,
         inWorktree: false,
         prs: [],
+        // The suggested follow-ups raised in here, in the order they were
+        // raised. Collected on the way past for the same reason peerMessages is:
+        // this is the only pass that reads every transcript, and a task is
+        // otherwise findable only by parsing the one conversation you have open.
+        //
+        // These are a derived index, not a second copy — the tool call in the
+        // transcript stays the only record of the offer, so a deleted session
+        // takes its tasks with it. See docs/api.md GET /api/suggestions.
+        suggestions: [],
         bytes: text.length,
     };
 
@@ -155,6 +164,18 @@ function scanMeta(filePath) {
                 if (at) meta.lastPeerTs = at;
                 meta.lastPeerFrom = o.name || o.from || meta.lastPeerFrom;
             }
+        }
+
+        // A suggested follow-up. Ahead of the classification below because that
+        // block `continue`s, and this lives on an `assistant` line — the same
+        // reason the peer block sits where it does.
+        //
+        // The gate is the tool-name suffix, so the parse only happens on the
+        // handful of lines that could hold one. A line that merely quotes the
+        // name — this repo's own transcripts discuss the tool — costs one parse
+        // and yields nothing, because suggestionsIn checks the structure.
+        if (line.includes(SUGGEST_TOOL_SUFFIX)) {
+            for (const s of suggestionsIn(safeParse(line))) meta.suggestions.push(s);
         }
 
         // Cheap classification first. Conversation lines are the big ones and we
@@ -744,6 +765,28 @@ function parseSuggestion(block, entry) {
         title: str(input.title),
         cwd: str(input.cwd) || (typeof entry.cwd === 'string' ? entry.cwd : null),
     };
+}
+
+/**
+ * Every suggested follow-up on one transcript entry.
+ *
+ * The whole-entry counterpart to parseSuggestion, for scanMeta — which has a
+ * line rather than the interleaved content blocks buildEvents walks. Both go
+ * through parseSuggestion so there is one definition of what a card is and what
+ * it carries; a second extraction here is how the index and the conversation
+ * would start disagreeing about the same tool call.
+ */
+function suggestionsIn(entry) {
+    if (!entry || entry.type !== 'assistant') return [];
+    const content = entry.message && entry.message.content;
+    if (!Array.isArray(content)) return [];
+    const out = [];
+    for (const b of content) {
+        if (!b || b.type !== 'tool_use') continue;
+        const s = parseSuggestion(b, entry);
+        if (s) out.push(s);
+    }
+    return out;
 }
 
 // A message from another Claude session is the same problem as a task

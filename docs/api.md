@@ -141,6 +141,10 @@ it — `{status: "started"|"dismissed", startedId, at}`. The suggestion itself i
 the transcript; only the decision is the app's, so only the decision is sent
 separately. See `POST /api/sessions/:id/suggestions/:toolUseId`.
 
+The suggestions themselves arrive as `suggestion` events in `events`, but a client
+drawing them as a list should read `GET /api/suggestions?session=<id>` instead —
+same fields, and it does not depend on how much of the transcript was asked for.
+
 `offset` is a **byte position in the transcript file**, not an event count. Hold it;
 it is what resumes the live tail.
 
@@ -315,6 +319,57 @@ outlives the turn that started it — and one that was never on the board has no
 Also pushed as the `overview` SSE event, so most clients never call this — but it is
 the right answer to "what is happening right now", and anything that wants that
 should read it rather than growing a second answer.
+
+### `GET /api/suggestions?session=&project=&status=&limit=`
+
+`{ suggestions: [task], ready: bool }`, newest first. A task is
+
+```json
+{
+  "id": "toolu_…", "kind": "suggestion", "sessionId": "…",
+  "ts": "2026-08-19T15:53:51.009Z",
+  "title": "Task persistence", "why": "…", "prompt": "…", "cwd": "/home/…",
+  "status": "open", "startedId": null, "at": 0,
+  "archived": false,
+  "session": { "title": "…", "projectName": "claude-sessions",
+               "projectCwd": "/home/…", "worktree": null, "test": false }
+}
+```
+
+Everything down to `cwd` is the offer, and is exactly what the `suggestion` event
+carries — same fields, same parse, so a client can draw a row and an event with
+one code path. Everything below it is the join: `status` is `open`, `started` or
+`dismissed`, with `startedId` and `at` present only for a decision that was
+actually taken. `?status=` filters on it and takes a comma-separated list
+(`?status=open,started`); an unknown value is a 400 naming the three.
+
+`?session=<id>` narrows to one conversation, which is what the aside beside a
+transcript asks for — it reads these rows rather than lifting them out of the
+event stream, so the panel and a cross-session view agree by construction.
+`?project=` matches `projectCwd`, as on `GET /api/sessions`. Temp sessions are
+left out and test sessions only appear on the development bridge, both exactly as
+in the session list.
+
+**A task from an archived session is still returned**, carrying `archived: true`
+so a caller can group or dim it. *Dismissed* is already the gesture for "not
+this"; if archiving hid tasks there would be two ways to dismiss, one of them
+invisible, and an outstanding task is the loose end you most want to still find
+after filing a conversation away.
+
+**A task lives and dies with its transcript.** The offers are collected by the
+index rescan — `scanMeta` puts them on `meta.suggestions`, and they are cached
+under `CACHE_VERSION` with the rest of it — so this route reads no transcripts of
+its own and holds no copy of one. Deleting a session therefore deletes its tasks,
+and `prune()` drops their decisions with them. Keeping a task alive past its
+session would mean writing `title`/`why`/`prompt` into state this app owns, and
+content coming from anywhere but Claude Code's transcripts is the line the app
+holds everywhere else (ROADMAP.md, *The three constraints*). What the index buys
+is that a task is findable without its conversation being **open** — which was the
+actual complaint — not that it outlives the conversation existing.
+
+There is no push for a task being *filed*. A client watching one conversation
+sees the `suggestion` event on its tail; anything watching all of them refetches,
+and `sessions-changed` is the signal that the index moved.
 
 ### `GET /api/slash-commands?session=<id>` · `GET /api/slash-commands?cwd=<path>`
 
@@ -514,7 +569,7 @@ nobody to ask.
 | `GET/DELETE /api/sessions/:id/queue[/:qid]` | | inspect, drop one, clear |
 | `POST /api/sessions/:id/queue/reorder` | `{ids}` | |
 | `POST /api/sessions/:id/flags` | `{pinned?, archived?, test?}` | |
-| `GET /api/sessions/:id/suggestions` | | `{sessionId, suggestions}` — the decisions alone |
+| `GET /api/sessions/:id/suggestions` | | `{sessionId, suggestions}` — the decisions alone. `GET /api/suggestions?session=` is the offers *and* the decisions |
 | `POST /api/sessions/:id/suggestions/:toolUseId` | `{status, startedId?}` | `status` of `started`, `dismissed`, or absent to undo |
 | `DELETE /api/sessions/:id` | | hard delete; `409` if a turn is running |
 | `GET /api/fs?path=` | | directory picker; roots-scoped |

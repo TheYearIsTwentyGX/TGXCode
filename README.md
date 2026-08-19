@@ -227,13 +227,22 @@ the conversation is happening. Almost none do, and repeating the same path down
 the panel is noise saying nothing — but one pointed at a different checkout is
 worth knowing about before you start it.
 
-**These live and die with their session, for now.** A task is a tool call in one
-transcript, so it is visible when that conversation is open and nowhere else.
-Making them outlive the session — one list of everything outstanding, across
-every session — is a further step and a small one: the decisions are already
-stored apart from the transcripts and keyed the right way, so what is missing is
-an index of the offers themselves, which the rescan that already reads every
-transcript could collect as it goes.
+**A task no longer needs its conversation open to be found.** The rescan that
+already reads every transcript collects the offers as it goes — `scanMeta` puts
+them on `meta.suggestions`, cached with the rest of the index — and
+`GET /api/suggestions` answers with every one of them across every session, each
+carrying the decision joined on from `suggestions.json`. The aside beside a
+transcript reads that same route scoped to one session rather than lifting the
+cards out of the event stream, so there is one answer about a task rather than
+two that can disagree.
+
+**They still die with their transcript.** The index is derived and nothing else:
+delete a session and its tasks go with it, decisions included. Keeping one alive
+past its session would mean copying the title, the reason and the prompt into
+state this app owns, and content coming from anywhere but Claude Code's
+transcripts is the line held everywhere else here. Being findable without the
+conversation being *open* was the actual complaint; outliving the conversation
+*existing* was not.
 
 The tool is on `--allowedTools`, so filing one never raises an approval card —
 a permission prompt for "may I suggest this?" is noise. Only sessions the bridge

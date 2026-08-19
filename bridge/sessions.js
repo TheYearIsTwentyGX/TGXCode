@@ -18,7 +18,7 @@ const { scanMeta, parseLines, buildEvents, readSubagentIndex,
 const CACHE_FILE = path.join(CACHE_DIR, 'index.json');
 // Bump whenever scanMeta's output shape or derivation changes, so a stale cache
 // is discarded rather than silently serving metadata from the old rules.
-const CACHE_VERSION = 11;
+const CACHE_VERSION = 12;
 
 // A transcript touched this recently is treated as live.
 const ACTIVE_WINDOW_MS = 90_000;
@@ -274,6 +274,77 @@ class SessionIndex extends EventEmitter {
         // shuffling everything else beneath the cursor.
         out.sort((a, b) => sortKey(b) - sortKey(a));
         return out.slice(0, limit);
+    }
+
+    /**
+     * Every suggested follow-up on this machine, newest first.
+     *
+     * The offers come off `meta.suggestions`, which scanMeta collected on the
+     * pass that reads every transcript; the decision beside each one comes off
+     * the store, which has always been keyed session-then-tool-use for exactly
+     * this join. So this route needs no transcript read of its own, and a task
+     * is answerable without the conversation it was raised in being open.
+     *
+     * **Named listSuggestions rather than suggestions** because
+     * `index.suggestions` is the decision store, injected above.
+     *
+     * A task from an *archived* session is still returned, carrying
+     * `archived: true` so a caller can group or dim it. Dismiss is already the
+     * gesture for "not this"; if archiving hid tasks there would be two ways to
+     * dismiss, one of them invisible — and an outstanding task is exactly the
+     * loose end you still want to find after filing a conversation away. Temp
+     * and test sessions are filtered as in list(), for the same reasons.
+     */
+    listSuggestions({ session = null, project = null, status = null,
+        limit = 500, includeTest = false } = {}) {
+        const wanted = status
+            ? new Set(String(status).split(',').map(v => v.trim()).filter(Boolean))
+            : null;
+        const out = [];
+
+        for (const rec of this.sessions.values()) {
+            const m = rec.meta;
+            if (!m.suggestions || !m.suggestions.length) continue;
+            if (session && m.sessionId !== session) continue;
+            if (project && m.projectCwd !== project) continue;
+            if (inTemp(m)) continue;
+            const flags = this.flags
+                ? this.flags.get(m.sessionId)
+                : { pinned: false, archived: false, test: false };
+            if (!includeTest && flags.test) continue;
+
+            const acted = this.suggestions ? this.suggestions.forSession(m.sessionId) : {};
+            for (const s of m.suggestions) {
+                const decision = acted[s.id] || null;
+                const state = decision ? decision.status : 'open';
+                if (wanted && !wanted.has(state)) continue;
+                out.push({
+                    ...s,
+                    sessionId: m.sessionId,
+                    status: state,
+                    startedId: decision ? decision.startedId : null,
+                    at: decision ? decision.at : 0,
+                    archived: flags.archived,
+                    // Enough to say where a task came from without a second
+                    // call. Not the whole summary: this list is read whole and
+                    // the fields a board labels a row with are these.
+                    session: {
+                        title: m.title,
+                        projectName: projectName(m.projectCwd || m.cwd),
+                        projectCwd: m.projectCwd,
+                        worktree: m.worktree,
+                        test: flags.test,
+                    },
+                    // When it was raised, resolved for the sort. A transcript
+                    // entry has always carried a timestamp, but the file's mtime
+                    // is a truthful fallback rather than sorting it to 1970.
+                    sortAt: tsMs(s.ts) || rec.mtimeMs,
+                });
+            }
+        }
+
+        out.sort((a, b) => b.sortAt - a.sortAt);
+        return out.slice(0, limit).map(({ sortAt, ...row }) => row);
     }
 
     _summary(rec, now = Date.now()) {
@@ -628,6 +699,12 @@ function conversationRecord(a, b) {
  * Position in the session list: the user's last message, falling back to the
  * transcript's own timestamps for sessions that somehow have no user turn.
  */
+/** A transcript timestamp as ms, or 0 for anything unparseable. */
+function tsMs(ts) {
+    const n = ts ? Date.parse(ts) : NaN;
+    return Number.isFinite(n) ? n : 0;
+}
+
 function sortKey(s) {
     const ts = s.lastUserTs || s.firstTs || s.lastTs;
     return ts ? Date.parse(ts) : s.mtimeMs;
