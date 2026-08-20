@@ -207,12 +207,21 @@ npm test -- 45901      # run against a bridge you already have on that port
 start and delete sessions, so pointing them at the everyday instance is exactly
 the accident the rest of this file is about.
 
-The suite is `auth`, `temp` and `recent` on their own — pure functions, no bridge
-needed — plus four that want a live one: `gate`, `browser`, `refusals`,
-`unpaired`. Between them they cover the token, what a remote caller is refused,
-and what an unpaired phone sees before and after pairing. If you touch
-`bridge/auth.js` or any route's local/remote rule, run it: that is the part of
-this codebase with tests around it.
+The suite is `auth`, `temp`, `recent`, `pulls`, `taskboard`, `ports`, `spinner`
+and `restart` on their own — no bridge needed — plus four that want a live one:
+`gate`, `browser`, `refusals`, `unpaired`. Between them they cover the token, what a remote caller
+is refused, what an unpaired phone sees before and after pairing, and what the
+nightly restart does when there is nobody to ask. If you touch `bridge/auth.js`
+or any route's local/remote rule, run it: that is the part of this codebase with
+tests around it.
+
+Most of the first group are pure functions, but `restart` is not — it runs a
+copy of `scripts/restart-bridge.sh` in a throwaway git repo, with a stub
+`bridge/launch.sh` and a port the kernel just handed back. It spawns the script
+`detached`, which is load-bearing rather than tidiness: `/dev/tty` is the
+*controlling* terminal and is inherited, so without the detach a run from a real
+terminal would reach a live `Continue? [y/N]` and hang the suite. Its first
+assertion checks the detach worked, so that failure is a failure and not a hang.
 
 ## Never rebuild without asking
 
@@ -272,3 +281,13 @@ sectioned by comment headers, so search for the section name rather than scrolli
   it as end-of-input and stops, mid-turn. Running it detached with its output on
   a file descriptor does not change this. There is no way to make a turn outlive
   its bridge, which is the whole reason for the separate development port.
+- **"Why is the bridge still on old code?" has a log.** A midnight cron entry
+  restarts the everyday bridge, and every run that could change something appends
+  a line to `~/.cache/claude-sessions/restart-45888.log` — a `start` line and then
+  one word for the outcome. `grep skipped-dirty` is the usual answer: uncommitted
+  changes **under `bridge/`** stop the nightly run, because there is no terminal
+  to confirm them at. So a worktree is not the only reason to keep the main
+  checkout clean — leaving half-finished `bridge/` edits in it is what silently
+  pins the everyday instance to yesterday's code. Nothing else in that directory
+  blocks it: `web/` is read per request and is already live, and docs, tests and
+  scripts the bridge never reads. See README §Picking up new code.
