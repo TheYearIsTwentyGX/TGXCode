@@ -799,13 +799,23 @@ const WHERE = {
  * Only the words. That a session is working at all is said by the dot at the head
  * of the meta line, which is the part that has to survive a narrow rail — this
  * text is last in a row that does not wrap, so it is the first thing to go.
+ *
+ * `detail` before `activity`, and that is the one place in the app that unpicks
+ * the label. Everywhere else has room for `Percolating… Reading runner.js`;
+ * twenty-odd characters does not, and clipping it there would spend them all on
+ * the spinner verb and cut the tool name off the end — the decorative half
+ * surviving at the expense of the informative one. `detail` is that label
+ * without its verb, and it is null exactly when the verb is all there is to
+ * say, so the rail still shows a verb whenever nothing more specific is
+ * happening.
  */
 function activityBits(runner) {
     if (!runner) return [];
     return [
         el('span', { class: 'dot dot-act' }, '·'),
         el('span', { class: 'pulse' },
-            el('span', { class: 'pulse-t' }, clip(runner.activity || 'Working', 22))),
+            el('span', { class: 'pulse-t' },
+                clip(runner.detail || runner.activity || 'Working', 22))),
     ];
 }
 
@@ -5947,7 +5957,10 @@ function connect() {
         // The rail's own copy, so a rebuild from the held order draws what the
         // patch below already put on screen rather than reverting it.
         const row = state.sessions.find(x => x.sessionId === s.sessionId);
-        if (row) row.runner = { state: s.state, activity: s.activity, queued: s.queued };
+        if (row) {
+            row.runner = { state: s.state, activity: s.activity,
+                detail: s.detail, queued: s.queued };
+        }
         const strip = dom.rail.querySelector(`[data-id="${CSS.escape(s.sessionId)}"]`);
         if (strip && row) patchStripStatus(strip, row);
     });

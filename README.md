@@ -419,6 +419,94 @@ ignored and the default stands, rather than being taken at face value.
 
 There is no settings page yet; the file is the interface.
 
+### What a turn in progress calls itself
+
+While a turn runs, every surface that shows it working — the status line, the
+rail, the boards, a phone at `/m` — says the same thing, because they all read
+one label off one SSE message. For most of this app's life that label was
+`Thinking…`, replaced by a tool's name while a tool ran. Now it has two halves:
+
+```
+Percolating…
+Percolating… Reading runner.js
+Percolating… Running: npm test
+```
+
+The **verb** comes from whichever themed groups you have enabled and drifts on
+its own clock — it is what says the session is alive. What follows it is
+whatever is specifically happening, and it changes when reality does. Neither
+half has to give way to the other, which is what lets the verb keep moving
+through a call of any length while that call keeps its name.
+
+The collection is [wynandw87/claude-code-spinner-verbs][verbs] — 3,639 verbs
+across 114 groups, the 185 Claude Code itself ships among them.
+`scripts/import-spinner-verbs.js` turns its README into
+`bridge/spinner-verbs.json`, which is written out on first run as one file per
+group:
+
+```
+~/.tgxcode/verbs/
+  Claude_Code_Defaults.json
+  Monty_Python.json
+  Tech_Programming.json
+  …114 files
+```
+
+```json
+{
+  "Category": "Tech / Programming",
+  "Verbs": ["Dockerizing", "Kubernetizing", "Terraforming"]
+}
+```
+
+**The `Category` is the name, and the filename is an index into it.** They are
+written down twice because a category may contain characters a filename may not
+— `Tech / Programming` is why `Tech_Programming.json` exists — and because a
+group that says what it is survives being renamed or handed to somebody else.
+Settings refer to the `Category`, forgivingly: `"Tech / Programming"`,
+`"Tech_Programming"` and `"tech-programming"` all find it.
+
+So **adding a group is dropping a file in**, and **removing a verb is deleting a
+line**. A group you delete stays deleted: the directory is only ever seeded when
+it is missing altogether, never file by file, because the alternative is your
+edits undoing themselves on the next run. A project can ship its own groups in
+`<checkout>/.tgxcode/verbs/`, and they win over the ones in your home directory.
+
+Which groups are *in play* is a setting, in the same file as the rest:
+
+```json
+{
+  "spinner": {
+    "randomize": true,
+    "groups": ["Claude Code Defaults", "Monty Python", "Absurd / Nonsense", "Tech / Programming"],
+    "rerollMs": 8000
+  }
+}
+```
+
+Only the groups named there are ever opened, so the size of the directory costs
+nothing. `randomize: false` gives back `Thinking…` and nothing else changes.
+
+`rerollMs` is how long a verb stands before the next is drawn, and it is the
+only thing that moves it — the half after it changes on its own as the work
+does. `0` pins one verb for the whole turn.
+
+A verb is only worn by work. A question waiting on you, an API retry, starting
+up and going idle say what they are and nothing else.
+
+`GET /api/spinner/groups?cwd=` lists what you have, with a count each and the
+reason any group failed to load — the discoverable half of a setting with no
+page in front of it.
+
+Two things worth knowing. The session rail has room for about twenty characters,
+which is not enough for both halves, so it shows the one that carries
+information: the tool's name while a tool runs, and the verb whenever nothing
+more specific is happening. Every wider surface draws the whole label. And
+twenty-three of the groups are full sentences rather than words, which truncate
+in the rail for the same reason — the groups enabled by default are all short.
+
+[verbs]: https://github.com/wynandw87/claude-code-spinner-verbs
+
 ### Test sessions
 
 A session can be marked **test**, which means only a development bridge lists it;
@@ -761,12 +849,15 @@ not.
 | `bridge/notifications.js` | The notification log, and what is worth raising |
 | `bridge/flags.js` | Pinned, archived and test state |
 | `bridge/prefs.js` | Settings from `~/.tgxcode/` and from the project |
+| `bridge/spinner.js` | What a turn in progress calls itself, out of `~/.tgxcode/verbs/` |
+| `bridge/spinner-verbs.json` | The verb catalogue, and the seed for that directory |
 | `bridge/suggestions.js` | What you did about a suggested follow-up |
 | `bridge/suggest-mcp.js` | The one tool this app gives a session: offer the next piece of work |
 | `bridge/slash-commands.js` | What slash commands a directory has, for composer completion |
 | `bridge/auth.js` | The access token, and telling local from remote apart |
 | `bridge/tailscale.js` | What this machine is reachable as, for pairing |
 | `bridge/launch.sh` | Finds a node, then starts the bridge |
+| `scripts/import-spinner-verbs.js` | Rebuilds the verb catalogue from upstream |
 | `web/` | The UI. No build step, no dependencies |
 | `web/terminal.js` | The terminal pane — a shell, or a run's output |
 | `web/mobile.*` | The phone surface at `/m` — a second client of the same API |
