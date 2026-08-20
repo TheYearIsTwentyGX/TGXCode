@@ -321,6 +321,31 @@ class NotificationLog {
         });
     }
 
+    /**
+     * A message from another Claude session.
+     *
+     * Loud, unlike a subagent finishing. The difference is who it is from and
+     * what it wants: an agent reporting back is this session's own work landing,
+     * whereas this is somebody else's session asking yours for something, and it
+     * may sit unanswered for as long as nobody looks. It is also the one event
+     * here that can arrive at a session with no process of ours anywhere near
+     * it, which is exactly the case a log is for.
+     *
+     * `from` is the peer's name, which is also its address — so the row names
+     * the thing you would type to reply.
+     */
+    peerMessage(p) {
+        const who = p.from || 'another session';
+        const many = p.count > 1 ? ` (${p.count} messages)` : '';
+        return this.record({
+            sessionId: p.sessionId,
+            type: 'peer-message',
+            summary: `${who} sent a message${many}`,
+            detail: null,
+            loud: true,
+        });
+    }
+
     // -- reading ------------------------------------------------------------
 
     /**

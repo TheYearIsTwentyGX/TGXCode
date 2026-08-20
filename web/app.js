@@ -25,6 +25,33 @@ async function post(path, body) {
     return data;
 }
 
+/**
+ * POST a file's bytes, rather than JSON.
+ *
+ * The only route that takes a body which is not JSON. Raw bytes and not
+ * base64-in-JSON because `readJson` on the bridge caps a body at 4MB and base64 is a
+ * third bigger than what it encodes — which would put the real limit at under 3MB, and
+ * a screenshot off this machine's display goes past that regularly.
+ *
+ * The client header is what `post` sets too; it is required on every non-GET under
+ * /api/, and forgetting it here would fail as a 403 that looks like an auth problem.
+ */
+async function postFile(path, file) {
+    const r = await fetch(path, {
+        method: 'POST',
+        headers: {
+            'X-Claude-Sessions-Client': '1',
+            // The bridge sniffs the real type from the bytes; this is a hint, and the
+            // fallback matters because a File dragged from some places has no type.
+            'Content-Type': file.type || 'application/octet-stream',
+        },
+        body: file,
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    return data;
+}
+
 async function del(path) {
     const r = await fetch(path, { method: 'DELETE', headers: HEADERS });
     const data = await r.json().catch(() => ({}));
@@ -39,6 +66,29 @@ async function del(path) {
 // agree about what "no mode was chosen" means.
 const DEFAULT_PERM = 'auto';
 
+// ── settings ─────────────────────────────────────────────────────────────
+
+// What the user's own ~/.tgxcode/settings.json says, handed to the page in a
+// <meta> tag by bridge/server.js. In the page rather than behind a fetch
+// because restoreView() opens a session synchronously at startup: a transcript
+// drawn before an answer arrived would stay drawn the wrong way, since nothing
+// re-renders history. A project may override any of it, and that answer travels
+// with the transcript instead — see openSession.
+const BOOT_PREFS = (() => {
+    const fallback = {
+        transcript: { groupToolCalls: true, groupMinCalls: 3, groupIncludesThinking: true },
+    };
+    try {
+        const m = document.querySelector('meta[name="cs-prefs"]');
+        if (!m) return fallback;
+        const d = JSON.parse(decodeURIComponent(m.content));
+        return { ...fallback, ...d, transcript: { ...fallback.transcript, ...(d.transcript || {}) } };
+    } catch { return fallback; }
+})();
+
+/** The transcript settings in force — the open session's, or the user's own. */
+const grouping = () => (state.prefs || BOOT_PREFS).transcript;
+
 const state = {
     clientId: null,
     dev: false,             // talking to a development bridge
@@ -50,6 +100,21 @@ const state = {
     openSeq: 0,             // bumped per open; a slow fetch checks it before drawing
     nodes: new Map(),       // event id -> {ev, node}
     tools: new Map(),       // tool_use id -> {ev, node}
+    // Just the ExitPlanMode calls among them, by id. `transcriptPlan` used to
+    // find the pending one by walking every tool in the session — thousands of
+    // them on a long transcript — and it is asked on every tail and every status
+    // tick, which is several times a second while a plan is on screen. There are
+    // never more than a handful of these, so the walk is over them instead. Ids
+    // rather than events: a result landing rebuilds the event in place.
+    plans: new Set(),
+    // Settings for the open session's directory, from the bridge. Null until a
+    // session is opened, when BOOT_PREFS is the answer.
+    prefs: null,
+    // Ids of the tool (and thinking) events seen since the last message, in
+    // order — the run that is still being worked on. Ids and not nodes: a node
+    // is replaced whenever a result lands, so a held reference goes stale.
+    run: [],
+    agentRun: [],
     turns: [],              // the user messages, in order, for the turn rail
     activeTurn: -1,
     agents: [],             // subagent records for this session, from the bridge
@@ -63,6 +128,12 @@ const state = {
     // only exists so that looking away and back does not quietly drop a choice.
     permChoice: new Map(),
     channels: [],
+    // Ports this session mentioned that belong to another workspace, counted
+    // so the strip can say they were left out rather than just look empty.
+    channelsElsewhere: 0,
+    // url -> {status, label, detail, title, updatedAt} from /api/sessions/:id/prs.
+    // Null until that answers; the header draws its PRs from the summary either way.
+    prStatus: null,
     // What the session's directory declares in .tgxcode/, and what is running
     // from it. Keyed by nothing — there is only ever one conversation on screen,
     // and the payload is re-fetched when it changes. `cmdsFor` is the directory
@@ -97,6 +168,11 @@ const state = {
     busyTimer: null,        // ticks the elapsed-time readout while a turn runs
     queue: [],              // the current session's waiting messages, from the bridge
     queueDrag: null,        // id of the chip being dragged
+    // Files staged for the next message. Each is already on disk in the session's
+    // attached_assets/ by the time it reaches `ready` — see the attachments section
+    // below — so this holds metadata and a local preview URL, never file bytes.
+    attach: [],
+    attachSeq: 0,
     queueOpen: new Set(),   // ids of chips expanded to their full text
     // Slash commands the composer can complete, per working directory — the
     // bridge keys them that way because that is what decides them. Held here so
@@ -104,6 +180,35 @@ const state = {
     // `slash-commands` SSE event drops an entry when a process reports a new
     // list. Not `commands`, which is `cmds` above — the project's own.
     slashCommands: new Map(),   // cwd -> {commands, at, exact}
+    // Sessions an agent here could message, from GET /api/peers. One list for
+    // the whole window rather than one per session, because it is a fact about
+    // the machine — every composer offers the same names.
+    //
+    // Refetched when the rail changes rather than held forever: a peer that has
+    // exited cannot be messaged, and offering its name would be offering a
+    // failure. `at` is when it was answered, so opening the picker twice in a
+    // row does not ask twice.
+    peers: { list: [], at: 0 },
+    // What has already been done about each suggested follow-up in the open
+    // conversation, keyed by the id of the tool call that raised it. Arrives
+    // whole on the session payload; changes arrive over SSE.
+    suggestions: new Map(),   // toolUseId -> {status, startedId, at}
+    // The suggestions themselves, in the order they were raised. They are pulled
+    // out of the transcript on the way past — see appendEvents — because they are
+    // drawn in the aside beside the log rather than in it.
+    tasks: new Map(),         // toolUseId -> ev
+    // Which task bodies are open. Only the ones you have actually toggled: the
+    // default is worked out per task in taskCard, so an offer you have not dealt
+    // with opens itself and one you have dealt with does not.
+    taskOpen: new Map(),      // toolUseId -> bool
+    // Whether the aside is showing at all. A property of the window rather than
+    // of a session, like the terminal pane's height — you either want these in
+    // view while you work or you do not.
+    tasksShut: localStorage.getItem('tasksShut') === '1',
+    // The task the big dialog is showing, if it is open. Held by id rather than
+    // by object so a decision taken inside it can find its way back to the same
+    // task after the panel behind has been rebuilt.
+    taskDialog: null,
     queueSig: '',           // what the chips were last built from, to avoid churn
     queueFocus: null,       // the chip holding the queue's single tab stop
     ask: null,              // the approval this session is blocked on, if any
@@ -132,11 +237,32 @@ const state = {
         // Half-written messages per card, held here rather than in the DOM so
         // they outlive the redraws the board does while agents work.
         drafts: new Map(),
+        // The cards already on screen, by session, with the `sig` the bridge
+        // stamped them with. This is what stops a push that moved one card from
+        // rebuilding all of them; see `liveCardFor`.
+        nodes: new Map(),
+        // The group sections, by key. Kept for the same reason and one more:
+        // re-parenting a card blurs whatever is focused inside it, so the
+        // containers have to stay put for the cards to be able to.
+        groups: new Map(),
         // Which way the board and the conversation divide the window:
         // 'bottom' stacks them, 'side' puts them next to each other. A property
         // of the window rather than of a session, like the terminal pane, so it
         // is remembered and every session you move to keeps it.
         dock: localStorage.getItem('liveDock') === 'side' ? 'side' : 'bottom' },
+    // The task board. `watching` is what the bridge has been told, apart from
+    // `open` for the same reason the live board keeps them apart.
+    //
+    // `order` and `freshRank` are the rail's stable-ordering trick, per column:
+    // where a card sits is decided once and then held, so nothing slides out
+    // from under the cursor while an agent works. `allIdle` is what the Show-all
+    // button fetched, held separately because the push never carries it.
+    taskboard: { open: false, watching: false, data: null, at: 0,
+        loading: false, error: null, allIdle: null,
+        // Half-typed text in the Suggested column's box, held here rather than
+        // in the DOM so it survives the redraws the board does while agents work.
+        draft: '',
+        order: new Map(), freshRank: 0, tailRank: 0 },
     // Sessions blocked on an answer, kept whether or not the board is open, so
     // the badge on a shut board still says how many people are waiting.
     waiting: new Set(),
@@ -161,17 +287,23 @@ const $ = (id) => document.getElementById(id);
 const dom = {};
 for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-sub',
     'channels', 'scroll', 'log', 'status-line', 'status-text', 'btn-stop', 'input',
-    'btn-send', 'btn-lgtm', 'slash-menu', 'queue', 'queue-list', 'queue-count', 'queue-clear',
+    'btn-send', 'btn-lgtm', 'btn-attach', 'attach', 'attach-input', 'composer',
+    'slash-menu', 'mention-menu', 'queue', 'queue-list', 'queue-count', 'queue-clear',
     'model', 'perm', 'btn-new', 'btn-new-menu', 'new-menu', 'db-status', 'db-label', 'toasts',
     'btn-bell', 'bell-menu', 'opt-desktop', 'opt-sound', 'bell-note', 'bell-try',
     'btn-pin', 'btn-folder', 'btn-term', 'btn-archive', 'btn-delete', 'turns', 'turn-pop',
     'term-pane', 'term-grip', 'term-dir', 'term-moved', 'term-body', 'term-restart', 'term-close',
     'term-tabs', 'term-stop', 'cmds',
+    'tasks', 'tasks-strip', 'tasks-strip-count', 'tasks-open', 'tasks-count',
+    'tasks-collapse', 'tasks-list',
+    'task-scrim', 'task-dlg-title', 'task-dlg-why', 'task-dlg-prompt', 'task-dlg-cwd',
+    'task-dlg-copy', 'task-dlg-acts',
     'agents', 'agent-scroll', 'agent-log', 'btn-back', 'btn-back-label',
     'ask-dock', 'plan-pane', 'plan-bar', 'plan-aside', 'plan-agent', 'plan-title',
     'plan-body', 'plan-doc', 'plan-foot',
     'btn-dash', 'dash-badge', 'dash', 'dash-sub', 'dash-body', 'dash-refresh',
     'btn-notes', 'notes-badge', 'notes', 'notes-sub', 'notes-body',
+    'btn-taskboard', 'tb-badge', 'taskboard', 'tb-sub', 'tb-body', 'tb-refresh',
     'notes-notable', 'notes-all', 'notes-clear',
     'lock', 'lock-text', 'lock-fork', 'lock-anyway',
     'btn-live', 'live-badge', 'live', 'live-sub', 'live-body', 'live-focus', 'focus-exit',
@@ -277,6 +409,10 @@ function toast(text, kind = 'info', opts = {}) {
 // transcript. Neither should be lost to a reload or a failed turn.
 
 const draftKey = (id) => `draft:${id}`;
+// A sibling key rather than a richer value under the one above. That one has to stay
+// a plain string: handleSendFailure writes into it for a session that is not on
+// screen, and every caller there is handling text.
+const attachKey = (id) => `attach:${id}`;
 
 function loadDraft(id) {
     try { return localStorage.getItem(draftKey(id)) || ''; } catch { return ''; }
@@ -289,15 +425,51 @@ function saveDraft(id, text) {
     } catch { /* storage unavailable; drafts are best effort */ }
 }
 
-/** Put text back in the composer without clobbering anything typed since. */
-function restoreToComposer(text) {
-    if (!text) return;
-    const current = dom.input.value.trim();
-    dom.input.value = current ? `${text}\n\n${current}` : text;
-    autoGrow();
-    dom.input.focus();
-    dom.input.setSelectionRange(dom.input.value.length, dom.input.value.length);
-    if (state.current) saveDraft(state.current.sessionId, dom.input.value);
+/**
+ * The files staged against a session, as metadata.
+ *
+ * This is what makes a staged attachment survive a reload, and it is only possible
+ * because the file went to disk before the chip appeared: there is a path to remember
+ * instead of bytes to store. Nothing in flight and nothing failed is saved — a chip
+ * that is still uploading has no path yet, and one that failed has nothing behind it.
+ */
+function loadAttach(id) {
+    try {
+        const raw = localStorage.getItem(attachKey(id));
+        const list = raw ? JSON.parse(raw) : [];
+        return Array.isArray(list) ? list.map(a => ({ ...a, status: 'ready' })) : [];
+    } catch { return []; }
+}
+
+function saveAttach(id, list) {
+    try {
+        const keep = (list || [])
+            .filter(a => a.status === 'ready')
+            .map(({ name, path, relPath, mediaType, bytes }) =>
+                ({ name, path, relPath, mediaType, bytes }));
+        if (keep.length) localStorage.setItem(attachKey(id), JSON.stringify(keep));
+        else localStorage.removeItem(attachKey(id));
+    } catch { /* storage unavailable; same best-effort as drafts */ }
+}
+
+/**
+ * Put text back in the composer without clobbering anything typed since.
+ *
+ * `files` is for the two callers that are handing a whole message back — a failed turn
+ * and a queued chip being edited. Without it, editing a message you had attached a
+ * screenshot to would give you the words and quietly drop the screenshot, which is the
+ * kind of loss you only notice after sending.
+ */
+function restoreToComposer(text, files) {
+    if (text) {
+        const current = dom.input.value.trim();
+        dom.input.value = current ? `${text}\n\n${current}` : text;
+        autoGrow();
+        dom.input.focus();
+        dom.input.setSelectionRange(dom.input.value.length, dom.input.value.length);
+        if (state.current) saveDraft(state.current.sessionId, dom.input.value);
+    }
+    if (files && files.length) adoptAttachments(files);
 }
 
 // ── rail ─────────────────────────────────────────────────────────────────
@@ -370,11 +542,74 @@ const ICON = {
     power: '<path d="M12 3.4v7.2" stroke="currentColor" stroke-width="2.1" '
         + 'stroke-linecap="round"/><path d="M7.5 6.6a6.4 6.4 0 1 0 9 0" stroke="currentColor" '
         + 'stroke-width="2.1" stroke-linecap="round"/>',
+    // The pull-request statuses. Drawn as three families so that the icon carries
+    // the state on its own and the colour only reinforces it: the branch shape is
+    // the PR's own lifecycle, a speech bubble is a human's verdict on it, and a
+    // bare mark is CI's. Two reds and two yellows are otherwise indistinguishable
+    // to anyone who cannot separate them by hue.
+    pr: '<circle cx="6.5" cy="17.5" r="2.6" stroke="currentColor" stroke-width="1.8"/>'
+        + '<circle cx="17.5" cy="6.5" r="2.6" stroke="currentColor" stroke-width="1.8"/>'
+        + '<path d="M6.5 14.9V8.5a2 2 0 0 1 2-2h6.4" stroke="currentColor" '
+        + 'stroke-width="1.8" stroke-linecap="round"/>',
+    // The same branch, not joined up yet. Dotted rather than dashed: a dash pattern
+    // on a path this short is invisible at 13px, where round caps with gaps wider
+    // than the marks change the outline instead of just its texture — and the
+    // outline is the only thing that still reads at this size.
+    prDraft: '<circle cx="6.5" cy="17.5" r="2.6" stroke="currentColor" stroke-width="1.8"/>'
+        + '<circle cx="17.5" cy="6.5" r="2.6" stroke="currentColor" stroke-width="1.8"/>'
+        + '<path d="M6.5 14.9V8.5a2 2 0 0 1 2-2h6.4" stroke="currentColor" '
+        + 'stroke-width="1.9" stroke-linecap="round" stroke-dasharray="0.1 3.5"/>',
+    // Landed: an arrow arriving at the trunk. Deliberately not another two-dots-and-
+    // an-elbow — a curve is all that separated it from `pr` and at 13px that is
+    // nothing, so merged leaves the branch family and takes a silhouette of its own.
+    // The two still-open states keep the family; the two settled ones each stand apart.
+    prMerged: '<path d="M18.8 4.6v14.8" stroke="currentColor" stroke-width="2" '
+        + 'stroke-linecap="round"/>'
+        + '<path d="M4.4 12h9.8" stroke="currentColor" stroke-width="1.8" '
+        + 'stroke-linecap="round"/>'
+        + '<path d="m10.6 8.3 3.9 3.7-3.9 3.7" stroke="currentColor" stroke-width="1.8" '
+        + 'stroke-linecap="round" stroke-linejoin="round"/>',
+    prClosed: '<circle cx="12" cy="12" r="7.6" stroke="currentColor" stroke-width="1.8"/>'
+        + '<path d="M8.3 15.7 15.7 8.3" stroke="currentColor" stroke-width="1.8" '
+        + 'stroke-linecap="round"/>',
+    reviewOk: '<path d="M20 14.4a2.5 2.5 0 0 1-2.5 2.5H9.3L5 20.3V6.1a2.5 2.5 0 0 1 2.5-2.5h10A2.5 '
+        + '2.5 0 0 1 20 6.1Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>'
+        + '<path d="m9.4 10.1 2 2 3.5-3.7" stroke="currentColor" stroke-width="1.8" '
+        + 'stroke-linecap="round" stroke-linejoin="round"/>',
+    reviewChanges: '<path d="M20 14.4a2.5 2.5 0 0 1-2.5 2.5H9.3L5 20.3V6.1a2.5 2.5 0 0 1 2.5-2.5h10A2.5 '
+        + '2.5 0 0 1 20 6.1Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>'
+        + '<path d="M9.3 10.2h6.4" stroke="currentColor" stroke-width="1.8" '
+        + 'stroke-linecap="round"/>',
+    checkFail: '<path d="m6.8 6.8 10.4 10.4" stroke="currentColor" stroke-width="2.2" '
+        + 'stroke-linecap="round"/><path d="M17.2 6.8 6.8 17.2" stroke="currentColor" '
+        + 'stroke-width="2.2" stroke-linecap="round"/>',
+    checkWait: '<circle cx="12" cy="12" r="7.6" stroke="currentColor" stroke-width="1.8" '
+        + 'stroke-linecap="round" stroke-dasharray="3.3 2.9"/>',
+    conflict: '<path d="M12 4.3 21 19.5H3Z" stroke="currentColor" stroke-width="1.8" '
+        + 'stroke-linejoin="round"/><path d="M12 9.9v3.7" stroke="currentColor" '
+        + 'stroke-width="1.8" stroke-linecap="round"/><path d="M12 16.6h.01" '
+        + 'stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
     trash: '<path d="M4.5 6.8h15" stroke="currentColor" stroke-width="1.8" '
         + 'stroke-linecap="round"/><path d="M6.6 6.8 7.7 19a1.5 1.5 0 0 0 1.5 1.4h5.6A1.5 1.5 0 0 0 '
         + '16.3 19l1.1-12.2" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>'
         + '<path d="M9.6 6.8V4.6a1 1 0 0 1 1-1h2.8a1 1 0 0 1 1 1v2.2" stroke="currentColor" '
         + 'stroke-width="1.8" stroke-linejoin="round"/>',
+};
+
+// Which glyph says each PR status. `unknown` is gh being unreachable rather than a
+// state a PR can be in, so it borrows the plain branch and the CSS leaves it grey:
+// a header that cannot reach GitHub says no less than it used to, and claims no more.
+const PR_ICON = {
+    open: 'pr',
+    unknown: 'pr',
+    draft: 'prDraft',
+    merged: 'prMerged',
+    closed: 'prClosed',
+    approved: 'reviewOk',
+    changes: 'reviewChanges',
+    'checks-failed': 'checkFail',
+    'checks-pending': 'checkWait',
+    conflicting: 'conflict',
 };
 
 function icon(name, size = 15) {
@@ -564,13 +799,23 @@ const WHERE = {
  * Only the words. That a session is working at all is said by the dot at the head
  * of the meta line, which is the part that has to survive a narrow rail — this
  * text is last in a row that does not wrap, so it is the first thing to go.
+ *
+ * `detail` before `activity`, and that is the one place in the app that unpicks
+ * the label. Everywhere else has room for `Percolating… Reading runner.js`;
+ * twenty-odd characters does not, and clipping it there would spend them all on
+ * the spinner verb and cut the tool name off the end — the decorative half
+ * surviving at the expense of the informative one. `detail` is that label
+ * without its verb, and it is null exactly when the verb is all there is to
+ * say, so the rail still shows a verb whenever nothing more specific is
+ * happening.
  */
 function activityBits(runner) {
     if (!runner) return [];
     return [
         el('span', { class: 'dot dot-act' }, '·'),
         el('span', { class: 'pulse' },
-            el('span', { class: 'pulse-t' }, clip(runner.activity || 'Working', 22))),
+            el('span', { class: 'pulse-t' },
+                clip(runner.detail || runner.activity || 'Working', 22))),
     ];
 }
 
@@ -688,6 +933,7 @@ function forgetSession(sessionId) {
     state.order.delete(sessionId);
     state.unsent.delete(sessionId);
     saveDraft(sessionId, '');
+    saveAttach(sessionId, []);
     setTermOpen(sessionId, false);
     if (state.pendingDelete && state.pendingDelete.sessionId === sessionId) closeDelete();
     if (state.current && state.current.sessionId === sessionId) clearCurrent();
@@ -702,6 +948,9 @@ function clearCurrent() {
     state.runner = null;
     state.nodes.clear();
     state.tools.clear();
+    state.plans.clear();
+    state.run.length = 0;
+    state.prefs = null;     // the next session's project may answer differently
     state.turns = [];
     state.activeTurn = -1;
     state.agents = [];
@@ -745,6 +994,7 @@ async function openSession(id, { quiet = false, keepDash = false } = {}) {
     // The menu belongs to the directory being left, and the draft arriving in
     // the box is not something anybody typed.
     closeSlashMenu();
+    closeMentionMenu();
 
     // Switching should feel like switching, not like waiting: a long transcript
     // is megabytes and the fetch is most of the delay. The rail summary is the
@@ -766,6 +1016,21 @@ async function openSession(id, { quiet = false, keepDash = false } = {}) {
         if (known) state.current = data.summary;   // the index may have moved on
         else beginOpen(data.summary, { keepDash }); // nothing was drawn yet
         state.offset = data.offset;
+        // Before appendEvents, because a suggestion card reads this as it is
+        // built — a card drawn first and corrected afterwards would offer to
+        // start something that was started days ago.
+        state.suggestions = new Map(Object.entries(data.suggestions || {}));
+        state.tasks.clear();
+        state.taskOpen.clear();
+        // Also before appendEvents, and for the same reason: what this project
+        // says about folding runs of tool calls has to be known before the
+        // transcript is built from it. Nothing re-renders history, so an answer
+        // that arrived afterwards would be an answer for the next session.
+        state.prefs = data.prefs || BOOT_PREFS;
+        // applyRunner runs below, after the log is drawn — but the log needs to
+        // know whether a turn is in flight, because the run of tool calls at the
+        // end of a busy session is the work you are watching and must not fold.
+        state.runner = data.runner || null;
 
         renderHeader();
         // Drops the skeleton — and with it a row drawn at Send while this fetch was
@@ -777,6 +1042,7 @@ async function openSession(id, { quiet = false, keepDash = false } = {}) {
         dom.log.replaceChildren();
         clearPendingSend();
         appendEvents(data.events);
+        warmPeers();        // not awaited: it only adds a name and a link
         renderTurns();      // a session with no turns of your own still clears the rail
         renderRail();
         applyRunner(data.runner);
@@ -786,7 +1052,9 @@ async function openSession(id, { quiet = false, keepDash = false } = {}) {
 
         subscribe();
         loadChannels();
+        loadPrStatus();
         loadAgents();
+        loadTasks();
         return true;
     } catch (err) {
         if (seq !== state.openSeq) return true;
@@ -815,21 +1083,33 @@ function beginOpen(summary, { keepDash = false } = {}) {
     state.runner = null;
     state.nodes.clear();
     state.tools.clear();
+    state.plans.clear();
+    state.run.length = 0;
+    state.prefs = null;     // the next session's project may answer differently
     state.turns = [];
     state.activeTurn = -1;
     state.pinned = true;
     state.agents = [];  // the previous session's agents are not this one's
+    state.prStatus = null;      // nor are its pull requests
     state.ask = null;   // approvals belong to the session that is blocked on them
+    state.suggestions.clear();  // what was acted on belongs to the session it was raised in
+    state.tasks.clear();        // and so do the offers themselves
+    state.taskOpen.clear();
+    closeTaskDialog();          // it was showing a task belonging to the old one
+    renderTasks();              // empties the aside, and hides it
     // A row drawn for one session is not evidence about another. The log is
     // replaced below in any case; this is what disarms the timer holding it.
     clearPendingSend();
     state.stopArmed = 0;
     leaveAgent();       // a subagent belongs to the session it was spawned by
 
-    // Picking a session is done with the work-in-flight board, whichever way you
-    // got there. The live board is not a place you leave — it docks under the
-    // conversation you just opened, which is the whole point of it.
+    // Picking a session is done with the whole-screen boards, whichever way you
+    // got there — including the roundabout way, where Start on a task board card
+    // makes a session and then opens it. The live board is not a place you leave
+    // — it docks under the conversation you just opened, which is the whole
+    // point of it.
     if (state.dash.open && !keepDash) showDash(false);
+    if (state.taskboard.open && !keepDash) showTaskboard(false);
     // Through paintPanels rather than by hand: opening a session is what turns a
     // full-height board into a docked one, and setting `conv.hidden` here
     // directly left the two disagreeing — the conversation drawn underneath a
@@ -861,6 +1141,12 @@ function beginOpen(summary, { keepDash = false } = {}) {
     // again then saved that copy as a real draft, which outlived the turn.
     // handleSendFailure and editQueued are the two things that hand text back.
     dom.input.value = loadDraft(summary.sessionId);
+    // The files staged against this session, from the same place. Cleared without
+    // saving first, so switching away does not write the outgoing session's chips over
+    // the incoming one's.
+    clearAttach({ save: false });
+    state.attach = loadAttach(summary.sessionId);
+    renderAttach();
     autoGrow();
     dom.input.focus();
 
@@ -956,16 +1242,90 @@ function renderHeader() {
     }
     bits.push(el('span', { class: 'sep' }, '·'));
     bits.push(el('span', {}, `${s.userMessages} turns`));
-    if (s.pr) {
+    for (const pr of headerPrs()) {
         bits.push(el('span', { class: 'sep' }, '·'));
-        bits.push(el('a', { class: 'pr', href: s.pr.url, target: '_blank', rel: 'noreferrer' },
-            `PR #${s.pr.number}`));
+        bits.push(prLink(pr));
     }
     bits.push(el('span', { class: 'sep' }, '·'));
     bits.push(el('span', { class: 'cwd', title: s.cwd }, clip(s.cwd, 42)));
 
     dom.convSub.replaceChildren(...bits);
     renderHeaderActions();
+}
+
+/**
+ * Which pull requests the header draws.
+ *
+ * The status fetch wins over the summary where it has an answer, because the two
+ * are not equally fresh: `state.current` is the summary from the moment the session
+ * was opened and nothing refreshes it in place, while the bridge reads its index
+ * per request. A PR raised during the conversation reaches the header this way and
+ * no other. The summary is what makes the first paint instant, and the fallback
+ * whenever the fetch has not answered or could not.
+ */
+function headerPrs() {
+    if (state.prStatus && state.prStatus.size) return [...state.prStatus.values()];
+    const s = state.current;
+    if (!s) return [];
+    if (s.prs) return s.prs;
+    // A bridge older than the `prs` field still sends one PR as `pr`, and that pairing
+    // is not hypothetical — it is the normal state of this app for a while after every
+    // merge. `npm run land` deliberately leaves the running bridge on old code, while
+    // web/ is read from disk per request and so is new on the next refresh. Renaming
+    // the field without this made the whole feature vanish in that window rather than
+    // degrade, which is worse than the single unstyled link it replaced. Safe to delete
+    // once no bridge that predates `prs` can still be running.
+    return s.pr ? [s.pr] : [];
+}
+
+/**
+ * One of the session's pull requests, with its status as an icon and a colour.
+ *
+ * Drawn from the transcript, so it appears with the header rather than after a
+ * round trip to GitHub — `status` starts as `unknown` and the fetch below fills it
+ * in. The status is spelled out in the tooltip because an icon can be recognised
+ * without being read, and these get small.
+ */
+function prLink(pr) {
+    const live = (state.prStatus && state.prStatus.get(pr.url)) || null;
+    const status = (live && live.status) || 'unknown';
+
+    const tip = [
+        live && live.label,
+        live && live.title,
+        ...((live && live.detail) || []),
+        [`#${pr.number}`, pr.repo, live && live.updatedAt && `updated ${ago(live.updatedAt)} ago`]
+            .filter(Boolean).join(' · '),
+    ].filter(Boolean).join('\n');
+
+    return el('a', {
+        class: 'pr', 'data-status': status, title: tip,
+        href: pr.url, target: '_blank', rel: 'noreferrer',
+    }, icon(PR_ICON[status] || 'pr', 13), `PR #${pr.number}`);
+}
+
+/**
+ * Ask GitHub what became of this session's PRs.
+ *
+ * Its own request rather than part of the session payload, because that one is
+ * also the rail's and must not wait on a network call. Failure is silent for the
+ * same reason a missing channel strip is: the links are already on screen and
+ * still work, they simply stay grey.
+ */
+async function loadPrStatus() {
+    if (!state.current) return;
+    // No guard on the summary having PRs: a session that had none when it was
+    // opened is exactly the one that raises its first mid-conversation, and the
+    // bridge answers a session with none from its index without asking GitHub.
+    const id = state.current.sessionId;
+    try {
+        const { prs } = await get(`/api/sessions/${id}/prs`);
+        if (!state.current || state.current.sessionId !== id) return;
+        state.prStatus = new Map((prs || []).map(pr => [pr.url, pr]));
+        renderHeader();
+    } catch {
+        // Leaves whatever was known before, which is better than blanking it.
+    }
 }
 
 function renderHeaderActions() {
@@ -988,9 +1348,12 @@ function renderHeaderActions() {
 
 const SESSION_VIEW = {
     isAgent: false,
-    nodes: state.nodes, tools: state.tools,
+    nodes: state.nodes, tools: state.tools, plans: state.plans,
     get log() { return dom.log; },
     get scroll() { return dom.scroll; },
+    // A getter, not the array: the run is emptied in place at four different
+    // places, and a copy taken here would go stale at every one of them.
+    get run() { return state.run; },
 };
 
 const AGENT_VIEW = {
@@ -998,20 +1361,61 @@ const AGENT_VIEW = {
     nodes: state.agentNodes, tools: state.agentTools,
     get log() { return dom.agentLog; },
     get scroll() { return dom.agentScroll; },
+    get run() { return state.agentRun; },
 };
 
-function appendEvents(events, view = SESSION_VIEW) {
-    const frag = document.createDocumentFragment();
+// `live` marks events arriving on the tail rather than history being drawn. The
+// only thing it changes is whether a new suggested follow-up schedules a refetch:
+// openSession loads the panel from the bridge itself, straight after this, so
+// asking again 1.2s later would be the same answer twice.
+function appendEvents(events, view = SESSION_VIEW, { live = false } = {}) {
+    let frag = document.createDocumentFragment();
+    // Closing a run wraps nodes that are already in the log around nodes that
+    // are still in this fragment, so the fragment goes in first. Cheap: it
+    // happens once per message, not once per event.
+    const flush = () => {
+        if (frag.childNodes.length) view.log.append(frag);
+        frag = document.createDocumentFragment();
+    };
     let newTurn = false;
     let sawAgent = false;
+    let newTasks = false;
     for (const ev of events) {
         if (ev.kind === 'tool-result') { patchTool(ev, view); continue; }
+        // A suggested follow-up is not part of the conversation, it is an offer
+        // about it — so it comes out here and is drawn in the aside instead.
+        // Taken from either view: a subagent that suggests something has
+        // suggested it to this session, and the panel is the session's.
+        //
+        // The panel's source is the bridge — see loadTasks — so this only fills
+        // the gap in front of it. The index rescan is 500ms behind the file
+        // watch and falls back to a 30s poll, and a card you are waiting for
+        // must not be missing for either of those. The row and the event are the
+        // same object from the same parse, so showing it early costs nothing and
+        // the refetch below reconciles.
+        if (ev.kind === 'suggestion') {
+            if (!state.tasks.has(ev.id)) { state.tasks.set(ev.id, ev); newTasks = true; }
+            continue;
+        }
         if (view.nodes.has(ev.id)) continue;
         const node = renderEvent(ev);
         if (!node) continue;
         view.nodes.set(ev.id, { ev, node });
+        // Where the run of tool calls begins and ends. Decided here rather than
+        // at the top of the loop because the three `continue`s above never
+        // produce a node — a tool-result patches one that exists, a suggestion
+        // is drawn in the aside, a repeat is already on screen — and treating
+        // any of them as the end of a run would split it for a reason nothing
+        // on screen accounts for.
+        if (ev.kind === 'tool' || (ev.kind === 'thinking' && grouping().groupIncludesThinking)) {
+            view.run.push(ev.id);
+        } else {
+            flush();
+            closeRun(view);
+        }
         if (ev.kind === 'tool') {
             view.tools.set(ev.id, { ev, node });
+            if (view.plans && ev.name === 'ExitPlanMode') view.plans.add(ev.id);
             if (ev.name === 'Task' || ev.name === 'Agent') sawAgent = true;
         }
         if (ev.kind === 'user') {
@@ -1035,7 +1439,13 @@ function appendEvents(events, view = SESSION_VIEW) {
         }
         frag.append(node);
     }
-    if (frag.childNodes.length) view.log.append(frag);
+    flush();
+    // A transcript that ends in tool calls has no message coming to close the
+    // last run — openSession replays a finished conversation in one call, and
+    // that run would otherwise stay unfolded forever. Only when nothing is
+    // running: mid-turn, the calls on screen are the work you are watching.
+    if (!isBusy()) closeRun(view);
+    if (newTasks) { renderTasks(); if (live) loadTasksSoon(); }
     if (!view.isAgent) {
         if (newTurn) renderTurns();
         // A Task call that has only just appeared belongs on the strip now, not
@@ -1067,11 +1477,151 @@ function patchTool(patch, view = SESSION_VIEW) {
     // Rebuild the body up front rather than waiting for the toggle event the
     // assignment queues, so a block that was open does not blink shut.
     if (det && wasOpen) { fillTool(det, entry.ev); det.open = true; }
+    // Read before the swap: `fresh` is not in the document yet, so asking it
+    // what it belongs to answers nothing.
+    const fold = entry.node.closest('.trun');
     entry.node.replaceWith(fresh);
     entry.node = fresh;
+    // A result landing on a run that has already folded moves its clock on and
+    // may be the error the row has to own up to.
+    if (fold) paintRunSummary(fold);
     view.nodes.set(entry.ev.id, entry);
     // A result landing on a Task call is a subagent finishing: the strip says so.
     if (!view.isAgent && entry.ev.agent) renderAgents();
+}
+
+// ── runs of tool calls ───────────────────────────────────────────────────
+//
+// Between one message and the next an agent may make thirty tool calls, and the
+// transcript printed every one of them. Scrolling back through a long session
+// meant scrolling past walls of Read/Bash/Edit to find the sentences that say
+// what actually happened.
+//
+// So a run of them folds into a single row once a message closes it — the same
+// row a tool call draws, with "16 tool calls" where the name goes and a tally
+// where the command goes. Only once it is *closed*: while the calls are still
+// arriving they are the work you are watching, and folding them as they land
+// would be taking the transcript away mid-turn.
+//
+// The rows are moved into the fold, not redrawn. That is what keeps patchTool
+// and redrawEvent working — they replace a node wherever it happens to be — and
+// it is why a tool block you had opened is still open when you open the fold.
+
+/** Is a turn in flight? While one is, the last run is still being written. */
+function isBusy() {
+    const r = state.runner;
+    return Boolean(r && (r.state === 'busy' || r.state === 'starting'));
+}
+
+/**
+ * Fold the run of tool calls that has just ended.
+ *
+ * Contiguity is checked against the DOM rather than assumed, because three
+ * things append straight to the log without going through appendEvents: the
+ * line left behind when you answer a permission, the message row drawn at Send
+ * before the transcript has it, and the permission card itself. Any of them can
+ * land in the middle of a run, and wrapping first-to-last would swallow it and
+ * reorder the conversation. Each contiguous stretch folds on its own instead,
+ * so what is on screen keeps the order it was written in.
+ */
+function closeRun(view) {
+    const ids = view.run;
+    if (!ids.length) return;
+    const opts = grouping();
+    if (!opts.groupToolCalls) { ids.length = 0; return; }
+
+    let run = [];
+    const runs = [];
+    for (const id of ids) {
+        const entry = view.nodes.get(id);
+        const node = entry && entry.node;
+        if (!node || node.parentNode !== view.log) {
+            if (run.length) runs.push(run);
+            run = [];
+            continue;
+        }
+        if (run.length && run[run.length - 1].node.nextElementSibling !== node) {
+            runs.push(run);
+            run = [];
+        }
+        run.push(entry);
+    }
+    if (run.length) runs.push(run);
+    ids.length = 0;
+
+    for (const r of runs) {
+        if (r.filter(e => e.ev.kind === 'tool').length < opts.groupMinCalls) continue;
+        foldRun(r);
+    }
+}
+
+/** Wrap one contiguous stretch of rows in a fold, in place. */
+function foldRun(entries) {
+    const det = el('details', { class: 'trun' });
+    det.append(el('summary', {}));
+    entries[0].node.before(det);
+    for (const e of entries) det.append(e.node);
+    // The events themselves, so a result arriving after the fold can redraw the
+    // row. patchTool assigns into the event object rather than replacing it, so
+    // this list stays true without being rebuilt.
+    det.runEvents = entries.map(e => e.ev);
+    paintRunSummary(det);
+    return det;
+}
+
+/**
+ * Draw the fold's own row.
+ *
+ * `.trow` wears the same clothes as a collapsed tool call's summary,
+ * deliberately: this is one more row of the same kind, and the only thing it
+ * says differently is how many.
+ */
+function paintRunSummary(det) {
+    const evs = det.runEvents || [];
+    if (!evs.length) return;
+    const tools = evs.filter(e => e.kind === 'tool');
+    const thoughts = evs.length - tools.length;
+
+    // In the order they were first used, which reads as an account of the run.
+    // Sorting by count would put the same three names at the front every time
+    // and say nothing about what the agent actually did first.
+    const byName = new Map();
+    for (const e of tools) byName.set(e.name, (byName.get(e.name) || 0) + 1);
+    const parts = [...byName].map(([name, n]) => (n > 1 ? `${name} \u00d7${n}` : name));
+    if (thoughts) parts.push(thoughts > 1 ? `${thoughts} thoughts` : '1 thought');
+
+    // Wall time across the run, which is what you would have watched. A call
+    // that was interrupted has no result and no end; the ones either side of it
+    // still bound the span.
+    const start = Date.parse(evs[0].ts);
+    let end = start;
+    for (const e of evs) {
+        const t = Date.parse(e.resultTs || e.ts);
+        if (Number.isFinite(t) && t > end) end = t;
+    }
+    const span = Number.isFinite(start) && end > start ? end - start : 0;
+
+    // Never 'pending': a closed run has nothing still running, and the dot for
+    // that one breathes.
+    const status = evs.some(e => e.status === 'error' || e.isError) ? 'error' : 'ok';
+
+    det.querySelector(':scope > summary').replaceChildren(
+        el('div', { class: 'ev ev-trun' },
+            // The clock is the row's, not the reader's: a screen reader
+            // announcing it inside the button's label would be reading out the
+            // gutter it is already skipping everywhere else.
+            el('div', { class: 'ev-time', 'aria-hidden': 'true' }, clockOf(evs[0].ts)),
+            el('div', { class: 'ev-body' },
+                el('div', { class: 'trow', 'data-status': status },
+                    el('span', { class: 'caret' }, '\u25b6'),
+                    el('span', { class: 'tname' },
+                        `${tools.length} tool call${tools.length === 1 ? '' : 's'}`),
+                    el('span', { class: 'targ' }, parts.join(' \u00b7 ')),
+                    el('span', { class: 'tmeta' }, dur(span)),
+                ),
+            ),
+        ),
+    );
 }
 
 function row(ev, kind, ...body) {
@@ -1088,6 +1638,7 @@ function renderEvent(ev) {
         case 'thinking': return renderThinking(ev);
         case 'tool': return renderTool(ev);
         case 'agent-done': return renderAgentDone(ev);
+        case 'peer-message': return renderPeerMessage(ev);
         case 'system': return renderSystem(ev);
         case 'compact': return row(ev, 'compact', 'context compacted');
         default: return null;
@@ -1104,11 +1655,46 @@ function renderUser(ev) {
     } else {
         body.push(el('div', { class: 'prose', html: renderMarkdown(ev.text) }));
     }
-    for (const img of ev.images || []) {
-        if (img.dataUri) body.push(el('img', { src: img.dataUri, alt: 'attached image',
-            style: 'max-width:100%; margin-top:8px; border:1px solid var(--outline-soft)' }));
+    // Wrapped, and with the styling in a class. Both were fine while a turn could only
+    // ever have arrived with one image on it — now that you can paste three, two bare
+    // <img> in a row flowed together edge to edge and read as one wide picture.
+    const shots = (ev.images || []).filter(img => img.dataUri);
+    if (shots.length) {
+        body.push(el('div', { class: 'ev-images' }, ...shots.map(img =>
+            el('img', { class: 'ev-image', src: img.dataUri, alt: 'attached image' }))));
     }
+    // Files this turn attached. An image is usually both — the thumbnail above is what
+    // the model was handed, this is the file on disk — because the card is the only one
+    // of the two you can click to open, and "open the screenshot I just pasted" is a
+    // thing you want as much for a PNG as for a PDF.
+    if (ev.files && ev.files.length) body.push(attachCards(ev));
     return row(ev, 'user', ...body);
+}
+
+/**
+ * The small cards under a user turn, one per attached file.
+ *
+ * Deliberately not a preview. What you want from a file in a transcript is to know it
+ * is there and to be able to open it — rendering a PDF or a spreadsheet inline is a
+ * viewer this app has no business being. So: name, size, and a click that hands the
+ * path to whatever the machine opens that kind of file with.
+ *
+ * The paths came out of the message text (`parseAttachmentNote`, bridge/transcript.js),
+ * which is why this works for a turn sent months ago and reread off disk.
+ */
+function attachCards(ev) {
+    const sessionId = state.current && state.current.sessionId;
+    return el('div', { class: 'ev-files' }, ...ev.files.map(f => el('button', {
+        class: 'ev-file', type: 'button',
+        title: `Open ${f.relPath}`,
+        // Without a session in view there is nothing to resolve the path against.
+        disabled: !sessionId,
+        onclick: () => sessionId && openAttachment(sessionId, f.relPath),
+    },
+        el('span', { class: 'ev-file-glyph' }, attachExt(f.name)),
+        el('span', { class: 'ev-file-name' }, f.name),
+        f.size ? el('span', { class: 'ev-file-size' }, f.size) : null,
+    )));
 }
 
 function renderAssistant(ev) {
@@ -1171,6 +1757,377 @@ function renderAgentDone(ev) {
     }
 
     return row(ev, 'agent-done', ...body);
+}
+
+// ── suggested follow-ups ─────────────────────────────────────────────────
+//
+// Work an agent noticed and did not do, drawn beside the conversation rather
+// than in it.
+//
+// The agent files these through a tool this app gives it (bridge/suggest-mcp.js),
+// so an offer is a tool call in the transcript like any other — which is why it
+// survives a reload, appears in a second window, and can be read out of a
+// session this bridge does not own. Nothing about the offer is stored here; only
+// what you decided about it, which is the bridge's suggestions.json.
+//
+// **An aside, not part of the log.** The transcript is a record of what
+// happened, and an offer is the one thing in the pane that has not happened yet
+// — it is a decision waiting on you. Inline, it interrupted the reading and
+// scrolled away from you; here it stays put and stays optional. appendEvents
+// lifts these out of the event stream on the way past, so the log never sees one.
+//
+// The panel collapses to a strip, because a session that suggested six things
+// should not be permanently narrower than one that suggested none. Each task
+// collapses on its own too, and the default is per task rather than global: an
+// offer you have not dealt with opens itself, one you have opens to a line.
+
+/** What a task's body should do when nothing has been said about it. */
+const taskOpenByDefault = (acted) => !acted;
+
+/** The whole aside, rebuilt from state.tasks. Cheap: there are never many. */
+function renderTasks() {
+    // In the order they were raised, oldest first, which is how the aside has
+    // always read. Sorted rather than left to insertion order: the panel's rows
+    // now come from /api/suggestions, which answers newest-first because that is
+    // what a list spanning every session wants, and a card arriving on the tail
+    // is merged in beside them.
+    const tasks = [...state.tasks.values()]
+        .sort((a, b) => (Date.parse(a.ts) || 0) - (Date.parse(b.ts) || 0));
+    dom.tasks.hidden = !tasks.length;
+    if (!tasks.length) return;
+
+    // Only the ones still on offer are counted. A count that includes things you
+    // have already dealt with is a number that never goes down, which is the
+    // opposite of what a count on a to-do list is for.
+    const open = tasks.filter(t => !state.suggestions.get(t.id)).length;
+    const label = open ? String(open) : '✓';
+    dom.tasksCount.textContent = label;
+    dom.tasksStripCount.textContent = label;
+
+    dom.tasksStrip.hidden = !state.tasksShut;
+    dom.tasksOpen.hidden = state.tasksShut;
+    dom.tasks.classList.toggle('shut', state.tasksShut);
+    if (state.tasksShut) return;   // nothing behind the strip needs building
+
+    dom.tasksList.replaceChildren(...tasks.map(taskCard));
+}
+
+/**
+ * One task.
+ *
+ * A `details`, which is the same thing a tool call is in the log, so the caret
+ * and the keyboard behaviour are the browser's rather than ours. The summary is
+ * the title alone; everything that would make the panel wide lives inside.
+ */
+function taskCard(ev) {
+    const acted = state.suggestions.get(ev.id) || null;
+    const remembered = state.taskOpen.get(ev.id);
+    const open = remembered === undefined ? taskOpenByDefault(acted) : remembered;
+
+    const det = el('details', {
+        class: 'task', 'data-status': acted ? acted.status : 'open',
+        'data-task': ev.id,
+        open,
+        ontoggle: (e) => state.taskOpen.set(ev.id, e.currentTarget.open),
+    },
+    el('summary', {},
+        el('span', { class: 'caret' }, '▶'),
+        el('span', { class: 'task-name' }, ev.title || firstLine(ev.prompt)),
+        // A button inside the summary, which is legal and works — but the click
+        // has to be stopped, or it reaches the summary and folds the card at the
+        // same moment the dialog opens over it.
+        el('button', {
+            class: 'task-open', type: 'button', title: 'Read this at full width',
+            'aria-label': 'Read this at full width',
+            onclick: (e) => { e.preventDefault(); e.stopPropagation(); openTaskDialog(ev); },
+        }, '⤢'),
+    ));
+
+    const body = el('div', { class: 'task-body' });
+    if (ev.why) body.append(el('div', { class: 'task-why' }, ev.why));
+    // The prompt in full. It is the thing being offered and the only way to
+    // judge the offer; a preview would mean starting a session on a message you
+    // have not read.
+    body.append(el('div', { class: 'task-prompt prose', html: renderMarkdown(ev.prompt) }));
+    // Only when it is somewhere other than where this conversation is happening.
+    // Almost every task runs in the session's own directory, and repeating that
+    // path down the panel is three lines of noise saying nothing — but a task
+    // pointed at a *different* checkout is worth knowing about before you start it.
+    if (ev.cwd && ev.cwd !== (state.current && state.current.cwd)) {
+        body.append(el('div', { class: 'task-cwd' }, ev.cwd));
+    }
+
+    body.append(taskActions(ev));
+
+    det.append(body);
+    return det;
+}
+
+/**
+ * What you can do about a task: the same three buttons wherever it is shown.
+ *
+ * Built fresh each time rather than moved between the card and the dialog, so
+ * the two can be on screen at once and neither steals the other's controls.
+ */
+function taskActions(ev) {
+    const acted = state.suggestions.get(ev.id) || null;
+
+    if (acted && acted.status === 'started') {
+        return el('div', { class: 'task-done' },
+            el('span', {}, 'Started'),
+            acted.startedId
+                ? el('button', { class: 'linky', type: 'button',
+                    onclick: () => { closeTaskDialog(); openSession(acted.startedId); } }, 'open it')
+                : null,
+            // Undo, because a task that has gone quiet with no way back is a task
+            // that lies once the session it names has been deleted.
+            el('button', { class: 'linky', type: 'button',
+                onclick: () => actOnSuggestion(ev, null) }, 'offer again'),
+        );
+    }
+    if (acted && acted.status === 'dismissed') {
+        return el('div', { class: 'task-done' },
+            el('span', {}, 'Dismissed'),
+            el('button', { class: 'linky', type: 'button',
+                onclick: () => actOnSuggestion(ev, null) }, 'undo'),
+        );
+    }
+    return el('div', { class: 'task-btns' },
+        el('button', { class: 'more-btn primary', type: 'button',
+            onclick: (e) => startSuggestion(ev, e.currentTarget) }, 'Start'),
+        el('button', { class: 'more-btn', type: 'button',
+            onclick: () => { closeTaskDialog(); openNew({ cwd: ev.cwd || '', prompt: ev.prompt }); } },
+        'Edit first'),
+        el('button', { class: 'more-btn', type: 'button',
+            onclick: () => actOnSuggestion(ev, 'dismissed') }, 'Dismiss'),
+    );
+}
+
+// ── a task at a readable width ───────────────────────────────────────────
+//
+// The panel is 300px, which is right for scanning a list and wrong for reading
+// a prompt written to brief an agent that has none of your context — those run
+// to paragraphs, and judging one means reading all of it rather than the first
+// two lines. So the panel keeps the list, and this is where you read the thing.
+//
+// The same three buttons are here as well as there. A dialog you have to close
+// before you can act on what it told you is a dialog that made you read twice.
+
+/** Show one task in the dialog. */
+function openTaskDialog(ev) {
+    state.taskDialog = ev.id;
+    dom.taskDlgTitle.textContent = ev.title || 'Suggested follow-up';
+
+    dom.taskDlgWhy.textContent = ev.why || '';
+    dom.taskDlgWhy.hidden = !ev.why;
+
+    dom.taskDlgPrompt.innerHTML = renderMarkdown(ev.prompt);
+
+    // Named unconditionally here, unlike on the card. The card leaves it out when
+    // it is the obvious directory because three copies of one path down a narrow
+    // column is noise; this is the place you came to read the whole thing, and
+    // "where would this run" is part of that.
+    dom.taskDlgCwd.textContent = ev.cwd || '';
+    dom.taskDlgCwd.hidden = !ev.cwd;
+
+    paintTaskDialogActions(ev);
+    dom.taskScrim.hidden = false;
+    dom.taskDlgCopy.focus();
+}
+
+/** Rebuild just the buttons, for a decision taken while the dialog is open. */
+function paintTaskDialogActions(ev) {
+    dom.taskDlgActs.replaceChildren(taskActions(ev));
+}
+
+function closeTaskDialog() {
+    if (dom.taskScrim.hidden) return;
+    dom.taskScrim.hidden = true;
+    const id = state.taskDialog;
+    state.taskDialog = null;
+    // Back to the summary the dialog was opened from, so the keyboard does not
+    // land on the body. It may have been rebuilt underneath — find it by id.
+    const back = id && dom.tasksList.querySelector(`[data-task="${CSS.escape(id)}"] summary`);
+    if (back) back.focus();
+}
+
+/**
+ * Start the session a task describes, exactly as the dialog would.
+ *
+ * `plan` rather than the mode this session is in: a prompt written by an agent
+ * for an agent has had no human read it as an instruction yet, and the first
+ * thing the new session should do is say what it intends. It is also what the
+ * Start dialog defaults to.
+ */
+async function startSuggestion(ev, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = 'Starting'; }
+    try {
+        const r = await post('/api/sessions', {
+            cwd: ev.cwd || (state.current && state.current.cwd),
+            prompt: ev.prompt,
+            permissionMode: 'plan',
+            // A task raised inside a test session is scratch work too. A row
+            // from /api/suggestions says so itself, because the task board draws
+            // tasks from conversations nobody has open.
+            test: state.dev && !!(ev.session ? ev.session.test
+                : (state.current && state.current.test)),
+        });
+        await actOnSuggestion(ev, 'started', r.sessionId);
+        closeTaskDialog();
+        toast('Session started.', 'ok');
+        openSessionSoon(r.sessionId);
+    } catch (err) {
+        if (btn) { btn.disabled = false; btn.textContent = 'Start'; }
+        toast(`Could not start it: ${err.message}`, 'error');
+    }
+}
+
+/**
+ * Which conversation a task belongs to.
+ *
+ * A row from `GET /api/suggestions` names its own session, and that is the whole
+ * reason the task board can act on a task raised in a conversation nobody has
+ * open. A `suggestion` event off the transcript tail carries no `sessionId`,
+ * because it could only ever have come from the session being read.
+ */
+const taskSessionId = (ev) =>
+    ev.sessionId || (state.current && state.current.sessionId) || null;
+
+/**
+ * Record what happened to a task, and redraw the panel.
+ *
+ * `status` of null undoes — the task goes back to offering itself. Optimistic,
+ * then put back if the bridge refuses, because these are single clicks on
+ * something already on screen and a round trip before anything moves reads as a
+ * dead button.
+ */
+async function actOnSuggestion(ev, status, startedId = null) {
+    const sessionId = taskSessionId(ev);
+    if (!sessionId) return;
+    const before = state.suggestions.get(ev.id) || null;
+
+    if (status) state.suggestions.set(ev.id, { status, startedId, at: Date.now() });
+    else state.suggestions.delete(ev.id);
+    // Deciding about a task is also finishing with it, so it folds away — and
+    // undoing opens it again. Left to the default rather than remembered, which
+    // is the one place the remembered state would be actively unhelpful.
+    state.taskOpen.delete(ev.id);
+    renderTasks();
+    if (state.taskDialog === ev.id) paintTaskDialogActions(ev);
+
+    try {
+        await post(`/api/sessions/${sessionId}/suggestions/${ev.id}`, { status, startedId });
+    } catch (err) {
+        if (before) state.suggestions.set(ev.id, before);
+        else state.suggestions.delete(ev.id);
+        renderTasks();
+        if (state.taskDialog === ev.id) paintTaskDialogActions(ev);
+        toast(`Could not save that: ${err.message}`, 'error');
+    }
+}
+
+/** The first line of a block of text, for a row with room for one. */
+function firstLine(text, max = 70) {
+    const line = String(text || '').split('\n').find(l => l.trim()) || '';
+    return line.length > max ? line.slice(0, max - 1) + '…' : line;
+}
+
+/** Put the panel away, or bring it back. Remembered across sessions. */
+function showTasks(on) {
+    state.tasksShut = !on;
+    localStorage.setItem('tasksShut', state.tasksShut ? '1' : '0');
+    renderTasks();
+    // Focus follows the thing that replaced what was clicked, so the keyboard
+    // does not land on the body after either direction.
+    (state.tasksShut ? dom.tasksStrip : dom.tasksCollapse).focus();
+}
+
+/**
+ * Replace one already-rendered event's node with a freshly built one.
+ *
+ * Almost everything in the log is a fact about the transcript and never moves.
+ * The exception is anything naming another session: a peer message and a
+ * `SendMessage` block both want the peer list, which is fetched lazily, so they
+ * are drawn once without it and again once it lands. See warmPeers.
+ *
+ * Both views are searched, because a subagent's transcript is a pane of its own.
+ * Which one holds the node is not worth asking about — the id is unique either
+ * way, and both panes stay mounted.
+ */
+function redrawEvent(ev) {
+    for (const nodes of [state.nodes, state.agentNodes]) {
+        const entry = nodes.get(ev.id);
+        if (!entry || !entry.node.isConnected) continue;
+        const next = renderEvent(ev);
+        if (!next) return;
+        entry.node.replaceWith(next);
+        nodes.set(ev.id, { ev, node: next });
+        return;
+    }
+}
+
+/**
+ * Put names to the sessions this conversation talked to.
+ *
+ * A message card and a `SendMessage` block both want to say *which* session,
+ * and to offer a way into it — which needs the peer list, which is fetched
+ * lazily because most conversations never mention another session at all. So
+ * the cards draw without it and are redrawn once it lands, rather than every
+ * conversation paying for a request it does not need.
+ *
+ * Only when something in the log actually refers to a peer, and only when the
+ * fetch told us something new: a list already in hand means the cards were
+ * drawn right the first time and redrawing them would collapse a tool block
+ * somebody had just opened.
+ */
+async function warmPeers() {
+    const cards = [...state.nodes.values()].filter(({ ev }) =>
+        ev.kind === 'peer-message' || (ev.kind === 'tool' && ev.name === 'SendMessage'));
+    if (!cards.length) return;
+    const before = state.peers.at;
+    try { await loadPeers(); } catch { return; }
+    if (state.peers.at === before) return;
+    for (const { ev } of cards) redrawEvent(ev);
+}
+
+/**
+ * A message from another Claude session.
+ *
+ * Claude Code delivers one as a user message, because a conversation still has
+ * no other channel — so left alone it renders as though somebody had pasted it
+ * at you. It is marked meta as well, which is why until now it rendered as
+ * nothing at all: a session that got messaged showed an empty gap.
+ *
+ * The sender's name is also its address — `SendMessage` takes a name and there
+ * is no other way to say who you mean — so Reply seeds the composer with it
+ * rather than trying to send anything itself. What happens next is the agent's
+ * to decide, which is the point of the feature.
+ */
+function renderPeerMessage(ev) {
+    const who = ev.fromName || ev.from || 'another session';
+    const peer = ev.fromName ? peerByName(ev.fromName) : null;
+
+    const body = [el('div', { class: 'ev-label' }, `Message from ${who}`)];
+    if (peer && peer.title && peer.title !== who) {
+        body.push(el('div', { class: 'peer-sub' }, peer.title));
+    }
+    body.push(el('div', { class: 'prose', html: renderMarkdown(ev.text || '') }));
+
+    const btns = [];
+    // Only when that session is one this app can show. A peer is often a
+    // background agent with no transcript indexed here, and a button that
+    // 404s is worse than no button.
+    if (peer && peer.sessionId) {
+        btns.push(el('button', { class: 'more-btn', type: 'button',
+            onclick: () => openSession(peer.sessionId) }, 'Open that session'));
+    }
+    if (ev.fromName) {
+        btns.push(el('button', { class: 'more-btn', type: 'button',
+            onclick: () => insertMention(ev.fromName) }, 'Reply'));
+    }
+    if (btns.length) body.push(el('div', { class: 'subagent-btns' }, ...btns));
+
+    return row(ev, 'peer-message', ...body);
 }
 
 function renderSystem(ev) {
@@ -1255,8 +2212,10 @@ const isTyping = (t) => !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA
 function transcriptPlan() {
     if (!state.current || state.runner) return null;
     let found = null;
-    for (const { ev } of state.tools.values()) {
-        if (ev.name !== 'ExitPlanMode' || ev.status !== 'pending') continue;
+    for (const id of state.plans) {
+        const entry = state.tools.get(id);
+        if (!entry || entry.ev.status !== 'pending') continue;
+        const { ev } = entry;
         if (!found || Date.parse(ev.ts) >= Date.parse(found.ts)) found = ev;
     }
     if (!found) return null;
@@ -1822,7 +2781,16 @@ function toolSummary(ev) {
         case 'ExitPlanMode': return clip((i.plan || '').replace(/^#+\s*/, ''), 80);
         case 'AskUserQuestion':
             return (i.questions || []).map(q => q.header || q.question).join(' · ');
-        case 'SendMessage': return `to ${i.to || i.recipient || '?'}`;
+        // The recipient is a peer's name, which is its address but not always
+        // what you call it — so the row shows the session's title when this app
+        // knows one, and the raw name when it does not.
+        case 'SendMessage': {
+            const to = i.to || i.recipient || '?';
+            const peer = peerByName(to);
+            const who = peer && peer.title && peer.title !== to ? `${to} — ${peer.title}` : to;
+            const said = typeof i.message === 'string' ? i.message : (i.summary || '');
+            return said ? `to ${who}: ${clip(said, 60)}` : `to ${who}`;
+        }
         default: {
             const first = Object.values(i)[0];
             return typeof first === 'string' ? clip(first, 80) : '';
@@ -1893,6 +2861,22 @@ function toolBody(ev) {
         out.push(section('Plan', el('div', { class: 'prose', html: renderMarkdown(i.plan || '') })));
     } else if (ev.name === 'AskUserQuestion') {
         out.push(section('Questions', questionsView(i.questions || [])));
+    } else if (ev.name === 'SendMessage') {
+        // One half of a conversation between two sessions. Rendered as prose
+        // rather than as a key-value dump because it is a message somebody
+        // wrote, and the other half — the arrival — renders that way too.
+        const said = typeof i.message === 'string' ? i.message : JSON.stringify(i.message, null, 2);
+        if (i.summary) out.push(section('Summary', el('div', { class: 'prose' }, i.summary)));
+        out.push(section('Message', el('div', { class: 'prose', html: renderMarkdown(said || '') })));
+        const peer = peerByName(i.to || i.recipient || '');
+        // Only when that session is one this app can show. Peers are often
+        // background agents with no transcript indexed here, and a button that
+        // 404s is worse than no button.
+        if (peer && peer.sessionId) {
+            out.push(el('div', { class: 'subagent-btns' },
+                el('button', { class: 'more-btn', type: 'button',
+                    onclick: () => openSession(peer.sessionId) }, 'Open that session')));
+        }
     } else if (Object.keys(i).length) {
         out.push(section('Input', kvView(i)));
     }
@@ -2204,6 +3188,7 @@ async function openAgent(toolUseId, { quiet = false } = {}) {
         state.agentOffset = d.offset || 0;
         state.agentNodes.clear();
         state.agentTools.clear();
+        state.agentRun.length = 0;
         dom.agentLog.replaceChildren();
 
         // Both panes stay mounted, so each keeps its own scroll position and the
@@ -2236,6 +3221,7 @@ function leaveAgent() {
     state.agentOffset = 0;
     state.agentNodes.clear();
     state.agentTools.clear();
+    state.agentRun.length = 0;
     dom.agentLog.replaceChildren();
     dom.scroll.hidden = false;
     dom.agentScroll.hidden = true;
@@ -2254,6 +3240,9 @@ function closeAgent() {
     rememberView();
 }
 
+// Writes the same `.conv-sub` as renderHeader, and deliberately without the
+// session's pull requests: a subagent did not raise them, and the line is about
+// the agent you are looking at. They come back when you leave it.
 function renderAgentHeader() {
     const a = agentRows().find(r => r.toolUseId === state.agent);
     if (!a) return;
@@ -2309,17 +3298,74 @@ async function loadChannels() {
     if (!state.current) return;
     const id = state.current.sessionId;
     try {
-        const { ports } = await get(`/api/sessions/${id}/devservers`);
+        const { ports, elsewhere } = await get(`/api/sessions/${id}/devservers`);
         if (!state.current || state.current.sessionId !== id) return;
         state.channels = ports;
+        state.channelsElsewhere = elsewhere || 0;
         renderChannels();
     } catch {
         // A missing channel strip is not worth interrupting the user over.
     }
 }
 
+/**
+ * The suggested follow-ups raised in the open conversation.
+ *
+ * From the bridge rather than from the event stream, which is what lets a task
+ * be answered without the transcript it lives in being parsed here. It is the
+ * same index /api/suggestions answers about every session with; this asks it for
+ * one, so the panel and a cross-session view read the same rows through the same
+ * code. Scoped to the open conversation deliberately — a list of everything
+ * outstanding is a place of its own, not a longer aside.
+ */
+async function loadTasks() {
+    if (!state.current) return;
+    const id = state.current.sessionId;
+    try {
+        const { suggestions } = await get(`/api/suggestions?session=${id}`);
+        if (!state.current || state.current.sessionId !== id) return;
+        const next = new Map((suggestions || []).map(t => [t.id, t]));
+        // A card the tail brought in that the rescan has not reached yet stays.
+        // Replacing the map outright would take it away again and put it back a
+        // rescan later, which is a card blinking out of the aside while somebody
+        // is reading it. The bridge wins for everything it does know about.
+        for (const [tid, task] of state.tasks) if (!next.has(tid)) next.set(tid, task);
+        state.tasks = next;
+        renderTasks();
+    } catch {
+        // The cards already showing came off the transcript tail and are still
+        // true. Interrupting somebody over a panel that is merely not fresher
+        // than it was would be worse than the staleness.
+    }
+}
+
+// Coalesced, because a turn can file several offers in a row and the rescan they
+// are waiting on is debounced anyway — one refetch shortly after the last of
+// them is the whole need.
+let taskLoadTimer = null;
+function loadTasksSoon() {
+    if (taskLoadTimer) return;
+    taskLoadTimer = setTimeout(() => { taskLoadTimer = null; loadTasks(); }, 1200);
+}
+
 function renderChannels() {
-    dom.channels.replaceChildren(...state.channels.map(channelChip));
+    const chips = state.channels.map(channelChip);
+    // Say when ports were left out, rather than leaving the strip looking like
+    // nothing is running. These are servers held by another worktree — the
+    // reason chips used to bleed across sessions — and naming the count is what
+    // makes their absence legible instead of merely quiet.
+    const n = state.channelsElsewhere;
+    if (n) {
+        chips.push(el('span', {
+            class: 'chan-note',
+            title: n > 1
+                ? `${n} ports this session mentioned are held by processes in other `
+                    + 'workspaces, so they are not shown here.'
+                : 'A port this session mentioned is held by a process in another '
+                    + 'workspace, so it is not shown here.',
+        }, `${n} elsewhere`));
+    }
+    dom.channels.replaceChildren(...chips);
 }
 
 /**
@@ -2328,10 +3374,20 @@ function renderChannels() {
  */
 function channelChip(p) {
     const go = el('span', { class: 'go' }, p.listening ? 'Open' : 'Gone');
+    // Why this chip is here, which is the question the strip used to be unable
+    // to answer. `ours` is the kernel's word — the process holding the port runs
+    // in this session's directory. `unverified` is nobody's word but this
+    // session's own output: nothing on the Linux side holds the port, which on
+    // this machine means a server on the Windows side of the mirror.
+    const why = p.ours
+        ? `Running in ${p.workspace}`
+        : (p.unverified ? 'No local process holds this port — shown because this '
+            + 'session started it' : '');
     const chip = el('div', {
-        class: 'channel',
+        class: `channel${p.unverified ? ' unverified' : ''}`,
         'data-live': String(p.listening),
-        title: p.evidence ? `${p.evidence.from}: ${p.evidence.command}` : '',
+        title: [why, p.evidence ? `${p.evidence.from}: ${p.evidence.command}` : '']
+            .filter(Boolean).join('\n'),
     },
         el('button', {
             class: 'chan-open', type: 'button',
@@ -2483,10 +3539,14 @@ function syncBoardWatch() {
 function showLive(on) {
     state.live.open = on;
     // The other way round from showDash: turning the board on gets the
-    // whole-screen board out of the way, since the two cannot both be read.
-    if (on) state.dash.open = false;
+    // whole-screen panels out of the way, since it cannot be read under one.
+    // All of them, not just the dashboard — History had the same gap all along
+    // and it only became visible once Ctrl+3 had to reach the live board past
+    // whatever was already up.
+    if (on) { state.dash.open = false; state.notes.open = false; state.taskboard.open = false; }
     paintPanels();
     syncBoardWatch();
+    syncTaskboardWatch();
 
     // The turn clocks count up between pushes rather than with them: a board of
     // sessions all doing something slow would otherwise be perfectly still, and
@@ -2609,7 +3669,10 @@ let restoring = false;
 function rememberView() {
     if (restoring) return;
     const q = new URLSearchParams();
-    if (state.dash.open) {
+    if (state.taskboard.open) {
+        q.set('view', 'taskboard');
+        if (state.live.open) q.set('live', '1');
+    } else if (state.dash.open) {
         q.set('view', 'dashboard');
         if (state.live.open) q.set('live', '1');
     } else if (state.live.open) {
@@ -2670,13 +3733,19 @@ function applyOverview(data) {
     // told us about.
     state.waiting = new Set(data.sessions.filter(s => s.ask).map(s => s.sessionId));
     paintLiveBadge();
+    paintTaskboardBadge();
     // Not while the work-in-flight board is covering it: the cards would be
     // rebuilt once a second for nobody to look at.
     if (liveVisible()) renderLive();
 }
 
 /** Whether the board is actually on screen, rather than merely switched on. */
-const liveVisible = () => state.live.open && !state.dash.open;
+// Every whole-screen panel, not just the dashboard: a board left switched on
+// under one of them is not on screen, and rebuilding it once a second while it
+// cannot be seen is what `showDash`/`showTaskboard` catch it up from on the way
+// out. History was already missed here before the task board arrived.
+const liveVisible = () => state.live.open
+    && !state.dash.open && !state.notes.open && !state.taskboard.open;
 
 /**
  * Whether the board is the sideways strip under a conversation.
@@ -2708,8 +3777,8 @@ function paintLiveBadge() {
     dom.liveBadge.textContent = String(waiting);
     dom.liveBadge.classList.toggle('urgent', waiting > 0);
     dom.btnLive.title = waiting
-        ? `${waiting} session${waiting === 1 ? ' is' : 's are'} waiting for you (Ctrl+2)`
-        : 'Every session running right now (Ctrl+2)';
+        ? `${waiting} session${waiting === 1 ? ' is' : 's are'} waiting for you (Ctrl+3)`
+        : 'Every session running right now (Ctrl+3)';
 }
 
 /** Prime the badge at boot, for asks that were already outstanding. */
@@ -2718,6 +3787,7 @@ async function primeWaiting() {
         const d = await get('/api/overview');
         state.waiting = new Set(d.sessions.filter(s => s.ask).map(s => s.sessionId));
         paintLiveBadge();
+        paintTaskboardBadge();
     } catch { /* the first permission event will start the count off anyway */ }
 }
 
@@ -2770,22 +3840,30 @@ function renderLive() {
         return;
     }
 
-    // The board is rebuilt whenever anything moves, which is constantly while
-    // agents are working — an activity line changing is enough. Somebody typing
-    // into a card would have the box pulled out from under them mid-word, so
-    // where the cursor was is noted and put back. The text itself survives in
-    // `drafts`; this is about the focus and the caret.
+    // The board is pushed whenever anything moves, which is constantly while
+    // agents are working — an activity line changing is enough. What changed is
+    // almost always one card, so `liveCardFor` keeps the nodes for the rest and
+    // `reconcile` moves only what actually differs. Somebody typing into a card
+    // is then untouched in the ordinary case; the save-and-restore below stays
+    // as the backstop for the passes that do have to rewrite a whole group.
     const active = document.activeElement;
     const typing = active && active.dataset && active.dataset.sendFor
         ? { id: active.dataset.sendFor, at: active.selectionStart, to: active.selectionEnd }
         : null;
     const scroll = { x: dom.liveBody.scrollLeft, y: dom.liveBody.scrollTop };
 
-    dom.liveBody.replaceChildren(...liveGroups(d, compact));
+    freshCards = [];
+    reconcile(dom.liveBody, liveGroups(d, compact));
     dom.liveBody.scrollLeft = scroll.x;
     dom.liveBody.scrollTop = scroll.y;
 
-    if (typing) {
+    // Anything not on the board any more, out of both caches — the same
+    // discipline `keepOnly` applies on the bridge, and without it a day's worth
+    // of cards is held alive by the map alone.
+    const live = new Set([...d.sessions, ...(d.recent || [])].map(s => s.sessionId));
+    for (const id of state.live.nodes.keys()) if (!live.has(id)) state.live.nodes.delete(id);
+
+    if (typing && document.activeElement !== active) {
         const box = dom.liveBody.querySelector(
             `[data-send-for="${CSS.escape(typing.id)}"]`);
         if (box) {
@@ -2793,7 +3871,85 @@ function renderLive() {
             box.setSelectionRange(typing.at, typing.to);
         }
     }
-    for (const box of dom.liveBody.querySelectorAll('.lsend-box')) grow(box, 30, 84);
+
+    // Sizing a composer means writing a height, reading `scrollHeight` and
+    // writing again — a forced synchronous layout, of a document that also
+    // holds the whole open transcript. Doing that per card per second is what
+    // made the board unusable beside a large session. Only a box that is both
+    // newly built and carrying a restored draft needs it: an empty one is the
+    // height its single row gives it, and one that survived the pass already
+    // has its height. Reads are batched between the writes so the run costs one
+    // layout rather than one each.
+    const boxes = [];
+    for (const node of freshCards) {
+        const box = node.querySelector('.lsend-box');
+        if (box && box.value) boxes.push(box);
+    }
+    if (boxes.length) {
+        for (const box of boxes) box.style.height = 'auto';
+        const heights = boxes.map(box => Math.max(30, Math.min(84, box.scrollHeight)));
+        boxes.forEach((box, i) => { box.style.height = `${heights[i]}px`; });
+    }
+}
+
+/**
+ * The cards built during the current pass, for the one thing that has to
+ * measure them after they are on screen.
+ */
+let freshCards = [];
+
+/**
+ * One card, reused when the bridge says it has not changed.
+ *
+ * Every card carries a `sig` — a hash of its own contents, from `fingerprint` in
+ * bridge/overview.js. So a push where one agent moved is a push where every other
+ * card is byte-identical to the one already on screen, and keeping those nodes is
+ * most of what makes the board affordable: `liveCard` builds thirty-odd elements
+ * with a listener on several of them, and building all of them once a second,
+ * beside a document that also holds the whole open transcript, was the cost.
+ *
+ * `compact` is part of the key because it changes what `liveCard` draws — a dock
+ * that has just been moved must not be served cards cut for the other shape.
+ */
+function liveCardFor(s, compact) {
+    const prev = state.live.nodes.get(s.sessionId);
+    if (prev && prev.sig === s.sig && prev.compact === compact) return prev.node;
+
+    const node = liveCard(s, compact);
+    state.live.nodes.set(s.sessionId, { sig: s.sig, compact, node });
+    freshCards.push(node);
+    return node;
+}
+
+/**
+ * Put `next` into `parent`, moving as few nodes as possible.
+ *
+ * Deliberately not `replaceChildren`: re-parenting a node blurs anything focused
+ * inside it, so a wholesale swap takes the caret out of a card composer on every
+ * push. Where the only difference is that some positions hold a freshly built
+ * node, those positions are swapped and the rest are left alone.
+ *
+ * A node already mounted in this parent turning up at a different index means
+ * the order changed rather than the contents, and an in-place swap would drop a
+ * card on the floor — so that falls back to the rewrite. It is rare, and when
+ * the order changes the board has visibly moved anyway.
+ */
+function reconcile(parent, next) {
+    const cur = parent.children;
+    if (cur.length === next.length) {
+        const swaps = [];
+        let inPlace = true;
+        for (let i = 0; i < next.length; i++) {
+            if (cur[i] === next[i]) continue;
+            if (next[i].parentNode === parent) { inPlace = false; break; }
+            swaps.push([next[i], cur[i]]);
+        }
+        if (inPlace) {
+            for (const [to, from] of swaps) parent.replaceChild(to, from);
+            return;
+        }
+    }
+    parent.replaceChildren(...next);
 }
 
 /**
@@ -2836,7 +3992,7 @@ function liveGroups(d, compact) {
     const pinned = d.sessions.filter(s => s.reason === 'pinned');
     const recent = d.recent || [];
 
-    return [
+    const shown = [
         // Only `recent` carries its own overflow. `hidden` is the board's cap
         // biting, and it bites the bottom of the rank order — pinned before
         // running — so the payload cannot say which of these two groups lost a
@@ -2845,21 +4001,54 @@ function liveGroups(d, compact) {
         ['live', 'Live', live, 0],
         ['recent', 'Recent activity', recent, d.recentHidden],
         ['pinned', 'Pinned', pinned, 0],
-    ].filter(([, , list]) => list.length)
-        .map(([key, label, list, hidden]) => liveGroup(key, label, list, hidden, compact));
+    ].filter(([, , list]) => list.length);
+
+    const sections = shown.map(([key, label, list, hidden]) =>
+        liveGroup(key, label, list, hidden, compact));
+
+    // A group that has emptied — the last thing you touched today falling out
+    // of the recent window — must not keep its section and its cards alive.
+    const keys = new Set(shown.map(([key]) => key));
+    for (const key of state.live.groups.keys()) {
+        if (!keys.has(key)) state.live.groups.delete(key);
+    }
+    return sections;
 }
 
-/** One headed segment of the board. */
+/**
+ * One headed segment of the board, kept between passes.
+ *
+ * The section and its heading are built once and then written to, rather than
+ * rebuilt: they are what the cards hang under, and a card that is re-parented
+ * loses the focus inside it however unchanged it is. So the containers stay put
+ * and `reconcile` decides what moves within them.
+ */
 function liveGroup(key, label, list, hidden, compact) {
-    return el('section', { class: 'live-group', 'data-group': key },
-        el('h2', { class: 'lgroup-head' },
-            el('span', { class: 'lgroup-label' }, label),
-            el('span', { class: 'lgroup-count' }, String(list.length)),
-            // Same promise the subtitle makes about the board as a whole: what
-            // fell off the end is reported, because a list that silently stops
-            // reads as the end of the list.
-            hidden ? el('span', { class: 'lgroup-more' }, `+${hidden} more`) : null),
-        el('div', { class: 'lgroup-body' }, list.map(s => liveCard(s, compact))));
+    let g = state.live.groups.get(key);
+    if (!g) {
+        const count = el('span', { class: 'lgroup-count' });
+        // Same promise the subtitle makes about the board as a whole: what fell
+        // off the end is reported, because a list that silently stops reads as
+        // the end of the list.
+        const more = el('span', { class: 'lgroup-more' });
+        const body = el('div', { class: 'lgroup-body' });
+        g = {
+            count,
+            more,
+            body,
+            section: el('section', { class: 'live-group', 'data-group': key },
+                el('h2', { class: 'lgroup-head' },
+                    el('span', { class: 'lgroup-label' }, label), count, more),
+                body),
+        };
+        state.live.groups.set(key, g);
+    }
+
+    g.count.textContent = String(list.length);
+    g.more.textContent = hidden ? `+${hidden} more` : '';
+    g.more.hidden = !hidden;
+    reconcile(g.body, list.map(s => liveCardFor(s, compact)));
+    return g.section;
 }
 
 /**
@@ -3232,12 +4421,14 @@ function paintPanels() {
     const docked = state.live.open && Boolean(state.current) && !state.focus;
     const full = state.live.open && !docked;
 
-    // Two whole-screen panels, and showDash/showNotes keep them exclusive, so
-    // "one of them is up" is the only thing anything below has to ask.
-    const covered = state.dash.open || state.notes.open;
+    // Three whole-screen panels, and showDash/showNotes/showTaskboard keep them
+    // exclusive, so "one of them is up" is the only thing anything below has to
+    // ask.
+    const covered = state.dash.open || state.notes.open || state.taskboard.open;
 
     dom.dash.hidden = !state.dash.open;
     dom.notes.hidden = !state.notes.open;
+    dom.taskboard.hidden = !state.taskboard.open;
     dom.live.hidden = !state.live.open || covered;
     dom.live.dataset.mode = docked ? 'dock' : 'full';
     // The orientation lives on both: `main` has to change its flex direction,
@@ -3250,7 +4441,7 @@ function paintPanels() {
     dom.placeholder.hidden = covered || state.live.open || Boolean(state.current);
 
     for (const [btn, on] of [[dom.btnDash, state.dash.open], [dom.btnLive, state.live.open],
-        [dom.btnNotes, state.notes.open]]) {
+        [dom.btnNotes, state.notes.open], [dom.btnTaskboard, state.taskboard.open]]) {
         btn.classList.toggle('on', on);
         btn.setAttribute('aria-pressed', String(on));
     }
@@ -3261,12 +4452,14 @@ function paintPanels() {
 
 function showDash(on) {
     state.dash.open = on;
-    if (on) state.notes.open = false;   // two whole screens; one at a time
+    // Three whole screens; one at a time.
+    if (on) { state.notes.open = false; state.taskboard.open = false; }
     // The live board is not closed by this, only covered. It is a strip you
     // leave up; the work-in-flight board is a whole screen you go and read and
     // then come back from, and coming back should find things as you left them.
     paintPanels();
     syncBoardWatch();
+    syncTaskboardWatch();
 
     if (on) {
         if (Date.now() - state.dash.at > DASH_STALE_MS) loadDash();
@@ -3506,6 +4699,7 @@ const NOTE_LABEL = {
     finished: 'Finished',
     failed: 'Failed',
     'agent-done': 'Subagent done',
+    'peer-message': 'From another session',
 };
 
 // The runner's vocabulary for how an ask ended, said the way a person would.
@@ -3533,9 +4727,10 @@ let pendingJump = null;
 
 function showNotes(on) {
     state.notes.open = on;
-    if (on) state.dash.open = false;
+    if (on) { state.dash.open = false; state.taskboard.open = false; }
     paintPanels();
     syncBoardWatch();
+    syncTaskboardWatch();
 
     if (on) {
         markNotesSeen();
@@ -3590,7 +4785,7 @@ function paintNotesBadge() {
     dom.notesBadge.textContent = String(n);
     dom.btnNotes.title = n
         ? `${n} ${n === 1 ? 'notification' : 'notifications'} since you last looked`
-        : 'Everything that has reached out to you (Ctrl+4)';
+        : 'Everything that has reached out to you (Ctrl+5)';
 }
 
 function markNotesSeen() {
@@ -3684,6 +4879,578 @@ function takePendingJump() {
     // Gone from the transcript, or never in it: the session is open and scrolled
     // to the end, which is the honest fallback rather than a guess.
     if (entry) jumpToTurn(entry);
+}
+
+// ── task board ───────────────────────────────────────────────────────────
+// Everything outstanding, in four columns.
+//
+// The other three views each answer a narrower question and none of them
+// answers this one. The rail is one conversation at a time. The live board is
+// only what is running this second — a session that finished an hour ago has no
+// card there and never will. A suggested follow-up used to be visible only while
+// the conversation that raised it was open, which meant the app's own mechanism
+// for handing work forward could only be read by going and looking for it.
+//
+// So: open tasks beside every un-archived session, grouped by what state it is
+// in, with needs-you first because that is why you looked.
+//
+// **Nothing on it moves while you are reading.** This is the constraint that
+// shapes the whole renderer, and it is the rail's rule for the rail's reason —
+// see README, "The rail is sorted on load, and then left alone". A board of
+// agents working would otherwise reshuffle every three seconds under the cursor
+// of somebody trying to read one card. So position within a column is taken once
+// and then held, and the only thing that moves a card is changing column, which
+// is news rather than noise.
+//
+// **One payload for the whole board.** The `taskboard` SSE event, on a three-
+// second tick the bridge only runs while somebody is watching, and only sends
+// when the answer actually moved. Nothing here fetches per card.
+
+/** Tell the bridge whether this window is watching the task board. */
+function syncTaskboardWatch() {
+    if (state.taskboard.watching === state.taskboard.open) return;
+    state.taskboard.watching = state.taskboard.open;
+    subscribe();
+}
+
+function showTaskboard(on) {
+    state.taskboard.open = on;
+    // Three whole screens; one at a time.
+    if (on) { state.dash.open = false; state.notes.open = false; }
+    paintPanels();
+    syncBoardWatch();
+    syncTaskboardWatch();
+
+    if (on) {
+        // The subscribe above brings the payload straight back, but only if the
+        // stream is up. A window that has just booted, or one whose stream is
+        // reconnecting, gets it the other way rather than an empty grid.
+        if (state.taskboard.data) renderTaskboard();
+        else loadTaskboard();
+    } else if (state.live.open) {
+        // The live board was left switched on underneath and has been ignoring
+        // its pushes; catch it up before it comes back into view.
+        renderLive();
+        if (state.current) termPane.refit();
+    } else if (state.current) {
+        termPane.refit();
+    }
+    rememberView();
+}
+
+/** Is the board both open and not covered by something else? */
+const taskboardVisible = () => state.taskboard.open;
+
+/**
+ * A payload arriving, from the stream or from a fetch.
+ *
+ * The badge is kept up to date whether or not the board is open — the same
+ * bargain the live board strikes — but the drawing only happens when there is
+ * something to draw on.
+ */
+function applyTaskboard(data, { all = false } = {}) {
+    state.taskboard.data = data;
+    state.taskboard.at = Date.now();
+    state.taskboard.error = null;
+    tbRememberOrder(data, all);
+    paintTaskboardBadge();
+    if (taskboardVisible()) renderTaskboard();
+}
+
+/**
+ * Fetch the board once.
+ *
+ * Three callers, all of them one-offs: the Refresh button, a window opening the
+ * board before its stream is up, and the Show-all button — which is the only one
+ * that passes `all`, and the only reason this takes an argument at all. The
+ * steady state is the push.
+ */
+async function loadTaskboard({ all = false } = {}) {
+    if (state.taskboard.loading) return;
+    state.taskboard.loading = true;
+    if (taskboardVisible()) renderTaskboard();
+    try {
+        const data = await get(`/api/taskboard${all ? '?idle=all' : ''}`);
+        // Held apart from the pushed payload rather than merged into it: the
+        // push never carries the older idle sessions, so merging would have them
+        // vanish again three seconds later.
+        if (all) state.taskboard.allIdle = data.idle;
+        state.taskboard.loading = false;
+        applyTaskboard(data, { all });
+    } catch (err) {
+        state.taskboard.loading = false;
+        state.taskboard.error = err.message;
+        if (taskboardVisible()) renderTaskboard();
+    }
+}
+
+/**
+ * How many sessions are blocked on you, on the button that opens the board.
+ *
+ * From `state.waiting` and **not** from `counts.needs`, though the payload
+ * carries it. The payload only arrives while the board is open — that is the
+ * point of the watcher-gated tick — so a badge fed from it would freeze at
+ * whatever the boot fetch happened to see and stay there all afternoon. The
+ * live board learnt this already: `state.waiting` is maintained from the
+ * permission events whether any board is open or not, which is exactly the
+ * property a badge needs.
+ *
+ * It therefore says the same number as the live board's badge, and should: two
+ * views of one fact, and that fact is the reason to open either of them. The
+ * one thing it misses is a session in `error`, which is in the column but not in
+ * `waiting`; being one short on something rare beats being frozen on everything.
+ */
+function paintTaskboardBadge() {
+    const n = state.waiting.size;
+    dom.tbBadge.hidden = !n;
+    dom.tbBadge.textContent = String(n);
+    // The same red the live board's badge uses: it is the same news.
+    dom.tbBadge.classList.toggle('urgent', n > 0);
+    dom.btnTaskboard.title = n
+        ? `${n} session${n === 1 ? ' is' : 's are'} waiting for you (Ctrl+2)`
+        : 'Everything outstanding, by state (Ctrl+2)';
+}
+
+// ── holding the order ────────────────────────────────────────────────────
+//
+// The rail's mechanism (`rememberOrder`, and the comment on it), applied per
+// column. Ranks from the first load count up from zero in the order the bridge
+// sent them; anything first seen after that takes a negative rank, so it lands at
+// the top of its column without moving anything already placed.
+//
+// **Keyed by column as well as by id**, which is what makes a session changing
+// state the one thing that can move a card. Its key in the new column has never
+// been seen, so it goes to the top of it — a session that has just become
+// blocked on you appearing at the top of *Needs you* is exactly the behaviour
+// wanted — while every card that did not change state keeps the rank it had.
+//
+// The old key is left behind rather than swept up. It is a few bytes per column
+// per session, it costs nothing, and clearing it would mean a session that goes
+// working → idle → working comes back at the top of *Working* having never left
+// the board, which reads as a new session when it is not.
+
+const tbKey = (col, id) => `${col}:${id}`;
+
+function tbRememberOrder(data, all = false) {
+    const first = state.taskboard.order.size === 0;
+    const rows = [
+        ...data.needs.map(c => tbKey('needs', c.sessionId)),
+        ...data.working.map(c => tbKey('working', c.sessionId)),
+        ...data.suggested.map(t => tbKey('task', t.id)),
+        // Not on an `?idle=all` answer: `data.idle` is then every un-archived
+        // session rather than today's, and putting all of it through the rule
+        // below would rank the whole history as newly arrived and stand the
+        // column on its head. The tail loop underneath is where those belong,
+        // and the ones already placed are skipped there by id.
+        ...(all ? [] : data.idle.map(c => tbKey('idle', c.sessionId))),
+    ];
+    for (const key of rows) {
+        if (state.taskboard.order.has(key)) continue;
+        state.taskboard.order.set(key,
+            first ? state.taskboard.order.size : --state.taskboard.freshRank);
+    }
+
+    // Show-all is the exception, and it has to be, because it is the one thing
+    // that adds rows which are *older* than everything already placed. Given the
+    // rule above they would each be "new", take a negative rank, and land above
+    // today's sessions — the column inverted, oldest first, and then held that
+    // way. So they count up from the high-water mark instead, which puts them
+    // under what is already there, in the order the bridge sent them.
+    for (const c of state.taskboard.allIdle || []) {
+        const key = tbKey('idle', c.sessionId);
+        if (state.taskboard.order.has(key)) continue;
+        // Above every rank handed out so far, whichever branch handed it out:
+        // `order.size` counts the negative ranks too, so it is a high-water mark
+        // that only ever rises, and taking the max of the two keeps this
+        // monotonic across several presses.
+        state.taskboard.tailRank =
+            Math.max(state.taskboard.tailRank, state.taskboard.order.size);
+        state.taskboard.order.set(key, state.taskboard.tailRank++);
+    }
+}
+
+const tbRankOf = (col, id) => state.taskboard.order.get(tbKey(col, id)) ?? 0;
+
+/** One column's rows, in the order they were first placed in. */
+function tbHold(col, rows, idOf) {
+    return [...rows].sort((a, b) => tbRankOf(col, idOf(a)) - tbRankOf(col, idOf(b)));
+}
+
+// ── drawing it ───────────────────────────────────────────────────────────
+
+const TB_COLUMNS = [
+    { key: 'needs', label: 'Needs you', empty: 'Nothing is blocked on you.' },
+    { key: 'working', label: 'Working', empty: 'Nothing is running.' },
+    { key: 'suggested', label: 'Suggested', empty: 'No open tasks.' },
+    { key: 'idle', label: 'Idle', empty: 'Nothing here.' },
+];
+
+function renderTaskboard() {
+    const d = state.taskboard.data;
+
+    dom.tbRefresh.disabled = state.taskboard.loading;
+    dom.tbRefresh.textContent = state.taskboard.loading ? 'Reading…' : 'Refresh';
+
+    if (state.taskboard.error) {
+        dom.tbBody.replaceChildren(el('div', { class: 'tb-note' },
+            el('p', {}, `Could not read the board. ${state.taskboard.error}`)));
+        return;
+    }
+    if (!d) {
+        dom.tbBody.replaceChildren(el('div', { class: 'tb-note' },
+            el('p', {}, 'Reading every session…')));
+        return;
+    }
+
+    dom.tbSub.textContent = [
+        `${d.counts.needs} blocked on you`,
+        `${d.counts.working} working`,
+        `${d.counts.suggested} open ${d.counts.suggested === 1 ? 'task' : 'tasks'}`,
+        `${d.counts.idle} idle`,
+    ].join(' · ');
+
+    // Each column scrolls on its own, and a rebuild would otherwise throw all
+    // four scroll positions away every three seconds.
+    const scrolls = new Map();
+    for (const c of dom.tbBody.querySelectorAll('.tb-col-body')) {
+        scrolls.set(c.dataset.col, c.scrollTop);
+    }
+    const bodyScroll = dom.tbBody.scrollLeft;
+
+    // Somebody typing a task into the box at the foot of the Suggested column
+    // would have it pulled out from under them mid-word, three seconds after
+    // they started. The text itself survives in `state.taskboard.draft`, which
+    // the box writes on every keystroke; this is the focus and the caret.
+    const active = document.activeElement;
+    const typing = active && active.classList.contains('tb-new-box')
+        ? { at: active.selectionStart, to: active.selectionEnd }
+        : null;
+
+    dom.tbBody.replaceChildren(...TB_COLUMNS.map(c => tbColumn(c, d)));
+
+    for (const c of dom.tbBody.querySelectorAll('.tb-col-body')) {
+        if (scrolls.has(c.dataset.col)) c.scrollTop = scrolls.get(c.dataset.col);
+    }
+    dom.tbBody.scrollLeft = bodyScroll;
+
+    if (typing) {
+        const box = dom.tbBody.querySelector('.tb-new-box');
+        if (box) {
+            box.focus({ preventScroll: true });
+            box.setSelectionRange(typing.at, typing.to);
+        }
+    }
+}
+
+function tbColumn(col, d) {
+    const cards = col.key === 'suggested'
+        ? tbTaskCards(d)
+        : tbSessionCards(col.key, d);
+
+    return el('section', { class: 'tb-col', 'data-col': col.key },
+        el('header', { class: 'tb-col-head' },
+            el('h2', {}, col.label),
+            el('span', { class: 'tb-count' }, String(d.counts[col.key])),
+        ),
+        el('div', { class: 'tb-col-body', 'data-col': col.key },
+            cards.length ? cards : el('p', { class: 'tb-empty' }, col.empty),
+            col.key === 'idle' ? tbShowAll(d) : null,
+            col.key === 'suggested' ? tbComposer() : null,
+        ),
+    );
+}
+
+/**
+ * The session columns.
+ *
+ * Idle is the one with a tail. When Show-all has been pressed, the older
+ * sessions it fetched are drawn under the ones the push keeps current — filtered
+ * against the two live columns, because a session that has started working since
+ * that fetch is on the board twice otherwise, once truthfully and once as a
+ * stale copy of itself.
+ */
+function tbSessionCards(key, d) {
+    let rows = d[key];
+    if (key === 'idle' && state.taskboard.allIdle) {
+        const elsewhere = new Set([...d.needs, ...d.working].map(c => c.sessionId));
+        const fresh = new Set(d.idle.map(c => c.sessionId));
+        rows = [...d.idle, ...state.taskboard.allIdle.filter(
+            c => !fresh.has(c.sessionId) && !elsewhere.has(c.sessionId))];
+    }
+    return tbHold(key, rows, c => c.sessionId).map(c => tbSessionCard(c));
+}
+
+/** Tasks, grouped by the project they were raised in, as the rail groups rows. */
+function tbTaskCards(d) {
+    const held = tbHold('task', d.suggested, t => t.id);
+
+    const groups = new Map();
+    for (const t of held) {
+        const name = (t.session && t.session.projectName) || 'Elsewhere';
+        if (!groups.has(name)) groups.set(name, []);
+        groups.get(name).push(t);
+    }
+    // One heading over the whole column says nothing. Grouping earns its keep
+    // only once there is more than one group to tell apart.
+    if (groups.size < 2) return held.map(tbTaskCard);
+
+    const out = [];
+    for (const [name, rows] of groups) {
+        out.push(el('h3', { class: 'tb-sub-head' }, name,
+            el('span', {}, String(rows.length))));
+        out.push(...rows.map(tbTaskCard));
+    }
+    return out;
+}
+
+/**
+ * A suggested task, as a card.
+ *
+ * Every button on it is the one the tasks panel beside a transcript already
+ * uses — `startSuggestion`, `openTaskDialog`, `actOnSuggestion` — because a task
+ * started from here and a task started from there must do the same thing, and
+ * two code paths for one gesture is how they stop doing it.
+ */
+function tbTaskCard(t) {
+    const where = t.session || {};
+    return el('article', {
+        class: 'tb-card tb-task', 'data-archived': String(!!t.archived),
+        onclick: (e) => { if (tbCardClickOpens(e)) openTaskDialog(t); },
+    },
+        el('header', { class: 'tb-card-head' },
+            el('span', { class: 'tb-dot' }),
+            el('button', {
+                class: 'tb-card-title', type: 'button',
+                title: 'Read this at full width',
+                onclick: () => openTaskDialog(t),
+            }, t.title || firstLine(t.prompt)),
+        ),
+        el('div', { class: 'tb-card-meta' },
+            el('span', {}, 'Suggested'),
+            el('span', { class: 'dot' }, '·'),
+            el('span', {}, where.worktree ? where.worktree.name
+                : (where.projectName || 'unknown')),
+            el('span', { class: 'dot' }, '·'),
+            el('span', { title: t.ts || '' }, ago(t.ts)),
+        ),
+        // Where it came from. The point of the column is that this is a task
+        // from a conversation you are not in, so saying which one is not
+        // decoration — it is how you judge the offer.
+        el('div', { class: 'tb-from' },
+            el('button', {
+                class: 'linky', type: 'button',
+                title: 'Open the conversation that raised this',
+                onclick: () => { showTaskboard(false); openSession(t.sessionId); },
+            }, clip(where.title || 'a conversation', 44)),
+            t.archived ? el('span', { class: 'tb-tag' }, 'archived') : null,
+            (t.session && t.session.test) ? el('span', { class: 'tb-tag' }, 'test') : null,
+        ),
+        el('div', { class: 'tb-acts' },
+            el('button', {
+                class: 'tb-btn primary', type: 'button',
+                onclick: (e) => tbStartTask(t, e.currentTarget),
+            }, 'Start'),
+            el('button', {
+                class: 'tb-btn', type: 'button',
+                onclick: () => openTaskDialog(t),
+            }, 'View task'),
+            el('button', {
+                class: 'tb-btn quiet', type: 'button', title: 'Not this one',
+                onclick: () => tbDecide(t, 'dismissed'),
+            }, 'Dismiss'),
+        ),
+    );
+}
+
+/**
+ * A session, as a card.
+ *
+ * Deliberately the live board's vocabulary — `liveStatusWords`, `ASK_WORD`,
+ * `taskBar`, `ago` — rather than a second set of words for the same states. A
+ * session that says "Waiting for permission" on one board and something else on
+ * the other is two boards disagreeing about one fact.
+ */
+function tbSessionCard(s) {
+    const r = s.runner;
+    const busy = r && (r.state === 'busy' || r.state === 'starting');
+    const away = s.live && s.live.running && !r;
+
+    return el('article', {
+        class: 'tb-card tb-session', 'data-col': s.column, 'data-id': s.sessionId,
+        onclick: (e) => { if (tbCardClickOpens(e)) tbOpen(s.sessionId); },
+    },
+        el('header', { class: 'tb-card-head' },
+            el('span', { class: 'tb-dot' }),
+            el('button', {
+                class: 'tb-card-title', type: 'button',
+                title: 'Open this conversation',
+                onclick: () => tbOpen(s.sessionId),
+            }, s.title),
+            el('button', {
+                class: 'mini', type: 'button', title: 'Archive',
+                onclick: (e) => { e.stopPropagation(); tbArchive(s); },
+            }, icon('archive')),
+        ),
+        el('div', { class: 'tb-card-meta' },
+            s.pinned ? el('span', { class: 'tag-pin', title: 'Pinned' }, icon('pin', 11)) : null,
+            s.test ? el('span', { class: 'tag-test' }, 'test') : null,
+            el('span', {}, s.worktree ? s.worktree.name : s.projectName),
+            el('span', { class: 'dot' }, '·'),
+            el('span', { title: s.lastTs || '' }, ago(s.lastTs)),
+            el('span', { class: 'dot' }, '·'),
+            el('span', {}, `${s.userMessages} ${s.userMessages === 1 ? 'turn' : 'turns'}`),
+            (r && r.queued) ? queuedBadge(r.queued) : null,
+        ),
+        // Nothing worth a line on an idle card: it has no runner to report an
+        // activity and no task list asked for, so `liveStatusWords` can only say
+        // "Idle" — under a column heading that already says it, to fifty-odd
+        // cards at once.
+        s.column === 'idle' ? null
+            : el('div', { class: 'tb-card-line' }, liveStatusWords(s, busy, away)),
+        s.tasks ? taskBar(s.tasks) : null,
+        s.tasks ? el('div', { class: 'tb-card-meta' },
+            el('span', {}, `${s.tasks.done} of ${s.tasks.total} tasks`)) : null,
+        // What it is waiting on, said rather than answered. Answering an ask
+        // from a tile is the live board's job and it does it well; this board is
+        // the map, and two places to approve the same thing is one too many.
+        s.ask ? el('p', { class: 'tb-ask' }, tbAskWords(s.ask)) : null,
+        el('div', { class: 'tb-acts' },
+            el('button', {
+                // Filled only where the card is asking for something. A column
+                // of fifty idle sessions each with a bright button is a wall
+                // that says nothing about which of them matters.
+                class: s.ask ? 'tb-btn primary' : 'tb-btn', type: 'button',
+                onclick: () => tbOpen(s.sessionId),
+            }, s.ask ? 'Answer it' : 'Open'),
+            busy ? el('button', {
+                class: 'tb-btn', type: 'button',
+                title: 'Interrupt the turn this session is running',
+                onclick: (e) => stopFromCard(s.sessionId, e.currentTarget),
+            }, 'Stop') : null,
+        ),
+    );
+}
+
+/** What the session is blocked on, in one line. */
+function tbAskWords(ask) {
+    if (ask.kind === 'plan') return 'A plan is waiting to be approved.';
+    if (ask.kind === 'question') return 'It asked you a question.';
+    const what = toolSummary({ name: ask.tool, input: ask.input }) || ask.displayName;
+    return `Wants to run ${clip(what, 60)}`;
+}
+
+/** The same rule the live board uses: a click on a control is not "take me there". */
+function tbCardClickOpens(e) {
+    if (e.target.closest('button, a, input, textarea, select, label')) return false;
+    const picked = window.getSelection();
+    return !(picked && picked.type === 'Range' && String(picked).trim());
+}
+
+/** Leaving the board for a conversation, which is what every card offers. */
+function tbOpen(sessionId) {
+    showTaskboard(false);
+    openSession(sessionId);
+}
+
+/** The rest of the idle sessions, once, behind a button. */
+function tbShowAll(d) {
+    if (state.taskboard.allIdle) return null;
+    if (!d.idleHidden) return null;
+    return el('div', { class: 'tb-more' },
+        el('button', {
+            class: 'tb-btn', type: 'button',
+            onclick: () => loadTaskboard({ all: true }),
+        }, `Show all ${d.counts.idle}`),
+        el('p', {}, `${d.idleHidden} older ${d.idleHidden === 1 ? 'session' : 'sessions'} `
+            + 'are not shown. The column leads with what has moved today.'),
+    );
+}
+
+/**
+ * A line at the foot of the Suggested column for a task of your own.
+ *
+ * It opens the ordinary new-session dialog with what you typed already in it,
+ * rather than starting anything: a task typed into a one-line box has had no
+ * directory chosen for it, and guessing one is how a session ends up running in
+ * the wrong checkout.
+ */
+function tbComposer() {
+    const box = el('input', {
+        class: 'tb-new-box', type: 'text', placeholder: 'Start a task…',
+        value: state.taskboard.draft,
+        oninput: (e) => { state.taskboard.draft = e.currentTarget.value; },
+        onkeydown: (e) => {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            go(e.currentTarget);
+        },
+    });
+    const go = (input) => {
+        const text = input.value.trim();
+        if (!text) return;
+        input.value = '';
+        state.taskboard.draft = '';
+        showTaskboard(false);
+        openNew({ prompt: text });
+    };
+    return el('div', { class: 'tb-new' }, box,
+        el('button', {
+            class: 'tb-btn', type: 'button',
+            onclick: () => go(box),
+        }, 'Start'),
+    );
+}
+
+// ── acting on a card ─────────────────────────────────────────────────────
+//
+// Every one of these goes through the function the rest of the app already uses
+// and then takes the card off the board itself. The push would do it within
+// three seconds, but three seconds of a button that visibly did nothing is how a
+// board teaches you to click twice.
+
+async function tbStartTask(t, btn) {
+    tbDropTask(t.id);
+    await startSuggestion(t, btn);
+}
+
+async function tbDecide(t, status) {
+    tbDropTask(t.id);
+    await actOnSuggestion(t, status);
+}
+
+/**
+ * Take one task off the board now.
+ *
+ * The column is open tasks only, so any decision removes it. Not rolled back on
+ * failure: `actOnSuggestion` rolls back its own state and says so in a toast, and
+ * the next push puts the row back where it belongs a moment later — which is
+ * more honest than this guessing at which of the two it was.
+ */
+function tbDropTask(id) {
+    const d = state.taskboard.data;
+    if (!d) return;
+    const before = d.suggested.length;
+    d.suggested = d.suggested.filter(t => t.id !== id);
+    if (d.suggested.length !== before) d.counts.suggested -= 1;
+    if (taskboardVisible()) renderTaskboard();
+}
+
+function tbArchive(s) {
+    const d = state.taskboard.data;
+    if (d) {
+        for (const key of ['needs', 'working', 'idle']) {
+            const before = d[key].length;
+            d[key] = d[key].filter(c => c.sessionId !== s.sessionId);
+            if (d[key].length !== before) d.counts[key] -= 1;
+        }
+        if (state.taskboard.allIdle) {
+            state.taskboard.allIdle =
+                state.taskboard.allIdle.filter(c => c.sessionId !== s.sessionId);
+        }
+        if (taskboardVisible()) renderTaskboard();
+    }
+    setFlags(s, { archived: true });
+    toast(`Archived “${clip(s.title, 40)}”.`, 'ok');
 }
 
 // ── notifications ────────────────────────────────────────────────────────
@@ -4130,10 +5897,21 @@ function connect() {
     es.addEventListener('hello', (e) => {
         state.clientId = JSON.parse(e.data).clientId;
         // A new client id knows nothing about what this window was following, so
-        // the board has to be asked for again — including when no session is
-        // open, which is the ordinary case for a window left on the board.
+        // the boards have to be asked for again — including when no session is
+        // open, which is the ordinary case for a window left on one of them.
+        //
+        // This is also the *first* subscribe a window ever makes. `subscribe()`
+        // does nothing without a client id, so a board opened by restoreView()
+        // during boot — `?view=taskboard`, the address a refresh leaves behind —
+        // has already asked to watch and been silently dropped. Both flags are
+        // reset to false so the sync below is a change and actually sends.
         state.live.watching = false;
-        if (state.current || state.live.open) { state.live.watching = state.live.open; subscribe(); }
+        state.taskboard.watching = false;
+        if (state.current || state.live.open || state.taskboard.open) {
+            state.live.watching = state.live.open;
+            state.taskboard.watching = state.taskboard.open;
+            subscribe();
+        }
         // Every `sessions-changed` while the stream was down was missed, and
         // nothing replays them, so the rail is however it was when the stream
         // dropped — a bridge restart used to leave rows sitting there with the
@@ -4153,7 +5931,7 @@ function connect() {
         if (!state.current || d.sessionId !== state.current.sessionId) return;
         state.offset = d.offset;
         const stick = state.pinned;
-        appendEvents(d.events, SESSION_VIEW);
+        appendEvents(d.events, SESSION_VIEW, { live: true });
         // A plan belonging to a session running elsewhere is read out of these
         // events, so it arrives — and goes away once answered over there — with
         // the transcript rather than with a status tick.
@@ -4170,7 +5948,7 @@ function connect() {
         state.agentOffset = d.offset;
         const sc = dom.agentScroll;
         const stick = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 90;
-        appendEvents(d.events, AGENT_VIEW);
+        appendEvents(d.events, AGENT_VIEW, { live: true });
         if (stick) sc.scrollTop = sc.scrollHeight;
     });
 
@@ -4195,6 +5973,7 @@ function connect() {
     });
 
     es.addEventListener('overview', (e) => applyOverview(JSON.parse(e.data)));
+    es.addEventListener('taskboard', (e) => applyTaskboard(JSON.parse(e.data)));
 
     es.addEventListener('sessions-changed', () => loadSessions());
 
@@ -4220,7 +5999,10 @@ function connect() {
         // The rail's own copy, so a rebuild from the held order draws what the
         // patch below already put on screen rather than reverting it.
         const row = state.sessions.find(x => x.sessionId === s.sessionId);
-        if (row) row.runner = { state: s.state, activity: s.activity, queued: s.queued };
+        if (row) {
+            row.runner = { state: s.state, activity: s.activity,
+                detail: s.detail, queued: s.queued };
+        }
         const strip = dom.rail.querySelector(`[data-id="${CSS.escape(s.sessionId)}"]`);
         if (strip && row) patchStripStatus(strip, row);
     });
@@ -4232,6 +6014,7 @@ function connect() {
         announceAsk(p);
         state.waiting.add(p.sessionId);
         paintLiveBadge();
+        paintTaskboardBadge();
         if (!state.current || p.sessionId !== state.current.sessionId) return;
         state.ask = p;
         renderAsk();
@@ -4244,6 +6027,7 @@ function connect() {
         clearAsk(p.sessionId);
         state.waiting.delete(p.sessionId);
         paintLiveBadge();
+        paintTaskboardBadge();
         if (!state.ask || state.ask.requestId !== p.requestId) return;
         resolveAsk(p.outcome);
     });
@@ -4261,6 +6045,37 @@ function connect() {
         const d = JSON.parse(e.data);
         state.slashCommands.delete(d.cwd);
         if (slashMenuOpen()) updateSlashMenu();
+    });
+
+    // A message arrived from another session — possibly at the conversation on
+    // screen, possibly at one three projects away.
+    //
+    // The message itself is not in here and does not need to be: it is in the
+    // transcript, and a session being watched is already tailing it, so it has
+    // drawn itself by now. What this is for is everything that is not the open
+    // pane — the rail's counts, and the peer list, whose usefulness depends on
+    // being about sessions that are still running.
+    es.addEventListener('peer-message', () => {
+        // The sender may be a session this window has never heard of, and the
+        // card that has just drawn itself off the transcript wants its name.
+        state.peers.at = 0;
+        warmPeers();
+        if (mentionMenuOpen()) updateMentionMenu();
+    });
+
+    // A suggested follow-up was started or waved away, here or in another
+    // window. The card is drawn from the transcript and the decision is not, so
+    // this is the only thing that would tell a second window about it.
+    es.addEventListener('suggestion-changed', async (e) => {
+        const d = JSON.parse(e.data);
+        if (!state.current || state.current.sessionId !== d.sessionId) return;
+        try {
+            const r = await get(`/api/sessions/${d.sessionId}/suggestions`);
+            state.suggestions = new Map(Object.entries(r.suggestions || {}));
+        } catch { return; }
+        // The whole aside, which is a handful of nodes — the transcript beside
+        // it is untouched, because none of this was ever in it.
+        renderTasks();
     });
 
     // A declared command started, took its port, or ended — possibly in another
@@ -4302,6 +6117,10 @@ function connect() {
         if (!state.current || r.sessionId !== state.current.sessionId) return;
         // The dev servers a turn started only become visible once it finishes.
         loadChannels();
+        // A finished turn is the likeliest moment for a PR to have been raised, or
+        // for a review to have landed on one. This is where a PR opened during the
+        // conversation first appears — see headerPrs.
+        loadPrStatus();
         loadAgents();
     });
 
@@ -4346,6 +6165,7 @@ async function subscribe() {
             // read a conversation, and the conversation keeps tailing while the
             // board is on screen.
             overview: state.live.open,
+            taskboard: state.taskboard.open,
         });
     } catch { /* the SSE reconnect will re-subscribe */ }
 }
@@ -4354,6 +6174,13 @@ function applyRunner(s) {
     state.runner = s;
     const busy = s && (s.state === 'busy' || s.state === 'starting');
     const retrying = Boolean(s && s.retry);
+
+    // A turn that ends without saying anything — stopped, or an error — leaves
+    // its last run of tool calls with no message coming to close it. The turn
+    // ending is the close. Harmless while one is still in flight: closeRun does
+    // nothing when there is no run, and this is the only thing that reports the
+    // end of a turn to the log at all.
+    if (!busy) { closeRun(SESSION_VIEW); closeRun(AGENT_VIEW); }
 
     // The status carries the pending ask too, so a window opening onto a session
     // that is already blocked draws the card without having seen the event.
@@ -4599,6 +6426,12 @@ function hideTurnPop() {
 function jumpToTurn(t) {
     hideTurnPop();
     const sc = dom.scroll;
+    // A row inside a folded run has no box to measure, so the jump would land
+    // near the top of the pane instead of on it. Turns are never in a fold —
+    // a message is what ends one — but the notification history jumps to tool
+    // calls, and those are exactly what folds.
+    const fold = t.node.closest('.trun');
+    if (fold) fold.open = true;
     const top = t.node.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop;
     sc.scrollTop = Math.max(0, top - 14);
     state.pinned = false;
@@ -4609,14 +6442,30 @@ function jumpToTurn(t) {
     setTimeout(() => t.node.classList.remove('flash'), 1400);
 }
 
-/** Whichever turn the transcript is currently sitting in. */
+/**
+ * Whichever turn the transcript is currently sitting in.
+ *
+ * Binary search rather than a walk from the top. The turns are in document
+ * order, so "is this one above the edge" is monotonic, and the walk broke only
+ * at the first turn *below* the viewport — meaning it measured every turn above
+ * it. At the bottom of a long session that was one `getBoundingClientRect` per
+ * turn, each a forced layout of the whole transcript, on every scroll event.
+ * This is a fixed handful of measurements however long the session gets.
+ */
 function markActiveTurn() {
     if (!state.turns.length) return;
     const edge = dom.scroll.getBoundingClientRect().top + 60;
+    let lo = 0;
+    let hi = state.turns.length - 1;
     let active = 0;
-    for (let i = 0; i < state.turns.length; i++) {
-        if (state.turns[i].node.getBoundingClientRect().top > edge) break;
-        active = i;
+    while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (state.turns[mid].node.getBoundingClientRect().top > edge) {
+            hi = mid - 1;
+        } else {
+            active = mid;
+            lo = mid + 1;
+        }
     }
     if (active === state.activeTurn) return;
     state.activeTurn = active;
@@ -4739,6 +6588,7 @@ function focusChipAt(i) {
  * they do has a key on the row instead.
  */
 function queueItem(entry, i, roving) {
+    const files = entry.attachments || [];
     const open = state.queueOpen.has(entry.id);
     const toggleOpen = () => {
         if (open) state.queueOpen.delete(entry.id);
@@ -4757,6 +6607,13 @@ function queueItem(entry, i, roving) {
     },
         el('span', { class: 'queue-grip', title: 'Drag to reorder', 'aria-hidden': 'true' }, '⠿'),
         el('span', { class: 'queue-n' }, String(i + 1)),
+        // A count, not the names. The chip is one line and the message is what it is
+        // for; the point is only that Edit will bring files back with it, so dropping
+        // this chip is dropping them too.
+        files.length ? el('span', {
+            class: 'queue-files',
+            title: files.map(f => f.name || f.relPath).join('\n'),
+        }, `📎${files.length > 1 ? files.length : ''}`) : null,
         el('button', {
             class: 'queue-text', type: 'button', 'data-part': 'text', tabindex: '-1',
             title: open ? 'Show less' : 'Show the whole message',
@@ -4914,7 +6771,10 @@ async function editQueued(entry) {
     try {
         const r = await del(`/api/sessions/${state.current.sessionId}/queue/${entry.id}`);
         applyRunner(r.status);
-        restoreToComposer(entry.text);
+        // The files come back with the words. The message was never written to the
+        // process, so they are still staged rather than sent — and the alternative is
+        // an edit that silently drops the screenshot the message was about.
+        restoreToComposer(entry.text, (r.removed && r.removed.attachments) || entry.attachments);
     } catch (err) {
         toast(err.message, 'warn');
         refreshQueue();
@@ -4949,6 +6809,311 @@ async function refreshQueue() {
     } catch { /* the next runner-status will fix it */ }
 }
 
+// ── attachments ──────────────────────────────────────────────────────────
+// Files pasted or dropped onto the composer.
+//
+// Each one is uploaded the moment it arrives, before the message is sent. That is
+// what makes the rest of this simple: the chip shows the name the file really has on
+// disk, a staged file survives a reload because only its path has to be remembered,
+// and the send stays the same small JSON POST it always was — a list of paths, not a
+// payload. The bridge writes them into attached_assets/ at the root of the session's
+// checkout; see bridge/attachments.js for why there.
+
+// Matches the bridge, which is the side that enforces them. Checked here so that
+// dropping a video says what the limit is instead of uploading 200MB to be refused.
+const MAX_ATTACH_BYTES = 25 * 1024 * 1024;
+const MAX_ATTACH_FILES = 5;
+
+// The types the bridge will inline as an image, and so the ones a chip draws a
+// thumbnail for.
+const ATTACH_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+
+function formatBytes(n) {
+    const b = Number(n) || 0;
+    if (b < 1024) return `${b} B`;
+    if (b < 1024 * 1024) return `${(b / 1024).toFixed(b < 10 * 1024 ? 1 : 0)} KB`;
+    return `${(b / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * A name for a file that arrived without a usable one.
+ *
+ * A pasted screenshot is `image.png` in Chromium and nameless everywhere else, so the
+ * client always supplies something and the bridge always requires it — better here,
+ * where the clock and the media type are both to hand, than invented server-side.
+ */
+function attachName(file) {
+    if (file.name) return file.name;
+    const d = new Date();
+    const p = (n) => String(n).padStart(2, '0');
+    const stamp = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}`
+        + `-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+    const ext = (file.type || '').split('/')[1] || 'bin';
+    return `pasted-${stamp}.${ext === 'jpeg' ? 'jpg' : ext}`;
+}
+
+/** Does this drag carry files, as opposed to one of our own chips? */
+function dragHasFiles(dt) {
+    return Boolean(dt && Array.from(dt.types || []).includes('Files'));
+}
+
+/**
+ * Take files in — from a paste, a drop, or the paperclip. The single entry point.
+ *
+ * Uploaded one at a time rather than all at once. It keeps several 25MB bodies off the
+ * wire together, and it makes the per-chip failure story true: four succeed and the
+ * fifth goes red, instead of a batch that half-worked.
+ */
+async function attachFiles(list) {
+    if (!state.current) return;
+    const sessionId = state.current.sessionId;
+    const files = Array.from(list || []).filter(f => f && f.size !== undefined);
+    if (!files.length) return;
+
+    const room = MAX_ATTACH_FILES - state.attach.length;
+    if (room <= 0) {
+        toast(`${MAX_ATTACH_FILES} files is the limit for one message.`, 'warn');
+        return;
+    }
+    if (files.length > room) {
+        toast(`Only ${room} more file${room === 1 ? '' : 's'} fit on this message.`, 'warn');
+    }
+
+    for (const file of files.slice(0, room)) {
+        // Refused here, with the number in it. The bridge refuses it too, but a 413
+        // arriving after a 40MB upload is a worse way to learn the same thing.
+        if (file.size > MAX_ATTACH_BYTES) {
+            toast(`${file.name || 'That file'} is ${formatBytes(file.size)} — the limit `
+                + `is ${formatBytes(MAX_ATTACH_BYTES)}.`, 'warn');
+            continue;
+        }
+        if (!file.size) {
+            toast(`${file.name || 'That file'} is empty.`, 'warn');
+            continue;
+        }
+
+        const entry = {
+            key: `a${++state.attachSeq}`,
+            name: attachName(file),
+            bytes: file.size,
+            mediaType: file.type || 'application/octet-stream',
+            // Cheaper than a FileReader and it never holds the bytes in a string.
+            // Revoked on removal, on send and on leaving the session.
+            previewUrl: ATTACH_IMAGE_TYPES.has(file.type) ? URL.createObjectURL(file) : null,
+            path: null, relPath: null,
+            status: 'uploading',
+            error: null,
+            file,
+        };
+        state.attach.push(entry);
+        renderAttach();
+        await uploadAttachment(sessionId, entry);
+    }
+}
+
+async function uploadAttachment(sessionId, entry) {
+    entry.status = 'uploading';
+    entry.error = null;
+    renderAttach();
+    try {
+        const r = await postFile(
+            `/api/sessions/${sessionId}/attachments?name=${encodeURIComponent(entry.name)}`,
+            entry.file);
+        // The name on disk wins. A collision made it `shot-2.png`, and a chip still
+        // saying `shot.png` would name a file the message does not attach.
+        entry.name = r.name;
+        entry.path = r.path;
+        entry.relPath = r.relPath;
+        entry.mediaType = r.mediaType;
+        entry.bytes = r.bytes;
+        entry.status = 'ready';
+        // Nothing needs the File once the bytes are on disk, and holding it keeps a
+        // blob alive for as long as the chip does.
+        entry.file = null;
+        saveAttach(sessionId, state.attach);
+    } catch (err) {
+        entry.status = 'failed';
+        entry.error = err.message;
+    }
+    renderAttach();
+}
+
+/** Chips for files the bridge already knows about — a restored draft, or an edit. */
+function adoptAttachments(files) {
+    for (const f of files || []) {
+        if (state.attach.length >= MAX_ATTACH_FILES) break;
+        if (state.attach.some(a => a.path && a.path === f.path)) continue;
+        state.attach.push({
+            key: `a${++state.attachSeq}`,
+            name: f.name || String(f.relPath || '').split('/').pop(),
+            bytes: f.bytes || 0,
+            mediaType: f.mediaType || 'application/octet-stream',
+            // No object URL: these files were never a File in this page. A restored
+            // image chip draws the glyph rather than a broken img.
+            previewUrl: null,
+            path: f.path || null,
+            relPath: f.relPath || null,
+            status: 'ready',
+            error: null,
+            file: null,
+        });
+    }
+    renderAttach();
+    if (state.current) saveAttach(state.current.sessionId, state.attach);
+}
+
+function removeAttach(key) {
+    const i = state.attach.findIndex(a => a.key === key);
+    if (i < 0) return;
+    const [gone] = state.attach.splice(i, 1);
+    if (gone.previewUrl) URL.revokeObjectURL(gone.previewUrl);
+    // Deliberately not deleted from disk. A delete route is a second thing that
+    // writes to a checkout and a second refusal to reason about, and an unsent file
+    // in attached_assets/ is a harmless untracked file you can see — where a delete
+    // that resolves the wrong path is not harmless.
+    renderAttach();
+    if (state.current) saveAttach(state.current.sessionId, state.attach);
+}
+
+/**
+ * Everything staged, gone — on a send, or on leaving the session.
+ *
+ * `revoke: false` is for the send path, and it is not an optimisation. The row drawn
+ * at the foot of the log the instant you press Enter shows the thumbnails, and those
+ * are these object URLs; revoking them here blanked the image in the same frame it
+ * appeared. So the send hands them to the pending row, which revokes them when it
+ * goes — and every path that does not draw one revokes them itself.
+ */
+function clearAttach({ save = true, revoke = true } = {}) {
+    if (revoke) revokePreviews(state.attach.map(a => a.previewUrl));
+    state.attach = [];
+    renderAttach();
+    if (save && state.current) saveAttach(state.current.sessionId, []);
+}
+
+function revokePreviews(urls) {
+    for (const u of urls || []) if (u) URL.revokeObjectURL(u);
+}
+
+/** What a send may carry: the ones that made it to disk. */
+const readyAttachments = () => state.attach
+    .filter(a => a.status === 'ready' && a.path)
+    .map(a => ({ path: a.path, relPath: a.relPath, mediaType: a.mediaType, name: a.name }));
+
+// The extension, for the glyph on a non-image chip. Short enough to read at 10px.
+function attachExt(name) {
+    const m = /\.([A-Za-z0-9]{1,5})$/.exec(name || '');
+    return m ? m[1].toLowerCase() : 'file';
+}
+
+function renderAttach() {
+    const list = state.attach;
+    dom.attach.hidden = !list.length;
+    dom.attach.replaceChildren(...list.map((a) => {
+        const bits = [];
+        if (a.previewUrl) {
+            bits.push(el('img', { class: 'attach-thumb', src: a.previewUrl, alt: '' }));
+        } else {
+            bits.push(el('span', { class: 'attach-glyph' }, attachExt(a.name)));
+        }
+        bits.push(el('span', { class: 'attach-name', title: a.relPath || a.name }, a.name));
+        bits.push(el('span', { class: 'attach-size' },
+            a.status === 'uploading' ? 'uploading…' : formatBytes(a.bytes)));
+        if (a.status === 'failed') {
+            bits.push(el('button', {
+                class: 'attach-act', type: 'button', title: a.error || 'Upload failed',
+                onclick: () => {
+                    if (!a.file || !state.current) return;
+                    uploadAttachment(state.current.sessionId, a);
+                },
+            }, 'Retry'));
+        }
+        bits.push(el('button', {
+            class: 'attach-act danger', type: 'button', 'aria-label': `Remove ${a.name}`,
+            title: 'Remove', onclick: () => removeAttach(a.key),
+        }, '×'));
+
+        return el('div', {
+            class: `attach-chip${a.status === 'ready' ? '' : ` ${a.status}`}`,
+            title: a.status === 'failed' ? a.error : (a.relPath || a.name),
+        }, ...bits);
+    }));
+    // An attachment on its own is a message, so the buttons have to follow the strip
+    // and not only the box.
+    enableSend(Boolean(state.current));
+}
+
+/**
+ * A paste that carries files.
+ *
+ * The condition is narrow on purpose. Cancelling a paste that was only ever text is
+ * the most likely way this feature breaks something that worked, and web/terminal.js
+ * already carries a comment about the last time a paste handler in this codebase took
+ * over more than it should have. A screenshot arrives with files and no `text/plain`;
+ * a file copied out of a file manager brings `text/uri-list` alongside it; text
+ * copied out of an editor brings `text/plain` and no files at all. So: files, and
+ * either nothing textual or an actual image.
+ */
+function onComposerPaste(e) {
+    const dt = e.clipboardData;
+    if (!dt) return;
+    const items = Array.from(dt.items || []);
+    const files = Array.from(dt.files || []);
+    if (!files.length && !items.some(i => i.kind === 'file')) return;
+
+    const hasText = Array.from(dt.types || []).includes('text/plain');
+    const anyImage = files.some(f => ATTACH_IMAGE_TYPES.has(f.type));
+    if (hasText && !anyImage) return;
+
+    e.preventDefault();
+    attachFiles(files.length ? files
+        : items.filter(i => i.kind === 'file').map(i => i.getAsFile()).filter(Boolean));
+}
+
+/**
+ * Dragging files over the composer.
+ *
+ * Both gates are before `preventDefault`, and that is what keeps the queue-chip drag
+ * working without touching a line of it: a chip drag puts only `text/plain` on the
+ * transfer, so `dragHasFiles` is false, this returns early, and #queue-list's own
+ * dragover still sees the event exactly as it did before.
+ */
+function onComposerDragOver(e) {
+    if (state.queueDrag) return;
+    if (!dragHasFiles(e.dataTransfer)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    dom.composer.classList.add('drop-target');
+}
+
+function onComposerDragLeave(e) {
+    // Only when the pointer has actually left the composer. Without the check the
+    // highlight flickers off every time the drag crosses a child element.
+    if (e.relatedTarget && dom.composer.contains(e.relatedTarget)) return;
+    dom.composer.classList.remove('drop-target');
+}
+
+function onComposerDrop(e) {
+    if (state.queueDrag) return;
+    if (!dragHasFiles(e.dataTransfer)) return;
+    e.preventDefault();
+    dom.composer.classList.remove('drop-target');
+    attachFiles(e.dataTransfer.files);
+}
+
+/**
+ * Open one of a turn's attachments in whatever this machine opens that kind of file
+ * with. The bridge re-derives the path against the session's own attachments
+ * directory before launching anything — see `attachmentPath` in bridge/server.js.
+ */
+async function openAttachment(sessionId, relPath) {
+    try {
+        await post(`/api/sessions/${sessionId}/attachments/open`, { path: relPath });
+    } catch (err) {
+        toast(`Could not open ${relPath}: ${err.message}`, 'warn');
+    }
+}
+
 // ── composer ─────────────────────────────────────────────────────────────
 
 /**
@@ -4974,6 +7139,9 @@ const growPrompt = () => grow(dom.newPrompt, 62, 300);
 function enableSend(on) {
     dom.btnSend.disabled = !on;
     dom.btnLgtm.disabled = !on;
+    // Attaching needs a session for the same reason sending does — the file goes into
+    // *that* session's checkout — so it turns on and off with them.
+    dom.btnAttach.disabled = !on;
 }
 
 /**
@@ -4999,7 +7167,12 @@ const LGTM_PROMPT = `LGTM — take it from here and land it.
 - Once they pass, merge it.
 
 If something genuinely blocks the merge — checks you cannot fix, conflicts, a
-review asking for changes — stop and tell me instead of working around it.`;
+review asking for changes — stop and tell me instead of working around it.
+
+If you noticed work along the way that this change is not the place for, file it
+with your suggest_session tool before you finish, one call each — the refactor
+you left alone, the test that should exist, the thing you had to work around. If
+you noticed nothing, say nothing; this is not a box to fill.`;
 
 const LGTM_TITLE = 'Send: open a PR for this work if there is not one, run the '
     + 'checks, and merge it once they pass.';
@@ -5025,18 +7198,25 @@ const PENDING_MS = 30000;
  * Only ever one at a time: pressing Enter twice in the same moment sends a second
  * message the bridge queues, and a queued message is already shown as a chip.
  */
-function showPendingSend(sessionId, text) {
-    if (state.pendingSend) return;
+function showPendingSend(sessionId, text, files, previews) {
+    if (state.pendingSend) return revokePreviews(previews);
     // The real renderer, so the swap when the transcript catches up is one node for
     // another and not a reflow. No `ts`: clockOf gives an empty gutter for a missing
     // one, and the marker on it says what that means. Sending the local clock
     // instead would print a time the transcript is then free to disagree with —
     // a cold start really does record the entry a second or more later.
-    const node = renderUser({ kind: 'user', text, ts: null });
+    // The object URLs and the file list, so the row that appears the instant you press
+    // Enter is the row the transcript will replace it with — thumbnail, cards and all —
+    // rather than a bare line of text that grows a screenshot a second later.
+    const node = renderUser({
+        kind: 'user', text, ts: null,
+        images: (previews || []).map(url => ({ dataUri: url })),
+        files: (files || []).map(f => ({ relPath: f.relPath, name: f.name, size: null })),
+    });
     node.dataset.pending = '1';
     dom.log.append(node);
     state.pendingSend = {
-        sessionId, node, timer: setTimeout(clearPendingSend, PENDING_MS),
+        sessionId, node, previews, timer: setTimeout(clearPendingSend, PENDING_MS),
     };
     state.pinned = true;
     scrollToEnd(false);
@@ -5056,11 +7236,20 @@ function clearPendingSend() {
     clearTimeout(p.timer);
     state.pendingSend = null;
     p.node.remove();
+    // The row was the last thing holding these; the transcript's own copy of the
+    // image comes from the transcript.
+    revokePreviews(p.previews);
 }
 
 async function sendMessage({ fork = false, text: override = null, canned = false } = {}) {
     const text = override != null ? override : dom.input.value.trim();
-    if (!text || !state.current) return;
+    // Attachments only ride on a message that came out of the box. A canned send — the
+    // LGTM button, a follow-up card — must not walk off with a screenshot you staged
+    // for something else, by the same argument that leaves the half-typed text alone.
+    const files = override == null ? readyAttachments() : [];
+    // A screenshot with nothing typed under it is a message: "look at this" is the
+    // whole content of it.
+    if ((!text && !files.length) || !state.current) return;
     const sessionId = state.current.sessionId;
 
     // The lock is a rule, not a disabled button. Greying out the buttons left
@@ -5078,10 +7267,16 @@ async function sendMessage({ fork = false, text: override = null, canned = false
     // Only a message that came out of the box empties the box — and only then is
     // the saved draft gone with it. A canned send leaves a half-written message
     // where it was, rather than dropping it on the way past.
+    // Taken before the strip is emptied, because emptying it is what would revoke them.
+    const previews = files.length
+        ? state.attach.filter(a => a.previewUrl).map(a => a.previewUrl)
+        : [];
+
     if (override == null) {
         dom.input.value = '';
         autoGrow();
         saveDraft(sessionId, '');
+        clearAttach({ revoke: false });
     }
 
     // Drawn in the same frame the box empties, so the message moves from one to the
@@ -5096,13 +7291,18 @@ async function sendMessage({ fork = false, text: override = null, canned = false
     const runner = state.runner;
     const willQueue = Boolean(runner
         && (runner.state === 'busy' || runner.state === 'starting'));
-    if (!fork && !willQueue) showPendingSend(sessionId, text);
+    if (!fork && !willQueue) showPendingSend(sessionId, text, files, previews);
+    // No row was drawn, so nothing is going to hand these back.
+    else revokePreviews(previews);
 
     enableSend(false);
 
     try {
         const r = await post(`/api/sessions/${sessionId}/send`, {
             text,
+            // Paths, not bytes: every one of these is already on disk, written by the
+            // attachments route before its chip appeared.
+            attachments: files,
             fork,
             model: dom.model.value || null,
             permissionMode: dom.perm.value,
@@ -5125,7 +7325,9 @@ async function sendMessage({ fork = false, text: override = null, canned = false
         }
     } catch (err) {
         clearPendingSend();   // it never reached the bridge; the log must not claim it did
-        if (!canned) restoreToComposer(text);
+        // The files are still on disk, so handing their metadata back is enough to put
+        // the chips where they were.
+        if (!canned) restoreToComposer(text, files);
         toast(`Could not send: ${err.message}`, 'error');
     } finally {
         enableSend(Boolean(state.current));
@@ -5570,14 +7772,17 @@ async function loadProjects() {
 }
 
 /**
- * @param {{cwd?: string, tab?: 'recent'|'browse'}} [opts] `cwd` is a caller that
- *   has already answered "where" — the split menu passes the row you clicked.
- *   Without one the dialog opens where it always has: the session on screen,
- *   else the most recent project.
+ * @param {{cwd?: string, tab?: 'recent'|'browse', prompt?: string}} [opts] `cwd`
+ *   is a caller that has already answered "where" — the split menu passes the
+ *   row you clicked. Without one the dialog opens where it always has: the
+ *   session on screen, else the most recent project. `prompt` fills the first
+ *   message, for a caller that has already written one — Edit first on a
+ *   suggested follow-up, where the whole point is that the prompt exists and
+ *   you want a look at it before it runs.
  */
-async function openNew({ cwd = '', tab = null } = {}) {
+async function openNew({ cwd = '', tab = null, prompt = '' } = {}) {
     dom.newScrim.hidden = false;
-    dom.newPrompt.value = '';
+    dom.newPrompt.value = prompt;
     growPrompt();
     dom.newTest.checked = false;
     dom.newCwd.value = cwd || (state.current
@@ -5604,6 +7809,9 @@ async function openNew({ cwd = '', tab = null } = {}) {
     }
     setPickerTab(tab || state.browse.tab, { load: true });
     dom.newPrompt.focus();
+    // A prompt that arrived already written is there to be read and edited, so
+    // put the caret at the end of it rather than in front of the first word.
+    if (prompt) dom.newPrompt.setSelectionRange(prompt.length, prompt.length);
 }
 
 function closeNew() { dom.newScrim.hidden = true; }
@@ -6039,12 +8247,59 @@ dom.search.addEventListener('input', debounce(() => {
 }, 180));
 
 dom.btnSend.addEventListener('click', () => sendMessage());
+
+// Paste, drop, and the paperclip all end up in attachFiles.
+dom.input.addEventListener('paste', onComposerPaste);
+dom.composer.addEventListener('dragover', onComposerDragOver);
+dom.composer.addEventListener('dragleave', onComposerDragLeave);
+dom.composer.addEventListener('drop', onComposerDrop);
+dom.btnAttach.addEventListener('click', () => dom.attachInput.click());
+dom.attachInput.addEventListener('change', () => {
+    attachFiles(dom.attachInput.files);
+    // Cleared so that picking the same file twice in a row fires `change` both times.
+    dom.attachInput.value = '';
+});
+// A file dropped anywhere else in the window would otherwise navigate away to it,
+// which loses the conversation and every draft on screen. Gated exactly like the
+// composer's own handlers, so a queue chip being dragged is still none of our
+// business here.
+for (const type of ['dragover', 'drop']) {
+    document.addEventListener(type, (e) => {
+        if (state.queueDrag) return;
+        if (!dragHasFiles(e.dataTransfer)) return;
+        if (dom.composer.contains(e.target)) return;   // handled above
+        e.preventDefault();
+    });
+}
 // One click, and no confirmation over the top of it: the click *is* the approval,
 // and the session still asks for whatever its permission mode makes it ask for
 // before anything is pushed or merged.
 dom.btnLgtm.addEventListener('click', () => sendMessage({ text: LGTM_PROMPT, canned: true }));
 // Wrapped, not passed: openNew now takes an options bag, and a MouseEvent is
 // not one.
+dom.tasksCollapse.addEventListener('click', () => showTasks(false));
+dom.tasksStrip.addEventListener('click', () => showTasks(true));
+
+for (const n of dom.taskScrim.querySelectorAll('[data-close-task]')) {
+    n.addEventListener('click', closeTaskDialog);
+}
+dom.taskScrim.addEventListener('click', (e) => {
+    if (e.target === dom.taskScrim) closeTaskDialog();
+});
+// The prompt is the thing worth having elsewhere — pasted into a terminal, into
+// another tool, into a message to somebody. The rendered markdown is not it, so
+// the source is what goes on the clipboard.
+dom.taskDlgCopy.addEventListener('click', async () => {
+    const ev = state.tasks.get(state.taskDialog);
+    if (!ev) return;
+    try {
+        await navigator.clipboard.writeText(ev.prompt);
+        toast('Prompt copied.', 'ok');
+    } catch {
+        toast('Could not reach the clipboard.', 'error');
+    }
+});
+
 dom.btnNew.addEventListener('click', () => openNew());
 
 dom.btnPin.addEventListener('click', () => {
@@ -6182,9 +8437,24 @@ dom.input.addEventListener('keydown', (e) => {
 // be promising something that will not happen.
 const SLASH_RE = /^\/[A-Za-z0-9_:-]*$/;
 
-const slashMenu = { rows: [], index: 0, seq: 0 };
+// Two popovers now hang off the composer — `/` commands and `@` mentions — and
+// they share everything except what opens them and what accepting one inserts.
+// So the selection, the paging and the keyboard map below take a menu rather
+// than reaching for one: `node` is the element it draws into, `id` prefixes its
+// rows' DOM ids so aria-activedescendant can name one unambiguously.
+const slashMenu = { rows: [], index: 0, seq: 0, node: dom.slashMenu, id: 'slash' };
+const mentionMenu = { rows: [], index: 0, seq: 0, node: dom.mentionMenu, id: 'mention' };
 
-const slashMenuOpen = () => !dom.slashMenu.hidden;
+const menuOpen = (m) => !m.node.hidden;
+const slashMenuOpen = () => menuOpen(slashMenu);
+const mentionMenuOpen = () => menuOpen(mentionMenu);
+
+/** Whichever popover is up, or null. Only ever one — each closes the other. */
+function openMenu() {
+    if (slashMenuOpen()) return slashMenu;
+    if (mentionMenuOpen()) return mentionMenu;
+    return null;
+}
 
 /** The typed fragment after the slash, or null when this is not a command. */
 function slashFragment() {
@@ -6300,7 +8570,7 @@ async function updateSlashMenu() {
 function drawSlashMenu(rows, note) {
     // Two popovers on screen at once is nobody's intention. Only on the way
     // open: this redraws on every keystroke, and the others are already shut.
-    if (dom.slashMenu.hidden) { showBell(false); showNewMenu(false); }
+    if (dom.slashMenu.hidden) { showBell(false); showNewMenu(false); closeMentionMenu(); }
 
     // A note is a message, not a list. Clearing the rows behind it matters:
     // otherwise Enter during "Loading…" would accept whatever the *previous*
@@ -6325,25 +8595,30 @@ function drawSlashMenu(rows, note) {
 
     dom.slashMenu.hidden = false;
     dom.input.setAttribute('aria-expanded', 'true');
-    if (rows && rows.length) paintSlashSelection();
+    if (rows && rows.length) paintSelection(slashMenu);
     else dom.input.removeAttribute('aria-activedescendant');
 }
 
-/** The highlight is a property of the list, never of focus — see below. */
-function paintSlashSelection() {
-    const rows = [...dom.slashMenu.querySelectorAll('.picker-row')];
-    rows.forEach((r, i) => r.setAttribute('aria-selected', String(i === slashMenu.index)));
-    const on = rows[slashMenu.index];
+/**
+ * The highlight is a property of the list, never of focus — see below.
+ *
+ * `.picker-row` and nothing else, so a group heading in the mention menu can sit
+ * among the rows without becoming one you can land on.
+ */
+function paintSelection(menu) {
+    const rows = [...menu.node.querySelectorAll('.picker-row')];
+    rows.forEach((r, i) => r.setAttribute('aria-selected', String(i === menu.index)));
+    const on = rows[menu.index];
     if (!on) return;
     dom.input.setAttribute('aria-activedescendant', on.id);
     on.scrollIntoView({ block: 'nearest' });
 }
 
-function moveSlashSelection(delta) {
-    const n = slashMenu.rows.length;
+function moveSelection(menu, delta) {
+    const n = menu.rows.length;
     if (!n) return;
-    slashMenu.index = ((slashMenu.index + delta) % n + n) % n;   // a menu is a ring
-    paintSlashSelection();
+    menu.index = ((menu.index + delta) % n + n) % n;   // a menu is a ring
+    paintSelection(menu);
 }
 
 /**
@@ -6354,11 +8629,11 @@ function moveSlashSelection(delta) {
  * from what the eye sees the moment either changes. The overlap of one row is
  * the usual paging convention: it leaves something recognisable behind.
  */
-function slashPageSize() {
-    const first = dom.slashMenu.querySelector('.picker-row');
+function menuPageSize(menu) {
+    const first = menu.node.querySelector('.picker-row');
     if (!first) return 1;
     const rowH = first.offsetHeight || 32;
-    return Math.max(1, Math.floor(dom.slashMenu.clientHeight / rowH) - 1);
+    return Math.max(1, Math.floor(menu.node.clientHeight / rowH) - 1);
 }
 
 /**
@@ -6369,11 +8644,11 @@ function slashPageSize() {
  * everything in between. Wrapping is a nicety when you are stepping one at a
  * time and a way to lose your place when you are moving in chunks.
  */
-function jumpSlashSelection(to) {
-    const n = slashMenu.rows.length;
+function jumpSelection(menu, to) {
+    const n = menu.rows.length;
     if (!n) return;
-    slashMenu.index = Math.max(0, Math.min(n - 1, to));
-    paintSlashSelection();
+    menu.index = Math.max(0, Math.min(n - 1, to));
+    paintSelection(menu);
 }
 
 /**
@@ -6410,48 +8685,307 @@ function acceptSlashCommand(i) {
  * chips, whose own Enter/Escape map is a few hundred lines up.
  */
 document.addEventListener('keydown', (e) => {
-    if (!slashMenuOpen() || e.target !== dom.input) return;
+    const menu = openMenu();
+    if (!menu || e.target !== dom.input) return;
     if (e.isComposing || e.keyCode === 229) return;
     // Open but with nothing to choose — a note, or a list still loading. Every
     // key belongs to the composer then; swallowing Enter here would lose a
     // message to a box that had no answer for it.
-    if (!slashMenu.rows.length) return;
+    if (!menu.rows.length) return;
+
+    const accept = () => (menu === slashMenu ? acceptSlashCommand() : acceptMention());
+    const close = () => (menu === slashMenu ? closeSlashMenu() : closeMentionMenu());
 
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
         e.stopPropagation();
-        moveSlashSelection(e.key === 'ArrowDown' ? 1 : -1);
+        moveSelection(menu, e.key === 'ArrowDown' ? 1 : -1);
     } else if (e.key === 'PageDown' || e.key === 'PageUp') {
         e.preventDefault();
         e.stopPropagation();
-        const step = slashPageSize();
-        jumpSlashSelection(slashMenu.index + (e.key === 'PageDown' ? step : -step));
+        const step = menuPageSize(menu);
+        jumpSelection(menu, menu.index + (e.key === 'PageDown' ? step : -step));
     } else if (e.key === 'Home' || e.key === 'End') {
         // Only worth taking while the menu is open, and only because the box it
         // sits on is one line: Home and End in a one-line composer move the
         // caret somewhere it already effectively is.
         e.preventDefault();
         e.stopPropagation();
-        jumpSlashSelection(e.key === 'Home' ? 0 : slashMenu.rows.length - 1);
+        jumpSelection(menu, e.key === 'Home' ? 0 : menu.rows.length - 1);
     } else if (e.key === 'Enter' || e.key === 'Tab') {
         if (e.shiftKey && e.key === 'Tab') return;   // still a way out of the box
         e.preventDefault();
         e.stopPropagation();
-        acceptSlashCommand();
+        accept();
     } else if (e.key === 'Escape') {
         // Leaves the text exactly as typed. Stopped so it closes the menu rather
         // than whatever Escape means to the panel behind it.
         e.preventDefault();
         e.stopPropagation();
-        closeSlashMenu();
+        close();
     }
 }, true);
 
-dom.input.addEventListener('input', updateSlashMenu);
-dom.input.addEventListener('blur', closeSlashMenu);
+// One listener feeding both, because both are derived from the text rather than
+// from a keystroke — see the note above SLASH_RE. Order matters only in that a
+// composer holding one slash-word is never also holding an `@` fragment.
+dom.input.addEventListener('input', () => { updateSlashMenu(); updateMentionMenu(); });
+dom.input.addEventListener('blur', () => { closeSlashMenu(); closeMentionMenu(); });
 document.addEventListener('click', (e) => {
-    if (slashMenuOpen() && !e.target.closest('.input-row')) closeSlashMenu();
+    if (e.target.closest('.input-row')) return;
+    closeSlashMenu();
+    closeMentionMenu();
 });
+
+// ── @ mentions ───────────────────────────────────────────────────────────
+//
+// Typing `@` offers the other Claude sessions running on this machine, so you
+// can name one to the agent you are talking to.
+//
+// Claude Code gives every session a name and an inbox of its own, and an agent
+// reaches another with `SendMessage({to: "<name>"})`. **The name is the whole
+// address — there is no separate addressing syntax.** So what this menu is for
+// is not sending anything; it is getting the exact name into the message,
+// because a name spelt approximately reaches nobody and an agent cannot guess
+// which of your fourteen sessions you meant.
+//
+// What is inserted is `@[name]`, and the brackets are load-bearing. They are not
+// CLI syntax — nothing parses them, and the agent reads them as prose — but they
+// keep session mentions from colliding with `@path/to/file`, which the CLI *does*
+// resolve on its own. That leaves the file half of the menu free to insert the
+// bare path the CLI already understands, which is why the group headings exist
+// before there is a second group to head.
+//
+// Anchored to the caret rather than to the whole composer value, which is the one
+// real difference from the slash menu above. `/` is anchored to the whole value
+// because the CLI dispatches on `text.startsWith("/")`, so a command anywhere else
+// is prose; `@` carries no such rule and belongs mid-sentence — "ask @[importer]
+// whether it has finished" is the normal shape of it.
+
+// The fragment under the caret: an `@` at a word boundary, then the name being
+// typed. Spaces are allowed inside the brackets — derived names have none, but
+// they are permitted, and a menu that stopped matching at the first space would
+// be unusable for one that did.
+const MENTION_RE = /(?:^|[\s(])@\[?([^\]\n]*)$/;
+
+// How stale the peer list may be before the picker refetches. Short, because the
+// answer is "which sessions are running", and offering one that has since exited
+// is offering a message that will not arrive.
+const PEERS_TTL_MS = 5_000;
+
+/**
+ * The typed fragment and where it starts, or null when the caret is not in one.
+ *
+ * `start` is the index of the `@`, so accepting can replace exactly the fragment
+ * and leave everything either side of it alone.
+ */
+function mentionFragment() {
+    const caret = dom.input.selectionStart;
+    // Only with no selection: `@` with a range selected is somebody about to
+    // overtype it, not somebody addressing a session.
+    if (caret !== dom.input.selectionEnd) return null;
+    const before = dom.input.value.slice(0, caret);
+    const m = MENTION_RE.exec(before);
+    if (!m) return null;
+    // m[0] may open with the whitespace that made the `@` a word boundary, and
+    // that character is not part of what gets replaced.
+    const lead = m[0].startsWith('@') ? 0 : 1;
+    return { text: m[1], start: caret - m[0].length + lead };
+}
+
+/** Peers, from memory when the answer is fresh enough to still be true. */
+async function loadPeers() {
+    if (Date.now() - state.peers.at < PEERS_TTL_MS) return state.peers.list;
+    const r = await get('/api/peers');
+    state.peers.list = r.peers || [];
+    state.peers.at = Date.now();
+    return state.peers.list;
+}
+
+/** A peer by the name that is also its address, or null. */
+function peerByName(name) {
+    return state.peers.list.find(p => p.name === name) || null;
+}
+
+/**
+ * Rows for a fragment, as a flat list where each carries the group it belongs to.
+ *
+ * Flat rather than nested so that the index arithmetic in the shared keyboard map
+ * keeps working untouched — headings are drawn between rows but are not rows, and
+ * `.picker-row` is what the selection counts.
+ *
+ * The session you are in is dropped: it is running, so the bridge lists it, but
+ * telling an agent to message itself is never the intention.
+ */
+function matchPeers(peers, frag) {
+    const q = frag.trim().toLowerCase();
+    const mine = state.current && state.current.sessionId;
+    const usable = peers.filter(p => p.sessionId !== mine);
+
+    // Matched on the title and the project as well as the name, because the title
+    // is what you remember a session by and the name is what has to be sent.
+    // Looking one up by the thing you know is the entire job of this menu.
+    const hit = (p) => !q
+        || p.name.toLowerCase().includes(q)
+        || (p.title || '').toLowerCase().includes(q)
+        || (p.project || '').toLowerCase().includes(q);
+
+    // Prefix on the name first — you may be part-way through typing one — then
+    // everything else that matches, each alphabetical by what the row shows.
+    const byLabel = (a, b) => (a.title || a.name).localeCompare(b.title || b.name);
+    const pre = [];
+    const rest = [];
+    for (const p of usable) {
+        if (!hit(p)) continue;
+        (q && p.name.toLowerCase().startsWith(q) ? pre : rest).push(p);
+    }
+    return [...pre.sort(byLabel), ...rest.sort(byLabel)]
+        .map(p => ({ group: 'Sessions', peer: p, insert: `@[${p.name}] ` }));
+}
+
+function closeMentionMenu() {
+    if (dom.mentionMenu.hidden) return;
+    dom.mentionMenu.hidden = true;
+    dom.mentionMenu.replaceChildren();
+    // Only give up the combobox state if the other menu is not the one using it.
+    if (!slashMenuOpen()) {
+        dom.input.setAttribute('aria-expanded', 'false');
+        dom.input.removeAttribute('aria-activedescendant');
+    }
+    mentionMenu.rows = [];
+    mentionMenu.index = 0;
+}
+
+/** Re-read the composer and show, filter or hide the menu to match. */
+async function updateMentionMenu() {
+    const frag = mentionFragment();
+    if (frag === null || !state.current) return closeMentionMenu();
+
+    const seq = ++mentionMenu.seq;
+    let peers = (Date.now() - state.peers.at < PEERS_TTL_MS) ? state.peers.list : null;
+
+    if (!peers) {
+        // Something on screen straight away, because the fetch is a round trip and
+        // an `@` that does nothing for a moment reads as an `@` that does nothing.
+        drawMentionMenu(null, 'Looking for sessions…');
+        try {
+            peers = await loadPeers();
+        } catch {
+            if (seq === mentionMenu.seq) drawMentionMenu(null, 'Could not list sessions.');
+            return;
+        }
+        // Typed on, or moved away, while that was in flight.
+        if (seq !== mentionMenu.seq) return;
+        if (mentionFragment() === null) return closeMentionMenu();
+    }
+
+    const now = mentionFragment();
+    if (!now) return closeMentionMenu();
+
+    const rows = matchPeers(peers, now.text);
+    if (!rows.length) {
+        // A bare `@` with nothing to offer is worth saying, because the reason is
+        // interesting — one session running is a normal state, and the silent
+        // alternative is a menu that mysteriously never appears. A fragment that
+        // matches nothing is just a typo, and gets out of the way.
+        if (!now.text.trim()) return drawMentionMenu(null, 'No other sessions are running.');
+        return closeMentionMenu();
+    }
+
+    mentionMenu.rows = rows;
+    mentionMenu.index = 0;
+    drawMentionMenu(rows, null);
+}
+
+function drawMentionMenu(rows, note) {
+    if (dom.mentionMenu.hidden) { showBell(false); showNewMenu(false); closeSlashMenu(); }
+    if (note) { mentionMenu.rows = []; mentionMenu.index = 0; }
+
+    const kids = [];
+    let group = null;
+    (rows || []).forEach((r, i) => {
+        if (r.group !== group) {
+            group = r.group;
+            // Not a `.picker-row`, deliberately: the shared selection code counts
+            // those, so a heading that were one would be a row you could land on
+            // and press Enter at.
+            kids.push(el('div', { class: 'menu-group', role: 'presentation' }, group));
+        }
+        kids.push(mentionRow(r, i));
+    });
+
+    dom.mentionMenu.replaceChildren(...(note ? [el('div', { class: 'menu-note' }, note)] : kids));
+    dom.mentionMenu.hidden = false;
+    dom.input.setAttribute('aria-expanded', 'true');
+    if (rows && rows.length) paintSelection(mentionMenu);
+    else dom.input.removeAttribute('aria-activedescendant');
+}
+
+/**
+ * One session.
+ *
+ * The title leads and the name follows, because the title is what you are looking
+ * for and the name is what gets inserted — showing both is what stops the box
+ * filling with something you did not expect. A session with no transcript indexed
+ * here has no title, and shows its name alone rather than an empty row.
+ */
+function mentionRow(r, i) {
+    const p = r.peer;
+    return el('button', {
+        class: 'picker-row', type: 'button', role: 'option',
+        id: `mention-row-${i}`, tabindex: -1,
+        'aria-selected': String(i === mentionMenu.index),
+        onmousedown: (e) => e.preventDefault(),
+        onclick: () => acceptMention(i),
+    },
+    el('span', { class: 'name' }, p.title || p.name),
+    el('span', { class: 'desc' }, p.name),
+    el('span', { class: 'hint' }, p.project || p.kind || ''),
+    );
+}
+
+/**
+ * Replace the fragment under the caret with the mention, and never send.
+ *
+ * A splice rather than the whole-value replace the slash menu does, because a
+ * mention belongs mid-sentence: the words either side of it are the message.
+ */
+function acceptMention(i) {
+    const r = mentionMenu.rows[i == null ? mentionMenu.index : i];
+    const frag = mentionFragment();
+    if (!r || !frag) return closeMentionMenu();
+    closeMentionMenu();
+    insertAt(frag.start, dom.input.selectionStart, r.insert);
+}
+
+/**
+ * Put a mention in the composer from somewhere other than the menu.
+ *
+ * Reply on a received message is the caller. It goes to the front rather than to
+ * the caret: replying is the first thing the message is for, so the sentence
+ * being written is the reply and the name belongs at the start of it.
+ */
+function insertMention(name) {
+    const text = `@[${name}] `;
+    if (dom.input.value.startsWith(text)) { dom.input.focus(); return; }
+    insertAt(0, 0, text);
+}
+
+/**
+ * Splice `text` over [from, to) in the composer, caret after it.
+ *
+ * Dispatching `input` rather than calling autoGrow() and saveDraft() by hand runs
+ * the listeners already wired to the box, so every draft guarantee holds by
+ * construction instead of by a second copy of the logic that can drift.
+ */
+function insertAt(from, to, text) {
+    const v = dom.input.value;
+    dom.input.value = v.slice(0, from) + text + v.slice(to);
+    const caret = from + text.length;
+    dom.input.setSelectionRange(caret, caret);
+    dom.input.dispatchEvent(new Event('input'));
+    dom.input.focus();
+}
 
 // Two stops, because the consequences differ. The first asks the turn to end
 // where it is, which leaves the session resumable and the transcript coherent.
@@ -6511,11 +9045,22 @@ dom.queueList.addEventListener('dragover', onQueueDragOver);
 dom.queueList.addEventListener('drop', (e) => e.preventDefault());
 
 // Stop auto-scrolling the moment the user scrolls away from the bottom.
+//
+// Coalesced into one frame, and passive: `markActiveTurn` measures the document
+// and scroll fires far faster than the screen can show the result, so running it
+// per event was paying for work nobody sees. `passive` because this never calls
+// preventDefault, and saying so lets the compositor scroll without waiting for
+// the handler at all.
+let scrollFrame = 0;
 dom.scroll.addEventListener('scroll', () => {
     const sc = dom.scroll;
     state.pinned = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 90;
-    markActiveTurn();
-});
+    if (scrollFrame) return;
+    scrollFrame = requestAnimationFrame(() => {
+        scrollFrame = 0;
+        markActiveTurn();
+    });
+}, { passive: true });
 
 // The tooltip is positioned against a tick, so it cannot follow one that moves.
 dom.turns.addEventListener('scroll', hideTurnPop);
@@ -6708,6 +9253,8 @@ dom.liveFocus.addEventListener('click', () => setFocus(!state.focus));
 dom.focusExit.addEventListener('click', () => setFocus(false));
 // The dock runs sideways and a mouse wheel only goes up and down.
 dom.liveBody.addEventListener('wheel', onDockWheel, { passive: false });
+dom.btnTaskboard.addEventListener('click', () => showTaskboard(!state.taskboard.open));
+dom.tbRefresh.addEventListener('click', () => loadTaskboard());
 dom.btnDash.addEventListener('click', () => showDash(!state.dash.open));
 dom.dashRefresh.addEventListener('click', () => loadDash({ refresh: true }));
 
@@ -6744,7 +9291,9 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !dom.newMenu.hidden) { showNewMenu(false); dom.btnNewMenu.focus(); return; }
     if (e.key === 'Escape' && !dom.delScrim.hidden) { closeDelete(); return; }
     if (e.key === 'Escape' && !dom.pairScrim.hidden) { closePair(); dom.btnPair.focus(); return; }
+    if (e.key === 'Escape' && !dom.taskScrim.hidden) { closeTaskDialog(); return; }
     if (e.key === 'Escape' && !dom.newScrim.hidden) { closeNew(); return; }
+    if (e.key === 'Escape' && state.taskboard.open) { showTaskboard(false); return; }
     if (e.key === 'Escape' && state.dash.open) { showDash(false); return; }
     if (e.key === 'Escape' && state.notes.open) { showNotes(false); return; }
     // Out of focus mode before out of the board: focus mode is the deeper state,
@@ -6755,13 +9304,23 @@ document.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); dom.search.focus(); }
     if ((e.ctrlKey || e.metaKey) && e.key === 'n') { e.preventDefault(); openNew(); }
 
-    // The four things `main` can show. Ctrl rather than a bare digit because
-    // the composer is a textarea and these have to work while it has the focus.
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && '1234'.includes(e.key)) {
+    // The five things `main` can show, ordered by how wide a question each one
+    // answers: the conversation in front of you, then everything outstanding,
+    // then what is running this second, then what is unfinished in the working
+    // trees, then what already reached you. The task board arriving is what made
+    // that an ordering rather than the sequence they happened to be built in —
+    // Live and Dashboard each moved along by one, which is a real cost and worth
+    // it once, not worth paying again.
+    //
+    // Ctrl rather than a bare digit because the composer is a textarea and these
+    // have to work while it has the focus.
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && '12345'.includes(e.key)) {
         e.preventDefault();
-        if (e.key === '1') { showLive(false); showDash(false); showNotes(false); }
-        else if (e.key === '2') showLive(true);
-        else if (e.key === '3') showDash(true);
+        if (e.key === '1') {
+            showLive(false); showDash(false); showNotes(false); showTaskboard(false);
+        } else if (e.key === '2') showTaskboard(true);
+        else if (e.key === '3') showLive(true);
+        else if (e.key === '4') showDash(true);
         else showNotes(true);
     }
 });
@@ -6814,8 +9373,10 @@ function restoreView() {
     // live board that was left switched on, the live board has to go on first —
     // showLive clears dash.open, so the other order loses it.
     const dash = q.get('view') === 'dashboard';
+    const tb = q.get('view') === 'taskboard';
     if (q.get('view') === 'live' || q.get('live') === '1' || q.get('focus') === '1') showLive(true);
     if (dash) showDash(true);
+    if (tb) showTaskboard(true);
     if (q.get('focus') === '1') setFocus(true);
 
     // The panels are up and the address they came from is untouched, so from
@@ -6879,6 +9440,11 @@ setInterval(() => {
     if (state.current && !dom.channels.querySelector('[data-arm="true"], .busy')) loadChannels();
 }, 25_000);
 
+// A PR changes under you — a review lands, checks finish — with nothing in this
+// session to say so. Matched to the bridge's own minute of cache, so a window left
+// open on a conversation costs one `gh pr list` a minute at most.
+setInterval(loadPrStatus, 60_000);
+
 // The count on the Dashboard button is the only thing that says there is
 // anything to look at, so it is read once at startup — a few seconds in, where
 // it cannot slow the first paint of the session list — and then only while the
@@ -6890,6 +9456,12 @@ setInterval(() => { if (state.dash.open) loadDash(); }, 60_000);
 // that wanted you while this window was shut is the one piece of news the button
 // carries, and nothing else would go and find it out.
 setTimeout(() => loadNotes(), 3200);
+
+// And for the task board's, which counts what is blocked on you. It doubles as
+// the board's first load: the order every column holds is taken from whichever
+// payload arrives first, so taking one at startup is what makes "sorted on load"
+// mean the page load rather than the moment somebody happened to press Ctrl+2.
+setTimeout(() => loadTaskboard(), 3400);
 
 // A running subagent writes to its own file, which the parent transcript says
 // nothing about — so the only way its activity line moves is to go and look.

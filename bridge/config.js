@@ -38,6 +38,26 @@ const TGX_DIR = '.tgxcode';
 const COMMANDS_FILE = 'commands.json';
 const COMMANDS_LOCAL_FILE = 'commands.local.json';
 
+// And where a project overrides how the app itself behaves — see bridge/prefs.js.
+// Same directory and same two-file shape as the commands above, on purpose: one
+// place to look, one precedence rule to remember.
+const SETTINGS_FILE = 'settings.json';
+const SETTINGS_LOCAL_FILE = 'settings.local.json';
+
+// The user's own settings, as opposed to what a project declares. Deliberately
+// not STATE_DIR: what lives there is state the app owns and nobody opens, and
+// this is a file a person edits by hand — and the start of a directory meant to
+// outlive this app's share of it.
+const USER_TGX_DIR = path.join(HOME, TGX_DIR);
+const USER_PREFS_FILE = path.join(USER_TGX_DIR, SETTINGS_FILE);
+
+// The words the spinner uses while a turn runs — see bridge/spinner.js. A
+// directory rather than a key in the settings file: there are thousands of them
+// across a hundred-odd themed groups, and one file per group is what makes
+// "delete the ones I don't like" a thing you can actually do.
+const VERBS_DIR = 'verbs';
+const USER_VERBS_DIR = path.join(USER_TGX_DIR, VERBS_DIR);
+
 // A run's output, kept past the end of the run so "why did it die" survives
 // longer than the pane. Under the cache rather than the state directory: losing
 // it costs nothing a rerun would not recover. Created 0700; the files inside are
@@ -148,6 +168,8 @@ module.exports = {
     ROOT, IS_WORKTREE,
     STATE_DIR, TOKEN_FILE,
     TGX_DIR, COMMANDS_FILE, COMMANDS_LOCAL_FILE, RUNS_LOG_DIR,
+    SETTINGS_FILE, SETTINGS_LOCAL_FILE, USER_TGX_DIR, USER_PREFS_FILE,
+    VERBS_DIR, USER_VERBS_DIR,
     ALLOW_REMOTE_BIND, ALLOWED_ROOTS, EXTRA_ORIGINS, withinRoots, expandHome,
     DEFAULT_PORT, DEV_PORT, IS_DEV,
     DEVBROWSER_DEFAULT_PORT, CLAUDE_BIN, PORT_DENYLIST,

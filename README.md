@@ -106,15 +106,19 @@ create one in `%APPDATA%\claude-sessions\`:
 | **Left rail** | Every session on disk, grouped by project. Worktrees fold under the checkout that owns them. A green dot means the transcript changed in the last 90 seconds — something is working. |
 | **Ordering** | By when *you* last wrote, not by last activity. Sorting on activity meant a busy agent kept bumping its session to the top and shuffling the rest out from under the cursor. The timestamp on each row is the one it sorts by. |
 | **Pin / archive** | Hover a row for its two buttons, or use the ones beside the session title. Pinned sessions sit in their own group at the top, across projects. Archived ones collapse into a group at the bottom. |
-| **Conversation** | Your turns, Claude's replies with syntax-highlighted code, and one collapsible block per tool call. Edits render as diffs, and output too large to inline loads on demand. |
+| **Conversation** | Your turns, Claude's replies with syntax-highlighted code, and one collapsible block per tool call. A run of tool calls between one message and the next folds into a single row — *16 tool calls · Bash ×6 · Read ×7* — which opens to the rows themselves; see *Folded tool calls*. Edits render as diffs, and output too large to inline loads on demand. |
 | **Plans & questions** | When Claude presents a plan or asks a multiple-choice question, the turn stops on a card at the foot of the transcript. A plan can be approved, approved with a note to bear in mind, or sent back with what to change; approving picks the mode the work continues in. Questions are answered by picking, with an *Other* row for none-of-the-above. |
 | **Subagents** | The first chip row under the title, one per subagent, with a light for how it is going and a line of what it is doing. Click to switch the pane over to it; `Esc` or the breadcrumb comes back. |
+| **Pull requests** | Every PR the session raised, on the line under the title, each with a glyph and a colour for where it has got to — draft, open, approved, changes requested, checks running or failing, conflicting, merged, closed. Hover for the status in words, the title, and how the checks stand. Merged and closed ones stay, dimmed, so the line is the session's whole PR history rather than only its newest. |
 | **Dev servers** | The second chip row. Green means the port is answering right now; click to switch DevBrowser to that tab, starting DevBrowser if it isn't running. The button on the end shuts the server down — one click arms it, the next signals. |
+| **Task board** | `Ctrl+2`, or *Tasks* in the top bar with a count of how many sessions are blocked on you. Four columns over everything outstanding: **Needs you** (a permission, a plan or a question waiting, or a turn that failed), **Working**, **Suggested** — every open task from every session, not only the conversation you have open — and **Idle**. Archived sessions are not on it; that is what archiving is for. A task card starts the work or opens it to read; a session card opens the conversation, and the button that appears on hover archives it. Idle leads with what has moved today and *Show all* pages in the rest. Nothing on it reorders while you read — see *The rail is sorted on load*. |
 | **Dashboard** | The button in the top bar, with a count of how many places are unfinished. It lists, per project, every directory holding uncommitted changes and every pull request still open, with the sessions that worked there as links back into the conversation. |
 | **Open folder** | The folder button by the title shows the session's working directory in Windows File Explorer, through the `\\wsl.localhost` share. |
 | **Composer** | Sends to the session, resuming it in place — the same transcript a terminal would append to. |
-| **LGTM** | Beside *Send*, for when you have read the work and it is done: it sends a written instruction to put the change on a pull request if it is not on one already, run the project's checks, and merge once they pass — and to stop and say so if something blocks it. One click, no confirmation over the top; the session still asks for what its permission mode makes it ask for. |
+| **LGTM** | Beside *Send*, for when you have read the work and it is done: it sends a written instruction to put the change on a pull request if it is not on one already, run the project's checks, merge once they pass, and file anything it noticed along the way as a suggested task — and to stop and say so if something blocks it. One click, no confirmation over the top; the session still asks for what its permission mode makes it ask for. |
 | **Send queue** | Write while an agent is working and the message waits, listed above the composer in send order. Each one can be expanded, reordered, pulled back for editing, or dropped, right up until its turn starts. `Shift+Tab` out of the composer to work through them without the mouse. |
+| **Suggested** | The panel beside the transcript. An agent that notices work outside what it was asked to do files it there, with the prompt already written. Each one folds to its title, and the ⤢ on a row opens it at full width to read; *Start* runs it, *Edit first* opens it in the Start dialog, *Dismiss* puts it away. *Hide* collapses the whole panel to a strip. |
+| **Mentions** | `@` in the composer lists the other sessions running on this machine and inserts the one you pick as `@[name]` — the name an agent addresses it by. |
 
 Shortcuts: `Ctrl+Enter` send, `Ctrl+K` filter, `Ctrl+N` new session, `Esc` leave
 a subagent, `Ctrl+R` reload, `Ctrl+±` zoom, `F12` devtools.
@@ -169,6 +173,119 @@ Subagents don't take messages — the composer greys out while you are reading o
 A subagent that spawned its own subagents shows them inside its transcript, at
 the `Task` call that spawned them, rather than flattening them into the session's
 chip row where they did not happen.
+
+### Suggested follow-ups
+
+Agents notice things. "There's a shortcoming here, but that's outside the scope
+of this PR" is a sentence every long session produces at least once, and until
+now it went nowhere: the agent had already written the prompt for the session
+that would fix it, and there was no way to hand that over.
+
+So sessions this app starts get one tool they would not otherwise have —
+`suggest_session`, from a small MCP server in `bridge/suggest-mcp.js` that the
+runner attaches with `--mcp-config`. The agent calls it with a prompt, a reason,
+and optionally a directory; the call lands in the transcript like any other tool
+call; the panel beside the conversation draws it as a task you can start in one
+click.
+
+**It sits beside the transcript rather than in it.** The log is a record of what
+happened; an offer is the one thing in the pane that has not happened yet, and it
+is a decision waiting on you rather than an event. Inline it interrupted the
+reading and scrolled away; in the aside it stays put and stays optional. Each
+task folds to its title — open by default while it is still an offer, folded once
+you have dealt with it — and the panel itself folds to a strip, so a session that
+suggested six things is not permanently narrower than one that suggested none.
+Whether the panel is open is remembered across sessions, like the terminal pane's
+height; which tasks are open is not, because the useful default changes as you
+deal with them.
+
+**The ⤢ on a row opens the task at a readable width.** 300px is right for
+scanning a list and wrong for reading a prompt written to brief an agent that has
+none of your context — those run to paragraphs, and judging one means reading all
+of it rather than the first two lines. The same three buttons are in the dialog as
+on the card, because a dialog you have to close before you can act on what it told
+you is a dialog that made you read twice. *Copy prompt* puts the source on the
+clipboard rather than the rendered markdown.
+
+**The server stores nothing, and that is the design.** The offer is already in the
+transcript, which is the copy that survives a restart, shows up in a second
+window, and can be read out of a session this bridge does not own — the same way
+a pending plan already is. A second copy would only be something to drift.
+
+What *is* the app's is what you did about it. Started or dismissed is a decision
+you made rather than something the agent said, so it lives in
+`~/.local/share/claude-sessions/suggestions.json` beside `flags.json`, and it is
+pruned when the transcript goes. Both are undoable: dismiss is the easy one to
+hit by accident, and the suggestion is still sitting in the transcript either way.
+
+A started suggestion runs in `plan` mode regardless of the mode it was raised in.
+A prompt written by one agent for another has had no human read it as an
+instruction yet, and the first thing the new session should do is say what it
+intends to do about it.
+
+The directory is only named on a task that would run somewhere other than where
+the conversation is happening. Almost none do, and repeating the same path down
+the panel is noise saying nothing — but one pointed at a different checkout is
+worth knowing about before you start it.
+
+**A task no longer needs its conversation open to be found.** The rescan that
+already reads every transcript collects the offers as it goes — `scanMeta` puts
+them on `meta.suggestions`, cached with the rest of the index — and
+`GET /api/suggestions` answers with every one of them across every session, each
+carrying the decision joined on from `suggestions.json`. The aside beside a
+transcript reads that same route scoped to one session rather than lifting the
+cards out of the event stream, so there is one answer about a task rather than
+two that can disagree.
+
+**They still die with their transcript.** The index is derived and nothing else:
+delete a session and its tasks go with it, decisions included. Keeping one alive
+past its session would mean copying the title, the reason and the prompt into
+state this app owns, and content coming from anywhere but Claude Code's
+transcripts is the line held everywhere else here. Being findable without the
+conversation being *open* was the actual complaint; outliving the conversation
+*existing* was not.
+
+The tool is on `--allowedTools`, so filing one never raises an approval card —
+a permission prompt for "may I suggest this?" is noise. Only sessions the bridge
+starts have it; a session you started in a terminal will not.
+
+### Sessions can talk to each other
+
+Claude Code gives every running session a name and an inbox of its own, and an
+agent reaches another with `SendMessage({to: "<name>"})`. That is all its own
+work — the socket, the delivery, the loop guards. **This app builds no transport
+and dials no socket.** What it does is make the conversation visible, which it
+was not.
+
+- **`@` in the composer** lists the sessions that are actually running, from
+  Claude Code's own process registry, and inserts the one you pick as
+  `@[name]`. The name is the whole address — there is no separate addressing
+  syntax — so getting the exact one into the message is the entire job. Rows
+  show the title you know the session by and the name that gets inserted, since
+  those are often not the same thing.
+- **The brackets are ours, not the CLI's.** Nothing parses them; the agent reads
+  them as prose. They exist so a session mention cannot be mistaken for
+  `@path/to/file`, which the CLI *does* resolve on its own — which is what keeps
+  the file half of that menu free for later.
+- **A message that arrives now renders.** It used to render as nothing at all:
+  Claude Code delivers one as a user message flagged `isMeta`, and
+  `bridge/transcript.js` skipped those wholesale, so a session that had been
+  messaged showed an empty gap where the message was. It is now recognised by its
+  `<cross-session-message>` wrapper and drawn as what it is, with the sender
+  named and a way into their session.
+- **It is still not a turn you took.** Peer messages stay out of the turn count
+  and out of `lastUserTs`, which the rail sorts on — otherwise two agents
+  talking would quietly reorder your session list.
+- **The notification is filed by the bridge**, not the page, because a message
+  can land in a session with no window open on it and no process of ours anywhere
+  near it. That is noticed in the transcript during the index rescan, which is
+  the only place that knows.
+
+One thing to know if messages seem to vanish: Claude Code has a
+`crossSessionInbound` setting — `accept`, `hold`, or `refuse`. On `hold` an
+inbound message waits for an interactive approval that a headless session has
+nobody to give, so it never arrives. That is the CLI's setting in your own
+`~/.claude/settings.json`, and not something this app writes.
 
 ### The send queue holds messages back on purpose
 
@@ -227,6 +344,17 @@ merely busy, so it goes to the top of its group, and a project with no sessions
 in it yet gets a new card at the top of the rail. Neither disturbs the position
 of anything already placed.
 
+**The task board holds the same rule, per column.** It has the stronger version of
+the same problem: a board with every session on it, redrawn every three seconds
+while agents work, would be a page of cards swapping places under the cursor. So
+position within a column is taken once and then held, and the one thing that can
+move a card is *changing column* — which is the news the board exists to carry,
+not noise. When it does, it lands at the top of its new column, so a session that
+has just become blocked on you is the first thing in *Needs you* and nothing
+already placed shifts to make room. A card that goes idle and comes back does not
+get a fresh place: it returns to the rank it had, because appearing at the top of
+*Working* reads as a new session, and it is not.
+
 ### Archiving never deletes — deleting does
 
 Archiving moves a session out of the way and nothing else. The transcript is
@@ -243,10 +371,141 @@ subagent transcripts and any spilled tool output — and nothing else. A session
 with a turn in flight is refused rather than deleted out from under the turn;
 stop it first.
 
-These flags are the only state this app owns; everything else it shows is derived
-from Claude Code's own files, which it never writes to. They live in
-`~/.local/share/claude-sessions/flags.json`, and flags for transcripts that no
-longer exist are pruned automatically.
+These flags are the only state this app owns *about a conversation*; everything
+else it shows is derived from Claude Code's own files, which it never writes to.
+They live in `~/.local/share/claude-sessions/flags.json`, and flags for
+transcripts that no longer exist are pruned automatically. Settings — how you
+want the app itself to behave — are a separate file you are meant to open; see
+*Folded tool calls*.
+
+### Folded tool calls
+
+Between one message and the next an agent may make thirty tool calls, and a
+transcript that prints all of them is a wall of `Read`/`Bash`/`Edit` to scroll
+past on the way to the sentences that say what happened. So once a message
+closes a run of them, the run folds into one row — the same row a tool call
+draws, reading *16 tool calls* with a tally of what they were and how long they
+took. Open it and the rows are there, unchanged, each still opening to its own
+output.
+
+Only once the run is **closed**. While the calls are still arriving they are the
+work you are watching, so they stay where they are and fold the moment the agent
+speaks again.
+
+Three settings control it, from `~/.tgxcode/settings.json` — written out with the
+defaults the first time the bridge runs, so it is there to edit:
+
+```json
+{
+  "version": 1,
+  "transcript": {
+    "groupToolCalls": true,
+    "groupMinCalls": 3,
+    "groupIncludesThinking": true
+  }
+}
+```
+
+`groupMinCalls` is how long a run has to be before folding it is worth it — one
+or two rows collapsed into a summary loses more than it saves.
+`groupIncludesThinking` decides whether a thinking block is part of the work
+stretch or the end of it; folding it in keeps runs long, and breaking on it
+fragments a turn that thinks between every call.
+
+A project can override any of these in `<checkout>/.tgxcode/settings.json`, the
+same directory it declares its commands in and with the same precedence — see
+`docs/api.md` under `GET /api/prefs`. A value that is not what the key allows is
+ignored and the default stands, rather than being taken at face value.
+
+There is no settings page yet; the file is the interface.
+
+### What a turn in progress calls itself
+
+While a turn runs, every surface that shows it working — the status line, the
+rail, the boards, a phone at `/m` — says the same thing, because they all read
+one label off one SSE message. For most of this app's life that label was
+`Thinking…`, replaced by a tool's name while a tool ran. Now it has two halves:
+
+```
+Percolating…
+Percolating… Reading runner.js
+Percolating… Running: npm test
+```
+
+The **verb** comes from whichever themed groups you have enabled and drifts on
+its own clock — it is what says the session is alive. What follows it is
+whatever is specifically happening, and it changes when reality does. Neither
+half has to give way to the other, which is what lets the verb keep moving
+through a call of any length while that call keeps its name.
+
+The collection is [wynandw87/claude-code-spinner-verbs][verbs] — 3,639 verbs
+across 114 groups, the 185 Claude Code itself ships among them.
+`scripts/import-spinner-verbs.js` turns its README into
+`bridge/spinner-verbs.json`, which is written out on first run as one file per
+group:
+
+```
+~/.tgxcode/verbs/
+  Claude_Code_Defaults.json
+  Monty_Python.json
+  Tech_Programming.json
+  …114 files
+```
+
+```json
+{
+  "Category": "Tech / Programming",
+  "Verbs": ["Dockerizing", "Kubernetizing", "Terraforming"]
+}
+```
+
+**The `Category` is the name, and the filename is an index into it.** They are
+written down twice because a category may contain characters a filename may not
+— `Tech / Programming` is why `Tech_Programming.json` exists — and because a
+group that says what it is survives being renamed or handed to somebody else.
+Settings refer to the `Category`, forgivingly: `"Tech / Programming"`,
+`"Tech_Programming"` and `"tech-programming"` all find it.
+
+So **adding a group is dropping a file in**, and **removing a verb is deleting a
+line**. A group you delete stays deleted: the directory is only ever seeded when
+it is missing altogether, never file by file, because the alternative is your
+edits undoing themselves on the next run. A project can ship its own groups in
+`<checkout>/.tgxcode/verbs/`, and they win over the ones in your home directory.
+
+Which groups are *in play* is a setting, in the same file as the rest:
+
+```json
+{
+  "spinner": {
+    "randomize": true,
+    "groups": ["Claude Code Defaults", "Monty Python", "Absurd / Nonsense", "Tech / Programming"],
+    "rerollMs": 8000
+  }
+}
+```
+
+Only the groups named there are ever opened, so the size of the directory costs
+nothing. `randomize: false` gives back `Thinking…` and nothing else changes.
+
+`rerollMs` is how long a verb stands before the next is drawn, and it is the
+only thing that moves it — the half after it changes on its own as the work
+does. `0` pins one verb for the whole turn.
+
+A verb is only worn by work. A question waiting on you, an API retry, starting
+up and going idle say what they are and nothing else.
+
+`GET /api/spinner/groups?cwd=` lists what you have, with a count each and the
+reason any group failed to load — the discoverable half of a setting with no
+page in front of it.
+
+Two things worth knowing. The session rail has room for about twenty characters,
+which is not enough for both halves, so it shows the one that carries
+information: the tool's name while a tool runs, and the verb whenever nothing
+more specific is happening. Every wider surface draws the whole label. And
+twenty-three of the groups are full sentences rather than words, which truncate
+in the rail for the same reason — the groups enabled by default are all short.
+
+[verbs]: https://github.com/wynandw87/claude-code-spinner-verbs
 
 ### Test sessions
 
@@ -501,7 +760,12 @@ and it reads none of it from the transcripts:
   share one, and a session that has left a worktree still left its changes in it.
 - **Open pull requests** come from one `gh pr list --state open` per repository.
   Being absent from that list *is* the answer to "has it been merged": a PR the
-  transcripts mention that is not open any more needs nothing from you.
+  transcripts mention that is not open any more needs nothing from you. This board
+  stops there. A conversation header wants the opposite — it keeps a merged PR on
+  screen as the record that the work landed — so it asks after that one PR by
+  number, once, and remembers the answer for good: merged and closed are the two
+  states nothing can move a PR out of. Both go through `bridge/pulls.js` and share
+  its cache, so the extra question costs one call per settled PR and no more.
 
 A workspace shows the PRs raised from the branch it has checked out, and only
 those — a session that raises a PR from a worktree and then leaves reports the
@@ -565,26 +829,35 @@ not.
 | `bridge/server.js` | HTTP + SSE, routing, static files |
 | `bridge/config.js` | Paths, ports, allowed roots — every constant with a reason attached |
 | `bridge/dashboard.js` | Uncommitted changes and open PRs, per project |
+| `bridge/pulls.js` | Everything that asks GitHub about a pull request, and what its status *is* |
 | `bridge/overview.js` | The live board: what every session is doing right now |
+| `bridge/taskboard.js` | The task board: everything outstanding, in a column per state |
 | `bridge/sessions.js` | The session index — incremental, cached, watched |
 | `bridge/registry.js` | Which sessions have a process, from Claude Code's own registry |
 | `bridge/transcript.js` | JSONL → render events; pairs tool calls with results; reads subagent transcripts |
 | `bridge/tasks.js` | Subagent task records |
+| `bridge/attachments.js` | Files pasted into the composer — where they land, and out of git |
 | `bridge/memo.js` | Small notes the UI keeps against a session |
 | `bridge/runner.js` | `claude` processes, one per active conversation |
 | `bridge/terminal.js` | The pty, out of `script(1)` — a shell to type into, or a declared command |
 | `bridge/commands.js` | What a project declares in `.tgxcode/` |
 | `bridge/runs.js` | Running those commands, and keeping the record |
-| `bridge/ports.js` | Finding a free port, and holding it until something takes it |
+| `bridge/ports.js` | Finding a port that is free *and* unclaimed, holding it, and remembering it |
 | `bridge/devservers.js` | Port detection, ranking, and stopping a server |
 | `bridge/devbrowser.js` | DevBrowser control client |
 | `bridge/explorer.js` | Opens a WSL directory in File Explorer |
 | `bridge/notifications.js` | The notification log, and what is worth raising |
 | `bridge/flags.js` | Pinned, archived and test state |
+| `bridge/prefs.js` | Settings from `~/.tgxcode/` and from the project |
+| `bridge/spinner.js` | What a turn in progress calls itself, out of `~/.tgxcode/verbs/` |
+| `bridge/spinner-verbs.json` | The verb catalogue, and the seed for that directory |
+| `bridge/suggestions.js` | What you did about a suggested follow-up |
+| `bridge/suggest-mcp.js` | The one tool this app gives a session: offer the next piece of work |
 | `bridge/slash-commands.js` | What slash commands a directory has, for composer completion |
 | `bridge/auth.js` | The access token, and telling local from remote apart |
 | `bridge/tailscale.js` | What this machine is reachable as, for pairing |
 | `bridge/launch.sh` | Finds a node, then starts the bridge |
+| `scripts/import-spinner-verbs.js` | Rebuilds the verb catalogue from upstream |
 | `web/` | The UI. No build step, no dependencies |
 | `web/terminal.js` | The terminal pane — a shell, or a run's output |
 | `web/mobile.*` | The phone surface at `/m` — a second client of the same API |

@@ -33,6 +33,11 @@ const WORKTREE_DIR_RE = /^(.*)\/\.claude\/worktrees\/(.+)$/;
 // of megabytes, for a field that is not in it, would cost more than the whole scan.
 const CWD_PARSE_LIMIT = 5;
 
+// How many pull requests to keep per session. A session raises one or two; this
+// is only here so that a transcript which somehow names dozens cannot inflate
+// every summary the session list sends.
+const PR_LIMIT = 10;
+
 // The permission mode a session was last seen in. Two entries state it and they
 // mean slightly different things: a `permission-mode` line is the interactive UI
 // being toggled, while the field on a prompt is the mode that turn actually ran
@@ -107,20 +112,71 @@ function scanMeta(filePath) {
         userMessages: 0,
         assistantMessages: 0,
         toolCalls: 0,
+        // Messages from other Claude sessions. Counted separately from
+        // userMessages and deliberately not added to it — see the skip below.
+        // The count is what lets the bridge notice a new one arriving without
+        // reading the file twice, and the last sender is what the row says.
+        peerMessages: 0,
+        lastPeerTs: null,
+        lastPeerFrom: null,
         firstTs: null,
         lastTs: null,
         lastUserTs: null,
         worktree: null,
         inWorktree: false,
-        pr: null,
+        prs: [],
+        // The suggested follow-ups raised in here, in the order they were
+        // raised. Collected on the way past for the same reason peerMessages is:
+        // this is the only pass that reads every transcript, and a task is
+        // otherwise findable only by parsing the one conversation you have open.
+        //
+        // These are a derived index, not a second copy — the tool call in the
+        // transcript stays the only record of the offer, so a deleted session
+        // takes its tasks with it. See docs/api.md GET /api/suggestions.
+        suggestions: [],
         bytes: text.length,
     };
 
     const titles = {};
+    const peerIds = new Set();
     let cwdTries = 0;
 
     for (const line of text.split('\n')) {
         if (!line) continue;
+
+        // A message from another session, in either of the shapes peerOriginOf
+        // describes. Ahead of the conversation classification because one of
+        // those shapes is an `attachment`, which is bookkeeping by every other
+        // measure and would never be looked at down there.
+        //
+        // Counted by distinct `msg_id` rather than by line: one message can reach
+        // disk twice, and this count is what the bridge watches to decide that
+        // something new arrived. Counting the same message twice would notify
+        // twice. The gate is a substring so the parse only happens on the handful
+        // of lines that could possibly be one.
+        if (line.includes(PEER_ORIGIN_MARK)) {
+            const parsed = safeParse(line);
+            const o = peerOriginOf(parsed);
+            if (o) {
+                peerIds.add(o.msg_id || `${parsed.uuid || peerIds.size}`);
+                meta.peerMessages = peerIds.size;
+                const at = matchField(line, 'timestamp');
+                if (at) meta.lastPeerTs = at;
+                meta.lastPeerFrom = o.name || o.from || meta.lastPeerFrom;
+            }
+        }
+
+        // A suggested follow-up. Ahead of the classification below because that
+        // block `continue`s, and this lives on an `assistant` line — the same
+        // reason the peer block sits where it does.
+        //
+        // The gate is the tool-name suffix, so the parse only happens on the
+        // handful of lines that could hold one. A line that merely quotes the
+        // name — this repo's own transcripts discuss the tool — costs one parse
+        // and yields nothing, because suggestionsIn checks the structure.
+        if (line.includes(SUGGEST_TOOL_SUFFIX)) {
+            for (const s of suggestionsIn(safeParse(line))) meta.suggestions.push(s);
+        }
 
         // Cheap classification first. Conversation lines are the big ones and we
         // only need counts and timestamps from them.
@@ -152,6 +208,10 @@ function scanMeta(filePath) {
             if (isUser) {
                 // A tool_result is mechanically a user message; don't count it as one.
                 if (line.includes('"type":"tool_result"')) continue;
+                // A message from another session is meta, and stays meta: it is
+                // not a turn you took, so it must not reach userMessages or
+                // lastUserTs, which the rail sorts on. It is counted above this
+                // loop's classification instead, where both of its shapes land.
                 if (line.includes('"isMeta":true')) continue;
                 // Nor is a background task reporting in. Counting it would both
                 // inflate the turn count and, because lastUserTs is what the
@@ -223,9 +283,23 @@ function scanMeta(filePath) {
                         };
                     }
                     break;
-                case 'pr-link':
-                    meta.pr = { number: o.prNumber, url: o.prUrl, repo: o.prRepository };
+                case 'pr-link': {
+                    // Every PR the session raised, not just the last one. This
+                    // was an assignment for a long time, which silently dropped
+                    // all but the newest: a session that opens a PR, lands it and
+                    // opens another is ordinary, and the header showed one of two.
+                    //
+                    // Keyed by url because the same PR is written back more than
+                    // once — first-seen order is the order they were raised, which
+                    // is the order worth reading them in. Capped because this ends
+                    // up in every session summary the rail sends.
+                    if (!o.prUrl || meta.prs.length >= PR_LIMIT) break;
+                    if (meta.prs.some(p => p.url === o.prUrl)) break;
+                    meta.prs.push({
+                        number: o.prNumber, url: o.prUrl, repo: o.prRepository || null,
+                    });
                     break;
+                }
             }
         }
     }
@@ -324,6 +398,38 @@ function projectRootOf(dir) {
     return at;
 }
 
+/**
+ * The workspace a directory belongs to: the worktree it sits inside, or the
+ * checkout above it.
+ *
+ * The mirror of projectRootOf, which walks *out* of worktrees to the owning
+ * checkout. This one answers "whose desk is this on" where that answers "which
+ * repository is this", and the difference matters for anything attributing a
+ * process to a session. A dev server running in
+ * `<proj>/.claude/worktrees/askui/web` belongs to the askui worktree — not to
+ * the project, and emphatically not to the main checkout, which contains every
+ * worktree by path and would otherwise claim all of their ports.
+ *
+ * WORKTREE_DIR_RE is greedy, so a worktree nested inside another resolves to
+ * the inner one: the desk the work is actually happening on.
+ */
+function workspaceOf(dir) {
+    if (!dir || !dir.startsWith('/')) return null;
+    const here = path.resolve(dir);
+    const m = WORKTREE_DIR_RE.exec(here);
+    if (m) return path.join(m[1], '.claude', 'worktrees', m[2].split('/')[0]);
+    // Not in a worktree, so the nearest checkout above. Bounded for the reason
+    // projectRootOf is bounded: this walks a path that came from outside.
+    let at = here;
+    for (let i = 0; i < 40; i++) {
+        if (isCheckout(at)) return at;
+        const up = path.dirname(at);
+        if (up === at) return null;
+        at = up;
+    }
+    return null;
+}
+
 // A checkout root carries `.git` — a directory in a clone, a file in a worktree,
 // so existence is the whole test. A directory that has since been deleted simply
 // is not one, which leaves the launch cwd standing; that is the right answer for
@@ -410,9 +516,32 @@ function stripEnvelope(s) {
 function buildEvents(entries, ctx = {}) {
     const events = [];
     const toolsById = new Map();
+    // Calls that became a card instead of a tool block, so their result can be
+    // dropped rather than emitted as a patch aimed at a node that was never
+    // rendered. The tool answers with a fixed sentence and the card shows the
+    // arguments, so there is nothing in the result a reader would want.
+    const cardToolIds = new Set();
+    // Peer messages already drawn, by `msg_id` — see peerOriginOf for why one
+    // message can reach disk twice.
+    const seenPeerIds = new Set();
     let lastAssistantModel = null;
 
     for (const e of entries) {
+        // Before the content-type gate, because an `attachment` is bookkeeping by
+        // every other measure and would never get this far otherwise.
+        const peerOrigin = peerOriginOf(e);
+        if (peerOrigin) {
+            // One message, one card, however many entries the CLI wrote for it.
+            const key = peerOrigin.msg_id || null;
+            if (key && seenPeerIds.has(key)) continue;
+            if (key) seenPeerIds.add(key);
+            const peer = parsePeerMessage(userText(e), e);
+            if (peer) {
+                events.push({ id: e.uuid, kind: 'peer-message', ts: e.timestamp, ...peer });
+                continue;
+            }
+        }
+
         if (!CONTENT_TYPES.has(e.type)) {
             if (e.type === 'system' || e.type === 'attachment') { /* handled below */ }
             continue;
@@ -444,6 +573,21 @@ function buildEvents(entries, ctx = {}) {
                         text: b.text, model: e.message.model,
                     });
                 } else if (b.type === 'tool_use') {
+                    // A suggested follow-up is a card, not a tool call. It is
+                    // mechanically a tool call and could render as one, but a
+                    // collapsed grey block saying `suggest_session` is exactly
+                    // how an offer goes unread — and there is nothing to inspect
+                    // in it anyway, because the arguments *are* the content.
+                    //
+                    // Emitted from the call rather than waiting for the result,
+                    // for the reason the subagent link below gives: the result
+                    // adds nothing and waiting only delays the card.
+                    const suggestion = parseSuggestion(b, e);
+                    if (suggestion) {
+                        cardToolIds.add(b.id);
+                        events.push(suggestion);
+                        continue;
+                    }
                     const ev = {
                         id: b.id, kind: 'tool', ts: e.timestamp,
                         name: b.name, input: b.input || {},
@@ -464,12 +608,22 @@ function buildEvents(entries, ctx = {}) {
         }
 
         // e.type === 'user'
-        if (e.isMeta) continue;
+        //
+        // `isMeta` means "not something the user typed", and skipping it is right
+        // for everything it marks. A message from another session is marked too —
+        // which is why one used to render as nothing at all — but it is caught at
+        // the top of this loop now, before anything here can drop it.
+        //
+        // The one belt-and-braces case: an entry with the wrapper but no `origin`
+        // to recognise it by, which is possible because whether `origin` reaches
+        // disk is Claude Code's business rather than a contract.
+        if (e.isMeta && !isPeerMessage(userText(e))) continue;
 
         if (Array.isArray(content)) {
             const resultBlocks = content.filter(b => b.type === 'tool_result');
             if (resultBlocks.length) {
                 for (const b of resultBlocks) {
+                    if (cardToolIds.has(b.tool_use_id)) continue;
                     const payload = resultPayload(b, e, ctx);
                     const target = toolsById.get(b.tool_use_id);
                     if (target) {
@@ -509,15 +663,35 @@ function buildEvents(entries, ctx = {}) {
             continue;
         }
 
+        // The belt-and-braces path for a peer message: an entry carrying the
+        // wrapper but no `origin` to be recognised by at the top of the loop.
+        // Anchored at the start, so an agent quoting a message it received is
+        // still a turn somebody took — the same trade the notification tag makes
+        // a few lines up.
+        const peer = parsePeerMessage(text, e);
+        if (peer) {
+            events.push({
+                id: e.uuid, kind: 'peer-message', ts: e.timestamp, ...peer,
+            });
+            continue;
+        }
+
         const images = Array.isArray(content)
             ? content.filter(b => b.type === 'image').map(imageRef)
             : [];
-        if (!text && !images.length) continue;
+        // Files this turn carried. An image is usually *both* — inlined so the model
+        // saw it without a Read, and listed so there is something to open — which is
+        // why these are two fields rather than one: the thumbnail is what was sent,
+        // the card is the file on disk.
+        const attached = parseAttachmentNote(text);
+        const body = attached ? attached.text : (text || '');
+        if (!body && !images.length && !attached) continue;
 
         events.push({
             id: e.uuid, kind: 'user', ts: e.timestamp,
-            text: text || '', images,
-            command: parseCommand(text),
+            text: body, images,
+            files: attached ? attached.files : [],
+            command: parseCommand(body),
             origin: e.origin && e.origin.kind,
         });
     }
@@ -559,6 +733,170 @@ function isTaskNotification(text) {
     return t.startsWith(NOTIFICATION_TAG) || t.startsWith(NOTIFICATION_PREFIX);
 }
 
+// The tool bridge/suggest-mcp.js provides, as the CLI names it once it has been
+// resolved through an MCP server. Matched on the suffix rather than the whole
+// string: the middle segment is the server's name in --mcp-config, which is ours
+// to choose today and could reasonably be namespaced differently tomorrow.
+const SUGGEST_TOOL_SUFFIX = '__suggest_session';
+
+/**
+ * A `suggest_session` call as a card, or null for any other tool.
+ *
+ * `cwd` falls back to the entry's own working directory rather than being left
+ * empty: the agent is being asked for the exception, not the rule, and a card
+ * with nowhere to run is a card with a broken button.
+ */
+function parseSuggestion(block, entry) {
+    const name = String(block.name || '');
+    if (!name.endsWith(SUGGEST_TOOL_SUFFIX)) return null;
+    const input = block.input || {};
+    const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+    const prompt = str(input.prompt);
+    // Structurally not one of these after all. The tool refuses an empty prompt,
+    // so this is a call that never should have been written — rendering an
+    // offer with nothing behind it would be worse than rendering the tool block.
+    if (!prompt) return null;
+    return {
+        id: block.id,
+        kind: 'suggestion',
+        ts: entry.timestamp,
+        prompt,
+        why: str(input.why),
+        title: str(input.title),
+        cwd: str(input.cwd) || (typeof entry.cwd === 'string' ? entry.cwd : null),
+    };
+}
+
+/**
+ * Every suggested follow-up on one transcript entry.
+ *
+ * The whole-entry counterpart to parseSuggestion, for scanMeta — which has a
+ * line rather than the interleaved content blocks buildEvents walks. Both go
+ * through parseSuggestion so there is one definition of what a card is and what
+ * it carries; a second extraction here is how the index and the conversation
+ * would start disagreeing about the same tool call.
+ */
+function suggestionsIn(entry) {
+    if (!entry || entry.type !== 'assistant') return [];
+    const content = entry.message && entry.message.content;
+    if (!Array.isArray(content)) return [];
+    const out = [];
+    for (const b of content) {
+        if (!b || b.type !== 'tool_use') continue;
+        const s = parseSuggestion(b, entry);
+        if (s) out.push(s);
+    }
+    return out;
+}
+
+// A message from another Claude session is the same problem as a task
+// notification, and gets the same treatment: it arrives as a *user* entry —
+// there is still no other channel into a conversation — and it is not something
+// you said. Claude Code also marks it `isMeta`, which is why buildEvents used to
+// drop these on the floor; a session that got messaged showed nothing at all.
+// See the guard there for what changed and what did not.
+//
+// What lands on disk is three parts, and only the middle one is the message:
+//
+//   Another Claude session sent a message:
+//   <cross-session-message from="uds:/run/user/1000/cc-socks/1234.sock"
+//                          from-name="dedupe-prod-a4" from-mode="prompting">
+//   …the message…
+//   </cross-session-message>
+//
+//   This came from another Claude session — not typed by your user, but …
+//
+// Both wrappers are addressed to the model rather than to a reader, and the
+// trailer in particular is a paragraph of standing instructions about permission
+// laundering that would be absurd to render under somebody's name.
+//
+// **`origin` is the copy to believe, and the text is the fallback.** The entry
+// carries `origin: {kind:"peer", from, name, body, msg_id, verifiedPeerPid, …}`
+// where `body` is the message with none of the wrapper and `name` is the peer
+// name — the thing `SendMessage` takes as `to`, so it is what a reply needs.
+// That is exact, where pulling the middle out of the prose is a parse the next
+// CLI release could quietly break. The parse stays as the fallback because
+// whether `origin` reaches disk is Claude Code's business, not a contract.
+const PEER_TAG = '<cross-session-message';
+
+// The openings seen in front of the tag. Anchoring on one of these, or on the
+// tag itself, is what keeps a *quoted* message from being taken for a received
+// one: an agent pasting a message it got back into a conversation is a turn
+// somebody took, exactly as for a task notification.
+const PEER_PREFIXES = [
+    'Another Claude session sent a message',
+    'A peer session sent a message while you were working',
+];
+
+// A message arrives in one of two shapes, depending on what the session was
+// doing when it landed, and both have to be recognised or half of them vanish:
+//
+//   idle      the message is delivered straight away and becomes a `user` entry
+//             carrying `origin: {kind:"peer", …}`.
+//   mid-turn  it is queued, and the transcript records
+//             `{type:"attachment", attachment:{type:"queued_command", origin, …}}`
+//             — and if the running turn absorbs it, **no `user` entry is ever
+//             written**. That is the case this was found in: an agent replied to
+//             a message that, without this, nothing had drawn.
+//
+// Both carry the same `origin`, so both are the same event with the same
+// `msg_id`, which is what buildEvents deduplicates on.
+const PEER_ORIGIN_MARK = '"kind":"peer"';
+
+/** The peer origin on an entry, whichever shape it came in, or null. */
+function peerOriginOf(entry) {
+    if (!entry) return null;
+    if (entry.origin && entry.origin.kind === 'peer') return entry.origin;
+    const att = entry.type === 'attachment' && entry.attachment;
+    if (att && att.type === 'queued_command' && att.origin && att.origin.kind === 'peer') {
+        return att.origin;
+    }
+    return null;
+}
+
+function isPeerMessage(text) {
+    const t = String(text || '').trimStart();
+    if (!t.includes(PEER_TAG)) return false;
+    return t.startsWith(PEER_TAG) || PEER_PREFIXES.some(pre => t.startsWith(pre));
+}
+
+/**
+ * Pull the sender and the message out of a peer message, or null if it isn't one.
+ *
+ * @param {string} text the entry's user text
+ * @param {object} [entry] the whole entry, for its `origin` — see above
+ */
+function parsePeerMessage(text, entry) {
+    const origin = peerOriginOf(entry);
+    if (origin && typeof origin.body === 'string') {
+        return {
+            from: origin.from || null,
+            fromName: origin.name || null,
+            text: origin.body.trim(),
+        };
+    }
+    if (!isPeerMessage(text)) return null;
+
+    const t = String(text);
+    const at = t.indexOf(PEER_TAG);
+    const open = /<cross-session-message([^>]*)>/.exec(t.slice(at));
+    if (!open) return null;
+    const attr = (name) => {
+        const m = new RegExp(`${name}="([^"]*)"`).exec(open[1]);
+        return m ? m[1] : null;
+    };
+    // Everything between the tags, which is also what drops the trailer. A
+    // closing tag is expected but not required: a truncated final line is a
+    // routine thing to read here, and half a message beats none.
+    const rest = t.slice(at + open[0].length);
+    const close = rest.lastIndexOf('</cross-session-message>');
+    return {
+        from: attr('from'),
+        fromName: attr('from-name'),
+        text: (close === -1 ? rest : rest.slice(0, close)).trim(),
+    };
+}
+
 /** Pull the useful fields out of a task notification, or null if it isn't one. */
 function parseTaskNotification(text) {
     if (!isTaskNotification(text)) return null;
@@ -598,6 +936,54 @@ function parseCommand(text) {
     if (!name) return null;
     const args = /<command-args>([\s\S]*?)<\/command-args>/.exec(text);
     return { name: name[1].trim().replace(/^\/+/, ''), args: args ? args[1].trim() : '' };
+}
+
+// The heading the bridge writes above a turn's attached files, and the line shape
+// under it. One definition, because it is written on the way out (see
+// `buildAttachmentNote` in bridge/attachments.js) and read back on the way in — and a
+// transcript already on disk carries the old wording forever if this ever moves.
+const ATTACHMENT_NOTE_HEAD = 'Attached files (read them):';
+const ATTACHMENT_LINE_RE = /^- (.+?) \(([^()]*)\)$/;
+
+/**
+ * The files attached to a user turn, and the message without the list of them.
+ *
+ * The paths have to travel in the text: that is the only channel a `claude` process
+ * takes a turn on, and it is the only thing a transcript reread from disk still has.
+ * But the list is bookkeeping, not something the person typed — leaving it in the
+ * rendered message means every turn with a screenshot on it ends in a paragraph of
+ * paths. So it is parsed back off here and the UI draws cards instead.
+ *
+ * Anchored at the very end of the message and required to run to the end of it,
+ * because someone quoting one of these blocks back into a conversation really is
+ * saying something, and the note this app writes is always the last thing in the turn.
+ *
+ * @returns {{text:string, files:Array<{relPath:string,name:string,size:string}>}|null}
+ */
+function parseAttachmentNote(text) {
+    if (!text || !text.includes(ATTACHMENT_NOTE_HEAD)) return null;
+    const at = text.lastIndexOf(`\n${ATTACHMENT_NOTE_HEAD}\n`);
+    const head = text.startsWith(`${ATTACHMENT_NOTE_HEAD}\n`) ? 0 : at < 0 ? -1 : at + 1;
+    if (head < 0) return null;
+
+    const lines = text.slice(head + ATTACHMENT_NOTE_HEAD.length + 1).split('\n');
+    const files = [];
+    for (const line of lines) {
+        if (!line.trim()) continue;
+        const m = ATTACHMENT_LINE_RE.exec(line);
+        // One line that is not a file line means this is not our block — a quoted
+        // one, or prose that happens to start the same way. Half a list is worse
+        // than none, because the half that is dropped is dropped silently.
+        if (!m) return null;
+        files.push({
+            relPath: m[1],
+            name: m[1].split('/').pop(),
+            size: m[2],
+        });
+    }
+    if (!files.length) return null;
+
+    return { text: text.slice(0, head).replace(/\n+$/, ''), files };
 }
 
 /** The renderable half of a tool call: status, output, diff, subagent link. */
@@ -928,8 +1314,14 @@ function todoProgress(file) {
 module.exports = {
     parseLines, scanMeta, buildEvents, readSubagentIndex, readSubagentTranscript,
     lastActivity, recentActivity, todoProgress, describeTool, stripEnvelope, firstLine,
+    // For bridge/notifications.js, which decides whether a message from another
+    // session is worth interrupting you for, and needs to recognise one first.
+    parsePeerMessage,
     // Exported for bridge/commands.js, which has to answer the same question
     // about a directory that scanMeta answers about a transcript: which checkout
     // is this, and is it a worktree of one.
-    projectRootOf, worktreeNameOf, worktreeBaseOf, isCheckout,
+    projectRootOf, worktreeNameOf, worktreeBaseOf, isCheckout, workspaceOf,
+    // Written by bridge/attachments.js, read back by the parser above. Shared so the
+    // two halves of one format cannot drift apart.
+    ATTACHMENT_NOTE_HEAD, parseAttachmentNote,
 };

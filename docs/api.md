@@ -120,9 +120,30 @@ than hardcoding the list; a remote client should drop `bypassPermissions` and
 `test` flags, `live` (from Claude Code's own process registry, or null), and
 `runner` (this bridge's process for it, or null).
 
+`prs` is every pull request the session raised, in the order it raised them:
+`[{number, url, repo}]`, empty for a session that raised none. Read from the
+transcript, so it is free and it is history — what has *become* of those PRs is a
+separate request, below. It is an array because a session that lands one PR and
+opens another is ordinary; it was a single `pr` object until August 2026, which
+silently kept only the newest.
+
 ### `GET /api/sessions/:id[?tail=N]`
 
-`{ summary, events: [...], offset, runner }`.
+`{ summary, events: [...], offset, runner, suggestions, prefs }`.
+
+`prefs` is the settings in force **for this conversation's directory** — see
+`GET /api/prefs`. It travels with the transcript rather than being fetched
+separately because a client that draws the transcript before the settings arrive
+has drawn it the wrong way, and nothing re-renders history.
+
+`suggestions` maps the id of a `suggestion` event to what was already done about
+it — `{status: "started"|"dismissed", startedId, at}`. The suggestion itself is in
+the transcript; only the decision is the app's, so only the decision is sent
+separately. See `POST /api/sessions/:id/suggestions/:toolUseId`.
+
+The suggestions themselves arrive as `suggestion` events in `events`, but a client
+drawing them as a list should read `GET /api/suggestions?session=<id>` instead —
+same fields, and it does not depend on how much of the transcript was asked for.
 
 `offset` is a **byte position in the transcript file**, not an event count. Hold it;
 it is what resumes the live tail.
@@ -136,12 +157,14 @@ Event kinds, all with `id`, `kind`, `ts`:
 
 | kind | Carries |
 |---|---|
-| `user` | `text`, `images[]`, `command`, `origin` (`human` or an agent) |
+| `user` | `text`, `images[]`, `files[]`, `command`, `origin` (`human` or an agent) |
 | `assistant` | `text` (markdown), `model` |
 | `thinking` | `text` |
 | `tool` | `name`, `input{}`, `status` (`ok`/`error`/absent while running), `result{text,stdout,stderr,patch,filePath,interrupted}`, `agent`, `persistedPath`, `durationMs` |
 | `system` | `subtype`, `isError`, `text` |
 | `agent-done` | `taskId`, `toolUseId`, `status`, `summary` |
+| `suggestion` | `prompt`, `why`, `title`, `cwd` — follow-up work an agent offered rather than did |
+| `peer-message` | `from` (socket address), `fromName` (the peer's name, which is its address), `text` |
 | `compact` | `text` |
 
 A `tool` event arrives once as a call and again with its result. Render idempotently
@@ -155,12 +178,157 @@ shrank — it was compacted or forked — and the client should reload from scra
 This is how a mobile client resumes after a network change, and it is much cheaper
 than refetching.
 
+### `GET /api/sessions/:id/prs`
+
+`{ prs: [...], gh: {ok, error} }` — what has become of the pull requests this
+session raised, one entry per PR in `summary.prs`, same order.
+
+Each carries `number`, `url`, `repo`, `title`, `branch`, `updatedAt`, a resolved
+`status`, a `label` naming that status in words, and `detail`: extra lines the one
+status had to leave out, for a tooltip.
+
+`status` is one of `open`, `draft`, `approved`, `changes`, `checks-failed`,
+`checks-pending`, `conflicting`, `merged`, `closed`, or `unknown`. A PR is
+regularly several of those at once — open *and* approved *and* conflicting — so
+one is chosen by what most needs doing about it: settled states first, then draft,
+then a review asking for changes, a failing check, a conflict, a check still
+running, an approval, and plain open last. `resolveStatus` in `bridge/pulls.js` is
+the whole rule and `test/pulls.test.js` pins the ordering.
+
+Two answers are deliberately withheld rather than guessed. A repository with no CI
+reports no check state at all — an empty rollup is not a pending one. And GitHub
+reports mergeability as `UNKNOWN` until it has computed it, which is common on a
+freshly-pushed branch, so nothing is said about conflicts until it does.
+
+`unknown` means gh could not be reached, and `gh.error` says why in one line. The
+client is expected to keep showing the PR — it has the number and the link from the
+summary already — and simply not colour it. **This is its own route rather than a
+field on the summary on purpose**: it asks GitHub, and the session list must never
+wait on GitHub. The bridge caches one `gh pr list` per repository for a minute, and
+a merged or closed PR for the life of the process, since neither can change back.
+
+### `GET /api/prefs?cwd=<path>`
+
+`{ version, transcript: {...}, sources: [...], problems: [...] }` — how the person
+using the app wants it to behave.
+
+`~/.tgxcode/settings.json` is the user's own, written out with the defaults on
+first run so it can be found and edited. A project overrides any key from
+`<workspace>/.tgxcode/settings.json`, with the same precedence as project
+commands: the workspace's checked-in file (falling back to the main checkout's),
+then `settings.local.json` from the main checkout, then one in the workspace.
+`sources` lists the files that were actually read, weakest first.
+
+A value that is not what the key allows is dropped and reported in `problems`
+rather than taken at face value; the default stands. Without `?cwd=` you get the
+user-level answer, which is also what every page is served in a `cs-prefs`
+`<meta>` tag (minus `sources` and `problems`).
+
+`transcript` today: `groupToolCalls` (fold a run of tool calls into one row once
+a message closes it), `groupMinCalls` (how long a run has to be — at least 2),
+`groupIncludesThinking` (whether a thinking block is part of the run or the end
+of it).
+
+`spinner`: `randomize` (whether a turn in progress wears a themed verb in front
+of what it is doing, or says only what it is doing as before), `groups` (which
+groups from `~/.tgxcode/verbs/` are in play, named by their `Category` — at most
+200), `rerollMs` (how long a verb stands before the next is drawn; `0` pins one
+for the whole turn, else 1000–600000). The verbs themselves are not here — they
+are a directory, and `GET /api/spinner/groups` lists it.
+
+### `GET /api/spinner/groups?cwd=<path>`
+
+`{ randomize, rerollMs, enabled: [...], pool, groups: [...], problems: [...] }` —
+which spinner verb groups exist and which are in force.
+
+`groups` is one entry per group available to `cwd` — `{name, file, count,
+source}`, where `name` is the `Category` inside the file and `source` is the
+directory it came from. A project's `<workspace>/.tgxcode/verbs/` wins over the
+user's `~/.tgxcode/verbs/`, so a repo can ship its own group without anybody
+editing their home directory.
+
+`enabled` is what settings ask for and `pool` is how many distinct verbs that
+actually amounts to — the two disagree when a name matches no file, which is
+what `problems` then says. A group whose filename and `Category` differ still
+works, and is reported here rather than left a mystery.
+
+This is the discoverable half of `spinner.groups`: there is no settings page, so
+without it the only answer to "what may I put in that list?" is to go and read a
+directory. Read-only, like `/api/prefs` — the files are the interface. Not
+local-only either: the names and sizes of verb groups are not a capability worth
+refusing a phone.
+
+### `GET /api/sessions/:id/devservers`
+
+`{ports: [...], total, elsewhere}` — the localhost ports this session's agent
+brought up, for the chip strip above the conversation.
+
+A port is shown when it belongs to **this session's workspace**, and that is
+decided by the kernel rather than by the transcript: `ss` says which pid holds
+the port, `/proc/<pid>/cwd` says where that process is running, and the worktree
+or checkout above it is the workspace. `ours: true` means that matched.
+
+This matters because the obvious alternative does not work. Evidence scraped
+from a transcript can only say a session *mentioned* a port, and "is it
+listening" is a fact about the machine — so a `curl localhost:5001` in one
+session used to light up green the moment another worktree's server took 5001.
+Ports bled across sessions constantly. Walking the holder's parents to find the
+owning `claude` does not work either: a backgrounded dev server is reparented to
+init as soon as its launching shell exits.
+
+Each port carries `port`, `title`, `listening`, `stopped`, `evidence`, plus the
+attribution: `workspace` (where its process runs, or null), `ours`, `foreign`
+(held by another workspace), `unverified`, `protectedBy` and `titledElsewhere`.
+
+Two cases the kernel cannot settle:
+
+- **No Linux process holds it.** WSL mirrored networking means a Windows-side
+  server answers on 127.0.0.1 with no pid this side. Those fall back to the
+  session's own transcript and only to its strong end — a startup banner or a
+  devbrowser call, never a bare mention — and come back `unverified: true`.
+- **The port is dead.** Nothing holds it, so nothing can speak for it. A dead
+  port is kept only if this session has strong evidence *and* DevBrowser's name
+  for it does not belong to another worktree (`titledElsewhere`).
+
+`protectedBy` marks a port held by a bridge or a `claude` process. Those are
+never offered at all: the everyday instance runs in the main checkout, so a
+session there would otherwise be shown a green chip — and a stop button — for
+the app it is being displayed in.
+
+`elsewhere` counts the live ports this session mentioned that another workspace
+is holding. The UI says so rather than leaving the strip looking empty.
+
+
+### `GET /api/peers`
+
+`{ peers: [{name, nameSource, sessionId, cwd, kind, entrypoint, status, startedAt,
+title, project}], at }` — the live sessions an agent could send a message to,
+newest first.
+
+Read from Claude Code's own process registry rather than from the session index,
+because they answer different questions: the index is about transcripts and hides
+some of them (test sessions on the everyday bridge, anything under `/tmp`), while a
+background agent with no indexed transcript is still perfectly able to receive a
+message. `title` and `project` are joined on where there is an indexed transcript
+and are null where there is not.
+
+**`name` is the address.** `SendMessage({to: "<name>"})` is how one session reaches
+another and there is no other form of address, which is what this route is for:
+getting the exact name in front of somebody. Only sessions that are running *and*
+have an inbox are listed.
+
 ### `GET /api/overview`
 
 The live board: `{ at, ready, sessions: [card], recent: [card], hidden, recentHidden,
 waiting, running }`, already ordered needs-you-first. A card carries `reason`
 (`ask`/`error`/`here`/`elsewhere`/`pinned`/`recent`), `title`, `projectName`, `worktree`,
 `runner`, `live`, `ask`, `headlines[]`, `tasks{done,total,current}`, `devservers`.
+
+Every card also carries `sig`, a short hash of the rest of the card. The board is pushed
+once a second and almost all of it is identical to the push before, so a client that keeps
+its nodes can compare `sig` and rebuild only the cards that moved — which is what the web
+UI does. Treat it as opaque: it is a fingerprint, not an identifier, and its only promise
+is that it changes when something else on the card does.
 
 `waiting` is the count worth putting on a badge.
 
@@ -178,14 +346,123 @@ work. Archived sessions are left out, and anything already in `sessions` cannot 
 here. Capped at 12 with the remainder in `recentHidden`, as `sessions` is capped at 24 with
 `hidden`.
 
-`devservers` is not refreshed for a recent card: the probe behind it costs a full
-transcript read per session every 15s, and that budget goes to what is running. A session
-that has just gone quiet keeps the chips its last pass found — a dev server usually
-outlives the turn that started it — and one that was never on the board has none.
+`devservers` is not refreshed for a recent card, and that budget goes to what is running.
+A session that has just gone quiet keeps the chips its last pass found — a dev server
+usually outlives the turn that started it — and one that was never on the board has none.
+The probe costs a whole transcript read the first time it sees a session and only the
+bytes appended since on every pass after; port detection folds forward, so there is
+nothing to recompute from the beginning.
 
 Also pushed as the `overview` SSE event, so most clients never call this — but it is
 the right answer to "what is happening right now", and anything that wants that
 should read it rather than growing a second answer.
+
+### `GET /api/taskboard?idle=`
+
+Everything outstanding, in one payload: open suggested tasks beside every un-archived
+session, grouped by what state it is in.
+
+```json
+{
+  "at": 1787161000629, "ready": true,
+  "needs":   [sessionCard],
+  "working": [sessionCard],
+  "suggested": [task],
+  "idle":    [sessionCard],
+  "counts": { "needs": 1, "working": 3, "suggested": 3, "idle": 57 },
+  "idleHidden": 46
+}
+```
+
+`suggested` is `GET /api/suggestions?status=open` verbatim — the same rows, the same
+fields — so a client draws a task the same way wherever it meets one. A `sessionCard` is
+a trimmed `/api/overview` card: no `headlines` and no `devservers`, because both cost a
+transcript read or a port probe per session and this board is several times wider than
+that one. What is left is state, which is free.
+
+Which column a session is in is `column(s, runner)` in `bridge/taskboard.js`, and it is
+deliberately the same predicates in the same order as `why()` in `overview.js`:
+
+| | |
+|---|---|
+| off the board | `archived` — that is what archiving is for, and it is the only filter applied to a session here |
+| `needs` | a pending permission (tool, plan or question), or a runner in `error` |
+| `working` | runner `busy` or `starting`, or a queue behind a stopped turn, or a live registry entry with no runner of ours — a terminal, VS Code, a background agent |
+| `idle` | everything else |
+
+Two differences from the live board, both because every session gets a card here.
+`pinned` is not a state: on the live board a pin is a *reason to draw a card at all*, and
+here a pinned idle session is simply idle. And nothing falls through to nothing.
+
+**`counts.idle` is the total, not what was returned.** The idle column leads with the same
+working-hours window the live board's recent group uses (`recentSince`, shared rather than
+reimplemented), and `idleHidden` says how many that left out. A count describing only the
+visible slice would read as "this is everything" on a machine with several hundred
+un-archived sessions.
+
+`?idle=all` drops the window and returns all of them, newest first, with `idleHidden: 0`.
+It is answered here and **never pushed**: it is what one button asks for once, the rows it
+brings back are idle by definition, and pushing several hundred of them every few seconds
+to every window is the cost the window exists to avoid. Any other value of `?idle=` means
+`recent`; there is nothing to get wrong, so there is no 400.
+
+Test sessions appear only on the development bridge, exactly as in the session list.
+**A task from an archived session is still returned**, carrying `archived: true` — the
+reasoning is under `/api/suggestions` and it is about tasks, not sessions.
+
+Also pushed as the `taskboard` SSE event, which is how the UI reads it; the route is for
+the first load, for the Show-all button, and for anything that would rather poll.
+
+### `GET /api/suggestions?session=&project=&status=&limit=`
+
+`{ suggestions: [task], ready: bool }`, newest first. A task is
+
+```json
+{
+  "id": "toolu_…", "kind": "suggestion", "sessionId": "…",
+  "ts": "2026-08-19T15:53:51.009Z",
+  "title": "Task persistence", "why": "…", "prompt": "…", "cwd": "/home/…",
+  "status": "open", "startedId": null, "at": 0,
+  "archived": false,
+  "session": { "title": "…", "projectName": "claude-sessions",
+               "projectCwd": "/home/…", "worktree": null, "test": false }
+}
+```
+
+Everything down to `cwd` is the offer, and is exactly what the `suggestion` event
+carries — same fields, same parse, so a client can draw a row and an event with
+one code path. Everything below it is the join: `status` is `open`, `started` or
+`dismissed`, with `startedId` and `at` present only for a decision that was
+actually taken. `?status=` filters on it and takes a comma-separated list
+(`?status=open,started`); an unknown value is a 400 naming the three.
+
+`?session=<id>` narrows to one conversation, which is what the aside beside a
+transcript asks for — it reads these rows rather than lifting them out of the
+event stream, so the panel and a cross-session view agree by construction.
+`?project=` matches `projectCwd`, as on `GET /api/sessions`. Temp sessions are
+left out and test sessions only appear on the development bridge, both exactly as
+in the session list.
+
+**A task from an archived session is still returned**, carrying `archived: true`
+so a caller can group or dim it. *Dismissed* is already the gesture for "not
+this"; if archiving hid tasks there would be two ways to dismiss, one of them
+invisible, and an outstanding task is the loose end you most want to still find
+after filing a conversation away.
+
+**A task lives and dies with its transcript.** The offers are collected by the
+index rescan — `scanMeta` puts them on `meta.suggestions`, and they are cached
+under `CACHE_VERSION` with the rest of it — so this route reads no transcripts of
+its own and holds no copy of one. Deleting a session therefore deletes its tasks,
+and `prune()` drops their decisions with them. Keeping a task alive past its
+session would mean writing `title`/`why`/`prompt` into state this app owns, and
+content coming from anywhere but Claude Code's transcripts is the line the app
+holds everywhere else (ROADMAP.md, *The three constraints*). What the index buys
+is that a task is findable without its conversation being **open** — which was the
+actual complaint — not that it outlives the conversation existing.
+
+There is no push for a task being *filed*. A client watching one conversation
+sees the `suggestion` event on its tail; anything watching all of them refetches,
+and `sessions-changed` is the signal that the index moved.
 
 ### `GET /api/slash-commands?session=<id>` · `GET /api/slash-commands?cwd=<path>`
 
@@ -215,11 +492,14 @@ a 404: the caller pressed a key, and an empty list is a real answer.
 `GET /api/events` — SSE, `text/event-stream`. Then tell it what to follow:
 
 ```
-POST /api/subscribe  { clientId, sessionId, offset, agent, overview }
+POST /api/subscribe  { clientId, sessionId, offset, agent, overview, taskboard }
 ```
 
-`clientId` comes from the `hello` event. One session followed at a time; `overview`
-is a separate, orthogonal follow that stays on while a session is open.
+`clientId` comes from the `hello` event. One session followed at a time; `overview` and
+`taskboard` are separate, orthogonal follows that stay on while a session is open, and
+independent of each other — the two boards answer different questions and a window is
+rarely reading both. Each has its own timer on the bridge, started only while somebody is
+watching, and its own per-client change mark.
 
 **There is no `Last-Event-ID` replay, and no `id:` field.** Nothing is buffered for
 a disconnected client. Recovery is: reconnect, re-subscribe from the offset you
@@ -235,7 +515,10 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `reset` | `{sessionId}` — reload from scratch |
 | `agent-tail` / `agent-reset` | as above, for a subagent |
 | `overview` | the board; sent only when it has actually changed |
+| `taskboard` | the task board; every ~3s while watched, and only when it has actually changed. Never carries `?idle=all` |
 | `sessions-changed` | `{at}` — a nudge to refetch the list |
+| `peer-message` | `{at, sessionId, from, count}` — another session messaged this one. The message itself is in the transcript, so a client tailing it has already drawn it; this is for everything that is not the open pane |
+| `suggestion-changed` | `{at, sessionId, toolUseId}` — a suggested follow-up was started, dismissed, or undone, possibly in another window |
 | `session-deleted` | `{sessionId, title}` |
 | `runner-status` | see below |
 | `permission-request` | `{sessionId, ...ask}` |
@@ -247,9 +530,21 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `slash-commands` | `{cwd, at}` — that directory's slash commands changed; drop what you cached |
 | `run-changed` | `{runId, workspace, commandId, label, state, port, exit, stopped, at}` — a project command moved; state only, never output |
 
-`runner-status`: `{sessionId, state, activity, model, permissionMode, cwd, error,
-errorKind, queued, queue[], pendingPermission, canPrompt, busySince}` where `state`
-is `stopped`/`starting`/`idle`/`busy`/`error`.
+`runner-status`: `{sessionId, state, activity, verb, detail, model, permissionMode,
+cwd, error, errorKind, queued, queue[], pendingPermission, canPrompt, busySince}`
+where `state` is `stopped`/`starting`/`idle`/`busy`/`error`.
+
+**`activity` is the label to draw.** While a turn works it is composed of two
+halves — `verb`, the themed spinner word, and `detail`, whatever is specifically
+happening (`Reading runner.js`, `Writing…`) — giving `Percolating… Reading
+runner.js`. Both are null outside a working state, and `verb` is null whenever
+`spinner.randomize` is off, in which case `activity` is exactly what it was
+before spinner verbs existed.
+
+The halves are on the wire for one reason: a surface too narrow for the whole
+label has to choose which half to keep, and it should keep the informative one.
+The session rail is the only place in this app that does, at about twenty
+characters; everything wider draws `activity` and can ignore both.
 
 **`pendingPermission` matters on open**: an ask may already be outstanding when a
 client attaches, and this is what remembers it. A client that only listens for the
@@ -274,7 +569,8 @@ first message.
 
 ### `POST /api/sessions/:id/send`
 
-`{text, model?, permissionMode?, fork?}` → `{ok, id, cwd, fork, status, queued}`.
+`{text, attachments?, model?, permissionMode?, fork?}` →
+`{ok, id, cwd, fork, status, queued}`.
 
 **Always send `permissionMode`.** An absent one normalises to `auto`, which means
 omitting it does not mean "leave it alone" — it means "set it to auto", and would
@@ -282,6 +578,49 @@ quietly drop a session out of `acceptEdits` on every message.
 
 A model or mode change replaces the process; queued messages carry across. `queued`
 tells you whether the text is still recoverable on this side.
+
+`attachments` is a list of files already uploaded through the route below —
+`[{path, relPath?, mediaType?}]`, at most five. Each is re-derived against *this*
+session's own attachments directory and dropped if it no longer resolves, so a client
+cannot name a path by sending one. `text` may be empty when there is at least one
+attachment: a screenshot with nothing typed under it is a message.
+
+What the process receives is the text plus a trailing list of the paths, and an inline
+image block for each attachment that really is a PNG, JPEG, GIF or WebP. The list is
+parsed back off the message before the transcript renders it (`files[]` on the `user`
+event above), so the paths are not shown twice.
+
+### `POST /api/sessions/:id/attachments?name=…`
+
+Raw file bytes, one file per request, `Content-Type` as a hint —
+→ `{ok, name, path, relPath, dir, bytes, mediaType, renamed}`.
+
+Not JSON: `readJson` caps a body at 4MB and base64 is a third larger than what it
+encodes, which would put the real limit under 3MB. The cap here is **25MB**, answered
+from `Content-Length` before the bytes travel where the client sent one.
+
+The file is written to `attached_assets/` at the root of the checkout the session is
+working in — the *worktree* root for a worktree session, not the checkout that owns it.
+`attached_assets/` is added to the owning checkout's `.git/info/exclude` on first write,
+which is local and untracked; no `.gitignore` is ever edited. Nothing prunes the
+directory.
+
+`name` is refused rather than sanitised — no separator, no `..`, no control character,
+200 bytes — but a leading dot is allowed, unlike `/api/fs/mkdir`, because nothing
+browses this directory. An existing name is never overwritten: `shot.png` becomes
+`shot-2.png` and `renamed` says so, so a client can relabel its chip.
+
+`mediaType` is sniffed from the bytes, not taken from `Content-Type`, because it is what
+decides whether the turn carries an inline image block.
+
+`413` is the cap. `403` is a directory outside the allowed roots, or a remote caller.
+
+### `POST /api/sessions/:id/attachments/open`
+
+`{path}` → `{ok, path, file}`. Opens the file in whatever the Windows host opens that
+kind of file with. Only the basename is taken from the caller; the directory is
+recomputed, so `404` means "not one of this session's attachments" rather than
+"missing". Local callers only.
 
 ### `POST /api/sessions/:id/permission`
 
@@ -339,6 +678,8 @@ nobody to ask.
 | `GET/DELETE /api/sessions/:id/queue[/:qid]` | | inspect, drop one, clear |
 | `POST /api/sessions/:id/queue/reorder` | `{ids}` | |
 | `POST /api/sessions/:id/flags` | `{pinned?, archived?, test?}` | |
+| `GET /api/sessions/:id/suggestions` | | `{sessionId, suggestions}` — the decisions alone. `GET /api/suggestions?session=` is the offers *and* the decisions |
+| `POST /api/sessions/:id/suggestions/:toolUseId` | `{status, startedId?}` | `status` of `started`, `dismissed`, or absent to undo |
 | `DELETE /api/sessions/:id` | | hard delete; `409` if a turn is running |
 | `GET /api/fs?path=` | | directory picker; roots-scoped |
 | `POST /api/fs/mkdir` | `{parent, name}` | one new folder; roots-scoped, local callers only |
@@ -409,6 +750,16 @@ asked to.
 so a client can open its output rather than quietly start nothing. `409` also
 covers no free port in the range and too many runs at once. Restart is stop, wait
 for `exited`, start.
+
+**A command tends to get the same port back.** Where a port is allocated it is
+not simply the lowest free one in the range: the port that command last had wins
+if it is still free, and a port another worktree has a claim on — its own
+remembered port, a live or recent run record, or a DevBrowser tab carrying its
+name — is passed over while anything else is available. A claimed port that
+nothing is listening on is still used rather than refused, since a stale claim
+should not stop a server starting. So `port` in the record is stable across a
+stop and start, and a client should not assume the bottom of the declared range.
+See `bridge/ports.js`.
 
 **Runs die with their bridge**, like terminals and unlike nothing else here. The
 child's stdout is a pipe whose only reader is the bridge, so one that outlived it

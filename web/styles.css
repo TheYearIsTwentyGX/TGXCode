@@ -877,6 +877,44 @@ a:hover { text-decoration: underline; }
 .conv-sub .agent-state.failed { color: var(--red); }
 .conv-sub .pulse { color: var(--yellow); }
 
+/* A pull request the session raised, and what has become of it. Colour and glyph
+   say the same thing twice on purpose — two of these are red and two are yellow,
+   so hue alone would not separate them. The word itself is in the tooltip.
+
+   `flex: none` because .conv-sub wraps: the icon and the number are one thing and
+   must not be broken across lines. The svg takes its colour from currentColor, so
+   every rule below sets it on the anchor and none of them touch the svg. */
+.conv-sub .pr {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex: none;
+    font: 500 12px/1 var(--sans);
+    text-decoration: none;
+    color: var(--text-3);
+    transition: color var(--t-fast) var(--ease), opacity var(--t-fast) var(--ease);
+}
+.conv-sub .pr[data-status="open"] { color: var(--blue); }
+.conv-sub .pr[data-status="approved"] { color: var(--green); }
+.conv-sub .pr[data-status="changes"],
+.conv-sub .pr[data-status="checks-failed"] { color: var(--red); }
+.conv-sub .pr[data-status="conflicting"],
+.conv-sub .pr[data-status="checks-pending"] { color: var(--yellow); }
+.conv-sub .pr[data-status="draft"] { color: var(--text-3); }
+/* Settled, and kept only as a record that the work landed — so it is here, but it
+   is not competing with the PRs that still want something. */
+.conv-sub .pr[data-status="merged"] { color: var(--purple); opacity: 0.62; }
+.conv-sub .pr[data-status="closed"] { color: var(--text-4); opacity: 0.62; }
+/* gh could not be reached. Says nothing rather than guessing. */
+.conv-sub .pr[data-status="unknown"] { color: var(--text-4); }
+/* Lifts the dimming off a settled PR without taking its colour away: the status is
+   the point, and losing it on the way to clicking the link would be a poor trade. */
+.conv-sub .pr:hover { opacity: 1; text-decoration: none; }
+/* Still moving, so it breathes — the same light every in-flight thing here uses. */
+.conv-sub .pr[data-status="checks-pending"] svg {
+    animation: breathe 1.6s var(--ease) infinite;
+}
+
 /* Dev servers: a row of chips, each one a switch into DevBrowser. */
 .channels {
     display: flex;
@@ -951,6 +989,26 @@ a:hover { text-decoration: underline; }
    should not first promise to open a tab. */
 .chan-open:hover .go { background: var(--blue-deep); color: #fff; }
 .channel[data-live="false"] .chan-open:hover .go { background: var(--s5); color: var(--text-2); }
+/* Shown on this session's own word rather than the kernel's: nothing on the
+   Linux side holds the port, which here means a server on the Windows side of
+   the WSL mirror. Dashed, because the claim is weaker than the others. */
+.channel.unverified .led {
+    background: none;
+    border: 1px dashed var(--text-4);
+}
+.channel[data-live="true"].unverified .led { border-color: var(--green); }
+
+/* "3 elsewhere" — ports this session named that another workspace is holding.
+   Says why the strip is shorter than the transcript suggests. */
+.chan-note {
+    align-self: center;
+    padding: 0 4px;
+    font: 400 11.5px/1.5 var(--sans);
+    color: var(--text-4);
+    white-space: nowrap;
+    cursor: help;
+}
+
 .channel.busy { opacity: 0.7; }
 .channel.busy .chan-stop { pointer-events: none; }
 
@@ -1090,6 +1148,246 @@ a:hover { text-decoration: underline; }
     color: var(--text-4);
 }
 .ev-agent-done .subagent-btns { margin-top: 2px; }
+
+/* ── suggested follow-ups ─────────────────────────────────────────────────
+   An aside beside the transcript, not part of it: the log is a record of what
+   happened, and these are the one thing in the pane that has not happened yet.
+   Collapses to a strip so a session with six offers is not permanently narrower
+   than one with none. */
+
+.tasks {
+    flex: none;
+    width: 300px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    border-left: 1px solid var(--outline-soft);
+    /* Only the width animates. Animating the whole box makes the transcript
+       reflow twice as the text inside re-wraps mid-transition. */
+    transition: width var(--t-fast) var(--ease);
+}
+.tasks.shut { width: 34px; }
+.tasks[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) { .tasks { transition: none; } }
+
+/* Narrow windows have no room for a third column, and the transcript is the
+   one that matters. The panel is still reachable — it becomes the strip. */
+@media (max-width: 1100px) { .tasks:not(.shut) { width: 240px; } }
+@media (max-width: 900px) { .tasks { display: none; } }
+
+.tasks-open { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.tasks-open[hidden] { display: none; }
+
+.tasks-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: none;
+    padding: 10px 12px 8px;
+}
+.tasks-title {
+    font: 500 11px/1.4 var(--sans);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-4);
+}
+.tasks-count {
+    min-width: 17px;
+    padding: 0 5px;
+    border-radius: 9px;
+    background: var(--blue-cont);
+    color: var(--blue);
+    font: 500 11px/17px var(--sans);
+    text-align: center;
+}
+.tasks-collapse {
+    margin-left: auto;
+    padding: 2px 7px;
+    border: 0;
+    border-radius: var(--r-xs);
+    background: none;
+    color: var(--text-4);
+    font: 400 11.5px/1.5 var(--sans);
+    cursor: pointer;
+}
+.tasks-collapse:hover { background: var(--s3); color: var(--text-2); }
+
+.tasks-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0 8px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+/* The strip the panel becomes. Vertical text, so the label stays readable at
+   34px rather than being clipped to "Ta". */
+.tasks-strip {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 0;
+    border: 0;
+    background: none;
+    color: var(--text-4);
+    cursor: pointer;
+}
+.tasks-strip[hidden] { display: none; }
+.tasks-strip:hover { background: var(--s2); color: var(--text-2); }
+/* The strip is one tall button, so the default ring draws a box the height of
+   the window around it. Inset, it reads as the control being focused rather
+   than as a second panel border. */
+.tasks-strip:focus-visible { outline-offset: -3px; }
+.tasks-strip-label {
+    writing-mode: vertical-rl;
+    font: 500 11px/1 var(--sans);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+/* One task. A `details`, like a tool call in the log, so the caret and the
+   keyboard behaviour are the browser's rather than ours. */
+.task {
+    border: 1px solid var(--outline-soft);
+    border-left: 2px solid var(--blue);
+    border-radius: var(--r-xs);
+    background: var(--s2);
+}
+.task[data-status="started"] { border-left-color: var(--green); }
+.task[data-status="dismissed"] { border-left-color: var(--outline-soft); opacity: 0.72; }
+.task[data-status="dismissed"]:hover { opacity: 1; }
+
+.task > summary {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    padding: 8px 10px;
+    cursor: pointer;
+    list-style: none;
+    font: 400 12.5px/1.45 var(--sans);
+    color: var(--text-2);
+}
+.task > summary::-webkit-details-marker { display: none; }
+.task > summary:hover { background: var(--s3); }
+.task[open] > summary { border-bottom: 1px solid var(--outline-soft); }
+.task > summary .caret {
+    flex: none;
+    margin-top: 1px;
+    font-size: 8px;
+    color: var(--text-4);
+    transition: transform var(--t-fast) var(--ease);
+}
+.task[open] > summary .caret { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .task > summary .caret { transition: none; } }
+.task-name { min-width: 0; overflow-wrap: anywhere; flex: 1; }
+
+/* Opens the task at a readable width. Faint until the row is under the cursor,
+   because the summary's own job — folding — is the common one. */
+.task-open {
+    flex: none;
+    padding: 0 2px;
+    border: 0;
+    border-radius: var(--r-xs);
+    background: none;
+    color: var(--text-4);
+    font-size: 12px;
+    line-height: 1.2;
+    opacity: 0;
+    cursor: pointer;
+}
+.task:hover .task-open,
+.task-open:focus-visible { opacity: 1; }
+.task-open:hover { color: var(--text-2); background: var(--s4); }
+
+.task-body { padding: 9px 10px 11px; }
+.task-why {
+    font: 400 11.5px/1.5 var(--sans);
+    color: var(--text-4);
+    margin-bottom: 7px;
+}
+/* The prompt in full — it is the thing being offered, and the only way to judge
+   the offer. Scrolls rather than stretching the panel to the height of an essay. */
+.task-prompt {
+    max-height: 320px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    font-size: 12.5px;
+    color: var(--text-3);
+}
+.task-cwd {
+    margin-top: 7px;
+    font: 400 11px/1.45 var(--mono);
+    color: var(--text-4);
+    overflow-wrap: anywhere;
+}
+.task-btns {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+}
+.task-done {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 9px;
+    font: 400 12px/1.5 var(--sans);
+    color: var(--text-4);
+}
+.linky {
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    color: var(--blue);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    cursor: pointer;
+}
+.linky:hover { color: #dbe6fb; }
+
+/* The same task, at a width you can actually read a briefing at. */
+.task-dlg-why {
+    margin-bottom: 12px;
+    font: 400 13px/1.55 var(--sans);
+    color: var(--text-4);
+}
+.task-dlg-why[hidden] { display: none; }
+.task-dlg-prompt { font-size: 14px; line-height: 1.65; color: var(--text-2); }
+.task-dlg-cwd {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--outline-soft);
+    font: 400 11.5px/1.5 var(--mono);
+    color: var(--text-4);
+    overflow-wrap: anywhere;
+}
+.task-dlg-cwd[hidden] { display: none; }
+/* The buttons keep the shape they have on the card, so the decision looks the
+   same wherever it is taken. */
+.task-dlg-acts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* a message from another session — somebody else's agent talking to yours.
+   Coloured apart from both your turns and Claude's, because it is neither. */
+.ev-peer-message .ev-body {
+    border-left: 2px solid var(--peach);
+    padding: 4px 0 10px 12px;
+    margin: 6px 0;
+}
+.ev-peer-message .ev-label { color: var(--peach); }
+.ev-peer-message .peer-sub {
+    margin: 1px 0 4px;
+    font: 400 12px/1.5 var(--sans);
+    color: var(--text-4);
+}
+.ev-peer-message .subagent-btns { margin-top: 8px; }
 
 /* system notices */
 .ev-system .ev-body {
@@ -1685,7 +1983,10 @@ a:hover { text-decoration: underline; }
 }
 .tool[open] { background: var(--s2); }
 
-.tool > summary {
+/* The row itself is shared with the fold a run of tool calls collapses into
+   (.trow, below) — one more row of the same kind, and it should be impossible
+   for the two to drift apart by editing only one of them. */
+:is(.tool > summary, .trow) {
     display: flex;
     align-items: center;
     gap: 11px;
@@ -1698,33 +1999,33 @@ a:hover { text-decoration: underline; }
     transition: background var(--t-fast) var(--ease);
 }
 .tool > summary::-webkit-details-marker { display: none; }
-.tool > summary:hover { background: var(--s3); }
+:is(.tool > summary, .trow):hover { background: var(--s3); }
 
 /* Status is a dot, not a coloured slab. */
-.tool > summary::before {
+:is(.tool > summary, .trow)::before {
     content: "";
     flex: none;
     width: 6px; height: 6px;
     border-radius: 50%;
     background: var(--text-4);
 }
-.tool[data-status="ok"] > summary::before { background: #4d5052; }
-.tool[data-status="error"] > summary::before { background: var(--red); }
+:is(.tool[data-status="ok"] > summary, .trow[data-status="ok"])::before { background: #4d5052; }
+:is(.tool[data-status="error"] > summary, .trow[data-status="error"])::before { background: var(--red); }
 .tool[data-status="pending"] > summary::before {
     background: var(--yellow);
     animation: breathe 1.6s var(--ease) infinite;
 }
 
-.tool .tname {
+:is(.tool, .trow) .tname {
     font-family: var(--mono);
     font-size: 12.5px;
     font-weight: 500;
     color: var(--text-2);
     flex: none;
 }
-.tool[data-status="error"] .tname { color: var(--red); }
+:is(.tool[data-status="error"], .trow[data-status="error"]) .tname { color: var(--red); }
 
-.tool .targ {
+:is(.tool, .trow) .targ {
     flex: 1;
     min-width: 0;
     overflow: hidden;
@@ -1735,14 +2036,14 @@ a:hover { text-decoration: underline; }
     color: var(--text-4);
 }
 
-.tool .tmeta {
+:is(.tool, .trow) .tmeta {
     flex: none;
     font-size: 11.5px;
     color: var(--text-4);
     font-variant-numeric: tabular-nums;
 }
 
-.tool .caret {
+:is(.tool, .trow) .caret {
     flex: none;
     width: 10px;
     font-size: 9px;
@@ -1750,6 +2051,25 @@ a:hover { text-decoration: underline; }
     transition: transform var(--t-fast) var(--ease);
 }
 .tool[open] .caret { transform: rotate(90deg); }
+
+/* A run of tool calls, folded into one row once a message closed it.
+   The <summary> is display:block and the grid lives inside it, so the rows the
+   fold holds stay top-level .ev grids: nesting them inside an .ev-body would
+   indent every one of them by a gutter they already have. */
+.trun { display: block; }
+.trun > summary {
+    display: block;
+    cursor: pointer;
+    list-style: none;
+}
+.trun > summary::-webkit-details-marker { display: none; }
+.trow {
+    margin: 3px 0;
+    background: var(--s2);
+}
+/* `> summary`, not a descendant: the fold holds tool blocks with carets of
+   their own, and those answer to their own open state. */
+.trun[open] > summary .caret { transform: rotate(90deg); }
 
 .tool-body { padding: 4px 15px 14px; }
 
@@ -2120,6 +2440,7 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 @media (prefers-reduced-motion: reduce) {
     .status-line[data-state="busy"] .led,
     .status-line[data-state="ask"] .led,
+    .conv-sub .pr[data-status="checks-pending"] svg,
     .tool[data-status="pending"] > summary::before,
     .strip[data-state="running"] .strip-meta::before { animation: none; }
 }
@@ -2240,6 +2561,15 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     text-align: center;
 }
 
+/* A queued message carrying files. Sits next to the send-order badge because it is
+   the same kind of fact about the chip: not its content, but what happens to it. */
+.queue-files {
+    flex: none;
+    font: 400 10.5px/17px var(--sans);
+    color: var(--text-3);
+    cursor: default;
+}
+
 .queue-text {
     flex: 1;
     min-width: 0;
@@ -2271,6 +2601,197 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 .queue-act:hover { background: var(--s4); color: var(--text-2); }
 .queue-act.danger { font-size: 14px; line-height: 1; padding: 3px 8px 4px; }
 .queue-act.danger:hover { background: #33201f; color: var(--red); }
+
+/* Files staged for the next message.
+   ---------------------------------------------------------------------------
+   Built on the queue-chip tokens above rather than on a set of its own: the two
+   strips sit one above the other in the same composer, and a second visual
+   vocabulary between them would read as two unrelated features that happen to be
+   adjacent. Same surface, same pill, same act buttons. */
+.attach {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-bottom: 8px;
+    padding: 7px 8px;
+    background: var(--s1);
+    border-radius: var(--r-lg);
+}
+
+.attach-chip {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    /* Room for a name without letting one long one push the rest off the row. */
+    max-width: 260px;
+    padding: 4px 4px 4px 5px;
+    background: var(--s2);
+    border-radius: var(--r);
+    transition: background var(--t-fast) var(--ease), opacity var(--t-fast) var(--ease);
+}
+.attach-chip:hover { background: var(--s3); }
+/* Not yet on disk, so not yet something a message can carry. Dimmed rather than
+   hidden: it is the evidence that the paste landed at all. */
+.attach-chip.uploading { opacity: 0.6; }
+.attach-chip.failed { background: #33201f; }
+
+.attach-thumb {
+    flex: none;
+    width: 26px; height: 26px;
+    border-radius: var(--r-xs);
+    object-fit: cover;
+    background: var(--s4);
+}
+
+/* For everything that is not an image: the extension, which is the most useful
+   three characters available and the one people actually scan for. */
+.attach-glyph {
+    flex: none;
+    width: 26px; height: 26px;
+    border-radius: var(--r-xs);
+    background: var(--s4);
+    color: var(--text-3);
+    font: 500 9px/26px var(--mono);
+    text-align: center;
+    text-transform: uppercase;
+    overflow: hidden;
+}
+
+.attach-name {
+    flex: 1;
+    min-width: 0;
+    font: 400 12px/1.4 var(--sans);
+    color: var(--text-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.attach-size {
+    flex: none;
+    font: 400 10.5px/1.4 var(--mono);
+    color: var(--text-4);
+}
+
+.attach-act {
+    flex: none;
+    padding: 2px 7px;
+    border-radius: var(--pill);
+    font: 400 11px/1.3 var(--sans);
+    color: var(--text-4);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.attach-act:hover { background: var(--s4); color: var(--text-2); }
+.attach-act.danger { font-size: 14px; line-height: 1; padding: 3px 7px 4px; }
+.attach-act.danger:hover { background: #33201f; color: var(--red); }
+
+/* Drag a file anywhere over the composer and the whole thing is the target, not a
+   strip you have to hit. Inset so it does not shift anything: an outline that
+   changed the layout would make the box jump under the pointer mid-drag. */
+.composer.drop-target .composer-inner {
+    outline: 1.5px dashed var(--blue);
+    outline-offset: -4px;
+    border-radius: var(--r-lg);
+    background: var(--blue-tint);
+}
+
+/* The paperclip. Quieter than Send and LGTM on either side of it — pasting and
+   dropping are the gestures this feature is really for, and this is the fallback
+   for when there is nothing to drag from. */
+.btn-attach {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px; height: 38px;
+    color: var(--text-3);
+    background: transparent;
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--pill);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
+                border-color var(--t-fast) var(--ease);
+}
+.btn-attach:hover:not(:disabled) {
+    background: var(--s3);
+    color: var(--text);
+    border-color: var(--outline);
+}
+.btn-attach:disabled { color: var(--text-4); border-color: var(--s3); cursor: default; }
+
+/* Images a turn carried, inline. Was two inline properties on the <img> itself, which
+   was enough while one image per turn was the only shape there was. */
+.ev-images {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.ev-image {
+    max-width: 100%;
+    /* Several on a turn should read as several, so none of them takes the full width
+       on its own. One is unconstrained, which is the case that matters most: a
+       screenshot you pasted to be looked at. */
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-xs);
+}
+.ev-images .ev-image:not(:only-child) { max-width: calc(50% - 4px); }
+
+/* Files on a turn in the transcript.
+   ---------------------------------------------------------------------------
+   A card and not a preview. Knowing a file is there and being able to open it is
+   the whole job; rendering a PDF or a spreadsheet inline would be a viewer this
+   app has no business being. */
+.ev-files {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+}
+
+.ev-file {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    max-width: 300px;
+    padding: 6px 11px 6px 7px;
+    background: var(--s2);
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r);
+    text-align: left;
+    transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+}
+.ev-file:hover:not(:disabled) { background: var(--s3); border-color: var(--outline); }
+/* No session in view means no directory to resolve the path against. */
+.ev-file:disabled { cursor: default; opacity: 0.6; }
+
+.ev-file-glyph {
+    flex: none;
+    width: 24px; height: 24px;
+    border-radius: var(--r-xs);
+    background: var(--s4);
+    color: var(--text-3);
+    font: 500 8.5px/24px var(--mono);
+    text-align: center;
+    text-transform: uppercase;
+    overflow: hidden;
+}
+
+.ev-file-name {
+    flex: 1;
+    min-width: 0;
+    font: 400 12.5px/1.4 var(--sans);
+    color: var(--text-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ev-file-size {
+    flex: none;
+    font: 400 10.5px/1.4 var(--mono);
+    color: var(--text-4);
+}
 
 /* The live-elsewhere lock, directly above the box it is holding shut. Sits where
    the queue sits, in the warning colour, because it is the one thing between a
@@ -2364,6 +2885,35 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     padding: 9px 10px;
     font: 400 12px/1.5 var(--sans);
     color: var(--text-4);
+}
+
+/* A heading between groups. Deliberately not a `.picker-row`: the keyboard map
+   counts those, so a heading that were one would be a row you could land on. */
+.slash-menu .menu-group {
+    padding: 8px 10px 4px;
+    font: 500 10.5px/1.4 var(--sans);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-4);
+}
+.slash-menu .menu-group:first-child { padding-top: 3px; }
+
+/* A session is found by its title and sent to by its name, so the row leads
+   with the title in the reading face and follows with the name in the mono one
+   — which is also the shape of what gets inserted. */
+#mention-menu .picker-row .name {
+    font-family: var(--sans);
+    font-size: 13px;
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+#mention-menu .picker-row .desc {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    flex: none;
 }
 
 @media (prefers-reduced-motion: reduce) { .slash-menu { animation: none; } }
@@ -2471,14 +3021,14 @@ body.term-resizing { user-select: none; cursor: row-resize; }
    the eye can run down the right edge for "what needs doing" and down the left
    for "where". */
 
-.dash, .live, .notes {
+.dash, .live, .notes, .taskboard {
     display: flex;
     flex-direction: column;
     flex: 1;
     min-height: 0;
 }
 /* Not optional: `display: flex` above beats the `hidden` attribute on its own. */
-.dash[hidden], .live[hidden], .notes[hidden] { display: none; }
+.dash[hidden], .live[hidden], .notes[hidden], .taskboard[hidden] { display: none; }
 
 /* ── the live board ──────────────────────────────────────────────────────
    A card per running session. The grid decides its own column count so that a
@@ -3067,6 +3617,7 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 .app[data-focus="1"] .rail,
 .app[data-focus="1"] .bar-search,
 .app[data-focus="1"] #btn-dash,
+.app[data-focus="1"] #btn-taskboard,
 .app[data-focus="1"] .live-head { display: none; }
 .app[data-focus="1"] .live-body { padding-top: 18px; }
 
@@ -3627,6 +4178,7 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 .note-row[data-type="finished"] { --accent: var(--green); }
 .note-row[data-type="failed"] { --accent: var(--red); }
 .note-row[data-type="agent-done"] { --accent: var(--text-4); }
+.note-row[data-type="peer-message"] { --accent: var(--peach); }
 
 /* Nothing ever interrupted you for these, so they do not get to shout here
    either. They are in the list to answer "what has been going on", which is a
@@ -3737,6 +4289,308 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 }
 @media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
 
+/* ── the task board ──────────────────────────────────────────────────────
+   Four columns over everything outstanding. Unlike the live board, which lets
+   the grid pick its own column count, this one is exactly four: each column is
+   a state, so losing one to a narrow window would lose a state rather than a
+   row. Below the breakpoint they fold into two rows of two instead.
+
+   Colour is the live board's, deliberately: a session that is blocked shows the
+   same yellow here as it does there, and one running the same green. Two boards
+   with two vocabularies for one fact is how you end up checking both. */
+
+.tb-head {
+    flex: none;
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    padding: 22px 28px 16px;
+}
+.tb-title { margin: 0; font: 400 21px/1.3 var(--sans); color: var(--text); }
+.tb-sub {
+    margin: 5px 0 0;
+    max-width: 640px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text-3);
+}
+
+.tb-body {
+    flex: 1;
+    min-height: 0;
+    padding: 0 28px 28px;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.tb-note {
+    grid-column: 1 / -1;
+    align-self: start;
+    padding: 18px 20px;
+    background: var(--s2);
+    border-radius: var(--r);
+    color: var(--text-3);
+    font-size: 13.5px;
+}
+.tb-note p { margin: 0; }
+
+/* A column is a well, not a ruled-off area: the surface lifts where the column
+   starts, the same way a project card does in the rail. */
+.tb-col {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+    background: var(--s1);
+    border-radius: var(--r-lg);
+}
+
+.tb-col-head {
+    flex: none;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 13px 16px 10px;
+}
+.tb-col-head h2 {
+    margin: 0;
+    font: 500 13px/1.3 var(--sans);
+    color: var(--text-2);
+}
+.tb-count {
+    margin-left: auto;
+    font: 400 12px/1.3 var(--sans);
+    color: var(--text-4);
+    font-variant-numeric: tabular-nums;
+}
+/* The one column whose count is news gets to say so without being read. */
+.tb-col[data-col="needs"] .tb-col-head h2 { color: var(--yellow); }
+
+.tb-col-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.tb-empty {
+    margin: 6px 8px;
+    font-size: 12.5px;
+    color: var(--text-4);
+}
+
+/* A heading inside a column, for the projects the Suggested tasks came from. */
+.tb-sub-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: 8px 8px 0;
+    font: 500 11px/1.3 var(--sans);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-4);
+}
+.tb-sub-head:first-child { margin-top: 2px; }
+.tb-sub-head span { margin-left: auto; letter-spacing: 0; text-transform: none; }
+
+/* ── a card ─────────────────────────────────────────────────────────────── */
+
+.tb-card {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding: 11px 12px 11px;
+    background: var(--s2);
+    border-radius: var(--r);
+    min-width: 0;
+    cursor: pointer;
+    /* Which column it is in, said again in colour along its edge, so a card
+       read out of the corner of the eye still carries its state. */
+    box-shadow: inset 3px 0 0 var(--s4);
+    transition: background var(--t-fast) var(--ease);
+}
+.tb-card:hover { background: var(--s3); }
+
+.tb-card[data-col="needs"]   { box-shadow: inset 3px 0 0 var(--yellow); background: #232017; }
+.tb-card[data-col="needs"]:hover { background: #2b2719; }
+.tb-card[data-col="working"] { box-shadow: inset 3px 0 0 var(--green); }
+.tb-task                     { box-shadow: inset 3px 0 0 var(--blue); }
+/* A task whose conversation has been filed away. Still offered — dismissing is
+   the gesture for "not this", and archiving must not become a second, silent
+   one — but visibly the loose end it is. */
+.tb-task[data-archived="true"] { opacity: 0.62; box-shadow: inset 3px 0 0 var(--s5); }
+
+.tb-card-head { display: flex; align-items: flex-start; gap: 8px; }
+
+.tb-dot {
+    flex: none;
+    width: 7px; height: 7px;
+    margin-top: 5px;
+    border-radius: 50%;
+    background: var(--text-4);
+}
+.tb-card[data-col="needs"] .tb-dot   { background: var(--yellow); }
+.tb-card[data-col="working"] .tb-dot {
+    background: var(--green);
+    animation: breathe 1.6s var(--ease) infinite;
+}
+.tb-task .tb-dot { background: var(--blue); }
+
+/* Two lines, then an ellipsis. A task title is a sentence and a session title
+   is often one too; one line loses the half that says which. */
+.tb-card-title {
+    flex: 1;
+    min-width: 0;
+    padding: 0;
+    background: none;
+    border: 0;
+    text-align: left;
+    font: 500 13px/1.4 var(--sans);
+    color: var(--text);
+    cursor: pointer;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+.tb-card:hover .tb-card-title,
+.tb-card-title:hover { color: var(--blue); }
+
+/* The archive button, hidden until the card is under the pointer — the same
+   bargain the rail strikes, for the same reason: it is not what the card is
+   for, and four columns of them would read as a page of controls. */
+.tb-card-head .mini {
+    flex: none;
+    opacity: 0;
+    transition: opacity var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+}
+.tb-card:hover .mini,
+.tb-card-head .mini:focus-visible { opacity: 1; }
+
+.tb-card-meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 5px;
+    min-width: 0;
+    font: 400 11.5px/1.4 var(--sans);
+    color: var(--text-4);
+}
+.tb-card-meta .dot { opacity: 0.6; }
+.tb-card-meta .tag-pin { display: inline-flex; color: var(--text-3); }
+
+.tb-card-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+
+.tb-from {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    font: 400 11.5px/1.4 var(--sans);
+    color: var(--text-4);
+}
+.tb-from .linky { font-size: 11.5px; }
+
+.tb-tag {
+    flex: none;
+    padding: 1px 6px;
+    border-radius: var(--pill);
+    background: var(--s3);
+    font: 500 10px/1.5 var(--sans);
+    color: var(--text-4);
+}
+
+/* What it is waiting on, said rather than answered. */
+.tb-ask {
+    margin: 0;
+    padding: 7px 9px;
+    border-radius: var(--r-sm);
+    background: #2b2719;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--yellow);
+}
+
+.tb-acts { display: flex; gap: 6px; margin-top: 1px; }
+
+.tb-btn {
+    /* Two buttons across the card, as wide as the card, which is what makes a
+       column of them scan as a column of the same offer. */
+    flex: 1;
+    min-width: 0;
+    height: 28px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: var(--r-sm);
+    background: var(--s3);
+    color: var(--text-2);
+    font: 500 12px/1 var(--sans);
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.tb-btn:hover { background: var(--s4); color: var(--text); }
+.tb-btn.primary { background: var(--blue-cont); color: var(--blue); }
+.tb-btn.primary:hover { background: #27446f; color: #cfe0ff; }
+.tb-btn.quiet { flex: none; background: none; color: var(--text-4); }
+.tb-btn.quiet:hover { background: var(--s3); color: var(--text-2); }
+.tb-btn:disabled { opacity: 0.45; cursor: default; }
+
+/* ── the foot of a column ───────────────────────────────────────────────── */
+
+/* The older idle sessions, behind one press. The gradient runs up over the last
+   card so the column reads as cut rather than as ended — which is the honest
+   picture, and the reason the count in the header is the total. */
+.tb-more {
+    flex: none;
+    position: relative;
+    margin-top: -30px;
+    padding: 36px 6px 2px;
+    background: linear-gradient(to bottom, transparent, var(--s1) 55%);
+    text-align: center;
+}
+.tb-more p {
+    margin: 8px 2px 0;
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: var(--text-4);
+}
+
+/* A line for a task of your own, at the foot of the column the suggested ones
+   are in. It opens the ordinary dialog rather than starting anything, so it is
+   an entry point and is styled as one. */
+.tb-new {
+    flex: none;
+    position: sticky;
+    bottom: 0;
+    display: flex;
+    gap: 6px;
+    margin-top: auto;
+    padding: 8px 4px 2px;
+    background: linear-gradient(to bottom, transparent, var(--s1) 40%);
+}
+.tb-new-box {
+    flex: 1;
+    min-width: 0;
+    height: 30px;
+    padding: 0 11px;
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-sm);
+    background: var(--s2);
+    color: var(--text);
+    font: 400 12.5px/1 var(--sans);
+}
+.tb-new-box::placeholder { color: var(--text-4); }
+.tb-new-box:focus-visible { outline: none; border-color: var(--s5); background: var(--s3); }
+.tb-new .tb-btn { flex: none; }
+
 /* ── narrow windows ──────────────────────────────────────────────────── */
 
 @media (max-width: 980px) {
@@ -3746,4 +4600,15 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     .log { padding: 6px 16px 40px; }
     .conv-head { padding: 14px 16px 0; }
     .composer { padding: 4px calc(16px + var(--turns)) 14px 16px; }
+
+    /* Two rows of two rather than four thin strips. Every column survives —
+       losing one would lose a state — and the board scrolls as a whole instead
+       of each column scrolling in a slot too short to be worth it. */
+    .tb-head { padding: 16px 16px 12px; }
+    .tb-body {
+        padding: 0 16px 20px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        overflow-y: auto;
+    }
+    .tb-col { max-height: 60vh; }
 }

@@ -20,14 +20,20 @@ const { SessionIndex } = require('./sessions');
 const { SessionRegistry } = require('./registry');
 const { RunnerPool, PERMISSION_MODES } = require('./runner');
 const { Flags } = require('./flags');
+const { Prefs } = require('./prefs');
+const { Spinner } = require('./spinner');
+const { Suggestions, STATUSES: SUGGESTION_STATUSES } = require('./suggestions');
 const { SlashCommandCache } = require('./slash-commands');
 const { NotificationLog } = require('./notifications');
 const devbrowser = require('./devbrowser');
 const tailscale = require('./tailscale');
 const devservers = require('./devservers');
 const dashboard = require('./dashboard');
+const pulls = require('./pulls');
 const overview = require('./overview');
-const { openInExplorer } = require('./explorer');
+const taskboard = require('./taskboard');
+const { openInExplorer, openFile } = require('./explorer');
+const attachments = require('./attachments');
 const { TerminalPool } = require('./terminal');
 const commands = require('./commands');
 const { RunPool } = require('./runs');
@@ -36,6 +42,20 @@ const WEB_DIR = path.join(__dirname, '..', 'web');
 const CLIENT_HEADER = 'x-claude-sessions-client';
 
 const flags = new Flags();
+// How the person using the app wants it to behave, from their own file and from
+// whatever the project they are looking at overrides — see bridge/prefs.js.
+const prefs = new Prefs();
+// The words a turn in progress calls itself, out of the groups those settings
+// enable. Shares the Prefs instance rather than making its own, so the two
+// cannot read different settings out of the same file.
+const spinner = new Spinner(prefs);
+// What you did about a suggested follow-up — started it, or waved it away. The
+// suggestion itself is in the transcript; only the decision is ours to keep.
+const suggestions = new Suggestions();
+// What `?status=` on /api/suggestions accepts: the two decisions the store
+// knows, plus `open` for a task nobody has decided about — which is the absence
+// of an entry rather than a status, so the store has no name for it.
+const SUGGESTION_STATES = new Set(['open', ...SUGGESTION_STATUSES]);
 const index = new SessionIndex(flags);
 const registry = new SessionRegistry();
 const pool = new RunnerPool();
@@ -57,6 +77,9 @@ const notifications = new NotificationLog({
 // how recently a file changed. The index works without it; every summary simply
 // carries `live: null` and the mtime window is all anyone has to go on.
 index.registry = registry;
+// So a decision about a suggestion goes when its transcript does, the way a pin
+// or an archive does.
+index.suggestions = suggestions;
 
 /**
  * @type {Map<string, {
@@ -115,8 +138,9 @@ function dropClient(id) {
     for (const sub of c.subs.values()) stopWatch(sub);
     stopAgentWatch(c);
     clients.delete(id);
-    // The last window watching the board closing is what stops its timer.
+    // The last window watching a board closing is what stops its timer.
     if (c.overview) syncBoard();
+    if (c.taskboard) syncTaskboard();
 }
 
 function stopWatch(sub) {
@@ -133,7 +157,10 @@ function stopWatch(sub) {
 
 const OVERVIEW_MS = 1_000;
 
-const board = { timer: null, devTimer: null };
+// `last` is whatever `buildBoard` most recently produced, so that the things
+// which only want to know *which* sessions are on the board do not each build
+// one of their own. It is at most a second old whenever the tick is running.
+const board = { timer: null, devTimer: null, last: null };
 
 function boardWatchers() {
     return [...clients.values()].filter(c => c.overview);
@@ -158,11 +185,13 @@ function syncBoard() {
         clearInterval(board.devTimer);
         board.timer = null;
         board.devTimer = null;
+        board.last = null;
     }
 }
 
 function buildBoard() {
-    return overview.build(index, pool, registry, { includeTest: cfg.IS_DEV });
+    board.last = overview.build(index, pool, registry, { includeTest: cfg.IS_DEV });
+    return board.last;
 }
 
 /**
@@ -213,10 +242,129 @@ function sendBoardNow(client) {
 
 async function tickDevServers() {
     if (!board.timer) return;
-    const ids = buildBoard().sessions.map(s => s.sessionId);
+    // The board the 1Hz tick just built, not a second one. Building it again
+    // walks the whole index and takes a tail read per card, all of it thrown
+    // away except the ids — and then a third time when the chips have moved.
+    // `last` is empty only on the pass `syncBoard` fires before the first tick.
+    const ids = (board.last || buildBoard()).sessions.map(s => s.sessionId);
     try {
         if (await overview.refreshDevServers(index, ids)) tickBoard();
     } catch { /* nothing here is worth failing a tick over */ }
+}
+
+// ---------------------------------------------------------------------------
+// The task board
+// ---------------------------------------------------------------------------
+//
+// The same machinery as the live board above, on its own slower cycle. Separate
+// rather than folded into `tickBoard` because the two answer different questions
+// and a client watching one is usually not watching the other: the phone reads
+// `overview` and never opens this, and a window left on the task board has no
+// use for dev-server chips.
+//
+// **Three seconds rather than one.** The client takes each column's order once
+// and then holds it, so a faster tick buys nothing a person could see — only
+// JSON. What it must still be is prompt about the thing the board is *for*: a
+// session going from working to blocked shows up within a tick, which is fast
+// enough for a view you glance at and slow enough that a payload carrying every
+// un-archived session is not built sixty times a minute.
+
+const TASKBOARD_MS = 3_000;
+
+const taskBoard = { timer: null };
+
+function taskboardWatchers() {
+    return [...clients.values()].filter(c => c.taskboard);
+}
+
+/** Start or stop the tick to match how many people are looking. */
+function syncTaskboard() {
+    const watching = taskboardWatchers().length > 0;
+    if (watching && !taskBoard.timer) {
+        taskBoard.timer = setInterval(tickTaskboard, TASKBOARD_MS);
+        taskBoard.timer.unref();
+    } else if (!watching && taskBoard.timer) {
+        clearInterval(taskBoard.timer);
+        taskBoard.timer = null;
+    }
+}
+
+/**
+ * Always the windowed idle column, never `?idle=all`.
+ *
+ * Show-all is a one-off fetch behind a button: the rows it brings back are idle
+ * by definition, so nothing about them changes, and pushing all several hundred
+ * of them three times a second to a window that may never have pressed it is the
+ * cost this view was shaped to avoid.
+ */
+function buildTaskboard() {
+    return taskboard.build(index, pool, { includeTest: cfg.IS_DEV });
+}
+
+/** Same per-client mark, for the same reason `tickBoard` gives. */
+function tickTaskboard() {
+    const watchers = taskboardWatchers();
+    if (!watchers.length) return;
+
+    const data = buildTaskboard();
+    const sig = signature(data);
+    for (const c of watchers) {
+        if (c.lastTaskboard === sig) continue;
+        c.lastTaskboard = sig;
+        sseSend(c, 'taskboard', data);
+    }
+}
+
+/** The board as it stands, to one client that has just asked for it. */
+function sendTaskboardNow(client) {
+    const data = buildTaskboard();
+    client.lastTaskboard = signature(data);
+    sseSend(client, 'taskboard', data);
+}
+
+// ---------------------------------------------------------------------------
+// Peers
+// ---------------------------------------------------------------------------
+//
+// Sessions an agent here could message, newest first. See the route for why
+// this reads the registry rather than the session index.
+//
+// The session this list is for is *not* filtered out here, and that is on
+// purpose: whether to hide yourself is a question about a composer, which knows
+// which session it is in, and this route is also read by the renderer to put a
+// name to a message that has already arrived — where dropping an entry would
+// mean failing to name the one session that definitely sent something.
+
+/** @returns {Array<object>} one entry per addressable live session. */
+function listPeers() {
+    const peers = [];
+    for (const entry of registry.running()) {
+        // A session with no name cannot be addressed, because the name is the
+        // address. One with no inbox is a Claude Code too old for any of this.
+        if (!entry.name || !entry.addressable) continue;
+        const summary = index.summary(entry.sessionId);
+        peers.push({
+            name: entry.name,
+            // 'derived' means Claude Code made this up from the directory rather
+            // than anybody choosing it — worth showing beside a name somebody is
+            // about to paste into a message.
+            nameSource: entry.nameSource,
+            sessionId: entry.sessionId,
+            cwd: entry.cwd || (summary && summary.cwd) || null,
+            kind: entry.kind,
+            entrypoint: entry.entrypoint,
+            status: entry.status,
+            startedAt: entry.startedAt,
+            // Absent for a peer with no transcript indexed here — a background
+            // agent, or one working somewhere this app does not look. It is
+            // still perfectly reachable, so it is still listed; the client shows
+            // the name on its own.
+            title: summary ? summary.title : null,
+            project: summary ? summary.projectName : null,
+        });
+    }
+    peers.sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
+    return peers;
 }
 
 function stopAgentWatch(client) {
@@ -469,6 +617,17 @@ function remoteRefusal(pathname, method) {
     if (pathname === '/api/fs/mkdir') {
         return 'folders can only be created on the machine they live on';
     }
+    // Attaching a file writes it into a checkout, which is the mkdir clause above.
+    //
+    // This is the weakest of the refusals on this list and it is worth saying so:
+    // a phone taking a photo has nowhere *else* to put it, so "write it on the
+    // machine you are sitting at" is advice a phone cannot take. It is refused in
+    // v1 because /m has no attach affordance to refuse anything for yet. When it
+    // grows one, the answer is a smaller cap for a remote caller — not deleting
+    // this line and letting a leaked token write 25MB files into a repo.
+    if (/^\/api\/sessions\/[^/]+\/attachments(\/open)?$/.test(pathname)) {
+        return 'files can only be attached on the machine they are saved to';
+    }
     return null;
 }
 
@@ -538,7 +697,7 @@ async function api(req, res, url, pathname, who) {
             Connection: 'keep-alive',
             'X-Accel-Buffering': 'no',
         });
-        const client = { res, subs: new Map(), agent: null, overview: false };
+        const client = { res, subs: new Map(), agent: null, overview: false, taskboard: false };
         clients.set(id, client);
         sseSend(client, 'hello', { clientId: id, version: cfg.VERSION });
 
@@ -562,6 +721,15 @@ async function api(req, res, url, pathname, who) {
             client.overview = wants;
             syncBoard();
             if (wants) sendBoardNow(client);
+        }
+        // The task board is a third, independent follow, for the same reason.
+        // It is not implied by `overview`: the two are different questions and a
+        // window is almost never reading both at once.
+        const wantsTb = Boolean(body.taskboard);
+        if (client.taskboard !== wantsTb) {
+            client.taskboard = wantsTb;
+            syncTaskboard();
+            if (wantsTb) sendTaskboardNow(client);
         }
         // One session in view at a time; drop other follows so we aren't polling
         // transcripts nobody is looking at.
@@ -613,6 +781,41 @@ async function api(req, res, url, pathname, who) {
             // restarts the bridge should look here first.
             busy: pool.busyCount,
             permissionModes: PERMISSION_MODES,
+        });
+    }
+
+    // Settings, for a caller that wants them fresh rather than as the page was
+    // served with them — a settings page saving, or a client checking after the
+    // file was edited by hand. `?cwd=` asks what is in force for a project;
+    // without it, the user-level answer. Not local-only: reading a preference
+    // about how a transcript looks is not a capability a phone should be
+    // refused, and prefs.forCwd() runs a cwd through cfg.withinRoots anyway.
+    if (pathname === '/api/prefs' && req.method === 'GET') {
+        return send(res, 200, prefs.forCwd(url.searchParams.get('cwd') || ''));
+    }
+
+    // Which spinner verb groups exist, so the answer to "what may I put in
+    // spinner.groups?" is reachable without listing a directory by hand. There
+    // is no settings page, so this is the discoverable half of that setting —
+    // and where a group that failed to load says why.
+    //
+    // Not local-only, for the same reason /api/prefs is not: it reports the
+    // names and sizes of verb groups, which is not a capability worth refusing
+    // a phone. Read-only, like prefs: the files are the interface.
+    if (pathname === '/api/spinner/groups' && req.method === 'GET') {
+        const cwd = url.searchParams.get('cwd') || '';
+        const { groups, problems } = spinner.groups(cwd);
+        const settings = prefs.forCwd(cwd).spinner;
+        const pool = spinner.pool(cwd);
+        return send(res, 200, {
+            randomize: settings.randomize,
+            rerollMs: settings.rerollMs,
+            enabled: settings.groups,
+            // What the spinner will actually draw from, which is not the same
+            // as `enabled` when a name in settings matches no file.
+            pool: pool.verbs.length,
+            groups,
+            problems: [...problems, ...pool.problems],
         });
     }
 
@@ -676,10 +879,68 @@ async function api(req, res, url, pathname, who) {
         for (const s of sessions) {
             const st = statuses[s.sessionId];
             // `queued` rides along so the rail can say a session has work waiting
-            // even while you are looking at a different one.
-            if (st) { s.runner = { state: st.state, activity: st.activity, queued: st.queued }; }
+            // even while you are looking at a different one, and `detail` so a
+            // row too narrow for the whole label can show the half that matters.
+            if (st) {
+                s.runner = { state: st.state, activity: st.activity,
+                    detail: st.detail, queued: st.queued };
+            }
         }
         return send(res, 200, { sessions, ready: index.ready });
+    }
+
+    // Every suggested follow-up, across every session.
+    //
+    // Until this existed a task was a tool call in one transcript and so was
+    // discoverable only while that conversation was open. The offers are now
+    // collected by the rescan that already reads every transcript, and the
+    // decision beside each one comes off the store it has always lived in.
+    //
+    // **The offers stay derived.** Nothing here is copied into state this app
+    // owns, so deleting a session removes its tasks along with its transcript —
+    // see docs/api.md for what that means and why it was chosen.
+    if (pathname === '/api/suggestions' && req.method === 'GET') {
+        const status = url.searchParams.get('status');
+        if (status) {
+            const bad = status.split(',').map(v => v.trim()).filter(Boolean)
+                .filter(v => !SUGGESTION_STATES.has(v));
+            if (bad.length) {
+                return send(res, 400, {
+                    error: `unknown status ${bad.join(', ')}; `
+                        + `expected ${[...SUGGESTION_STATES].join(', ')}`,
+                });
+            }
+        }
+        return send(res, 200, {
+            suggestions: index.listSuggestions({
+                session: url.searchParams.get('session') || null,
+                project: url.searchParams.get('project') || null,
+                status: status || null,
+                limit: Number(url.searchParams.get('limit')) || 500,
+                // Same rule as /api/sessions: a scratch session belongs to the
+                // instance that started it.
+                includeTest: cfg.IS_DEV,
+            }),
+            ready: index.ready,
+        });
+    }
+
+    // Who an agent in this session could send a message to.
+    //
+    // Claude Code gives every live session a name and an inbox, and agents
+    // address each other by that name — `SendMessage({to: "<name>"})`, with no
+    // other form of address. This route is the list of names that are real,
+    // which is what the composer's `@` picker offers.
+    //
+    // Read out of the registry rather than out of the session index, because
+    // they answer different questions. The index knows about transcripts, and
+    // filters some of them out — test sessions on the everyday bridge, anything
+    // under /tmp. The registry knows about *processes*, and a background agent
+    // with no indexed transcript is still perfectly able to receive a message.
+    // Titles are joined on from the index where there is one; a peer without one
+    // is still listed, because being unnamed here does not make it unreachable.
+    if (pathname === '/api/peers' && req.method === 'GET') {
+        return send(res, 200, { peers: listPeers(), at: Date.now() });
     }
 
     // Every live session at once: what it is doing, how far through its tasks it
@@ -688,6 +949,21 @@ async function api(req, res, url, pathname, who) {
     // Pollable by anything; the UI takes it over SSE instead.
     if (pathname === '/api/overview' && req.method === 'GET') {
         return send(res, 200, buildBoard());
+    }
+
+    // Everything outstanding at once: open suggested tasks beside every
+    // un-archived session, grouped by what state it is in. Derived from what is
+    // already in memory and reads no transcripts — see taskboard.js.
+    //
+    // `?idle=all` drops the recent window on the idle column and returns every
+    // un-archived session. Only ever answered here, never pushed: it is what the
+    // Show-all button asks for once, and the rows it brings back are idle by
+    // definition.
+    if (pathname === '/api/taskboard' && req.method === 'GET') {
+        return send(res, 200, taskboard.build(index, pool, {
+            includeTest: cfg.IS_DEV,
+            idle: url.searchParams.get('idle') === 'all' ? 'all' : 'recent',
+        }));
     }
 
     // Work in flight: uncommitted changes and unmerged pull requests, by project.
@@ -705,7 +981,10 @@ async function api(req, res, url, pathname, who) {
             for (const w of p.workspaces) {
                 for (const s of w.sessions) {
                     const st = statuses[s.sessionId];
-                    if (st) s.runner = { state: st.state, activity: st.activity, queued: st.queued };
+                    if (st) {
+                        s.runner = { state: st.state, activity: st.activity,
+                            detail: st.detail, queued: st.queued };
+                    }
                 }
             }
         }
@@ -768,6 +1047,21 @@ async function api(req, res, url, pathname, who) {
             // point; serializing all of it and then throwing most away would save
             // nothing. `offset` is deliberately left as-is — it is a byte position
             // in the file, so the live tail still resumes correctly from it.
+            // What was already done about each suggested follow-up in here.
+            // Sent whole rather than per event: it is a handful of keys, and a
+            // card that arrives on the live tail — after this payload — still
+            // needs to know whether it was acted on in another window.
+            const acted = suggestions.forSession(sessionId);
+
+            // The settings in force *for this conversation's directory*. The
+            // page was served with the user-level answer before it knew which
+            // session it was about to show, and a project may override it — so
+            // the answer travels with the transcript it applies to, and lands
+            // in the same await the client already does before it draws
+            // anything. Fetching it separately would be a race the big payload
+            // usually wins and sometimes does not.
+            const settings = prefs.forCwd(data.summary && data.summary.cwd);
+
             const want = Number(url.searchParams.get('tail'));
             if (Number.isFinite(want) && want > 0 && data.events.length > want) {
                 const dropped = data.events.length - want;
@@ -776,9 +1070,12 @@ async function api(req, res, url, pathname, who) {
                     events: data.events.slice(-want),
                     truncated: { dropped, total: data.events.length },
                     runner: st || null,
+                    suggestions: acted,
+                    prefs: settings,
                 });
             }
-            return send(res, 200, { ...data, runner: st || null });
+            return send(res, 200, {
+                ...data, runner: st || null, suggestions: acted, prefs: settings });
         }
 
         // Hard delete. Everywhere else in this app "remove" means archive; this
@@ -823,14 +1120,36 @@ async function api(req, res, url, pathname, who) {
             const data = index.read(sessionId);
             if (!data) return send(res, 404, { error: 'session not found' });
             const s = data.summary;
-            const candidates = devservers.detect(data.events);
+            const candidates = [...devservers.detect(data.events).values()];
             const titles = await devbrowser.titles();
             const out = await devservers.enrich(candidates, titles, {
+                workspace: workingDir(s),
                 worktreeName: s.worktree && s.worktree.name,
                 projectName: s.projectName,
                 lastTs: s.lastTs,
             });
             return send(res, 200, out);
+        }
+
+        // The status of the pull requests this session raised.
+        //
+        // Its own route rather than a field on the summary, because it asks
+        // GitHub and the session list must never wait on GitHub — the same reason
+        // `/api/dashboard` is not on that path either. The header renders its PRs
+        // from the summary immediately and fills the statuses in when this
+        // answers, so a slow or absent gh only ever costs the colour.
+        if (tail === 'prs' && req.method === 'GET') {
+            const summary = index.summary(sessionId);
+            if (!summary) return send(res, 404, { error: 'session not found' });
+
+            // A `pr-link` entry usually names its repository. Where one did not,
+            // the session's own directory is the best guess available.
+            const list = summary.prs || [];
+            const repo = list.some(pr => !pr.repo) && summary.cwd
+                ? await pulls.repoOf(summary.cwd)
+                : null;
+
+            return send(res, 200, await pulls.forSession(list, repo));
         }
 
         if (tail === 'subagents' && req.method === 'GET') {
@@ -856,8 +1175,12 @@ async function api(req, res, url, pathname, who) {
 
         if (tail === 'send' && req.method === 'POST') {
             const body = await readJson(req);
-            const text = body.text && String(body.text).trim();
-            if (!text) return send(res, 400, { error: 'text is required' });
+            const text = body.text ? String(body.text).trim() : '';
+            // A screenshot with nothing typed under it is a real message — "look at
+            // this" is the whole content — so an attachment satisfies this on its own.
+            if (!text && !(Array.isArray(body.attachments) && body.attachments.length)) {
+                return send(res, 400, { error: 'text or an attachment is required' });
+            }
 
             // Sending is also how a mode changes, so the same refusal applies here
             // as on creation — otherwise a phone could start a session in `auto` and
@@ -874,13 +1197,25 @@ async function api(req, res, url, pathname, who) {
             if (!summary) return send(res, 404, { error: 'session not found' });
             const cwd = sessionCwd(summary);
 
+            // The client is telling us paths it was told a moment ago; this is what
+            // makes that safe. Anything that is not in this session's own attachments
+            // directory, or is no longer on disk, is dropped rather than refused —
+            // losing the whole message because one staged file was tidied away would
+            // be the wrong trade.
+            let files;
+            try {
+                files = resolveAttachments(cwd, body.attachments);
+            } catch (err) {
+                return send(res, 400, { error: err.message });
+            }
+
             const r = pool.ensure(sessionId, {
                 cwd,
                 model: body.model || null,
                 permissionMode: sendMode,
                 fork: !!body.fork,
             });
-            const entry = r.send(text);
+            const entry = r.send(text, files);
             // Which of the two happened matters to the caller: a message that is
             // still queued is safe on this side and will be handed back if the
             // process dies, so the UI only has to hold on to one that went out.
@@ -889,6 +1224,109 @@ async function api(req, res, url, pathname, who) {
                 ok: true, id: entry.id, cwd, fork: !!body.fork, status,
                 queued: status.queue.some(q => q.id === entry.id),
             });
+        }
+
+        // --- attachments ---------------------------------------------------
+        // A file pasted or dropped onto the composer. Written before the message is
+        // sent rather than with it: the strip shows real files with real names, the
+        // send stays a small JSON POST, and a staged file survives a reload because
+        // it is already on disk. See bridge/attachments.js for where it lands.
+        if (tail === 'attachments' && !seg[4] && req.method === 'POST') {
+            // The name first, before the session is even looked up. It is refused for
+            // reasons that have nothing to do with which session asked, and answering
+            // "session not found" to a request that also carried `../evil.png` hides
+            // the refusal that actually mattered behind an unrelated one.
+            const name = url.searchParams.get('name');
+            const bad = attachments.attachmentNameProblem(name);
+            if (bad) return send(res, 400, { error: bad });
+
+            // And the size, for the same reason and before the same lookup. Answered
+            // from Content-Length, so an oversized upload is refused before its bytes
+            // travel rather than after.
+            if (declaredOverMax(req, attachments.MAX_ATTACHMENT_BYTES)) {
+                return refuseUpload(req, res, 413, overMax(attachments.MAX_ATTACHMENT_BYTES));
+            }
+
+            const summary = index.summary(sessionId);
+            if (!summary) return send(res, 404, { error: 'session not found' });
+            const cwd = sessionCwd(summary);
+
+            const { dir, root } = attachments.attachmentsDirFor(cwd);
+            if (!cfg.withinRoots(dir)) {
+                return send(res, 403, {
+                    error: 'that directory is outside the allowed roots',
+                    path: dir, roots: cfg.ALLOWED_ROOTS,
+                });
+            }
+
+            let buffer;
+            try {
+                buffer = await readBinary(req, attachments.MAX_ATTACHMENT_BYTES);
+            } catch (err) {
+                if (err.oversized) return refuseUpload(req, res, err.status, err.message);
+                return send(res, err.status || 400, { error: err.message });
+            }
+            if (!buffer.length) return send(res, 400, { error: 'that file is empty' });
+
+            let written;
+            try {
+                written = attachments.writeAttachment({ dir, name, buffer });
+            } catch (err) {
+                if (err.code === 'ENOTDIR') {
+                    return send(res, 400, {
+                        error: `${dir} exists but is not a directory`,
+                    });
+                }
+                return send(res, 500, { error: `could not save the file: ${err.message}` });
+            }
+
+            // After the mkdir, not before: this is the check that catches an
+            // attached_assets symlinked out of the roots, which cannot be seen until
+            // the directory exists.
+            let real = dir;
+            try { real = fs.realpathSync(dir); } catch { /* just written; treat as itself */ }
+            if (!cfg.withinRoots(real)) {
+                try { fs.unlinkSync(written.path); } catch { /* nothing better to do */ }
+                return send(res, 403, {
+                    error: 'that directory resolves outside the allowed roots',
+                    path: real, roots: cfg.ALLOWED_ROOTS,
+                });
+            }
+
+            attachments.ensureExcluded(root);
+
+            return send(res, 200, {
+                ok: true,
+                name: written.name,
+                renamed: written.renamed,
+                path: written.path,
+                relPath: attachments.relativeTo(cwd, written.path),
+                dir,
+                bytes: buffer.length,
+                // Sniffed from the bytes, not taken from Content-Type — this is what
+                // decides whether the turn carries an inline image block.
+                mediaType: attachments.sniffType(buffer, req.headers['content-type']),
+            });
+        }
+
+        // Open a staged or sent attachment in whatever Windows opens that kind of
+        // file with. The path comes from the client, so it is re-derived against this
+        // session's own attachments directory before anything is launched — this is
+        // the one route here that hands a path to another program.
+        if (tail === 'attachments' && seg[4] === 'open' && req.method === 'POST') {
+            const summary = index.summary(sessionId);
+            if (!summary) return send(res, 404, { error: 'session not found' });
+            const cwd = sessionCwd(summary);
+            const body = await readJson(req);
+
+            const file = attachmentPath(cwd, body.path);
+            if (!file) {
+                return send(res, 404, {
+                    error: 'that file is not one of this session\'s attachments',
+                });
+            }
+            const out = await openFile(file);
+            return send(res, out.ok ? 200 : 502, { ...out, file });
         }
 
         if (tail === 'stop' && req.method === 'POST') {
@@ -980,6 +1418,51 @@ async function api(req, res, url, pathname, who) {
             const stopped = next.archived ? archiveStoppedRuns(summary) : 0;
             broadcast('sessions-changed', { at: Date.now() });
             return send(res, 200, { ok: true, sessionId, ...next, runsStopped: stopped });
+        }
+
+        // Just the decisions, for a client that has the conversation already and
+        // only needs to know what moved. Refetching the whole transcript to
+        // learn that one card was dismissed would be megabytes for two fields.
+        if (tail === 'suggestions' && !seg[4] && req.method === 'GET') {
+            if (!index.summary(sessionId)) return send(res, 404, { error: 'session not found' });
+            return send(res, 200, { sessionId, suggestions: suggestions.forSession(sessionId) });
+        }
+
+        // What you did about one suggested follow-up.
+        //
+        // The suggestion itself is never written here — it is a tool call in the
+        // transcript and stays the only copy. This records the *decision*, which
+        // is the one part of it that is yours: `started`, with the session it
+        // produced so the card can become a link, or `dismissed`. Posting with no
+        // status takes the decision back and the card offers itself again, which
+        // matters because dismiss is the easy one to hit by accident.
+        //
+        // Broadcast, so a second window showing the same conversation stops
+        // offering something that has already been started.
+        if (tail === 'suggestions' && seg[4] && req.method === 'POST') {
+            const summary = index.summary(sessionId);
+            if (!summary) return send(res, 404, { error: 'session not found' });
+            const toolUseId = seg[4];
+            const body = await readJson(req);
+            const status = body.status == null ? null : String(body.status);
+
+            if (status === null) {
+                suggestions.clear(sessionId, toolUseId);
+                broadcast('suggestion-changed', { at: Date.now(), sessionId, toolUseId });
+                return send(res, 200, { ok: true, sessionId, toolUseId, status: null });
+            }
+            if (!SUGGESTION_STATUSES.has(status)) {
+                return send(res, 400, {
+                    error: `status must be one of ${[...SUGGESTION_STATUSES].join(', ')}, `
+                        + 'or absent to undo',
+                });
+            }
+            const next = suggestions.set(sessionId, toolUseId, {
+                status,
+                startedId: typeof body.startedId === 'string' ? body.startedId : null,
+            });
+            broadcast('suggestion-changed', { at: Date.now(), sessionId, toolUseId });
+            return send(res, 200, { ok: true, sessionId, toolUseId, ...next });
         }
 
         // Show the session's working directory in Windows File Explorer.
@@ -1352,6 +1835,84 @@ function sessionCwd(summary) {
     return cfg.HOME;
 }
 
+/**
+ * One client-supplied attachment path, re-derived against this session's own
+ * attachments directory — or null.
+ *
+ * The client is handing back a path the bridge gave it a moment ago, which is not the
+ * same thing as a path the bridge is willing to act on: a different session's id with
+ * this session's file, or a path edited in flight, both arrive looking identical. So
+ * only the *basename* is taken from the caller and the directory is recomputed here.
+ * That leaves nothing for a `..` to traverse out of.
+ */
+function attachmentPath(cwd, given) {
+    const raw = String(given == null ? '' : given);
+    if (!raw) return null;
+    const name = path.basename(raw);
+    if (attachments.attachmentNameProblem(name)) return null;
+
+    const { dir } = attachments.attachmentsDirFor(cwd);
+    if (!cfg.withinRoots(dir)) return null;
+
+    const file = path.join(dir, name);
+    if (path.dirname(file) !== dir) return null;      // belt and braces
+    try {
+        if (!fs.statSync(file).isFile()) return null;
+    } catch {
+        return null;
+    }
+    return file;
+}
+
+/**
+ * The attachments a send may carry, in the order the client staged them.
+ *
+ * A path that no longer resolves is dropped rather than refused. The alternative is
+ * losing a message somebody typed because a file they staged was tidied away in the
+ * meantime, and the message is worth more than the completeness of its file list.
+ */
+function resolveAttachments(cwd, given) {
+    if (given == null) return [];
+    if (!Array.isArray(given)) throw new Error('attachments must be an array');
+    if (given.length > attachments.MAX_PER_MESSAGE) {
+        throw new Error(`at most ${attachments.MAX_PER_MESSAGE} files per message`);
+    }
+
+    const out = [];
+    for (const a of given) {
+        const file = attachmentPath(cwd, a && (a.path || a.relPath || a));
+        if (!file) continue;
+        let bytes = 0;
+        try { bytes = fs.statSync(file).size; } catch { /* raced; reported as 0 */ }
+        out.push({
+            path: file,
+            name: path.basename(file),
+            relPath: attachments.relativeTo(cwd, file),
+            // Sniffed from the file on disk rather than believed from the client, for
+            // the same reason the upload route sniffs it: this decides whether the turn
+            // carries an inline image block, and a wrong answer is a failed turn.
+            mediaType: attachments.sniffType(readHead(file), a && a.mediaType),
+            bytes,
+        });
+    }
+    return out;
+}
+
+/** The first few bytes of a file, for sniffing. Enough for every magic number. */
+function readHead(file, n = 16) {
+    let fd;
+    try {
+        fd = fs.openSync(file, 'r');
+        const buf = Buffer.alloc(n);
+        const read = fs.readSync(fd, buf, 0, n, 0);
+        return buf.subarray(0, read);
+    } catch {
+        return Buffer.alloc(0);
+    } finally {
+        if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* already gone */ } }
+    }
+}
+
 // An unrecognised mode falls back to the app's default rather than erroring: the
 // mode is a knob on a request that has real work in it, and refusing the whole
 // send over a typo in one field loses the message.
@@ -1519,6 +2080,81 @@ function readJson(req) {
     });
 }
 
+/**
+ * The whole body as bytes, for the one route that takes a file rather than JSON.
+ *
+ * A sibling of readJson rather than a generalisation of it, for two reasons. It
+ * needs a *caller-supplied* cap — 25MB for an attachment against readJson's 4MB —
+ * and it needs to fail honestly: readJson's rejection reaches the catch-all in
+ * `route`, which turns "body too large" into a 500, and that has been the answer
+ * for long enough that other routes may be relying on the shape. So the new reader
+ * throws a `status` and this route reads it, and readJson is left alone.
+ *
+ * Content-Length is checked first where the client sent one, so an oversized upload
+ * is refused before the bytes travel rather than after.
+ */
+const overMax = (max) => `that file is larger than the `
+    + `${Math.round(max / (1024 * 1024))}MB limit`;
+
+/**
+ * Refuse an upload, and hang up on the rest of it.
+ *
+ * Both halves matter and the order between them is the whole reason this is a function
+ * rather than two lines at each caller. Destroying the socket is what stops a client
+ * from spending thirty seconds sending a file that has already been refused; doing it
+ * before the response has flushed truncates the sentence that says why, which is how
+ * an oversized upload came to report a bare `100 Continue` and nothing else. `finish`
+ * is the event that says the answer is out.
+ */
+function refuseUpload(req, res, status, error) {
+    res.on('finish', () => req.destroy());
+    return send(res, status || 413, { error });
+}
+
+/**
+ * A Content-Length the caller already told us is too big.
+ *
+ * Split out so the route can ask *before* it looks a session up. Both refusals can be
+ * true of one request, and the size is the more useful of the two to hear: "session not
+ * found" in answer to a 40MB upload hides the thing that would still be wrong after
+ * the id was fixed.
+ */
+function declaredOverMax(req, max) {
+    const n = Number(req.headers['content-length']);
+    return Number.isFinite(n) && n > max;
+}
+
+function readBinary(req, max) {
+    return new Promise((resolve, reject) => {
+        // Paused, not destroyed. Destroying the socket here was the first version and
+        // it is wrong in a way worth remembering: the caller still has to write the
+        // 413 onto that socket, and a client that sent `Expect: 100-continue` — curl
+        // does, for a body this size — then sees the interim 100 and nothing else. It
+        // reports "100" as the status and never learns what the limit was. So the
+        // stream stops and the route answers; `oversized` tells it to hang up
+        // afterwards, since nothing is going to read the rest of the upload.
+        const tooBig = () => {
+            req.pause();
+            reject(Object.assign(new Error(overMax(max)), { status: 413, oversized: true }));
+        };
+
+        // Normally already handled by the caller; kept because this function's contract
+        // is the cap, not the caller's diligence.
+        if (declaredOverMax(req, max)) return tooBig();
+
+        const chunks = [];
+        let size = 0;
+        req.on('data', (c) => {
+            size += c.length;
+            // A Content-Length that lied, or a chunked body. Same answer.
+            if (size > max) return tooBig();
+            chunks.push(c);
+        });
+        req.on('end', () => resolve(Buffer.concat(chunks)));
+        req.on('error', reject);
+    });
+}
+
 const MIME = {
     '.html': 'text/html; charset=utf-8',
     '.js': 'text/javascript; charset=utf-8',
@@ -1530,6 +2166,13 @@ const MIME = {
     // icons is not installable, and both would otherwise be served as
     // application/octet-stream and ignored.
     '.png': 'image/png',
+    // The other three the composer will accept and inline. Nothing in web/ is a
+    // jpeg today; the table being one short of the set it claims to cover is the
+    // kind of gap that only shows up as a broken image months later.
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
     '.ico': 'image/x-icon',
     '.webmanifest': 'application/manifest+json',
 };
@@ -1579,6 +2222,13 @@ function serveStatic(req, res, pathname, who) {
             body = Buffer.from(auth.injectToken(body.toString('utf8')), 'utf8');
             headers['Set-Cookie'] = auth.pairCookie(auth.current(), { secure: who.secure });
         }
+        // Settings go to every page, local or not — they are not a credential,
+        // and a remote browser renders the same transcript. In the page rather
+        // than behind a fetch because the client opens a session synchronously
+        // at startup: a transcript drawn before an async answer arrived would
+        // stay drawn the wrong way, since nothing re-renders history.
+        body = Buffer.from(auth.injectMeta(body.toString('utf8'),
+            'cs-prefs', JSON.stringify(prefs.page(''))), 'utf8');
     }
     headers['Content-Length'] = body.length;
 
@@ -1660,7 +2310,23 @@ function pair(req, res, url, pathname, who) {
  */
 pool.hasViewer = () => clients.size > 0;
 
+// And what it says while it works. Every surface that shows a session working
+// reads `runner.activity` off one SSE message, so deciding it here is what makes
+// all of them — a phone included — agree. See bridge/spinner.js.
+pool.thinking = (cwd, last) => spinner.pick(cwd, last);
+pool.rerollAfter = (cwd) => spinner.rerollMs(cwd);
+
 index.on('changed', () => broadcast('sessions-changed', { at: Date.now() }));
+
+// A message from another Claude session, noticed in the transcript rather than
+// in a process stream — see SessionIndex#rescan for why that is the only place
+// it can be noticed. Broadcast as well as logged, so a window already showing
+// that conversation does not have to wait for the rail to tell it something
+// happened.
+index.on('peer-message', (p) => {
+    broadcast('peer-message', p);
+    filed(notifications.peerMessage(p));
+});
 // A session starting or stopping in a terminal writes nothing to a transcript,
 // so the registry is the only thing that notices — the rail would otherwise wait
 // for the next thing that happened to change a file.

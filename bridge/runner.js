@@ -58,6 +58,7 @@
 // interrupt that does not land falls through to the signal path.
 
 const fs = require('fs');
+const path = require('path');
 const { spawn } = require('child_process');
 const { randomUUID } = require('crypto');
 const { EventEmitter } = require('events');
@@ -66,6 +67,7 @@ const cfg = require('./config');
 
 const { CLAUDE_BIN } = cfg;
 const { describeTool } = require('./transcript');
+const { ATTACHMENT_NOTE_HEAD, attachmentNoteLine } = require('./attachments');
 
 // Queue entry ids only have to be unique per process; the UI never persists one.
 let queueSeq = 0;
@@ -88,6 +90,28 @@ function sessionEnv() {
     delete env.CLAUDE_SESSIONS_PORT;
     return env;
 }
+
+// The one tool this app gives a session that it would not otherwise have: a way
+// to hand the next piece of work over as a suggestion. See bridge/suggest-mcp.js
+// for what it does and why it stores nothing.
+//
+// Passed as a JSON *string* rather than a file — `--mcp-config` takes either, and
+// a string means there is no temp file to write, collide on between two bridges,
+// or leave behind. `process.execPath` rather than `node`, because the node that
+// is already running us is the only one we know exists: a login shell has none
+// on PATH, which is the whole reason bridge/launch.sh exists.
+//
+// Deliberately *not* `--strict-mcp-config`, which would switch off every MCP
+// server the user configured for themselves. We are adding one, not taking over.
+const SUGGEST_TOOL = 'mcp__claude-sessions__suggest_session';
+const MCP_CONFIG = JSON.stringify({
+    mcpServers: {
+        'claude-sessions': {
+            command: process.execPath,
+            args: [path.join(__dirname, 'suggest-mcp.js')],
+        },
+    },
+});
 
 // Processes are cheap to restart (resume is a warm cache hit), so don't hoard them.
 const MAX_LIVE = 4;
@@ -121,6 +145,67 @@ const CONTROL_TIMEOUT_MS = 8_000;
 // turn instead and say why.
 const MAX_AUTO_DENIES = 2;
 
+// Types the API accepts as an image source. Kept here rather than imported from
+// bridge/attachments.js so the runner has no opinion about where files come from —
+// it is handed a list and asked to send it.
+const INLINE_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+
+// A cap on what one turn will inline, independent of the per-file upload cap. Five
+// 25MB screenshots base64'd is a 160MB line on a pipe, and the paths are in the text
+// either way — so past this the model reads the file instead of being handed it.
+const MAX_INLINE_BYTES = 12 * 1024 * 1024;
+
+/**
+ * The content blocks for one user turn.
+ *
+ * With nothing attached this is what it always was: one text block. With files on it,
+ * three things are going on, and they are worth separating.
+ *
+ * **The note is split across blocks, one line each, with an image block sitting
+ * straight after the line that names it.** `userText` in bridge/transcript.js joins a
+ * turn's text blocks with a newline, so this reassembles into exactly the message a
+ * single block would have carried — the parser on the way back does not know or care
+ * that it arrived in pieces. What it buys is that each screenshot is labelled with the
+ * file it came from. Two anonymous images on one turn are genuinely ambiguous, and
+ * asked which was which the model said so; "the second screenshot" is a thing people
+ * say, and this is what makes it answerable.
+ *
+ * **The base64 is read here**, at flush time, rather than carried on the queue entry.
+ * A queued message is broadcast to every viewer inside `status()` on every change, and
+ * a screenshot on that path would put megabytes through an SSE stream for reasons
+ * unrelated to it.
+ *
+ * **A file that has gone missing since it was staged is skipped**, not fatal. Its path
+ * is still in the note, so the message stays true either way: it says a file was
+ * attached, and the model finds out it cannot read it in the ordinary way.
+ */
+function userContent(entry) {
+    const files = entry.attachments || [];
+    if (!files.length) return [{ type: 'text', text: entry.text }];
+
+    // The note's heading rides on the end of the typed message rather than in a block
+    // of its own, so the blank line between the two survives the rejoin.
+    const content = [{
+        type: 'text',
+        text: entry.text ? `${entry.text}\n\n${ATTACHMENT_NOTE_HEAD}` : ATTACHMENT_NOTE_HEAD,
+    }];
+
+    let budget = MAX_INLINE_BYTES;
+    for (const a of files) {
+        content.push({ type: 'text', text: attachmentNoteLine(a) });
+        if (!INLINE_IMAGE_TYPES.has(a.mediaType) || a.bytes > budget) continue;
+        let data;
+        try { data = fs.readFileSync(a.path); } catch { continue; }
+        budget -= data.length;
+        content.push({
+            type: 'image',
+            source: { type: 'base64', media_type: a.mediaType, data: data.toString('base64') },
+        });
+    }
+
+    return content;
+}
+
 class Runner extends EventEmitter {
     /**
      * @param {object} opts
@@ -145,6 +230,16 @@ class Runner extends EventEmitter {
         this.errorKind = null;
         this.retry = null;             // set while the CLI is retrying the API
 
+        // What to call a turn in progress, and how long each word stands.
+        // Supplied by the pool, which the server supplies from bridge/spinner.js.
+        // Null is a real answer and the default one: no verb composes to exactly
+        // what this app said before there were any.
+        this.thinking = opts.thinking || (() => null);
+        this.rerollAfter = opts.rerollAfter || (() => 0);
+        this._verb = null;             // the themed word, drifting on its own clock
+        this._detail = null;           // and what is specifically happening, if anything
+        this._reroll = null;           // the timer moving the verb along
+
         this.proc = null;
         this.state = 'stopped';        // stopped | starting | idle | busy | error
         this.activity = null;          // human-readable "what is it doing right now"
@@ -155,6 +250,11 @@ class Runner extends EventEmitter {
         // written straight through, so they stay visible and cancellable — see
         // _flushQueue.
         this.queue = [];
+        // Queue *entries*, not their text. It used to hold strings, and the retry
+        // path below concatenates this straight back onto `queue` — which meant a
+        // resumed queue held strings where every reader expects `{id, text, at}`,
+        // and the next flush wrote a turn with `text: undefined` in it. Entries
+        // throughout, so the two arrays are one shape.
         this.inFlight = [];            // written to the process, not yet answered
         this._buf = '';
         this._stderr = '';
@@ -192,6 +292,13 @@ class Runner extends EventEmitter {
         // `stdio` is the CLI's sentinel for "ask over this stream" rather than
         // the name of an MCP tool.
         if (this.caps.permissionPrompt) args.push('--permission-prompt-tool', 'stdio');
+        // Filing a suggestion is the agent offering the user something, not the
+        // agent doing anything, so it must never raise an approval card — a
+        // permission prompt for "may I suggest this?" is noise nobody wants.
+        // `--allowedTools` is an auto-approve list, not a restriction on which
+        // tools exist; `--tools` is the one that would narrow the set.
+        args.push('--mcp-config', MCP_CONFIG);
+        args.push('--allowedTools', SUGGEST_TOOL);
         if (this.isNew) args.push('--session-id', this.sessionId);
         else args.push('--resume', this.sessionId);
         if (this.fork) args.push('--fork-session');
@@ -272,7 +379,7 @@ class Runner extends EventEmitter {
                 this.emit('failed', {
                     kind: classified.kind,
                     message: classified.message,
-                    unsent: this.inFlight.concat(this.queue.map(q => q.text)),
+                    unsent: this.inFlight.concat(this.queue).map(q => q.text),
                 });
                 this.inFlight.length = 0;
                 this.queue.length = 0;
@@ -297,9 +404,14 @@ class Runner extends EventEmitter {
      * Returns the queue entry, so a caller can tell whether its message went
      * out immediately or is still waiting.
      */
-    send(text) {
+    send(text, attachments = []) {
         this.lastUsedAt = Date.now();
-        const entry = { id: `q${++queueSeq}`, text, at: Date.now() };
+        // `text` stays a plain string and the files ride alongside it, rather than
+        // the entry becoming a content-block array. Everything that already reads an
+        // entry — the queue chips, the hand-back on death, dequeue, reorder, the
+        // `dropped` a stop reports — reads `.text`, and all of it keeps working
+        // untouched. Only _flushQueue knows these are here.
+        const entry = { id: `q${++queueSeq}`, text, at: Date.now(), attachments };
         this.queue.push(entry);
         if (!this.proc) this.start();
         else this._flushQueue();
@@ -324,15 +436,15 @@ class Runner extends EventEmitter {
         // ours at that point, so put it back rather than dropping it on the floor.
         if (!this._write({
             type: 'user',
-            message: { role: 'user', content: [{ type: 'text', text: entry.text }] },
+            message: { role: 'user', content: userContent(entry) },
         })) {
             this.queue.unshift(entry);
             return;
         }
         // Held until a result arrives: if the process dies first, this text
         // was never written to the transcript and would otherwise be lost.
-        this.inFlight.push(entry.text);
-        this._setState('busy', 'Thinking…');
+        this.inFlight.push(entry);
+        this._work();
         // _setState only reports when the state or activity moved; a shorter
         // queue is news on its own.
         this._queueChanged();
@@ -754,7 +866,7 @@ class Runner extends EventEmitter {
             sessionId: this.sessionId, requestId: ask.id, outcome,
         });
         // The tool is about to run (or not); either way we are back to working.
-        if (this.state === 'busy') this._setState('busy', 'Thinking…');
+        if (this.state === 'busy') this._work();
     }
 
     _autoDeny(ask, reason) {
@@ -917,11 +1029,11 @@ class Runner extends EventEmitter {
                 for (const b of content) {
                     if (b.type === 'tool_use') {
                         this._pendingTools.set(b.id, b.name);
-                        this._setState('busy', describeTool(b));
+                        this._work(describeTool(b));
                     } else if (b.type === 'text' && b.text.trim()) {
-                        this._setState('busy', 'Writing…');
+                        this._work('Writing…');
                     } else if (b.type === 'thinking') {
-                        this._setState('busy', 'Thinking…');
+                        this._work();
                     }
                 }
                 break;
@@ -933,7 +1045,9 @@ class Runner extends EventEmitter {
                     if (b.type !== 'tool_result') continue;
                     this._pendingTools.delete(b.tool_use_id);
                 }
-                if (this.state === 'busy') this._setState('busy', 'Thinking…');
+                // The call is over, so its name would now be a lie — back to
+                // the verb alone until the next thing starts.
+                if (this.state === 'busy') this._work();
                 break;
             }
 
@@ -979,7 +1093,84 @@ class Runner extends EventEmitter {
         }
     }
 
-    _setState(state, activity) {
+    /**
+     * Working, and on what.
+     *
+     * The label a turn shows has two halves. The **verb** is the themed word out
+     * of bridge/spinner.js, and it drifts on its own clock — it is what says the
+     * session is alive. The **detail** is whatever is specifically happening,
+     * and it changes when reality does: a tool's name, or `Writing…`, or nothing
+     * at all while Claude is only thinking.
+     *
+     * Showing both is the point. Before this the tool name *replaced* the verb,
+     * so a long tool call sat on one string and a spinner that has stopped
+     * spinning reads as a session that has stopped working — but dropping the
+     * tool name to keep the verb moving would have traded the informative half
+     * for the decorative one. `Percolating… Reading runner.js` gives up neither,
+     * and lets the verb keep drifting straight through a call of any length.
+     *
+     * @param {string|null} [detail] what is specifically happening, or null for
+     *   thinking with nothing more to say.
+     */
+    _work(detail = null) {
+        // Drawn once when a turn starts working and then left to the timer.
+        // Redrawing it here as well would change both halves at once on every
+        // tool call, and the detail is already the half that says what moved.
+        if (!this._verb) this._verb = this.thinking(this.cwd, null);
+        this._detail = detail;
+        this._say();
+    }
+
+    /** The timer firing: a new verb, the same detail. */
+    _drift() {
+        this._verb = this.thinking(this.cwd, this._verb);
+        this._say();
+    }
+
+    /**
+     * Put the two halves on the wire, and arm the next drift.
+     *
+     * With no verb — `randomize: false`, or no group that resolved — this is
+     * exactly the string the app showed before any of it existed: the detail
+     * alone, or `Thinking…`. That is the whole reason Spinner#pick answers null
+     * rather than a fallback.
+     */
+    _say() {
+        const verb = this._verb;
+        const detail = this._detail;
+        let activity;
+        if (verb && detail) {
+            // `Writing…` already ends in one, and `Percolating… Writing…` reads
+            // like a stutter. One ellipsis to a label.
+            activity = `${verb}… ${detail.replace(/…$/, '')}`;
+        } else if (verb) {
+            activity = `${verb}…`;
+        } else {
+            activity = detail || 'Thinking…';
+        }
+
+        this._setState('busy', activity, true);
+        const ms = this.rerollAfter(this.cwd);
+        // Nothing to drift towards without a verb, and nothing to drift to if
+        // the interval is off.
+        if (verb && ms > 0) {
+            this._reroll = setTimeout(() => this._drift(), ms);
+            // Never a reason to hold the process open, the same as the pool's
+            // eviction sweep.
+            this._reroll.unref();
+        }
+    }
+
+    /**
+     * @param {boolean} [work] whether this is the pair above talking. Anything
+     *   else — a question waiting on a person, an API retry, starting, going
+     *   idle, stopping — is not work with a verb in front of it, so it clears
+     *   both halves. One line here rather than a rule at every call site.
+     */
+    _setState(state, activity, work = false) {
+        if (this._reroll) { clearTimeout(this._reroll); this._reroll = null; }
+        if (!work) { this._verb = null; this._detail = null; }
+
         const changed = this.state !== state || this.activity !== activity;
         // Stamped once per turn, not on every activity change, so the elapsed
         // time the UI shows covers the whole turn.
@@ -995,6 +1186,12 @@ class Runner extends EventEmitter {
             sessionId: this.sessionId,
             state: this.state,
             activity: this.activity,
+            // The two halves `activity` is composed of, so a surface too narrow
+            // for both can choose. The rail is the one that does: it has room
+            // for about twenty characters, and the informative half is `detail`.
+            // Everything wider just draws `activity` and needs neither of these.
+            verb: this._verb,
+            detail: this._detail,
             model: this.model,
             permissionMode: this.permissionMode,
             cwd: this.cwd,
@@ -1008,7 +1205,13 @@ class Runner extends EventEmitter {
             // status event carries this, so it stays a list of what is still
             // waiting — the message being answered is on its way to the transcript
             // and is read from there like any other.
-            queue: this.queue.map(q => ({ id: q.id, text: q.text, at: q.at })),
+            // `attachments` rides along so a chip can say a message has files on it,
+            // and so editing one puts them back on the composer rather than dropping
+            // them on the floor. Metadata only — the base64 is read at flush time and
+            // never travels on a status event.
+            queue: this.queue.map(q => ({
+                id: q.id, text: q.text, at: q.at, attachments: q.attachments || [],
+            })),
             // A window opening onto a session that is already blocked on an ask
             // has to be able to draw the card without having seen the event.
             pendingPermission: this.pendingPermission ? publicAsk(this.pendingPermission) : null,
@@ -1108,6 +1311,13 @@ class RunnerPool extends EventEmitter {
         // listening decides between blocking on a person and denying, so
         // guessing "yes" here would hang turns nobody is watching.
         this.hasViewer = () => false;
+
+        // And what a turn in progress calls itself — replaced by the server
+        // with bridge/spinner.js, which reads the groups the user enabled. No
+        // verb is a real answer: a pool built without a server says exactly what
+        // this app said before there were any.
+        this.thinking = () => null;
+        this.rerollAfter = () => 0;
     }
 
     get(sessionId) {
@@ -1138,7 +1348,12 @@ class RunnerPool extends EventEmitter {
 
         this._evictTo(MAX_LIVE - 1);
 
-        r = new Runner({ sessionId, cwd, model, permissionMode, isNew, fork, caps: this.caps });
+        // Delegated rather than handed over, so a runner asks the pool afresh
+        // every time: settings change under a live session, and the answer
+        // should not be the one that was true when it started.
+        r = new Runner({ sessionId, cwd, model, permissionMode, isNew, fork, caps: this.caps,
+            thinking: (dir, last) => this.thinking(dir, last),
+            rerollAfter: (dir) => this.rerollAfter(dir) });
         // Read through `r.sessionId` rather than closing over the id it was
         // created with: a fork changes it, and the viewer check has to follow.
         r.hasViewer = () => this.hasViewer(r.sessionId);

@@ -214,8 +214,23 @@ function readEntry(file) {
         // How it was started: 'cli', 'vscode', 'claude-sessions' (us), …
         entrypoint: str(raw.entrypoint),
         // A human label Claude Code already derived. Used as a title source for
-        // a session whose transcript has not produced one.
+        // a session whose transcript has not produced one — and, since cross-
+        // session messaging arrived, as the session's *address*: `SendMessage`
+        // takes a peer's name and there is no other way to say who you mean.
         name: str(raw.name),
+        // 'derived' when Claude Code made the name up from the directory,
+        // 'collision' when it had to break a tie. Worth showing beside a name
+        // the user is about to paste into a message, because a derived one is
+        // not a name anybody chose and may not mean what it looks like.
+        nameSource: str(raw.nameSource),
+        // Whether this session is listening for messages from other sessions.
+        // **Kept as a boolean, not as the path.** Nothing in this app dials that
+        // socket — the peer protocol is internal to Claude Code and versioned
+        // (`peerProtocol`), so reading it degrades to a missing field while
+        // writing to it would break outright. All we want to know is whether
+        // offering this session as a recipient would be offering something real.
+        addressable: typeof raw.messagingSocketPath === 'string' && !!raw.messagingSocketPath,
+        peerProtocol: num(raw.peerProtocol),
         status: str(raw.status),
         version: str(raw.version),
         startedAt: num(raw.startedAt),

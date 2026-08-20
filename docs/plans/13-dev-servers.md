@@ -62,6 +62,97 @@ file.
 For servers the app did *not* start there is no log to read. Say so plainly
 rather than showing an empty panel.
 
+### B2. Whose port is it — settled
+
+> **Built.** Not in the original plan, because the original plan did not realise
+> attribution was the problem.
+
+Everything above assumes the chips on a session are that session's ports. They
+were not. `enrich` ended in `ranked.filter(p => p.listening)`, so *any* port a
+transcript mentioned became a live chip the moment anything on the machine
+answered on it — and the ranking above it never gated the list at all. A
+`curl localhost:5001` in one worktree lit up green because another worktree's
+vite was on 5001. No amount of scoring fixes that, because "is it listening" is a
+fact about the machine and the score is a fact about a conversation.
+
+The kernel knows the answer: `ss` gives the pid holding a port, `/proc/<pid>/cwd`
+gives its directory, and `workspaceOf()` turns that into a worktree or checkout.
+A port belongs to the workspace its process is in. Sessions elsewhere do not see
+it, whatever their transcript says.
+
+Ancestry — walk the holder's parents until you reach the session's `claude` —
+looks like the better answer and is not: a backgrounded dev server is reparented
+to init the moment its launching shell exits. Measured on this machine, every
+agent-started server had systemd as its ancestor and not one was traceable.
+
+Two things the kernel cannot settle, and what they fall back to:
+
+- **No Linux pid** — a Windows-side server on the mirror. Falls back to this
+  session's own transcript, and only its strong end, marked `unverified`.
+- **A dead port** — nothing holds it. Kept only on strong own-transcript
+  evidence *and* only if DevBrowser's name for it is not another worktree's.
+  That last rule exists because `pgrep -f "vite dev --port 5002"` reads as a
+  start command to any regex looking for one.
+
+Ports held by a bridge or a `claude` are dropped outright. The everyday instance
+runs in the main checkout, so a session there was being offered a green chip —
+and a stop button — for the app it was being displayed in.
+
+### B3. Which port does it get — settled
+
+> **Built.** Also not in the original plan, and for the same reason: allocation
+> looked like a solved problem because `isFree()` was never wrong about a socket.
+
+A dev server for one worktree came up on the port another worktree's had, and
+took its DevBrowser tab with it. The reconstruction, from the run records and
+both transcripts:
+
+| | |
+|---|---|
+| 09:58 | the app starts `Dev server (PROD DB)` for `training-video-scripts` on **5001** |
+| 10:21 | that worktree's agent kills the run and restarts vite itself in the background, then titles the tab `training-videos (PROD DB)` |
+| ~10:30 | the agent's background server dies with its session |
+| 10:35 | the app starts the same command for `bank-accounts`, is handed **5001**, and re-titles the tab |
+
+At 10:35 the port was genuinely free — no `EADDRINUSE`, and vite's `--strictPort`
+never fired. The socket test was right. What was wrong was everything around it:
+
+- **First-fit from the bottom of the range, with no memory.** Every worktree of a
+  project scans from the same low port, so whichever server restarts next takes
+  it. `titles.json` had the other half of the fingerprint: 5001 *and* 5002 both
+  named `PROD bank-accounts`, because that run had been on 5002, restarted, hopped
+  down, and orphaned its own tab on the way.
+- **Free is not the same as unclaimed.** A tab named for another worktree, a run
+  record from one, and the port memory of the other bridge are all evidence that
+  a free port is somebody's. None of it was consulted.
+
+So `allocate()` now takes `prefer` (tried first, in order) and `avoid` (used only
+when the alternative is refusing to start), and remembers key → port in
+`STATE_DIR/ports.json` — one file shared with the other bridge on purpose, since
+that is the only thing that stops two instances homing onto the same port.
+`runs.js` supplies the policy, because the claims are about workspaces and tabs:
+its own remembered port first, then a tab already carrying this command's name
+(which is what survives losing the memory file); against it, other keys'
+remembered ports, other workspaces' run records, and tabs named for anything
+else. A tab name is deliberately the softer evidence of the two — anyone can set
+one from a shell — so it makes a port a last resort but cannot hand over one a
+record of allocation already claims. When a command does move ports, the title it
+left behind is cleared, provided it is still its own name and nothing is
+listening there.
+
+One real hole turned up underneath all this, measured rather than reasoned: a
+listener bound to `::1` alone passed both tests. `bindable()` on the wildcard
+succeeds next to it and 127.0.0.1 answers nothing, so the port read as free and
+would have been handed out from under a running server. `isFree()` now also
+consults the kernel's listen table — one `ss` sweep per `allocate()`, which sees
+every local socket whatever it is bound to — and probes `::1` as well as
+127.0.0.1. `test/ports.test.js` holds a `::1` port and demands it be skipped.
+
+What is still not closed: two bridges can pick the same port in the same moment.
+The shared memory file narrows it; only a lock would close it, and the failure is
+already loud — the log says the address is in use, the button goes red, and
+clicking again gets a different port.
+
 ### C. Naming, taken seriously
 
 The machine notes for this box are emphatic that DevBrowser tabs are identified

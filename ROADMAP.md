@@ -41,7 +41,7 @@ These come out of how the app already works, and every plan respects them.
 | 6 | ~~[Multi-session dashboard](docs/plans/06-dashboard.md)~~ — **built, as *Live*** | `bridge/overview.js` + the `Live` panel. Named *Live* because *Dashboard* was already the work-in-flight board (10). One SSE `overview` event, one timer, needs-you first, and a tool permission is answered from the card. |
 | 7 | [Transcript view: todos, error markers, virtualization](docs/plans/07-transcript-view.md) | Long sessions are slow to open and hard to navigate, and the todo list — the best summary of what an agent is doing — is buried in a collapsed block. Task progress is already read for the Live cards: `bridge/tasks.js` reads `~/.claude/tasks/<id>/`, which is the current list rather than something reconstructed from the transcript. |
 | 8 | [Branch from a turn](docs/plans/08-branch-from-turn.md) | Forking is already implemented end to end; it just isn't reachable from a point in history. |
-| 9 | [Composer](docs/plans/09-composer.md) | `@` files, `/` commands, images, a visible send queue, retry, snippets. |
+| 9 | [Composer](docs/plans/09-composer.md) | `@` files, `/` commands, images, a visible send queue, retry, snippets. The `/` half of A shipped, and `@` now exists for **sessions** — the picker and its group headings are built, so the file half is a second source rather than a second menu. B shipped as **files**, not just images: paste or drop anything, it lands in `attached_assets/` at the root of the session's checkout, and an image goes inline as well so it needs no `Read`. D and E are what is left. |
 
 ## Tier 3 — the surrounding workflow
 
@@ -50,7 +50,7 @@ These come out of how the app already works, and every plan respects them.
 | 10 | [Code and git](docs/plans/10-code-and-git.md) | "What did this agent actually change" currently means scrolling. Part of the git side exists: `bridge/dashboard.js` already runs `git status --porcelain=v2` per directory, cached, for the dashboard — the primitives to extract into `bridge/git.js` are there. |
 | 11 | [Labels and session info](docs/plans/11-labels-and-session-info.md) | Auto-titles are often bad, and the `system/init` message knows exactly which config produced a session's behaviour. |
 | 12 | [Export](docs/plans/12-export.md) | Sharing what an agent did without screenshotting it. |
-| 13 | [Dev servers](docs/plans/13-dev-servers.md) | We detect ports but can't act on them. §A's start half and §B are **superseded by 17** — a declared command beats one scraped from Bash traffic. §C and §D still stand. |
+| 13 | [Dev servers](docs/plans/13-dev-servers.md) | We detect ports but can't act on them. §A's start half and §B are **superseded by 17** — a declared command beats one scraped from Bash traffic. §C and §D still stand. Attribution is no longer guessed: a chip is shown only when the kernel says the port's process runs in this session's workspace. |
 | 17 | ~~[Commands a project declares](docs/plans/17-project-commands.md)~~ — **built** | `.tgxcode/commands.json` gives a project a row of buttons in the conversation header. `bridge/commands.js` reads it, `bridge/ports.js` finds a free port in the declared range, `bridge/runs.js` runs it on the same pty terminals use, and the output gets a tab in the terminal pane. |
 
 ## Tier 4 — worth doing, with caveats
@@ -79,6 +79,38 @@ are what is left of tier 1**, and both are independent of everything else.
 else wanting "what is happening right now" should read, rather than growing a
 second answer to the same question.
 
+## Landed since this was written
+
+None of these had a plan; they came out of the same observation, that work
+crossing a session boundary had nowhere to go.
+
+- **Suggested follow-ups.** An agent files the next piece of work as a card with
+  the prompt already written, through the one tool this app gives a session
+  (`bridge/suggest-mcp.js`). The offer is a tool call in the transcript, so the
+  card is derived rather than stored; only *started or dismissed* is the app's,
+  and that sits beside `flags.json`. The offers are now collected by the index
+  rescan as well, so `GET /api/suggestions` answers about every session at once
+  and a task no longer needs its conversation open to be found — still derived,
+  so it still goes when the transcript does.
+- **The task board.** The view the entry above was still missing. `bridge/taskboard.js`
+  puts open tasks beside every un-archived session in a column per state — needs
+  you, working, suggested, idle — so "what is left" is one screen rather than a
+  rail, a live board and a panel that could each only answer part of it. Derived
+  like everything else: it reads the index, the runner pool and the registry, and
+  no transcripts at all, which is what lets it be several times wider than the
+  live board. It holds the rail's ordering rule per column, because a board that
+  reshuffled while you read it would repeat the exact mistake that rule exists to
+  prevent.
+- **Sessions talking to each other.** Claude Code ships the transport — a socket
+  per session, advertised in the registry `bridge/registry.js` already reads, and
+  agents addressing each other by name. This app builds none of that. It offers
+  the names in the composer with `@`, and it renders both halves of the
+  conversation — including the receiving half, which `transcript.js` had been
+  dropping on the floor because Claude Code marks an inbound message `isMeta`.
+
+The last is the shape 15 recommends for scheduling and got right: **do not
+rebuild it, build a view over it.**
+
 ## Deliberately not doing
 
 - **Rendering from the runner's token stream.** Tempting for per-token
@@ -87,3 +119,11 @@ second answer to the same question.
 - **Editing transcripts.** Not ours to write.
 - **Reimplementing what `claude` already does well.** The bridge should drive
   the CLI, not reproduce its logic.
+- **Speaking the peer-messaging socket.** The bridge could dial
+  `$XDG_RUNTIME_DIR/cc-socks/<pid>.sock` itself — the auth key is on disk beside
+  the registry entry — and inject a message into any live session, including ones
+  it holds no process for. It is deliberately not done: the protocol is internal
+  and versioned (`peerProtocol: 1`), so *reading* the registry degrades to a
+  missing field while *writing* to the socket would break outright. It would also
+  make a browser client able to put words in the mouth of any session on the
+  machine, which is a bigger door than this app needs open.

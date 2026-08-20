@@ -103,6 +103,7 @@ function build(index, pool, registry, { includeTest = false } = {}) {
     tasks.keepOnly(ids);
     keepOnly(devCache, ids);
     keepOnly(devLast, ids);
+    keepOnly(devFold, ids);
 
     return {
         at: Date.now(),
@@ -211,7 +212,7 @@ function card(index, s, runner, reason) {
     const rec = index.get(s.sessionId);
     const file = rec ? rec.file : null;
 
-    return {
+    const c = {
         sessionId: s.sessionId,
         reason,
         title: s.title,
@@ -264,6 +265,99 @@ function card(index, s, runner, reason) {
         // Whatever the last dev-server pass left; null until the first one runs.
         devservers: devLast.get(s.sessionId) || null,
     };
+
+    c.sig = fingerprint(c);
+    return c;
+}
+
+/**
+ * A card's contents, as one short string.
+ *
+ * The board is pushed once a second and almost every card in it is identical to
+ * the one before — an agent working moves one card's activity line and leaves
+ * the other thirty-five alone. Without this the client has no way to know that,
+ * so it tears down and rebuilds every card on every push. This is what lets it
+ * keep the nodes it already has; see `renderLive` in web/app.js.
+ *
+ * Nothing here needs the exclusion `signature` makes for `at`. Every field on a
+ * card is a fact that stays put until something happens — timestamps out of the
+ * transcript, a fixed `busySince` the UI counts up from itself — so a card only
+ * differs when the session did something. `busySince` in particular has to stay
+ * in: a queued message starting a second turn moves it without the runner state
+ * ever leaving `busy`, and a card that ignored that would count the new turn
+ * from the old turn's start.
+ *
+ * FNV-1a rather than a crypto hash: this runs 36 times a second forever, the
+ * strings are a kilobyte or two, and nothing here is adversarial — a collision
+ * costs one stale card until the next thing that session does.
+ */
+function fingerprint(card) {
+    const json = JSON.stringify(card);
+    let h = 0x811c9dc5;
+    for (let i = 0; i < json.length; i++) {
+        h ^= json.charCodeAt(i);
+        h = Math.imul(h, 0x01000193);
+    }
+    return (h >>> 0).toString(36);
+}
+
+/**
+ * The port fold per session: where in its transcript we have read to, and what
+ * had been found by then. See `foldPorts`.
+ * @type {Map<string, {offset: number, found: Map<number, object>}>}
+ */
+const devFold = new Map();
+
+/**
+ * How far back before the last offset each pass re-reads.
+ *
+ * A tool call and its result are consecutive lines, but an append can land
+ * between them — `buildEvents` says so itself, "this happens on every live
+ * tail" — and a result read on its own is a patch with no command attached, so
+ * a server banner in it would be attributed to nothing. Overlapping the window
+ * puts the pair back together. `detect` folds monotonically, so re-reading the
+ * same lines cannot change the answer; the only cost is the bytes.
+ */
+const FOLD_LOOKBACK = 64 * 1024;
+
+/**
+ * Every port this session has mentioned, folded from wherever we left off.
+ *
+ * The first pass reads the transcript whole, because a server started an hour
+ * ago and still listening is only visible in the part that has already been
+ * written. Every pass after that reads the bytes appended since — which while
+ * an agent works is a few kilobytes, against tens of megabytes for the file.
+ *
+ * That difference is the whole point. This used to call `index.read` on every
+ * session on the board every fifteen seconds, and `index.read` is a synchronous
+ * read-and-parse of the entire transcript: measured at ~200ms and ~150MB of
+ * garbage for one 48MB session on this machine, with the board's own pinned
+ * card guaranteeing that session was in the list whether or not it was running.
+ * Each of those was one uninterruptible block on the bridge's only thread, so
+ * every turn, every tail and every request waited behind it.
+ *
+ * A transcript that shrank has been replaced; `readSince` reports that, and the
+ * fold starts again rather than carrying ports from a file that no longer says
+ * so.
+ */
+function foldPorts(index, sessionId) {
+    const prev = devFold.get(sessionId);
+    if (prev) {
+        const from = Math.max(0, prev.offset - FOLD_LOOKBACK);
+        const delta = index.readSince(sessionId, from);
+        if (delta && !delta.reset) {
+            const found = devservers.detect(delta.events, prev.found);
+            devFold.set(sessionId, { offset: delta.offset, found });
+            return found;
+        }
+        if (!delta) return null;
+    }
+
+    const data = index.read(sessionId);
+    if (!data) return null;
+    const found = devservers.detect(data.events);
+    devFold.set(sessionId, { offset: data.offset, found });
+    return found;
 }
 
 /**
@@ -273,11 +367,10 @@ function card(index, s, runner, reason) {
  * and asks DevBrowser for its tab names, which is far too much to do at the rate
  * the board redraws. Call it on a timer; `build` picks up whatever it last left.
  *
- * One session at a time, with the loop given a chance to breathe between them.
- * `index.read` is a synchronous read-and-parse of the whole transcript — tens of
- * megabytes for a long session — so firing all of them off together stalls
- * everything else the bridge is doing, including the turns it is running, for as
- * long as the slowest of them takes. Spread out, the same work is invisible.
+ * One session at a time, with the loop given a chance to breathe between them —
+ * still worth doing now that `foldPorts` reads only the appended bytes, because
+ * the first pass over a session is a whole transcript and the port probes and
+ * DevBrowser round trip are still real IO.
  */
 async function refreshDevServers(index, ids) {
     if (!ids.length) return false;
@@ -291,13 +384,14 @@ async function refreshDevServers(index, ids) {
         const before = JSON.stringify(devLast.get(sessionId) || null);
         try {
             const next = await cached(devCache, sessionId, DEVSERVER_TTL_MS, async () => {
-                const data = index.read(sessionId);
-                if (!data) return null;
+                const ports = foldPorts(index, sessionId);
+                const summary = ports && index.summary(sessionId);
+                if (!summary) return null;
                 const found = await devservers.enrich(
-                    devservers.detect(data.events), titles, {
-                        worktreeName: data.summary.worktree && data.summary.worktree.name,
-                        projectName: data.summary.projectName,
-                        lastTs: data.summary.lastTs,
+                    [...ports.values()], titles, {
+                        worktreeName: summary.worktree && summary.worktree.name,
+                        projectName: summary.projectName,
+                        lastTs: summary.lastTs,
                     });
                 // Only the ports something is actually answering on. `enrich`
                 // also returns a few recently-dead ones, which are useful
@@ -315,4 +409,4 @@ async function refreshDevServers(index, ids) {
 /** Yield to the event loop, so a long pass is not one long block. */
 const breathe = () => new Promise(resolve => setImmediate(resolve));
 
-module.exports = { build, refreshDevServers, recentSince, DEVSERVER_TTL_MS };
+module.exports = { build, refreshDevServers, recentSince, activityAt, DEVSERVER_TTL_MS };
