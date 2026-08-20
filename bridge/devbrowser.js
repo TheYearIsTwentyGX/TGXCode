@@ -25,6 +25,7 @@ const TIMEOUT_MS = 2500;
 
 let appDataCache = null;      // WSL path to %APPDATA%
 let portCache = null;         // {port, at}
+let titlesCache = null;       // {titles, at} — only the file fallback below
 const PORT_CACHE_MS = 5000;
 
 // ---------------------------------------------------------------------------
@@ -161,9 +162,35 @@ async function health() {
     return { running: true, port: res.json.port || await controlPort(), version: res.json.version };
 }
 
+/**
+ * DevBrowser's saved names, read from its own store.
+ *
+ * The fallback for titles() when the control server is not answering — which is
+ * also when the answer matters most: a port named by an agent hours ago, with
+ * DevBrowser since closed, is exactly the claim runs.js must not walk over. Only
+ * read, never written; the file belongs to the other app. Cached as briefly as
+ * the control port, because it lives on the Windows filesystem.
+ */
+async function savedTitles() {
+    if (titlesCache && Date.now() - titlesCache.at < PORT_CACHE_MS) return titlesCache.titles;
+    const titles = {};
+    const dir = await dataDir();
+    if (dir) {
+        try {
+            const j = JSON.parse(fs.readFileSync(path.join(dir, 'titles.json'), 'utf8'));
+            for (const [port, name] of Object.entries((j && j.titles) || {})) {
+                if (typeof name === 'string' && name) titles[port] = name;
+            }
+        } catch { /* never written, or not readable from here */ }
+    }
+    titlesCache = { titles, at: Date.now() };
+    return titles;
+}
+
 async function titles() {
     const res = await request('GET', '/titles');
-    return res.ok && res.json ? (res.json.titles || {}) : {};
+    if (res.ok && res.json) return res.json.titles || {};
+    return savedTitles();
 }
 
 async function ports() {

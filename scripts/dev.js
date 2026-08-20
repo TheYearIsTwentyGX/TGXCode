@@ -22,16 +22,39 @@ const ports = require('../bridge/ports');
 const repo = path.join(__dirname, '..');
 const wantsWindow = !process.argv.includes('--no-window');
 
+// What this checkout's dev bridge is remembered as. One key per worktree, so
+// each agent's instance comes back to its own port — the DevBrowser tab named
+// for a worktree then keeps pointing at that worktree's bridge instead of at
+// whichever one restarted last.
+const memoryKey = `dev:${repo}`;
+
 /**
- * First free port at or above `from`, so two agents can each have their own.
+ * A port for this checkout's bridge: the one it had last time if it is still
+ * free, otherwise the first free port at or above `from` that no other checkout
+ * has a claim on.
+ *
+ * `sticky` is off when a port was actually asked for. `npm run dev --
+ * --port=45905` names a port, and honouring a remembered one over it would make
+ * the flag mean nothing.
  *
  * `denylist: null` because this is picking a port for a *bridge*, not for a
  * project's dev server: the config denylist contains the bridge port, and
  * `CLAUDE_SESSIONS_PORT=45899 npm run dev` is a request for that exact one.
  */
-function pickPort(from) {
-    return ports.allocate(
-        { lo: from, hi: from + 19, skip: [DEFAULT_PORT], denylist: null }, 'npm run dev');
+function pickPort(from, sticky) {
+    const remembered = sticky ? ports.rememberedPort(memoryKey) : null;
+    const avoid = new Set();
+    for (const [key, port] of ports.claims()) {
+        if (key !== memoryKey) avoid.add(port);
+    }
+    return ports.allocate({
+        lo: from,
+        hi: from + 19,
+        skip: [DEFAULT_PORT],
+        denylist: null,
+        prefer: remembered == null ? [] : [remembered],
+        avoid,
+    }, 'npm run dev');
 }
 
 function findExe() {
@@ -61,14 +84,17 @@ function askedPort() {
 }
 
 (async () => {
-    const requested = askedPort() || Number(process.env.CLAUDE_SESSIONS_PORT) || DEV_PORT;
+    // Named, as against defaulted: a port somebody typed outranks a remembered
+    // one, even when it happens to be the development default.
+    const named = askedPort() || Number(process.env.CLAUDE_SESSIONS_PORT) || 0;
+    const requested = named || DEV_PORT;
     if (requested === DEFAULT_PORT) {
         console.error(`Refusing to run development on ${DEFAULT_PORT} — that is the `
             + 'everyday instance. Leave CLAUDE_SESSIONS_PORT unset and --port off.');
         process.exit(1);
     }
 
-    const port = await pickPort(requested);
+    const port = await pickPort(requested, !named);
     if (!port) {
         console.error(`No free port near ${requested}.`);
         process.exit(1);
@@ -79,6 +105,11 @@ function askedPort() {
         stdio: 'inherit',
         env: { ...process.env, CLAUDE_SESSIONS_PORT: String(port) },
     });
+
+    // Remembered only once it has stayed up — a bridge that lost a race for the
+    // port exits at once, and `close` takes this process with it before the
+    // timer fires, so nothing wrong gets written down.
+    setTimeout(() => ports.remember(memoryKey, port), 3000).unref();
 
     const origin = `http://127.0.0.1:${port}`;
     console.log('');
