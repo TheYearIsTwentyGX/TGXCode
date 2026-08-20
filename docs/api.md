@@ -295,6 +295,12 @@ waiting, running }`, already ordered needs-you-first. A card carries `reason`
 (`ask`/`error`/`here`/`elsewhere`/`pinned`/`recent`), `title`, `projectName`, `worktree`,
 `runner`, `live`, `ask`, `headlines[]`, `tasks{done,total,current}`, `devservers`.
 
+Every card also carries `sig`, a short hash of the rest of the card. The board is pushed
+once a second and almost all of it is identical to the push before, so a client that keeps
+its nodes can compare `sig` and rebuild only the cards that moved — which is what the web
+UI does. Treat it as opaque: it is a fingerprint, not an identifier, and its only promise
+is that it changes when something else on the card does.
+
 `waiting` is the count worth putting on a badge.
 
 `sessions` is "running now, plus pinned" and is the answer to *who is blocked on me*.
@@ -311,10 +317,12 @@ work. Archived sessions are left out, and anything already in `sessions` cannot 
 here. Capped at 12 with the remainder in `recentHidden`, as `sessions` is capped at 24 with
 `hidden`.
 
-`devservers` is not refreshed for a recent card: the probe behind it costs a full
-transcript read per session every 15s, and that budget goes to what is running. A session
-that has just gone quiet keeps the chips its last pass found — a dev server usually
-outlives the turn that started it — and one that was never on the board has none.
+`devservers` is not refreshed for a recent card, and that budget goes to what is running.
+A session that has just gone quiet keeps the chips its last pass found — a dev server
+usually outlives the turn that started it — and one that was never on the board has none.
+The probe costs a whole transcript read the first time it sees a session and only the
+bytes appended since on every pass after; port detection folds forward, so there is
+nothing to recompute from the beginning.
 
 Also pushed as the `overview` SSE event, so most clients never call this — but it is
 the right answer to "what is happening right now", and anything that wants that

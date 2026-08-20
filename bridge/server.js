@@ -152,7 +152,10 @@ function stopWatch(sub) {
 
 const OVERVIEW_MS = 1_000;
 
-const board = { timer: null, devTimer: null };
+// `last` is whatever `buildBoard` most recently produced, so that the things
+// which only want to know *which* sessions are on the board do not each build
+// one of their own. It is at most a second old whenever the tick is running.
+const board = { timer: null, devTimer: null, last: null };
 
 function boardWatchers() {
     return [...clients.values()].filter(c => c.overview);
@@ -177,11 +180,13 @@ function syncBoard() {
         clearInterval(board.devTimer);
         board.timer = null;
         board.devTimer = null;
+        board.last = null;
     }
 }
 
 function buildBoard() {
-    return overview.build(index, pool, registry, { includeTest: cfg.IS_DEV });
+    board.last = overview.build(index, pool, registry, { includeTest: cfg.IS_DEV });
+    return board.last;
 }
 
 /**
@@ -232,7 +237,11 @@ function sendBoardNow(client) {
 
 async function tickDevServers() {
     if (!board.timer) return;
-    const ids = buildBoard().sessions.map(s => s.sessionId);
+    // The board the 1Hz tick just built, not a second one. Building it again
+    // walks the whole index and takes a tail read per card, all of it thrown
+    // away except the ids — and then a third time when the chips have moved.
+    // `last` is empty only on the pass `syncBoard` fires before the first tick.
+    const ids = (board.last || buildBoard()).sessions.map(s => s.sessionId);
     try {
         if (await overview.refreshDevServers(index, ids)) tickBoard();
     } catch { /* nothing here is worth failing a tick over */ }
@@ -1074,7 +1083,7 @@ async function api(req, res, url, pathname, who) {
             const data = index.read(sessionId);
             if (!data) return send(res, 404, { error: 'session not found' });
             const s = data.summary;
-            const candidates = devservers.detect(data.events);
+            const candidates = [...devservers.detect(data.events).values()];
             const titles = await devbrowser.titles();
             const out = await devservers.enrich(candidates, titles, {
                 workspace: workingDir(s),

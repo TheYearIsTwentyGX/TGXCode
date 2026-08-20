@@ -63,9 +63,17 @@ const SCORES = {
  * Collect port evidence from a session's render events.
  * @returns {Array} candidates, richest evidence first
  */
-function detect(events) {
-    /** @type {Map<number, object>} */
-    const found = new Map();
+function detect(events, prior) {
+    /**
+     * The fold so far, when there is one. Every `record` below is monotonic —
+     * a strictly greater score wins, a timestamp only moves forward — so
+     * feeding the same event in twice cannot change the answer. That is what
+     * lets the live board fold each append onto the previous result instead of
+     * re-reading whole transcripts, and what makes a lookback over the last
+     * stretch of a file safe rather than merely cheap.
+     * @type {Map<number, object>}
+     */
+    const found = prior || new Map();
 
     const touch = (port) => {
         const p = Number(port);
@@ -157,7 +165,7 @@ function detect(events) {
         }
     }
 
-    return [...found.values()];
+    return found;
 }
 
 function* matchAll(text, re) {
@@ -211,7 +219,7 @@ const STARTED_IT = SCORES.portFlag;
  * held by a process in another worktree is not this session's dev server, however
  * strong the evidence that this session once mentioned it.
  *
- * @param {Array}  candidates  from detect()
+ * @param {Array}  candidates  the values of the map from detect()
  * @param {object} titles      DevBrowser's port -> name map
  * @param {object} session     {workspace, worktreeName, projectName, lastTs}
  */
