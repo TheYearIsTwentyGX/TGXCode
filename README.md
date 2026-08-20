@@ -754,7 +754,7 @@ not.
 | `bridge/terminal.js` | The pty, out of `script(1)` — a shell to type into, or a declared command |
 | `bridge/commands.js` | What a project declares in `.tgxcode/` |
 | `bridge/runs.js` | Running those commands, and keeping the record |
-| `bridge/ports.js` | Finding a free port, and holding it until something takes it |
+| `bridge/ports.js` | Finding a port that is free *and* unclaimed, holding it, and remembering it |
 | `bridge/devservers.js` | Port detection, ranking, and stopping a server |
 | `bridge/devbrowser.js` | DevBrowser control client |
 | `bridge/explorer.js` | Opens a WSL directory in File Explorer |
