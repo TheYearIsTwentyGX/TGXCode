@@ -100,6 +100,13 @@ const state = {
     openSeq: 0,             // bumped per open; a slow fetch checks it before drawing
     nodes: new Map(),       // event id -> {ev, node}
     tools: new Map(),       // tool_use id -> {ev, node}
+    // Just the ExitPlanMode calls among them, by id. `transcriptPlan` used to
+    // find the pending one by walking every tool in the session — thousands of
+    // them on a long transcript — and it is asked on every tail and every status
+    // tick, which is several times a second while a plan is on screen. There are
+    // never more than a handful of these, so the walk is over them instead. Ids
+    // rather than events: a result landing rebuilds the event in place.
+    plans: new Set(),
     // Settings for the open session's directory, from the bridge. Null until a
     // session is opened, when BOOT_PREFS is the answer.
     prefs: null,
@@ -230,6 +237,14 @@ const state = {
         // Half-written messages per card, held here rather than in the DOM so
         // they outlive the redraws the board does while agents work.
         drafts: new Map(),
+        // The cards already on screen, by session, with the `sig` the bridge
+        // stamped them with. This is what stops a push that moved one card from
+        // rebuilding all of them; see `liveCardFor`.
+        nodes: new Map(),
+        // The group sections, by key. Kept for the same reason and one more:
+        // re-parenting a card blurs whatever is focused inside it, so the
+        // containers have to stay put for the cards to be able to.
+        groups: new Map(),
         // Which way the board and the conversation divide the window:
         // 'bottom' stacks them, 'side' puts them next to each other. A property
         // of the window rather than of a session, like the terminal pane, so it
@@ -784,13 +799,23 @@ const WHERE = {
  * Only the words. That a session is working at all is said by the dot at the head
  * of the meta line, which is the part that has to survive a narrow rail — this
  * text is last in a row that does not wrap, so it is the first thing to go.
+ *
+ * `detail` before `activity`, and that is the one place in the app that unpicks
+ * the label. Everywhere else has room for `Percolating… Reading runner.js`;
+ * twenty-odd characters does not, and clipping it there would spend them all on
+ * the spinner verb and cut the tool name off the end — the decorative half
+ * surviving at the expense of the informative one. `detail` is that label
+ * without its verb, and it is null exactly when the verb is all there is to
+ * say, so the rail still shows a verb whenever nothing more specific is
+ * happening.
  */
 function activityBits(runner) {
     if (!runner) return [];
     return [
         el('span', { class: 'dot dot-act' }, '·'),
         el('span', { class: 'pulse' },
-            el('span', { class: 'pulse-t' }, clip(runner.activity || 'Working', 22))),
+            el('span', { class: 'pulse-t' },
+                clip(runner.detail || runner.activity || 'Working', 22))),
     ];
 }
 
@@ -923,6 +948,7 @@ function clearCurrent() {
     state.runner = null;
     state.nodes.clear();
     state.tools.clear();
+    state.plans.clear();
     state.run.length = 0;
     state.prefs = null;     // the next session's project may answer differently
     state.turns = [];
@@ -1057,6 +1083,7 @@ function beginOpen(summary, { keepDash = false } = {}) {
     state.runner = null;
     state.nodes.clear();
     state.tools.clear();
+    state.plans.clear();
     state.run.length = 0;
     state.prefs = null;     // the next session's project may answer differently
     state.turns = [];
@@ -1321,7 +1348,7 @@ function renderHeaderActions() {
 
 const SESSION_VIEW = {
     isAgent: false,
-    nodes: state.nodes, tools: state.tools,
+    nodes: state.nodes, tools: state.tools, plans: state.plans,
     get log() { return dom.log; },
     get scroll() { return dom.scroll; },
     // A getter, not the array: the run is emptied in place at four different
@@ -1388,6 +1415,7 @@ function appendEvents(events, view = SESSION_VIEW, { live = false } = {}) {
         }
         if (ev.kind === 'tool') {
             view.tools.set(ev.id, { ev, node });
+            if (view.plans && ev.name === 'ExitPlanMode') view.plans.add(ev.id);
             if (ev.name === 'Task' || ev.name === 'Agent') sawAgent = true;
         }
         if (ev.kind === 'user') {
@@ -2184,8 +2212,10 @@ const isTyping = (t) => !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA
 function transcriptPlan() {
     if (!state.current || state.runner) return null;
     let found = null;
-    for (const { ev } of state.tools.values()) {
-        if (ev.name !== 'ExitPlanMode' || ev.status !== 'pending') continue;
+    for (const id of state.plans) {
+        const entry = state.tools.get(id);
+        if (!entry || entry.ev.status !== 'pending') continue;
+        const { ev } = entry;
         if (!found || Date.parse(ev.ts) >= Date.parse(found.ts)) found = ev;
     }
     if (!found) return null;
@@ -3790,24 +3820,32 @@ function renderLive() {
         return;
     }
 
-    // The board is rebuilt whenever anything moves, which is constantly while
-    // agents are working — an activity line changing is enough. Somebody typing
-    // into a card would have the box pulled out from under them mid-word, so
-    // where the cursor was is noted and put back. The text itself survives in
-    // `drafts`; this is about the focus and the caret.
+    // The board is pushed whenever anything moves, which is constantly while
+    // agents are working — an activity line changing is enough. What changed is
+    // almost always one card, so `liveCardFor` keeps the nodes for the rest and
+    // `reconcile` moves only what actually differs. Somebody typing into a card
+    // is then untouched in the ordinary case; the save-and-restore below stays
+    // as the backstop for the passes that do have to rewrite a whole group.
     const active = document.activeElement;
     const typing = active && active.dataset && active.dataset.sendFor
         ? { id: active.dataset.sendFor, at: active.selectionStart, to: active.selectionEnd }
         : null;
     const scroll = { x: dom.liveBody.scrollLeft, y: dom.liveBody.scrollTop };
 
-    dom.liveBody.replaceChildren(...(grouped
+    freshCards = [];
+    reconcile(dom.liveBody, grouped
         ? liveGroups(d, compact)
-        : d.sessions.map(s => liveCard(s, false))));
+        : d.sessions.map(s => liveCardFor(s, false)));
     dom.liveBody.scrollLeft = scroll.x;
     dom.liveBody.scrollTop = scroll.y;
 
-    if (typing) {
+    // Anything not on the board any more, out of both caches — the same
+    // discipline `keepOnly` applies on the bridge, and without it a day's worth
+    // of cards is held alive by the map alone.
+    const live = new Set([...d.sessions, ...(d.recent || [])].map(s => s.sessionId));
+    for (const id of state.live.nodes.keys()) if (!live.has(id)) state.live.nodes.delete(id);
+
+    if (typing && document.activeElement !== active) {
         const box = dom.liveBody.querySelector(
             `[data-send-for="${CSS.escape(typing.id)}"]`);
         if (box) {
@@ -3815,7 +3853,85 @@ function renderLive() {
             box.setSelectionRange(typing.at, typing.to);
         }
     }
-    for (const box of dom.liveBody.querySelectorAll('.lsend-box')) grow(box, 30, 84);
+
+    // Sizing a composer means writing a height, reading `scrollHeight` and
+    // writing again — a forced synchronous layout, of a document that also
+    // holds the whole open transcript. Doing that per card per second is what
+    // made the board unusable beside a large session. Only a box that is both
+    // newly built and carrying a restored draft needs it: an empty one is the
+    // height its single row gives it, and one that survived the pass already
+    // has its height. Reads are batched between the writes so the run costs one
+    // layout rather than one each.
+    const boxes = [];
+    for (const node of freshCards) {
+        const box = node.querySelector('.lsend-box');
+        if (box && box.value) boxes.push(box);
+    }
+    if (boxes.length) {
+        for (const box of boxes) box.style.height = 'auto';
+        const heights = boxes.map(box => Math.max(30, Math.min(84, box.scrollHeight)));
+        boxes.forEach((box, i) => { box.style.height = `${heights[i]}px`; });
+    }
+}
+
+/**
+ * The cards built during the current pass, for the one thing that has to
+ * measure them after they are on screen.
+ */
+let freshCards = [];
+
+/**
+ * One card, reused when the bridge says it has not changed.
+ *
+ * Every card carries a `sig` — a hash of its own contents, from `fingerprint` in
+ * bridge/overview.js. So a push where one agent moved is a push where every other
+ * card is byte-identical to the one already on screen, and keeping those nodes is
+ * most of what makes the board affordable: `liveCard` builds thirty-odd elements
+ * with a listener on several of them, and building all of them once a second,
+ * beside a document that also holds the whole open transcript, was the cost.
+ *
+ * `compact` is part of the key because it changes what `liveCard` draws — a dock
+ * that has just been moved must not be served cards cut for the other shape.
+ */
+function liveCardFor(s, compact) {
+    const prev = state.live.nodes.get(s.sessionId);
+    if (prev && prev.sig === s.sig && prev.compact === compact) return prev.node;
+
+    const node = liveCard(s, compact);
+    state.live.nodes.set(s.sessionId, { sig: s.sig, compact, node });
+    freshCards.push(node);
+    return node;
+}
+
+/**
+ * Put `next` into `parent`, moving as few nodes as possible.
+ *
+ * Deliberately not `replaceChildren`: re-parenting a node blurs anything focused
+ * inside it, so a wholesale swap takes the caret out of a card composer on every
+ * push. Where the only difference is that some positions hold a freshly built
+ * node, those positions are swapped and the rest are left alone.
+ *
+ * A node already mounted in this parent turning up at a different index means
+ * the order changed rather than the contents, and an in-place swap would drop a
+ * card on the floor — so that falls back to the rewrite. It is rare, and when
+ * the order changes the board has visibly moved anyway.
+ */
+function reconcile(parent, next) {
+    const cur = parent.children;
+    if (cur.length === next.length) {
+        const swaps = [];
+        let inPlace = true;
+        for (let i = 0; i < next.length; i++) {
+            if (cur[i] === next[i]) continue;
+            if (next[i].parentNode === parent) { inPlace = false; break; }
+            swaps.push([next[i], cur[i]]);
+        }
+        if (inPlace) {
+            for (const [to, from] of swaps) parent.replaceChild(to, from);
+            return;
+        }
+    }
+    parent.replaceChildren(...next);
 }
 
 /**
@@ -3834,7 +3950,7 @@ function liveGroups(d, compact) {
     const pinned = d.sessions.filter(s => s.reason === 'pinned');
     const recent = d.recent || [];
 
-    return [
+    const shown = [
         // Only `recent` carries its own overflow. `hidden` is the board's cap
         // biting, and it bites the bottom of the rank order — pinned before
         // running — so the payload cannot say which of these two groups lost a
@@ -3843,21 +3959,54 @@ function liveGroups(d, compact) {
         ['live', 'Live', live, 0],
         ['recent', 'Recent activity', recent, d.recentHidden],
         ['pinned', 'Pinned', pinned, 0],
-    ].filter(([, , list]) => list.length)
-        .map(([key, label, list, hidden]) => liveGroup(key, label, list, hidden, compact));
+    ].filter(([, , list]) => list.length);
+
+    const sections = shown.map(([key, label, list, hidden]) =>
+        liveGroup(key, label, list, hidden, compact));
+
+    // A group that has emptied — the last thing you touched today falling out
+    // of the recent window — must not keep its section and its cards alive.
+    const keys = new Set(shown.map(([key]) => key));
+    for (const key of state.live.groups.keys()) {
+        if (!keys.has(key)) state.live.groups.delete(key);
+    }
+    return sections;
 }
 
-/** One headed segment of the board. */
+/**
+ * One headed segment of the board, kept between passes.
+ *
+ * The section and its heading are built once and then written to, rather than
+ * rebuilt: they are what the cards hang under, and a card that is re-parented
+ * loses the focus inside it however unchanged it is. So the containers stay put
+ * and `reconcile` decides what moves within them.
+ */
 function liveGroup(key, label, list, hidden, compact) {
-    return el('section', { class: 'live-group', 'data-group': key },
-        el('h2', { class: 'lgroup-head' },
-            el('span', { class: 'lgroup-label' }, label),
-            el('span', { class: 'lgroup-count' }, String(list.length)),
-            // Same promise the subtitle makes about the board as a whole: what
-            // fell off the end is reported, because a list that silently stops
-            // reads as the end of the list.
-            hidden ? el('span', { class: 'lgroup-more' }, `+${hidden} more`) : null),
-        el('div', { class: 'lgroup-body' }, list.map(s => liveCard(s, compact))));
+    let g = state.live.groups.get(key);
+    if (!g) {
+        const count = el('span', { class: 'lgroup-count' });
+        // Same promise the subtitle makes about the board as a whole: what fell
+        // off the end is reported, because a list that silently stops reads as
+        // the end of the list.
+        const more = el('span', { class: 'lgroup-more' });
+        const body = el('div', { class: 'lgroup-body' });
+        g = {
+            count,
+            more,
+            body,
+            section: el('section', { class: 'live-group', 'data-group': key },
+                el('h2', { class: 'lgroup-head' },
+                    el('span', { class: 'lgroup-label' }, label), count, more),
+                body),
+        };
+        state.live.groups.set(key, g);
+    }
+
+    g.count.textContent = String(list.length);
+    g.more.textContent = hidden ? `+${hidden} more` : '';
+    g.more.hidden = !hidden;
+    reconcile(g.body, list.map(s => liveCardFor(s, compact)));
+    return g.section;
 }
 
 /**
@@ -5808,7 +5957,10 @@ function connect() {
         // The rail's own copy, so a rebuild from the held order draws what the
         // patch below already put on screen rather than reverting it.
         const row = state.sessions.find(x => x.sessionId === s.sessionId);
-        if (row) row.runner = { state: s.state, activity: s.activity, queued: s.queued };
+        if (row) {
+            row.runner = { state: s.state, activity: s.activity,
+                detail: s.detail, queued: s.queued };
+        }
         const strip = dom.rail.querySelector(`[data-id="${CSS.escape(s.sessionId)}"]`);
         if (strip && row) patchStripStatus(strip, row);
     });
@@ -6248,14 +6400,30 @@ function jumpToTurn(t) {
     setTimeout(() => t.node.classList.remove('flash'), 1400);
 }
 
-/** Whichever turn the transcript is currently sitting in. */
+/**
+ * Whichever turn the transcript is currently sitting in.
+ *
+ * Binary search rather than a walk from the top. The turns are in document
+ * order, so "is this one above the edge" is monotonic, and the walk broke only
+ * at the first turn *below* the viewport — meaning it measured every turn above
+ * it. At the bottom of a long session that was one `getBoundingClientRect` per
+ * turn, each a forced layout of the whole transcript, on every scroll event.
+ * This is a fixed handful of measurements however long the session gets.
+ */
 function markActiveTurn() {
     if (!state.turns.length) return;
     const edge = dom.scroll.getBoundingClientRect().top + 60;
+    let lo = 0;
+    let hi = state.turns.length - 1;
     let active = 0;
-    for (let i = 0; i < state.turns.length; i++) {
-        if (state.turns[i].node.getBoundingClientRect().top > edge) break;
-        active = i;
+    while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (state.turns[mid].node.getBoundingClientRect().top > edge) {
+            hi = mid - 1;
+        } else {
+            active = mid;
+            lo = mid + 1;
+        }
     }
     if (active === state.activeTurn) return;
     state.activeTurn = active;
@@ -8835,11 +9003,22 @@ dom.queueList.addEventListener('dragover', onQueueDragOver);
 dom.queueList.addEventListener('drop', (e) => e.preventDefault());
 
 // Stop auto-scrolling the moment the user scrolls away from the bottom.
+//
+// Coalesced into one frame, and passive: `markActiveTurn` measures the document
+// and scroll fires far faster than the screen can show the result, so running it
+// per event was paying for work nobody sees. `passive` because this never calls
+// preventDefault, and saying so lets the compositor scroll without waiting for
+// the handler at all.
+let scrollFrame = 0;
 dom.scroll.addEventListener('scroll', () => {
     const sc = dom.scroll;
     state.pinned = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 90;
-    markActiveTurn();
-});
+    if (scrollFrame) return;
+    scrollFrame = requestAnimationFrame(() => {
+        scrollFrame = 0;
+        markActiveTurn();
+    });
+}, { passive: true });
 
 // The tooltip is positioned against a tick, so it cannot follow one that moves.
 dom.turns.addEventListener('scroll', hideTurnPop);

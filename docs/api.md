@@ -229,6 +229,35 @@ a message closes it), `groupMinCalls` (how long a run has to be — at least 2),
 `groupIncludesThinking` (whether a thinking block is part of the run or the end
 of it).
 
+`spinner`: `randomize` (whether a turn in progress wears a themed verb in front
+of what it is doing, or says only what it is doing as before), `groups` (which
+groups from `~/.tgxcode/verbs/` are in play, named by their `Category` — at most
+200), `rerollMs` (how long a verb stands before the next is drawn; `0` pins one
+for the whole turn, else 1000–600000). The verbs themselves are not here — they
+are a directory, and `GET /api/spinner/groups` lists it.
+
+### `GET /api/spinner/groups?cwd=<path>`
+
+`{ randomize, rerollMs, enabled: [...], pool, groups: [...], problems: [...] }` —
+which spinner verb groups exist and which are in force.
+
+`groups` is one entry per group available to `cwd` — `{name, file, count,
+source}`, where `name` is the `Category` inside the file and `source` is the
+directory it came from. A project's `<workspace>/.tgxcode/verbs/` wins over the
+user's `~/.tgxcode/verbs/`, so a repo can ship its own group without anybody
+editing their home directory.
+
+`enabled` is what settings ask for and `pool` is how many distinct verbs that
+actually amounts to — the two disagree when a name matches no file, which is
+what `problems` then says. A group whose filename and `Category` differ still
+works, and is reported here rather than left a mystery.
+
+This is the discoverable half of `spinner.groups`: there is no settings page, so
+without it the only answer to "what may I put in that list?" is to go and read a
+directory. Read-only, like `/api/prefs` — the files are the interface. Not
+local-only either: the names and sizes of verb groups are not a capability worth
+refusing a phone.
+
 ### `GET /api/sessions/:id/devservers`
 
 `{ports: [...], total, elsewhere}` — the localhost ports this session's agent
@@ -295,6 +324,12 @@ waiting, running }`, already ordered needs-you-first. A card carries `reason`
 (`ask`/`error`/`here`/`elsewhere`/`pinned`/`recent`), `title`, `projectName`, `worktree`,
 `runner`, `live`, `ask`, `headlines[]`, `tasks{done,total,current}`, `devservers`.
 
+Every card also carries `sig`, a short hash of the rest of the card. The board is pushed
+once a second and almost all of it is identical to the push before, so a client that keeps
+its nodes can compare `sig` and rebuild only the cards that moved — which is what the web
+UI does. Treat it as opaque: it is a fingerprint, not an identifier, and its only promise
+is that it changes when something else on the card does.
+
 `waiting` is the count worth putting on a badge.
 
 `sessions` is "running now, plus pinned" and is the answer to *who is blocked on me*.
@@ -311,10 +346,12 @@ work. Archived sessions are left out, and anything already in `sessions` cannot 
 here. Capped at 12 with the remainder in `recentHidden`, as `sessions` is capped at 24 with
 `hidden`.
 
-`devservers` is not refreshed for a recent card: the probe behind it costs a full
-transcript read per session every 15s, and that budget goes to what is running. A session
-that has just gone quiet keeps the chips its last pass found — a dev server usually
-outlives the turn that started it — and one that was never on the board has none.
+`devservers` is not refreshed for a recent card, and that budget goes to what is running.
+A session that has just gone quiet keeps the chips its last pass found — a dev server
+usually outlives the turn that started it — and one that was never on the board has none.
+The probe costs a whole transcript read the first time it sees a session and only the
+bytes appended since on every pass after; port detection folds forward, so there is
+nothing to recompute from the beginning.
 
 Also pushed as the `overview` SSE event, so most clients never call this — but it is
 the right answer to "what is happening right now", and anything that wants that
@@ -493,9 +530,21 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `slash-commands` | `{cwd, at}` — that directory's slash commands changed; drop what you cached |
 | `run-changed` | `{runId, workspace, commandId, label, state, port, exit, stopped, at}` — a project command moved; state only, never output |
 
-`runner-status`: `{sessionId, state, activity, model, permissionMode, cwd, error,
-errorKind, queued, queue[], pendingPermission, canPrompt, busySince}` where `state`
-is `stopped`/`starting`/`idle`/`busy`/`error`.
+`runner-status`: `{sessionId, state, activity, verb, detail, model, permissionMode,
+cwd, error, errorKind, queued, queue[], pendingPermission, canPrompt, busySince}`
+where `state` is `stopped`/`starting`/`idle`/`busy`/`error`.
+
+**`activity` is the label to draw.** While a turn works it is composed of two
+halves — `verb`, the themed spinner word, and `detail`, whatever is specifically
+happening (`Reading runner.js`, `Writing…`) — giving `Percolating… Reading
+runner.js`. Both are null outside a working state, and `verb` is null whenever
+`spinner.randomize` is off, in which case `activity` is exactly what it was
+before spinner verbs existed.
+
+The halves are on the wire for one reason: a surface too narrow for the whole
+label has to choose which half to keep, and it should keep the informative one.
+The session rail is the only place in this app that does, at about twenty
+characters; everything wider draws `activity` and can ignore both.
 
 **`pendingPermission` matters on open**: an ask may already be outstanding when a
 client attaches, and this is what remembers it. A client that only listens for the
@@ -701,6 +750,16 @@ asked to.
 so a client can open its output rather than quietly start nothing. `409` also
 covers no free port in the range and too many runs at once. Restart is stop, wait
 for `exited`, start.
+
+**A command tends to get the same port back.** Where a port is allocated it is
+not simply the lowest free one in the range: the port that command last had wins
+if it is still free, and a port another worktree has a claim on — its own
+remembered port, a live or recent run record, or a DevBrowser tab carrying its
+name — is passed over while anything else is available. A claimed port that
+nothing is listening on is still used rather than refused, since a stale claim
+should not stop a server starting. So `port` in the record is stable across a
+stop and start, and a client should not assume the bottom of the declared range.
+See `bridge/ports.js`.
 
 **Runs die with their bridge**, like terminals and unlike nothing else here. The
 child's stdout is a pipe whose only reader is the bridge, so one that outlived it

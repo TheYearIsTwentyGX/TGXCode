@@ -10,6 +10,12 @@
 // bridge/flags.js, and they are not per-browser either: the same answer should
 // come back in the Electron window, in a tab, and on a phone.
 //
+// `spinner` is the second, and the same argument puts it here: what a turn in
+// progress calls itself should read the same on every surface, and it does,
+// because the bridge decides it rather than each client. The verbs themselves
+// are too many for this file and live one group per file in `~/.tgxcode/verbs/`
+// — see bridge/spinner.js. What lands here is only which groups are in play.
+//
 // **Where the file lives is the deliberate part.** `~/.tgxcode/settings.json`,
 // not STATE_DIR. Everything under STATE_DIR is state the app owns and nobody is
 // expected to open — a token, a set of archived ids. This is a file a person
@@ -55,6 +61,21 @@ const DEFAULTS = {
         // that thinks between every call into groups of two.
         groupIncludesThinking: true,
     },
+    spinner: {
+        // What a turn in progress calls itself. Off gives back the literal
+        // "Thinking…" this app said for its whole life before now.
+        randomize: true,
+        // Which groups from `~/.tgxcode/verbs/` are in play. Named, not
+        // globbed: enabling all 114 at once is a soup, and the point of the
+        // groups is to choose a voice.
+        groups: ['Claude Code Defaults', 'Monty Python', 'Absurd / Nonsense', 'Tech / Programming'],
+        // How long a verb stands before another is drawn. This is the only
+        // thing that moves it: the verb is a prefix, and what follows it — a
+        // tool's name, `Writing…` — changes on its own as reality does. So the
+        // verb drifts straight through a call of any length without displacing
+        // what that call is. 0 pins it for the whole turn.
+        rerollMs: 8000,
+    },
 };
 
 // What each key is allowed to be. A file is a thing people edit, so a bad value
@@ -66,6 +87,17 @@ const SHAPE = {
         groupToolCalls: (v) => typeof v === 'boolean',
         groupMinCalls: (v) => Number.isInteger(v) && v >= 2 && v <= 1000,
         groupIncludesThinking: (v) => typeof v === 'boolean',
+    },
+    spinner: {
+        randomize: (v) => typeof v === 'boolean',
+        // A bound on the list rather than on the catalogue: the files are the
+        // user's to add to, but a settings file naming ten thousand groups is
+        // either a mistake or an attempt to make the bridge do unbounded work.
+        groups: (v) => Array.isArray(v) && v.length <= 200
+            && v.every(s => typeof s === 'string' && s.length > 0 && s.length <= 80),
+        // A floor of a second, because a label changing faster than you can
+        // read it is worse than one that never changes. 0 is off.
+        rerollMs: (v) => v === 0 || (Number.isInteger(v) && v >= 1000 && v <= 600_000),
     },
 };
 
@@ -189,7 +221,7 @@ class Prefs {
      * @param {string} [dir] a workspace — a session's cwd. Omitted gives the
      *   user-level answer, which is what the page is served before it knows
      *   which conversation it is about to show.
-     * @returns {{version, transcript, sources: string[], problems: object[]}}
+     * @returns {{version, transcript, spinner, sources: string[], problems: object[]}}
      */
     forCwd(dir) {
         const key = dir || '';
@@ -213,6 +245,7 @@ class Prefs {
         const value = {
             version: VERSION,
             transcript: { ...DEFAULTS.transcript },
+            spinner: { ...DEFAULTS.spinner },
             sources: [],
             problems: [],
         };
@@ -244,4 +277,4 @@ class Prefs {
     }
 }
 
-module.exports = { Prefs, DEFAULTS, VERSION };
+module.exports = { Prefs, DEFAULTS, SHAPE, VERSION };

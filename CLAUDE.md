@@ -207,9 +207,9 @@ npm test -- 45901      # run against a bridge you already have on that port
 start and delete sessions, so pointing them at the everyday instance is exactly
 the accident the rest of this file is about.
 
-The suite is `auth`, `temp`, `recent`, `pulls`, `taskboard` and `restart` on
-their own — no bridge needed — plus four that want a live one: `gate`, `browser`,
-`refusals`, `unpaired`. Between them they cover the token, what a remote caller
+The suite is `auth`, `temp`, `recent`, `pulls`, `taskboard`, `ports`, `spinner`
+and `restart` on their own — no bridge needed — plus four that want a live one:
+`gate`, `browser`, `refusals`, `unpaired`. Between them they cover the token, what a remote caller
 is refused, what an unpaired phone sees before and after pairing, and what the
 nightly restart does when there is nobody to ask. If you touch `bridge/auth.js`
 or any route's local/remote rule, run it: that is the part of this codebase with

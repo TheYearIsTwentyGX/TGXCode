@@ -63,9 +63,17 @@ const SCORES = {
  * Collect port evidence from a session's render events.
  * @returns {Array} candidates, richest evidence first
  */
-function detect(events) {
-    /** @type {Map<number, object>} */
-    const found = new Map();
+function detect(events, prior) {
+    /**
+     * The fold so far, when there is one. Every `record` below is monotonic —
+     * a strictly greater score wins, a timestamp only moves forward — so
+     * feeding the same event in twice cannot change the answer. That is what
+     * lets the live board fold each append onto the previous result instead of
+     * re-reading whole transcripts, and what makes a lookback over the last
+     * stretch of a file safe rather than merely cheap.
+     * @type {Map<number, object>}
+     */
+    const found = prior || new Map();
 
     const touch = (port) => {
         const p = Number(port);
@@ -157,7 +165,7 @@ function detect(events) {
         }
     }
 
-    return [...found.values()];
+    return found;
 }
 
 function* matchAll(text, re) {
@@ -174,8 +182,16 @@ function clip(s, n = 160) {
     return one.length > n ? one.slice(0, n - 1) + '…' : one;
 }
 
-/** Is something accepting connections on this port right now? */
-function isListening(port, timeout = 300) {
+/**
+ * Is something accepting connections on this port right now?
+ *
+ * `host` is 127.0.0.1 for everything that asks about a dev server — that is the
+ * address a browser will use, and the only one a Windows-side server under
+ * mirrored networking answers on. ports.js also asks about `::1`, because a
+ * listener bound there alone is invisible from IPv4 and would otherwise be
+ * handed out as free.
+ */
+function isListening(port, timeout = 300, host = '127.0.0.1') {
     return new Promise((resolve) => {
         const sock = new net.Socket();
         let done = false;
@@ -184,7 +200,7 @@ function isListening(port, timeout = 300) {
         sock.once('connect', () => finish(true));
         sock.once('timeout', () => finish(false));
         sock.once('error', () => finish(false));
-        sock.connect(port, '127.0.0.1');
+        sock.connect(port, host);
     });
 }
 
@@ -203,7 +219,7 @@ const STARTED_IT = SCORES.portFlag;
  * held by a process in another worktree is not this session's dev server, however
  * strong the evidence that this session once mentioned it.
  *
- * @param {Array}  candidates  from detect()
+ * @param {Array}  candidates  the values of the map from detect()
  * @param {object} titles      DevBrowser's port -> name map
  * @param {object} session     {workspace, worktreeName, projectName, lastTs}
  */

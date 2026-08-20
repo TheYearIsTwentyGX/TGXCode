@@ -21,6 +21,7 @@ const { SessionRegistry } = require('./registry');
 const { RunnerPool, PERMISSION_MODES } = require('./runner');
 const { Flags } = require('./flags');
 const { Prefs } = require('./prefs');
+const { Spinner } = require('./spinner');
 const { Suggestions, STATUSES: SUGGESTION_STATUSES } = require('./suggestions');
 const { SlashCommandCache } = require('./slash-commands');
 const { NotificationLog } = require('./notifications');
@@ -44,6 +45,10 @@ const flags = new Flags();
 // How the person using the app wants it to behave, from their own file and from
 // whatever the project they are looking at overrides — see bridge/prefs.js.
 const prefs = new Prefs();
+// The words a turn in progress calls itself, out of the groups those settings
+// enable. Shares the Prefs instance rather than making its own, so the two
+// cannot read different settings out of the same file.
+const spinner = new Spinner(prefs);
 // What you did about a suggested follow-up — started it, or waved it away. The
 // suggestion itself is in the transcript; only the decision is ours to keep.
 const suggestions = new Suggestions();
@@ -152,7 +157,10 @@ function stopWatch(sub) {
 
 const OVERVIEW_MS = 1_000;
 
-const board = { timer: null, devTimer: null };
+// `last` is whatever `buildBoard` most recently produced, so that the things
+// which only want to know *which* sessions are on the board do not each build
+// one of their own. It is at most a second old whenever the tick is running.
+const board = { timer: null, devTimer: null, last: null };
 
 function boardWatchers() {
     return [...clients.values()].filter(c => c.overview);
@@ -177,11 +185,13 @@ function syncBoard() {
         clearInterval(board.devTimer);
         board.timer = null;
         board.devTimer = null;
+        board.last = null;
     }
 }
 
 function buildBoard() {
-    return overview.build(index, pool, registry, { includeTest: cfg.IS_DEV });
+    board.last = overview.build(index, pool, registry, { includeTest: cfg.IS_DEV });
+    return board.last;
 }
 
 /**
@@ -232,7 +242,11 @@ function sendBoardNow(client) {
 
 async function tickDevServers() {
     if (!board.timer) return;
-    const ids = buildBoard().sessions.map(s => s.sessionId);
+    // The board the 1Hz tick just built, not a second one. Building it again
+    // walks the whole index and takes a tail read per card, all of it thrown
+    // away except the ids — and then a third time when the chips have moved.
+    // `last` is empty only on the pass `syncBoard` fires before the first tick.
+    const ids = (board.last || buildBoard()).sessions.map(s => s.sessionId);
     try {
         if (await overview.refreshDevServers(index, ids)) tickBoard();
     } catch { /* nothing here is worth failing a tick over */ }
@@ -780,6 +794,31 @@ async function api(req, res, url, pathname, who) {
         return send(res, 200, prefs.forCwd(url.searchParams.get('cwd') || ''));
     }
 
+    // Which spinner verb groups exist, so the answer to "what may I put in
+    // spinner.groups?" is reachable without listing a directory by hand. There
+    // is no settings page, so this is the discoverable half of that setting —
+    // and where a group that failed to load says why.
+    //
+    // Not local-only, for the same reason /api/prefs is not: it reports the
+    // names and sizes of verb groups, which is not a capability worth refusing
+    // a phone. Read-only, like prefs: the files are the interface.
+    if (pathname === '/api/spinner/groups' && req.method === 'GET') {
+        const cwd = url.searchParams.get('cwd') || '';
+        const { groups, problems } = spinner.groups(cwd);
+        const settings = prefs.forCwd(cwd).spinner;
+        const pool = spinner.pool(cwd);
+        return send(res, 200, {
+            randomize: settings.randomize,
+            rerollMs: settings.rerollMs,
+            enabled: settings.groups,
+            // What the spinner will actually draw from, which is not the same
+            // as `enabled` when a name in settings matches no file.
+            pool: pool.verbs.length,
+            groups,
+            problems: [...problems, ...pool.problems],
+        });
+    }
+
     if (pathname === '/api/shutdown' && req.method === 'POST') {
         // Only honour a shutdown aimed at this exact process. Without it, an app
         // window closing could take down a bridge somebody else started — say one
@@ -840,8 +879,12 @@ async function api(req, res, url, pathname, who) {
         for (const s of sessions) {
             const st = statuses[s.sessionId];
             // `queued` rides along so the rail can say a session has work waiting
-            // even while you are looking at a different one.
-            if (st) { s.runner = { state: st.state, activity: st.activity, queued: st.queued }; }
+            // even while you are looking at a different one, and `detail` so a
+            // row too narrow for the whole label can show the half that matters.
+            if (st) {
+                s.runner = { state: st.state, activity: st.activity,
+                    detail: st.detail, queued: st.queued };
+            }
         }
         return send(res, 200, { sessions, ready: index.ready });
     }
@@ -938,7 +981,10 @@ async function api(req, res, url, pathname, who) {
             for (const w of p.workspaces) {
                 for (const s of w.sessions) {
                     const st = statuses[s.sessionId];
-                    if (st) s.runner = { state: st.state, activity: st.activity, queued: st.queued };
+                    if (st) {
+                        s.runner = { state: st.state, activity: st.activity,
+                            detail: st.detail, queued: st.queued };
+                    }
                 }
             }
         }
@@ -1074,7 +1120,7 @@ async function api(req, res, url, pathname, who) {
             const data = index.read(sessionId);
             if (!data) return send(res, 404, { error: 'session not found' });
             const s = data.summary;
-            const candidates = devservers.detect(data.events);
+            const candidates = [...devservers.detect(data.events).values()];
             const titles = await devbrowser.titles();
             const out = await devservers.enrich(candidates, titles, {
                 workspace: workingDir(s),
@@ -2263,6 +2309,12 @@ function pair(req, res, url, pathname, who) {
  * which is exactly what the app did before approvals existed.
  */
 pool.hasViewer = () => clients.size > 0;
+
+// And what it says while it works. Every surface that shows a session working
+// reads `runner.activity` off one SSE message, so deciding it here is what makes
+// all of them — a phone included — agree. See bridge/spinner.js.
+pool.thinking = (cwd, last) => spinner.pick(cwd, last);
+pool.rerollAfter = (cwd) => spinner.rerollMs(cwd);
 
 index.on('changed', () => broadcast('sessions-changed', { at: Date.now() }));
 
