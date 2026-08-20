@@ -3700,9 +3700,9 @@ function rememberView() {
  * cards are on. Down is right, which is the direction the row runs.
  */
 function onDockWheel(e) {
-    // Only the strip runs sideways. As a column it scrolls the ordinary way and
-    // the wheel needs no help at all.
-    if (dom.live.dataset.mode !== 'dock' || state.live.dock !== 'bottom') return;
+    // Only the strip runs sideways. As a column, or with the window to itself, it
+    // scrolls the ordinary way and the wheel needs no help at all.
+    if (!liveStrip()) return;
     // A trackpad swiped sideways already says so; leave that alone.
     if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
 
@@ -3748,6 +3748,17 @@ const liveVisible = () => state.live.open
     && !state.dash.open && !state.notes.open && !state.taskboard.open;
 
 /**
+ * Whether the board is the sideways strip under a conversation.
+ *
+ * `state.live.dock` is not this question. It remembers which side you docked to
+ * and keeps saying 'bottom' when the board has the whole window, where nothing
+ * runs sideways at all — so anything about the arrangement has to ask
+ * `data-mode` as well. Both the compact card and the jump's scroll axis want
+ * this one.
+ */
+const liveStrip = () => dom.live.dataset.mode === 'dock' && state.live.dock === 'bottom';
+
+/**
  * How many sessions are waiting on you, on the button that opens the board.
  *
  * Counted in people-blocking things, not in running ones: five agents working
@@ -3790,30 +3801,39 @@ function renderLive() {
         return;
     }
 
+    // Every arrangement is grouped: "running" against "I merely touched this
+    // today" is what makes the board pickable, and that is as true of the grid
+    // with the window to itself as of the strip. It was the strip's idea first,
+    // which is why it was once the strip's flag.
+    //
+    // What is still a question about the layout is density — only the bottom
+    // strip is short of room. As a column, or full screen, there is height for a
+    // fuller card.
+    const compact = liveStrip();
+
     const bits = [];
     if (d.waiting) bits.push(`${d.waiting} waiting for you`);
     bits.push(`${d.running} running`);
+    // What the other groups hold, and a way to get to them — the strip's
+    // problem first. Five sessions working is 1650px of Live before Recent
+    // activity even begins, so a group past the first is not so much missing as
+    // unmentioned, and the first thing anybody says is that the section never
+    // appeared. A count alone would still leave the scroll to be discovered, so
+    // the count is the way there. Full screen the same run of cards is below the
+    // fold rather than off the side, which is the same problem lying down.
+    const recent = (d.recent || []).length;
+    const pinned = d.sessions.filter(s => s.reason === 'pinned').length;
+    if (recent) bits.push(jumpToGroup('recent', `${recent} recent`));
+    if (pinned) bits.push(jumpToGroup('pinned', `${pinned} pinned`));
     if (d.hidden) bits.push(`${d.hidden} more not shown`);
-    dom.liveSub.textContent = bits.join(' · ');
+    // Interleaved rather than joined: some of these are buttons now.
+    dom.liveSub.replaceChildren(...bits.flatMap((bit, i) => (i
+        ? [el('span', { class: 'live-sep' }, ' · '), bit]
+        : [bit])));
 
-    // Two separate questions about the layout, which were one flag until the
-    // groups arrived.
-    //
-    // Grouped: both docked arrangements are. Docked, the board is the thing you
-    // pick from while reading something else, and "running" against "I merely
-    // touched this today" is the distinction that makes it pickable. With the
-    // window to itself it is already a sorted grid of everything and reads as
-    // one list, so it stays one.
-    //
-    // Compact: only the bottom strip is short of room. As a column, or full
-    // screen, there is height for a fuller card.
-    const grouped = dom.live.dataset.mode === 'dock';
-    const compact = grouped && state.live.dock === 'bottom';
-
-    // Nothing to draw. `recent` counts here only where it is drawn, or the
-    // full-screen board would answer "is anything running" with an empty box on
-    // a morning when the answer is no.
-    if (!d.sessions.length && !(grouped && (d.recent || []).length)) {
+    // Nothing to draw at all — the recent group is a reason to draw the board
+    // even with nothing running, and it is drawn in every arrangement now.
+    if (!d.sessions.length && !recent) {
         dom.liveBody.replaceChildren(el('div', { class: 'live-note' },
             el('p', {}, 'Nothing is running. Every session on this machine is idle, '
                 + 'here and in every terminal.')));
@@ -3833,9 +3853,7 @@ function renderLive() {
     const scroll = { x: dom.liveBody.scrollLeft, y: dom.liveBody.scrollTop };
 
     freshCards = [];
-    reconcile(dom.liveBody, grouped
-        ? liveGroups(d, compact)
-        : d.sessions.map(s => liveCardFor(s, false)));
+    reconcile(dom.liveBody, liveGroups(d, compact));
     dom.liveBody.scrollLeft = scroll.x;
     dom.liveBody.scrollTop = scroll.y;
 
@@ -3935,7 +3953,31 @@ function reconcile(parent, next) {
 }
 
 /**
- * The docked board, in three parts — along the strip, or down the column.
+ * A count in the subtitle that takes you to the group it counts.
+ *
+ * `scrollIntoView` along whichever axis the board is arranged in — the group is
+ * off to the right in the strip and further down in the column or the
+ * full-window grid, and asking for the wrong one moves nothing. Which is why
+ * the axis comes from `liveStrip()` and not from `state.live.dock`: that still
+ * reads 'bottom' with no conversation open, so an inline scroll was requested
+ * down a board that only scrolls vertically.
+ */
+function jumpToGroup(key, label) {
+    return el('button', {
+        class: 'live-jump', type: 'button',
+        title: `Show the ${label.replace(/^\d+ /, '')} group`,
+        onclick: () => {
+            const group = dom.liveBody.querySelector(`.live-group[data-group="${key}"]`);
+            if (!group) return;
+            group.scrollIntoView(liveStrip()
+                ? { behavior: 'smooth', inline: 'start', block: 'nearest' }
+                : { behavior: 'smooth', block: 'start', inline: 'nearest' });
+        },
+    }, label);
+}
+
+/**
+ * The board in three parts — along the strip, down the column, or down the page.
  *
  * Pinned and running are already known — they are the reasons the bridge sorts
  * the board by — so those two groups are that one list cut in two rather than a
@@ -3943,7 +3985,7 @@ function reconcile(parent, next) {
  * the cut. Recent is the array the bridge sends beside it.
  *
  * Empty groups are dropped rather than shown empty: three headings over one card
- * is mostly headings, and neither arrangement has room to spare.
+ * is mostly headings, and the strip has no room to spare for them.
  */
 function liveGroups(d, compact) {
     const live = d.sessions.filter(s => s.reason !== 'pinned');

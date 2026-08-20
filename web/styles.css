@@ -3090,6 +3090,22 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 .live[data-mode="dock"] .live-title { font-size: 12.5px; color: var(--text-3); }
 .live[data-mode="dock"] .live-sub { margin: 0; font-size: 11.5px; }
 
+/* A count in the subtitle that scrolls its group into view. Deliberately not a
+   button to look at — it sits inside a sentence of plain facts, and only the
+   underline on hover says it can be clicked. */
+.live-jump {
+    color: inherit;
+    font: inherit;
+    padding: 0;
+    border: 0;
+    background: none;
+    cursor: pointer;
+    border-radius: 3px;
+}
+.live-jump:hover { color: var(--text); text-decoration: underline; }
+.live-jump:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.live-sep { white-space: pre; }
+
 .live[data-mode="dock"] .live-body {
     padding: 0 28px 14px;
     /* One row: columns are laid out along the inline axis and the row scrolls,
@@ -3105,12 +3121,17 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 }
 .live[data-mode="dock"] .live-note { grid-column: auto; min-width: 330px; }
 
-/* ── the docked board's three groups ─────────────────────────────────────
-   Both docked arrangements are grouped; the full-screen board is not, and its
-   auto-fill grid is left exactly as it was. Shared here — the heading, and the
-   fact that a group is a heading over a grid — then the two arrangements differ
-   below in the one way they differ everywhere else: the strip runs sideways and
-   the column runs down. */
+/* ── the board's three groups ────────────────────────────────────────────
+   All three arrangements are grouped. Shared here — the heading, and the fact
+   that a group is a heading over a grid — then the arrangements differ below in
+   the one way they differ everywhere else: the strip runs sideways, the column
+   and the full-window grid run down.
+
+   In each of them the grid .live-body used to own moves one level down onto
+   .lgroup-body, unchanged. A group is exactly as wide as the body, so handing
+   the same track list to each of three groups instead of to the one body lays
+   the cards out identically — same columns, same widths, nothing reflows just
+   because groups arrived. */
 
 .live-group {
     display: flex;
@@ -3214,6 +3235,47 @@ body.term-resizing { user-select: none; cursor: row-resize; }
        hides its overflow. */
     grid-template-columns: minmax(0, 1fr);
     grid-auto-flow: row;
+    align-content: start;
+}
+
+/* ── grouped with the window to itself ───────────────────────────────────
+   The side column's stack at the full board's width: the groups run down the
+   page, each heading a band across the whole of its own segment, and inside it
+   the auto-fill grid .live-body had before the groups arrived — so a window that
+   showed four cards across still shows four, and they still step to five at the
+   same width. */
+
+.live[data-mode="full"] .live-body {
+    /* One segment per row. The 330px columns are each group's business now;
+       without this it is the groups themselves that get laid into them. */
+    grid-template-columns: minmax(0, 1fr);
+    /* The rule between segments carries that spacing, as it does down the
+       column. Left at 14px it doubles up. */
+    gap: 0;
+}
+.live[data-mode="full"] .live-group + .live-group {
+    /* Vertical only, deliberately: any horizontal padding or border here would
+       narrow the group against the body and cost the cards a column at some
+       widths, which is the one thing this change is not allowed to do. */
+    margin-top: 18px;
+    padding-top: 14px;
+    border-top: 1px solid var(--s4);
+}
+.live[data-mode="full"] .lgroup-head {
+    /* Held at the top while its own cards go past — the same trade as the side
+       column, and worth more here, where a group is several rows of grid deep.
+       --s1, not the column's --bg: this board has no background of its own and
+       sits directly on .main. A transparent heading with cards sliding under it
+       is unreadable for the height of one line. */
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    align-self: stretch;
+    padding: 8px 0 6px;
+    background: var(--s1);
+}
+.live[data-mode="full"] .lgroup-body {
+    grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
     align-content: start;
 }
 
