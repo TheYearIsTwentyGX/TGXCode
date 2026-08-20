@@ -230,6 +230,16 @@ class Runner extends EventEmitter {
         this.errorKind = null;
         this.retry = null;             // set while the CLI is retrying the API
 
+        // What to call a turn in progress, and how long each word stands.
+        // Supplied by the pool, which the server supplies from bridge/spinner.js.
+        // Null is a real answer and the default one: no verb composes to exactly
+        // what this app said before there were any.
+        this.thinking = opts.thinking || (() => null);
+        this.rerollAfter = opts.rerollAfter || (() => 0);
+        this._verb = null;             // the themed word, drifting on its own clock
+        this._detail = null;           // and what is specifically happening, if anything
+        this._reroll = null;           // the timer moving the verb along
+
         this.proc = null;
         this.state = 'stopped';        // stopped | starting | idle | busy | error
         this.activity = null;          // human-readable "what is it doing right now"
@@ -434,7 +444,7 @@ class Runner extends EventEmitter {
         // Held until a result arrives: if the process dies first, this text
         // was never written to the transcript and would otherwise be lost.
         this.inFlight.push(entry);
-        this._setState('busy', 'Thinking…');
+        this._work();
         // _setState only reports when the state or activity moved; a shorter
         // queue is news on its own.
         this._queueChanged();
@@ -856,7 +866,7 @@ class Runner extends EventEmitter {
             sessionId: this.sessionId, requestId: ask.id, outcome,
         });
         // The tool is about to run (or not); either way we are back to working.
-        if (this.state === 'busy') this._setState('busy', 'Thinking…');
+        if (this.state === 'busy') this._work();
     }
 
     _autoDeny(ask, reason) {
@@ -1019,11 +1029,11 @@ class Runner extends EventEmitter {
                 for (const b of content) {
                     if (b.type === 'tool_use') {
                         this._pendingTools.set(b.id, b.name);
-                        this._setState('busy', describeTool(b));
+                        this._work(describeTool(b));
                     } else if (b.type === 'text' && b.text.trim()) {
-                        this._setState('busy', 'Writing…');
+                        this._work('Writing…');
                     } else if (b.type === 'thinking') {
-                        this._setState('busy', 'Thinking…');
+                        this._work();
                     }
                 }
                 break;
@@ -1035,7 +1045,9 @@ class Runner extends EventEmitter {
                     if (b.type !== 'tool_result') continue;
                     this._pendingTools.delete(b.tool_use_id);
                 }
-                if (this.state === 'busy') this._setState('busy', 'Thinking…');
+                // The call is over, so its name would now be a lie — back to
+                // the verb alone until the next thing starts.
+                if (this.state === 'busy') this._work();
                 break;
             }
 
@@ -1081,7 +1093,84 @@ class Runner extends EventEmitter {
         }
     }
 
-    _setState(state, activity) {
+    /**
+     * Working, and on what.
+     *
+     * The label a turn shows has two halves. The **verb** is the themed word out
+     * of bridge/spinner.js, and it drifts on its own clock — it is what says the
+     * session is alive. The **detail** is whatever is specifically happening,
+     * and it changes when reality does: a tool's name, or `Writing…`, or nothing
+     * at all while Claude is only thinking.
+     *
+     * Showing both is the point. Before this the tool name *replaced* the verb,
+     * so a long tool call sat on one string and a spinner that has stopped
+     * spinning reads as a session that has stopped working — but dropping the
+     * tool name to keep the verb moving would have traded the informative half
+     * for the decorative one. `Percolating… Reading runner.js` gives up neither,
+     * and lets the verb keep drifting straight through a call of any length.
+     *
+     * @param {string|null} [detail] what is specifically happening, or null for
+     *   thinking with nothing more to say.
+     */
+    _work(detail = null) {
+        // Drawn once when a turn starts working and then left to the timer.
+        // Redrawing it here as well would change both halves at once on every
+        // tool call, and the detail is already the half that says what moved.
+        if (!this._verb) this._verb = this.thinking(this.cwd, null);
+        this._detail = detail;
+        this._say();
+    }
+
+    /** The timer firing: a new verb, the same detail. */
+    _drift() {
+        this._verb = this.thinking(this.cwd, this._verb);
+        this._say();
+    }
+
+    /**
+     * Put the two halves on the wire, and arm the next drift.
+     *
+     * With no verb — `randomize: false`, or no group that resolved — this is
+     * exactly the string the app showed before any of it existed: the detail
+     * alone, or `Thinking…`. That is the whole reason Spinner#pick answers null
+     * rather than a fallback.
+     */
+    _say() {
+        const verb = this._verb;
+        const detail = this._detail;
+        let activity;
+        if (verb && detail) {
+            // `Writing…` already ends in one, and `Percolating… Writing…` reads
+            // like a stutter. One ellipsis to a label.
+            activity = `${verb}… ${detail.replace(/…$/, '')}`;
+        } else if (verb) {
+            activity = `${verb}…`;
+        } else {
+            activity = detail || 'Thinking…';
+        }
+
+        this._setState('busy', activity, true);
+        const ms = this.rerollAfter(this.cwd);
+        // Nothing to drift towards without a verb, and nothing to drift to if
+        // the interval is off.
+        if (verb && ms > 0) {
+            this._reroll = setTimeout(() => this._drift(), ms);
+            // Never a reason to hold the process open, the same as the pool's
+            // eviction sweep.
+            this._reroll.unref();
+        }
+    }
+
+    /**
+     * @param {boolean} [work] whether this is the pair above talking. Anything
+     *   else — a question waiting on a person, an API retry, starting, going
+     *   idle, stopping — is not work with a verb in front of it, so it clears
+     *   both halves. One line here rather than a rule at every call site.
+     */
+    _setState(state, activity, work = false) {
+        if (this._reroll) { clearTimeout(this._reroll); this._reroll = null; }
+        if (!work) { this._verb = null; this._detail = null; }
+
         const changed = this.state !== state || this.activity !== activity;
         // Stamped once per turn, not on every activity change, so the elapsed
         // time the UI shows covers the whole turn.
@@ -1097,6 +1186,12 @@ class Runner extends EventEmitter {
             sessionId: this.sessionId,
             state: this.state,
             activity: this.activity,
+            // The two halves `activity` is composed of, so a surface too narrow
+            // for both can choose. The rail is the one that does: it has room
+            // for about twenty characters, and the informative half is `detail`.
+            // Everything wider just draws `activity` and needs neither of these.
+            verb: this._verb,
+            detail: this._detail,
             model: this.model,
             permissionMode: this.permissionMode,
             cwd: this.cwd,
@@ -1216,6 +1311,13 @@ class RunnerPool extends EventEmitter {
         // listening decides between blocking on a person and denying, so
         // guessing "yes" here would hang turns nobody is watching.
         this.hasViewer = () => false;
+
+        // And what a turn in progress calls itself — replaced by the server
+        // with bridge/spinner.js, which reads the groups the user enabled. No
+        // verb is a real answer: a pool built without a server says exactly what
+        // this app said before there were any.
+        this.thinking = () => null;
+        this.rerollAfter = () => 0;
     }
 
     get(sessionId) {
@@ -1246,7 +1348,12 @@ class RunnerPool extends EventEmitter {
 
         this._evictTo(MAX_LIVE - 1);
 
-        r = new Runner({ sessionId, cwd, model, permissionMode, isNew, fork, caps: this.caps });
+        // Delegated rather than handed over, so a runner asks the pool afresh
+        // every time: settings change under a live session, and the answer
+        // should not be the one that was true when it started.
+        r = new Runner({ sessionId, cwd, model, permissionMode, isNew, fork, caps: this.caps,
+            thinking: (dir, last) => this.thinking(dir, last),
+            rerollAfter: (dir) => this.rerollAfter(dir) });
         // Read through `r.sessionId` rather than closing over the id it was
         // created with: a fork changes it, and the viewer check has to follow.
         r.hasViewer = () => this.hasViewer(r.sessionId);

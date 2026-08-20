@@ -229,6 +229,35 @@ a message closes it), `groupMinCalls` (how long a run has to be — at least 2),
 `groupIncludesThinking` (whether a thinking block is part of the run or the end
 of it).
 
+`spinner`: `randomize` (whether a turn in progress wears a themed verb in front
+of what it is doing, or says only what it is doing as before), `groups` (which
+groups from `~/.tgxcode/verbs/` are in play, named by their `Category` — at most
+200), `rerollMs` (how long a verb stands before the next is drawn; `0` pins one
+for the whole turn, else 1000–600000). The verbs themselves are not here — they
+are a directory, and `GET /api/spinner/groups` lists it.
+
+### `GET /api/spinner/groups?cwd=<path>`
+
+`{ randomize, rerollMs, enabled: [...], pool, groups: [...], problems: [...] }` —
+which spinner verb groups exist and which are in force.
+
+`groups` is one entry per group available to `cwd` — `{name, file, count,
+source}`, where `name` is the `Category` inside the file and `source` is the
+directory it came from. A project's `<workspace>/.tgxcode/verbs/` wins over the
+user's `~/.tgxcode/verbs/`, so a repo can ship its own group without anybody
+editing their home directory.
+
+`enabled` is what settings ask for and `pool` is how many distinct verbs that
+actually amounts to — the two disagree when a name matches no file, which is
+what `problems` then says. A group whose filename and `Category` differ still
+works, and is reported here rather than left a mystery.
+
+This is the discoverable half of `spinner.groups`: there is no settings page, so
+without it the only answer to "what may I put in that list?" is to go and read a
+directory. Read-only, like `/api/prefs` — the files are the interface. Not
+local-only either: the names and sizes of verb groups are not a capability worth
+refusing a phone.
+
 ### `GET /api/sessions/:id/devservers`
 
 `{ports: [...], total, elsewhere}` — the localhost ports this session's agent
@@ -493,9 +522,21 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `slash-commands` | `{cwd, at}` — that directory's slash commands changed; drop what you cached |
 | `run-changed` | `{runId, workspace, commandId, label, state, port, exit, stopped, at}` — a project command moved; state only, never output |
 
-`runner-status`: `{sessionId, state, activity, model, permissionMode, cwd, error,
-errorKind, queued, queue[], pendingPermission, canPrompt, busySince}` where `state`
-is `stopped`/`starting`/`idle`/`busy`/`error`.
+`runner-status`: `{sessionId, state, activity, verb, detail, model, permissionMode,
+cwd, error, errorKind, queued, queue[], pendingPermission, canPrompt, busySince}`
+where `state` is `stopped`/`starting`/`idle`/`busy`/`error`.
+
+**`activity` is the label to draw.** While a turn works it is composed of two
+halves — `verb`, the themed spinner word, and `detail`, whatever is specifically
+happening (`Reading runner.js`, `Writing…`) — giving `Percolating… Reading
+runner.js`. Both are null outside a working state, and `verb` is null whenever
+`spinner.randomize` is off, in which case `activity` is exactly what it was
+before spinner verbs existed.
+
+The halves are on the wire for one reason: a surface too narrow for the whole
+label has to choose which half to keep, and it should keep the informative one.
+The session rail is the only place in this app that does, at about twenty
+characters; everything wider draws `activity` and can ignore both.
 
 **`pendingPermission` matters on open**: an ask may already be outstanding when a
 client attaches, and this is what remembers it. A client that only listens for the
