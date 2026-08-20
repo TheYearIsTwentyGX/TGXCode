@@ -56,7 +56,7 @@ All of these run from WSL, in this directory.
 | | |
 |---|---|
 | `npm start` | Launch the Windows app. It starts its own bridge on 45888. |
-| `npm run restart` | Restart the everyday bridge so it picks up whatever is on main. Refuses while a turn is in flight; `-- --pull` fast-forwards from origin first, `-- --status` just reports. |
+| `npm run restart` | Restart the everyday bridge so it picks up whatever is on main. Refuses while a turn is in flight; `-- --pull` fast-forwards from origin first, `-- --status` just reports. With no terminal to ask at — under cron — it leaves uncommitted `bridge/` changes alone and exits 3 rather than reporting a restart that never happened; `-- --yes` loads them anyway. |
 | `npm run dev` | A **separate** instance on 45899 plus its own window, for working on this app without disturbing the one you actually use. |
 | `npm run dev:headless` | The same, bridge only — open the printed URL in a browser. The fastest loop for UI work: edit `web/`, hit refresh. |
 | `npm run bridge` | The bridge in the foreground on 45888. This is the everyday instance; use `dev` instead unless you mean it. |
@@ -860,6 +860,48 @@ Then `restart-bridge` from anywhere. It touches only the everyday port, refuses
 while a turn is in flight (`--force` overrides), takes `--pull` to fast-forward
 from origin first, and `--status` to just report what is running. Any open
 window reconnects on its own.
+
+#### The nightly one, and how to tell whether it ran
+
+There is a midnight entry in `crontab -l` — written down here because it is
+installed on the machine and nowhere in this repo:
+
+```
+SHELL=/bin/bash
+MAILTO=""
+0 0 * * * /home/dylan_hays/Other/claude-sessions/scripts/restart-bridge.sh >/tmp/bridge.log 2>&1
+```
+
+`MAILTO=""` means cron mails nothing, and `/tmp` is a tmpfs that WSL empties on
+every shutdown, so that redirect is not a record of anything — by morning it is
+usually gone. The script therefore keeps its own, appended, next to the bridge's
+log:
+
+```bash
+tail ~/.cache/claude-sessions/restart-45888.log
+```
+
+One line per event: a `start` line, then one word for the outcome —
+`restarted`, `skipped-dirty`, `skipped-declined`, `skipped-busy`,
+`refused-worktree`, `failed-pull`, `failed-start`. So `grep skipped-dirty` is a
+real question to ask of it, and the last several nights are all still there.
+`bridge-45888.log` next to it is the running bridge's own stdout and is
+truncated on every restart, which is why it cannot answer this.
+
+Two readings worth knowing:
+
+- **A `start` line with no outcome after it** — the script was killed part-way.
+- **No `start` line at all for that night** — cron never fired, which on this
+  machine usually means WSL was not running at midnight. That is a different
+  problem from a skip, and used to be indistinguishable from one.
+
+A dirty main checkout does **not** stop the nightly run any more, unless the
+dirty files are under `bridge/`. That is the only directory a restart actually
+loads: the bridge `require`s it once at startup, whereas `web/` is read from disk
+per request and so is already live either way, and docs, tests and scripts are
+not read by the bridge process at all. Uncommitted `bridge/` code with nobody to
+confirm with is left alone and journalled as `skipped-dirty` — put `--yes` in the
+crontab if you would rather it loaded whatever is on disk.
 
 ## Working on this with agents
 

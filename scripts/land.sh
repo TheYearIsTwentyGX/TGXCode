@@ -237,5 +237,14 @@ if [ "$RESTART" = 1 ]; then
     # Delegated rather than reimplemented: that script has the turn-in-flight
     # guard, and running it from $MAIN is the one place it is allowed to
     # replace the everyday instance.
-    ( cd "$MAIN" && bash scripts/restart-bridge.sh )
+    #
+    # Its status is worth reading. It exits 3 when it deliberately did not
+    # restart — a turn in flight, or uncommitted bridge/ changes — and swallowing
+    # that would leave you thinking the merge you just landed is running when it
+    # is not, which is the same silent skip the nightly cron run used to have.
+    if ! ( cd "$MAIN" && bash scripts/restart-bridge.sh ); then
+        say ""
+        say "  The restart did not happen — see above. $MAIN is merged either way;"
+        say "  the running bridge is still on the code it started with."
+    fi
 fi
