@@ -174,8 +174,16 @@ function clip(s, n = 160) {
     return one.length > n ? one.slice(0, n - 1) + '…' : one;
 }
 
-/** Is something accepting connections on this port right now? */
-function isListening(port, timeout = 300) {
+/**
+ * Is something accepting connections on this port right now?
+ *
+ * `host` is 127.0.0.1 for everything that asks about a dev server — that is the
+ * address a browser will use, and the only one a Windows-side server under
+ * mirrored networking answers on. ports.js also asks about `::1`, because a
+ * listener bound there alone is invisible from IPv4 and would otherwise be
+ * handed out as free.
+ */
+function isListening(port, timeout = 300, host = '127.0.0.1') {
     return new Promise((resolve) => {
         const sock = new net.Socket();
         let done = false;
@@ -184,7 +192,7 @@ function isListening(port, timeout = 300) {
         sock.once('connect', () => finish(true));
         sock.once('timeout', () => finish(false));
         sock.once('error', () => finish(false));
-        sock.connect(port, '127.0.0.1');
+        sock.connect(port, host);
     });
 }
 

@@ -702,6 +702,16 @@ so a client can open its output rather than quietly start nothing. `409` also
 covers no free port in the range and too many runs at once. Restart is stop, wait
 for `exited`, start.
 
+**A command tends to get the same port back.** Where a port is allocated it is
+not simply the lowest free one in the range: the port that command last had wins
+if it is still free, and a port another worktree has a claim on — its own
+remembered port, a live or recent run record, or a DevBrowser tab carrying its
+name — is passed over while anything else is available. A claimed port that
+nothing is listening on is still used rather than refused, since a stale claim
+should not stop a server starting. So `port` in the record is stable across a
+stop and start, and a client should not assume the bottom of the declared range.
+See `bridge/ports.js`.
+
 **Runs die with their bridge**, like terminals and unlike nothing else here. The
 child's stdout is a pipe whose only reader is the bridge, so one that outlived it
 would fill the buffer, block on `write()` and go on holding its port while hung.
