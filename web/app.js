@@ -222,6 +222,16 @@ const state = {
     // Per session and not persisted: the next window, and this one after a
     // reload, should ask again rather than inherit somebody's earlier gamble.
     lockOverride: new Set(),
+    // What this session changed. `on` is whether the drawer is in the layout at
+    // all and `shut` whether it is collapsed to its strip — the same two states
+    // the suggestions aside has, and remembered for the same reason: it is a
+    // property of the window, not of a session. `at` is when the bridge last
+    // answered, so re-opening it does not shell out to git again.
+    changes: {
+        on: localStorage.getItem('changesOn') === '1',
+        shut: localStorage.getItem('changesShut') === '1',
+        sessionId: null, data: null, at: 0, loading: false, error: null,
+    },
     // The board of unfinished work. `at` is when the bridge last answered, so
     // opening it again does not re-run git over every worktree on the machine.
     dash: { open: false, data: null, at: 0, loading: false, error: null, files: new Set() },
@@ -291,7 +301,10 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'slash-menu', 'mention-menu', 'queue', 'queue-list', 'queue-count', 'queue-clear',
     'model', 'perm', 'btn-new', 'btn-new-menu', 'new-menu', 'db-status', 'db-label', 'toasts',
     'btn-bell', 'bell-menu', 'opt-desktop', 'opt-sound', 'bell-note', 'bell-try',
-    'btn-pin', 'btn-folder', 'btn-term', 'btn-archive', 'btn-delete', 'turns', 'turn-pop',
+    'btn-pin', 'btn-changes', 'btn-folder', 'btn-term', 'btn-archive', 'btn-delete',
+    'turns', 'turn-pop',
+    'changes', 'changes-strip', 'changes-strip-count', 'changes-open', 'changes-count',
+    'changes-refresh', 'changes-collapse', 'changes-body',
     'term-pane', 'term-grip', 'term-dir', 'term-moved', 'term-body', 'term-restart', 'term-close',
     'term-tabs', 'term-stop', 'cmds',
     'tasks', 'tasks-strip', 'tasks-strip-count', 'tasks-open', 'tasks-count',
@@ -959,6 +972,8 @@ function clearCurrent() {
     leaveAgent();
     clearInterval(state.busyTimer);
     state.busyTimer = null;
+    resetChanges();
+    renderChanges();        // hides the drawer: there is no session to be about
     dom.log.replaceChildren();
     dom.turns.replaceChildren();
     dom.agents.replaceChildren();
@@ -1055,6 +1070,9 @@ async function openSession(id, { quiet = false, keepDash = false } = {}) {
         loadPrStatus();
         loadAgents();
         loadTasks();
+        // Only when the drawer is up. It shells out to git, and a window that
+        // never opens it should not pay for it on every session it visits.
+        loadChangesIfStale();
         return true;
     } catch (err) {
         if (seq !== state.openSeq) return true;
@@ -1097,6 +1115,8 @@ function beginOpen(summary, { keepDash = false } = {}) {
     state.taskOpen.clear();
     closeTaskDialog();          // it was showing a task belonging to the old one
     renderTasks();              // empties the aside, and hides it
+    resetChanges();             // and the files listed were the old session's
+    renderChanges();            // which leaves the drawer saying it is looking
     // A row drawn for one session is not evidence about another. The log is
     // replaced below in any case; this is what disarms the timer holding it.
     clearPendingSend();
@@ -1337,6 +1357,10 @@ function renderHeaderActions() {
     dom.btnArchive.classList.toggle('on', !!s.archived);
     dom.btnArchive.title = s.archived ? 'Restore from archive' : 'Archive this session';
     dom.btnDelete.title = `Delete “${clip(s.title, 40)}” permanently`;
+    dom.btnChanges.classList.toggle('on', state.changes.on);
+    dom.btnChanges.setAttribute('aria-pressed', String(state.changes.on));
+    dom.btnChanges.title = state.changes.on
+        ? 'Hide what this session changed' : 'What this session changed';
     dom.btnFolder.title = `Show ${s.cwd} in File Explorer`;
     dom.btnTerm.title = dom.termPane.hidden
         ? `Open a terminal in ${s.cwd}` : 'Hide the terminal';
@@ -2024,6 +2048,256 @@ async function actOnSuggestion(ev, status, startedId = null) {
         if (state.taskDialog === ev.id) paintTaskDialogActions(ev);
         toast(`Could not save that: ${err.message}`, 'error');
     }
+}
+
+// ── what this session changed ────────────────────────────────────────────
+//
+// Two lists in one drawer, and the whole design is in why they are two.
+//
+// *Changed by this session* comes out of the transcript, so it is about the
+// conversation: it holds files edited and since committed, files edited in a
+// directory that has since been removed, and files a subagent edited on the
+// session's behalf. *Working tree* comes from git, so it is about the directory:
+// it holds whatever anybody else changed, and it drops what this session changed
+// and then put back. Reconciling them would mean choosing which of those to lie
+// about, so they are drawn as they are and the disagreement is the information.
+//
+// It lives beside the transcript rather than over it because clicking a file
+// jumps to the edit that made it, and a panel you have to close first turns that
+// into two actions and something to remember.
+
+// Long enough that opening the drawer twice in a row does not shell out to git
+// twice, short enough that it is never obviously wrong. A turn ending refetches
+// regardless — see applyRunner — which is what actually keeps it current.
+const CHANGES_STALE_MS = 20_000;
+
+/** Put the drawer in the layout, or take it out. Remembered across sessions. */
+function showChanges(on) {
+    state.changes.on = on;
+    localStorage.setItem('changesOn', on ? '1' : '0');
+    // Asking for it from the header means wanting to see it, not wanting a
+    // 34px strip: an open drawer is what the button promises.
+    if (on) collapseChanges(false, { render: false });
+    renderChanges();
+    renderHeaderActions();
+    if (on) loadChangesIfStale();
+}
+
+/** Collapse it to its strip, or bring it back. */
+function collapseChanges(shut, { render = true } = {}) {
+    state.changes.shut = shut;
+    localStorage.setItem('changesShut', shut ? '1' : '0');
+    if (!render) return;
+    renderChanges();
+    // Focus follows whatever replaced the thing that was clicked.
+    (shut ? dom.changesStrip : dom.changesCollapse).focus();
+    if (!shut) loadChangesIfStale();
+}
+
+function loadChangesIfStale() {
+    const s = state.current;
+    if (!s || !state.changes.on || state.changes.shut) return;
+    const fresh = state.changes.sessionId === s.sessionId
+        && Date.now() - state.changes.at < CHANGES_STALE_MS;
+    if (!fresh) loadChanges();
+}
+
+/** Forget what is on screen — the conversation it was about has changed. */
+function resetChanges() {
+    state.changes.data = null;
+    state.changes.sessionId = null;
+    state.changes.at = 0;
+    state.changes.error = null;
+}
+
+async function loadChanges({ refresh = false } = {}) {
+    const s = state.current;
+    if (!s || state.changes.loading) return;
+    const id = s.sessionId;
+
+    state.changes.loading = true;
+    state.changes.error = null;
+    renderChanges();
+    try {
+        const d = await get(`/api/sessions/${id}/changes${refresh ? '?refresh=1' : ''}`);
+        // Another conversation was opened while this was in flight; that one owns
+        // the drawer now.
+        if (!state.current || state.current.sessionId !== id) return;
+        state.changes.data = d;
+        state.changes.sessionId = id;
+        state.changes.at = Date.now();
+    } catch (err) {
+        state.changes.error = err.message;
+    } finally {
+        state.changes.loading = false;
+        renderChanges();
+    }
+}
+
+function renderChanges() {
+    dom.changes.hidden = !state.changes.on || !state.current;
+    if (dom.changes.hidden) return;
+
+    const d = state.changes.data;
+    const edits = (d && d.edits) || [];
+    // The count is the transcript's, not the tree's: the drawer is about what
+    // this session did, and the tree is the second opinion beside it.
+    const label = d ? String(edits.length) : (state.changes.error ? '!' : '…');
+    dom.changesCount.textContent = label;
+    dom.changesStripCount.textContent = label;
+
+    dom.changesStrip.hidden = !state.changes.shut;
+    dom.changesOpen.hidden = state.changes.shut;
+    dom.changes.classList.toggle('shut', state.changes.shut);
+    dom.changesRefresh.disabled = state.changes.loading;
+    if (state.changes.shut) return;   // nothing behind the strip needs building
+
+    if (state.changes.error) {
+        dom.changesBody.replaceChildren(
+            el('p', { class: 'ch-note bad' }, state.changes.error),
+        );
+        return;
+    }
+    if (!d) {
+        dom.changesBody.replaceChildren(el('p', { class: 'ch-note' }, 'Looking…'));
+        return;
+    }
+
+    dom.changesBody.replaceChildren(editsSection(d), treeSection(d.git));
+}
+
+/** The transcript's answer. */
+function editsSection(d) {
+    const edits = d.edits || [];
+    const fromAgents = edits.filter(f => f.agent).length;
+
+    const rows = edits.length
+        ? edits.map(editRow)
+        : [el('p', { class: 'ch-note' }, d.agents && d.agents.total
+            ? 'Nothing in this conversation or its subagents changed a file.'
+            : 'Nothing in this conversation changed a file.')];
+
+    return el('section', { class: 'ch-sec' },
+        el('div', { class: 'ch-head' },
+            el('span', { class: 'ch-title' }, 'Changed by this session'),
+            edits.length ? plusMinus(d) : null,
+        ),
+        // Only worth a line when some of the work was not done in this
+        // conversation at all — which is exactly when the count looks wrong.
+        fromAgents
+            ? el('p', { class: 'ch-note' },
+                `${fromAgents} of these ${fromAgents === 1 ? 'was' : 'were'} edited by a subagent.`)
+            : null,
+        el('ul', { class: 'ch-list' }, rows),
+    );
+}
+
+/**
+ * One file, and where clicking it goes.
+ *
+ * Resolved at click rather than at render: the transcript fills in as it loads
+ * and grows while a turn runs, so a row built a second too early would be dead
+ * for the rest of its life.
+ */
+function editRow(f) {
+    const agent = f.agent;
+    const go = () => {
+        const entry = f.toolId ? state.tools.get(f.toolId) : null;
+        if (entry) return jumpToTurn(entry);
+        // Every edit was made by an agent, so there is no call in this
+        // transcript to jump to — its own pane is where the edit is.
+        if (agent) return openAgent(agent.toolUseId);
+        toast('That edit is not in the part of the conversation on screen.', 'warn');
+    };
+
+    const tip = [f.path, `${f.edits} ${f.edits === 1 ? 'edit' : 'edits'}`,
+        agent && `by a ${agent.agentType || 'subagent'}${agent.description ? `: ${agent.description}` : ''}`,
+        f.lastTs && `last ${ago(f.lastTs)} ago`].filter(Boolean).join('\n');
+
+    return el('li', {},
+        el('button', { class: 'ch-row', type: 'button', title: tip, onclick: go },
+            filePath(f.relPath),
+            plusMinus(f),
+            // One word, not the agent's type: the types run to `general-purpose`
+            // and the column would then be wider than the paths. Which agent it
+            // was is in the tooltip, where there is room for the description too.
+            el('span', { class: 'ch-meta' }, agent ? 'agent' : `${f.edits}×`),
+        ));
+}
+
+/** The working tree's answer. */
+function treeSection(g) {
+    const head = (...bits) => el('div', { class: 'ch-head' },
+        el('span', { class: 'ch-title' }, 'Working tree'), ...bits);
+
+    if (!g || !g.ok) {
+        return el('section', { class: 'ch-sec' }, head(),
+            el('p', { class: 'ch-note' }, treeReason(g)));
+    }
+
+    const files = g.sample || [];
+    const branch = [
+        g.branch || (g.detached ? 'detached HEAD' : null),
+        g.ahead ? `${g.ahead} unpushed` : null,
+        g.behind ? `${g.behind} behind` : null,
+    ].filter(Boolean).join(' · ');
+
+    return el('section', { class: 'ch-sec' },
+        head(g.files ? el('span', { class: 'ch-tally' }, `${g.files} uncommitted`) : null),
+        branch ? el('p', { class: 'ch-branch' }, branch) : null,
+        files.length
+            ? el('ul', { class: 'ch-list' }, files.map(treeFileRow),
+                g.truncated ? el('li', { class: 'ch-note' }, `and ${g.truncated} more`) : null)
+            : el('p', { class: 'ch-note' }, 'Nothing uncommitted.'),
+    );
+}
+
+function treeFileRow(f) {
+    return el('li', {},
+        el('div', { class: 'ch-row flat', title: f.path },
+            el('span', { class: 'fstat', 'data-s': f.status }, statusWord(f.status)),
+            filePath(f.path),
+            // Untracked files are not in `git diff` and so have no counts. The
+            // status word already said "new", which is the honest answer.
+            f.added == null ? null : plusMinus(f),
+        ));
+}
+
+function treeReason(g) {
+    const reason = (g && g.reason) || 'status-failed';
+    if (reason === 'no-directory') return 'The directory this session worked in is gone.';
+    if (reason === 'not-a-repo') return 'Not a git repository.';
+    if (reason === 'left-behind') {
+        return 'This directory is not a checkout of its own — a worktree that was removed, '
+            + 'most likely.';
+    }
+    return `git status could not run${g && g.error ? `: ${g.error}` : ''}.`;
+}
+
+/**
+ * A path as two pieces, so the drawer can drop the directory and keep the file.
+ *
+ * A trailing slash — an untracked directory — belongs with the part that gets
+ * clipped, not treated as an empty filename.
+ */
+function filePath(p) {
+    const text = String(p || '');
+    const cut = text.replace(/\/$/, '').lastIndexOf('/');
+    return el('span', { class: 'fpath' },
+        cut === -1 ? null : el('span', { class: 'fdir' }, text.slice(0, cut + 1)),
+        el('span', { class: 'fbase' }, cut === -1 ? text : text.slice(cut + 1)));
+}
+
+/** `+84 −12`, or the word for a file git will not count. */
+function plusMinus(f) {
+    const box = el('span', { class: 'ch-nums' });
+    if (f.binary) return el('span', { class: 'ch-nums ch-meta' }, 'binary');
+    if (f.added) box.append(el('span', { class: 'ch-add' }, `+${f.added}`));
+    if (f.deleted) box.append(el('span', { class: 'ch-del' }, `−${f.deleted}`));
+    // An edit that added and removed nothing is a file written with the contents
+    // it already had. Rare, and worth not drawing as a blank column.
+    if (!box.childNodes.length) box.append(el('span', { class: 'ch-meta' }, '±0'));
+    return box;
 }
 
 /** The first line of a block of text, for a row with room for one. */
@@ -6171,6 +6445,7 @@ async function subscribe() {
 }
 
 function applyRunner(s) {
+    const wasBusy = isBusy();
     state.runner = s;
     const busy = s && (s.state === 'busy' || s.state === 'starting');
     const retrying = Boolean(s && s.retry);
@@ -6181,6 +6456,12 @@ function applyRunner(s) {
     // nothing when there is no run, and this is the only thing that reports the
     // end of a turn to the log at all.
     if (!busy) { closeRun(SESSION_VIEW); closeRun(AGENT_VIEW); }
+
+    // A turn ending is when the file list is worth asking about again: the edits
+    // it made are on disk and its subagents have finished writing. On the end of
+    // a turn rather than on a timer, because between turns nothing changes and a
+    // drawer left open all afternoon should not shell out to git all afternoon.
+    if (wasBusy && !busy && state.changes.on && !state.changes.shut) loadChanges();
 
     // The status carries the pending ask too, so a window opening onto a session
     // that is already blocked draws the card without having seen the event.
@@ -8280,6 +8561,13 @@ dom.btnLgtm.addEventListener('click', () => sendMessage({ text: LGTM_PROMPT, can
 dom.tasksCollapse.addEventListener('click', () => showTasks(false));
 dom.tasksStrip.addEventListener('click', () => showTasks(true));
 
+dom.changesCollapse.addEventListener('click', () => collapseChanges(true));
+dom.changesStrip.addEventListener('click', () => collapseChanges(false));
+// Refresh means "ask git again about this directory", and only this one — the
+// work-in-flight board's answers for forty other worktrees are not stale
+// because you clicked here. See git.clearCache.
+dom.changesRefresh.addEventListener('click', () => loadChanges({ refresh: true }));
+
 for (const n of dom.taskScrim.querySelectorAll('[data-close-task]')) {
     n.addEventListener('click', closeTaskDialog);
 }
@@ -8314,6 +8602,10 @@ dom.btnDelete.addEventListener('click', () => {
     if (state.current) askDelete(state.current);
 });
 dom.delGo.addEventListener('click', confirmDelete);
+
+dom.btnChanges.addEventListener('click', () => {
+    if (state.current) showChanges(!state.changes.on);
+});
 
 dom.btnFolder.addEventListener('click', async () => {
     if (!state.current) return;

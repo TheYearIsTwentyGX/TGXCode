@@ -22,165 +22,25 @@
 //     per PR, because it wants merged ones too — which is why that code lives in
 //     `pulls.js` and not here, and why the cache it uses is shared.
 //
-// Everything here shells out, so all of it is cached: a dashboard left on screen
-// re-reads working trees every fifteen seconds, and GitHub every minute over in
-// `pulls.js`.
+// Everything here shells out, so all of it is cached — and neither cache is this
+// module's any more. Working trees live in `git.js`, which the session changes
+// panel asks the same question of and which therefore shares the answer; GitHub
+// lives in `pulls.js` along with everything else that asks it questions.
 
 const fs = require('fs');
 const path = require('path');
-const { execFile } = require('child_process');
 
-const { cached, mapLimit } = require('./memo');
+const { mapLimit } = require('./memo');
+const git = require('./git');
 const pulls = require('./pulls');
-
-// Working trees are local and cheap. GitHub is neither, and its cache lives in
-// `pulls.js` along with everything else that asks it questions.
-const STATUS_TTL_MS = 15_000;
 
 // Enough to see who has been in here without the row becoming a list.
 const SESSIONS_PER_WORKSPACE = 6;
 // Enough to recognise the change without pasting a `git status` into the UI.
 const FILE_SAMPLE = 10;
 
-const GIT_TIMEOUT_MS = 10_000;
 const GIT_CONCURRENCY = 8;
 const GH_CONCURRENCY = 4;
-
-const cache = {
-    /** @type {Map<string, {value?: any, pending?: Promise<any>, at: number}>} dir -> working state */
-    status: new Map(),
-};
-
-// ---------------------------------------------------------------------------
-// Plumbing
-// ---------------------------------------------------------------------------
-
-/**
- * Run a command and always resolve. A dashboard is a report on other people's
- * repositories: half of what it asks for is allowed to fail, and a directory
- * that has stopped being a checkout is an answer rather than an error.
- */
-function run(cmd, args, { cwd, timeout = GIT_TIMEOUT_MS } = {}) {
-    return new Promise((resolve) => {
-        execFile(cmd, args, { cwd, timeout, maxBuffer: 8 * 1024 * 1024 },
-            (err, stdout, stderr) => resolve({
-                ok: !err,
-                stdout: String(stdout || ''),
-                stderr: String(stderr || (err && err.message) || ''),
-                code: err ? (err.code ?? 1) : 0,
-            }));
-    });
-}
-
-const firstLine = (s) => String(s || '').trim().split('\n')[0] || '';
-
-/** Two paths naming the same directory, through symlinks. */
-function samePath(a, b) {
-    if (!a || !b) return false;
-    if (a === b) return true;
-    try { return fs.realpathSync(a) === fs.realpathSync(b); } catch { return false; }
-}
-
-// ---------------------------------------------------------------------------
-// Working trees
-// ---------------------------------------------------------------------------
-
-/**
- * What `git status` says about one directory.
- *
- * The directory has to be a checkout root of its own, and that test is the whole
- * reason this asks git twice. A worktree that was removed leaves its directory
- * behind whenever anything untracked was in it — `node_modules`, a build cache —
- * and because those directories sit *inside* the project (`.claude/worktrees/…`)
- * git happily answers about the parent repository instead. Taking that answer
- * would report the main checkout's modified files against every dead worktree
- * on disk.
- */
-async function workingState(dir) {
-    const top = await run('git', ['-C', dir, 'rev-parse', '--show-toplevel']);
-    if (!top.ok) return { ok: false, reason: 'not-a-repo', error: firstLine(top.stderr) };
-
-    const root = top.stdout.trim();
-    if (!samePath(root, dir)) return { ok: false, reason: 'left-behind', root };
-
-    const st = await run('git', [
-        // Paths relative to the repository root rather than to the cwd, so a
-        // sample line reads the same wherever the directory happens to be.
-        '-c', 'status.relativePaths=false',
-        '-C', dir, 'status', '--porcelain=v2', '--branch', '--untracked-files=normal',
-    ]);
-    if (!st.ok) return { ok: false, reason: 'status-failed', error: firstLine(st.stderr) };
-    return parseStatus(st.stdout);
-}
-
-function parseStatus(text) {
-    const out = {
-        ok: true, branch: null, upstream: null, ahead: 0, behind: 0,
-        staged: 0, unstaged: 0, untracked: 0, conflicts: 0, files: 0,
-        sample: [], detached: false,
-    };
-
-    for (const line of text.split('\n')) {
-        if (!line) continue;
-
-        if (line.startsWith('# ')) {
-            const sp = line.indexOf(' ', 2);
-            const key = sp === -1 ? line.slice(2) : line.slice(2, sp);
-            const value = sp === -1 ? '' : line.slice(sp + 1);
-            if (key === 'branch.head') {
-                if (value === '(detached)') out.detached = true;
-                else out.branch = value;
-            } else if (key === 'branch.upstream') {
-                out.upstream = value;
-            } else if (key === 'branch.ab') {
-                const m = /^\+(\d+) -(\d+)$/.exec(value);
-                if (m) { out.ahead = Number(m[1]); out.behind = Number(m[2]); }
-            }
-            continue;
-        }
-
-        const kind = line[0];
-        let entry = null;
-
-        if (kind === '1' || kind === '2') {
-            // 1 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <path>
-            // 2 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <X><score> <path>\t<orig>
-            const skip = kind === '1' ? 8 : 9;
-            const xy = line.split(' ', 2)[1] || '..';
-            const rest = afterFields(line, skip);
-            if (xy[0] !== '.') out.staged++;
-            if (xy[1] !== '.') out.unstaged++;
-            entry = { path: rest.split('\t')[0], status: xy };
-        } else if (kind === 'u') {
-            // u <XY> <sub> <m1> <m2> <m3> <mW> <h1> <h2> <h3> <path>
-            out.conflicts++;
-            entry = { path: afterFields(line, 10), status: 'UU' };
-        } else if (kind === '?') {
-            out.untracked++;
-            entry = { path: line.slice(2), status: '??' };
-        }
-
-        if (!entry) continue;
-        out.files++;
-        if (out.sample.length < FILE_SAMPLE) out.sample.push(entry);
-    }
-
-    out.dirty = out.files > 0;
-    return out;
-}
-
-/** Everything past the first `n` space-separated fields, spaces in it intact. */
-function afterFields(line, n) {
-    let at = 0;
-    for (let i = 0; i < n; i++) {
-        at = line.indexOf(' ', at);
-        if (at === -1) return '';
-        at++;
-    }
-    return line.slice(at);
-}
-
-const statusOf = (dir) => cached(cache.status, dir, STATUS_TTL_MS, () => workingState(dir));
 
 // ---------------------------------------------------------------------------
 // Assembly
@@ -224,7 +84,7 @@ const chipTime = (c) => (c.lastTs ? Date.parse(c.lastTs) : 0);
  * @param {{includeTest?: boolean, refresh?: boolean}} opts
  */
 async function build(index, { includeTest = false, refresh = false } = {}) {
-    if (refresh) { cache.status.clear(); pulls.clearCache(); }
+    if (refresh) { git.clearCache(); pulls.clearCache(); }
 
     const sessions = index.list({ limit: 100_000, includeTest });
 
@@ -272,7 +132,7 @@ async function build(index, { includeTest = false, refresh = false } = {}) {
     // -- ask git and GitHub --------------------------------------------------
     const allWorkspaces = [...projects.values()].flatMap(p => [...p.workspaces.values()]);
     const gitDone = mapLimit(allWorkspaces, GIT_CONCURRENCY, async (ws) => {
-        ws.git = await statusOf(ws.dir);
+        ws.git = await git.statusOf(ws.dir, { limit: FILE_SAMPLE });
     });
 
     // A repository per project from its remote, plus any a transcript named
@@ -402,4 +262,4 @@ async function build(index, { includeTest = false, refresh = false } = {}) {
     };
 }
 
-module.exports = { build, parseStatus };
+module.exports = { build };
