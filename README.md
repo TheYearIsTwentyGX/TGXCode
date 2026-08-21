@@ -181,8 +181,8 @@ of this PR" is a sentence every long session produces at least once, and until
 now it went nowhere: the agent had already written the prompt for the session
 that would fix it, and there was no way to hand that over.
 
-So sessions this app starts get one tool they would not otherwise have —
-`suggest_session`, from a small MCP server in `bridge/suggest-mcp.js` that the
+So sessions this app starts get a tool they would not otherwise have —
+`suggest_session`, from a small MCP server in `bridge/mcp.js` that the
 runner attaches with `--mcp-config`. The agent calls it with a prompt, a reason,
 and optionally a directory; the call lands in the transcript like any other tool
 call; the panel beside the conversation draws it as a task you can start in one
@@ -253,9 +253,11 @@ starts have it; a session you started in a terminal will not.
 
 Claude Code gives every running session a name and an inbox of its own, and an
 agent reaches another with `SendMessage({to: "<name>"})`. That is all its own
-work — the socket, the delivery, the loop guards. **This app builds no transport
-and dials no socket.** What it does is make the conversation visible, which it
-was not.
+work — the socket, the delivery, the loop guards. **This app dials no socket**, and
+for this feature it builds no transport either: what it does is make the
+conversation visible, which it was not. (It does build one transport of its own, for
+the case `SendMessage` cannot cover at all — a session that is not running. That is
+the next section, and it goes nowhere near this socket.)
 
 - **`@` in the composer** lists the sessions that are actually running, from
   Claude Code's own process registry, and inserts the one you pick as
@@ -286,6 +288,67 @@ One thing to know if messages seem to vanish: Claude Code has a
 inbound message waits for an interactive approval that a headless session has
 nobody to give, so it never arrives. That is the CLI's setting in your own
 `~/.claude/settings.json`, and not something this app writes.
+
+### And they can hand each other work
+
+The paragraph above is still true of `SendMessage`, and it stops at a wall: **the
+address only exists while the session does.** A name comes from
+`~/.claude/sessions/<pid>.json`, so a session that finished an hour ago cannot be
+reached at all — and since only four runners stay live and one is evicted after
+fifteen idle minutes, that is the ordinary state of a session rather than an edge
+case. The agent that just changed an API had no way to tell the session that owns
+the mobile client, because that session stopped when its turn ended.
+
+So there is one transport here after all, and it is worth being precise about what
+it is. It is not the peer socket — that is still Claude Code's, still versioned,
+still not dialled from here (see ROADMAP §Deliberately not doing). It is
+`POST /api/sessions/:id/handoff`, over the path this app already owned: **the
+bridge could always wake an idle session and did not know it.** `pool.ensure`
+spawns `claude --resume` when there is no process, which is what the composer has
+been doing every time you typed into a session that had stopped. A handoff is that
+same wake, addressed by session id rather than by a name that has expired, and
+reachable by an agent.
+
+- **`message_session` and `list_sessions`** join `suggest_session` in
+  `bridge/mcp.js`. The list is the counterpart to the `@` menu above and answers
+  the opposite question: not "who can receive a message right now" but "who could
+  be *given* work", which is nearly everybody.
+- **The woken session resumes in plan mode.** It reads the message, checks the
+  claim against the files it names, and comes back with a plan — so it lands in
+  *needs you* on the board, with something to approve, rather than having edited a
+  checkout nobody was watching. You are handed a decision, not a fait accompli.
+- **A session in plan mode cannot hand off**, and that turns out to be the right
+  shape rather than a limitation. Plan mode routes every tool that is not plainly
+  read-only through an approval card whatever is on `--allowedTools` — measured,
+  not assumed. So the sender this feature exists for still works, because an agent
+  that has just *changed* something was never in plan mode; and the session woken
+  *by* a handoff cannot pass the work on to a third one, which is the containment
+  the wrapper asks for in prose, enforced.
+- **The sender is told to stop there.** The tool's own reply says so, the wrapper
+  around the message says so, and the bridge enforces it: one handoff per pair per
+  minute, twenty an hour. Two agents that each think the other should know
+  something will otherwise wake each other for as long as the machine allows, and
+  every round costs a process and a turn. See `bridge/handoff.js`.
+- **It renders as work arriving, not as something you typed.** Its own wrapper and
+  its own card, deliberately not Claude Code's — reusing `<cross-session-message>`
+  would have drawn a card for free and never fired a notification, because the
+  count behind that is gated on a field only the CLI writes. Half-working silently
+  is worse than a parallel path.
+- **And it is not a turn you took either**, for the same reason peer messages are
+  not — but it takes real code to hold that line here. A peer message gets it free
+  from the `isMeta` flag the CLI sets; a handoff arrives down stdin as an ordinary
+  user message, so without an explicit gate in `scanMeta` one agent handing work to
+  another would quietly reorder your rail. `test/handoff.test.js` is mostly about
+  that one fact.
+- **A handoff that did not land is not reported as delivered.** This is the one
+  place the bridge waits on a spawn. When `claude --resume` is refused — a session
+  id still locked by a process that was killed — the composer's answer is to hand
+  your text back for another go; a handoff has nobody to hand it back to, and the
+  sender is a sentence away from telling you it passed the work on. So the route
+  watches for a few seconds and the tool reports the truth.
+- **Local callers only.** A phone may still send to a session by hand, one message
+  at a time; what it may not do is hand a token to something that wakes every
+  session on the machine.
 
 ### The send queue holds messages back on purpose
 
@@ -881,7 +944,8 @@ not.
 | `bridge/spinner.js` | What a turn in progress calls itself, out of `~/.tgxcode/verbs/` |
 | `bridge/spinner-verbs.json` | The verb catalogue, and the seed for that directory |
 | `bridge/suggestions.js` | What you did about a suggested follow-up |
-| `bridge/suggest-mcp.js` | The one tool this app gives a session: offer the next piece of work |
+| `bridge/mcp.js` | The tools this app gives a session: offer the next piece of work, find the other sessions, hand one of them a fact |
+| `bridge/handoff.js` | The rules a handoff has to pass: the loop guard, and what waking a session would run into |
 | `bridge/slash-commands.js` | What slash commands a directory has, for composer completion |
 | `bridge/auth.js` | The access token, and telling local from remote apart |
 | `bridge/tailscale.js` | What this machine is reachable as, for pairing |

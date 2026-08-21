@@ -39,6 +39,10 @@ const attachments = require('./attachments');
 const { TerminalPool } = require('./terminal');
 const commands = require('./commands');
 const { RunPool } = require('./runs');
+// Written here, read back by transcript.js. One format, and the two halves of it
+// live in one file so they cannot drift apart.
+const { handoffEnvelope } = require('./transcript');
+const { HandoffLimit, stateOf: handoffState, wakes, wakeFailure } = require('./handoff');
 
 const WEB_DIR = path.join(__dirname, '..', 'web');
 const CLIENT_HEADER = 'x-claude-sessions-client';
@@ -619,6 +623,14 @@ function remoteRefusal(pathname, method) {
     if (pathname === '/api/fs/mkdir') {
         return 'folders can only be created on the machine they live on';
     }
+    // A handoff starts a turn in a session the caller is not looking at, and can
+    // wake one that has no process at all. That is a reasonable thing for an
+    // agent on this machine to do and not a reasonable thing to reach in for from
+    // a phone: the blast radius of a leaked token would be every session on the
+    // machine, each spending tokens on words nobody typed.
+    if (/^\/api\/sessions\/[^/]+\/handoff$/.test(pathname) && method === 'POST') {
+        return 'a session can only be handed work from the machine it runs on';
+    }
     // Attaching a file writes it into a checkout, which is the mkdir clause above.
     //
     // This is the weakest of the refusals on this list and it is worth saying so:
@@ -668,6 +680,17 @@ function tooManyCreates() {
     CREATE_LIMIT.hits.push(now);
     return false;
 }
+
+/** A bounded `?limit=`, so one caller cannot ask for the whole index. */
+function limitOf(url, fallback, max) {
+    const n = Number(url.searchParams.get('limit'));
+    if (!Number.isFinite(n) || n <= 0) return fallback;
+    return Math.min(Math.floor(n), max);
+}
+
+// The brake on handoffs. One per bridge; see bridge/handoff.js for the two
+// windows it keeps and why a loop guard is needed at all.
+const handoffLimit = new HandoffLimit();
 
 /**
  * Log a remote request, once per minute per source rather than per request.
@@ -894,6 +917,55 @@ async function api(req, res, url, pathname, who) {
             }
         }
         return send(res, 200, { sessions, ready: index.ready });
+    }
+
+    // Who an agent could hand work to. Registered above /api/sessions/:id, or
+    // "addressable" would be read as a session id.
+    //
+    // **The counterpart to /api/peers, and the difference is the whole point.**
+    // That route answers "who can receive a message right now", which means live
+    // processes with an inbox, because Claude Code's own peer transport needs
+    // one. This answers "who could be *given* work", which is nearly everybody:
+    // a handoff goes through `pool.ensure`, so an idle session is resumed rather
+    // than unreachable. Since MAX_LIVE is 4 and a runner is evicted after
+    // fifteen idle minutes, having no process is the normal state of a session
+    // and this list is mostly sessions /api/peers cannot see at all.
+    //
+    // Archived sessions are left out. Filing one away is a statement that it is
+    // done, and an agent trawling for somewhere to send work should not reopen
+    // it. The route below does not re-check that: an id had to come from
+    // somewhere, and refusing one the user named themselves would be worse.
+    if (pathname === '/api/sessions/addressable' && req.method === 'GET') {
+        const from = url.searchParams.get('from');
+        const statuses = pool.statuses();
+        const rows = [];
+        for (const s of index.list({
+            query: url.searchParams.get('q') || '',
+            project: url.searchParams.get('project') || null,
+            limit: 100_000,
+            includeTest: cfg.IS_DEV,
+        })) {
+            if (s.archived) continue;
+            rows.push({
+                sessionId: s.sessionId,
+                title: s.title,
+                cwd: s.cwd,
+                projectName: s.projectName,
+                // The worktree's short name, not the whole `worktree` object the
+                // summary carries — this is a label a model prints in a line, and
+                // the rest of that object is about paths it has no use for.
+                branch: (s.worktree && s.worktree.name) || s.gitBranch || null,
+                lastActive: s.lastTs || null,
+                // idle | working | elsewhere — what a handoff would run into, and
+                // three answers rather than the taskboard's two. See handoff.js.
+                state: handoffState(s, statuses[s.sessionId] || null),
+                self: !!from && s.sessionId === from,
+            });
+        }
+        return send(res, 200, {
+            sessions: rows.slice(0, limitOf(url, 30, 200)),
+            ready: index.ready,
+        });
     }
 
     // Every suggested follow-up, across every session.
@@ -1284,6 +1356,113 @@ async function api(req, res, url, pathname, who) {
             const status = r.status();
             return send(res, 200, {
                 ok: true, id: entry.id, cwd, fork: !!body.fork, status,
+                queued: status.queue.some(q => q.id === entry.id),
+            });
+        }
+
+        // --- handoff -------------------------------------------------------
+        // One session telling another something it needs to know, and waking it
+        // to deal with it. Reached by `message_session` in bridge/mcp.js.
+        //
+        // **The wake needed no new machinery.** `pool.ensure` already spawns
+        // `claude --resume` when there is no process, so /send has been able to
+        // do this since it existed; what was missing was an address an agent
+        // could use, since Claude Code's peer names only exist while a process
+        // does. So this is /send with four differences, and each is the reason it
+        // is not a flag on /send:
+        //
+        //   * the mode is not the caller's to choose. Forced to `plan`, so a
+        //     woken session comes back with a plan for the user instead of
+        //     editing a checkout nobody is watching.
+        //   * refusals a person would never hit. Handing work to yourself, and
+        //     handing it to a session running in a terminal, which /send only
+        //     discovers by failing a spawn.
+        //   * a rate limit, because the sender is a model and the recipient can
+        //     send back. See bridge/handoff.js.
+        //   * the message is wrapped, so it renders as work arriving rather than
+        //     as something the user typed. See handoffEnvelope in transcript.js.
+        //
+        // Local callers only — see remoteRefusal.
+        if (tail === 'handoff' && req.method === 'POST') {
+            const body = await readJson(req);
+            const text = body.text ? String(body.text).trim() : '';
+            const from = body.from ? String(body.from) : null;
+            if (!text) {
+                return send(res, 400, {
+                    error: 'text is required — say what the other session needs to know.',
+                });
+            }
+
+            // Before the lookup, as on /send: an answer that depends on whether
+            // the session exists is a way to ask which ids are real.
+            if (from && from === sessionId) {
+                return send(res, 400, {
+                    error: 'that is this session. A handoff is for telling another session '
+                        + 'something; write it in your own reply instead.',
+                });
+            }
+
+            const summary = index.summary(sessionId);
+            if (!summary) {
+                return send(res, 404, {
+                    error: 'no session with that id. Use list_sessions to get one — the id '
+                        + 'has to come from there, not from a name or a title.',
+                });
+            }
+
+            // A session held by a terminal, VS Code, or a background agent. Said
+            // here rather than left to the spawn, which would fail with the same
+            // reason a few seconds later and after a process had been started.
+            const st = pool.statuses()[sessionId] || null;
+            if (handoffState(summary, st) === 'elsewhere') {
+                return send(res, 409, {
+                    error: 'that session is running somewhere else — a terminal, or a '
+                        + 'background agent — so it cannot be resumed from here. Two writers '
+                        + 'cannot append to one transcript. Pick another session, or say what '
+                        + 'you found in your reply.',
+                });
+            }
+
+            const refusal = handoffLimit.refuse(from, sessionId);
+            if (refusal) return send(res, 429, { error: refusal });
+
+            const sender = from ? index.summary(from) : null;
+            const cwd = sessionCwd(summary);
+            // Read before ensure(), which is about to change the answer.
+            const woke = wakes(st);
+
+            const r = pool.ensure(sessionId, { cwd, permissionMode: 'plan' });
+            const entry = r.send(handoffEnvelope({
+                text,
+                // Provenance, not authority. The id is whatever the sending
+                // session was started as, so a session that later forked reports
+                // the one it began with — which is why nothing downstream trusts
+                // this to find a session, and why an unknown `from` is carried
+                // through rather than refused.
+                fromId: from,
+                fromTitle: sender ? sender.title : null,
+                fromProject: sender ? sender.projectName : null,
+                title: body.title ? String(body.title).trim() : null,
+            }));
+            // A handoff that never landed must not be reported as delivered. The
+            // sender is about to finish its turn and tell the user it passed the
+            // work on; there is nobody to hand the message back to. So when the
+            // send is what started the process, wait briefly to see whether it
+            // started. See wakeFailure.
+            if (woke) {
+                const failure = await wakeFailure(r);
+                if (failure) {
+                    return send(res, 502, {
+                        error: `that session could not be resumed, so nothing was delivered. `
+                            + `${failure.message} Say what you found in your reply instead, and `
+                            + 'mention that the handoff did not go through.',
+                    });
+                }
+            }
+
+            const status = r.status();
+            return send(res, 200, {
+                ok: true, id: entry.id, sessionId, cwd, woke, status,
                 queued: status.queue.some(q => q.id === entry.id),
             });
         }
@@ -2388,6 +2567,13 @@ index.on('changed', () => broadcast('sessions-changed', { at: Date.now() }));
 index.on('peer-message', (p) => {
     broadcast('peer-message', p);
     filed(notifications.peerMessage(p));
+});
+// A handoff this bridge delivered. Watched in the transcript rather than reported
+// by the route that sent it, for the same reason as above and one more: the route
+// knows a message was queued, and this knows it arrived.
+index.on('handoff', (h) => {
+    broadcast('handoff', h);
+    filed(notifications.handoff(h));
 });
 // A session starting or stopping in a terminal writes nothing to a transcript,
 // so the registry is the only thing that notices — the rail would otherwise wait

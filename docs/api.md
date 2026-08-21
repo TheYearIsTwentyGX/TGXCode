@@ -115,11 +115,11 @@ the thing you are about to approve is running on a machine you are sitting at.
 `permissionMode` of `bypassPermissions` or `dontAsk` on both create and send; all
 of `/api/terminals/*`; all of `/api/runs/*`; `POST /api/commands/run`;
 `/api/shutdown`; `/api/devservers/stop`; `/api/devbrowser/*`;
-`POST /api/sessions/:id/reveal`; `POST /api/fs/mkdir`.
+`POST /api/sessions/:id/reveal`; `POST /api/sessions/:id/handoff`; `POST /api/fs/mkdir`.
 
-Note the asymmetry in the last two: `GET /api/fs` and `GET /api/commands` stay
-readable remotely, so those refusals are on the exact path rather than the
-prefix. Reading the tree answers "where could a session start", and a phone may
+Note the asymmetry around `/api/fs` and `/api/commands`: `GET /api/fs` and
+`GET /api/commands` stay readable remotely, so those refusals are on the exact path
+rather than the prefix. Reading the tree answers "where could a session start", and a phone may
 already start one; reading what a project declares gives away nothing that is not
 in its repository. Creating a directory, or running one of those commands, is
 reaching past the app into the machine.
@@ -265,6 +265,7 @@ strings by a client that then rendered `[object Object]`:
 | `agent-done` | `taskId`, `toolUseId`, `status` (`"completed"` unless the notification said otherwise), `summary`, `result` — all strings or null — plus `tokens`, `toolUses`, `durationMs`, numbers or null |
 | `suggestion` | `prompt` string · `why`, `title` strings or null · `cwd` string — follow-up work an agent offered rather than did |
 | `peer-message` | `from` (socket address), `fromName` (the peer's name, which is its address), `text` |
+| `handoff` | `text` string — work another session handed this one, which is what woke it · `from` (the sending session's id), `fromTitle`, `fromProject`, `title`, all strings or null |
 | `compact` | `text` string |
 
 **`tool.status` is `"pending"`, not absent, while a call is running**, and `"ok"` or
@@ -521,6 +522,38 @@ and are null where there is not.
 another and there is no other form of address, which is what this route is for:
 getting the exact name in front of somebody. Only sessions that are running *and*
 have an inbox are listed.
+
+For the sessions that are *not* running — which is most of them — see
+`GET /api/sessions/addressable` below. The two routes look similar and answer
+different questions, and the difference is the whole reason both exist.
+
+### `GET /api/sessions/addressable?q=&project=&from=&limit=`
+
+`{ sessions: [{sessionId, title, cwd, projectName, branch, lastActive, state, self}],
+ready }` — who an agent could **hand work to**, most recently active first.
+
+The counterpart to `GET /api/peers`, and worth reading beside it. That route answers
+"who can receive a message right now", so it lists live processes with an inbox:
+Claude Code's peer transport needs one, and a name only exists while a process does.
+This answers "who could be *given* work", which is nearly everybody — a handoff goes
+through `pool.ensure`, so a session with no process is resumed rather than
+unreachable. Since a runner is evicted after fifteen idle minutes and only four stay
+live, having no process is the ordinary state of a session, and most of this list is
+sessions `/api/peers` cannot see at all.
+
+`state` is what a handoff would run into, and it is three answers where the taskboard
+gives two:
+
+| | |
+|---|---|
+| `idle` | no turn in flight. A handoff resumes it. The usual case. |
+| `working` | a turn is running, or messages are queued. A handoff is queued behind it. |
+| `elsewhere` | a process, but not one of ours — a terminal, VS Code, a background agent. `claude --resume` refuses it, so a handoff is refused too. |
+
+`?from=` marks the caller's own row `self`, so the tool offering this list can rule
+out the one session it must not pick. Archived sessions are left out: filing one away
+says it is finished, and an agent looking for somewhere to send work should not
+reopen it.
 
 ### `GET /api/overview`
 
@@ -812,6 +845,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `taskboard` | the task board; every ~3s while watched, and only when it has actually changed. Never carries `?idle=all` |
 | `sessions-changed` | `{at}` — a nudge to refetch the list |
 | `peer-message` | `{at, sessionId, from, count}` — another session messaged this one. The message itself is in the transcript, so a client tailing it has already drawn it; this is for everything that is not the open pane |
+| `handoff` | `{at, sessionId, from, count}` — another session handed this one work, and it was resumed to deal with it. Same shape and same reasoning as above; watched in the transcript rather than reported by the route, so it fires when the message *arrived* rather than when it was queued |
 | `suggestion-changed` | `{at, sessionId, toolUseId}` — a suggested follow-up was started, dismissed, or undone, possibly in another window |
 | `session-deleted` | `{sessionId, title}` |
 | `notification` | a whole notification row, just filed — the same shape `GET /api/notifications` returns, so an open history view need not refetch |
@@ -918,6 +952,56 @@ What the process receives is the text plus a trailing list of the paths, and an 
 image block for each attachment that really is a PNG, JPEG, GIF or WebP. The list is
 parsed back off the message before the transcript renders it (`files[]` on the `user`
 event above), so the paths are not shown twice.
+
+### `POST /api/sessions/:id/handoff`
+
+`{from, text, title?}` → `{ok, id, sessionId, cwd, woke, status, queued}`. **Local
+callers only.**
+
+One session telling another something it needs to know, and waking it to deal with
+it. Reached by the `message_session` tool in `bridge/mcp.js`; `:id` comes from
+`GET /api/sessions/addressable`.
+
+The wake itself needed nothing new — `pool.ensure` has always spawned
+`claude --resume` when there is no process, so `/send` could do this already. What
+was missing was an address an agent could use, since a peer name only exists while a
+process does. So this is `/send` with four differences, and they are the reason it is
+not a flag on `/send`:
+
+- **The mode is not the caller's to choose.** Forced to `plan`, so a woken session
+  comes back with a plan for you rather than editing a checkout nobody is watching.
+  There is no `permissionMode` field to send.
+- **Refusals a person would never hit.** `400` for handing work to yourself (checked
+  before the lookup, so the answer cannot be used to ask which ids are real), `409`
+  for a target whose `state` is `elsewhere` — which `/send` only discovers by failing
+  a spawn a few seconds later.
+- **A rate limit**, `429`: one handoff per sender-recipient pair per minute, twenty
+  an hour across the bridge. The sender is a model and the recipient can send back,
+  so a ping-pong is a real failure mode rather than a theoretical one. See
+  `bridge/handoff.js`.
+- **The message is wrapped**, in `<session-handoff>`, so it renders as work arriving
+  rather than as something you typed. See `handoffEnvelope` in `bridge/transcript.js`.
+
+`woke` says whether this resumed a stopped session or joined one already up — the one
+thing the sender cannot work out for itself.
+
+**A handoff that did not land is not reported as delivered.** `502` when the wake
+failed — a session id still locked by a process that was killed, a transcript another
+writer holds. This is the one place the route waits: when the send is what started
+the process it watches the runner for about five seconds and answers with what
+happened. `/send` needs none of that because a person gets their text back in the
+composer and can try again; the session that sent a handoff is finishing its turn and
+is about to tell the user it passed the work on, so a silent drop is the worst
+outcome available.
+
+`from` is **provenance, not authority**. It is whatever the sending session was
+started as, so a session that has forked since reports the id it began with. Nothing
+downstream uses it to find a session; an unknown one is carried through rather than
+refused, and the card simply shows no sender.
+
+Every refusal here is phrased for the model that will read it, because that is who
+reads it — a body that only says `429` leaves an agent with nothing to do but try
+again.
 
 ### `POST /api/sessions/:id/attachments?name=…`
 

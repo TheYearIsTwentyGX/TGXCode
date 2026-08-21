@@ -1389,6 +1389,23 @@ a:hover { text-decoration: underline; }
 }
 .ev-peer-message .subagent-btns { margin-top: 8px; }
 
+/* work handed to this session by another one, which is what started the turn
+   under it. Purple rather than the peach above: a peer message is a session
+   being talked to, this is a session being given something, and it borrows the
+   colour of a plan because a plan is what it produces. */
+.ev-handoff .ev-body {
+    border-left: 2px solid var(--purple);
+    padding: 4px 0 10px 12px;
+    margin: 6px 0;
+}
+.ev-handoff .ev-label { color: var(--purple); }
+.ev-handoff .peer-sub {
+    margin: 1px 0 4px;
+    font: 400 12px/1.5 var(--sans);
+    color: var(--text-4);
+}
+.ev-handoff .subagent-btns { margin-top: 8px; }
+
 /* system notices */
 .ev-system .ev-body {
     background: var(--blue-tint);
@@ -4294,6 +4311,7 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 .note-row[data-type="failed"] { --accent: var(--red); }
 .note-row[data-type="agent-done"] { --accent: var(--text-4); }
 .note-row[data-type="peer-message"] { --accent: var(--peach); }
+.note-row[data-type="handoff"] { --accent: var(--purple); }
 
 /* Nothing ever interrupted you for these, so they do not get to shout here
    either. They are in the list to answer "what has been going on", which is a

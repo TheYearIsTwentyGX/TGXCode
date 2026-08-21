@@ -1663,6 +1663,7 @@ function renderEvent(ev) {
         case 'tool': return renderTool(ev);
         case 'agent-done': return renderAgentDone(ev);
         case 'peer-message': return renderPeerMessage(ev);
+        case 'handoff': return renderHandoff(ev);
         case 'system': return renderSystem(ev);
         case 'compact': return row(ev, 'compact', 'context compacted');
         default: return null;
@@ -1788,7 +1789,7 @@ function renderAgentDone(ev) {
 // Work an agent noticed and did not do, drawn beside the conversation rather
 // than in it.
 //
-// The agent files these through a tool this app gives it (bridge/suggest-mcp.js),
+// The agent files these through a tool this app gives it (bridge/mcp.js),
 // so an offer is a tool call in the transcript like any other — which is why it
 // survives a reload, appears in a second window, and can be read out of a
 // session this bridge does not own. Nothing about the offer is stored here; only
@@ -2402,6 +2403,41 @@ function renderPeerMessage(ev) {
     if (btns.length) body.push(el('div', { class: 'subagent-btns' }, ...btns));
 
     return row(ev, 'peer-message', ...body);
+}
+
+/**
+ * Work handed to this session by another one.
+ *
+ * Beside renderPeerMessage rather than folded into it, because the two answer
+ * different questions. A peer message arrived at a session that was already
+ * running and has a live sender to reply to. A handoff *started* this turn —
+ * the session had very likely stopped, and the sender has very likely finished
+ * — so there is nobody to reply to and the interesting fact is that the session
+ * is awake at all. Hence no Reply button: the sender is addressed by session id,
+ * not by a name the composer could insert, and the thing to do about a handoff
+ * is read the plan the session is about to produce.
+ *
+ * The card is drawn from the wrapper's attributes rather than from the peer
+ * list, so it needs no fetch and does not go through warmPeers.
+ */
+function renderHandoff(ev) {
+    const who = ev.fromTitle || 'another session';
+    const body = [el('div', { class: 'ev-label' }, `Handed to this session by ${who}`)];
+    if (ev.title) body.push(el('div', { class: 'peer-sub' }, ev.title));
+    else if (ev.fromProject) body.push(el('div', { class: 'peer-sub' }, ev.fromProject));
+    body.push(el('div', { class: 'prose', html: renderMarkdown(ev.text || '') }));
+
+    // Only when the sender is a session this app can show. `from` is the id the
+    // sending session was *started* as, so a session that forked since is not
+    // findable by it — which is why this is a button that may not appear rather
+    // than a link that may not work.
+    if (ev.from && state.sessions.some(s => s.sessionId === ev.from)) {
+        body.push(el('div', { class: 'subagent-btns' },
+            el('button', { class: 'more-btn', type: 'button',
+                onclick: () => openSession(ev.from) }, 'Open the session that sent this')));
+    }
+
+    return row(ev, 'handoff', ...body);
 }
 
 function renderSystem(ev) {
@@ -3038,6 +3074,22 @@ function resolveAsk(outcome) {
 /** One-line summary of what a tool call is doing, shown on the collapsed row. */
 function toolSummary(ev) {
     const i = ev.input || {};
+
+    // Handing work to another session. Before the switch because the CLI prefixes
+    // an MCP tool with its server — `mcp__claude-sessions__message_session` — and
+    // the suffix is the part worth matching, for the same reason
+    // SUGGEST_TOOL_SUFFIX is matched that way in bridge/transcript.js.
+    //
+    // Worth a case of its own rather than the default's "first string value",
+    // which would show a bare session id: the recipient is the whole point of the
+    // call, and an id says nothing about who it reached.
+    if (ev.name && ev.name.endsWith('__message_session')) {
+        const to = state.sessions.find(s => s.sessionId === i.sessionId);
+        const who = to ? (to.title || to.projectName || i.sessionId) : i.sessionId || '?';
+        const said = typeof i.text === 'string' ? i.text : '';
+        return said ? `to ${who}: ${clip(said, 60)}` : `to ${who}`;
+    }
+
     switch (ev.name) {
         case 'Bash': return i.command || i.description || '';
         case 'Read': return i.file_path + (i.offset ? `  :${i.offset}` : '');
@@ -4974,6 +5026,7 @@ const NOTE_LABEL = {
     failed: 'Failed',
     'agent-done': 'Subagent done',
     'peer-message': 'From another session',
+    handoff: 'Handed work',
 };
 
 // The runner's vocabulary for how an ask ended, said the way a person would.
