@@ -100,6 +100,58 @@ running `npm run dev` are fine from wherever you are. The rule is about writing
 to tracked files: if you are about to change one, be in a worktree. When in
 doubt, make one — it costs a second and nothing is lost by it.
 
+## Leave `docs/api.md` true before you land
+
+**If your change touched the bridge's wire surface, updating `docs/api.md` is part
+of the change, not a follow-up.** Wire surface means: a route added, removed or
+renamed; a request or response field added, removed, retyped or given a new
+meaning; a new `/api/events` event or a new payload field on an existing one; a
+status code, a refusal rule, a local/remote classification, a required header, a
+cap or a rate limit. If a client would behave differently after your commit, the
+document has to say so before you land it.
+
+This is heavier than the usual "keep the docs current" because there is now a
+client that cannot read the code. `~/Other/tgxcode-mobile` is a native Android
+app — the third client of this bridge, alongside `web/app.js` and `web/mobile.js`
+— and its whole design premise is that `docs/api.md` *is* the contract: it adds
+no code to this repo, and anything it needs and cannot get from that file is
+recorded as a gap to be fixed here. An agent working in that project reads
+`docs/api.md` and nothing else of ours. So a field that changed shape and was
+never written down does not produce a merge conflict or a failing test; it
+produces a phone that silently renders the wrong thing, and a session that spends
+an afternoon finding out why.
+
+That has already happened, more than once, which is what this section is made of.
+Four fields were documented by name alone and turned out to be
+objects — `user.command`, `tool.result.patch` and `tool.agent` in the event table,
+and the `status` a send returns. A whole event kind, `tool-result`, was never listed, so the phone client
+left every tool spinning while you watched a live turn. And
+`X-Claude-Sessions-Client: 1` has been mandatory on every non-GET `/api/` route
+since the CSRF guard landed, without appearing in the document at all — so the
+first thing a new client does is 403 on its entire write surface.
+
+Three habits follow from that:
+
+- **Write the type, not the field name.** `command` in a table cell is a lie a
+  reader can act on; `command {name, args}` is not. An object, an array of
+  objects, "a string or null" — say which.
+- **Say when a route is narrower than it looks.** `/api/sessions` and
+  `/api/dashboard` carry a *four-field* `runner`, not the full `runner-status`
+  payload; a client that reads `runner.pendingPermission` there gets `undefined`
+  forever and no error. The same goes for a response that is eventually consistent:
+  `POST /api/sessions` returns an id that `GET /api/sessions/:id` 404s on for a
+  few seconds, and the obvious client — navigate straight to the new id — reports
+  "session not found" about a session that is being created perfectly well.
+- **Fix the document rather than the reader.** If a client had to discover
+  something by experiment, that discovery belongs in `docs/api.md` in the same
+  commit. Both directions: gaps that `~/Other/tgxcode-mobile/README.md` reports
+  under *Things found while building this* are ours to close, and closing one
+  means editing `docs/api.md`, not replying in a transcript.
+
+`docs/remote.md` is the same deal for anything you change about the local/remote
+split, and `README.md` §Layout for a new module. `docs/api.md` is the one with a
+client depending on it.
+
 ## Landing what you finished
 
 `npm run land`, from the worktree you worked in, merges the pull request for the
