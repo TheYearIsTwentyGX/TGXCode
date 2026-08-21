@@ -107,6 +107,24 @@
       <span id="notes-badge" class="bar-badge" hidden></span>
     </button>
 
+    <!-- Work set up but not started: a whole first message, with its directory,
+         model and permission mode already chosen, waiting for a merge or for
+         quota. Last in the bar and last on the Ctrl ladder, which is the same
+         ordering the rest of it follows — most demanding to least, and a draft
+         demands nothing yet. -->
+    <button id="btn-drafts" class="bar-btn" type="button" aria-pressed="false"
+            title="Sessions set up but not started (Ctrl+6)">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M5.5 3.7h8.2l4.8 4.8v11.8a1.8 1.8 0 0 1-1.8 1.8H5.5a1.8 1.8 0 0 1-1.8-1.8V5.5a1.8 1.8 0 0 1 1.8-1.8Z"
+              stroke="currentColor" stroke-width="1.7"/>
+        <path d="M13.4 3.9v4.7h4.7" stroke="currentColor" stroke-width="1.7"/>
+        <path d="M7.6 13.2h7M7.6 16.8h4.4" stroke="currentColor"
+              stroke-width="1.7" stroke-linecap="round"/>
+      </svg>
+      <span>Drafts</span>
+      <span id="dr-badge" class="bar-badge" hidden></span>
+    </button>
+
     <!-- The same sessions, on a phone. Icon-only: it is a setup step you do once
          per device, not something to give a word of the bar to forever. -->
     <button id="btn-pair" class="bar-btn icon-only" type="button"
@@ -615,6 +633,21 @@ checks, and merge it once they pass.">LGTM</button>
       <div id="tb-body" class="tb-body"></div>
     </section>
 
+    <!-- Sessions set up but not started. Every other view here is derived from
+         something that already happened; this one is the only screen that is
+         about work that has not begun, which is why it is a panel of its own
+         rather than a fifth column on the task board. -->
+    <section id="drafts" class="drafts" hidden aria-label="Drafts">
+      <header class="dr-head">
+        <div>
+          <h1 class="dr-title">Drafts</h1>
+          <p id="dr-sub" class="dr-sub">Sessions you have set up but not started.</p>
+        </div>
+        <button id="dr-new" class="dash-btn" type="button">New draft</button>
+      </header>
+      <div id="dr-body" class="dr-body"></div>
+    </section>
+
     <div id="placeholder" class="empty">
       <h2>No session selected</h2>
       <p>Pick a session from the board, or start a new one. Sessions running in a
@@ -709,6 +742,11 @@ checks, and merge it once they pass.">LGTM</button>
       </div>
       <span class="spacer"></span>
       <button class="btn" data-close type="button">Cancel</button>
+      <!-- The same dialog, kept rather than run. Everything above is already the
+           whole of a create call, so holding it back needs no second form — only
+           a second button, and a title that says which of the two you are doing.
+           See openNew() and drSave() in app.js. -->
+      <button id="new-save" class="btn" type="button">Save as draft</button>
       <button id="new-go" class="btn primary" type="button">Start</button>
     </div>
   </div>

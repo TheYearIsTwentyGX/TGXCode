@@ -52,6 +52,19 @@ async function postFile(path, file) {
     return data;
 }
 
+/**
+ * A partial update. The one route that takes one is `PATCH /api/drafts/:id`,
+ * where the verb is load-bearing: a field left out of the body is left alone,
+ * which is how the dialog can save a change to the message without restating the
+ * model and the permission mode it did not touch.
+ */
+async function patch(path, body) {
+    const r = await fetch(path, { method: 'PATCH', headers: HEADERS, body: JSON.stringify(body || {}) });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    return data;
+}
+
 async function del(path) {
     const r = await fetch(path, { method: 'DELETE', headers: HEADERS });
     const data = await r.json().catch(() => ({}));
@@ -273,6 +286,22 @@ const state = {
         // in the DOM so it survives the redraws the board does while agents work.
         draft: '',
         order: new Map(), freshRank: 0, tailRank: 0 },
+    // Sessions set up but not started.
+    //
+    // **Not the other two `drafts` in this file.** `state.live.drafts` above and
+    // `state.taskboard.draft` are half-typed text held so a redraw cannot eat it,
+    // and `saveDraft`/`loadDraft` near the top are the composer's per-session
+    // localStorage. These are the real thing: whole create calls, stored by the
+    // bridge, that outlive the window.
+    //
+    // No `watching` and no stable-order machinery, unlike the two boards above.
+    // Nothing here changes unless somebody changes it, so there is no tick to
+    // gate and no card that could slide out from under the cursor — the bridge
+    // pushes the whole list on `drafts-changed` and this holds it as sent.
+    //
+    // `editing` is the id the dialog is currently editing, or null when it is
+    // about to make a new one. It is what tells Save which verb to use.
+    drafts: { open: false, rows: [], at: 0, loading: false, error: null, editing: null },
     // Sessions blocked on an answer, kept whether or not the board is open, so
     // the badge on a shut board still says how many people are waiting.
     waiting: new Set(),
@@ -317,12 +346,13 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'btn-dash', 'dash-badge', 'dash', 'dash-sub', 'dash-body', 'dash-refresh',
     'btn-notes', 'notes-badge', 'notes', 'notes-sub', 'notes-body',
     'btn-taskboard', 'tb-badge', 'taskboard', 'tb-sub', 'tb-body', 'tb-refresh',
+    'btn-drafts', 'dr-badge', 'drafts', 'dr-sub', 'dr-body', 'dr-new',
     'notes-notable', 'notes-all', 'notes-clear',
     'lock', 'lock-text', 'lock-fork', 'lock-anyway',
     'btn-live', 'live-badge', 'live', 'live-sub', 'live-body', 'live-focus', 'focus-exit',
     'live-side', 'live-side-label', 'live-side-a', 'live-side-b',
     'new-scrim', 'new-cwd', 'new-picker', 'new-prompt', 'new-model', 'new-perm',
-    'new-test', 'new-test-row', 'new-go',
+    'new-test', 'new-test-row', 'new-go', 'new-save', 'new-title',
     'new-tab-recent', 'new-tab-browse', 'new-browse', 'new-roots', 'new-crumbs',
     'new-tree', 'new-mkdir', 'new-mkdir-name', 'new-mkdir-go', 'new-browse-note',
     'del-scrim', 'del-what', 'del-meta', 'del-go',
@@ -3869,7 +3899,10 @@ function showLive(on) {
     // All of them, not just the dashboard — History had the same gap all along
     // and it only became visible once Ctrl+3 had to reach the live board past
     // whatever was already up.
-    if (on) { state.dash.open = false; state.notes.open = false; state.taskboard.open = false; }
+    if (on) {
+        state.dash.open = false; state.notes.open = false;
+        state.taskboard.open = false; state.drafts.open = false;
+    }
     paintPanels();
     syncBoardWatch();
     syncTaskboardWatch();
@@ -4000,6 +4033,9 @@ function rememberView() {
         if (state.live.open) q.set('live', '1');
     } else if (state.dash.open) {
         q.set('view', 'dashboard');
+        if (state.live.open) q.set('live', '1');
+    } else if (state.drafts.open) {
+        q.set('view', 'drafts');
         if (state.live.open) q.set('live', '1');
     } else if (state.live.open) {
         q.set('view', 'live');
@@ -4747,14 +4783,16 @@ function paintPanels() {
     const docked = state.live.open && Boolean(state.current) && !state.focus;
     const full = state.live.open && !docked;
 
-    // Three whole-screen panels, and showDash/showNotes/showTaskboard keep them
-    // exclusive, so "one of them is up" is the only thing anything below has to
-    // ask.
-    const covered = state.dash.open || state.notes.open || state.taskboard.open;
+    // Four whole-screen panels, and showDash/showNotes/showTaskboard/showDrafts
+    // keep them exclusive, so "one of them is up" is the only thing anything
+    // below has to ask.
+    const covered = state.dash.open || state.notes.open || state.taskboard.open
+        || state.drafts.open;
 
     dom.dash.hidden = !state.dash.open;
     dom.notes.hidden = !state.notes.open;
     dom.taskboard.hidden = !state.taskboard.open;
+    dom.drafts.hidden = !state.drafts.open;
     dom.live.hidden = !state.live.open || covered;
     dom.live.dataset.mode = docked ? 'dock' : 'full';
     // The orientation lives on both: `main` has to change its flex direction,
@@ -4767,7 +4805,8 @@ function paintPanels() {
     dom.placeholder.hidden = covered || state.live.open || Boolean(state.current);
 
     for (const [btn, on] of [[dom.btnDash, state.dash.open], [dom.btnLive, state.live.open],
-        [dom.btnNotes, state.notes.open], [dom.btnTaskboard, state.taskboard.open]]) {
+        [dom.btnNotes, state.notes.open], [dom.btnTaskboard, state.taskboard.open],
+        [dom.btnDrafts, state.drafts.open]]) {
         btn.classList.toggle('on', on);
         btn.setAttribute('aria-pressed', String(on));
     }
@@ -4778,8 +4817,11 @@ function paintPanels() {
 
 function showDash(on) {
     state.dash.open = on;
-    // Three whole screens; one at a time.
-    if (on) { state.notes.open = false; state.taskboard.open = false; }
+    // Four whole screens; one at a time.
+    if (on) {
+        state.notes.open = false; state.taskboard.open = false;
+        state.drafts.open = false;
+    }
     // The live board is not closed by this, only covered. It is a strip you
     // leave up; the work-in-flight board is a whole screen you go and read and
     // then come back from, and coming back should find things as you left them.
@@ -5054,7 +5096,10 @@ let pendingJump = null;
 
 function showNotes(on) {
     state.notes.open = on;
-    if (on) { state.dash.open = false; state.taskboard.open = false; }
+    if (on) {
+        state.dash.open = false; state.taskboard.open = false;
+        state.drafts.open = false;
+    }
     paintPanels();
     syncBoardWatch();
     syncTaskboardWatch();
@@ -5242,8 +5287,11 @@ function syncTaskboardWatch() {
 
 function showTaskboard(on) {
     state.taskboard.open = on;
-    // Three whole screens; one at a time.
-    if (on) { state.dash.open = false; state.notes.open = false; }
+    // Four whole screens; one at a time.
+    if (on) {
+        state.dash.open = false; state.notes.open = false;
+        state.drafts.open = false;
+    }
     paintPanels();
     syncBoardWatch();
     syncTaskboardWatch();
@@ -5780,6 +5828,290 @@ function tbArchive(s) {
     toast(`Archived “${clip(s.title, 40)}”.`, 'ok');
 }
 
+// ── drafts ───────────────────────────────────────────────────────────────
+//
+// Sessions set up but not started.
+//
+// Every other screen in this app is a view over something that already happened:
+// a transcript, a running process, a task an agent raised, a notification that
+// was sent. This one is the only one about work that has not begun — which is why
+// it is a panel rather than a fifth column on the task board, and why the bridge
+// keeps a file for it instead of deriving it from anything.
+//
+// **A draft is a whole create call, held back.** Not a note about a session: the
+// same working directory, first message, model and permission mode that
+// `POST /api/sessions` takes, validated the same way when it is saved, so
+// pressing Start cannot fail for any reason you could have been told about
+// earlier. That is also why there is no second form — the Start-a-session dialog
+// already collects exactly these fields, so it grew a second button instead.
+//
+// **Nothing here moves on its own**, so none of the two boards' machinery is
+// needed: no watcher-gated tick to subscribe to, and no `tbRememberOrder` ranks
+// to stop a card sliding out from under the cursor. The bridge pushes the whole
+// list on `drafts-changed` whenever somebody changes something, and this draws it
+// in the order it arrived — newest-edited first.
+
+function showDrafts(on) {
+    state.drafts.open = on;
+    // Four whole screens; one at a time.
+    if (on) {
+        state.dash.open = false; state.notes.open = false;
+        state.taskboard.open = false;
+    }
+    paintPanels();
+    syncBoardWatch();
+    // This panel has no watch of its own — the push is unconditional — but it
+    // *closes* the task board, and the board's ~3s `taskboard.build` on the bridge
+    // only stops when somebody says they have stopped watching. Leaving this out
+    // let that tick run for the rest of the session.
+    syncTaskboardWatch();
+
+    if (on) {
+        // Draw whatever is already held so the panel is never briefly empty, and
+        // fetch behind it. Unlike the two boards there is no subscribe to wait
+        // on: the push is unconditional, so a fetch is only needed for a window
+        // that has not had one yet.
+        renderDrafts();
+        if (!state.drafts.at) loadDrafts();
+    } else if (state.live.open) {
+        // The live board was left switched on underneath and has been ignoring
+        // its pushes; catch it up before it comes back into view.
+        renderLive();
+        if (state.current) termPane.refit();
+    } else if (state.current) {
+        termPane.refit();
+    }
+    rememberView();
+}
+
+const draftsVisible = () => state.drafts.open;
+
+/**
+ * A payload arriving, from the stream or from a fetch.
+ *
+ * The badge is kept current whether or not the panel is open, the same bargain
+ * the other boards strike — and here it costs nothing, because the push is not
+ * gated on anybody watching.
+ */
+function applyDrafts(data) {
+    state.drafts.rows = data.drafts || [];
+    state.drafts.at = data.at || Date.now();
+    state.drafts.error = null;
+    paintDraftsBadge();
+    if (draftsVisible()) renderDrafts();
+}
+
+async function loadDrafts() {
+    if (state.drafts.loading) return;
+    state.drafts.loading = true;
+    try {
+        const data = await get('/api/drafts');
+        state.drafts.loading = false;
+        applyDrafts(data);
+    } catch (err) {
+        state.drafts.loading = false;
+        state.drafts.error = err.message;
+        if (draftsVisible()) renderDrafts();
+    }
+}
+
+/**
+ * How many drafts are waiting, on the button that opens the panel.
+ *
+ * Fed straight from the rows, unlike the task board's badge — which has to come
+ * from `state.waiting` because its payload only arrives while it is being
+ * watched. This payload always arrives, so the simple thing is also the correct
+ * one.
+ *
+ * Never `urgent`: a draft is the one thing in this app that is explicitly not
+ * asking for attention, and colouring it red would be arguing with the reason it
+ * exists.
+ */
+function paintDraftsBadge() {
+    const n = state.drafts.rows.length;
+    dom.drBadge.hidden = !n;
+    dom.drBadge.textContent = String(n);
+    dom.btnDrafts.title = n
+        ? `${n} draft${n === 1 ? '' : 's'} waiting to be started (Ctrl+6)`
+        : 'Sessions set up but not started (Ctrl+6)';
+}
+
+// ── drawing it ───────────────────────────────────────────────────────────
+
+function renderDrafts() {
+    const rows = state.drafts.rows;
+
+    dom.drSub.textContent = rows.length
+        ? `${rows.length} ${rows.length === 1 ? 'draft' : 'drafts'}, newest edit first.`
+        : 'Sessions you have set up but not started.';
+
+    if (state.drafts.error) {
+        dom.drBody.replaceChildren(el('div', { class: 'dr-note' },
+            el('p', {}, `Could not read the drafts. ${state.drafts.error}`)));
+        return;
+    }
+
+    // The panel scrolls as one column, and a push would otherwise throw the
+    // scroll position away mid-read every time anything changed.
+    const scroll = dom.drBody.scrollTop;
+
+    if (!rows.length) {
+        dom.drBody.replaceChildren(el('div', { class: 'dr-note' },
+            el('p', {}, 'Nothing set up yet.'),
+            el('p', { class: 'dim' }, 'A draft is a session with its directory, first '
+                + 'message, model and permissions already chosen — for work that is '
+                + 'ready to go but blocked on something else.'),
+            el('button', {
+                class: 'tb-btn primary', type: 'button',
+                onclick: () => openNew(),
+            }, 'New draft')));
+        return;
+    }
+
+    dom.drBody.replaceChildren(...draftCards(rows));
+    dom.drBody.scrollTop = scroll;
+}
+
+/**
+ * Grouped by project, the way the task board groups suggested tasks.
+ *
+ * And with the same rule: a heading over the whole column says nothing, so
+ * grouping only earns its keep once there is more than one group to tell apart.
+ * `projectName` comes off the payload rather than being derived here, so every
+ * client agrees about which project a directory belongs to.
+ */
+function draftCards(rows) {
+    const groups = new Map();
+    for (const d of rows) {
+        const name = d.projectName || 'unknown';
+        if (!groups.has(name)) groups.set(name, []);
+        groups.get(name).push(d);
+    }
+    if (groups.size < 2) return rows.map(draftCard);
+
+    const out = [];
+    for (const [name, list] of groups) {
+        out.push(el('h3', { class: 'tb-sub-head' }, name,
+            el('span', {}, String(list.length))));
+        out.push(...list.map(draftCard));
+    }
+    return out;
+}
+
+/**
+ * One draft, as a card.
+ *
+ * Deliberately the task board's card vocabulary — `tb-card`, `tb-card-meta`,
+ * `tb-acts`, `tb-btn` — rather than a second set of styles for the same shape.
+ * The prompt is shown rather than only its first line: the whole point of coming
+ * here is to read what you wrote before releasing it, and a draft is usually a
+ * paragraph rather than a transcript.
+ */
+function draftCard(d) {
+    return el('article', {
+        class: 'tb-card dr-card', 'data-id': d.id,
+        onclick: (e) => { if (tbCardClickOpens(e)) drEdit(d); },
+    },
+        el('header', { class: 'tb-card-head' },
+            el('span', { class: 'tb-dot' }),
+            el('button', {
+                class: 'tb-card-title', type: 'button',
+                title: 'Open this draft for editing',
+                onclick: () => drEdit(d),
+            }, d.title || firstLine(d.prompt)),
+        ),
+        el('div', { class: 'tb-card-meta' },
+            d.test ? el('span', { class: 'tag-test' }, 'test') : null,
+            el('span', { title: d.cwd }, d.projectName || 'unknown'),
+            el('span', { class: 'dot' }, '·'),
+            // `inherit` rather than nothing: a model the session will pick for
+            // itself is a real answer, and a blank here would read as unset.
+            el('span', {}, d.model || 'inherit'),
+            el('span', { class: 'dot' }, '·'),
+            el('span', {}, d.permissionMode),
+            el('span', { class: 'dot' }, '·'),
+            el('span', { title: new Date(d.updatedAt).toLocaleString() },
+                ago(new Date(d.updatedAt).toISOString())),
+        ),
+        // `clipLines`, not `clip`: clip() flattens every run of whitespace to a
+        // single space, which would turn a prompt written as a list of steps into
+        // one long line — and the whole reason the message is on the card is to be
+        // read back before it runs. The CSS clamps the height; this caps the text.
+        el('p', { class: 'dr-prompt' }, clipLines(d.prompt, 600)),
+        el('div', { class: 'tb-acts' },
+            el('button', {
+                class: 'tb-btn primary', type: 'button',
+                title: 'Start this session now',
+                onclick: (e) => drStart(d, e.currentTarget),
+            }, 'Start'),
+            el('button', {
+                class: 'tb-btn', type: 'button',
+                onclick: () => drEdit(d),
+            }, 'Edit'),
+            el('button', {
+                class: 'tb-btn quiet', type: 'button', title: 'Delete this draft',
+                onclick: () => drDelete(d),
+            }, 'Delete'),
+        ),
+    );
+}
+
+// ── acting on a card ─────────────────────────────────────────────────────
+
+/**
+ * Start it.
+ *
+ * One call: the bridge starts the session and forgets the draft, in that order,
+ * so a failure leaves the draft where it was. Doing it here as two calls would
+ * mean this window deciding what happens if the second one fails — and the phone
+ * and the Android client would each have to decide the same thing again.
+ */
+async function drStart(d, btn) {
+    btn.disabled = true;
+    btn.textContent = 'Starting';
+    try {
+        const r = await post(`/api/drafts/${d.id}/start`);
+        toast('Session started.', 'ok');
+        showDrafts(false);
+        // The transcript only exists once `claude` has written its first line.
+        openSessionSoon(r.sessionId);
+    } catch (err) {
+        toast(`Could not start the draft: ${err.message}`, 'error');
+        btn.disabled = false;
+        btn.textContent = 'Start';
+    }
+    // No re-enable on the happy path: the push takes the card off the board, and
+    // a button that came back to life on a card about to vanish invites a second
+    // press that would start the session twice.
+}
+
+/**
+ * Open it in the dialog it was written in.
+ *
+ * The panel stays open behind the modal, so closing the dialog lands you back on
+ * the board with the change already drawn — the `drafts-changed` push arrives
+ * while it is still covered.
+ */
+function drEdit(d) {
+    openNew({ draft: d });
+}
+
+/**
+ * Delete it.
+ *
+ * No confirmation, unlike a session. `#del-scrim` exists because deleting a
+ * transcript destroys a conversation that cannot be reconstructed; a draft is a
+ * paragraph you wrote and can write again, and putting a dialog in front of it
+ * would make tidying the board a chore.
+ */
+async function drDelete(d) {
+    try {
+        await del(`/api/drafts/${d.id}`);
+    } catch (err) {
+        toast(`Could not delete the draft: ${err.message}`, 'error');
+    }
+}
+
 // ── notifications ────────────────────────────────────────────────────────
 //
 // A turn can run for minutes, and the point of leaving one going is that you go
@@ -6246,6 +6578,12 @@ function connect() {
         // moment the list cannot be trusted. Harmless on the first connect: it
         // costs the one extra fetch that boot was going to make anyway.
         loadSessions();
+        // And the drafts, for the same reason and one more: every
+        // `drafts-changed` while the stream was down was missed too, so the panel
+        // and its badge are however they were when it dropped. There is no
+        // watching flag to reset here — the push is unconditional, so a
+        // reconnected window starts receiving them again with no subscribe.
+        loadDrafts();
         // Same reasoning for the status line, which onerror left reading
         // "Reconnecting to the bridge…". applyRunner derives it from what we
         // already know, so an idle session says Ready again and a busy one is
@@ -6301,6 +6639,11 @@ function connect() {
 
     es.addEventListener('overview', (e) => applyOverview(JSON.parse(e.data)));
     es.addEventListener('taskboard', (e) => applyTaskboard(JSON.parse(e.data)));
+    // The whole list, every time, and not gated on watching the panel — see the
+    // drafts section. It carries the rows, so there is nothing to refetch: this
+    // is also how a draft saved or started in another window disappears from
+    // this one.
+    es.addEventListener('drafts-changed', (e) => applyDrafts(JSON.parse(e.data)));
 
     es.addEventListener('sessions-changed', () => loadSessions());
 
@@ -8106,22 +8449,48 @@ async function loadProjects() {
 }
 
 /**
- * @param {{cwd?: string, tab?: 'recent'|'browse', prompt?: string}} [opts] `cwd`
- *   is a caller that has already answered "where" — the split menu passes the
- *   row you clicked. Without one the dialog opens where it always has: the
+ * The Start-a-session dialog, which is also the edit-a-draft dialog.
+ *
+ * @param {{cwd?: string, tab?: 'recent'|'browse', prompt?: string, draft?: object}} [opts]
+ *   `cwd` is a caller that has already answered "where" — the split menu passes
+ *   the row you clicked. Without one the dialog opens where it always has: the
  *   session on screen, else the most recent project. `prompt` fills the first
  *   message, for a caller that has already written one — Edit first on a
- *   suggested follow-up, where the whole point is that the prompt exists and
- *   you want a look at it before it runs.
+ *   suggested follow-up, where the whole point is that the prompt exists and you
+ *   want a look at it before it runs.
+ *
+ *   `draft` opens the dialog *as* that draft: every field prefilled, the title
+ *   and the save button renamed, and Save writing back to it rather than making
+ *   another. One dialog for both because a draft is exactly the set of fields
+ *   this one already collects — a second form would be the same six controls
+ *   with a different chance of drifting.
+ *
+ * **Model and permission mode are written on every open, in both directions.**
+ * They used to be left alone, which was harmless while the dialog only ever
+ * started things: the selects kept your last choice, which was usually what you
+ * wanted again. It stops being harmless once a draft can set them — opening a
+ * `bypassPermissions` draft and then pressing Ctrl+N would offer that mode for a
+ * brand-new session, having been asked for once, about something else.
  */
-async function openNew({ cwd = '', tab = null, prompt = '' } = {}) {
+async function openNew({ cwd = '', tab = null, prompt = '', draft = null } = {}) {
+    state.drafts.editing = draft ? draft.id : null;
+
     dom.newScrim.hidden = false;
-    dom.newPrompt.value = prompt;
+    dom.newPrompt.value = draft ? draft.prompt : prompt;
     growPrompt();
-    dom.newTest.checked = false;
-    dom.newCwd.value = cwd || (state.current
+    dom.newTest.checked = draft ? !!draft.test : false;
+    dom.newModel.value = draft ? (draft.model || '') : '';
+    // The dialog's own default, and deliberately not the composer's: the first
+    // message of a session is the one written with the least idea of what it will
+    // touch. Spelled out here rather than left to the `selected` attribute, which
+    // only decides the very first open.
+    dom.newPerm.value = draft ? draft.permissionMode : 'plan';
+    dom.newCwd.value = (draft && draft.cwd) || cwd || (state.current
         ? (state.current.worktree ? state.current.worktree.originalCwd : state.current.cwd)
         : '');
+
+    dom.newTitle.textContent = draft ? 'Edit draft' : 'Start a session';
+    dom.newSave.textContent = draft ? 'Save changes' : 'Save as draft';
     cancelMkdir();
     try {
         const projects = await loadProjects();
@@ -8145,10 +8514,16 @@ async function openNew({ cwd = '', tab = null, prompt = '' } = {}) {
     dom.newPrompt.focus();
     // A prompt that arrived already written is there to be read and edited, so
     // put the caret at the end of it rather than in front of the first word.
-    if (prompt) dom.newPrompt.setSelectionRange(prompt.length, prompt.length);
+    const written = dom.newPrompt.value;
+    if (written) dom.newPrompt.setSelectionRange(written.length, written.length);
 }
 
-function closeNew() { dom.newScrim.hidden = true; }
+function closeNew() {
+    dom.newScrim.hidden = true;
+    // So a Save that somehow ran after this could not write to a draft the dialog
+    // is no longer showing. openNew sets it on the way in either way.
+    state.drafts.editing = null;
+}
 
 // ── the recent-directories menu ──────────────────────────────────────────
 
@@ -8546,21 +8921,83 @@ async function submitMkdir() {
     }
 }
 
-async function startNew() {
+/**
+ * What the dialog is currently describing, or null if it is not ready.
+ *
+ * Shared by the two buttons in the footer rather than copied into each: Start and
+ * Save want exactly the same fields and exactly the same two complaints, and the
+ * cost of having said them twice would be a save that accepted something a start
+ * would refuse.
+ *
+ * Says so and returns null rather than throwing — the caller's next line is
+ * always "then stop", and both callers are event handlers.
+ */
+function newDialogValues() {
     const cwd = dom.newCwd.value.trim();
     const prompt = dom.newPrompt.value.trim();
-    if (!cwd) { toast('Pick a working directory first.', 'warn'); return; }
-    if (!prompt) { toast('Write a first message so the session has something to do.', 'warn'); return; }
+    if (!cwd) { toast('Pick a working directory first.', 'warn'); return null; }
+    if (!prompt) {
+        toast('Write a first message so the session has something to do.', 'warn');
+        return null;
+    }
+    const body = {
+        cwd, prompt,
+        model: dom.newModel.value || null,
+        permissionMode: dom.newPerm.value,
+    };
+    // `test` is only sent where the checkbox exists, which is the development
+    // bridge alone — markInstance() hides the row otherwise. Sending it anyway
+    // would be a silent lie in the one case that matters: a test-flagged draft
+    // opened for editing in the everyday window would come back with
+    // `test: false` from a control nobody could see, and the session it later
+    // started would land in the user's real rail. PATCH leaves out what it is not
+    // given, so omitting it preserves the flag; a create with it absent is
+    // unflagged, which is right when the box was never offered.
+    if (state.dev) body.test = dom.newTest.checked;
+    return body;
+}
+
+/**
+ * Keep it instead of running it.
+ *
+ * The same body Start would have sent, to the drafts route rather than the
+ * sessions one — which is the whole idea, and why this is a button on that dialog
+ * rather than a form of its own. A PATCH when the dialog was opened on an
+ * existing draft, so editing one twice does not leave two.
+ *
+ * The label is not restored on success: `closeNew` has already hidden the dialog,
+ * and the next `openNew` sets both the title and this button for whichever of the
+ * two things it is about to be.
+ */
+async function drSave() {
+    const body = newDialogValues();
+    if (!body) return;
+
+    const editing = state.drafts.editing;
+    const label = dom.newSave.textContent;
+    dom.newSave.disabled = true;
+    dom.newSave.textContent = 'Saving';
+    try {
+        if (editing) await patch(`/api/drafts/${editing}`, body);
+        else await post('/api/drafts', body);
+        closeNew();
+        toast(editing ? 'Draft saved.' : 'Saved as a draft.', 'ok');
+    } catch (err) {
+        toast(`Could not save the draft: ${err.message}`, 'error');
+        dom.newSave.textContent = label;
+    } finally {
+        dom.newSave.disabled = false;
+    }
+}
+
+async function startNew() {
+    const body = newDialogValues();
+    if (!body) return;
 
     dom.newGo.disabled = true;
     dom.newGo.textContent = 'Starting';
     try {
-        const r = await post('/api/sessions', {
-            cwd, prompt,
-            model: dom.newModel.value || null,
-            permissionMode: dom.newPerm.value,
-            test: state.dev && dom.newTest.checked,
-        });
+        const r = await post('/api/sessions', body);
         closeNew();
         toast('Session started.', 'ok');
         // The transcript only exists once `claude` writes its first line.
@@ -8707,6 +9144,7 @@ dom.termGrip.addEventListener('keydown', (e) => {
 });
 
 dom.newGo.addEventListener('click', startNew);
+dom.newSave.addEventListener('click', drSave);
 dom.dbStatus.addEventListener('click', refreshDevBrowser);
 dom.btnBack.addEventListener('click', closeAgent);
 
@@ -9604,6 +10042,13 @@ dom.btnDash.addEventListener('click', () => showDash(!state.dash.open));
 dom.dashRefresh.addEventListener('click', () => loadDash({ refresh: true }));
 
 dom.btnNotes.addEventListener('click', () => showNotes(!state.notes.open));
+
+dom.btnDrafts.addEventListener('click', () => showDrafts(!state.drafts.open));
+// The dialog, with nothing in it — and no `draft`, so Save makes a new one. The
+// panel is deliberately left open underneath: the dialog is a modal over the
+// whole window, and closing it drops you back on the board with the new card
+// already on it rather than on whatever was behind the board.
+dom.drNew.addEventListener('click', () => openNew());
 dom.notesNotable.addEventListener('click', () => setNotesScope('notable'));
 dom.notesAll.addEventListener('click', () => setNotesScope('all'));
 dom.notesClear.addEventListener('click', async () => {
@@ -9641,6 +10086,7 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && state.taskboard.open) { showTaskboard(false); return; }
     if (e.key === 'Escape' && state.dash.open) { showDash(false); return; }
     if (e.key === 'Escape' && state.notes.open) { showNotes(false); return; }
+    if (e.key === 'Escape' && state.drafts.open) { showDrafts(false); return; }
     // Out of focus mode before out of the board: focus mode is the deeper state,
     // and leaving it should not also take the board away.
     if (e.key === 'Escape' && state.focus) { setFocus(false); return; }
@@ -9649,24 +10095,32 @@ document.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); dom.search.focus(); }
     if ((e.ctrlKey || e.metaKey) && e.key === 'n') { e.preventDefault(); openNew(); }
 
-    // The five things `main` can show, ordered by how wide a question each one
+    // The six things `main` can show, ordered by how wide a question each one
     // answers: the conversation in front of you, then everything outstanding,
     // then what is running this second, then what is unfinished in the working
-    // trees, then what already reached you. The task board arriving is what made
-    // that an ordering rather than the sequence they happened to be built in —
-    // Live and Dashboard each moved along by one, which is a real cost and worth
-    // it once, not worth paying again.
+    // trees, then what already reached you, then what has not begun. The task
+    // board arriving is what made that an ordering rather than the sequence they
+    // happened to be built in — Live and Dashboard each moved along by one, which
+    // is a real cost and worth it once, not worth paying again.
+    //
+    // Which is why Drafts is 6 rather than slotted in beside the task board:
+    // renumbering three shortcuts a second time would cost more than the tidier
+    // adjacency is worth. It also happens to belong at the end on the rule above
+    // — a draft is the one thing here demanding nothing of you yet — so the bar
+    // button sits last too and the two agree.
     //
     // Ctrl rather than a bare digit because the composer is a textarea and these
     // have to work while it has the focus.
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && '12345'.includes(e.key)) {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && '123456'.includes(e.key)) {
         e.preventDefault();
         if (e.key === '1') {
-            showLive(false); showDash(false); showNotes(false); showTaskboard(false);
+            showLive(false); showDash(false); showNotes(false);
+            showTaskboard(false); showDrafts(false);
         } else if (e.key === '2') showTaskboard(true);
         else if (e.key === '3') showLive(true);
         else if (e.key === '4') showDash(true);
-        else showNotes(true);
+        else if (e.key === '5') showNotes(true);
+        else showDrafts(true);
     }
 });
 
@@ -9719,9 +10173,11 @@ function restoreView() {
     // showLive clears dash.open, so the other order loses it.
     const dash = q.get('view') === 'dashboard';
     const tb = q.get('view') === 'taskboard';
+    const dr = q.get('view') === 'drafts';
     if (q.get('view') === 'live' || q.get('live') === '1' || q.get('focus') === '1') showLive(true);
     if (dash) showDash(true);
     if (tb) showTaskboard(true);
+    if (dr) showDrafts(true);
     if (q.get('focus') === '1') setFocus(true);
 
     // The panels are up and the address they came from is untouched, so from

@@ -192,6 +192,58 @@ const HOME = os.homedir();
     });
     check('bypassPermissions locally is allowed through the gate', localSend.status, 404);
 
+    // A draft carries a mode, so it is a second way to ask for one — and it is
+    // asked twice, once when the draft is written and once when it is started.
+    // Refusing only at the start would let a phone stash a mode it cannot run,
+    // which is a draft that exists to fail; refusing only at the write would let
+    // one saved at the desk be started from the phone, which is the actual hole.
+    console.log('\n--- permission modes on a draft ---');
+    const draftBypass = await call('POST', '/api/drafts', {
+        headers: PHONE, body: { cwd: HOME, prompt: 'x', permissionMode: 'bypassPermissions' },
+    });
+    check('saving a bypassPermissions draft remotely', draftBypass.status, 403);
+    console.log(`       said: ${draftBypass.body && draftBypass.body.error}`);
+    check('saving a dontAsk draft remotely', (await call('POST', '/api/drafts', {
+        headers: PHONE, body: { cwd: HOME, prompt: 'x', permissionMode: 'dontAsk' },
+    })).status, 403);
+    check('escalating a draft by editing it remotely', (await call('PATCH', '/api/drafts/abc', {
+        headers: PHONE, body: { permissionMode: 'bypassPermissions' },
+    })).status, 403);
+
+    // The one that matters: a draft saved at the desk, started from the phone.
+    // Made locally so it really exists, so the 403 can only be the mode check at
+    // start time rather than a 404 standing in for it.
+    const saved = await call('POST', '/api/drafts', {
+        headers: LOCAL,
+        body: { cwd: HOME, prompt: 'never started', permissionMode: 'bypassPermissions',
+            test: true },
+    });
+    check('saving that draft from the desk is allowed', saved.status, 200);
+    const savedId = saved.body && saved.body.draft && saved.body.draft.id;
+    check('starting it from the phone is refused', (await call(
+        'POST', `/api/drafts/${savedId}/start`, { headers: PHONE })).status, 403);
+    // Still there — a refused start must not consume the draft.
+    const after = await call('GET', '/api/drafts', { headers: LOCAL });
+    check('and the refused draft is still on the board',
+        (after.body.drafts || []).some(d => d.id === savedId), true);
+    check('tidied up', (await call('DELETE', `/api/drafts/${savedId}`,
+        { headers: LOCAL })).status, 200);
+
+    // Reading and writing drafts is otherwise a phone's business: setting work up
+    // at the desk and releasing it from a phone is the case they exist for.
+    check('a phone may read drafts', (await call('GET', '/api/drafts',
+        { headers: PHONE })).status, 200);
+    const phoneDraft = await call('POST', '/api/drafts', {
+        headers: PHONE, body: { cwd: HOME, prompt: 'from a phone', test: true },
+    });
+    check('and may save an ordinary one', phoneDraft.status, 200);
+    if (phoneDraft.body && phoneDraft.body.draft) {
+        check('and delete it again', (await call('DELETE',
+            `/api/drafts/${phoneDraft.body.draft.id}`, { headers: PHONE })).status, 200);
+    }
+    check('an unknown draft is a 404, not a refusal', (await call('DELETE',
+        '/api/drafts/nope', { headers: LOCAL })).status, 404);
+
     console.log('\n--- cwd roots ---');
     const etc = await call('POST', '/api/sessions', {
         headers: LOCAL, body: { cwd: '/etc', prompt: 'x' },

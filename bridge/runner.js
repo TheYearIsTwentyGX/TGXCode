@@ -1338,6 +1338,42 @@ function classifyError(stderr, code) {
     return { kind: 'unknown', message: tail || `claude exited with code ${code}` };
 }
 
+/**
+ * The expanded, checked working directory a session may run in, or a throw
+ * saying exactly why not.
+ *
+ * Lifted out of `RunnerPool#create`, where it was the whole top half, because
+ * there is now a second caller that has to reach the same verdict without
+ * spawning anything: a draft is a create call held back, and `POST /api/drafts`
+ * refuses a directory at write time so you cannot save something that could never
+ * start. Two copies of these three rules would drift, and the way you would find
+ * out is a draft that saves cleanly and then refuses forever.
+ *
+ * `~` is expanded here and the expanded form is what gets stored and handed to
+ * spawn(), so this is also the one place the path is normalised.
+ */
+function resolveWorkdir(cwd) {
+    const dir = cwd && cfg.expandHome(cwd);
+    // A regular file passes existsSync perfectly happily, and the session then
+    // dies at spawn with a bare ENOTDIR long after anyone could act on it.
+    // Asking the question properly here turns that into a 400 that says so.
+    let st = null;
+    try { st = fs.statSync(dir); } catch { /* reported below */ }
+    if (!dir || !st) {
+        throw new Error(`Working directory does not exist: ${cwd}`);
+    }
+    if (!st.isDirectory()) {
+        throw new Error(`Not a directory: ${cwd}`);
+    }
+    // Existing is not the same as allowed. /etc exists. Checked again at the
+    // moment of spawning even when a draft already passed it: the roots are
+    // configuration and a draft can outlive the setting that let it be saved.
+    if (!cfg.withinRoots(dir)) {
+        throw new Error(`Working directory is outside the allowed roots: ${cwd}`);
+    }
+    return dir;
+}
+
 // ---------------------------------------------------------------------------
 // Pool
 // ---------------------------------------------------------------------------
@@ -1438,27 +1474,7 @@ class RunnerPool extends EventEmitter {
 
     /** Create a brand-new session and deliver its first prompt. */
     create({ cwd, model, permissionMode, prompt }) {
-        // Every route that can start a session comes through here, so this is
-        // also the one place worth normalising the path: a `~` typed into the
-        // directory box should mean what it means in a shell, and the expanded
-        // form is what gets stored and handed to spawn().
-        const dir = cwd && cfg.expandHome(cwd);
-        // A regular file passes existsSync perfectly happily, and the session then
-        // dies at spawn with a bare ENOTDIR long after anyone could act on it.
-        // Asking the question properly here turns that into a 400 that says so.
-        let st = null;
-        try { st = fs.statSync(dir); } catch { /* reported below */ }
-        if (!dir || !st) {
-            throw new Error(`Working directory does not exist: ${cwd}`);
-        }
-        if (!st.isDirectory()) {
-            throw new Error(`Not a directory: ${cwd}`);
-        }
-        // Existing is not the same as allowed. /etc exists. This is the last point
-        // before a process is spawned, so it is the right place for the check.
-        if (!cfg.withinRoots(dir)) {
-            throw new Error(`Working directory is outside the allowed roots: ${cwd}`);
-        }
+        const dir = resolveWorkdir(cwd);
         const sessionId = randomUUID();
         const r = this.ensure(sessionId, { cwd: dir, model, permissionMode, isNew: true });
         r.send(prompt);
@@ -1535,4 +1551,4 @@ class RunnerPool extends EventEmitter {
     }
 }
 
-module.exports = { RunnerPool, Runner, PERMISSION_MODES };
+module.exports = { RunnerPool, Runner, PERMISSION_MODES, resolveWorkdir };

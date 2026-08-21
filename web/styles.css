@@ -3153,14 +3153,15 @@ body.term-resizing { user-select: none; cursor: row-resize; }
    the eye can run down the right edge for "what needs doing" and down the left
    for "where". */
 
-.dash, .live, .notes, .taskboard {
+.dash, .live, .notes, .taskboard, .drafts {
     display: flex;
     flex-direction: column;
     flex: 1;
     min-height: 0;
 }
 /* Not optional: `display: flex` above beats the `hidden` attribute on its own. */
-.dash[hidden], .live[hidden], .notes[hidden], .taskboard[hidden] { display: none; }
+.dash[hidden], .live[hidden], .notes[hidden], .taskboard[hidden],
+.drafts[hidden] { display: none; }
 
 /* ── the live board ──────────────────────────────────────────────────────
    A card per running session. The grid decides its own column count so that a
@@ -4724,6 +4725,80 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 .tb-new-box:focus-visible { outline: none; border-color: var(--s5); background: var(--s3); }
 .tb-new .tb-btn { flex: none; }
 
+/* ── drafts ──────────────────────────────────────────────────────────────
+   Work set up but not started. One column rather than the task board's five,
+   because there is only one state a draft can be in — so the width goes to the
+   message instead, which is the part you came here to read before releasing it.
+   The card is the task board's card: same class, same meta line, same buttons,
+   because it is the same object at a different moment. */
+
+.dr-head {
+    flex: none;
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    padding: 22px 28px 16px;
+}
+.dr-title { margin: 0; font: 400 21px/1.3 var(--sans); color: var(--text); }
+.dr-sub {
+    margin: 5px 0 0;
+    max-width: 640px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text-3);
+}
+.dr-head .dash-btn { margin-left: auto; flex: none; }
+
+.dr-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 28px 32px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    /* Wide enough to read a paragraph, narrow enough that the line length stays
+       comfortable on a second monitor. The board next door is a grid and needs
+       the whole width; a single column does not, and stretching one card to
+       2000px would make the prompt unreadable. */
+    max-width: 860px;
+}
+
+/* `.tb-card` colours its left edge by which column it is in — yellow for needs
+   you, green for working, blue for a suggested task. There are no columns here,
+   so a draft takes the quietest edge in the set rather than borrowing a meaning
+   from one of those three. It is the one thing in this app not asking for
+   anything, and the stripe should say so. */
+.dr-card { box-shadow: inset 3px 0 0 var(--s5); }
+
+/* The message itself, which is the point of the card. Several lines of it, then
+   an ellipsis: a draft is usually a paragraph, and one that is not should not
+   push the buttons off the bottom of a card you cannot act on without scrolling
+   past. `clip()` in app.js caps the text as well; this caps the height. */
+.dr-prompt {
+    margin: 1px 0 2px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text-2);
+    white-space: pre-wrap;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 6;
+}
+
+/* The empty state, and the read-failure note, share it — both are one short
+   block of prose in the middle of an otherwise blank panel. */
+.dr-note {
+    padding: 18px 4px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+}
+.dr-note p { margin: 0; max-width: 520px; font-size: 13.5px; line-height: 1.65; color: var(--text-2); }
+.dr-note p.dim { font-size: 13px; color: var(--text-4); }
+
 /* ── narrow windows ──────────────────────────────────────────────────── */
 
 @media (max-width: 980px) {
@@ -4744,4 +4819,7 @@ body.term-resizing { user-select: none; cursor: row-resize; }
         overflow-y: auto;
     }
     .tb-col { max-height: 60vh; }
+
+    .dr-head { padding: 16px 16px 12px; }
+    .dr-body { padding: 0 16px 20px; }
 }
