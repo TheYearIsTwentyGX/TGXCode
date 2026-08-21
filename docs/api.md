@@ -1,11 +1,21 @@
 # The bridge API
 
 What a client needs to know to talk to the bridge. `web/app.js` (desktop) and
-`web/mobile.js` (phone) are both clients of this; a native Android app will be a
-third, and this document exists so that it is a *client* rather than a rewrite.
+`web/mobile.js` (phone) are both clients of this; the native Android app in
+`~/Other/tgxcode-mobile` is the third, and this document exists so that it is a
+*client* rather than a rewrite.
 
 Anything a client needs and cannot get from here is a gap in the API, and belongs
 fixed here rather than worked around in the client.
+
+**This file is the contract, not a summary of one.** The Android client adds no
+code to this repository and cannot read `bridge/`; it is written against this
+document alone. So a change to the wire surface that is not written down here does
+not fail a test — it produces a client that renders the wrong thing and a session
+spent finding out why. Field *types* are given wherever a name alone would mislead,
+because that is the mistake this file has actually made: four fields were listed by
+name and turned out to be objects. See CLAUDE.md §*Leave `docs/api.md` true before
+you land*.
 
 ## The invariant that shapes everything
 
@@ -39,6 +49,37 @@ credential in one slot does not shadow a good one in another:
 | `Cookie: cs_token=<token>` | What browsers use after pairing. |
 
 Failure is `401` with `{"error": "unauthorized", "hint": …}`.
+
+### `X-Claude-Sessions-Client: 1` on every write
+
+**Every non-GET `/api/` route except `/api/health` also requires the header
+`X-Claude-Sessions-Client: 1`**, and refuses without it with
+`403 {"error": "missing client header"}`. It is checked before the token, so a
+request that is missing it fails the same way whether or not the token was good.
+
+It is a CSRF guard, not a secret: the value is a constant published in this
+repository, and the point is only that a form post or an image tag from another
+origin cannot set a custom header without a preflight. Nothing in `web/` mentions
+it in prose because `web/app.js`, `web/mobile.js`, `web/terminal.js` and
+`web/sw.js` each carry it in their own `HEADERS` constant.
+
+It is the first thing a new client trips over, because the read surface works
+perfectly without it and then the *entire* write surface 403s at once —
+`/api/subscribe` included, which makes it look like the live channel is broken
+rather than the header missing. Send it on every request and the distinction never
+comes up.
+
+Sending it on a GET is harmless and simplest.
+
+### One more refusal that is not about the token
+
+A **remote** request addressed to a host the bridge does not recognise is
+`403 {"error": "unexpected host", "host": …}`, before auth. Loopback names, any
+`.ts.net` name, a bare IP address, and anything in `CLAUDE_SESSIONS_ORIGINS`
+are recognised; a name that resolves to `127.0.0.1` from somewhere else is the
+DNS-rebinding case this closes. A client reaching the bridge through a proxy on a
+new hostname needs that hostname in `CLAUDE_SESSIONS_ORIGINS` — the symptom is a 403 that no
+amount of correct token fixes.
 
 ### Pairing a device
 
@@ -112,13 +153,69 @@ The only unauthenticated route. Counts, a pid, and:
 than hardcoding the list; a remote client should drop `bypassPermissions` and
 `dontAsk` from what it offers, because the bridge will refuse them.
 
+### `GET /api/projects`
+
+`{projects: [{cwd, name, sessions, mtimeMs, active}]}` — one entry per directory
+sessions have run in, newest first. `sessions` is how many there are, `active` how
+many were written to in the last 90 seconds, `mtimeMs` the newest of them. Sessions
+whose directory is under a temp path contribute nothing. This is what fills the
+project filter on `GET /api/sessions?project=`.
+
 ### `GET /api/sessions?q=&project=&limit=`
 
-`{ sessions: [summary], ready: bool }`. A summary carries `sessionId`, `title`,
-`projectName`, `cwd`, `worktree`, `model`, `permissionMode`, `userMessages`,
-`toolCalls`, `firstTs`/`lastTs`/`lastUserTs`, `lastPrompt`, the `pinned`/`archived`/
-`test` flags, `live` (from Claude Code's own process registry, or null), and
-`runner` (this bridge's process for it, or null).
+`{ sessions: [summary], ready: bool }`. A summary is:
+
+| Field | Type |
+|---|---|
+| `sessionId`, `title`, `titleSource`, `cwd`, `projectCwd`, `projectName`, `gitBranch`, `model`, `permissionMode`, `version`, `sessionKind`, `lastPrompt` | strings, any of them null |
+| `firstTs`, `lastTs`, `lastUserTs` | ISO 8601 strings or null |
+| `userMessages`, `assistantMessages`, `toolCalls`, `bytes`, `mtimeMs` | numbers |
+| `pinned`, `archived`, `test`, `active` | bools |
+| **`worktree`** | **object or null** — `{name, branch, path, originalCwd}` |
+| `prs` | array of `{number, url, repo}`, empty if none |
+| **`live`** | **object or null** — see below |
+| **`runner`** | **object or absent** — four fields only, see below |
+
+**`worktree` is an object, not a name.** `{name, branch, path, originalCwd}`, where
+`originalCwd` is the checkout the worktree was branched from — which is what makes a
+worktree session belong to its owning project in a rail rather than becoming a project
+of its own. Null for a session that is not in one.
+
+**`live` is Claude Code's own process-registry entry, not a flag.** Present as an
+object when there is a process — including one running in a terminal or VS Code, which
+this bridge knows nothing else about — and `null` otherwise:
+`{sessionId, pid, procStart, cwd, kind, entrypoint, name, nameSource, addressable,
+peerProtocol, status, version, startedAt, updatedAt, running}`. `kind` is
+`"interactive"`, `"bg"`, or whatever Claude Code adds next; `entrypoint` is `"cli"`,
+`"vscode"`, `"claude-sessions"` (us), …; `name` is the session's *address* for
+cross-session messaging and `addressable` says whether it is listening. Treat truthiness
+of `live` as "there is a process" and `live.running` as "and it is still alive" — the
+registry file outlives the process that wrote it.
+
+### There are three different `runner` shapes
+
+The same field name carries **three different shapes** depending on which payload you
+read it off. Nothing errors when you read a field that is not there; you get
+`undefined` forever. So check which one you are holding:
+
+| Where | `runner` is |
+|---|---|
+| `GET /api/sessions/:id` · `runner-status` event · the `status` a write returns | **the whole thing** — every field in §*`runner-status`* below |
+| `GET /api/sessions` · `GET /api/dashboard` | **four fields**: `{state, activity, detail, queued}` |
+| a `GET /api/overview` / `taskboard` card | **seven fields**: `{state, activity, queued, busySince, retry, error, errorKind}` |
+| absent entirely | there is no process of ours for that session |
+
+The narrowing is deliberate — the rail draws several hundred rows and wants a label and
+a badge, not a queue and an ask for each — but it is invisible at the call site, which
+is what makes it worth a table.
+
+**The practical consequence: `runner.pendingPermission` is `undefined` on every payload
+except the three in the first row.** A client that reads it off a session summary to
+decide whether to draw an ask dot draws it never and reports no error, which is what
+`web/mobile.js` does today. **To find out which sessions are blocked, read
+`GET /api/overview` and use the card's `ask` field** — not `card.runner`, which does not
+carry it either. `ask` is the whole ask object, so a tool ask can be answered straight
+from the card.
 
 `prs` is every pull request the session raised, in the order it raised them:
 `[{number, url, repo}]`, empty for a session that raised none. Read from the
@@ -153,22 +250,76 @@ it is what resumes the live tail.
 ~1,800 events and half a megabyte of JSON, and none of the first 1,500 is why
 someone opened their phone.
 
-Event kinds, all with `id`, `kind`, `ts`:
+Event kinds, all with `id` (string), `kind` (string) and `ts` (ISO 8601 string).
+Types are given because several of these were once listed by name alone and read as
+strings by a client that then rendered `[object Object]`:
 
 | kind | Carries |
 |---|---|
-| `user` | `text`, `images[]`, `files[]`, `command`, `origin` (`human` or an agent) |
-| `assistant` | `text` (markdown), `model` |
-| `thinking` | `text` |
-| `tool` | `name`, `input{}`, `status` (`ok`/`error`/absent while running), `result{text,stdout,stderr,patch,filePath,interrupted}`, `agent`, `persistedPath`, `durationMs` |
-| `system` | `subtype`, `isError`, `text` |
-| `agent-done` | `taskId`, `toolUseId`, `status`, `summary` |
-| `suggestion` | `prompt`, `why`, `title`, `cwd` — follow-up work an agent offered rather than did |
+| `user` | `text` string · `images[]` `{mediaType, dataUri}` · `files[]` `{relPath, name, size}` · **`command` object or null** — `{name, args}` · `origin` string or absent — Claude Code's own `origin.kind`, passed through: `"human"`, `"peer"`, or an agent type. Not a closed set the bridge controls, so treat anything other than `"human"` as "not the person" rather than switching on it |
+| `assistant` | `text` string (markdown) · `model` string or null |
+| `thinking` | `text` string |
+| `tool` | `name` string · `input` object · `status` — see below · `result` object or null · **`agent` object or null** · `persistedPath` string or null · `durationMs` number or null · `resultTs` ISO string once resolved |
+| `tool-result` | `toolId` string, plus every field of a resolved `tool` — a **patch**, see below |
+| `system` | `subtype` string · `isError` bool · `text` string |
+| `agent-done` | `taskId`, `toolUseId`, `status` (`"completed"` unless the notification said otherwise), `summary`, `result` — all strings or null — plus `tokens`, `toolUses`, `durationMs`, numbers or null |
+| `suggestion` | `prompt` string · `why`, `title` strings or null · `cwd` string — follow-up work an agent offered rather than did |
 | `peer-message` | `from` (socket address), `fromName` (the peer's name, which is its address), `text` |
-| `compact` | `text` |
+| `compact` | `text` string |
+
+**`tool.status` is `"pending"`, not absent, while a call is running**, and `"ok"` or
+`"error"` once it resolves. A client switching on it needs three cases, and the third
+is not a missing key.
+
+**`tool.result`** is `{text, stdout, stderr, patch, filePath, interrupted,
+backgroundTaskId}`. `text` is the tool output flattened to a string and is the one to
+show; `stdout`/`stderr`/`filePath` are strings or null; `interrupted` is a bool.
+
+**`tool.result.patch` is a structured diff, not a string** — the `structuredPatch`
+Claude Code records for an edit, an array of hunks:
+
+```json
+[{ "oldStart": 12, "oldLines": 3, "newStart": 12, "newLines": 4,
+   "lines": ["     const x = 1;", "-    return x;", "+    return x + 1;"] }]
+```
+
+Each entry in `lines` already carries its own leading `+`, `-` or space; do not add
+one. Null for a tool that produced no diff.
+
+**`tool.agent` is a subagent descriptor, not a name** — `{agentId, agentType,
+description, model, isAsync, durationMs, tokens, toolUses}` from the result, plus
+`spawnDepth` and `hasTranscript: true` when a transcript for it exists on disk. Null
+for an ordinary tool call. `hasTranscript` is what says the subagent can be opened as
+its own view; see `agent` on `POST /api/subscribe`.
+
+**A `user` event for a slash command has bookkeeping XML in `text`.** The bridge
+strips `<system-reminder>` and `<local-command-stdout>` and nothing else, so a
+`/foo bar` turn arrives with `text` of
+`"<command-message>…</command-message><command-name>/foo</command-name><command-args>bar</command-args>"`
+and the parsed `command` beside it. Render from `command` when it is present —
+`{name: "foo", args: "bar"}`, the name with its leading slash **already removed**, so
+put one back; `args` is `""` for a command that takes none — and strip the
+`<command-…>` tags out of `text` yourself if you show it at all. `web/mobile.js` does
+neither, which is why a slash command reads as `/[object Object]` there.
+
+### A tool call resolves in one of two ways
 
 A `tool` event arrives once as a call and again with its result. Render idempotently
 by `id` and patch in place.
+
+**Which of the two you get depends on whether the call and its result landed in the
+same read**, and on a live tail they usually do not:
+
+- **A full read** (`GET /api/sessions/:id`) stitches the result into the `tool` event
+  itself, so the second copy carries `status`, `result` and `durationMs`.
+- **A tail** whose chunk holds the result but not the call cannot stitch, and emits a
+  separate **`tool-result`** event instead: `id` of `<toolUseId>:result`, `kind` of
+  `tool-result`, `toolId` pointing at the `tool` event already on screen, and the
+  resolved fields alongside. Apply it to that block.
+
+**A client with no `tool-result` case leaves every tool spinning for the whole of a
+live turn** and looks perfectly fine on a finished session, because a full read never
+produces one. `web/app.js` handles it; `web/mobile.js` does not.
 
 ### `GET /api/sessions/:id/since?offset=N`
 
@@ -259,8 +410,10 @@ directories. Its own route rather than a field on the summary for the reason
 
 ### `GET /api/prefs?cwd=<path>`
 
-`{ version, transcript: {...}, sources: [...], problems: [...] }` — how the person
-using the app wants it to behave.
+`{ version, transcript: {…}, spinner: {…}, sources: [string], problems: [{file, message}] }`
+— how the person using the app wants it to behave. `sources` is file paths, weakest
+first; each `problems` entry is an **object**, `{file, message}`, naming the file that
+carried a value the key does not allow and what was wrong with it.
 
 `~/.tgxcode/settings.json` is the user's own, written out with the defaults on
 first run so it can be found and edited. A project overrides any key from
@@ -288,8 +441,10 @@ are a directory, and `GET /api/spinner/groups` lists it.
 
 ### `GET /api/spinner/groups?cwd=<path>`
 
-`{ randomize, rerollMs, enabled: [...], pool, groups: [...], problems: [...] }` —
-which spinner verb groups exist and which are in force.
+`{ randomize (bool), rerollMs (number), enabled: [string], pool (number),
+groups: [{name, file, count, source}], problems: [{file, message}] }` — which spinner
+verb groups exist and which are in force. `enabled` is group names; `problems` entries
+are **objects**, as on `/api/prefs`.
 
 `groups` is one entry per group available to `cwd` — `{name, file, count,
 source}`, where `name` is the `Category` inside the file and `source` is the
@@ -370,9 +525,23 @@ have an inbox are listed.
 ### `GET /api/overview`
 
 The live board: `{ at, ready, sessions: [card], recent: [card], hidden, recentHidden,
-waiting, running }`, already ordered needs-you-first. A card carries `reason`
-(`ask`/`error`/`here`/`elsewhere`/`pinned`/`recent`), `title`, `projectName`, `worktree`,
-`runner`, `live`, `ask`, `headlines[]`, `tasks{done,total,current}`, `devservers`.
+waiting, running }`, already ordered needs-you-first. A card is:
+
+| Field | Type |
+|---|---|
+| `sessionId`, `title`, `projectName`, `cwd`, `model`, `permissionMode` | strings, any of them null |
+| `reason` | `"ask"`, `"error"`, `"here"`, `"elsewhere"`, `"pinned"` or `"recent"` |
+| `pinned`, `test` | bools |
+| `lastTs`, `lastUserTs` | ISO 8601 strings or null |
+| `toolCalls`, `userMessages` | numbers |
+| **`worktree`** | **object or null** — as on a session summary |
+| **`live`** | **object or null** — the registry entry, as on a session summary |
+| **`runner`** | **object or null — seven fields**, not the `runner-status` payload: `{state, activity, queued, busySince, retry, error, errorKind}` |
+| **`ask`** | **object or null** — the *whole* ask (`runner.pendingPermission`), so a tool ask is answerable from the card. Same shape as `permission-request` |
+| **`headlines[]`** | **array of objects**, not strings — `{text, ts}`, oldest first, up to three |
+| `tasks` | object or null — `{done, total, current, ts}` |
+| **`devservers`** | **array of objects or null** — `{port, title, owned}`, listening ports only; `null` until the first probe has run |
+| `sig` | string — see below |
 
 Every card also carries `sig`, a short hash of the rest of the card. The board is pushed
 once a second and almost all of it is identical to the push before, so a client that keeps
@@ -462,6 +631,81 @@ reasoning is under `/api/suggestions` and it is about tasks, not sessions.
 
 Also pushed as the `taskboard` SSE event, which is how the UI reads it; the route is for
 the first load, for the Show-all button, and for anything that would rather poll.
+
+### `GET /api/dashboard?refresh=1`
+
+What is still in flight: work written to disk but not committed, and pull requests
+that are open but not merged. A different question from the session list — a worktree
+with eleven modified files and no commit does not show up as activity, which is
+exactly why it gets lost.
+
+```json
+{ "ready": true, "checkedAt": "2026-08-21T…Z", "dirty": 3, "open": 2,
+  "gh": { "ok": true, "repos": 4, "error": null },
+  "projects": [ { "cwd": "…", "name": "claude-sessions", "repo": "owner/repo",
+                  "dirty": 2, "open": 1, "workspaces": [ … ] } ] }
+```
+
+A workspace is `{dir, kind, name, git, prs[], sessions[], moreSessions, lastTs}`.
+`kind` is `checkout`, `worktree`, or `gone` — a row that exists only because a
+transcript named a still-open PR whose directory has since been removed, in which case
+`dir` is null. `git` is either `{ok: false, reason}` (`not-a-repo`, `left-behind`,
+`status-failed`, `gone`) or a parsed `git status`: `{ok: true, branch, upstream, ahead,
+behind, staged, unstaged, untracked, conflicts, files, dirty, detached, sample[]}`,
+where `sample` is up to ten `{path, status}` entries — enough to recognise the change,
+not a whole `git status`. `prs[]` are `pulls.js` records with `matched` of `"branch"`
+(the workspace has that branch checked out) or `"session"` (only a transcript
+connects them). `sessions[]` are chips — `{sessionId, title, lastTs, userMessages,
+active}` — capped at six per workspace with `moreSessions` counting the rest, and
+carrying the same narrow four-field `runner` as `GET /api/sessions` where one is live.
+
+Only unfinished rows survive: a workspace with a clean tree and no open PR is dropped,
+and so is a project left with no workspaces. `gh` fails once for everything rather than
+per repository, because they all fail the same way — `gh` missing, or a login that
+expired.
+
+**This route shells out to `git` and `gh`, so it is slow and it is cached** — working
+trees for 15s, GitHub for a minute. `?refresh=1` clears both caches first; do not send
+it on a poll.
+
+### `GET /api/notifications?scope=&type=&sessionId=&limit=`
+
+Everything that reached out to you, after the fact — `{notifications: [row]}`, newest
+first. It exists because `broadcast()` has no replay buffer and Windows' own
+notification centre swallows toasts, so "something pinged me and I have no idea what"
+had no answer.
+
+A row is:
+
+```json
+{ "id": "1786722343125-a1b2c3d4", "at": 1786722343125, "type": "permission",
+  "sessionId": "…", "title": "Rename the runner", "project": "claude-sessions",
+  "cwd": "…", "summary": "Bash: npm test", "detail": "…", "loud": true,
+  "requestId": "…", "outcome": null, "outcomeAt": null, "anchorId": "…" }
+```
+
+`type` is one of `permission`, `plan`, `question`, `finished`, `failed`, `agent-done`,
+`peer-message`. `summary` is clipped to 200 characters and `detail` to 400. `outcome`
+and `outcomeAt` are filled in later, on the row that already exists, when an ask is
+answered — so a row is mutable and a client holding one should patch it rather than
+assume it is final. `anchorId` is a `toolUseId` where there is one, so a client can
+scroll the transcript to what the notification was about. `requestId` is set for the
+three ask types only.
+
+**`loud` means "this cleared the bar for interrupting somebody", not "a toast appeared
+on your screen"** — the bridge cannot know whether you were looking straight at that
+session, which is the one thing the page knows and it does not. `?scope=notable` (the
+default) returns only the loud rows; `?scope=all` also returns the quiet ones — a
+six-second turn, a subagent finishing — which nothing ever notified about but which
+answer "what has been going on". `limit` defaults to 200 and is capped at 1000. Test
+sessions are included on a dev bridge only, same rule as `GET /api/sessions`.
+
+`DELETE /api/notifications` empties the log and broadcasts `notifications-cleared`.
+There is no per-row delete.
+
+History is kept in `~/.local/share/claude-sessions/notifications.jsonl`, appended a
+line at a time so that two bridges writing at once interleave instead of clobbering,
+and pruned to 1000 rows or 14 days, whichever bites first.
 
 ### `GET /api/suggestions?session=&project=&status=&limit=`
 
@@ -570,19 +814,35 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `peer-message` | `{at, sessionId, from, count}` — another session messaged this one. The message itself is in the transcript, so a client tailing it has already drawn it; this is for everything that is not the open pane |
 | `suggestion-changed` | `{at, sessionId, toolUseId}` — a suggested follow-up was started, dismissed, or undone, possibly in another window |
 | `session-deleted` | `{sessionId, title}` |
+| `notification` | a whole notification row, just filed — the same shape `GET /api/notifications` returns, so an open history view need not refetch |
+| `notification-resolved` | `{id, outcome, outcomeAt}` — patch the row with that `id`; fired alongside `permission-resolved` |
+| `notifications-cleared` | `{at}` — the log was emptied, by this window or another |
 | `runner-status` | see below |
 | `permission-request` | `{sessionId, ...ask}` |
 | `permission-resolved` | `{sessionId, requestId, outcome}` |
 | `notice` | `{sessionId, level, kind, text}` |
-| `turn-complete` | `{sessionId, isError, detail, costUsd, durationMs, …}` |
+| `turn-complete` | `{sessionId, isError, detail, retries, costUsd, durationMs, numTurns, stopReason}` — the runner's `lastResult` with the session id on it. `detail` is null unless `isError` |
 | `send-failed` | `{sessionId, kind, message, unsent: [text]}` — hand the text back to the user |
 | `session-forked` | `{from, to}` — follow the new id |
 | `slash-commands` | `{cwd, at}` — that directory's slash commands changed; drop what you cached |
 | `run-changed` | `{runId, workspace, commandId, label, state, port, exit, stopped, at}` — a project command moved; state only, never output |
 
-`runner-status`: `{sessionId, state, activity, verb, detail, model, permissionMode,
-cwd, error, errorKind, queued, queue[], pendingPermission, canPrompt, busySince}`
-where `state` is `stopped`/`starting`/`idle`/`busy`/`error`.
+`runner-status` is the full shape — the one the two narrower `runner` objects are cut
+down from:
+
+| Field | Type |
+|---|---|
+| `sessionId`, `model`, `permissionMode`, `cwd` | strings or null |
+| `state` | `"stopped"`, `"starting"`, `"idle"`, `"busy"` or `"error"` |
+| `activity`, `verb`, `detail` | strings or null — see below |
+| `error`, `errorKind` | strings or null |
+| `queued` | number — how many messages are waiting |
+| **`queue[]`** | **array of objects** — `{id, text, at, attachments[]}`, the messages themselves, because the composer draws a chip per entry and needs the `id` to cancel or reorder it. `attachments` is metadata only; the base64 is read at flush time and never travels here |
+| **`pendingPermission`** | **object or null** — the whole ask, same shape as `permission-request` |
+| `canPrompt` | bool — whether this process supports permission prompts at all |
+| `busySince` | number or null — epoch ms, and null unless `state` is `busy` |
+| **`retry`** | **object or null** — `{attempt, max, status, at}` while the CLI is retrying a failing API call, which can run for minutes. Cleared when the turn lands |
+| **`lastResult`** | **object or null** — `{isError, detail, retries, costUsd, durationMs, numTurns, stopReason}` for the turn that most recently finished |
 
 **`activity` is the label to draw.** While a turn works it is composed of two
 halves — `verb`, the themed spinner word, and `detail`, whatever is specifically
@@ -617,10 +877,29 @@ causes auto-denials.
 window — use it for anything exploratory. `plan` is the sensible default mode for a
 first message.
 
+**`status` is a whole runner status object** — the `runner-status` payload, for the
+process that was just started — not a word describing the outcome. Same on
+`POST /api/sessions/:id/send` and on every queue write.
+
+**The new id is not readable for a few seconds.** This returns as soon as the process
+spawns, but `GET /api/sessions/:id` reads the transcript, and `claude` has not written
+its first line yet — so the obvious client, navigate straight to the id you were just
+given, gets `404 {"error": "session not found"}` about a session that is being created
+perfectly well. Measured at roughly three and a half seconds on this machine, and it
+is a race rather than a fixed delay. Either subscribe and wait for the first `tail`,
+or retry the read on 404 for ~15s before believing it. The bridge already holds the id
+against pruning for five minutes for the same reason (`note()` in
+`bridge/sessions.js`), so a 404 in that window is "not yet", never "never".
+
+`400` for a missing `cwd` or `prompt`, a directory that does not exist, or one outside
+the roots; `403` for a refused `permissionMode` from a remote caller; `429` past 8
+creates a minute.
+
 ### `POST /api/sessions/:id/send`
 
 `{text, attachments?, model?, permissionMode?, fork?}` →
-`{ok, id, cwd, fork, status, queued}`.
+`{ok, id, cwd, fork, status, queued}`, where `id` is the id of the message and
+`status` is a whole runner status object, not a word.
 
 **Always send `permissionMode`.** An absent one normalises to `auto`, which means
 omitting it does not mean "leave it alone" — it means "set it to auto", and would
@@ -841,13 +1120,25 @@ These are cheap now and expensive later, so they are settled:
   client only learns about an ask while it is connected — and see *Being connected
   is load-bearing* above for why that matters more than it sounds.
 
-## Two things that will bite
+## Things that will bite
+
+**The write surface 403s without `X-Claude-Sessions-Client: 1`.** Reads work, writes
+do not, and the message says `missing client header` rather than anything about auth.
+See §*Authentication*.
+
+**A newly created session 404s for a few seconds.** `POST /api/sessions` hands back an
+id before `claude` has written a transcript to read. See §`POST /api/sessions`.
 
 **Deleting a session whose process is still shutting down.** `DELETE` unlinks the
 transcript, but an exiting `claude` may then write its bookkeeping (`last-prompt`,
 `ai-title`) back to the same path — and the session reappears as an empty row with
 0 turns. Stop it, wait, then delete; or delete twice.
 
-**A tool call is not final when you first see it.** It arrives with no `status` and
-no `result`, and again later with both. Anything keyed on first sight will show a
-permanently spinning tool.
+**A tool call is not final when you first see it.** It arrives with `status:
+"pending"` and no `result`, and resolves later — either as a second copy of the same
+`tool` event, or as a separate `tool-result` event when the call was in an earlier
+chunk. Anything keyed on first sight, or handling only the first of those two shapes,
+will show a permanently spinning tool. See §*A tool call resolves in one of two ways*.
+
+**`runner` on a session summary is not the `runner-status` payload.** Four fields, and
+`pendingPermission` is not among them. See §`GET /api/sessions`.
