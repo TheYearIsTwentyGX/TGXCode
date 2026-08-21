@@ -29,6 +29,8 @@ const devbrowser = require('./devbrowser');
 const tailscale = require('./tailscale');
 const devservers = require('./devservers');
 const dashboard = require('./dashboard');
+const git = require('./git');
+const changes = require('./changes');
 const pulls = require('./pulls');
 const overview = require('./overview');
 const taskboard = require('./taskboard');
@@ -708,6 +710,11 @@ function logRemote(req, pathname, who) {
         + `via ${who.host}`);
 }
 
+// How many working-tree files the changes panel is sent. Well past what anybody
+// scrolls, and low enough that a `node_modules` somebody forgot to ignore cannot
+// turn one panel into a megabyte of JSON.
+const CHANGED_FILE_CAP = 400;
+
 async function api(req, res, url, pathname, who) {
     const seg = pathname.split('/').filter(Boolean); // ['api', ...]
 
@@ -1169,6 +1176,9 @@ async function api(req, res, url, pathname, who) {
             // The shell was opened on this session's directory and belongs to
             // it; with the session gone there is nothing left to reattach to.
             terminals.closeSession(sessionId);
+            // Derived from transcripts that are about to be unlinked, so it goes
+            // when they do — the same rule the suggestion cards follow.
+            changes.forget(sessionId);
 
             let removed;
             try { removed = index.remove(sessionId); }
@@ -1201,6 +1211,58 @@ async function api(req, res, url, pathname, who) {
                 lastTs: s.lastTs,
             });
             return send(res, 200, out);
+        }
+
+        // What this session changed — the two answers, side by side.
+        //
+        // `edits` comes out of the transcript and is about this session: it holds
+        // files it edited and has since committed, and it is still right when the
+        // working tree has moved on or gone. `git` is the tree as it stands and is
+        // about the directory: it holds work somebody else did, and drops work
+        // this session did and reverted. Neither is a better version of the other,
+        // which is why both are sent and the panel draws them as two lists.
+        //
+        // Not on the summary, for `prs`' reason one line further down: it shells
+        // out, and the session list must never wait on that.
+        if (tail === 'changes' && req.method === 'GET') {
+            // The summary, not the transcript: `changes.js` reads the file itself,
+            // from wherever it stopped last time. A panel that re-asked on every
+            // turn would otherwise re-parse the whole conversation each time, and
+            // the transcripts on this machine run to tens of megabytes.
+            const summary = index.summary(sessionId);
+            if (!summary) return send(res, 404, { error: 'session not found' });
+            const rec = index.get(sessionId);
+            const dir = workingDir(summary);
+            if (url.searchParams.get('refresh') && dir) git.clearCache(dir);
+
+            const tree = dir
+                ? await git.statusOf(dir, { limit: CHANGED_FILE_CAP })
+                : { ok: false, reason: 'no-directory' };
+            // Line counts only where there is a tree to diff. Untracked files are
+            // not in `git diff` and stay countless, which is what the UI's "new"
+            // already says about them.
+            if (tree && tree.ok) {
+                const counts = await git.numstat(dir);
+                tree.sample = tree.sample.map(f => ({ ...f, ...(counts.get(f.path) || {}) }));
+            }
+
+            const derived = changes.forSession(index, sessionId, {
+                sessionDir: rec ? path.join(rec.dir, sessionId) : null,
+                // The repository root where there is one, so a path reads the same
+                // here as it does in the tree list beside it.
+                root: (tree && tree.root) || dir,
+            });
+            if (!derived) return send(res, 404, { error: 'session not found' });
+
+            return send(res, 200, {
+                dir,
+                checkedAt: new Date().toISOString(),
+                git: tree,
+                edits: derived.files,
+                agents: derived.agents,
+                added: derived.added,
+                deleted: derived.deleted,
+            });
         }
 
         // The status of the pull requests this session raised.

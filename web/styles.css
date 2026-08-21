@@ -1436,6 +1436,121 @@ a:hover { text-decoration: underline; }
     background: var(--outline-soft);
 }
 
+/* ── what this session changed ───────────────────────────────────────────
+   The drawer carries `class="tasks changes"`, so the box, the strip and the
+   narrow-window behaviour are the suggestions panel's — one aside styled once.
+   Only what is different is here: two sections instead of a list of cards, and
+   rows that are paths rather than prose, so monospace and clipped from the left
+   where the interesting end of a path is. */
+
+/* Each list scrolls on its own, rather than the drawer scrolling as one column.
+   A session that changed seventy files would otherwise push the working tree —
+   the whole point of there being two lists — several screens below the fold. */
+.changes-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 0 8px 8px;
+}
+
+.ch-sec { display: flex; flex-direction: column; min-height: 0; }
+/* The transcript's list gets whatever room there is; the tree takes what it
+   needs up to a share of the drawer, so its heading is always in view. */
+.ch-sec:first-child { flex: 1 1 auto; }
+.ch-sec + .ch-sec {
+    /* Takes what it needs up to a share of the drawer, and does not give it
+       back: the list above is the one with room to yield, and a tree section
+       squeezed to its heading would be a heading over nothing. */
+    flex: 0 0 auto;
+    max-height: 45%;
+    margin-top: 8px;
+    padding-top: 2px;
+    border-top: 1px solid var(--outline-soft);
+}
+
+.ch-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex: none;
+    padding: 10px 4px 4px;
+}
+.ch-title {
+    font: 500 11px/1.4 var(--sans);
+    letter-spacing: 0.04em;
+    color: var(--text-3);
+}
+.ch-tally { margin-left: auto; font: 400 11px/1.4 var(--mono); color: var(--text-4); }
+/* The whole-session total, in the heading rather than in a row. */
+.ch-head .ch-nums { margin-left: auto; font: 400 11px/1.4 var(--mono); }
+.ch-branch { flex: none; margin: 0 4px 4px; font: 400 11px/1.5 var(--mono); color: var(--text-4); }
+.ch-note { flex: none; margin: 2px 4px 6px; font: 400 11.5px/1.5 var(--sans); color: var(--text-4); }
+.ch-note.bad { color: var(--red); }
+
+.ch-list {
+    list-style: none;
+    margin: 0;
+    padding: 0 0 6px;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+/* One file. A button where there is somewhere to go and a plain row where there
+   is not — the working tree's rows are a report, not a way in. */
+.ch-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    width: 100%;
+    padding: 3px 5px;
+    border: 0;
+    border-radius: var(--r-xs);
+    background: none;
+    color: var(--text-2);
+    font: 400 11.5px/1.7 var(--mono);
+    text-align: left;
+    cursor: pointer;
+}
+.ch-row.flat { cursor: default; }
+.ch-row:not(.flat):hover { background: var(--s3); color: var(--text); }
+
+/* A path is read from its right-hand end, and the drawer is narrow, so the
+   directory is what gives way rather than the filename — two spans rather than
+   one clipped string, which also lets the leading directories go quiet and the
+   file stand out. Clipping with `direction: rtl` would do it in one, and does it
+   wrong: an untracked directory ends in a slash, and bidi reordering moves that
+   slash to the front. */
+.ch-row .fpath { flex: 1; min-width: 0; display: flex; }
+/* Both halves can give way, and the directories give way first — the shrink
+   factors are that priority. Without one on the filename too, a long name
+   pushed the line counts out of the row instead of clipping itself. */
+.ch-row .fdir {
+    flex: 0 999 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-4);
+}
+.ch-row .fbase {
+    flex: 0 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* Wide enough for the longest word statusWord produces — `modified`, `conflict`
+   — and clipped rather than allowed to bleed into the path beside it. */
+.ch-row .fstat { flex: none; width: 8ch; overflow: hidden; color: var(--text-4); }
+.ch-row .fstat[data-s="??"] { color: var(--green); }
+.ch-row .fstat[data-s="UU"] { color: var(--red); }
+
+.ch-nums { flex: none; display: inline-flex; gap: 5px; }
+.ch-add { color: var(--green); }
+.ch-del { color: var(--red); }
+.ch-meta { flex: none; min-width: 2.5ch; text-align: right; color: var(--text-4); }
+
 /* ── turn rail ───────────────────────────────────────────────────────── */
 /* One tick per thing you said, down the right edge. Hover reads it back,
    clicking jumps to it. Deliberately mute: it is a map, not a second rail. */

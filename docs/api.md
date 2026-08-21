@@ -208,6 +208,56 @@ field on the summary on purpose**: it asks GitHub, and the session list must nev
 wait on GitHub. The bridge caches one `gh pr list` per repository for a minute, and
 a merged or closed PR for the life of the process, since neither can change back.
 
+### `GET /api/sessions/:id/changes[?refresh=1]`
+
+`{ dir, checkedAt, git: {...}, edits: [...], agents: {total, edited}, added, deleted }`
+— what this session changed, in the two ways that question has an answer. Both are
+sent because **neither is a better version of the other**, and the client is
+expected to draw them as two lists rather than reconcile them.
+
+`edits` is the transcript's answer, and so is about the *conversation*: it holds
+files the session edited and has since committed, files it edited in a directory
+that no longer exists, and files a subagent edited on its behalf. Each entry
+carries `path` (absolute, its identity), `relPath` (relative to the repository
+root where it is inside one, absolute where it is not), `added`, `deleted`, an
+`edits` count, `firstTs`/`lastTs`, and one of two ways back to it:
+
+- `toolId` — the `tool_use` id of the **first** edit in this transcript, so a
+  client can jump to where the file started changing rather than where it stopped.
+- `agent` — `{toolUseId, agentType, description}`, set only when *every* edit came
+  from a subagent, so there is no call in this transcript to jump to. Where both
+  touched a file, `toolId` wins and `agent` is null.
+
+Counted from the structured patch Claude Code recorded with the call, not by
+re-diffing a file that has moved on since. Only `Edit`, `Write`, `MultiEdit` and
+`NotebookEdit` count, and they are recognised **by tool name**: `ExitPlanMode`
+results carry a `filePath` too — the plan file — and keying on that field instead
+lists approved plans as edited code. A `Bash` running `sed -i` is invisible here
+by necessity, which is one of the reasons the tree is shown beside this.
+
+`git` is the working tree as it stands, and so is about the *directory*: it holds
+whatever anybody else changed and drops what this session changed and put back.
+`{ok: true}` carries `branch`, `upstream`, `ahead`, `behind`, `root`, the counts
+`staged`/`unstaged`/`untracked`/`conflicts`/`files`, `dirty`, and `sample` — up to
+400 files, with `truncated` saying how many were left out. Each sample entry has
+`path` (relative to the repository root), `status` (the porcelain-v2 XY code), and
+`added`/`deleted`/`binary` from `git diff --numstat`. Untracked files have no
+counts at all: they are not in `git diff`, and the status code already says they
+are new.
+
+`{ok: false}` is an answer rather than an error, and `reason` is one of
+`no-directory`, `not-a-repo`, `left-behind` (the directory is inside a repository
+but is not a checkout of its own — a removed worktree whose untracked files kept
+it on disk) or `status-failed`. Sessions run outside a repository are ordinary.
+
+`agents` says how many subagents the session spawned and how many of them changed
+a file, so a client can explain a count that looks too small.
+
+`refresh=1` drops the cached `git status` **for this directory only** — a 15s TTL
+otherwise, shared with `/api/dashboard`, which asks the same question of the same
+directories. Its own route rather than a field on the summary for the reason
+`/prs` gives: it shells out, and the session list must never wait on that.
+
 ### `GET /api/prefs?cwd=<path>`
 
 `{ version, transcript: {...}, sources: [...], problems: [...] }` — how the person
