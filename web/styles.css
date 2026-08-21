@@ -4035,6 +4035,38 @@ body.term-resizing { user-select: none; cursor: row-resize; }
    squeezing the buttons when the window is narrow. */
 .modal-foot .opts { flex-wrap: wrap; margin: 0; }
 
+/* Two rows: settings, then what to do with them. For a footer carrying more than
+   a pair of buttons — see the comment on #new-scrim's. The gap is wider than the
+   one between buttons because it is separating two kinds of thing rather than
+   spacing a row of one kind. */
+.modal-foot.stacked {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 16px;
+}
+/* Given the whole row, the settings no longer have to squeeze past the buttons.
+   Still allowed to wrap — the modal is `min(640px, 100%)` and goes narrow on a
+   phone-width window — but now it can only break between the pairs, because each
+   is an `.opt` of its own. The gap is the wide one for the same reason. */
+.modal-foot.stacked .opts { flex-wrap: wrap; gap: 8px 18px; padding-left: 0; }
+.opt {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+/* The select gives up width before the label does: `inherit` truncated is still
+   readable, whereas a clipped "Permissions" stops naming anything. */
+.opt label { flex: none; }
+.opt select { min-width: 0; }
+
+.foot-acts {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
 .field { margin-bottom: 18px; }
 .field > label {
     display: block;
@@ -4156,12 +4188,27 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     border-radius: var(--pill);
     font: 500 13.5px/1 var(--sans);
     color: var(--blue);
+    /* A button is a label, not a paragraph. Left to wrap, "Save as draft" broke
+       across two lines and took the footer's height with it. */
+    white-space: nowrap;
     transition: background var(--t-fast) var(--ease);
 }
 .btn:hover { background: var(--blue-tint); }
 .btn.primary { background: var(--blue); color: #062e6f; }
 .btn.primary:hover { background: var(--blue); filter: brightness(1.08); }
 .btn:disabled { opacity: 0.45; cursor: default; }
+
+/* The middle weight, for a footer with two things you might commit. Filled, so
+   it reads as an action rather than a way out, but in the surface colour rather
+   than the accent so it cannot be mistaken for the main one. The same grey-filled
+   idiom the New session button in the bar uses, and it means the same thing. */
+.btn.tonal { background: var(--s4); color: var(--text); }
+.btn.tonal:hover { background: var(--s5); }
+
+/* And the quietest, for the way out. Blue on Cancel put it in the same voice as
+   the actions it sits beside; this steps it back so the eye lands on them. */
+.btn.quiet { color: var(--text-3); }
+.btn.quiet:hover { background: var(--s3); color: var(--text); }
 
 /* The one button in the app that destroys something. Filled, in the error
    colour, so it can never be mistaken for the confirm it sits next to. */
