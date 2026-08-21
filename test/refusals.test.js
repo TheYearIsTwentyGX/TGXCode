@@ -109,6 +109,12 @@ const HOME = os.homedir();
     check('opening an attachment', (await call('POST', '/api/sessions/abc/attachments/open', {
         headers: PHONE, body: { path: 'x.png' },
     })).status, 403);
+    // A handoff starts a turn in a session nobody is looking at, and can wake one
+    // that has no process at all. Refused before the session id is looked at, so
+    // a leaked token cannot even find out which ids are real this way.
+    check('handing work to a session', (await call('POST', '/api/sessions/abc/handoff', {
+        headers: PHONE, body: { text: 'do this' },
+    })).status, 403);
     check('runs list', (await call('GET', '/api/runs', { headers: PHONE })).status, 403);
     check('runs stream', (await call('GET', '/api/runs/x/stream', { headers: PHONE })).status, 403);
     check('runs input', (await call('POST', '/api/runs/x/input', { headers: PHONE, body: {} })).status, 403);
@@ -137,6 +143,35 @@ const HOME = os.homedir();
     // terms, which is the distinction being tested.
     check('a run locally reaches its own not-found',
         (await call('GET', '/api/runs/nope', { headers: LOCAL })).status, 404);
+
+    console.log('\n--- handing work to a session ---');
+    // From the desk the gate lets it through, and it then fails on its own terms.
+    // Each of these is a refusal a *model* reads, so the wording is checked too:
+    // one that only says 404 leaves it with nothing to do but retry.
+    const noSuch = await call('POST', '/api/sessions/nope/handoff', {
+        headers: LOCAL, body: { from: 'me', text: 'the API changed' },
+    });
+    check('an id that names nothing', noSuch.status, 404);
+    check('and says where to get a real one',
+        /list_sessions/.test((noSuch.body && noSuch.body.error) || ''), true);
+    // Checked before the lookup, so the answer cannot be used to ask which ids
+    // are real — the same rule /send follows for permission modes.
+    check('handing work to yourself', (await call('POST', '/api/sessions/abc/handoff', {
+        headers: LOCAL, body: { from: 'abc', text: 'x' },
+    })).status, 400);
+    const empty = await call('POST', '/api/sessions/abc/handoff', {
+        headers: LOCAL, body: { from: 'me', text: '   ' },
+    });
+    check('nothing to say', empty.status, 400);
+    // No attachment escape hatch here, unlike /send: a screenshot with nothing
+    // typed under it is a message somebody sent, and a handoff nobody wrote is
+    // just a woken session with no idea why.
+    check('and no session lookup happened first',
+        /text is required/.test((empty.body && empty.body.error) || ''), true);
+    // The one route in this file where the addressable list matters: it must be
+    // reachable, or the tool that finds a recipient has nothing to call.
+    check('the addressable list is readable locally',
+        (await call('GET', '/api/sessions/addressable?limit=1', { headers: LOCAL })).status, 200);
 
     console.log('\n--- permission modes ---');
     const bypass = await call('POST', '/api/sessions', {

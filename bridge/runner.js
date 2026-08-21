@@ -91,9 +91,9 @@ function sessionEnv() {
     return env;
 }
 
-// The one tool this app gives a session that it would not otherwise have: a way
-// to hand the next piece of work over as a suggestion. See bridge/suggest-mcp.js
-// for what it does and why it stores nothing.
+// The tools this app gives a session that it would not otherwise have: offer the
+// next piece of work as a suggestion, find the other sessions, and hand one of
+// them a fact — waking it if it is idle. See bridge/mcp.js for what each does.
 //
 // Passed as a JSON *string* rather than a file — `--mcp-config` takes either, and
 // a string means there is no temp file to write, collide on between two bridges,
@@ -103,15 +103,33 @@ function sessionEnv() {
 //
 // Deliberately *not* `--strict-mcp-config`, which would switch off every MCP
 // server the user configured for themselves. We are adding one, not taking over.
-const SUGGEST_TOOL = 'mcp__claude-sessions__suggest_session';
-const MCP_CONFIG = JSON.stringify({
-    mcpServers: {
-        'claude-sessions': {
-            command: process.execPath,
-            args: [path.join(__dirname, 'suggest-mcp.js')],
+//
+// **The port and the session id are arguments, and the token is not.** Two of
+// these tools call back into this bridge, so the server has to know where it is
+// — and `sessionEnv()` strips CLAUDE_SESSIONS_PORT on purpose, so the
+// environment is not the channel. This string lands on the `claude` command
+// line, where `ps` can read it, which is why the port travels here and the token
+// is read off disk at the other end instead.
+const AGENT_TOOLS = [
+    'mcp__claude-sessions__suggest_session',
+    'mcp__claude-sessions__list_sessions',
+    'mcp__claude-sessions__message_session',
+];
+
+function mcpConfig(sessionId) {
+    return JSON.stringify({
+        mcpServers: {
+            'claude-sessions': {
+                command: process.execPath,
+                args: [
+                    path.join(__dirname, 'mcp.js'),
+                    '--port', String(cfg.PORT),
+                    '--session', sessionId,
+                ],
+            },
         },
-    },
-});
+    });
+}
 
 // Processes are cheap to restart (resume is a warm cache hit), so don't hoard them.
 const MAX_LIVE = 4;
@@ -297,8 +315,38 @@ class Runner extends EventEmitter {
         // permission prompt for "may I suggest this?" is noise nobody wants.
         // `--allowedTools` is an auto-approve list, not a restriction on which
         // tools exist; `--tools` is the one that would narrow the set.
-        args.push('--mcp-config', MCP_CONFIG);
-        args.push('--allowedTools', SUGGEST_TOOL);
+        //
+        // `message_session` is on that list too, and that one is a real choice:
+        // it wakes another session, which is an effect outside this
+        // conversation, and auto-approving it means a session in *plan* mode can
+        // still cause one. The alternative was worse. A handoff exists precisely
+        // because the sender is finishing and the recipient is not around, so
+        // gating it on an approval card means it is auto-denied exactly when it
+        // was needed (see _handlePermission, which denies with no window open)
+        // and stalls until somebody looks the rest of the time. The containment
+        // is put where it survives that: the woken session resumes in plan mode
+        // and stops at a plan, and the bridge rate-limits the pair.
+        //
+        // One flag per tool. Repeating it is the form that has been checked
+        // against a real session; whether a comma-separated list is also accepted
+        // has not, and there is nothing to gain by finding out.
+        //
+        // **Plan mode ignores this list, and that is worth knowing before you go
+        // looking for a bug in it.** A session in `plan` routes every tool that
+        // is not plainly read-only through `can_use_tool` whatever is on
+        // `--allowedTools`, so `message_session` from a planning session raises a
+        // card — and is auto-denied when no window is open. Measured, not assumed:
+        // the same `list_sessions` call is denied in `plan` and runs unasked in
+        // `auto`.
+        //
+        // It matters in two directions and is wanted in both. A session that has
+        // just *changed* something is not in plan mode, so the handoff that
+        // motivates this feature goes out. And a session woken *by* a handoff is
+        // resumed in plan mode, so it cannot pass the work on to a third session
+        // even though the tool is nominally allowed — which is exactly the
+        // containment the wrapper asks for in prose, enforced.
+        args.push('--mcp-config', mcpConfig(this.sessionId));
+        for (const tool of AGENT_TOOLS) args.push('--allowedTools', tool);
         if (this.isNew) args.push('--session-id', this.sessionId);
         else args.push('--resume', this.sessionId);
         if (this.fork) args.push('--fork-session');

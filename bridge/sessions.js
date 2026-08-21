@@ -18,7 +18,7 @@ const { scanMeta, parseLines, buildEvents, readSubagentIndex,
 const CACHE_FILE = path.join(CACHE_DIR, 'index.json');
 // Bump whenever scanMeta's output shape or derivation changes, so a stale cache
 // is discarded rather than silently serving metadata from the old rules.
-const CACHE_VERSION = 12;
+const CACHE_VERSION = 13;
 
 // A transcript touched this recently is treated as live.
 const ACTIVE_WINDOW_MS = 90_000;
@@ -142,6 +142,12 @@ class SessionIndex extends EventEmitter {
         // is the only thing that knows, and the count scanMeta already keeps is
         // the cheapest way to ask.
         const arrived = [];
+        // And handoffs, which this bridge delivered itself. Noticed the same way
+        // rather than at the route that sent them, because the route knows a
+        // message was *queued* and this knows it reached the transcript — and
+        // because a handoff is worth announcing in whichever window is open, not
+        // only to whoever happened to be posting.
+        const handed = [];
         for (const [id, rec] of chosen) {
             const prev = this.sessions.get(id);
             if (!prev || prev.file !== rec.file || prev.size !== rec.size
@@ -154,6 +160,14 @@ class SessionIndex extends EventEmitter {
                     from: rec.meta.lastPeerFrom,
                     at: rec.meta.lastPeerTs,
                     count: rec.meta.peerMessages - (prev.meta.peerMessages || 0),
+                });
+            }
+            if (prev && (rec.meta.handoffs || 0) > (prev.meta.handoffs || 0)) {
+                handed.push({
+                    sessionId: id,
+                    from: rec.meta.lastHandoffFrom,
+                    at: rec.meta.lastHandoffTs,
+                    count: (rec.meta.handoffs || 0) - (prev.meta.handoffs || 0),
                 });
             }
         }
@@ -173,6 +187,7 @@ class SessionIndex extends EventEmitter {
         // After the index is in place, so a listener asking for the summary of
         // the session that was messaged gets the current one.
         for (const a of arrived) this.emit('peer-message', a);
+        for (const h of handed) this.emit('handoff', h);
         return { scanned, changed };
     }
 
@@ -379,6 +394,13 @@ class SessionIndex extends EventEmitter {
             userMessages: m.userMessages,
             assistantMessages: m.assistantMessages,
             toolCalls: m.toolCalls,
+            // How many handoffs this session has been sent, and by whom last.
+            // Beside the turn counts rather than in them: a handoff is work
+            // arriving, not a turn the user took. See HANDOFF_TAG in
+            // transcript.js for why that distinction has to be made twice.
+            handoffs: m.handoffs || 0,
+            lastHandoffFrom: m.lastHandoffFrom || null,
+            lastHandoffTs: m.lastHandoffTs || null,
             firstTs: m.firstTs,
             lastTs: m.lastTs,
             lastUserTs: m.lastUserTs,

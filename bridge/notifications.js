@@ -346,6 +346,30 @@ class NotificationLog {
         });
     }
 
+    /**
+     * A handoff: another session gave this one work, and woke it up to do it.
+     *
+     * Louder than a peer message, in the sense that matters — it is the only
+     * event in here that started a turn nobody asked for. A session sitting with
+     * an unread message is at rest; a session that was resumed is spending
+     * tokens, and if that was a mistake the useful moment to find out is now.
+     *
+     * `from` is the sending session's title rather than a name you could reply
+     * to. There is no address to reply to: a handoff goes to a session id, and
+     * the sender has very likely finished by the time this is read.
+     */
+    handoff(h) {
+        const who = h.from || 'another session';
+        const many = h.count > 1 ? ` (${h.count} handoffs)` : '';
+        return this.record({
+            sessionId: h.sessionId,
+            type: 'handoff',
+            summary: `${who} handed work to this session${many}`,
+            detail: 'It was resumed in plan mode to deal with it.',
+            loud: true,
+        });
+    }
+
     // -- reading ------------------------------------------------------------
 
     /**

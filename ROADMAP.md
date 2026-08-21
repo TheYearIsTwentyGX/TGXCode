@@ -86,7 +86,7 @@ crossing a session boundary had nowhere to go.
 
 - **Suggested follow-ups.** An agent files the next piece of work as a card with
   the prompt already written, through the one tool this app gives a session
-  (`bridge/suggest-mcp.js`). The offer is a tool call in the transcript, so the
+  (`bridge/mcp.js`). The offer is a tool call in the transcript, so the
   card is derived rather than stored; only *started or dismissed* is the app's,
   and that sits beside `flags.json`. The offers are now collected by the index
   rescan as well, so `GET /api/suggestions` answers about every session at once
@@ -127,3 +127,13 @@ rebuild it, build a view over it.**
   missing field while *writing* to the socket would break outright. It would also
   make a browser client able to put words in the mouth of any session on the
   machine, which is a bigger door than this app needs open.
+
+  This still holds, and the thing it was standing in the way of has since been
+  built without it. Agents needed to hand each other work, and the reason they
+  could not was narrower than "no transport": a peer name only exists while the
+  process does, so the sessions most in need of being told something — the idle
+  ones — had no address at all. `POST /api/sessions/:id/handoff` gives them one,
+  over `pool.ensure` and `claude --resume`, which is machinery this app already
+  drove for every message typed into a stopped session. Same need, no socket, and
+  the recipient is resumed in plan mode so what comes back is a plan rather than an
+  edit. See README §And they can hand each other work.

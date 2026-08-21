@@ -705,6 +705,7 @@ function renderEvent(ev) {
             el('div', { text: `Subagent ${ev.status || 'finished'}${ev.summary ? ` — ${ev.summary}` : ''}` }));
         case 'suggestion': return renderSuggestion(ev);
         case 'peer-message': return renderPeerMessage(ev);
+        case 'handoff': return renderHandoff(ev);
         case 'compact': return row(ev, 'compact', el('div', { text: 'Conversation compacted' }));
         default: return null;
     }
@@ -764,6 +765,20 @@ function renderPeerMessage(ev) {
     const body = el('div', { html: renderMarkdown(ev.text || '') });
     body.prepend(el('div', { class: 'row-meta', text: `Message from ${who}` }));
     return row(ev, 'peer-message', body);
+}
+
+/**
+ * Work handed to this session by another one, which is what woke it.
+ *
+ * A phone cannot send a handoff — the route is local-only — but it can very
+ * easily be the first place one is read, since a woken session is exactly the
+ * one nobody has open.
+ */
+function renderHandoff(ev) {
+    const who = ev.fromTitle || 'another session';
+    const body = el('div', { html: renderMarkdown(ev.text || '') });
+    body.prepend(el('div', { class: 'row-meta', text: `Handed to this session by ${who}` }));
+    return row(ev, 'handoff', body);
 }
 
 function renderSystem(ev) {
