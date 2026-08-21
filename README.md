@@ -780,6 +780,33 @@ instead — so each directory must be its own checkout root (`rev-parse
 --show-toplevel`) or it is skipped. And everything here shells out, so all of it
 is cached: working trees for 15 seconds, GitHub for a minute.
 
+### What this session changed
+
+The drawer behind the header's document icon answers "what did this agent
+actually change", which otherwise meant scrolling a transcript looking for `Edit`
+blocks. It holds two lists, and **they are meant to disagree**:
+
+- **Changed by this session** is derived from the transcript, so it is about the
+  conversation. It keeps files that were edited and have since been committed, and
+  files edited in a directory that has since been removed, and it is right about a
+  session that ran in a terminal months ago. The line counts are the ones the diffs
+  in the conversation show — the patch Claude Code recorded with the call — not a
+  re-diff of a file that has moved on. Clicking a file jumps to the first edit that
+  touched it, which makes a long transcript navigable by file rather than by time.
+- **Working tree** is `git status` in the session's directory, so it is about the
+  directory. It holds whatever anybody else changed, and it drops what this
+  session changed and then reverted.
+
+A session that delegates its work to `Task` subagents has no `Edit` calls of its
+own — those are in the agents' own transcripts — so those are folded in and marked
+*agent*; clicking one opens that agent's pane, since there is no call in this
+conversation to jump to. What no list can hold is a `Bash` running `sed -i`:
+nothing in the transcript says which file it touched, which is one more reason the
+tree is shown beside the transcript's answer rather than instead of it.
+
+It refetches when a turn ends rather than on a timer — between turns nothing
+changes — and `git status` is cached for 15 seconds, shared with the board below.
+
 ## On a phone
 
 The premise of the app is watching sessions you are not sitting in front of, and
@@ -829,6 +856,8 @@ not.
 | `bridge/server.js` | HTTP + SSE, routing, static files |
 | `bridge/config.js` | Paths, ports, allowed roots — every constant with a reason attached |
 | `bridge/dashboard.js` | Uncommitted changes and open PRs, per project |
+| `bridge/git.js` | Every question the bridge asks git about a directory, cached once for all of them |
+| `bridge/changes.js` | What a session changed, out of its transcript and its subagents' |
 | `bridge/pulls.js` | Everything that asks GitHub about a pull request, and what its status *is* |
 | `bridge/overview.js` | The live board: what every session is doing right now |
 | `bridge/taskboard.js` | The task board: everything outstanding, in a column per state |

@@ -3,6 +3,36 @@
 **Effort:** M · **Depends on:** none · **Touches:** new `bridge/git.js`,
 `bridge/explorer.js`, `bridge/server.js`, `web/app.js`
 
+> **§A is built.** `bridge/git.js` holds the git primitives, extracted from
+> `bridge/dashboard.js` as this plan expected and now sharing one cached
+> `git status` with it. `bridge/changes.js` derives the transcript half,
+> `GET /api/sessions/:id/changes` sends both, and the drawer sits beside the
+> transcript rather than over it — built on the suggested-follow-ups aside, so
+> it collapses to the same strip and disappears in the same narrow window.
+> The two lists are stacked rather than side by side: at 300px there is room
+> for one column of paths, and putting them side by side would have meant a
+> panel wide enough to cover the transcript it jumps into.
+>
+> Three things this design did not anticipate, all of them now in
+> `bridge/changes.js`:
+>
+> - **Subagents.** A session that delegates its work has no `Edit` calls of its
+>   own, so "changed by this session" was empty for exactly the sessions that
+>   changed the most. Their transcripts are folded in, read incrementally from a
+>   remembered offset, and a row that came from one opens that agent's pane —
+>   there is no call in this conversation to jump to.
+> - **`ExitPlanMode` results carry a `filePath`** — the plan file. Keying on "the
+>   result names a file" rather than on the tool's name listed approved plans as
+>   edited code. `test/changes.test.js` pins that.
+> - **A trailing line with no newline** is handed back by
+>   `readSubagentTranscript` without being consumed, so the next read offers the
+>   same call again — and a file's line counts double. Recorded ids are kept per
+>   agent to stop it.
+>
+> §B and §C still stand. §B's `"explorer"` option is already written —
+> `openFile` in `bridge/explorer.js`, which attachments use — so what is left
+> there is the editor half and the containment check.
+
 Three features about the code a session touched, sharing one bridge module.
 
 ## A. Session changes panel

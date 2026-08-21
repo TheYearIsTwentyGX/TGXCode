@@ -215,6 +215,16 @@
                 <path d="M12 13v8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
               </svg>
             </button>
+            <button id="btn-changes" class="icon-btn" type="button"
+                    title="What this session changed" aria-pressed="false">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M6 4h7l4.5 4.5V20H6V4Z" stroke="currentColor" stroke-width="1.7"
+                      stroke-linejoin="round"/>
+                <path d="M9 12.6h4M11 10.6v4" stroke="currentColor" stroke-width="1.5"
+                      stroke-linecap="round"/>
+                <path d="M9 17h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+              </svg>
+            </button>
             <button id="btn-folder" class="icon-btn" type="button"
                     title="Show the working directory in File Explorer">
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -323,6 +333,34 @@
                         title="Put these to one side">Hide</button>
               </div>
               <div id="tasks-list" class="tasks-list"></div>
+            </div>
+          </aside>
+
+          <!-- What this session changed. Beside the transcript rather than over
+               it, because clicking a file jumps to the edit that made it and
+               that is something you want to watch happen.
+
+               Two lists, not one. The transcript's answer and the working tree's
+               disagree for real reasons — see bridge/changes.js — so neither is
+               presented as the total. Borrows the suggested-follow-ups panel's
+               class names outright: same box, same strip, same behaviour when
+               the window gets narrow. -->
+          <aside id="changes" class="tasks changes" hidden
+                 aria-label="Files this session changed">
+            <button id="changes-strip" class="tasks-strip" type="button" hidden>
+              <span class="tasks-strip-label">Changed</span>
+              <span id="changes-strip-count" class="tasks-count"></span>
+            </button>
+            <div id="changes-open" class="tasks-open">
+              <div class="tasks-head">
+                <span class="tasks-title">Changed</span>
+                <span id="changes-count" class="tasks-count"></span>
+                <button id="changes-refresh" class="tasks-collapse" type="button"
+                        title="Ask git again">Refresh</button>
+                <button id="changes-collapse" class="tasks-collapse changes-hide"
+                        type="button" title="Put this to one side">Hide</button>
+              </div>
+              <div id="changes-body" class="changes-body"></div>
             </div>
           </aside>
           <nav id="turns" class="turns" aria-label="Your messages in this session"></nav>
