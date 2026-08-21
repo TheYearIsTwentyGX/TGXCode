@@ -163,24 +163,59 @@ project filter on `GET /api/sessions?project=`.
 
 ### `GET /api/sessions?q=&project=&limit=`
 
-`{ sessions: [summary], ready: bool }`. A summary carries `sessionId`, `title`,
-`projectName`, `cwd`, `worktree`, `model`, `permissionMode`, `userMessages`,
-`toolCalls`, `firstTs`/`lastTs`/`lastUserTs`, `lastPrompt`, the `pinned`/`archived`/
-`test` flags, `live` (from Claude Code's own process registry, or null), and
-`runner` (this bridge's process for it, or null).
+`{ sessions: [summary], ready: bool }`. A summary is:
 
-**`runner` here is four fields, not the `runner-status` payload**:
-`{state, activity, detail, queued}`, and nothing else. The rail wants a label and a
-badge for several hundred rows, not a queue and an ask for each. So
-`runner.pendingPermission` on a session summary is **always `undefined`** — not
-`null`, not absent-because-nothing-is-pending — and a client that branches on it
-draws the ask dot never and reports no error, which is what `web/mobile.js` does
-today. To know which sessions are blocked, read `GET /api/overview` (or the
-`overview` event), which is the board that answers exactly that. `GET /api/dashboard`
-carries the same narrow `runner`, for the same reason.
+| Field | Type |
+|---|---|
+| `sessionId`, `title`, `titleSource`, `cwd`, `projectCwd`, `projectName`, `gitBranch`, `model`, `permissionMode`, `version`, `sessionKind`, `lastPrompt` | strings, any of them null |
+| `firstTs`, `lastTs`, `lastUserTs` | ISO 8601 strings or null |
+| `userMessages`, `assistantMessages`, `toolCalls`, `bytes`, `mtimeMs` | numbers |
+| `pinned`, `archived`, `test`, `active` | bools |
+| **`worktree`** | **object or null** — `{name, branch, path, originalCwd}` |
+| `prs` | array of `{number, url, repo}`, empty if none |
+| **`live`** | **object or null** — see below |
+| **`runner`** | **object or absent** — four fields only, see below |
 
-The full status is on `GET /api/sessions/:id`, on the `runner-status` event, and on
-the `status` a write returns.
+**`worktree` is an object, not a name.** `{name, branch, path, originalCwd}`, where
+`originalCwd` is the checkout the worktree was branched from — which is what makes a
+worktree session belong to its owning project in a rail rather than becoming a project
+of its own. Null for a session that is not in one.
+
+**`live` is Claude Code's own process-registry entry, not a flag.** Present as an
+object when there is a process — including one running in a terminal or VS Code, which
+this bridge knows nothing else about — and `null` otherwise:
+`{sessionId, pid, procStart, cwd, kind, entrypoint, name, nameSource, addressable,
+peerProtocol, status, version, startedAt, updatedAt, running}`. `kind` is
+`"interactive"`, `"bg"`, or whatever Claude Code adds next; `entrypoint` is `"cli"`,
+`"vscode"`, `"claude-sessions"` (us), …; `name` is the session's *address* for
+cross-session messaging and `addressable` says whether it is listening. Treat truthiness
+of `live` as "there is a process" and `live.running` as "and it is still alive" — the
+registry file outlives the process that wrote it.
+
+### There are three different `runner` shapes
+
+The same field name carries **three different shapes** depending on which payload you
+read it off. Nothing errors when you read a field that is not there; you get
+`undefined` forever. So check which one you are holding:
+
+| Where | `runner` is |
+|---|---|
+| `GET /api/sessions/:id` · `runner-status` event · the `status` a write returns | **the whole thing** — every field in §*`runner-status`* below |
+| `GET /api/sessions` · `GET /api/dashboard` | **four fields**: `{state, activity, detail, queued}` |
+| a `GET /api/overview` / `taskboard` card | **seven fields**: `{state, activity, queued, busySince, retry, error, errorKind}` |
+| absent entirely | there is no process of ours for that session |
+
+The narrowing is deliberate — the rail draws several hundred rows and wants a label and
+a badge, not a queue and an ask for each — but it is invisible at the call site, which
+is what makes it worth a table.
+
+**The practical consequence: `runner.pendingPermission` is `undefined` on every payload
+except the three in the first row.** A client that reads it off a session summary to
+decide whether to draw an ask dot draws it never and reports no error, which is what
+`web/mobile.js` does today. **To find out which sessions are blocked, read
+`GET /api/overview` and use the card's `ask` field** — not `card.runner`, which does not
+carry it either. `ask` is the whole ask object, so a tool ask can be answered straight
+from the card.
 
 `prs` is every pull request the session raised, in the order it raised them:
 `[{number, url, repo}]`, empty for a session that raised none. Read from the
@@ -325,8 +360,10 @@ a merged or closed PR for the life of the process, since neither can change back
 
 ### `GET /api/prefs?cwd=<path>`
 
-`{ version, transcript: {...}, sources: [...], problems: [...] }` — how the person
-using the app wants it to behave.
+`{ version, transcript: {…}, spinner: {…}, sources: [string], problems: [{file, message}] }`
+— how the person using the app wants it to behave. `sources` is file paths, weakest
+first; each `problems` entry is an **object**, `{file, message}`, naming the file that
+carried a value the key does not allow and what was wrong with it.
 
 `~/.tgxcode/settings.json` is the user's own, written out with the defaults on
 first run so it can be found and edited. A project overrides any key from
@@ -354,8 +391,10 @@ are a directory, and `GET /api/spinner/groups` lists it.
 
 ### `GET /api/spinner/groups?cwd=<path>`
 
-`{ randomize, rerollMs, enabled: [...], pool, groups: [...], problems: [...] }` —
-which spinner verb groups exist and which are in force.
+`{ randomize (bool), rerollMs (number), enabled: [string], pool (number),
+groups: [{name, file, count, source}], problems: [{file, message}] }` — which spinner
+verb groups exist and which are in force. `enabled` is group names; `problems` entries
+are **objects**, as on `/api/prefs`.
 
 `groups` is one entry per group available to `cwd` — `{name, file, count,
 source}`, where `name` is the `Category` inside the file and `source` is the
@@ -436,9 +475,23 @@ have an inbox are listed.
 ### `GET /api/overview`
 
 The live board: `{ at, ready, sessions: [card], recent: [card], hidden, recentHidden,
-waiting, running }`, already ordered needs-you-first. A card carries `reason`
-(`ask`/`error`/`here`/`elsewhere`/`pinned`/`recent`), `title`, `projectName`, `worktree`,
-`runner`, `live`, `ask`, `headlines[]`, `tasks{done,total,current}`, `devservers`.
+waiting, running }`, already ordered needs-you-first. A card is:
+
+| Field | Type |
+|---|---|
+| `sessionId`, `title`, `projectName`, `cwd`, `model`, `permissionMode` | strings, any of them null |
+| `reason` | `"ask"`, `"error"`, `"here"`, `"elsewhere"`, `"pinned"` or `"recent"` |
+| `pinned`, `test` | bools |
+| `lastTs`, `lastUserTs` | ISO 8601 strings or null |
+| `toolCalls`, `userMessages` | numbers |
+| **`worktree`** | **object or null** — as on a session summary |
+| **`live`** | **object or null** — the registry entry, as on a session summary |
+| **`runner`** | **object or null — seven fields**, not the `runner-status` payload: `{state, activity, queued, busySince, retry, error, errorKind}` |
+| **`ask`** | **object or null** — the *whole* ask (`runner.pendingPermission`), so a tool ask is answerable from the card. Same shape as `permission-request` |
+| **`headlines[]`** | **array of objects**, not strings — `{text, ts}`, oldest first, up to three |
+| `tasks` | object or null — `{done, total, current, ts}` |
+| **`devservers`** | **array of objects or null** — `{port, title, owned}`, listening ports only; `null` until the first probe has run |
+| `sig` | string — see below |
 
 Every card also carries `sig`, a short hash of the rest of the card. The board is pushed
 once a second and almost all of it is identical to the push before, so a client that keeps
@@ -718,15 +771,28 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `permission-request` | `{sessionId, ...ask}` |
 | `permission-resolved` | `{sessionId, requestId, outcome}` |
 | `notice` | `{sessionId, level, kind, text}` |
-| `turn-complete` | `{sessionId, isError, detail, costUsd, durationMs, …}` |
+| `turn-complete` | `{sessionId, isError, detail, retries, costUsd, durationMs, numTurns, stopReason}` — the runner's `lastResult` with the session id on it. `detail` is null unless `isError` |
 | `send-failed` | `{sessionId, kind, message, unsent: [text]}` — hand the text back to the user |
 | `session-forked` | `{from, to}` — follow the new id |
 | `slash-commands` | `{cwd, at}` — that directory's slash commands changed; drop what you cached |
 | `run-changed` | `{runId, workspace, commandId, label, state, port, exit, stopped, at}` — a project command moved; state only, never output |
 
-`runner-status`: `{sessionId, state, activity, verb, detail, model, permissionMode,
-cwd, error, errorKind, queued, queue[], pendingPermission, canPrompt, busySince}`
-where `state` is `stopped`/`starting`/`idle`/`busy`/`error`.
+`runner-status` is the full shape — the one the two narrower `runner` objects are cut
+down from:
+
+| Field | Type |
+|---|---|
+| `sessionId`, `model`, `permissionMode`, `cwd` | strings or null |
+| `state` | `"stopped"`, `"starting"`, `"idle"`, `"busy"` or `"error"` |
+| `activity`, `verb`, `detail` | strings or null — see below |
+| `error`, `errorKind` | strings or null |
+| `queued` | number — how many messages are waiting |
+| **`queue[]`** | **array of objects** — `{id, text, at, attachments[]}`, the messages themselves, because the composer draws a chip per entry and needs the `id` to cancel or reorder it. `attachments` is metadata only; the base64 is read at flush time and never travels here |
+| **`pendingPermission`** | **object or null** — the whole ask, same shape as `permission-request` |
+| `canPrompt` | bool — whether this process supports permission prompts at all |
+| `busySince` | number or null — epoch ms, and null unless `state` is `busy` |
+| **`retry`** | **object or null** — `{attempt, max, status, at}` while the CLI is retrying a failing API call, which can run for minutes. Cleared when the turn lands |
+| **`lastResult`** | **object or null** — `{isError, detail, retries, costUsd, durationMs, numTurns, stopReason}` for the turn that most recently finished |
 
 **`activity` is the label to draw.** While a turn works it is composed of two
 halves — `verb`, the themed spinner word, and `detail`, whatever is specifically
