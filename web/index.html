@@ -107,6 +107,24 @@
       <span id="notes-badge" class="bar-badge" hidden></span>
     </button>
 
+    <!-- Work set up but not started: a whole first message, with its directory,
+         model and permission mode already chosen, waiting for a merge or for
+         quota. Last in the bar and last on the Ctrl ladder, which is the same
+         ordering the rest of it follows — most demanding to least, and a draft
+         demands nothing yet. -->
+    <button id="btn-drafts" class="bar-btn" type="button" aria-pressed="false"
+            title="Sessions set up but not started (Ctrl+6)">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M5.5 3.7h8.2l4.8 4.8v11.8a1.8 1.8 0 0 1-1.8 1.8H5.5a1.8 1.8 0 0 1-1.8-1.8V5.5a1.8 1.8 0 0 1 1.8-1.8Z"
+              stroke="currentColor" stroke-width="1.7"/>
+        <path d="M13.4 3.9v4.7h4.7" stroke="currentColor" stroke-width="1.7"/>
+        <path d="M7.6 13.2h7M7.6 16.8h4.4" stroke="currentColor"
+              stroke-width="1.7" stroke-linecap="round"/>
+      </svg>
+      <span>Drafts</span>
+      <span id="dr-badge" class="bar-badge" hidden></span>
+    </button>
+
     <!-- The same sessions, on a phone. Icon-only: it is a setup step you do once
          per device, not something to give a word of the bar to forever. -->
     <button id="btn-pair" class="bar-btn icon-only" type="button"
@@ -615,6 +633,21 @@ checks, and merge it once they pass.">LGTM</button>
       <div id="tb-body" class="tb-body"></div>
     </section>
 
+    <!-- Sessions set up but not started. Every other view here is derived from
+         something that already happened; this one is the only screen that is
+         about work that has not begun, which is why it is a panel of its own
+         rather than a fifth column on the task board. -->
+    <section id="drafts" class="drafts" hidden aria-label="Drafts">
+      <header class="dr-head">
+        <div>
+          <h1 class="dr-title">Drafts</h1>
+          <p id="dr-sub" class="dr-sub">Sessions you have set up but not started.</p>
+        </div>
+        <button id="dr-new" class="dash-btn" type="button">New draft</button>
+      </header>
+      <div id="dr-body" class="dr-body"></div>
+    </section>
+
     <div id="placeholder" class="empty">
       <h2>No session selected</h2>
       <p>Pick a session from the board, or start a new one. Sessions running in a
@@ -681,35 +714,60 @@ checks, and merge it once they pass.">LGTM</button>
           you are done.</div>
       </div>
     </div>
-    <div class="modal-foot">
+    <!-- Stacked, unlike the other dialogs' footers: three buttons and two
+         labelled selects do not fit on one 640px line, and squeezed onto one they
+         wrapped mid-control — "Permissions" beside the model select, "plan"
+         orphaned underneath. Two rows is also the truer reading of it, since the
+         selects are settings for the thing and the buttons are what to do with
+         it. -->
+    <div class="modal-foot stacked">
+      <!-- Each label paired with its own control in an `.opt`, so that when the
+           row does have to wrap it breaks *between* the two settings and never
+           inside one. Flat, the wrap fell wherever it fit — which is how
+           "Permissions" ended up beside the model's select with "plan" orphaned
+           on the line below. -->
       <div class="opts">
-      <label for="new-model">Model</label>
-      <select id="new-model">
-        <option value="">inherit</option>
-        <option value="opus">opus</option>
-        <option value="sonnet">sonnet</option>
-        <option value="haiku">haiku</option>
-        <option value="fable">fable</option>
-      </select>
-      <label for="new-perm">Permissions</label>
-      <!-- Its own control rather than borrowing the composer's: the mode a new
-           session starts in is a decision about that session, and the composer
-           belongs to whichever conversation happens to be open behind this. -->
-      <select id="new-perm">
-        <option value="acceptEdits">acceptEdits</option>
-        <option value="auto">auto</option>
-        <option value="manual">manual</option>
-        <!-- Default here, unlike the composer: the first message of a session is
-             the one written with the least idea of what it will touch, so it is
-             worth reading a plan back before anything is changed. -->
-        <option value="plan" selected>plan</option>
-        <option value="dontAsk">dontAsk</option>
-        <option value="bypassPermissions">bypassPermissions</option>
-      </select>
+        <span class="opt">
+          <label for="new-model">Model</label>
+          <select id="new-model">
+            <option value="">inherit</option>
+            <option value="opus">opus</option>
+            <option value="sonnet">sonnet</option>
+            <option value="haiku">haiku</option>
+            <option value="fable">fable</option>
+          </select>
+        </span>
+        <span class="opt">
+          <label for="new-perm">Permissions</label>
+          <!-- Its own control rather than borrowing the composer's: the mode a new
+               session starts in is a decision about that session, and the composer
+               belongs to whichever conversation happens to be open behind this. -->
+          <select id="new-perm">
+            <option value="acceptEdits">acceptEdits</option>
+            <option value="auto">auto</option>
+            <option value="manual">manual</option>
+            <!-- Default here, unlike the composer: the first message of a session
+                 is the one written with the least idea of what it will touch, so
+                 it is worth reading a plan back before anything is changed. -->
+            <option value="plan" selected>plan</option>
+            <option value="dontAsk">dontAsk</option>
+            <option value="bypassPermissions">bypassPermissions</option>
+          </select>
+        </span>
       </div>
-      <span class="spacer"></span>
-      <button class="btn" data-close type="button">Cancel</button>
-      <button id="new-go" class="btn primary" type="button">Start</button>
+      <!-- Three weights for three roles, which the first cut of this got wrong:
+           Cancel and Save shared `.btn` and so looked identical, though one
+           throws the dialog away and the other commits it. Quiet, tonal, filled —
+           discard, keep, run. -->
+      <div class="foot-acts">
+        <button class="btn quiet" data-close type="button">Cancel</button>
+        <!-- The same dialog, kept rather than run. Everything above is already
+             the whole of a create call, so holding it back needs no second
+             form — only a second button, and a title that says which of the two
+             you are doing. See openNew() and drSave() in app.js. -->
+        <button id="new-save" class="btn tonal" type="button">Save as draft</button>
+        <button id="new-go" class="btn primary" type="button">Start</button>
+      </div>
     </div>
   </div>
 </div>

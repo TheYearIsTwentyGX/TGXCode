@@ -112,10 +112,17 @@ for this by name, and a client should honour it: you should never be unsure whet
 the thing you are about to approve is running on a machine you are sitting at.
 
 **Refused for remote callers** (403, with `{"error": …, "remote": true}`):
-`permissionMode` of `bypassPermissions` or `dontAsk` on both create and send; all
+`permissionMode` of `bypassPermissions` or `dontAsk` on create, on send, and on
+**saving or starting a draft**; all
 of `/api/terminals/*`; all of `/api/runs/*`; `POST /api/commands/run`;
 `/api/shutdown`; `/api/devservers/stop`; `/api/devbrowser/*`;
 `POST /api/sessions/:id/reveal`; `POST /api/sessions/:id/handoff`; `POST /api/fs/mkdir`.
+
+The draft routes are otherwise fully open to a remote caller, deliberately: setting
+work up at the desk and releasing it from a phone when quota frees up is the case the
+feature exists for. What a phone cannot do is *widen* a mode — the check runs when the
+draft is written and again when it is started, so a `bypassPermissions` draft saved
+locally still refuses to start remotely.
 
 Note the asymmetry around `/api/fs` and `/api/commands`: `GET /api/fs` and
 `GET /api/commands` stay readable remotely, so those refusals are on the exact path
@@ -665,6 +672,64 @@ reasoning is under `/api/suggestions` and it is about tasks, not sessions.
 Also pushed as the `taskboard` SSE event, which is how the UI reads it; the route is for
 the first load, for the Show-all button, and for anything that would rather poll.
 
+### `GET /api/drafts`
+
+Sessions set up but not started — a working directory, a first message, a model and a
+permission mode, held until somebody presses Start.
+
+```json
+{
+  "at": 1787328400656,
+  "drafts": [
+    { "id": "9640eae3-2c96-4a21-aa94-b7d262950ec0",
+      "cwd": "/home/dylan_hays/Other/claude-sessions",
+      "projectName": "claude-sessions",
+      "prompt": "Add a CSV export to the reports page",
+      "title": null, "model": "opus", "permissionMode": "plan", "test": true,
+      "createdAt": 1787328400891, "updatedAt": 1787328401276 }
+  ],
+  "counts": { "total": 1 }
+}
+```
+
+**A draft is the body of `POST /api/sessions`**, plus an id, two timestamps and a
+`title`. That is the whole idea: pressing Start runs the create call that was written
+down, so a client that can build one form can do both, and nothing about the session is
+decided at start time that was not decided when it was saved.
+
+`title` is the one field that is **not** part of the create call, and it does not survive
+the start — there is nothing to hand it to, because a session names itself from its first
+message like every other session. It names the *draft*, on a board that may hold a
+dozen, and it is dropped when the draft is. Leave it `null` and clients show the first
+line of `prompt`, which is what `web/app.js` does; set it when the first line makes a bad
+label.
+
+| Field | Type |
+|---|---|
+| `id` | string, a UUID |
+| `cwd` | string — **expanded and checked when it was saved**, so never a `~`, always inside the allowed roots at the time of writing |
+| **`projectName`** | string — derived, not stored. The same label the rail and the session list use (`projectName` in `bridge/sessions.js`), computed on the bridge so three clients cannot disagree about which project a directory belongs to |
+| `prompt` | string, non-empty, already trimmed |
+| **`title`** | **string or null.** `null` means *derive it* — take the first line of `prompt`. It is not an empty heading and it is not the string `"null"`; a client that renders it raw shows nothing where the name should be |
+| **`model`** | **string or null.** `null` is `inherit` — the session picks for itself. Not `""` |
+| `permissionMode` | string, one of the six in `POST /api/sessions/:id/send` |
+| `test` | boolean — the flag the started session will get, not a property of the draft |
+| `createdAt`, `updatedAt` | numbers, epoch ms. `createdAt` never moves; every write bumps `updatedAt` |
+
+Ordered **newest `updatedAt` first**, which is the order to draw them in — editing a
+draft moves it to the front. Ties break newest-first too, so a burst saved in the same
+millisecond does not come back reversed.
+
+`counts.total` is the length of `drafts`, always: unlike `/api/taskboard`'s idle column
+there is no window and nothing is held back, so the two cannot disagree.
+
+Test-flagged drafts are **not** filtered on the everyday bridge, unlike test *sessions*.
+A draft is not visible work — it has no transcript and no process — and hiding one you
+had ticked would mean losing it. The flag only decides what the session becomes.
+
+Also pushed as the `drafts-changed` SSE event, which is how the UI reads it. That event
+carries this same payload, so a client never has to come back here after the first load.
+
 ### `GET /api/dashboard?refresh=1`
 
 What is still in flight: work written to disk but not committed, and pull requests
@@ -843,6 +908,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `agent-tail` / `agent-reset` | as above, for a subagent |
 | `overview` | the board; sent only when it has actually changed |
 | `taskboard` | the task board; every ~3s while watched, and only when it has actually changed. Never carries `?idle=all` |
+| `drafts-changed` | `{at, drafts[], counts}` — the whole `GET /api/drafts` payload, so there is nothing to refetch. **Not gated by a `POST /api/subscribe` flag**, unlike `overview` and `taskboard`: a draft only changes because somebody changed it, so there is no tick to switch on and every window gets every change. Fires on create, edit, delete, and on a start (which deletes one) |
 | `sessions-changed` | `{at}` — a nudge to refetch the list |
 | `peer-message` | `{at, sessionId, from, count}` — another session messaged this one. The message itself is in the transcript, so a client tailing it has already drawn it; this is for everything that is not the open pane |
 | `handoff` | `{at, sessionId, from, count}` — another session handed this one work, and it was resumed to deal with it. Same shape and same reasoning as above; watched in the transcript rather than reported by the route, so it fires when the message *arrived* rather than when it was queued |
@@ -952,6 +1018,91 @@ What the process receives is the text plus a trailing list of the paths, and an 
 image block for each attachment that really is a PNG, JPEG, GIF or WebP. The list is
 parsed back off the message before the transcript renders it (`files[]` on the `user`
 event above), so the paths are not shown twice.
+
+### `POST /api/drafts`
+
+`{cwd, prompt, model?, permissionMode?, test?, title?}` → `{draft}`, the row as
+`GET /api/drafts` describes it.
+
+**Validated exactly as `POST /api/sessions` is, at save time.** This is the part worth
+knowing: the directory must exist, be a directory, and be inside the allowed roots
+*now*, and a remote caller is refused `bypassPermissions` and `dontAsk` here and not
+only when the draft is started. The reasoning is that a draft you cannot start is worse
+than a refused save — it sits on the board looking ready and fails every time you press
+the button, with nothing to say why it was ever accepted. `resolveWorkdir` in
+`bridge/runner.js` is the same function the create route calls, so the two cannot come
+to different verdicts.
+
+`cwd` is stored **expanded**: send `~/thing` and the draft comes back with the real
+path, because that is what will be handed to `spawn()`.
+
+`400` for a missing `cwd` or empty `prompt`, a directory that does not exist, is a file,
+or is outside the roots; `403` for a refused `permissionMode` from a remote caller;
+`409` past **200 drafts**, which is a ceiling and not a lifetime budget — deleting one
+makes room again.
+
+An unknown `permissionMode` normalises to `auto` rather than being refused, as
+everywhere else. An absent one does too, so **send it explicitly**: omitting it does not
+mean "decide later", it means the draft is saved as `auto`.
+
+### `PATCH /api/drafts/:id`
+
+Any subset of `{cwd, prompt, model, permissionMode, test, title}` → `{draft}`.
+
+**A genuine partial.** A field left out of the body is left alone; only what you send is
+written. So saving an edited message does not restate the model and the mode, and cannot
+silently reset them — which is the trap `POST /api/sessions/:id/send` has with
+`permissionMode`, and the reason this is a PATCH rather than a second POST.
+
+`null` is a value and absence is not: `{"title": null}` clears a title, `{}` changes
+nothing but the timestamp. For `title` and `model` a whitespace-only string is stored as
+`null`, since neither has a meaningful empty value.
+
+Every field is validated as it is on create, so the refusals are the same — `400`, and
+`403` on a remote caller's `permissionMode` — plus `404` for an unknown id. `createdAt`
+is never touched; `updatedAt` always is, which is what moves the row to the front of the
+list.
+
+**The body is checked before the id is looked up**, so a refused mode is a `403` whether
+or not the draft exists — the same order `POST /api/sessions/:id/send` uses, and for the
+same reason: the refusal is about what this caller may ask for, not about what it aimed
+at. A client that treats `404` as "wrong id" and `403` as "not allowed" therefore reads
+both correctly.
+
+### `DELETE /api/drafts/:id`
+
+→ `{ok: true, id}`; `404` if there is no such draft.
+
+A hard delete of a small file, and deliberately not offered a confirmation by the UI —
+unlike a session, whose transcript cannot be reconstructed. Deleting twice is a `404`,
+not an error worth handling.
+
+### `POST /api/drafts/:id/start`
+
+No body → `{sessionId, status, test}`, and **the draft is deleted**.
+
+The same response as `POST /api/sessions`, because it *is* that call with its arguments
+read off a file — and therefore everything documented there applies:
+
+- **`status` is a whole runner status object**, the `runner-status` payload for the
+  process just started, not a word describing the outcome.
+- **The new id is not readable for a few seconds.** `GET /api/sessions/:id` will `404`
+  while `claude` writes its first line. Subscribe and wait for the first `tail`, or
+  retry the read for ~15s before believing it.
+
+**The draft is deleted only after the process starts.** A failure leaves it exactly
+where it was, which is the whole reason this is one route and not the client doing
+create-then-delete: a directory moved since you saved it should cost you the press, not
+the message you wrote. So a `400` here means *nothing happened* and the draft is still
+listed.
+
+Re-checked at start time rather than trusted from save time: the allowed roots are
+configuration and a draft can outlive the setting that let it be saved, and a draft
+saved at the machine must not become a way for a phone to start `bypassPermissions`.
+
+`404` for an unknown id; `403` for a `permissionMode` this caller may not start; `400`
+if the directory no longer resolves; `429` past 8 sessions started in a minute — the
+same bucket `POST /api/sessions` draws on, because both spawn a process.
 
 ### `POST /api/sessions/:id/handoff`
 

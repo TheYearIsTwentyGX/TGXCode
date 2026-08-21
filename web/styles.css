@@ -3153,14 +3153,15 @@ body.term-resizing { user-select: none; cursor: row-resize; }
    the eye can run down the right edge for "what needs doing" and down the left
    for "where". */
 
-.dash, .live, .notes, .taskboard {
+.dash, .live, .notes, .taskboard, .drafts {
     display: flex;
     flex-direction: column;
     flex: 1;
     min-height: 0;
 }
 /* Not optional: `display: flex` above beats the `hidden` attribute on its own. */
-.dash[hidden], .live[hidden], .notes[hidden], .taskboard[hidden] { display: none; }
+.dash[hidden], .live[hidden], .notes[hidden], .taskboard[hidden],
+.drafts[hidden] { display: none; }
 
 /* ── the live board ──────────────────────────────────────────────────────
    A card per running session. The grid decides its own column count so that a
@@ -4034,6 +4035,38 @@ body.term-resizing { user-select: none; cursor: row-resize; }
    squeezing the buttons when the window is narrow. */
 .modal-foot .opts { flex-wrap: wrap; margin: 0; }
 
+/* Two rows: settings, then what to do with them. For a footer carrying more than
+   a pair of buttons — see the comment on #new-scrim's. The gap is wider than the
+   one between buttons because it is separating two kinds of thing rather than
+   spacing a row of one kind. */
+.modal-foot.stacked {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 16px;
+}
+/* Given the whole row, the settings no longer have to squeeze past the buttons.
+   Still allowed to wrap — the modal is `min(640px, 100%)` and goes narrow on a
+   phone-width window — but now it can only break between the pairs, because each
+   is an `.opt` of its own. The gap is the wide one for the same reason. */
+.modal-foot.stacked .opts { flex-wrap: wrap; gap: 8px 18px; padding-left: 0; }
+.opt {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+/* The select gives up width before the label does: `inherit` truncated is still
+   readable, whereas a clipped "Permissions" stops naming anything. */
+.opt label { flex: none; }
+.opt select { min-width: 0; }
+
+.foot-acts {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
 .field { margin-bottom: 18px; }
 .field > label {
     display: block;
@@ -4155,12 +4188,27 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     border-radius: var(--pill);
     font: 500 13.5px/1 var(--sans);
     color: var(--blue);
+    /* A button is a label, not a paragraph. Left to wrap, "Save as draft" broke
+       across two lines and took the footer's height with it. */
+    white-space: nowrap;
     transition: background var(--t-fast) var(--ease);
 }
 .btn:hover { background: var(--blue-tint); }
 .btn.primary { background: var(--blue); color: #062e6f; }
 .btn.primary:hover { background: var(--blue); filter: brightness(1.08); }
 .btn:disabled { opacity: 0.45; cursor: default; }
+
+/* The middle weight, for a footer with two things you might commit. Filled, so
+   it reads as an action rather than a way out, but in the surface colour rather
+   than the accent so it cannot be mistaken for the main one. The same grey-filled
+   idiom the New session button in the bar uses, and it means the same thing. */
+.btn.tonal { background: var(--s4); color: var(--text); }
+.btn.tonal:hover { background: var(--s5); }
+
+/* And the quietest, for the way out. Blue on Cancel put it in the same voice as
+   the actions it sits beside; this steps it back so the eye lands on them. */
+.btn.quiet { color: var(--text-3); }
+.btn.quiet:hover { background: var(--s3); color: var(--text); }
 
 /* The one button in the app that destroys something. Filled, in the error
    colour, so it can never be mistaken for the confirm it sits next to. */
@@ -4724,6 +4772,80 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 .tb-new-box:focus-visible { outline: none; border-color: var(--s5); background: var(--s3); }
 .tb-new .tb-btn { flex: none; }
 
+/* ── drafts ──────────────────────────────────────────────────────────────
+   Work set up but not started. One column rather than the task board's five,
+   because there is only one state a draft can be in — so the width goes to the
+   message instead, which is the part you came here to read before releasing it.
+   The card is the task board's card: same class, same meta line, same buttons,
+   because it is the same object at a different moment. */
+
+.dr-head {
+    flex: none;
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    padding: 22px 28px 16px;
+}
+.dr-title { margin: 0; font: 400 21px/1.3 var(--sans); color: var(--text); }
+.dr-sub {
+    margin: 5px 0 0;
+    max-width: 640px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text-3);
+}
+.dr-head .dash-btn { margin-left: auto; flex: none; }
+
+.dr-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 28px 32px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    /* Wide enough to read a paragraph, narrow enough that the line length stays
+       comfortable on a second monitor. The board next door is a grid and needs
+       the whole width; a single column does not, and stretching one card to
+       2000px would make the prompt unreadable. */
+    max-width: 860px;
+}
+
+/* `.tb-card` colours its left edge by which column it is in — yellow for needs
+   you, green for working, blue for a suggested task. There are no columns here,
+   so a draft takes the quietest edge in the set rather than borrowing a meaning
+   from one of those three. It is the one thing in this app not asking for
+   anything, and the stripe should say so. */
+.dr-card { box-shadow: inset 3px 0 0 var(--s5); }
+
+/* The message itself, which is the point of the card. Several lines of it, then
+   an ellipsis: a draft is usually a paragraph, and one that is not should not
+   push the buttons off the bottom of a card you cannot act on without scrolling
+   past. `clip()` in app.js caps the text as well; this caps the height. */
+.dr-prompt {
+    margin: 1px 0 2px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text-2);
+    white-space: pre-wrap;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 6;
+}
+
+/* The empty state, and the read-failure note, share it — both are one short
+   block of prose in the middle of an otherwise blank panel. */
+.dr-note {
+    padding: 18px 4px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+}
+.dr-note p { margin: 0; max-width: 520px; font-size: 13.5px; line-height: 1.65; color: var(--text-2); }
+.dr-note p.dim { font-size: 13px; color: var(--text-4); }
+
 /* ── narrow windows ──────────────────────────────────────────────────── */
 
 @media (max-width: 980px) {
@@ -4744,4 +4866,7 @@ body.term-resizing { user-select: none; cursor: row-resize; }
         overflow-y: auto;
     }
     .tb-col { max-height: 60vh; }
+
+    .dr-head { padding: 16px 16px 12px; }
+    .dr-body { padding: 0 16px 20px; }
 }
