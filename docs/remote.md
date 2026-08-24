@@ -149,72 +149,109 @@ is ever lost there is no documented way to get a new one, only a move to paid
 Microsoft 365. A second domain registered at Cloudflare costs a few dollars a year
 and takes the question off the table entirely.
 
-### Measured: SSE does not survive the tunnel
+### Measured: a named tunnel streams, a quick tunnel does not
 
-This was tested rather than assumed, and it fails:
+This is worth being precise about, because the distinction is the difference
+between the phone feeling live and the phone looking broken — and the open
+`cloudflared` issues only ever tested the half that fails.
 
-| | Loopback | Through the tunnel |
-|---|---|---|
-| `hello` event | 0.04s | **never** |
-| Pings at 25s / 50s | on time | never |
-| Bytes in 75s | 418 | **0** |
-| `X-Accel-Buffering: no` on the response | present | **stripped** |
+| `/api/events` | Loopback | Quick tunnel | Named tunnel |
+|---|---|---|---|
+| `hello` | 0.04s | **never** | **0.29s** |
+| Pings at 25s / 50s | on time | never | on time |
+| Chunks in ~75s | 9 | **0** | **36** |
+| `X-Accel-Buffering: no` echoed | yes | stripped | stripped |
 
-HTTP 200, `text/event-stream`, `cf-ray` present — and not one byte in 75 seconds.
-Cloudflare removes the header that is supposed to disable buffering, so there is
-nothing to fix from this side. This confirms
+A **quick** tunnel (`cloudflared tunnel --url …`, `*.trycloudflare.com`) buffers
+completely: HTTP 200, `text/event-stream`, and zero bytes for 75 seconds while the
+immediate `hello` and three pings are all held. That reproduces
 [cloudflared#1449](https://github.com/cloudflare/cloudflared/issues/1449) and
-[#199](https://github.com/cloudflare/cloudflared/issues/199) apply to us.
+[#199](https://github.com/cloudflare/cloudflared/issues/199).
 
-**It does not matter, because polling is cheap.** Through the same tunnel:
+A **named** tunnel on a real hostname streams properly — 36 chunks spread across
+75 seconds, pings landing at 25.28s and 50.28s. Both strip the
+`X-Accel-Buffering` header, so that header is not what makes the difference and
+there is no config knob to reach for; the buffering lives in the quick-tunnel path
+specifically.
 
-```
-overview  avg  62ms   7 KB
-since     avg  61ms   42 B   (when nothing has happened)
-```
+**So the named tunnel is the supported setup, and SSE works on it.** Do not judge
+this transport by a quick tunnel — that is a test of a different code path.
 
-`web/mobile.js` detects the dead stream on the missing `hello` and switches to
-polling by itself — see *The live channel* in `docs/api.md`. The dot in the top bar
-becomes a ring rather than a filled circle, and says so on tap. Liveness is a couple
-of seconds granular instead of instant.
+**The fallback stays anyway.** `web/mobile.js` watches for `hello` and switches to
+polling if it does not arrive within six seconds. It costs nothing when the stream
+works (it never engages) and it is what makes a quick tunnel, a corporate proxy, or
+some hotel network degrade into "a couple of seconds behind" instead of "silently
+frozen". Polling was measured through the same tunnel at 62ms for the board and
+42 bytes for an empty transcript delta, so the degraded mode is barely degraded.
 
-### Setup
+### Setup — and what is already done on this machine
 
-1. **Authorise the machine.** Opens a browser; pick the zone you want.
+The tunnel below exists and is configured. This records it so it can be rebuilt,
+and so the next person knows which parts are decisions rather than defaults.
+
+- **`cloudflared`** lives at `~/.local/bin/cloudflared`, not installed system-wide.
+  `~/.bashrc` puts that directory on PATH, so `cloudflared` resolves in an
+  interactive shell with no sudo anywhere.
+- **Tunnel** `claude-sessions`, id `8fc8f334-b1fa-483f-8110-1fe6d2a4458e`.
+- **Hostname** `tgxcode.com` — the apex, on a domain bought for this and nothing
+  else. A CNAME to the tunnel was created by `tunnel route dns`.
+- **Config** `~/.cloudflared/config.yml`, pointing at `http://127.0.0.1:45888`.
+
+To rebuild from nothing:
+
+1. **Authorise the machine.** Opens a browser; pick the zone.
 
    ```bash
    cloudflared tunnel login
    ```
 
-2. **Create the tunnel and route a hostname to it.**
+2. **Create the tunnel and route the hostname to it.**
 
    ```bash
    cloudflared tunnel create claude-sessions
-   cloudflared tunnel route dns claude-sessions sessions.example.com
+   cloudflared tunnel route dns claude-sessions tgxcode.com
    ```
 
-3. **Point it at the bridge.** `~/.cloudflared/config.yml`:
+3. **Point it at the bridge** in `~/.cloudflared/config.yml`. A single service
+   needs no `hostname` match — whatever is routed to the tunnel reaches the bridge,
+   and `tunnel route dns` is the only thing that decides what that is:
 
    ```yaml
-   tunnel: claude-sessions
-   credentials-file: /home/you/.cloudflared/<tunnel-id>.json
+   tunnel: 8fc8f334-b1fa-483f-8110-1fe6d2a4458e
+   credentials-file: /home/dylan_hays/.cloudflared/8fc8f334-….json
+   edge-ip-version: "4"
    ingress:
-     - hostname: sessions.example.com
-       service: http://127.0.0.1:45888
-     - service: http_status:404
+     - service: http://127.0.0.1:45888
    ```
 
-4. **Tell the bridge the hostname**, or every request is refused with
-   `403 unexpected host` — that is the DNS-rebinding guard, and it does not know
-   about your domain until you say so. Put it wherever the bridge's environment is
-   set:
+   `edge-ip-version: "4"` is load-bearing here: this machine has no working IPv6
+   route, and `cloudflared tunnel list` fails dialling Cloudflare over v6 while the
+   same call succeeds over v4. Without the pin, every reconnect burns a timeout
+   first. It must be a **string** — an int is rejected by the config parser.
+
+   **`--url` on the command line does not override `ingress`.** It is echoed in the
+   startup `Settings:` line, which makes it look like it took effect, but the config
+   file's ingress rules are what route. To test against a different port, edit the
+   config; do not trust the flag.
+
+4. **Tell the bridge the hostname**, or every request comes back
+   `403 {"error":"unexpected host"}` — the DNS-rebinding guard, which has no way to
+   know about your domain until you say so.
+
+   On this machine that lives in **`~/.profile`**:
 
    ```bash
-   CLAUDE_SESSIONS_ORIGINS=https://sessions.example.com
+   export CLAUDE_SESSIONS_ORIGINS=https://tgxcode.com
    ```
 
-5. **Run it as a service**, so it survives a reboot. WSL has systemd enabled here
-   (`/etc/wsl.conf` sets `systemd=true`), so this works:
+   That file rather than the app, because the Windows shell starts the bridge with
+   `wsl.exe bash -lc`, and a login shell reads `~/.profile` — which is also the only
+   one of the three login files present here, so it is definitely the one read.
+   Setting it in `app/main.js` would work too and would need a rebuild, which is
+   worse. **A running bridge does not pick this up**; it applies at next start.
+
+5. **Run it as a service**, so it survives a reboot. WSL has systemd enabled
+   (`/etc/wsl.conf` sets `systemd=true`):
 
    ```bash
    sudo cloudflared service install
@@ -222,7 +259,7 @@ of seconds granular instead of instant.
    ```
 
 6. **Pair the phone** exactly as with Tailscale — the phone button in the top bar,
-   with the hostname typed into *Reachable at*.
+   with `https://tgxcode.com` in *Reachable at*.
 
 ### Put something in front of it
 

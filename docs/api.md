@@ -884,10 +884,14 @@ a 404: the caller pressed a key, and an empty list is a real answer.
 **SSE is best-effort. Polling is the guaranteed path.** Some transports buffer
 server-sent events instead of passing them through, and they fail silently: the
 request succeeds, the content type is right, and nothing arrives until the
-connection closes. Measured through a Cloudflare Tunnel, `/api/events` delivered
-**zero bytes in 75 seconds** — the immediate `hello` and three pings all held —
-while ordinary requests through the same tunnel returned in 60ms. Cloudflare strips
-the `X-Accel-Buffering: no` header the bridge sets, so the origin cannot fix it.
+connection closes.
+
+Measured, so a client knows what it is defending against. A Cloudflare **named**
+tunnel streams fine — 36 chunks over 75 seconds, `hello` at 0.29s. A Cloudflare
+**quick** tunnel (`*.trycloudflare.com`) delivers **zero bytes in 75 seconds** on
+the same bridge, holding the immediate `hello` and three pings, while ordinary
+requests through it return in 60ms. Both strip the `X-Accel-Buffering: no` header
+the bridge sets, so that header is not the lever and the origin cannot fix it.
 
 A client that must work everywhere should detect this and fall back:
 
