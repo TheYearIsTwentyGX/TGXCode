@@ -3618,6 +3618,12 @@ body.term-resizing { user-select: none; cursor: row-resize; }
        that "who is blocked on me" survives a screen too full to read. */
     box-shadow: inset 3px 0 0 var(--s4);
 }
+/* Stopped at the facts line by `live.compact`. Four short rows in a row-gap
+   chosen for a card that also held a preview and a message box reads as a
+   half-filled card, so the whole thing draws in a little. Spacing only — the
+   colours above still do the work of saying which band it is in. */
+.lcard[data-compact="1"] { gap: 7px; padding: 12px 15px 11px; }
+
 .lcard[data-reason="ask"]   { box-shadow: inset 3px 0 0 var(--yellow); background: #232017; }
 .lcard[data-reason="error"] { box-shadow: inset 3px 0 0 var(--red); }
 .lcard[data-reason="here"]  { box-shadow: inset 3px 0 0 var(--green); }

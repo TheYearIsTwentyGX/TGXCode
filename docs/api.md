@@ -418,7 +418,7 @@ directories. Its own route rather than a field on the summary for the reason
 
 ### `GET /api/prefs?cwd=<path>`
 
-`{ version, transcript: {…}, spinner: {…}, sources: [string], problems: [{file, message}] }`
+`{ version, transcript: {…}, live: {…}, spinner: {…}, sources: [string], problems: [{file, message}] }`
 — how the person using the app wants it to behave. `sources` is file paths, weakest
 first; each `problems` entry is an **object**, `{file, message}`, naming the file that
 carried a value the key does not allow and what was wrong with it.
@@ -439,6 +439,19 @@ user-level answer, which is also what every page is served in a `cs-prefs`
 a message closes it), `groupMinCalls` (how long a run has to be — at least 2),
 `groupIncludesThinking` (whether a thinking block is part of the run or the end
 of it).
+
+`live` is about the desktop live board: `compact` (bool — a card stops at the
+tool-count line, with no history preview, no message box, no Open/Stop and no
+approval row), `hideElsewhere` (bool — leave out cards whose session is running
+under something that is not this bridge, i.e. `reason: "elsewhere"`; the board
+says how many it left out rather than dropping them silently). Both default
+`false`.
+
+Note that the page reads these from its `<meta>` copy, which is the **user-level**
+answer — the board draws sessions from every project at once, so a project's
+`<workspace>/.tgxcode/settings.json` can set `live` and will see it echoed back
+on `?cwd=`, but it does not change what the board draws. Nothing in `/m` reads
+`live`: the phone builds its own cards.
 
 `spinner`: `randomize` (whether a turn in progress wears a themed verb in front
 of what it is doing, or says only what it is doing as before), `groups` (which
