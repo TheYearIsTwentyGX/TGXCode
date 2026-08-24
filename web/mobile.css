@@ -170,6 +170,13 @@ button { cursor: pointer; }
 .conn[data-state="live"]        { background: var(--green); }
 .conn[data-state="connecting"]  { background: var(--yellow); }
 .conn[data-state="offline"]     { background: var(--red); }
+/* Working, but by asking rather than being told — some networks will not carry a
+   stream. A ring rather than a dot, because it is a different kind of connected
+   and pretending otherwise would make a two-second delay look like a bug. */
+.conn[data-state="polling"] {
+    background: transparent;
+    box-shadow: inset 0 0 0 2px var(--blue);
+}
 
 /* --- screens -------------------------------------------------------------- */
 
