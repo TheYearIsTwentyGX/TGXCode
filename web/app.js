@@ -2620,12 +2620,27 @@ function refreshAsk(runnerAsk) {
 const askShowing = () => Boolean(
     dom.log.querySelector('.perm') || !dom.askDock.hidden || !dom.planPane.hidden);
 
-/** Whichever element is currently carrying the ask, for disabling and dimming. */
+/** Whichever element is currently carrying the ask, for dimming. */
 function askRoot() {
     const kind = state.ask && state.ask.kind;
     if (kind === 'plan') return dom.planPane;
     if (kind === 'question') return dom.askDock;
     return dom.log.querySelector('.perm');
+}
+
+/**
+ * The buttons that answer the ask, which is narrower than the element carrying
+ * it. The plan view's chrome — Set aside, and the bar that brings the plan back
+ * — lives in the same section as the answer, and is not an answer: it says
+ * nothing to the bridge and stays live even while an answer is in flight.
+ *
+ * Disabling by askRoot() instead left both of them dead from the first answered
+ * plan onwards, since only the footer is rebuilt for the next one. That is the
+ * bug this exists for.
+ */
+function askControls() {
+    if (state.ask && state.ask.kind === 'plan') return dom.planFoot;
+    return askRoot();
 }
 
 /** Show, replace or clear whatever the session is blocked on. */
@@ -2636,6 +2651,7 @@ function renderAsk() {
     delete dom.askDock.dataset.pending;
     dom.planPane.hidden = true;
     delete dom.planPane.dataset.pending;
+    delete dom.planPane.dataset.collapsed;
 
     // The dock's controls are where the answers live, so it is emptied only
     // once it is no longer the dock for the ask in hand. Going to read a
@@ -3076,10 +3092,9 @@ async function answerAsk(payload) {
     // on this bridge to answer, and its requestId is not one.
     if (ask.readOnly) return;
     const root = askRoot();
-    if (root) {
-        for (const b of root.querySelectorAll('button')) b.disabled = true;
-        root.dataset.pending = '1';
-    }
+    const controls = askControls();
+    if (root) root.dataset.pending = '1';
+    if (controls) for (const b of controls.querySelectorAll('button')) b.disabled = true;
     try {
         await answerAskFor(state.current.sessionId, ask.requestId, payload);
         if (payload.mode) adoptMode(payload.mode);
@@ -3087,10 +3102,8 @@ async function answerAsk(payload) {
         // 409 means another window got there first; the resolved event that
         // follows takes the surface down with the right reason on it.
         toast(`Could not answer: ${err.message}`, 'error');
-        if (root) {
-            delete root.dataset.pending;
-            for (const b of root.querySelectorAll('button')) b.disabled = false;
-        }
+        if (root) delete root.dataset.pending;
+        if (controls) for (const b of controls.querySelectorAll('button')) b.disabled = false;
     }
 }
 
@@ -10935,14 +10948,17 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && state.dash.open) { showDash(false); return; }
     if (e.key === 'Escape' && state.notes.open) { showNotes(false); return; }
     if (e.key === 'Escape' && state.drafts.open) { showDrafts(false); return; }
-    // Out of focus mode before out of the board: focus mode is the deeper state,
-    // and leaving it should not also take the board away.
+    // Focus mode is a way of showing the board rather than a panel of its own, so
+    // Escape leaves it without also taking the board away. Closing the board is
+    // the Live button's alone — it is somewhere you go and stay, not something
+    // laid over your work, and Escape was shutting it while you were reading it.
     if (e.key === 'Escape' && state.focus) { setFocus(false); return; }
-    if (e.key === 'Escape' && state.live.open) { showLive(false); return; }
     // Above the subagent pane it may be searching, below anything laid over the
     // whole window — and everything above this line closes find on the way up
     // (paintPanels, showPlan) or refuses to let it open (openFind), so the two
-    // are never both on screen for the order to matter.
+    // are never both on screen for the order to matter. A *docked* live board is
+    // the one thing above that does not: it leaves the conversation on screen,
+    // and searching it while the board runs beside you is the point.
     if (e.key === 'Escape' && state.find.open) { closeFind({ focus: true }); return; }
     if (e.key === 'Escape' && state.agent) { closeAgent(); return; }
     // Ctrl+F, and F3 for the repeat — both of which the terminal gets first when

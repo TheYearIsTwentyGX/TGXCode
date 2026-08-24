@@ -1911,9 +1911,13 @@ a:hover { text-decoration: underline; }
     background: var(--s3);
     color: var(--text-3);
     font: 500 12px/1 var(--sans);
+    cursor: pointer;
     transition: background var(--t-fast) var(--ease);
 }
-.plan-aside:hover { background: var(--s4); color: var(--text-2); }
+/* Guarded, so a button that cannot be pressed cannot look pressable either —
+   the plan chrome going quietly dead was invisible for exactly this reason. */
+.plan-aside:hover:not(:disabled) { background: var(--s4); color: var(--text-2); }
+.plan-aside:disabled, .plan-bar:disabled { cursor: default; }
 
 /* The plan itself. Measured for reading rather than stretched to the pane, and
    the only thing here that scrolls — the answer stays put below it. */
@@ -1986,7 +1990,7 @@ a:hover { text-decoration: underline; }
     cursor: pointer;
     transition: background var(--t-fast) var(--ease);
 }
-.plan-bar:hover { background: #35301c; }
+.plan-bar:hover:not(:disabled) { background: #35301c; }
 .plan-bar-led {
     flex: none;
     width: 7px;
