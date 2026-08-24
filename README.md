@@ -482,6 +482,47 @@ ignored and the default stands, rather than being taken at face value.
 
 There is no settings page yet; the file is the interface.
 
+### Cutting the live board down
+
+The same file has a `live` block, for the board behind **Live** (`Ctrl+3`) — two
+keys, both off by default:
+
+```json
+{
+  "version": 1,
+  "live": {
+    "compact": false,
+    "hideElsewhere": false
+  }
+}
+```
+
+`compact` stops every card at its tool-count line. Everything under that line
+goes — the few lines of history, the message box, the Open and Stop buttons, and
+the Allow/Deny row of a session waiting on permission. What is left is the title,
+what it is doing, the task bar and the counts, which is a card you read rather
+than one you act on. That is the trade: a screenful of sessions at a glance,
+against having to open one to answer it. Clicking anywhere on a card still opens
+it, so nothing is unreachable — only a click further away.
+
+`hideElsewhere` leaves out sessions running under something that is not this
+bridge: a terminal, VS Code, a background agent, another Claude Sessions window.
+They are the cards this window cannot do anything with — it will not send into
+them, because two processes appending to one transcript is how a transcript gets
+corrupted — so if what you want from the board is only what you can drive from
+here, this is the switch. The subtitle still counts what it left out; the board
+never quietly shrinks.
+
+Both are read from **your** file rather than a project's, even though a project
+may set them. The board is the one view that is not about a single session — it
+draws cards from every project on the machine at once, so letting whichever
+conversation happens to be open decide how the rest are drawn is a setting that
+appears to change on its own.
+
+An existing `~/.tgxcode/settings.json` will not have grown the block: the
+defaults are only written out when there is no file at all. Add it by hand, and
+until you do, both are `false`. Neither is picked up until the page reloads.
+
 ### What a turn in progress calls itself
 
 While a turn runs, every surface that shows it working — the status line, the

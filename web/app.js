@@ -90,17 +90,34 @@ const DEFAULT_PERM = 'auto';
 const BOOT_PREFS = (() => {
     const fallback = {
         transcript: { groupToolCalls: true, groupMinCalls: 3, groupIncludesThinking: true },
+        live: { compact: false, hideElsewhere: false },
     };
     try {
         const m = document.querySelector('meta[name="cs-prefs"]');
         if (!m) return fallback;
         const d = JSON.parse(decodeURIComponent(m.content));
-        return { ...fallback, ...d, transcript: { ...fallback.transcript, ...(d.transcript || {}) } };
+        return {
+            ...fallback, ...d,
+            transcript: { ...fallback.transcript, ...(d.transcript || {}) },
+            live: { ...fallback.live, ...(d.live || {}) },
+        };
     } catch { return fallback; }
 })();
 
 /** The transcript settings in force — the open session's, or the user's own. */
 const grouping = () => (state.prefs || BOOT_PREFS).transcript;
+
+/**
+ * The board's settings — the user's own, and deliberately never `state.prefs`.
+ *
+ * `state.prefs` is the *open session's* answer, project overrides and all, and
+ * the board is the one view that is not about one session: it draws cards from
+ * every project on the machine at once. Reading it here would let whichever
+ * conversation happens to be open decide how every other project's cards are
+ * drawn, which is a setting that appears to change on its own.
+ */
+const liveCompact = () => BOOT_PREFS.live.compact;
+const liveHideElsewhere = () => BOOT_PREFS.live.hideElsewhere;
 
 const state = {
     clientId: null,
@@ -4115,8 +4132,8 @@ const liveVisible = () => state.live.open
  * `state.live.dock` is not this question. It remembers which side you docked to
  * and keeps saying 'bottom' when the board has the whole window, where nothing
  * runs sideways at all — so anything about the arrangement has to ask
- * `data-mode` as well. Both the compact card and the jump's scroll axis want
- * this one.
+ * `data-mode` as well. Both the stripped-down card and the jump's scroll axis
+ * want this one.
  */
 const liveStrip = () => dom.live.dataset.mode === 'dock' && state.live.dock === 'bottom';
 
@@ -4171,11 +4188,23 @@ function renderLive() {
     // What is still a question about the layout is density — only the bottom
     // strip is short of room. As a column, or full screen, there is height for a
     // fuller card.
-    const compact = liveStrip();
+    const strip = liveStrip();
+
+    // `live.hideElsewhere`: drop the cards this window has no process for. The
+    // test is the one the rail already uses, so the two views cannot disagree
+    // about what "not ours" means. `recent` needs no filtering — a session the
+    // bridge put in that group is one it found idle, and a session running in a
+    // terminal is never idle.
+    const sessions = liveHideElsewhere()
+        ? d.sessions.filter(s => !elsewhere(s))
+        : d.sessions;
+    const hiddenAway = d.sessions.length - sessions.length;
 
     const bits = [];
     if (d.waiting) bits.push(`${d.waiting} waiting for you`);
-    bits.push(`${d.running} running`);
+    // Recounted rather than taken from the payload, which counted the cards
+    // before any of them were hidden. Same two reasons the bridge counts.
+    bits.push(`${sessions.filter(s => s.reason === 'here' || s.reason === 'elsewhere').length} running`);
     // What the other groups hold, and a way to get to them — the strip's
     // problem first. Five sessions working is 1650px of Live before Recent
     // activity even begins, so a group past the first is not so much missing as
@@ -4184,10 +4213,14 @@ function renderLive() {
     // the count is the way there. Full screen the same run of cards is below the
     // fold rather than off the side, which is the same problem lying down.
     const recent = (d.recent || []).length;
-    const pinned = d.sessions.filter(s => s.reason === 'pinned').length;
+    const pinned = sessions.filter(s => s.reason === 'pinned').length;
     if (recent) bits.push(jumpToGroup('recent', `${recent} recent`));
     if (pinned) bits.push(jumpToGroup('pinned', `${pinned} pinned`));
     if (d.hidden) bits.push(`${d.hidden} more not shown`);
+    // Said out loud rather than left to look like an empty board — the same
+    // promise the cap above makes. A setting that silently removes cards is
+    // indistinguishable from a bridge that has stopped noticing them.
+    if (hiddenAway) bits.push(`${hiddenAway} elsewhere, hidden`);
     // Interleaved rather than joined: some of these are buttons now.
     dom.liveSub.replaceChildren(...bits.flatMap((bit, i) => (i
         ? [el('span', { class: 'live-sep' }, ' · '), bit]
@@ -4195,10 +4228,15 @@ function renderLive() {
 
     // Nothing to draw at all — the recent group is a reason to draw the board
     // even with nothing running, and it is drawn in every arrangement now.
-    if (!d.sessions.length && !recent) {
+    if (!sessions.length && !recent) {
         dom.liveBody.replaceChildren(el('div', { class: 'live-note' },
-            el('p', {}, 'Nothing is running. Every session on this machine is idle, '
-                + 'here and in every terminal.')));
+            // The plain sentence claims the terminals too, so it must not be
+            // said when `hideElsewhere` is the reason the board is empty.
+            el('p', {}, hiddenAway
+                ? `Nothing here is running. ${hiddenAway === 1 ? 'One session is' : `${hiddenAway} sessions are`} `
+                    + 'running outside this window, and live.hideElsewhere keeps them off the board.'
+                : 'Nothing is running. Every session on this machine is idle, '
+                    + 'here and in every terminal.')));
         return;
     }
 
@@ -4215,7 +4253,7 @@ function renderLive() {
     const scroll = { x: dom.liveBody.scrollLeft, y: dom.liveBody.scrollTop };
 
     freshCards = [];
-    reconcile(dom.liveBody, liveGroups(d, compact));
+    reconcile(dom.liveBody, liveGroups({ ...d, sessions }, strip));
     dom.liveBody.scrollLeft = scroll.x;
     dom.liveBody.scrollTop = scroll.y;
 
@@ -4270,15 +4308,15 @@ let freshCards = [];
  * with a listener on several of them, and building all of them once a second,
  * beside a document that also holds the whole open transcript, was the cost.
  *
- * `compact` is part of the key because it changes what `liveCard` draws — a dock
+ * `strip` is part of the key because it changes what `liveCard` draws — a dock
  * that has just been moved must not be served cards cut for the other shape.
  */
-function liveCardFor(s, compact) {
+function liveCardFor(s, strip) {
     const prev = state.live.nodes.get(s.sessionId);
-    if (prev && prev.sig === s.sig && prev.compact === compact) return prev.node;
+    if (prev && prev.sig === s.sig && prev.strip === strip) return prev.node;
 
-    const node = liveCard(s, compact);
-    state.live.nodes.set(s.sessionId, { sig: s.sig, compact, node });
+    const node = liveCard(s, strip);
+    state.live.nodes.set(s.sessionId, { sig: s.sig, strip, node });
     freshCards.push(node);
     return node;
 }
@@ -4349,7 +4387,7 @@ function jumpToGroup(key, label) {
  * Empty groups are dropped rather than shown empty: three headings over one card
  * is mostly headings, and the strip has no room to spare for them.
  */
-function liveGroups(d, compact) {
+function liveGroups(d, strip) {
     const live = d.sessions.filter(s => s.reason !== 'pinned');
     const pinned = d.sessions.filter(s => s.reason === 'pinned');
     const recent = d.recent || [];
@@ -4366,7 +4404,7 @@ function liveGroups(d, compact) {
     ].filter(([, , list]) => list.length);
 
     const sections = shown.map(([key, label, list, hidden]) =>
-        liveGroup(key, label, list, hidden, compact));
+        liveGroup(key, label, list, hidden, strip));
 
     // A group that has emptied — the last thing you touched today falling out
     // of the recent window — must not keep its section and its cards alive.
@@ -4385,7 +4423,7 @@ function liveGroups(d, compact) {
  * loses the focus inside it however unchanged it is. So the containers stay put
  * and `reconcile` decides what moves within them.
  */
-function liveGroup(key, label, list, hidden, compact) {
+function liveGroup(key, label, list, hidden, strip) {
     let g = state.live.groups.get(key);
     if (!g) {
         const count = el('span', { class: 'lgroup-count' });
@@ -4409,7 +4447,7 @@ function liveGroup(key, label, list, hidden, compact) {
     g.count.textContent = String(list.length);
     g.more.textContent = hidden ? `+${hidden} more` : '';
     g.more.hidden = !hidden;
-    reconcile(g.body, list.map(s => liveCardFor(s, compact)));
+    reconcile(g.body, list.map(s => liveCardFor(s, strip)));
     return g.section;
 }
 
@@ -4421,7 +4459,7 @@ function liveGroup(key, label, list, hidden, compact) {
  * The risk with a view like this is two renderers of one state drifting apart,
  * and sharing the small parts is what keeps them honest.
  */
-function liveCard(s, compact = false) {
+function liveCard(s, strip = false) {
     const r = s.runner;
     const busy = r && (r.state === 'busy' || r.state === 'starting');
     const away = s.live && s.live.running && !r;
@@ -4430,10 +4468,16 @@ function liveCard(s, compact = false) {
     // button — the title above it already opens the session, and the rail is
     // right there. Beside the conversation there is height to spare and the
     // fuller card is free.
-    const lines = compact ? 2 : HEADLINES_SHOWN;
+    const lines = strip ? 2 : HEADLINES_SHOWN;
+    // A different question, and a settings one rather than a layout one: how
+    // much of a card there is to draw at all. Everything below the facts line
+    // is optional, and `live.compact` says it is not wanted — in every
+    // arrangement, strip or column or full screen. See liveCompact().
+    const compact = liveCompact();
 
     return el('article', {
         class: 'lcard', 'data-reason': s.reason, 'data-id': s.sessionId,
+        'data-compact': compact ? '1' : null,
         onclick: (e) => { if (cardClickOpens(e)) openSession(s.sessionId); },
     },
         el('header', { class: 'lcard-head' },
@@ -4464,15 +4508,20 @@ function liveCard(s, compact = false) {
             el('span', { class: 'lcard-ago' }, ago(s.lastTs)),
         ),
 
-        s.ask ? liveAsk(s) : null,
+        // Below here is everything `live.compact` takes away — the approval row
+        // with the rest of it. Losing that one is the real cost of the setting,
+        // since answering is what the board is for; the card still says it is
+        // asking, in its status words and in its coloured edge, and clicking it
+        // goes to where the question can be answered.
+        (compact || !s.ask) ? null : liveAsk(s),
 
-        s.headlines.length ? el('ol', { class: 'lcard-log' },
-            s.headlines.slice(-lines).map(h => el('li', { title: h.text }, clip(h.text, 74)))) : null,
+        (compact || !s.headlines.length) ? null : el('ol', { class: 'lcard-log' },
+            s.headlines.slice(-lines).map(h => el('li', { title: h.text }, clip(h.text, 74)))),
 
-        cardComposer(s, busy, away),
+        compact ? null : cardComposer(s, busy, away),
 
-        (!compact || busy) ? el('div', { class: 'lcard-acts' },
-            compact ? null : el('button', {
+        (!compact && (!strip || busy)) ? el('div', { class: 'lcard-acts' },
+            strip ? null : el('button', {
                 class: 'lbtn', type: 'button',
                 onclick: () => openSession(s.sessionId),
             }, 'Open'),
