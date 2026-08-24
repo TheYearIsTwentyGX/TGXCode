@@ -979,7 +979,7 @@ not.
 | `bridge/devservers.js` | Port detection, ranking, and stopping a server |
 | `bridge/devbrowser.js` | DevBrowser control client |
 | `bridge/explorer.js` | Opens a WSL directory in File Explorer |
-| `bridge/notifications.js` | The notification log, and what is worth raising |
+| `bridge/notifications.js` | The notification log, what is worth raising, and what you have already read |
 | `bridge/flags.js` | Pinned, archived and test state |
 | `bridge/prefs.js` | Settings from `~/.tgxcode/` and from the project |
 | `bridge/spinner.js` | What a turn in progress calls itself, out of `~/.tgxcode/verbs/` |

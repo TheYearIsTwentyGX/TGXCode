@@ -28,18 +28,21 @@
 // file. A whole-file rewrite means the last writer silently discards the other
 // one's rows. Appending a single short line is atomic, so two processes
 // interleave instead of clobbering.
+//
+// `ReadState`, at the foot of this file, is the other half: what of all this you
+// have already seen. It is a watermark per session rather than a flag per row,
+// and it lives in its own small JSON file — see the comment on the class for why
+// the clobbering hazard above does not apply to it.
 
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 const { randomUUID } = require('crypto');
 
 const { describeTool, firstLine } = require('./transcript');
+const { STATE_DIR } = require('./config');
 
-const STATE_DIR = path.join(
-    process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'),
-    'claude-sessions');
 const LOG_FILE = path.join(STATE_DIR, 'notifications.jsonl');
+const READ_FILE = path.join(STATE_DIR, 'notification-reads.json');
 
 // How much history is worth keeping. Both limits apply: whichever bites first.
 const KEEP = 1000;
@@ -49,6 +52,13 @@ const MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 // appended rather than patched in place, so the file grows faster than the
 // number of entries in it.
 const ROTATE_AFTER = 4000;
+
+// The read-watermark file's own schema version, independent of the log beside it.
+const READ_VERSION = 1;
+
+// Marks arrive in bursts — a click through four conversations is four of them —
+// and every write re-reads the file to merge. Coalesce them.
+const SAVE_DEBOUNCE_MS = 250;
 
 // The same line announceTurn() draws in the page: under this and you were
 // almost certainly still sitting in front of it.
@@ -389,6 +399,29 @@ class NotificationLog {
         return out;
     }
 
+    /**
+     * How many loud rows are still unread.
+     *
+     * Over the whole log rather than over a page of it, which is the point: the
+     * badge in the UI was counted client-side over the 300 rows it had fetched,
+     * so it stopped telling the truth exactly when there was a lot to tell.
+     * Quiet rows never count — a six-second turn finishing was not an
+     * interruption when it happened and is not one now.
+     *
+     * `isRead` comes in rather than being looked up, so this stays the one place
+     * that knows which rows exist and ReadState stays the one place that knows
+     * what has been seen.
+     */
+    countUnread(isRead, { includeTest = false } = {}) {
+        let n = 0;
+        for (const row of this.rows) {
+            if (!row.loud) continue;
+            if (!includeTest && this.isTest(row.sessionId)) continue;
+            if (!isRead(row)) n++;
+        }
+        return n;
+    }
+
     clear() {
         this.rows = [];
         this._lines = 0;
@@ -397,6 +430,151 @@ class NotificationLog {
             fs.writeFileSync(LOG_FILE, '');
         } catch (err) {
             console.error(`[claude-sessions] could not clear ${LOG_FILE}: ${err.message}`);
+        }
+    }
+}
+
+/**
+ * What you have already seen, as a watermark per session.
+ *
+ * The log above answers "what happened"; this answers "what of it is news". It
+ * used to be one timestamp in the page's localStorage, moved only by opening
+ * the History panel — so dealing with the thing a notification was *about*,
+ * going to the chat and approving the plan, left the badge exactly where it
+ * was. A badge that counts work you have already done is a badge you stop
+ * reading.
+ *
+ * Timestamps rather than a set of read row ids, and that is the whole design. A
+ * watermark already answers the question a row filed *after* you left the chat
+ * needs answered — it is newer than the mark, so it is unread — with nothing to
+ * keep. An id set would have to be reconciled against `clear()` and against the
+ * log's own pruning, and would grow with no natural bound.
+ *
+ * In the bridge rather than the page for the same reason the log is: two windows
+ * are usually open, and there is a phone. A badge that disagreed with itself
+ * across them would be worse than the one this replaces.
+ */
+class ReadState {
+    constructor() {
+        /** The floor, moved when the History panel itself is opened. */
+        this.all = 0;
+        /** sessionId -> when that conversation was last looked at */
+        this.sessions = new Map();
+        this._saveTimer = null;
+        this.load();
+    }
+
+    load() {
+        let raw;
+        try { raw = fs.readFileSync(READ_FILE, 'utf8'); } catch { return; }
+        try {
+            // Tolerate a BOM, as flags.js does: this file is plain enough that
+            // somebody may open it.
+            const data = JSON.parse(raw.replace(/^﻿/, ''));
+            if (data.version !== READ_VERSION) return;
+            this.all = Number(data.all) || 0;
+            this.sessions = new Map(Object.entries(data.sessions || {})
+                .map(([id, at]) => [id, Number(at) || 0]));
+        } catch (err) {
+            console.error(`[claude-sessions] ignoring unreadable ${READ_FILE}: ${err.message}`);
+            return;
+        }
+        this._prune();
+    }
+
+    /**
+     * Drop watermarks older than the log's own retention.
+     *
+     * Free rather than merely tidy: every row that survives pruning is newer
+     * than MAX_AGE_MS, so it is newer than a watermark that old, so it would
+     * read as unread either way. This is what bounds the map — otherwise it is
+     * one entry per session ever opened, forever.
+     */
+    _prune() {
+        const cutoff = Date.now() - MAX_AGE_MS;
+        for (const [id, at] of this.sessions) {
+            if (at < cutoff) this.sessions.delete(id);
+        }
+    }
+
+    get() {
+        return { all: this.all, sessions: Object.fromEntries(this.sessions) };
+    }
+
+    /** Everything up to now, whatever session it belonged to. */
+    markAll(at = Date.now()) {
+        if (at <= this.all) return false;
+        this.all = at;
+        this.save();
+        return true;
+    }
+
+    /**
+     * Everything this conversation has filed up to now.
+     *
+     * Monotonic, like markAll: opening a chat you were in an hour ago must not
+     * un-read the rows filed since. Returns whether anything moved, so a caller
+     * can skip the broadcast when nothing did — every navigation in the UI goes
+     * through this, and most of them have nothing to clear.
+     */
+    markSession(sessionId, at = Date.now()) {
+        if (!sessionId) return false;
+        if (at <= (this.sessions.get(sessionId) || 0)) return false;
+        this.sessions.set(sessionId, at);
+        this.save();
+        return true;
+    }
+
+    isRead(row) {
+        if (!row) return true;
+        return row.at <= Math.max(this.all, this.sessions.get(row.sessionId) || 0);
+    }
+
+    /**
+     * Debounced atomic write, the shape flags.js uses — with one addition it
+     * does not have: whatever is on disk is merged in before it is replaced.
+     *
+     * Two bridges write here, the everyday one and whatever development bridge
+     * an agent has up, and a plain whole-file rewrite means the last writer
+     * discards the other one's marks. The log next door went to JSONL to escape
+     * exactly that. This does not need to: taking the later of the two
+     * timestamps for every key is idempotent and order-independent, so the loser
+     * of a race loses nothing and both processes converge on the union. Merging
+     * also means this bridge adopts marks made in the other one's window, which
+     * is the behaviour you would want even if there were no race.
+     */
+    save() {
+        if (this._saveTimer) return;
+        this._saveTimer = setTimeout(() => {
+            this._saveTimer = null;
+            this._merge();
+            try {
+                fs.mkdirSync(STATE_DIR, { recursive: true });
+                const tmp = READ_FILE + '.tmp';
+                fs.writeFileSync(tmp, JSON.stringify({
+                    version: READ_VERSION,
+                    all: this.all,
+                    sessions: Object.fromEntries(this.sessions),
+                }, null, 2));
+                fs.renameSync(tmp, READ_FILE);
+            } catch (err) {
+                console.error(`[claude-sessions] could not write ${READ_FILE}: ${err.message}`);
+            }
+        }, SAVE_DEBOUNCE_MS);
+    }
+
+    /** Fold whatever is on disk into memory; the later timestamp wins. */
+    _merge() {
+        let data;
+        try {
+            data = JSON.parse(fs.readFileSync(READ_FILE, 'utf8').replace(/^﻿/, ''));
+        } catch { return; /* absent, or a file load() would refuse anyway */ }
+        if (!data || data.version !== READ_VERSION) return;
+        this.all = Math.max(this.all, Number(data.all) || 0);
+        for (const [id, at] of Object.entries(data.sessions || {})) {
+            if ((Number(at) || 0) > (this.sessions.get(id) || 0)) {
+                this.sessions.set(id, Number(at) || 0);
+            }
         }
     }
 }
@@ -421,4 +599,4 @@ function askDetail(p, kind) {
     return p.reason || p.description || null;
 }
 
-module.exports = { NotificationLog, LOG_FILE };
+module.exports = { NotificationLog, ReadState, LOG_FILE, READ_FILE, MAX_AGE_MS };

@@ -36,6 +36,7 @@
       ]
     },
     "nsis": {
+      "shortcutName": "TGXCode",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,

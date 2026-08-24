@@ -4496,6 +4496,18 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 .note-row[data-type="peer-message"] { --accent: var(--peach); }
 .note-row[data-type="handoff"] { --accent: var(--purple); }
 
+/* Dealt with: the badge is not counting this any more, and the row should not
+   look like it is either. The same two moves the quiet rows get below — the fill
+   goes and the edge dims — because it is the same statement, that this one is not
+   asking for anything. The title keeps its weight, which is what still separates
+   a handled interruption from something that was never one.
+
+   Read rather than unread is what changes, deliberately. A log you have already
+   been through is the normal case, so the marked state has to be the exception or
+   every row is marked and none of them read as marked. */
+.note-row[data-loud="true"][data-unread="false"] { background: transparent; }
+.note-row[data-loud="true"][data-unread="false"]::before { opacity: 0.4; }
+
 /* Nothing ever interrupted you for these, so they do not get to shout here
    either. They are in the list to answer "what has been going on", which is a
    question you ask by reading rather than by glancing. */

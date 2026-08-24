@@ -426,15 +426,41 @@ function createWindow() {
 
 // ── boot ─────────────────────────────────────────────────────────────────
 
-// What Windows prints above a toast. Left alone, Electron announces itself as
-// `electron.app.<productName>`, and since nothing is registered under that ID
-// Windows has no display name to look up and shows the raw string — which is
-// how notifications came to be headed `electron.app.ClaudeSessions`.
+// Which installed application a toast belongs to. **It has to match the
+// AppUserModelID on the Start Menu shortcut, and that is the whole story here.**
 //
-// That fallback is the mechanism, so this is set to the words that should
-// appear rather than to a reverse-DNS identifier: an ID Windows cannot resolve
-// gets printed verbatim either way. Keep it human-readable for that reason.
-app.setAppUserModelId('TGXCode');
+// Every notification this app raises is a Chromium notification from the
+// renderer, so Windows owns the activation and resolves it through this ID. When
+// the ID resolves to nothing there is nothing to activate, and the shell falls
+// through to its last resort: searching the web for the string. This used to say
+// `TGXCode`, chosen deliberately because an unresolvable ID gets printed verbatim
+// as the toast header and that was a cheap way to get a readable one — so for
+// months every notification click opened a Bing search for the word TGXCode, and
+// none of the click handling in web/sw.js or web/app.js ever ran.
+//
+// The header is not lost by fixing this. Windows takes the display name from the
+// shortcut, so `nsis.shortcutName` in package.json is set to `TGXCode` and the
+// toast still says TGXCode — it just now names something that exists.
+// electron-builder writes `build.appId` onto both shortcuts it creates
+// (`WinShell::SetLnkAUMI` in its NSIS template), which is where this value comes
+// from and why the two must be changed together.
+app.setAppUserModelId('com.claudesessions.desktop');
+
+// One window, however it was asked for.
+//
+// Needed *because* of the fix above rather than as tidying. A toast that has
+// fallen into the Action Center no longer has a live notification object behind
+// it, so clicking it is an ordinary shell activation of the shortcut — which,
+// unguarded, starts a second copy of the app next to the first. The bridge is
+// already up by then, so both windows would work, which is the bad kind of bug.
+//
+// Nothing is passed along by that activation: without a registered COM toast
+// activator Windows has no way to tell us *which* notification was clicked, so
+// the most this can do is raise what is already open. A click on a toast still on
+// screen goes to the renderer instead and does land on the right conversation.
+const isOnlyInstance = app.requestSingleInstanceLock();
+if (!isOnlyInstance) app.quit();
+else app.on('second-instance', () => raise(mainWindow));
 
 // Raise the window a clicked notification belongs to.
 //
@@ -445,18 +471,27 @@ app.setAppUserModelId('TGXCode');
 // immediately afterwards means the window does not actually stay on top of
 // everything else. It ends up raised and focused, and behaves normally after.
 //
-// Sent by preload.js, which is the page's only way to ask.
-ipcMain.on('reveal-window', (event) => {
-    const win = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+// Sent by preload.js, which is the page's only way to ask — and by
+// `second-instance` above, which has no page to ask on behalf of.
+function raise(win) {
     if (!win || win.isDestroyed()) return;
     if (win.isMinimized()) win.restore();
     win.setAlwaysOnTop(true);
     win.show();
     win.setAlwaysOnTop(false);
     win.focus();
+}
+
+ipcMain.on('reveal-window', (event) => {
+    raise(BrowserWindow.fromWebContents(event.sender) || mainWindow);
 });
 
 app.whenReady().then(async () => {
+    // Quitting before `ready` normally stops it firing at all, but not
+    // dependably enough to hang a second window off — and this is the copy that
+    // must not start one, having just handed the click to the copy that already
+    // has one.
+    if (!isOnlyInstance) return;
     const cfg = loadConfig();
     const win = createWindow();
 

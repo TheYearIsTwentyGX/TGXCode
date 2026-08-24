@@ -283,11 +283,13 @@ const state = {
     // The board of unfinished work. `at` is when the bridge last answered, so
     // opening it again does not re-run git over every worktree on the machine.
     dash: { open: false, data: null, at: 0, loading: false, error: null, files: new Set() },
-    // The notification log. `seen` is when the view was last opened, kept in
-    // localStorage so the badge does not come back full after a reload — the
-    // rows themselves live in the bridge, which is the whole point of them.
+    // The notification log. `read` is the bridge's watermarks — a floor moved by
+    // opening this panel, and one per conversation moved by going to it — and
+    // `unread` is the badge, counted over the whole log rather than over the
+    // page we happen to have fetched. Both come from the bridge rather than from
+    // localStorage, because two windows and a phone have to agree about a badge.
     notes: { open: false, rows: [], at: 0, loading: false, error: null,
-        scope: 'notable', seen: Number(localStorage.getItem('notesSeenAt')) || 0 },
+        scope: 'notable', read: { all: 0, sessions: {} }, unread: 0, mark: null },
     // The live board. `watching` is what the bridge has been told, kept apart
     // from `open` so that a re-subscribe for some other reason does not turn the
     // board's timer on for a window that closed it.
@@ -1069,6 +1071,11 @@ function clearCurrent() {
 // ── conversation ─────────────────────────────────────────────────────────
 
 async function openSession(id, { quiet = false, keepDash = false } = {}) {
+    // Going to a conversation is what "I have dealt with this" looks like, so it
+    // is what clears its notifications. Above the early return below rather than
+    // after it: a history row for the chat you are already sitting in still has
+    // to clear, and that is the one path that does not reach the rest of this.
+    markSessionNotesRead(id);
     // Already here — but a history row may still have somewhere to put you.
     if (state.current && state.current.sessionId === id) { takePendingJump(); return true; }
     // Keep whatever is half-typed for the session being left behind.
@@ -5204,15 +5211,28 @@ function showNotes(on) {
     if (on) {
         state.dash.open = false; state.taskboard.open = false;
         state.drafts.open = false;
+    } else {
+        state.notes.mark = null;
     }
     paintPanels();
     syncBoardWatch();
     syncTaskboardWatch();
 
     if (on) {
-        markNotesSeen();
-        if (Date.now() - state.notes.at > NOTES_STALE_MS) loadNotes();
-        else renderNotes();
+        // Opening History still means "I have seen all this" — but the rows have
+        // to go on *looking* like what was new, or the unread marking is a state
+        // no eye ever sees. So the watermarks are photographed on the way in and
+        // the list renders against the photograph, while the badge clears from
+        // the real thing. The photograph is thrown away on the way out.
+        state.notes.mark = {
+            all: state.notes.read.all,
+            sessions: { ...state.notes.read.sessions },
+        };
+        // Marked *after* the fetch rather than alongside it. Fired together, the
+        // two race, and a GET that lands second overwrites the badge the POST
+        // just cleared — which reads as "opening History no longer clears it".
+        if (Date.now() - state.notes.at > NOTES_STALE_MS) loadNotes().then(markNotesSeen);
+        else { renderNotes(); markNotesSeen(); }
     } else if (state.live.open) {
         // The board was left switched on underneath and has been ignoring its
         // pushes; catch it up before it comes back into view.
@@ -5231,7 +5251,20 @@ async function loadNotes() {
     try {
         const data = await get(`/api/notifications?scope=${state.notes.scope}&limit=300`);
         state.notes.rows = data.notifications;
+        state.notes.read = data.read || { all: 0, sessions: {} };
+        state.notes.unread = data.unread || 0;
         state.notes.at = Date.now();
+        await migrateNotesSeen();
+        // Catch up the conversation already on screen.
+        //
+        // markSessionNotesRead can only act on rows it has, and at boot it has
+        // none: restoreView opens a session immediately and the log is not
+        // fetched until three seconds later. That gap is exactly the path that
+        // matters most — a notification clicked when no window was open arrives
+        // as `#/session/<id>` and opens the session before anything else runs, so
+        // without this the one click that should certainly clear a row is the one
+        // click that never did.
+        markSessionNotesRead(state.current && state.current.sessionId);
     } catch (err) {
         state.notes.error = err.message;
     } finally {
@@ -5251,24 +5284,106 @@ function setNotesScope(scope) {
 }
 
 /**
- * How many things have wanted you since you last looked.
+ * Whether a row is still news.
  *
- * Counted over the loud rows only, whichever scope is showing: a badge is an
- * interruption in its own right, and a six-second turn finishing is not one.
+ * A watermark per conversation, with `all` as a floor under all of them. The
+ * bridge computes the same thing and stamps `read` on every row it hands over —
+ * this exists for the rows that arrive afterwards, over SSE, and for the moment
+ * between a mark-read and the response landing.
+ *
+ * `marks` is which set to ask, and the two callers want different ones: the badge
+ * wants the truth, and the open panel wants the snapshot taken when it opened.
+ * See showNotes for why those differ.
+ */
+function noteUnread(row, marks = state.notes.read) {
+    return row.at > Math.max(marks.all, marks.sessions[row.sessionId] || 0);
+}
+
+/**
+ * How many things are still waiting to be dealt with.
+ *
+ * Counted over the loud rows only: a badge is an interruption in its own right,
+ * and a six-second turn finishing is not one.
+ *
+ * The number comes from the bridge, which counts the whole log. Counting it here
+ * is the fallback for the moment before the first fetch lands, and it is only a
+ * fallback because it can only see the rows that were fetched — which is how this
+ * badge used to work, and why it stopped being true past 300 rows.
  */
 function paintNotesBadge() {
-    const n = state.notes.rows.filter(r => r.loud && r.at > state.notes.seen).length;
+    const n = state.notes.at
+        ? state.notes.unread
+        : state.notes.rows.filter(r => r.loud && noteUnread(r)).length;
     dom.notesBadge.hidden = !n;
     dom.notesBadge.textContent = String(n);
     dom.btnNotes.title = n
-        ? `${n} ${n === 1 ? 'notification' : 'notifications'} since you last looked`
+        ? `${n} ${n === 1 ? 'notification' : 'notifications'} you have not dealt with`
         : 'Everything that has reached out to you (Ctrl+5)';
 }
 
-function markNotesSeen() {
-    state.notes.seen = Date.now();
-    localStorage.setItem('notesSeenAt', String(state.notes.seen));
+/**
+ * Tell the bridge something has been seen, and take the new badge back.
+ *
+ * `{all: true}` is the History panel being opened; `{sessionId}` is a
+ * conversation being opened. Applied locally before the round trip so the badge
+ * moves with the click rather than a moment after it — the bridge's reply is
+ * authoritative and overwrites this, but it agrees with it.
+ *
+ * Failure is deliberately quiet. The worst case is a badge that stays up, and a
+ * toast about a badge would be a worse interruption than the badge is.
+ */
+async function markNotesRead(what) {
+    const at = Date.now();
+    if (what.all) state.notes.read.all = Math.max(state.notes.read.all, at);
+    else state.notes.read.sessions[what.sessionId] = at;
+    if (state.notes.open) renderNotes();
     paintNotesBadge();
+    try {
+        const r = await post('/api/notifications/read', what);
+        state.notes.read = r.read;
+        state.notes.unread = r.unread;
+    } catch { /* the badge is not worth a toast */ }
+    if (state.notes.open) renderNotes();
+    paintNotesBadge();
+}
+
+/** Opening History says you have seen everything, and always has. */
+const markNotesSeen = () => markNotesRead({ all: true });
+
+/**
+ * Going to a conversation says you have seen what it filed.
+ *
+ * Guarded on there being something to clear, because this hangs off openSession
+ * and openSession is every navigation in the app — without the guard, clicking
+ * down the rail would be one POST per row and one repaint in every other window.
+ */
+function markSessionNotesRead(sessionId) {
+    if (!sessionId) return;
+    const rows = state.notes.rows;
+    // Before the first fetch there are no rows to check, so nothing can be known
+    // to be unread and nothing is posted. The badge is empty then anyway.
+    if (!rows.some(r => r.loud && r.sessionId === sessionId && noteUnread(r))) return;
+    markNotesRead({ sessionId });
+}
+
+/**
+ * The one-time move off the old localStorage watermark.
+ *
+ * Read state used to be a single `notesSeenAt` in this browser. Without carrying
+ * it over, the first load after the bridge took the job over shows every loud row
+ * of the last fortnight as unread — a badge in the hundreds, for a log you have
+ * already been through. Carried over once, then the key goes.
+ */
+async function migrateNotesSeen() {
+    const legacy = Number(localStorage.getItem('notesSeenAt')) || 0;
+    if (!legacy) return;
+    localStorage.removeItem('notesSeenAt');
+    if (legacy <= state.notes.read.all) return;
+    try {
+        const r = await post('/api/notifications/read', { all: legacy });
+        state.notes.read = r.read;
+        state.notes.unread = r.unread;
+    } catch { /* it will simply look unread; the key is gone either way */ }
 }
 
 function renderNotes() {
@@ -5309,6 +5424,10 @@ function noteRow(n) {
         class: 'note-row',
         'data-type': n.type,
         'data-loud': String(n.loud),
+        // What the badge was counting when this panel opened, marked so the
+        // number is traceable to rows. Quiet rows are never counted, so they are
+        // never marked either.
+        'data-unread': String(n.loud && noteUnread(n, state.notes.mark || state.notes.read)),
         'data-id': n.id,
     },
         el('button', {
@@ -6434,20 +6553,39 @@ function clearAsk(sessionId) {
         .catch(() => {});
 }
 
+/**
+ * Said out loud, and clickable back to where it came from.
+ *
+ * Through the service-worker registration where there is one, which showAsk()
+ * already does for the ask toasts — not for the buttons this time, but for the
+ * `data` payload. A plain `new Notification` keeps the session id only in the
+ * closure below, and a closure lasts exactly as long as the page: reload, or come
+ * back to a toast the next morning, and the click has nothing left to route on.
+ * The worker's copy is on the notification itself, so `sw.js` can still open the
+ * right conversation with no window involved.
+ *
+ * The plain kind stays as the fallback for a browser with no worker, where losing
+ * the click after a reload is better than losing the notification.
+ */
 function announce(title, body, tone, sessionId) {
     chime(tone);
     if (!notify.desktop || notifyPermission() !== 'granted') return;
+    const opts = {
+        body,
+        // A second one for the same session replaces the first rather than
+        // piling up behind it.
+        tag: sessionId ? `claude-session:${sessionId}` : 'claude-session',
+        // chime() is the only thing here allowed to make a noise, so that
+        // the sound checkbox means what it says.
+        silent: true,
+    };
+    if (notify.sw) {
+        notify.sw.showNotification(title, { ...opts, data: { sessionId } }).catch(() => {});
+        return;
+    }
     let n;
     try {
-        n = new Notification(title, {
-            body,
-            // A second one for the same session replaces the first rather than
-            // piling up behind it.
-            tag: sessionId ? `claude-session:${sessionId}` : 'claude-session',
-            // chime() is the only thing here allowed to make a noise, so that
-            // the sound checkbox means what it says.
-            silent: true,
-        });
+        n = new Notification(title, opts);
     } catch { return; /* some engines expose Notification but refuse `new` */ }
     n.onclick = () => {
         // Raising the window is the shell's job — a renderer cannot get past
@@ -6861,10 +6999,31 @@ function connect() {
     // history left open in a second window stays live.
     es.addEventListener('notification', (e) => {
         const row = JSON.parse(e.data);
-        if (state.notes.scope === 'notable' && !row.loud) return;
-        state.notes.rows.unshift(row);
+        if (typeof row.unread === 'number') state.notes.unread = row.unread;
+        // A row filed against the conversation in front of you, in a window you
+        // are looking at, is not news — you watched it happen. The same judgement
+        // turnWorthSaying already makes about not raising a toast for it; without
+        // it the badge lights up for a plan sitting on screen.
+        const watching = document.hasFocus()
+            && state.current && state.current.sessionId === row.sessionId;
+        if (state.notes.scope !== 'notable' || row.loud) {
+            state.notes.rows.unshift(row);
+        }
         if (state.notes.open) { renderNotes(); markNotesSeen(); }
+        else if (watching && row.loud) markNotesRead({ sessionId: row.sessionId });
         else paintNotesBadge();
+    });
+
+    // A watermark moved, here or in another window. This is what keeps two
+    // windows agreed about a badge, and it is why the watermarks live in the
+    // bridge at all.
+    es.addEventListener('notification-read', (e) => {
+        const { sessionId, at, unread } = JSON.parse(e.data);
+        if (sessionId) state.notes.read.sessions[sessionId] = at;
+        else state.notes.read.all = Math.max(state.notes.read.all, at);
+        state.notes.unread = unread;
+        if (state.notes.open) renderNotes();
+        paintNotesBadge();
     });
 
     es.addEventListener('notification-resolved', (e) => {
@@ -6879,6 +7038,9 @@ function connect() {
 
     es.addEventListener('notifications-cleared', () => {
         state.notes.rows = [];
+        // No rows left, so nothing unread — the watermarks are left alone,
+        // because with nothing to apply to they cost nothing.
+        state.notes.unread = 0;
         if (state.notes.open) renderNotes();
         paintNotesBadge();
     });
