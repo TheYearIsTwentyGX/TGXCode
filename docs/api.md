@@ -768,10 +768,12 @@ it on a poll.
 
 ### `GET /api/notifications?scope=&type=&sessionId=&limit=`
 
-Everything that reached out to you, after the fact — `{notifications: [row]}`, newest
-first. It exists because `broadcast()` has no replay buffer and Windows' own
-notification centre swallows toasts, so "something pinged me and I have no idea what"
-had no answer.
+Everything that reached out to you, after the fact. It exists because `broadcast()`
+has no replay buffer and Windows' own notification centre swallows toasts, so
+"something pinged me and I have no idea what" had no answer.
+
+The envelope is
+`{ notifications: [row], unread: number, read: {all, sessions} }`, newest row first.
 
 A row is:
 
@@ -779,16 +781,25 @@ A row is:
 { "id": "1786722343125-a1b2c3d4", "at": 1786722343125, "type": "permission",
   "sessionId": "…", "title": "Rename the runner", "project": "claude-sessions",
   "cwd": "…", "summary": "Bash: npm test", "detail": "…", "loud": true,
-  "requestId": "…", "outcome": null, "outcomeAt": null, "anchorId": "…" }
+  "requestId": "…", "outcome": null, "outcomeAt": null, "anchorId": "…",
+  "read": false }
 ```
 
 `type` is one of `permission`, `plan`, `question`, `finished`, `failed`, `agent-done`,
-`peer-message`. `summary` is clipped to 200 characters and `detail` to 400. `outcome`
-and `outcomeAt` are filled in later, on the row that already exists, when an ask is
-answered — so a row is mutable and a client holding one should patch it rather than
-assume it is final. `anchorId` is a `toolUseId` where there is one, so a client can
-scroll the transcript to what the notification was about. `requestId` is set for the
-three ask types only.
+`peer-message`, `handoff`. `summary` is clipped to 200 characters and `detail` to 400.
+`outcome` and `outcomeAt` are filled in later, on the row that already exists, when an
+ask is answered — so a row is mutable and a client holding one should patch it rather
+than assume it is final. `anchorId` is a `toolUseId` where there is one, so a client
+can scroll the transcript to what the notification was about. `requestId` is set for
+the three ask types only.
+
+**`read` is not stored on the row — it is computed for you.** A row records one thing
+that happened; whether it is still news is a question about the reader, and the answer
+is kept as a watermark per conversation. It is stamped on the response so that a
+client rendering a list does not have to reimplement the comparison. `read` on the
+envelope is that state itself — `{all: number, sessions: {sessionId: number}}`, all of
+them epoch milliseconds — and the rule is
+`read = row.at <= max(all, sessions[row.sessionId] ?? 0)`.
 
 **`loud` means "this cleared the bar for interrupting somebody", not "a toast appeared
 on your screen"** — the bridge cannot know whether you were looking straight at that
@@ -798,12 +809,49 @@ six-second turn, a subagent finishing — which nothing ever notified about but 
 answer "what has been going on". `limit` defaults to 200 and is capped at 1000. Test
 sessions are included on a dev bridge only, same rule as `GET /api/sessions`.
 
+**`unread` counts the whole log, not the page.** It is the number of `loud` rows that
+are not `read`, across every row the bridge holds — so a client can render the badge
+from it directly rather than counting the rows it happened to fetch, which is what the
+desktop UI used to do and why the badge quietly stopped being true past 300 rows.
+
 `DELETE /api/notifications` empties the log and broadcasts `notifications-cleared`.
-There is no per-row delete.
+There is no per-row delete. It does not touch the read watermarks, and does not need
+to: with no rows left there is nothing for them to apply to.
+
+### `POST /api/notifications/read`
+
+Mark rows read. Two gestures, and the body says which:
+
+```json
+{ "all": true }              // I have seen everything up to now
+{ "sessionId": "…" }         // I have seen this conversation up to now
+```
+
+Returns `{ok: true, moved: bool, unread: number, read: {all, sessions}}`. **`moved`
+is whether `unread` changed, not whether a watermark did** — repeating the call
+advances the timestamp every time and that means nothing, whereas a loud row going
+from unread to read is the only thing another client would have to repaint for. Every
+navigation in the desktop UI posts a `sessionId` and most of them have nothing to
+clear. Sending neither key is a `400`; it is not a third gesture.
+
+**Watermarks are monotonic and never move backwards.** Re-opening a chat you were in
+an hour ago cannot un-read the rows filed since, and two clients racing cannot undo
+each other. A `sessionId` watermark covers that conversation only; `all` is a floor
+under every conversation, including ones with no watermark of their own.
+
+Allowed from a phone, unlike most write routes — see `docs/remote.md`. Marking
+something read is the whole point of having History on a second device, and the worst
+a hostile caller could do with it is clear a badge.
+
+A move broadcasts `notification-read`. Nothing is broadcast when `moved` is false.
 
 History is kept in `~/.local/share/claude-sessions/notifications.jsonl`, appended a
 line at a time so that two bridges writing at once interleave instead of clobbering,
-and pruned to 1000 rows or 14 days, whichever bites first.
+and pruned to 1000 rows or 14 days, whichever bites first. The watermarks live beside
+it in `notification-reads.json`, which is rewritten whole — safe there, where it would
+not be for the log, because the file is merged in before it is replaced and the later
+of two timestamps always wins. Watermarks older than the log's own 14 days are dropped
+on load; every surviving row is newer than one of those, so it could not have applied.
 
 ### `GET /api/suggestions?session=&project=&status=&limit=`
 
@@ -914,8 +962,9 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `handoff` | `{at, sessionId, from, count}` — another session handed this one work, and it was resumed to deal with it. Same shape and same reasoning as above; watched in the transcript rather than reported by the route, so it fires when the message *arrived* rather than when it was queued |
 | `suggestion-changed` | `{at, sessionId, toolUseId}` — a suggested follow-up was started, dismissed, or undone, possibly in another window |
 | `session-deleted` | `{sessionId, title}` |
-| `notification` | a whole notification row, just filed — the same shape `GET /api/notifications` returns, so an open history view need not refetch |
+| `notification` | a whole notification row, just filed — the same shape `GET /api/notifications` returns, `read` included — plus `unread`, the badge count after this row. So an open history view need not refetch, and need not guess whether the new row counts |
 | `notification-resolved` | `{id, outcome, outcomeAt}` — patch the row with that `id`; fired alongside `permission-resolved` |
+| `notification-read` | `{sessionId: string\|null, at: number, unread: number}` — a watermark moved, here or in another window. `sessionId` is `null` when the whole log was marked. Fold `at` into your copy of `read` and repaint |
 | `notifications-cleared` | `{at}` — the log was emptied, by this window or another |
 | `runner-status` | see below |
 | `permission-request` | `{sessionId, ...ask}` |
