@@ -85,21 +85,64 @@ the session and jumps to that event, reusing `jumpToTurn`'s scroll-and-flash
 grouped by session, newest first, each showing the matching line with the term
 highlighted, plus session/project/when.
 
-### B. Find in conversation
+### B. Find in conversation — **built**
 
 `Ctrl+F` inside an open session. Entirely client-side over `state.nodes` — the
-events are already in memory.
+events are already in memory. Lives in the find section of `web/app.js`, whose
+header comment carries the reasoning; this is what was asked for and what
+changed on the way.
 
-- Match against `ev.text`, tool input, and tool result text.
-- Highlight all hits; `Enter`/`Shift+Enter` cycle; `Esc` closes.
+- Match against `ev.text`, tool input, and tool result text. ✓ `searchableText`
+  and `toolText` do this from the event objects, mirroring `toolBody`'s branches.
+- Highlight all hits; `Enter`/`Shift+Enter` cycle; `Esc` closes. ✓ — plus
+  `F3`/`Shift+F3`, which is what a repeat key is on this platform, and which also
+  reopens the bar on the last query when it is shut.
 - Hits inside collapsed tool blocks: mark the collapsed summary with a hit count
-  and expand on navigate. Not expanding is worse than the noise of expanding.
-- Draw hit markers on the turn rail (see plan 07, which adds a marker layer).
-- Count in the field: `3 of 47`.
+  and expand on navigate. ✓ Both kinds of shut thing get a badge: the tool block
+  and the fold a run of them was lifted into.
+- Count in the field: `3 of 47`. ✓
+- Draw hit markers on the turn rail. **Not done**, deliberately: `.turns` is a
+  fixed-height tick per user message, not a proportional map of the transcript,
+  so a hit's position does not map to a tick's without the marker layer plan 07
+  §B adds. The cheap interim if it is wanted before then is `data-hits` on the
+  existing `.turn-tick`, recoloured through the mechanism `[aria-current]`
+  already uses — but `renderTurns` calls `replaceChildren`, so find would have to
+  repaint after every one.
 
-Caveat: once plan 07 virtualizes the log, hits must come from the event *data*,
-not the DOM. Write it against `state.nodes`' event objects from the start so it
-survives that change.
+Added beyond the plan, because it was asked for: a **Subagents** toggle in the
+bar. Off by default and not persisted. With it on the index covers the session's
+transcript *and* its subagents', spliced in at the `Task` call that spawned each
+one, and stepping into a subagent hit switches the pane through `openAgent`.
+The index is then independent of which pane is showing, which is what lets a step
+walk in and back out without the list changing underneath it. The toggle hides
+itself when the session spawned nothing, and while you are reading a subagent —
+you are already in one — unless it is on and therefore a thing to turn off. It
+covers the one level the pill strip shows: `agentRows` leaves out agents spawned
+*by* a subagent.
+
+The caveat held, and turned out to be about more than plan 07: hits come from the
+event data, and the DOM ranges that paint them are a cache rebuilt from a dirty
+flag. Not only because virtualizing the log will take the DOM away, but because
+`foldRun` *moves* rows into a fold without redrawing them — and the DOM's remove
+steps collapse any live range inside a node that moves, silently, painting
+nothing and throwing nothing.
+
+Two things measurement changed. Painting every match cost 400ms a keystroke on
+the longest session here (3 600 events, 2 300 tool calls, a two-letter query
+matching 674 rows) — and almost none of it was the tree walking, which is 20ms
+for the whole log. It was 674 badge elements inserted and removed per repaint,
+each invalidating the layout of a very tall document. So the paint is bounded by
+the viewport and scrolling repaints; the worst case is now under 100ms. And the
+hit cap has to be generous (20 000) rather than tight, because it stops indexing
+partway *down* the transcript: a low one leaves you at the bottom of a long
+session with every mark up at the top and nothing saying so.
+
+Known misses, all deliberate and all commented at the code: a match split across
+an element boundary is not found, the same limit native find has; output spilled
+to a file is in neither the data nor the DOM, since only the button that loads it
+knows the text; and the two strings differ where markdown eats syntax or
+`codePre` truncates, which navigation absorbs by clamping to the last range in
+the row rather than by modelling the difference.
 
 ### C. Filters and the quick switcher
 

@@ -1638,13 +1638,138 @@ a:hover { text-decoration: underline; }
 }
 @media (prefers-reduced-motion: reduce) { .turn-pop { animation: none; } }
 
-/* Where a jump landed, so the eye finds it without hunting. */
+/* Where a jump landed, so the eye finds it without hunting.
+ *
+ * Two rules, because the keyframes have to end on the row's own resting
+ * background and a user turn is the only kind that has one (`--s3`, above).
+ * Dropping the `.ev-user` qualifier instead would leave an assistant or tool row
+ * as an opaque grey box once the animation stopped. The second rule is not
+ * theoretical: `editRow` and `takePendingJump` both jump to tool calls, and
+ * until it existed they flashed nothing at all. */
 .ev-user.flash .ev-body { animation: flash 1.3s var(--ease); }
 @keyframes flash {
     0%, 55% { background: var(--blue-cont); }
     100% { background: var(--s3); }
 }
-@media (prefers-reduced-motion: reduce) { .ev-user.flash .ev-body { animation: none; } }
+.ev:not(.ev-user).flash .ev-body { animation: flash-row 1.3s var(--ease); }
+@keyframes flash-row {
+    0%, 55% { background: var(--blue-tint); }
+    100% { background: transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .ev-user.flash .ev-body,
+    .ev:not(.ev-user).flash .ev-body { animation: none; }
+}
+
+/* ── find in conversation ────────────────────────────────────────────── */
+/* Ctrl+F, over the transcript. Absolute inside `.conv-main`, which is a
+   containing block already, and `z-index: 4` so the plan pane (5) covers it.
+   `right: 38px` clears the turn rail (--turns, plus a little air). */
+
+.find {
+    position: absolute;
+    top: 8px;
+    right: 38px;
+    z-index: 4;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 5px 5px 5px 12px;
+    border-radius: var(--pill);
+    background: var(--s2);
+    box-shadow: 0 6px 22px #0009, 0 0 0 1px var(--outline-soft);
+    animation: find-in var(--t-fast) var(--ease);
+}
+/* display:flex above would otherwise beat the hidden attribute. */
+.find[hidden] { display: none; }
+
+@keyframes find-in {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) { .find { animation: none; } }
+
+#find-input {
+    width: 230px;
+    padding: 4px 0;
+    font: 400 13px/1.5 var(--sans);
+    outline: none;
+}
+#find-input::placeholder { color: var(--text-4); }
+
+/* Tabular so the count does not shuffle sideways as you cycle through it. */
+.find-count {
+    flex: none;
+    min-width: 74px;
+    text-align: right;
+    font: 400 11.5px/1.5 var(--mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--text-4);
+    white-space: nowrap;
+}
+
+.find-btn {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 26px; height: 26px;
+    border-radius: 50%;
+    color: var(--text-3);
+    font-size: 12px;
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.find-btn:hover { background: var(--s4); color: var(--text); }
+.find-btn:disabled { opacity: 0.35; cursor: default; background: none; }
+
+.find-subs {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-left: 2px;
+    padding: 3px 9px 3px 6px;
+    border-radius: var(--pill);
+    background: var(--s3);
+    font: 400 11.5px/1.5 var(--sans);
+    color: var(--text-3);
+    white-space: nowrap;
+    cursor: pointer;
+}
+.find-subs[hidden] { display: none; }
+.find-subs:hover { color: var(--text); }
+.find-subs input { accent-color: var(--blue-deep); cursor: pointer; }
+.find-subs:has(input:checked) { background: var(--blue-cont); color: #e6edff; }
+
+/* How many matches are hiding inside something you have not opened. Without it
+   the count in the field and the marks on screen would not add up, and the gap
+   would look like a bug rather than a closed tool call. */
+.find-hits {
+    margin-left: 6px;
+    padding: 0 6px;
+    border-radius: var(--pill);
+    background: var(--yellow);
+    color: #131314;
+    font: 500 10.5px/16px var(--mono);
+    font-variant-numeric: tabular-nums;
+}
+
+/* The marks themselves, painted through the Custom Highlight API rather than by
+   wrapping matches in elements — see the find section of web/app.js for why.
+   Only `color`, `background-color`, `text-decoration`, `text-shadow` and
+   `-webkit-text-stroke` are honoured here, so the mark is a plain rectangle.
+   Both set `color`: a match landing on a dim syntax token (`.tok-comment`) would
+   otherwise be unreadable, and matches land on three different backgrounds — a
+   user turn's `--s3`, the bare page, and the `--bg` of a code block. Amber, not
+   the blue of `::selection`: a find mark that reads as a selection is a bug
+   report waiting to happen. */
+::highlight(cs-find) {
+    background-color: #4d3f10;
+    color: #f6e3ab;
+}
+::highlight(cs-find-at) {
+    background-color: var(--yellow);
+    color: #131314;
+}
 
 /* ── approval card ───────────────────────────────────────────────────── */
 /* A blocked turn. It reads as a tool block on purpose — the thing you are
