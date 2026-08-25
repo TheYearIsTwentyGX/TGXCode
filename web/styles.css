@@ -494,6 +494,47 @@ a:hover { text-decoration: underline; }
 }
 .strip[aria-current="true"] .strip-meta .tag-pin { color: #cfe0ff; }
 
+/* What the session left on GitHub, at its worst. The same glyph set and the same
+   colour table as the header chip (see `.conv-sub .pr`) so that there is one PR
+   vocabulary in the app rather than two — and for the same reason as there: two of
+   these states are red and two are yellow, so the glyph and the colour have to say
+   the same thing twice.
+
+   `flex: none` is load-bearing. `.strip-meta` is nowrap with overflow hidden, and
+   the worktree name and the activity line are the two things meant to give way; a
+   status that vanished on a narrow rail would be worse than none, because its
+   absence means "no pull requests". */
+.strip-meta .tag-pr {
+    display: grid;
+    place-items: center;
+    flex: none;
+    color: var(--text-3);
+}
+.strip-meta .tag-pr[data-status="open"] { color: var(--blue); }
+.strip-meta .tag-pr[data-status="approved"] { color: var(--green); }
+.strip-meta .tag-pr[data-status="changes"],
+.strip-meta .tag-pr[data-status="checks-failed"] { color: var(--red); }
+.strip-meta .tag-pr[data-status="conflicting"],
+.strip-meta .tag-pr[data-status="checks-pending"] { color: var(--yellow); }
+.strip-meta .tag-pr[data-status="draft"] { color: var(--text-3); }
+/* Settled. Kept because "this landed" is worth a glance, dimmed because it is not
+   competing with the rows that still want something. */
+.strip-meta .tag-pr[data-status="merged"] { color: var(--purple); opacity: 0.62; }
+.strip-meta .tag-pr[data-status="closed"] { color: var(--text-4); opacity: 0.62; }
+/* gh could not be reached. Says nothing rather than guessing. */
+.strip-meta .tag-pr[data-status="unknown"] { color: var(--text-4); }
+/* The selected row recolours everything in its meta line, and this is the one
+   thing on it that carries meaning in the hue — so only the greys are lifted, to
+   where they can still be seen against --blue-cont. Red, yellow, green and purple
+   are left exactly as they are. */
+.strip[aria-current="true"] .strip-meta .tag-pr[data-status="draft"],
+.strip[aria-current="true"] .strip-meta .tag-pr[data-status="unknown"],
+.strip[aria-current="true"] .strip-meta .tag-pr[data-status="closed"] { color: #b3c7ea; }
+/* Still moving, so it breathes — the same light every in-flight thing here uses. */
+.strip-meta .tag-pr[data-status="checks-pending"] svg {
+    animation: breathe 1.6s var(--ease) infinite;
+}
+
 .mini {
     display: grid;
     place-items: center;
@@ -2702,6 +2743,7 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     .status-line[data-state="busy"] .led,
     .status-line[data-state="ask"] .led,
     .conv-sub .pr[data-status="checks-pending"] svg,
+    .strip-meta .tag-pr[data-status="checks-pending"] svg,
     .tool[data-status="pending"] > summary::before,
     .strip[data-state="running"] .strip-meta::before { animation: none; }
 }
