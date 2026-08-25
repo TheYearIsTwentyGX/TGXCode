@@ -1465,7 +1465,17 @@ async function api(req, res, url, pathname, who) {
         const go = () => {
             if (fired) return;
             fired = true;
-            restart.launch({ force });
+            try {
+                restart.launch({ force });
+            } catch (err) {
+                // Nothing was killed, so this process is still the bridge — and a
+                // one-way flag would leave the button dead with no way to say why.
+                // The 200 has already gone out, so the log is the only place left
+                // to put this; the caller finds out by watching pid never change.
+                handedOver = false;
+                console.error(`[claude-sessions] restart: could not start ${restart.SCRIPT}:`,
+                    err.message);
+            }
         };
         // The script's first act is to SIGTERM this process, so it is not started
         // until the reply is on the socket. /api/shutdown above guesses at this
