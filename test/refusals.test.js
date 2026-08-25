@@ -95,6 +95,10 @@ const HOME = os.homedir();
     check('terminals stream', (await call('GET', '/api/terminals/x/stream', { headers: PHONE })).status, 403);
     check('terminals input', (await call('POST', '/api/terminals/x/input', { headers: PHONE, body: {} })).status, 403);
     check('shutdown', (await call('POST', '/api/shutdown', { headers: PHONE })).status, 403);
+    // Both methods. The refusal has to land before the body is read, or a phone
+    // could pull a checkout it is refused the restart of.
+    check('restart', (await call('POST', '/api/restart', { headers: PHONE, body: {} })).status, 403);
+    check('restart journal', (await call('GET', '/api/restart', { headers: PHONE })).status, 403);
     check('devservers stop', (await call('POST', '/api/devservers/stop', { headers: PHONE, body: { port: 1 } })).status, 403);
     check('devbrowser status', (await call('GET', '/api/devbrowser/status', { headers: PHONE })).status, 403);
     check('reveal', (await call('POST', '/api/sessions/abc/reveal', { headers: PHONE, body: {} })).status, 403);

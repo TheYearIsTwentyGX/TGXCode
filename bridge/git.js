@@ -45,10 +45,14 @@ const cache = {
  * Run a command and always resolve. A dashboard is a report on other people's
  * repositories: half of what it asks for is allowed to fail, and a directory
  * that has stopped being a checkout is an answer rather than an error.
+ *
+ * `env` is undefined for every caller here, which leaves execFile inheriting
+ * ours. bridge/restart.js is the one that passes it, to shut off git's terminal
+ * prompt — see the comment there for why that matters.
  */
-function run(cmd, args, { cwd, timeout = GIT_TIMEOUT_MS } = {}) {
+function run(cmd, args, { cwd, timeout = GIT_TIMEOUT_MS, env } = {}) {
     return new Promise((resolve) => {
-        execFile(cmd, args, { cwd, timeout, maxBuffer: 8 * 1024 * 1024 },
+        execFile(cmd, args, { cwd, timeout, env, maxBuffer: 8 * 1024 * 1024 },
             (err, stdout, stderr) => resolve({
                 ok: !err,
                 stdout: String(stdout || ''),

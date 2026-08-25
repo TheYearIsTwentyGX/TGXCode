@@ -961,6 +961,7 @@ not.
 | `bridge/config.js` | Paths, ports, allowed roots — every constant with a reason attached |
 | `bridge/dashboard.js` | Uncommitted changes and open PRs, per project |
 | `bridge/git.js` | Every question the bridge asks git about a directory, cached once for all of them |
+| `bridge/restart.js` | Pulling this checkout and handing over to `scripts/restart-bridge.sh` — the one mutating git call |
 | `bridge/changes.js` | What a session changed, out of its transcript and its subagents' |
 | `bridge/pulls.js` | Everything that asks GitHub about a pull request, and what its status *is* |
 | `bridge/overview.js` | The live board: what every session is doing right now |
@@ -1077,7 +1078,22 @@ started it, which is the entire point of having one.
 ### Picking up new code
 
 The bridge runs whatever was on disk when it started, so it keeps running old
-code until you restart it. Add this to `~/.bashrc`:
+code until you restart it.
+
+**The quickest way is the button in the header**, beside the DevBrowser pill: it
+fast-forwards the checkout this bridge is serving and restarts it. When something
+is in the way it says so rather than doing half of it — turns in flight, a pull
+that would not fast-forward, uncommitted `bridge/` code — and offers to cancel,
+to hand the checkout to a session, or to go ahead anyway. That third choice is
+the confirmation the script asks for at a terminal, moved somewhere it can be
+answered; see `POST /api/restart` in `docs/api.md`.
+
+It restarts *this* bridge, whichever that is, so a dev instance in a worktree
+picks up its own branch and not main. One wart: the replacement comes back in its
+own session, so a bridge started by `npm run dev` is no longer stoppable with
+Ctrl-C in that terminal — kill it by port instead.
+
+For a terminal, add this to `~/.bashrc`:
 
 ```bash
 alias restart-bridge='bash ~/Other/claude-sessions/scripts/restart-bridge.sh'

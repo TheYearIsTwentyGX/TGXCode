@@ -35,6 +35,7 @@ const tailscale = require('./tailscale');
 const devservers = require('./devservers');
 const dashboard = require('./dashboard');
 const git = require('./git');
+const restart = require('./restart');
 const changes = require('./changes');
 const pulls = require('./pulls');
 const { mapLimit } = require('./memo');
@@ -114,6 +115,11 @@ index.suggestions = suggestions;
  * }>}
  */
 const clients = new Map();
+
+// Whether a restart script has been handed over to. One-way: this process is
+// being replaced, so there is nothing to set it back for. Two clicks would
+// otherwise be two kills and two launch.sh racing for one port.
+let handedOver = false;
 
 // ---------------------------------------------------------------------------
 // SSE
@@ -597,8 +603,10 @@ function isKnownHost(host) {
  *   - **Terminals** are a raw pty. Everything else here is mediated by the app —
  *     you answer an ask, you send a prompt — but this is a shell, and a leaked
  *     token that reaches it has the machine. A phone has no use for one.
- *   - **Shutdown** and **stopping a dev server** act on processes the person at the
- *     desk is using, and are trivially a denial of service from anywhere else.
+ *   - **Shutdown**, **restarting** and **stopping a dev server** act on processes the
+ *     person at the desk is using, and are trivially a denial of service from
+ *     anywhere else. Restarting is the worst of the three to hand out: it ends every
+ *     turn in flight and comes back running whatever is on disk.
  *   - **Reveal** and **DevBrowser** drive windows on the Windows host. Opening
  *     Explorer on a desktop nobody is sitting at is at best pointless.
  *   - **Making a folder** writes to the filesystem. Note the asymmetry with the
@@ -628,6 +636,11 @@ function remoteRefusal(pathname, method) {
     }
     if (pathname === '/api/shutdown') {
         return 'the bridge can only be shut down from the machine it runs on';
+    }
+    // Both methods: the GET is the journal, which names the checkout and what a
+    // restart decided about it, and there is nothing a phone does with that.
+    if (pathname === '/api/restart') {
+        return 'the bridge can only be restarted from the machine it runs on';
     }
     if (pathname === '/api/devservers/stop') {
         return 'dev servers can only be stopped from the machine they run on';
@@ -1375,6 +1388,126 @@ async function api(req, res, url, pathname, who) {
         send(res, 200, { ok: true });
         setTimeout(() => shutdown(0), 100);
         return;
+    }
+
+    // What a restart decided, for a client that watched one fail to happen.
+    //
+    // The journal is the point. A restart that refuses leaves this process alive,
+    // so nothing drops, no pid changes and no event fires — the outcome is only
+    // ever written to a file, and the bridge that can serve it is whichever one
+    // is up now. See the note on bridge/restart.js's `journal`.
+    if (pathname === '/api/restart' && req.method === 'GET') {
+        return send(res, 200, {
+            pid: process.pid, port: cfg.PORT, root: cfg.ROOT,
+            worktree: cfg.IS_WORKTREE, busy: pool.busyCount,
+            journal: restart.journal(),
+        });
+    }
+
+    if (pathname === '/api/restart' && req.method === 'POST') {
+        // Fast-forward this bridge's own checkout and hand over to
+        // scripts/restart-bridge.sh. Sibling of /api/shutdown above, and the
+        // ?pid= guard is there for the same reason: a window can adopt a bridge
+        // it did not start, and this one's blast radius is larger.
+        const want = url.searchParams.get('pid');
+        if (want && Number(want) !== process.pid) {
+            return send(res, 409, { error: 'not the bridge you started', pid: process.pid });
+        }
+        if (handedOver) {
+            return send(res, 409, { error: 'a restart is already running', pid: process.pid });
+        }
+
+        const body = await readJson(req).catch(() => ({}));
+        // One meaning only: go ahead with turns in flight. It is the answer to
+        // what the dialog asked, not a blanket override — the script is passed
+        // --yes on every invocation regardless, because there is never a terminal
+        // here to answer its dirty-bridge prompt at.
+        const force = body.force === true;
+        const wantPull = body.pull !== false;
+
+        // What is in the way, asked twice: before the pull so a refusal never
+        // leaves the checkout moved, and after it because the pull takes a moment
+        // and may itself have landed the bridge/ change now being complained
+        // about.
+        //
+        // Skipped outright when forcing rather than asked and ignored. That is
+        // not only thrift: asking first and refusing anyway is what would make
+        // Restart anyway unable to pull.
+        const gate = async (sofar) => {
+            if (force) return null;
+            const found = [
+                ...(sofar && !sofar.ok ? [{ kind: 'pull', text: sofar.error }] : []),
+                ...await restart.blockers(cfg.ROOT, { busy: pool.busyCount }),
+            ];
+            return found.length ? found : null;
+        };
+
+        let problems = await gate(null);
+        if (problems) return send(res, 409, { blocked: true, pulled: null, problems });
+
+        const pulled = wantPull
+            ? await restart.pull(cfg.ROOT)
+            : { ok: true, skipped: true, out: '', error: null, before: null, after: null, changed: [] };
+
+        problems = await gate(pulled);
+        if (problems) return send(res, 409, { blocked: true, pulled, problems });
+
+        // The pull may just have replaced the script — which is wanted — or moved
+        // it. An ENOENT after the 200 below is unrecoverable: nothing restarts and
+        // nothing is left to say so.
+        if (!restart.scriptPresent()) {
+            return send(res, 500, {
+                error: `${restart.SCRIPT} is missing — nothing was restarted`, pulled,
+            });
+        }
+
+        handedOver = true;
+        let fired = false;
+        const go = () => {
+            if (fired) return;
+            fired = true;
+            try {
+                restart.launch({ force });
+            } catch (err) {
+                // Nothing was killed, so this process is still the bridge — and a
+                // one-way flag would leave the button dead with no way to say why.
+                // The 200 has already gone out, so the log is the only place left
+                // to put this; the caller finds out by watching pid never change.
+                handedOver = false;
+                console.error(`[claude-sessions] restart: could not start ${restart.SCRIPT}:`,
+                    err.message);
+            }
+        };
+        // The script's first act is to SIGTERM this process, so it is not started
+        // until the reply is on the socket. /api/shutdown above guesses at this
+        // with a 100ms timer; here the event itself is available, and the reply is
+        // the only thing that will ever tell the caller the restart began. The
+        // timer is the fallback for a client that hung up mid-reply, where
+        // 'finish' may never fire.
+        res.once('finish', go);
+        setTimeout(go, 500).unref();
+
+        const where = {
+            log: path.join(cfg.CACHE_DIR, `restart-${cfg.PORT}.out`),
+            journal: path.join(cfg.CACHE_DIR, `restart-${cfg.PORT}.log`),
+        };
+        return send(res, 200, {
+            ok: true,
+            // Not "restarted": the process that could confirm that is the one
+            // being replaced. A caller learns it worked by polling /api/health
+            // until `pid` differs from the one below.
+            restarting: true,
+            pid: process.pid, port: cfg.PORT, force,
+            pulled, reach: restart.reach(pulled.changed),
+            // Neither is a blocker — both die with the bridge by design — but a
+            // dialog should be able to say what is about to go with it.
+            warnings: { terminals: terminals.live().length, runs: runs.live().length },
+            // The replacement comes back setsid'd from the script, so a bridge
+            // started by `npm run dev` is no longer the child of that terminal
+            // and Ctrl-C there stops working. Said out loud so the UI can.
+            detached: true,
+            ...where,
+        });
     }
 
     // --- notification history ---------------------------------------------
