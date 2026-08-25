@@ -4555,6 +4555,44 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     color: var(--red);
 }
 
+/* ── restart ─────────────────────────────────────────────────────────── */
+
+.restart-lede {
+    margin: 0 0 14px;
+    font: 400 14px/1.6 var(--sans);
+    color: var(--text-2);
+}
+.restart-problems {
+    margin: 0 0 4px;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.restart-problems > li {
+    padding: 12px 14px;
+    background: var(--bg);
+    border-radius: var(--r);
+}
+.restart-why {
+    font: 400 14px/1.55 var(--sans);
+    color: var(--text);
+}
+/* Paths, so mono — and they are the part being pointed at, hence the indent
+   rather than another card. Scrolls sideways on its own: a long path must not be
+   allowed to widen the dialog. */
+.restart-files {
+    margin: 8px 0 0;
+    padding: 0 0 0 2px;
+    list-style: none;
+    overflow-x: auto;
+    font: 400 12px/1.7 var(--mono);
+    color: var(--text-3);
+}
+.restart-files > li { white-space: pre; }
+.restart-more { font-family: var(--sans); font-style: italic; }
+
 /* ── toast ───────────────────────────────────────────────────────────── */
 
 .toasts {

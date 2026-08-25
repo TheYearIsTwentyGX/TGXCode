@@ -186,6 +186,19 @@
       </div>
     </div>
 
+    <!-- Grouped with the DevBrowser pill rather than with Tasks and Board: those
+         are places to go, and these two are the state of the machine. Hidden for
+         a remote caller, which is a courtesy — the route refuses it either way. -->
+    <button id="btn-restart" class="bar-btn icon-only" type="button"
+            title="Pull and restart the bridge">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M12 3.5v10.5m0 0-3.6-3.6M12 14l3.6-3.6" stroke="currentColor"
+              stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M4.5 16v2.5a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V16" stroke="currentColor"
+              stroke-width="1.7" stroke-linecap="round"/>
+      </svg>
+    </button>
+
     <button id="db-status" class="db-status" data-up="false" type="button"
             title="DevBrowser connection">
       <span class="led"></span><span id="db-label">DevBrowser</span>
@@ -879,6 +892,41 @@ checks, and merge it once they pass.">LGTM</button>
       <span class="spacer"></span>
       <button class="btn" data-close-del type="button">Cancel</button>
       <button id="del-go" class="btn destructive" type="button">Delete permanently</button>
+    </div>
+  </div>
+</div>
+
+<!-- Why a restart did not happen.
+
+     This dialog is a terminal prompt that had nowhere to live. restart-bridge.sh
+     asks `Continue? [y/N]` before loading uncommitted bridge/ changes, reading
+     /dev/tty — and a script started from an HTTP route has no controlling
+     terminal, so the read fails and the failure is taken for a no. That is what
+     silently pins the bridge to yesterday's code. Here the question can be
+     answered.
+
+     Turns in flight and a failed pull are on the same list because they are the
+     same question — something is in the way of this restart — and three dialogs
+     for one decision is two dialogs too many.
+
+     The footer is the three weights the Start a session dialog names: quiet,
+     tonal, filled for discard, hand off, run. Destructive rather than primary on
+     the last, because agreeing to it can end a turn somebody is waiting on. -->
+<div id="restart-scrim" class="scrim" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="restart-title">
+    <div class="modal-head">
+      <span id="restart-title">Something is in the way</span>
+      <button class="modal-close" data-close-restart type="button" aria-label="Close">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="restart-lede" id="restart-lede"></p>
+      <ul class="restart-problems" id="restart-problems"></ul>
+    </div>
+    <div class="modal-foot">
+      <span class="spacer"></span>
+      <button class="btn quiet" data-close-restart type="button">Cancel</button>
+      <button id="restart-fix" class="btn tonal" type="button">Fix it</button>
+      <button id="restart-go" class="btn destructive" type="button">Restart anyway</button>
     </div>
   </div>
 </div>

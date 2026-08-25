@@ -115,7 +115,7 @@ the thing you are about to approve is running on a machine you are sitting at.
 `permissionMode` of `bypassPermissions` or `dontAsk` on create, on send, and on
 **saving or starting a draft**; all
 of `/api/terminals/*`; all of `/api/runs/*`; `POST /api/commands/run`;
-`/api/shutdown`; `/api/devservers/stop`; `/api/devbrowser/*`;
+`/api/shutdown`; `/api/restart` (both methods); `/api/devservers/stop`; `/api/devbrowser/*`;
 `POST /api/sessions/:id/reveal`; `POST /api/sessions/:id/handoff`; `POST /api/fs/mkdir`.
 
 The draft routes are otherwise fully open to a remote caller, deliberately: setting
@@ -1380,6 +1380,66 @@ create limit, `400` for a directory or ref that no longer resolves, `404` for an
 unknown id. Every failure is also recorded on the schedule as `lastSkipReason`, so the
 card says what happened even if the response was lost.
 
+### `POST /api/restart`
+
+`{force?, pull?}` → `200 {ok, restarting, pid, port, force, pulled, reach, warnings,
+detached, log, journal}`. **Local callers only.** Fast-forwards the checkout this
+bridge is serving and hands over to `scripts/restart-bridge.sh`.
+
+**A `200` does not mean it restarted.** It means the script was launched and this
+process is about to be killed by it. Nothing can report the outcome, because the
+process that would report it is the one being replaced — see §*Things that will bite*
+for what to poll instead.
+
+`pulled` is `{ok, skipped, out, error, before, after, changed}` — `before`/`after` are
+SHAs or `null`, `changed` is an array of repo-relative paths, `error` is a string or
+`null`. `reach` is `{bridge, web, shell}`: three booleans saying whether what arrived
+needs a restart at all (`bridge/`), was already live (`web/`, read per request), or
+needs a rebuild nobody should run unasked (`app/`, `package.json`). `warnings` is
+`{terminals, runs}` — counts of things that die with the bridge. `detached: true` says
+the replacement comes back in its own session, so a bridge that `npm run dev` was
+watching can no longer be stopped with Ctrl-C in that terminal. `log` and `journal`
+are paths on the machine.
+
+`409 {blocked: true, pulled, problems}` when something is in the way. `problems` is an
+array of `{kind, text, files?}`, `kind` one of:
+
+| `kind` | what it is | `files` |
+|---|---|---|
+| `busy` | turns in flight; a restart ends them | — |
+| `dirty-bridge` | uncommitted tracked files under `bridge/`, which a restart would load | repo-relative paths |
+| `pull` | `git pull --ff-only` failed; `text` is git's own stderr | — |
+| `not-a-repo` | the checkout cannot be read as one | — |
+
+**On a `409` nothing was restarted — but the pull may have succeeded.** `pulled` is
+`null` when it was never attempted (something was already in the way) and an object
+when it ran, so a client must read it rather than assuming a refusal means nothing
+happened. Only `bridge/` counts for `dirty-bridge`: the bridge `require()`s it once at
+startup, while `web/` is read per request.
+
+`force: true` means one thing — **go ahead with turns in flight**. It is not a general
+override: uncommitted `bridge/` changes are always loaded, because a script started
+from a route has no terminal to answer the confirmation at. With `force` there is no
+`409`; a failed pull is reported in `pulled` and the restart happens anyway.
+
+`pull: false` skips the fast-forward and restarts on what is already on disk. Sensible
+after watching a pull fail, and for a worktree bridge on a branch with no upstream.
+
+`409 {error: 'not the bridge you started', pid}` for a `?pid=` that is not this
+process, and `409 {error: 'a restart is already running'}` for a second call — two
+would be two kills racing for one port. `500` if the pull removed the script.
+
+### `GET /api/restart`
+
+`→ {pid, port, root, worktree, busy, journal}`. **Local callers only.** `journal` is
+up to the last 20 lines of `~/.cache/claude-sessions/restart-<port>.log` as strings.
+
+This exists for the case a `POST` cannot report: a restart that refused. The script's
+own turn-in-flight guard is still armed on every invocation, so a turn starting between
+the route's check and the script's own means it exits without restarting — this process
+lives, no `pid` changes, nothing drops, and the only record is that file. Whichever
+bridge is up serves it.
+
 ### `POST /api/sessions/:id/handoff`
 
 `{from, text, title?}` → `{ok, id, sessionId, cwd, woke, status, queued}`. **Local
@@ -1654,3 +1714,10 @@ will show a permanently spinning tool. See §*A tool call resolves in one of two
 
 **`runner` on a session summary is not the `runner-status` payload.** Four fields, and
 `pendingPermission` is not among them. See §`GET /api/sessions`.
+
+**A restart has no completion event.** The process that would send one is the process
+being replaced. After a `200` from `POST /api/restart`, poll `GET /api/health` until
+`pid` differs from the one the `200` returned — allow 45s, since the script waits 30s
+for the replacement to answer. A `pid` that never changes does not mean it is still
+working: it means the script decided not to restart, and `GET /api/restart` carries the
+journal line saying why. See §`POST /api/restart`.
