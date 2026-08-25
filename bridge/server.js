@@ -26,7 +26,7 @@ const { Suggestions, STATUSES: SUGGESTION_STATUSES } = require('./suggestions');
 const { Drafts, MAX_DRAFTS } = require('./drafts');
 const {
     Schedules, MAX_SCHEDULES, CATCHUP_MS,
-    parseCron, nextSlot, dueSlot, describeCron, fillPrompt, verdictOf,
+    parseCron, nextSlot, dueSlot, describeCron, cronForm, fillPrompt, verdictOf,
 } = require('./schedule');
 const { SlashCommandCache } = require('./slash-commands');
 const { NotificationLog, ReadState } = require('./notifications');
@@ -836,7 +836,12 @@ function scheduleOut(row) {
     return {
         ...row,
         projectName: projectName(row.cwd),
-        cronText: describeCron(spec),
+        cronText: describeCron(spec, { once: row.once }),
+        // The same expression as controls rather than as prose, so the dialog can
+        // draw a picker without parsing cron in the page. Derived here for the
+        // reason above: three clients reading five fields each is three chances
+        // to disagree about what `0 2 * * 2-6` selects.
+        cronForm: cronForm(spec),
         // Null when the expression can never match again, which is a real answer
         // — `0 0 30 2 *` is a schedule that will never fire — and one the card
         // should be able to say out loud rather than showing a blank.
@@ -944,6 +949,11 @@ function scheduleFields(body, who, { partial }) {
     if (!partial || body.title !== undefined) fields.title = body.title || null;
     if (!partial || body.test !== undefined) fields.test = !!body.test;
     if (!partial || body.enabled !== undefined) fields.enabled = body.enabled !== false;
+    // Not checked against the expression, deliberately. `once` on `0 2 * * *` is
+    // a schedule that runs tomorrow at 2 AM and then switches itself off, which
+    // is odd but coherent — and a dated expression *without* the flag is a
+    // birthday reminder. Neither is the store's business to refuse.
+    if (!partial || body.once !== undefined) fields.once = !!body.once;
 
     return { fields };
 }
@@ -1878,9 +1888,16 @@ async function api(req, res, url, pathname, who) {
             const spec = parseCron(text);
             if (spec.error) return send(res, 400, { error: spec.error });
             const next = nextSlot(spec, Date.now());
+            // `once` because the dialog is asking what it is about to save, and a
+            // dated expression means two different things with the flag and
+            // without it. Read off the query rather than guessed from the shape.
+            const once = url.searchParams.get('once') === '1';
             return send(res, 200, {
                 cron: spec.text,
-                text: describeCron(spec),
+                text: describeCron(spec, { once }),
+                // The controls that would produce this expression, so a client
+                // that has one can select the right row without parsing it.
+                form: cronForm(spec),
                 // Null is a real answer — `0 0 30 2 *` parses and never matches —
                 // and one the dialog says out loud rather than leaving blank.
                 next,

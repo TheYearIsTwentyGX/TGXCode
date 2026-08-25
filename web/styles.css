@@ -5082,6 +5082,138 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 .dr-note p { margin: 0; max-width: 520px; font-size: 13.5px; line-height: 1.65; color: var(--text-2); }
 .dr-note p.dim { font-size: 13px; color: var(--text-4); }
 
+/* ── the schedule builder ────────────────────────────────────────────────
+   The trigger picker in the new-session dialog, in schedule mode. Six rows, one
+   selected, each with its own arguments on the same line — the shape Windows
+   Task Scheduler uses, and it earns the copy: you read down the left edge to
+   find the kind of schedule you want and the controls for it are already there,
+   rather than behind a step.
+
+   Native radios and checkboxes throughout, skinned but not replaced. Arrow keys
+   move within a radiogroup, space toggles a checkbox, and a label points at its
+   control — none of which is worth reimplementing for a form this small. The
+   same argument renderQuestionDock makes.
+
+   The one real trap here is the native date and time inputs. `.field
+   input[type="text"]` is type-scoped, so those pick up nothing but the global
+   reset and arrive unstyled; and with no `color-scheme` anywhere in this file,
+   Chromium draws their pickers and spinners light-on-light inside a dark dialog.
+   Both are fixed on `.when-in` rather than on `:root`, because a global
+   `color-scheme` would repaint every scrollbar and native control in the app. */
+
+.when { display: flex; flex-direction: column; gap: 2px; }
+
+/* A row, not a label — see the comment in index.html. `align-items: baseline`
+   so "Every" sits on the same line as the number beside it however tall the
+   controls turn out to be. */
+.when-opt {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    padding: 7px 11px;
+    border-radius: var(--r-sm);
+    transition: background var(--t-fast) var(--ease);
+}
+.when-opt:hover { background: var(--s2); }
+/* The selected row is tinted rather than outlined: six outlined boxes in a
+   column read as six separate things, and this is one control. */
+.when-opt:has(input[type="radio"]:checked) { background: var(--blue-tint); }
+
+/* Wide enough that the six names line up and the arguments start at one column,
+   which is what makes the list scannable. */
+.when-pick {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    flex: none;
+    width: 108px;
+    margin: 0;
+    font: 500 12.5px/1.5 var(--sans);
+    color: var(--text-2);
+    cursor: pointer;
+}
+.when-opt:has(input[type="radio"]:checked) .when-pick { color: var(--text); }
+.when-pick input { flex: none; accent-color: var(--blue-deep); }
+
+/* The arguments are dimmed until their row is the live one, so the column reads
+   as one choice with details rather than as thirty controls. */
+.when-args {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    font: 400 12.5px/1.5 var(--sans);
+    color: var(--text-3);
+}
+.when-args.grow { flex: 1; min-width: 180px; }
+.when-args.grow input { width: 100%; }
+.when-opt:not(:has(input[type="radio"]:checked)) .when-args { opacity: 0.55; }
+
+.when-in {
+    background: var(--bg);
+    border-radius: var(--r-xs);
+    padding: 6px 9px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    /* Without this the native picker and its spinners come out light-on-light.
+       Scoped here rather than on :root — see the section note. */
+    color-scheme: dark;
+}
+.when-in:focus { outline: none; box-shadow: inset 0 0 0 2px var(--blue); }
+.when-in.num { width: 58px; text-align: right; }
+.when-args select {
+    background: var(--s2);
+    border-radius: var(--pill);
+    padding: 5px 10px;
+    font: 400 12px/1.2 var(--sans);
+    color: var(--text-2);
+    cursor: pointer;
+    transition: background var(--t-fast) var(--ease);
+}
+.when-args select:hover { background: var(--s3); color: var(--text); }
+
+/* The day ticks sit on their own line under Weekly's time, indented to the
+   argument column: seven pills plus a time do not fit on one 640px row, and
+   wrapping them mid-week looked like two groups. */
+.when-days {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    width: 100%;
+    margin: 6px 0 0;
+    padding-left: 108px;
+}
+/* A checkbox skinned as a pill. The input stays in the DOM and focusable rather
+   than `display: none`, so tabbing through the week still works; it is the
+   `:focus-within` ring below that makes that visible. */
+.when-day {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 40px;
+    height: 27px;
+    padding: 0 9px;
+    border-radius: var(--pill);
+    background: var(--s2);
+    font: 500 11.5px/1 var(--sans);
+    color: var(--text-3);
+    cursor: pointer;
+    user-select: none;
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.when-day input {
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    opacity: 0;
+    cursor: pointer;
+}
+.when-day:hover { background: var(--s3); color: var(--text); }
+.when-day:focus-within { box-shadow: 0 0 0 2px var(--blue); }
+.when-day:has(input:checked) { background: var(--blue-cont); color: var(--blue); }
+
 /* ── the schedules panel ─────────────────────────────────────────────────
    Drafts' layout, reused rather than restated: same head, same single scrolling
    column at the same width, same card vocabulary. The two panels are the same

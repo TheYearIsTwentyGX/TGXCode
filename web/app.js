@@ -400,6 +400,9 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'btn-sched', 'sched-badge', 'sched', 'sched-sub', 'sched-body', 'sched-new',
     'new-cron', 'new-cron-row', 'new-cron-note', 'new-gate-ref', 'new-gate-row',
     'new-sched-save',
+    'new-when-date', 'new-when-once-time', 'new-when-count', 'new-when-unit',
+    'new-when-daily-time', 'new-when-weekly-time', 'new-when-days',
+    'new-when-dom', 'new-when-monthly-time',
     'notes-notable', 'notes-all', 'notes-clear',
     'lock', 'lock-text', 'lock-fork', 'lock-anyway',
     'btn-live', 'live-badge', 'live', 'live-sub', 'live-body', 'live-focus', 'focus-exit',
@@ -10223,7 +10226,12 @@ async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     // The two fields only a schedule has.
     dom.newCronRow.hidden = !schedMode;
     dom.newGateRow.hidden = !schedMode;
-    dom.newCron.value = sched ? sched.cron : (schedMode ? '0 2 * * 2-6' : '');
+    // The picker rather than an expression, and filled from the bridge's own
+    // reading of one: `cronForm` is what says which row an existing schedule
+    // belongs on. A new schedule opens on Weekly, Tue–Sat at 02:00 — the same
+    // suggestion the cron box used to open with, spelled as controls.
+    setWhen(sched ? sched.cronForm : null, sched ? sched.cron : '',
+        sched ? !!sched.once : false);
     dom.newGateRef.value = sched && sched.gate ? sched.gate.ref : '';
     if (schedMode) describeCronSoon();
 
@@ -10706,6 +10714,236 @@ function newDialogValues() {
     return body;
 }
 
+// ── the trigger picker ──────────────────────────────────────────────────────
+//
+// One direction only: **the picker composes cron and never parses it.** Reading
+// an expression back — which the dialog has to do to open an existing schedule
+// on the right row — is the bridge's `cronForm`, arriving on the row as
+// `cronForm` and from `/api/schedules/describe` as `form`. That keeps the rule
+// docs/api.md states: the process that decides when a schedule runs is the only
+// one that gets an opinion about what an expression means.
+//
+// Composing is safe to do here because it cannot disagree with anything. There
+// is no expression to misread — five fields get built out of controls whose
+// values are already numbers — and the sentence under the picker is still the
+// bridge's answer about the result.
+
+const WHEN_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/** The selected row, or null before the dialog has ever been opened. */
+function whenKind() {
+    const on = dom.newCronRow.querySelector('input[name="new-when"]:checked');
+    return on ? on.value : null;
+}
+
+/** The seven day checkboxes, in the order `whenBuild` made them. */
+function whenDayBoxes() {
+    return [...dom.newWhenDays.querySelectorAll('input')];
+}
+
+/**
+ * `"14:30"` → `{hour: 14, minute: 30}`, and null for a box nobody filled in.
+ *
+ * A time input hands back `""` when it is empty or half-typed, which is a real
+ * state the caller says out loud rather than defaulting to midnight — a schedule
+ * silently set to 00:00 is the kind of thing you find out about at midnight.
+ */
+function whenClock(input) {
+    const m = /^(\d{1,2}):(\d{2})$/.exec((input.value || '').trim());
+    if (!m) return null;
+    const hour = Number(m[1]);
+    const minute = Number(m[2]);
+    if (hour > 23 || minute > 59) return null;
+    return { hour, minute };
+}
+
+/**
+ * The picker as `{cron, once}`, or null after saying what is missing.
+ *
+ * Returns null and toasts rather than throwing — the same bargain
+ * `newDialogValues` strikes, and for the same reason: every caller's next line
+ * is "then stop".
+ *
+ * `quiet` is for the live preview, which composes on every keystroke and must
+ * not shout about a row somebody is halfway through filling in. One composer
+ * with a mute rather than two: the preview and the save have to agree about what
+ * the controls mean, and that is exactly the kind of thing that drifts.
+ */
+function whenValues({ quiet = false } = {}) {
+    const say = quiet ? () => {} : toast;
+    const kind = whenKind();
+
+    if (kind === 'custom') {
+        const cron = dom.newCron.value.trim();
+        if (!cron) {
+            say('Say when it should run — five cron fields, like 0 2 * * 2-6.', 'warn');
+            return null;
+        }
+        return { cron, once: false };
+    }
+
+    if (kind === 'every') {
+        const n = Number(dom.newWhenCount.value);
+        const hours = dom.newWhenUnit.value === 'hours';
+        const max = hours ? 23 : 59;
+        if (!Number.isInteger(n) || n < 1 || n > max) {
+            say(`How often? A whole number of ${hours ? 'hours' : 'minutes'}, 1 to ${max}.`,
+                'warn');
+            return null;
+        }
+        return { cron: hours ? `0 */${n} * * *` : `*/${n} * * * *`, once: false };
+    }
+
+    if (kind === 'daily') {
+        const t = whenClock(dom.newWhenDailyTime);
+        if (!t) { say('Pick a time for it to run.', 'warn'); return null; }
+        return { cron: `${t.minute} ${t.hour} * * *`, once: false };
+    }
+
+    if (kind === 'weekly') {
+        const t = whenClock(dom.newWhenWeeklyTime);
+        if (!t) { say('Pick a time for it to run.', 'warn'); return null; }
+        const days = whenDayBoxes().filter(b => b.checked).map(b => Number(b.value));
+        if (!days.length) {
+            say('Tick at least one day, or make it a daily schedule.', 'warn');
+            return null;
+        }
+        return { cron: `${t.minute} ${t.hour} * * ${days.join(',')}`, once: false };
+    }
+
+    if (kind === 'monthly') {
+        const t = whenClock(dom.newWhenMonthlyTime);
+        if (!t) { say('Pick a time for it to run.', 'warn'); return null; }
+        return { cron: `${t.minute} ${t.hour} ${Number(dom.newWhenDom.value)} * *`, once: false };
+    }
+
+    if (kind === 'once') {
+        const date = (dom.newWhenDate.value || '').trim();
+        if (!date) { say('Pick the date it should run on.', 'warn'); return null; }
+        const t = whenClock(dom.newWhenOnceTime);
+        if (!t) { say('Pick a time for it to run.', 'warn'); return null; }
+        const [y, mo, d] = date.split('-').map(Number);
+
+        // **The one check the bridge cannot make.** `once` rides on a dated
+        // expression, and a dated expression in the past still matches — next
+        // year. So `scheduleFields` sees a perfectly good cron and the card would
+        // sit there saying the next run is eleven months away. Refused here,
+        // where the date somebody actually picked is still in front of us.
+        if (new Date(y, mo - 1, d, t.hour, t.minute, 0, 0).getTime() <= Date.now()) {
+            say('That moment has already passed — pick a date and time still to come.',
+                'warn');
+            return null;
+        }
+        return { cron: `${t.minute} ${t.hour} ${d} ${mo} *`, once: true };
+    }
+
+    say('Say when it should run.', 'warn');
+    return null;
+}
+
+/**
+ * Fill the picker in from a schedule, or from nothing.
+ *
+ * `form` is the bridge's `cronForm`; `cron` is the raw expression, needed for the
+ * Custom row and as the fallback for a shape no row can draw.
+ *
+ * **Every control is written on every open, in both directions** — the rule
+ * `openNew`'s docstring states, and it matters more here than anywhere else in
+ * this dialog. A picker that left last time's ticked days behind would attach
+ * them to the next schedule you opened, and Weekly is exactly the row where you
+ * would not notice.
+ */
+function setWhen(form, cron, once) {
+    const f = form || {};
+    // `null` is "a schedule that does not exist yet", which is *not* the same as
+    // `{kind: 'custom'}` — an existing schedule whose expression no row can draw.
+    // The first opens on a suggestion, the second on its own raw expression, and
+    // conflating them opened every new schedule on an empty cron box.
+    const kind = form ? form.kind : 'new';
+
+    // A dated expression is the One time row only when the row said so. Without
+    // the flag it is an annual schedule, which no row draws — so it is Custom.
+    const row = kind === 'new' ? 'weekly'
+        : kind === 'date' ? (once ? 'once' : 'custom')
+            : (kind === 'minutes' || kind === 'hours' ? 'every' : kind);
+
+    const clock = f.hour === undefined ? '02:00' : `${pad(f.hour)}:${pad(f.minute)}`;
+
+    dom.newCron.value = row === 'custom' ? (cron || '') : '';
+    dom.newWhenCount.value = String(kind === 'minutes' || kind === 'hours' ? f.every : 15);
+    dom.newWhenUnit.value = kind === 'hours' ? 'hours' : 'minutes';
+    dom.newWhenDailyTime.value = clock;
+    dom.newWhenWeeklyTime.value = clock;
+    dom.newWhenMonthlyTime.value = clock;
+    dom.newWhenOnceTime.value = row === 'once' ? clock : '09:00';
+    dom.newWhenDom.value = String(kind === 'monthly' ? f.day : 1);
+
+    // Tue–Sat is the default week, which is what the cron box used to open on:
+    // "review whatever landed overnight", on the days there was an overnight.
+    const days = new Set(kind === 'weekly' ? f.days : [2, 3, 4, 5, 6]);
+    for (const box of whenDayBoxes()) box.checked = days.has(Number(box.value));
+
+    // A dated expression carries no year, so an existing one-time schedule can
+    // only be shown on the next date it matches — which is the date it will
+    // actually run, and so the honest thing to put in the box.
+    if (row === 'once') {
+        const now = new Date();
+        const soon = new Date(now.getFullYear(), f.month - 1, f.day, f.hour, f.minute, 0, 0);
+        if (soon.getTime() <= Date.now()) soon.setFullYear(now.getFullYear() + 1);
+        dom.newWhenDate.value =
+            `${soon.getFullYear()}-${pad(soon.getMonth() + 1)}-${pad(soon.getDate())}`;
+    } else {
+        dom.newWhenDate.value = '';
+    }
+
+    const pick = document.getElementById(`new-when-${row}`);
+    if (pick) pick.checked = true;
+}
+
+/** `1` → `"1st"`. The bridge says this too; here it is only ever a label. */
+function ordinalDay(n) {
+    const s = ['th', 'st', 'nd', 'rd'];
+    const v = n % 100;
+    return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+
+/**
+ * Build the two lists too long to write out, and wire the picker. Called once.
+ *
+ * The day pills and the 1–31 select are generated because thirty-eight
+ * hand-written controls in index.html is thirty-eight chances for a typo in a
+ * value nobody would ever look at again.
+ */
+function whenBuild() {
+    dom.newWhenDays.replaceChildren(...WHEN_DAYS.map((name, i) =>
+        el('label', { class: 'when-day' },
+            el('input', { type: 'checkbox', value: String(i), 'aria-label': name }),
+            el('span', {}, name))));
+
+    dom.newWhenDom.replaceChildren(...Array.from({ length: 31 }, (_, i) =>
+        el('option', { value: String(i + 1) }, ordinalDay(i + 1))));
+
+    // Touching a row's arguments selects that row. Without this you could set a
+    // time on Weekly, press Save, and have Daily's time be what got stored — every
+    // control filled in and only the radio saying which one counted.
+    // `renderQuestionDock`'s "Other" box does the same, for the same reason.
+    for (const opt of dom.newCronRow.querySelectorAll('.when-opt')) {
+        const radio = opt.querySelector('input[type="radio"]');
+        for (const arg of opt.querySelectorAll('.when-args input, .when-args select')) {
+            arg.addEventListener('input', () => { radio.checked = true; describeCronSoon(); });
+        }
+        radio.addEventListener('change', () => describeCronSoon());
+    }
+    // The day ticks live outside `.when-args`, so they are wired separately —
+    // and a day is only ever meaningful on Weekly, which is the row they are in.
+    for (const box of whenDayBoxes()) {
+        box.addEventListener('change', () => {
+            document.getElementById('new-when-weekly').checked = true;
+            describeCronSoon();
+        });
+    }
+}
+
 /**
  * The two extra fields, on top of what every caller of this dialog needs.
  *
@@ -10714,21 +10952,19 @@ function newDialogValues() {
  * `POST /api/sessions` body would be silently ignored today and would be a
  * puzzle the first time somebody added a field by that name.
  *
- * The expression is not validated here. The bridge parses it — and its parser is
- * the one that will actually decide when this runs — so a second parser in the
- * page could only ever be a way for the two to disagree. What the page does is
- * ask for the English, which is `describeCronSoon` below.
+ * The expression is composed from the picker and never parsed here. The bridge's
+ * parser is the one that will actually decide when this runs, so a second parser
+ * in the page could only ever be a way for the two to disagree. What the page
+ * does is ask for the English, which is `describeCronSoon` below.
  */
 function schedDialogValues() {
     const body = newDialogValues();
     if (!body) return null;
 
-    const cron = dom.newCron.value.trim();
-    if (!cron) {
-        toast('Say when it should run — five cron fields, like 0 2 * * 2-6.', 'warn');
-        return null;
-    }
-    body.cron = cron;
+    const when = whenValues();
+    if (!when) return null;
+    body.cron = when.cron;
+    body.once = when.once;
 
     // An empty ref is "run every time", which is a real choice and not an
     // unfinished one — so it clears the gate rather than refusing the save.
@@ -10753,15 +10989,20 @@ let cronNoteTimer = null;
 function describeCronSoon() {
     clearTimeout(cronNoteTimer);
     cronNoteTimer = setTimeout(async () => {
-        const cron = dom.newCron.value.trim();
-        if (!cron) {
-            dom.newCronNote.textContent = 'Five fields, local time: minute hour '
-                + 'day-of-month month day-of-week.';
+        // Composed exactly the way a save composes it, so the sentence is about
+        // the expression that would actually be stored rather than about the
+        // controls' best guess at one.
+        const when = whenValues({ quiet: true });
+        if (!when) {
+            dom.newCronNote.textContent = whenKind() === 'custom'
+                ? 'Five fields, local time: minute hour day-of-month month day-of-week.'
+                : 'Fill in the row you picked and this will say when it runs.';
             dom.newCronNote.classList.remove('bad');
             return;
         }
         try {
-            const r = await get(`/api/schedules/describe?cron=${encodeURIComponent(cron)}`);
+            const q = `cron=${encodeURIComponent(when.cron)}${when.once ? '&once=1' : ''}`;
+            const r = await get(`/api/schedules/describe?${q}`);
             dom.newCronNote.textContent = r.next
                 ? `${r.text} — next ${new Date(r.next).toLocaleString()}`
                 : r.text;
@@ -11979,7 +12220,10 @@ dom.schedNew.addEventListener('click', () => openNew({ schedule: true }));
 dom.newSchedSave.addEventListener('click', () => schedSave());
 // The English under the box, from the bridge's own parser. `input` rather than
 // `change` so it keeps up with typing; the fetch behind it is debounced.
-dom.newCron.addEventListener('input', () => describeCronSoon());
+// Every control in the picker, `#new-cron` included, is wired inside this — on
+// `input` rather than `change`, so the Custom row keeps up with typing and the
+// debounced fetch behind it absorbs the rest.
+whenBuild();
 dom.notesNotable.addEventListener('click', () => setNotesScope('notable'));
 dom.notesAll.addEventListener('click', () => setNotesScope('all'));
 dom.notesClear.addEventListener('click', async () => {
