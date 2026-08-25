@@ -1384,12 +1384,24 @@ async function api(req, res, url, pathname, who) {
             // usually wins and sometimes does not.
             const settings = prefs.forCwd(data.summary && data.summary.cwd);
 
-            const want = Number(url.searchParams.get('tail'));
-            if (Number.isFinite(want) && want > 0 && data.events.length > want) {
+            // `tail=0` is not "no limit", it is "none of them": everything above
+            // without the transcript. That is what a polling client wants for the
+            // liveness it cannot get from a stream — runner state, the pending ask,
+            // the offset to ask `/since` from — at a few hundred bytes rather than
+            // half a megabyte. Spelled out rather than relying on `slice(-0)`,
+            // which returns the whole array and would make `tail=0` the most
+            // expensive call on this route instead of the cheapest.
+            // Read as a string first, because `Number(null)` is 0 and the param
+            // being absent must not read as "send none of them" — that is the
+            // desktop's call, and it wants the whole conversation.
+            const asked = url.searchParams.get('tail');
+            const want = asked === null ? null : Number(asked);
+            if (want !== null && Number.isFinite(want) && want >= 0
+                && data.events.length > want) {
                 const dropped = data.events.length - want;
                 return send(res, 200, {
                     ...data,
-                    events: data.events.slice(-want),
+                    events: want === 0 ? [] : data.events.slice(-want),
                     truncated: { dropped, total: data.events.length },
                     runner: st || null,
                     suggestions: acted,

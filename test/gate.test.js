@@ -99,6 +99,30 @@ const PHONE = {
     check('a LAN IP is fine',
         (await call('/api/sessions', { headers: { ...BEARER, host: '10.11.64.43:45901' } })).status, 200);
 
+    console.log('\n--- tail=0: metadata without the transcript ---');
+    // The polling fallback in web/mobile.js leans on this: liveness for the open
+    // session at a few hundred bytes rather than a whole conversation. `slice(-0)`
+    // returns everything, so getting this wrong makes the cheapest call the most
+    // expensive one — hence a test rather than trust.
+    const list = JSON.parse((await call('/api/sessions?limit=1', { headers: BEARER })).body);
+    const id = list.sessions[0] && list.sessions[0].sessionId;
+    if (id) {
+        const full = JSON.parse((await call(`/api/sessions/${id}`, { headers: BEARER })).body);
+        const none = JSON.parse((await call(`/api/sessions/${id}?tail=0`, { headers: BEARER })).body);
+        const one = JSON.parse((await call(`/api/sessions/${id}?tail=1`, { headers: BEARER })).body);
+        check('tail=0 returns no events', none.events.length, 0);
+        check('tail=1 returns exactly one', one.events.length, Math.min(1, full.events.length));
+        check('tail=0 still reports the offset', typeof none.offset, 'number');
+        check('and the same offset as a full read', none.offset, full.offset);
+        check('tail=0 still carries the runner slot', 'runner' in none, true);
+        check('and says what it withheld', none.truncated && none.truncated.total,
+            full.events.length);
+        check('tail=0 is smaller than the whole transcript',
+            JSON.stringify(none).length < JSON.stringify(full).length, true);
+    } else {
+        console.log('  --   no sessions indexed; skipped');
+    }
+
     console.log('\n--- token injection into the page ---');
     const page = await call('/');
     check('/ serves HTML', page.status, 200);

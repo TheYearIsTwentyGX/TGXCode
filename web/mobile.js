@@ -105,8 +105,10 @@ const state = {
     clientId: null,
     /** Sessions from GET /api/sessions, newest activity first. */
     sessions: [],
-    /** The live board, from the `overview` SSE event. */
+    /** The live board, from the `overview` SSE event or a poll. */
     board: null,
+    /** Its content signature, so a poll can tell a real change from a new clock. */
+    boardSig: '',
     /** The open conversation, or null. */
     current: null,
     /** Permission modes the bridge will accept, minus the ones it refuses remotely. */
@@ -227,17 +229,75 @@ function setConn(stateName) {
         live: 'Connected to the bridge',
         connecting: 'Connecting to the bridge…',
         offline: 'Not connected to the bridge',
+        polling: 'Checking every few seconds — this network will not carry a live stream',
     }[stateName] || '';
 }
+
+// ---------------------------------------------------------------------------
+// When the stream does not arrive
+// ---------------------------------------------------------------------------
+//
+// Some transports buffer server-sent events instead of passing them through, and
+// the failure is silent: the request succeeds, the content type is right, and then
+// nothing arrives until the connection closes. Measured through a Cloudflare
+// Tunnel, `/api/events` delivered *zero bytes in 75 seconds* — the immediate
+// `hello` and three pings all held — while the same tunnel served ordinary
+// requests in 60ms. Cloudflare strips the `X-Accel-Buffering: no` header the
+// bridge sets, so there is nothing to fix from this side.
+//
+// `hello` is what makes this detectable. The bridge writes it the instant the
+// stream opens, so on any transport that works it lands in well under a second
+// (0.04s on loopback). If it has not arrived in HELLO_GRACE, the stream is not
+// going to work at all, and waiting longer only delays the fallback.
+//
+// The fallback is polling the delta endpoints the API already has, which turns out
+// to be cheap enough that it is barely a compromise: `/since` is 42 bytes when
+// nothing has happened. Liveness becomes a couple of seconds granular instead of
+// instant, which for "has it finished, does it need me" is a distinction without a
+// difference — and it is more robust besides, surviving proxies, tab backgrounding
+// and network changes that a held connection does not.
+//
+// A comment line (`: ping`) is invisible to EventSource, so an idle-but-healthy
+// stream looks exactly like a dead one from here. `hello` is the only signal that
+// separates them, which is why the decision is made once, up front, rather than by
+// watching for silence later.
+
+const HELLO_GRACE_MS = 6_000;
+
+// How often to poll, once polling. Fast enough that answering an ask feels
+// immediate, slow enough not to be a nuisance on a metered connection.
+const POLL_MS = 2_500;
+
+// The board is ~7KB and the transcript delta is tens of bytes, so they do not
+// deserve the same rate. Every other tick keeps the badge honest for ~3.5KB/s.
+const BOARD_EVERY = 2;
+
+const poll = { timer: null, ticks: 0, on: false };
 
 function connect() {
     disconnect();
     setConn('connecting');
+
+    // Already established that this network eats streams; do not re-litigate it on
+    // every visibility change.
+    if (poll.on) return startPolling();
+
     es = new EventSource('/api/events');
+
+    helloWatchdog = setTimeout(() => {
+        helloWatchdog = null;
+        if (state.clientId) return;         // hello landed; nothing to do
+        console.info('[claude-sessions] no hello in %dms — the stream is being '
+            + 'buffered, falling back to polling', HELLO_GRACE_MS);
+        if (es) { es.close(); es = null; }
+        poll.on = true;
+        startPolling();
+    }, HELLO_GRACE_MS);
 
     es.addEventListener('hello', async (e) => {
         const data = JSON.parse(e.data);
         state.clientId = data.clientId;
+        if (helloWatchdog) { clearTimeout(helloWatchdog); helloWatchdog = null; }
         setConn('live');
         // Nothing replays, so a reconnection re-reads rather than assuming the gap
         // was empty: the list, then whatever this client was following.
@@ -332,9 +392,118 @@ function connect() {
     };
 }
 
+let helloWatchdog = null;
+
 function disconnect() {
+    if (helloWatchdog) { clearTimeout(helloWatchdog); helloWatchdog = null; }
     if (es) { es.close(); es = null; }
+    stopPolling();
     state.clientId = null;
+}
+
+// ---------------------------------------------------------------------------
+// Polling
+// ---------------------------------------------------------------------------
+
+/** The board's content, ignoring when it was built. */
+function boardSignature(board) {
+    if (!board) return '';
+    const { at, ...rest } = board;
+    return JSON.stringify(rest);
+}
+
+function stopPolling() {
+    if (poll.timer) { clearInterval(poll.timer); poll.timer = null; }
+}
+
+function startPolling() {
+    stopPolling();
+    setConn('polling');
+    poll.ticks = 0;
+    tickPoll();
+    poll.timer = setInterval(tickPoll, POLL_MS);
+}
+
+/**
+ * One round of "what changed", using only ordinary GETs.
+ *
+ * Deliberately the same endpoints the stream feeds from, so the rendering paths
+ * below this are identical either way — `appendEvents` does not know or care which
+ * mode delivered its events, and `renderAsk` does not know whether the ask arrived
+ * on a stream or was noticed by a poll.
+ */
+async function tickPoll() {
+    if (document.visibilityState === 'hidden') return;
+    const round = poll.ticks++;
+
+    try {
+        // The board, and with it the needs-you screen and the tab badge.
+        if (round % BOARD_EVERY === 0) {
+            const board = await get('/api/overview');
+            // Compared without `at`, which is the time the payload was built and so
+            // differs on every single call. Keying on it meant "changed" was always
+            // true and the list was rebuilt every few seconds — DOM churn under the
+            // reader's thumb, which on a phone can eat the tap it was aimed at. The
+            // bridge does the same thing for the same reason before it decides
+            // whether to push (its `signature` nulls `at` out).
+            const sig = boardSignature(board);
+            const changed = sig !== state.boardSig;
+            state.board = board;
+            state.boardSig = sig;
+            if (changed) {
+                if (state.screen === 'needs') renderNeeds();
+                updateBadge();
+            }
+        }
+
+        if (!state.current) { setConn('polling'); return; }
+        const id = encodeURIComponent(state.current.sessionId);
+
+        // Liveness for the open session: runner state, and any ask waiting on it.
+        // `tail=0` is this call's whole reason for existing — the metadata without
+        // the transcript.
+        const meta = await get(`/api/sessions/${id}?tail=0`);
+        applyPolledRunner(meta.runner);
+
+        // And whatever was appended since we last looked.
+        const delta = await get(`/api/sessions/${id}/since?offset=${state.current.offset}`);
+        if (delta.reset) return void openSession(state.current.sessionId, { force: true });
+        state.current.offset = delta.offset;
+        if (delta.events && delta.events.length) appendEvents(delta.events);
+
+        setConn('polling');
+    } catch (err) {
+        if (err.status === 401) return notPaired();
+        // A failed round is not interesting; the next one is along shortly.
+        setConn('offline');
+    }
+}
+
+/**
+ * Reconcile a polled runner status with what is on screen.
+ *
+ * The stream gets `permission-request` and `permission-resolved` as they happen;
+ * polling only ever sees the current state, so appearing and disappearing have to
+ * be inferred. Keyed on requestId so re-rendering an unchanged card — and throwing
+ * away half-filled question answers with it — does not happen.
+ */
+function applyPolledRunner(runner) {
+    if (!state.current) return;
+    state.current.runner = runner;
+    renderRunner();
+
+    const ask = runner && runner.pendingPermission;
+    const showing = state.current.shownAsk || null;
+
+    if (ask && ask.requestId !== showing) {
+        state.current.shownAsk = ask.requestId;
+        renderAsk({ sessionId: state.current.sessionId, ...ask });
+    } else if (!ask && showing) {
+        state.current.shownAsk = null;
+        // Polling cannot know *how* it was answered — that rides on the resolved
+        // event — so it says the neutral thing rather than inventing an outcome.
+        resolveAsk('answered');
+    }
 }
 
 /** Tell the bridge what this client is following. */

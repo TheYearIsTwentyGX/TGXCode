@@ -126,41 +126,155 @@ streaming — is refused remotely anyway.
 can start processes on this machine; it should not be on the public internet behind
 a single bearer token.
 
-## Alternative: Cloudflare Tunnel
+## Cloudflare Tunnel — no VPN on the phone
 
-Worth knowing about because it gives a public HTTPS URL with **no VPN on the
-phone**, which is nicer for a native Android client. Also free. But read the second
-caveat before committing to it.
+The reason to prefer this over Tailscale: the phone gets an ordinary HTTPS URL and
+needs nothing installed. That matters most for a native Android client, which would
+otherwise inherit a VPN dependency.
 
-**Your GoDaddy registration stays where it is.** Cloudflare Tunnel needs the
-domain's *DNS* hosted at Cloudflare, not its registration — you change the
-nameservers at GoDaddy and the domain stays registered there. That is not a
-transfer.
+Free, and nothing to host — `cloudflared` runs here and dials *out*, so there is no
+port to forward and no server to pay for.
 
-What is *not* free is keeping GoDaddy's DNS and delegating only a subdomain:
-partial (CNAME) setup is a Business-plan feature and subdomain zones are
-Enterprise. On the free plan the whole zone's DNS moves to Cloudflare. The
-onboarding scan imports existing records, but check MX and TXT afterwards if the
-domain carries email.
+### Use a domain whose DNS you do not mind moving
 
-**The caveat that actually matters: `cloudflared` has an open SSE buffering bug.**
-[cloudflared#1449](https://github.com/cloudflare/cloudflared/issues/1449) (open as
-of April 2025) and the older
-[#199](https://github.com/cloudflare/cloudflared/issues/199): server-sent events
-over **GET** are held until roughly 100 KB accumulates or the connection closes,
-while POST streams fine. `GET /api/events` is this app's entire live channel, so if
-that bug applies, the phone shows a frozen board and a transcript that arrives in
-lumps.
+Cloudflare Tunnel needs the hostname to live in a Cloudflare zone, and on the free
+plan that means the **whole zone's** DNS moves to Cloudflare. Keeping your existing
+DNS and delegating only a subdomain is not a free path: partial (CNAME) setup is
+Business plan, subdomain zones are Enterprise.
 
-It is confirmed on quick tunnels and **untested on named tunnels**. So if you want
-this route, spike it before building on it: stand up a named tunnel against a dev
-bridge and watch a session tick for more than two minutes. If it buffers, the fix
-is moving the live channel to WebSockets, which is real work — Tailscale needs none
-of it, because WireGuard is not an HTTP proxy and has nothing to buffer.
+So do not move a domain that carries mail you cannot afford to lose. `twentygx.com`
+is the example to avoid: its MX is `149900537.pamx1.hotmail.com`, the legacy
+Windows Live custom-domain service, which is no longer provisioned — if that record
+is ever lost there is no documented way to get a new one, only a move to paid
+Microsoft 365. A second domain registered at Cloudflare costs a few dollars a year
+and takes the question off the table entirely.
 
-Set `CLAUDE_SESSIONS_ORIGINS=https://sessions.example.com` so the origin check
-knows the hostname, and put Cloudflare Access in front of it — a public URL with one
-bearer token behind it is thinner than it should be.
+### Measured: a named tunnel streams, a quick tunnel does not
+
+This is worth being precise about, because the distinction is the difference
+between the phone feeling live and the phone looking broken — and the open
+`cloudflared` issues only ever tested the half that fails.
+
+| `/api/events` | Loopback | Quick tunnel | Named tunnel |
+|---|---|---|---|
+| `hello` | 0.04s | **never** | **0.29s** |
+| Pings at 25s / 50s | on time | never | on time |
+| Chunks in ~75s | 9 | **0** | **36** |
+| `X-Accel-Buffering: no` echoed | yes | stripped | stripped |
+
+A **quick** tunnel (`cloudflared tunnel --url …`, `*.trycloudflare.com`) buffers
+completely: HTTP 200, `text/event-stream`, and zero bytes for 75 seconds while the
+immediate `hello` and three pings are all held. That reproduces
+[cloudflared#1449](https://github.com/cloudflare/cloudflared/issues/1449) and
+[#199](https://github.com/cloudflare/cloudflared/issues/199).
+
+A **named** tunnel on a real hostname streams properly — 36 chunks spread across
+75 seconds, pings landing at 25.28s and 50.28s. Both strip the
+`X-Accel-Buffering` header, so that header is not what makes the difference and
+there is no config knob to reach for; the buffering lives in the quick-tunnel path
+specifically.
+
+**So the named tunnel is the supported setup, and SSE works on it.** Do not judge
+this transport by a quick tunnel — that is a test of a different code path.
+
+**The fallback stays anyway.** `web/mobile.js` watches for `hello` and switches to
+polling if it does not arrive within six seconds. It costs nothing when the stream
+works (it never engages) and it is what makes a quick tunnel, a corporate proxy, or
+some hotel network degrade into "a couple of seconds behind" instead of "silently
+frozen". Polling was measured through the same tunnel at 62ms for the board and
+42 bytes for an empty transcript delta, so the degraded mode is barely degraded.
+
+### Setup — and what is already done on this machine
+
+The tunnel below exists and is configured. This records it so it can be rebuilt,
+and so the next person knows which parts are decisions rather than defaults.
+
+- **`cloudflared`** lives at `~/.local/bin/cloudflared`, not installed system-wide.
+  `~/.bashrc` puts that directory on PATH, so `cloudflared` resolves in an
+  interactive shell with no sudo anywhere.
+- **Tunnel** `claude-sessions`, id `8fc8f334-b1fa-483f-8110-1fe6d2a4458e`.
+- **Hostname** `tgxcode.com` — the apex, on a domain bought for this and nothing
+  else. A CNAME to the tunnel was created by `tunnel route dns`.
+- **Config** `~/.cloudflared/config.yml`, pointing at `http://127.0.0.1:45888`.
+
+To rebuild from nothing:
+
+1. **Authorise the machine.** Opens a browser; pick the zone.
+
+   ```bash
+   cloudflared tunnel login
+   ```
+
+2. **Create the tunnel and route the hostname to it.**
+
+   ```bash
+   cloudflared tunnel create claude-sessions
+   cloudflared tunnel route dns claude-sessions tgxcode.com
+   ```
+
+3. **Point it at the bridge** in `~/.cloudflared/config.yml`. A single service
+   needs no `hostname` match — whatever is routed to the tunnel reaches the bridge,
+   and `tunnel route dns` is the only thing that decides what that is:
+
+   ```yaml
+   tunnel: 8fc8f334-b1fa-483f-8110-1fe6d2a4458e
+   credentials-file: /home/dylan_hays/.cloudflared/8fc8f334-….json
+   edge-ip-version: "4"
+   ingress:
+     - service: http://127.0.0.1:45888
+   ```
+
+   `edge-ip-version: "4"` is load-bearing here: this machine has no working IPv6
+   route, and `cloudflared tunnel list` fails dialling Cloudflare over v6 while the
+   same call succeeds over v4. Without the pin, every reconnect burns a timeout
+   first. It must be a **string** — an int is rejected by the config parser.
+
+   **`--url` on the command line does not override `ingress`.** It is echoed in the
+   startup `Settings:` line, which makes it look like it took effect, but the config
+   file's ingress rules are what route. To test against a different port, edit the
+   config; do not trust the flag.
+
+4. **Tell the bridge the hostname**, or every request comes back
+   `403 {"error":"unexpected host"}` — the DNS-rebinding guard, which has no way to
+   know about your domain until you say so.
+
+   On this machine that lives in **`~/.profile`**:
+
+   ```bash
+   export CLAUDE_SESSIONS_ORIGINS=https://tgxcode.com
+   ```
+
+   That file rather than the app, because the Windows shell starts the bridge with
+   `wsl.exe bash -lc`, and a login shell reads `~/.profile` — which is also the only
+   one of the three login files present here, so it is definitely the one read.
+   Setting it in `app/main.js` would work too and would need a rebuild, which is
+   worse. **A running bridge does not pick this up**; it applies at next start.
+
+5. **Run it as a service**, so it survives a reboot. WSL has systemd enabled
+   (`/etc/wsl.conf` sets `systemd=true`):
+
+   ```bash
+   sudo cloudflared service install
+   systemctl status cloudflared
+   ```
+
+6. **Pair the phone** exactly as with Tailscale — the phone button in the top bar,
+   with `https://tgxcode.com` in *Reachable at*.
+
+### Put something in front of it
+
+This is the real cost of dropping Tailscale, and it is not the money. A tailnet
+means only your own devices can reach the bridge at all. A public hostname means
+anyone who finds it reaches the door, and the only thing behind that door is one
+bearer token that never expires.
+
+**Cloudflare Access** is free for up to 50 users: email or SSO for the browser, and
+**service tokens** for a native client, which is exactly the Android story. One
+thing to design around: an Access session expiring mid-request is a redirect to a
+login page, so give the session a long duration.
+
+The refusals in the bridge still apply — no pty, no `bypassPermissions`, no
+shutdown — but they are a second line, not the first.
 
 ## Last resort: binding the LAN
 
