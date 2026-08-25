@@ -3282,7 +3282,7 @@ body.term-resizing { user-select: none; cursor: row-resize; }
    the eye can run down the right edge for "what needs doing" and down the left
    for "where". */
 
-.dash, .live, .notes, .taskboard, .drafts {
+.dash, .live, .notes, .taskboard, .drafts, .sched {
     display: flex;
     flex-direction: column;
     flex: 1;
@@ -3290,7 +3290,7 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 }
 /* Not optional: `display: flex` above beats the `hidden` attribute on its own. */
 .dash[hidden], .live[hidden], .notes[hidden], .taskboard[hidden],
-.drafts[hidden] { display: none; }
+.drafts[hidden], .sched[hidden] { display: none; }
 
 /* ── the live board ──────────────────────────────────────────────────────
    A card per running session. The grid decides its own column count so that a
@@ -4992,6 +4992,92 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 }
 .dr-note p { margin: 0; max-width: 520px; font-size: 13.5px; line-height: 1.65; color: var(--text-2); }
 .dr-note p.dim { font-size: 13px; color: var(--text-4); }
+
+/* ── the schedules panel ─────────────────────────────────────────────────
+   Drafts' layout, reused rather than restated: same head, same single scrolling
+   column at the same width, same card vocabulary. The two panels are the same
+   shape and the only reason they are separate rules at all is the class name.
+
+   What is genuinely different is the *status line*. A draft's card is read to
+   decide whether to release it, so the message is the point. A schedule has
+   already been released, and you come here to find out whether it is still
+   working — so the card gets a row of its own for the last run, coloured, above
+   the message. It is the one line in this app whose job is to make "this quietly
+   stopped happening" impossible to scroll past. */
+
+.sched-head { flex: none; display: flex; align-items: flex-start; gap: 16px; padding: 22px 28px 16px; }
+.sched-title { margin: 0; font: 400 21px/1.3 var(--sans); color: var(--text); }
+.sched-sub { margin: 5px 0 0; max-width: 640px; font-size: 13px; line-height: 1.6; color: var(--text-3); }
+.sched-head .dash-btn { margin-left: auto; flex: none; }
+
+.sched-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 28px 32px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-width: 860px;
+}
+
+/* The stripe says what the last run did, which is the same question the dot
+   answers — two readings of one fact, because the dot is what you see scanning
+   the column and the stripe is what you see having stopped at one card. */
+.sched-card { box-shadow: inset 3px 0 0 var(--s5); }
+.sched-card:has(.sched-dot.is-bad)  { box-shadow: inset 3px 0 0 var(--red); }
+.sched-card:has(.sched-dot.is-warn) { box-shadow: inset 3px 0 0 var(--yellow); }
+
+/* A paused schedule is dimmed rather than hidden or moved: it is a decision you
+   made and may want back, and sorting it to the bottom would mean the card you
+   went looking for is not where you left it. The same treatment an archived task
+   gets next door, for the same reason. */
+.sched-card.is-off { opacity: 0.6; }
+.sched-card.is-off .sched-when { text-decoration: line-through; }
+
+.sched-dot.is-ok    { background: var(--green); }
+.sched-dot.is-warn  { background: var(--yellow); }
+.sched-dot.is-bad   { background: var(--red); }
+.sched-dot.is-quiet { background: var(--text-4); }
+
+.sched-last {
+    margin: 2px 0 0;
+    font-size: 12.5px;
+    line-height: 1.55;
+    color: var(--text-3);
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.sched-last.is-bad  { color: var(--red); }
+.sched-last.is-warn { color: var(--yellow); }
+.sched-last .dim { color: var(--text-4); }
+
+/* Inline in the status line rather than down with the buttons: it belongs to the
+   sentence it follows — "ran 3h ago — BLOCK, open" — and putting it in the action
+   row would have made it look like a fifth thing you can do to the schedule
+   rather than a way into what it produced. */
+.sched-open {
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    color: var(--blue);
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+.sched-open:hover { color: #cfe0ff; }
+
+/* The expression in English, with the raw text on the title attribute. Slightly
+   brighter than the rest of the meta line because it is the field the card is
+   really about. */
+.sched-when { color: var(--text-2); }
+
+/* The bad state of the "what this means" note under the cron box. Only ever set
+   from the bridge's own parser error, so it says something specific. */
+#new-cron-note.bad { color: var(--red); }
 
 /* ── narrow windows ──────────────────────────────────────────────────── */
 

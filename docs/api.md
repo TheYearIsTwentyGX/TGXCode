@@ -743,6 +743,105 @@ had ticked would mean losing it. The flag only decides what the session becomes.
 Also pushed as the `drafts-changed` SSE event, which is how the UI reads it. That event
 carries this same payload, so a client never has to come back here after the first load.
 
+### `GET /api/schedules`
+
+Sessions that start on a clock — everything `POST /api/sessions` takes, plus a cron
+expression and an optional gate, held and fired by the bridge itself.
+
+```json
+{
+  "at": 1787669481083,
+  "schedules": [
+    { "id": "1e18868c-2a44-4e4b-9be7-f049c34e2072",
+      "enabled": true,
+      "title": "adversarial review",
+      "cwd": "/home/dylan_hays/LTCDataPlus",
+      "projectName": "LTCDataPlus",
+      "prompt": "/adversarial-reviewer --diff {{range}}",
+      "model": null, "permissionMode": "dontAsk", "test": false,
+      "cron": "0 2 * * 2-6",
+      "cronText": "Tue–Sat at 2:00 AM",
+      "nextRunAt": 1787727600000,
+      "gate": { "kind": "git-commits", "ref": "origin/main", "fetch": true },
+      "lastSlotAt": 1787641200000,
+      "lastFiredAt": 1787641203115,
+      "lastSessionId": "c7e384e8-1a5c-495f-b02c-7d48a7d63095",
+      "lastOutcome": "CLEAN",
+      "lastSkipReason": null,
+      "lastError": null,
+      "lastMarker": "c9e5dcd56a7031f2b0f8e4a1d9c7b6e5f4a3b2c1",
+      "runs": 14,
+      "createdAt": 1787328400891, "updatedAt": 1787641203118 }
+  ],
+  "counts": { "total": 1, "enabled": 1 }
+}
+```
+
+**A schedule is a draft that is never consumed, plus a cron expression and a gate.**
+The same create-call fields, validated the same way — so a client that can build the
+drafts form can build this one with two fields added.
+
+**`prompt` may contain placeholders, and they are filled at fire time, not stored
+expanded.** `{{range}}` is the one that matters: it becomes `abc123def456..789abc012def`,
+the commits that have landed since the previous run. Also `{{head}}`, `{{since}}`,
+`{{count}}`, `{{ref}}` and `{{date}}` (ISO `YYYY-MM-DD`). A placeholder this list does not
+name is **left in the text verbatim** rather than blanked — a prompt is prose, and `{{`
+is not reserved punctuation in it. With no usable marker `{{range}}` narrows to
+`<head>~1..<head>`, never to the whole history and never to an empty string.
+
+| Field | Type |
+|---|---|
+| `id` | string, a UUID |
+| `enabled` | boolean. `false` is paused, not deleted — it keeps its history and its marker, and is skipped by the tick |
+| **`title`** | **string or null.** `null` means *derive it* — take the first line of `prompt`. Not an empty heading, not the string `"null"` |
+| `cwd` | string — expanded and checked when it was saved, and **checked again at fire time**, so a directory that has since moved costs one run rather than being trusted from disk |
+| **`projectName`** | string — derived, not stored. The same label the rail uses |
+| `prompt` | string, non-empty, already trimmed. See placeholders above |
+| **`model`** | **string or null.** `null` is `inherit`. Not `""` |
+| `permissionMode` | string, one of the six in `POST /api/sessions/:id/send` |
+| `test` | boolean — the flag the started session will get |
+| `cron` | string, **five space-separated fields in the bridge's local timezone**: minute hour day-of-month month day-of-week. `*`, `N`, `a-b`, `*/n` and comma lists. Day-of-week 0 and 7 are both Sunday. **No** names (`MON`), `@daily`, `L`, `#` or `?` — those are refused, not ignored. When day-of-month and day-of-week are both restricted, a day matching **either** fires, which is crontab(5)'s rule |
+| **`cronText`** | **string or null** — derived. `cron` in English, e.g. `"Tue–Sat at 2:00 AM"`. Falls back to the raw expression for shapes it cannot phrase, so it is safe to render directly. `null` only if `cron` is unparseable, which a stored row cannot be |
+| **`nextRunAt`** | **number or null**, epoch ms — derived, computed per request. `null` when the schedule is paused **or** when the expression matches no future date (`0 0 30 2 *` parses and never fires). Those two are different states; `enabled` tells them apart |
+| **`gate`** | **object or null** — `{kind: "git-commits", ref: string, fetch: boolean}`. `null` means fire every time the clock says so. `ref` is anything `git rev-parse` accepts. `fetch` defaults to `true` and fetches only that ref's remote, never `--all`, never tags |
+| **`lastSlotAt`** | **number or null**, epoch ms — the cron slot already satisfied. This, not `lastFiredAt`, is what makes firing idempotent; a client should treat it as bookkeeping rather than as "when it last ran" |
+| **`lastFiredAt`** | **number or null**, epoch ms — when a session was actually started. `null` if it has never run. A slot that skipped does **not** move this |
+| **`lastSessionId`** | **string or null** — the session the last run produced. Safe to link to; it may 404 briefly right after a run, for the reason `POST /api/sessions` gives |
+| **`lastOutcome`** | **string or null** — how the last *run* ended: `"BLOCK"`, `"CONCERNS"`, `"CLEAN"`, `"error"`, or `"done"`. The first three are lifted from a `VERDICT:` line in the session's final message; `"done"` means it finished and said nothing of the sort, which is the ordinary case for most prompts and **not** a failure. `null` before the first run finishes |
+| **`lastSkipReason`** | **string or null** — why the last slot passed *without* starting a session: `"nothing-new"` (the gate found no commits), `"missed"` (the slot was older than the 12-hour catch-up cap), `"error"`, `"rate-limited"`. `null` when the last slot did run. **A card that treats `null` here as "fine" and ignores the rest will show a broken schedule as healthy** |
+| **`lastError`** | **string or null** — the message behind an `error` or `missed` skip |
+| **`lastMarker`** | **string or null** — the full SHA reviewed up to, and the `since` half of `{{range}}`. **Seeded when the schedule is created**, so the first run covers what arrives afterwards rather than the repository's whole history. Advanced **only** when a session actually starts: a skip, a refusal or a failed spawn leaves it exactly where it was |
+| `runs` | number — sessions actually started, ever. Skips do not count |
+| `createdAt`, `updatedAt` | numbers, epoch ms. `createdAt` never moves |
+
+Ordered **newest `updatedAt` first**. Note that a *run* bumps `updatedAt`, so the order
+moves on its own here in a way the drafts list's does not.
+
+Test-flagged schedules are not filtered on the everyday bridge, for the reason drafts are
+not. The flag decides what the session becomes, and — see below — which bridge may fire it.
+
+**Only the everyday instance fires schedules.** Several bridges share `schedules.json` by
+design, so a development bridge lists, edits and runs-on-demand but its tick does nothing.
+With `CLAUDE_SESSIONS_SCHEDULE_ON_DEV=1` a dev bridge fires schedules with `test: true`
+and only those. A client cannot see which bridge it is talking to beyond `dev` in
+`/api/health`, and should not need to.
+
+Also pushed as the `schedules-changed` SSE event, carrying this same payload.
+
+### `GET /api/schedules/describe?cron=<expr>`
+
+What an expression means, without saving anything. This is where a "runs Tue–Sat at
+2:00 AM" line under an input box comes from — **do not ship a second cron parser in a
+client**, or it will eventually disagree with the one that actually fires.
+
+```json
+{ "cron": "0 2 * * 2-6", "text": "Tue–Sat at 2:00 AM", "next": 1787727600000 }
+```
+
+`text` is never null here. `next` is a number or `null`, and `null` is a real answer:
+the expression parses and matches no future date. `400` with `{error}` for anything
+`cron` cannot parse, and that message is written to be shown to a person.
+
 ### `GET /api/dashboard?refresh=1`
 
 What is still in flight: work written to disk but not committed, and pull requests
@@ -799,7 +898,17 @@ A row is:
 ```
 
 `type` is one of `permission`, `plan`, `question`, `finished`, `failed`, `agent-done`,
-`peer-message`, `handoff`. `summary` is clipped to 200 characters and `detail` to 400.
+`peer-message`, `handoff`, `schedule-findings`, `schedule-failed`, `schedule-missed`.
+`summary` is clipped to 200 characters and `detail` to 400.
+
+**`sessionId` may be `null`, and it is on two of the three schedule types.** Every row
+used to be about a session, so a client could treat `sessionId` as always present and
+`title` as always the session's. A schedule can fail *without* producing a session — a
+missed slot, a ref it could not resolve, a working directory that has moved — and those
+are exactly the rows worth raising. On such a row `title` is the schedule's name and
+there is nothing to navigate to, so **a client that links the whole row to
+`/api/sessions/<sessionId>` must check for `null` first**. `schedule-findings` does
+carry one; the other two do not.
 `outcome` and `outcomeAt` are filled in later, on the row that already exists, when an
 ask is answered — so a row is mutable and a client holding one should patch it rather
 than assume it is final. `anchorId` is a `toolUseId` where there is one, so a client
@@ -997,6 +1106,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `overview` | the board; sent only when it has actually changed |
 | `taskboard` | the task board; every ~3s while watched, and only when it has actually changed. Never carries `?idle=all` |
 | `drafts-changed` | `{at, drafts[], counts}` — the whole `GET /api/drafts` payload, so there is nothing to refetch. **Not gated by a `POST /api/subscribe` flag**, unlike `overview` and `taskboard`: a draft only changes because somebody changed it, so there is no tick to switch on and every window gets every change. Fires on create, edit, delete, and on a start (which deletes one) |
+| `schedules-changed` | `{at, schedules[], counts}` — the whole `GET /api/schedules` payload. Ungated, exactly as `drafts-changed` is. Unlike that one it fires **without anybody having done anything**: a schedule firing, skipping a slot, or having its outcome recorded when the turn ends all push it. So a client that assumed the payload only moves in response to a user action will be wrong here, and pleasantly so — this is how a card starts saying "ran 2h ago — BLOCK" while nobody is looking at it |
 | `sessions-changed` | `{at}` — a nudge to refetch the list |
 | `peer-message` | `{at, sessionId, from, count}` — another session messaged this one. The message itself is in the transcript, so a client tailing it has already drawn it; this is for everything that is not the open pane |
 | `handoff` | `{at, sessionId, from, count}` — another session handed this one work, and it was resumed to deal with it. Same shape and same reasoning as above; watched in the transcript rather than reported by the route, so it fires when the message *arrived* rather than when it was queued |
@@ -1192,6 +1302,79 @@ saved at the machine must not become a way for a phone to start `bypassPermissio
 `404` for an unknown id; `403` for a `permissionMode` this caller may not start; `400`
 if the directory no longer resolves; `429` past 8 sessions started in a minute — the
 same bucket `POST /api/sessions` draws on, because both spawn a process.
+
+### `POST /api/schedules`
+
+`{cwd, prompt, cron, gate?, title?, model?, permissionMode?, test?, enabled?}` →
+`{schedule}`, the row as `GET /api/schedules` returns it.
+
+Validated exactly as `POST /api/drafts` is — `cwd` resolved and checked against the
+allowed roots, `permissionMode` normalised — plus the two of its own:
+
+- **`cron` must parse *and* match some future date.** `0 0 30 2 *` is syntactically
+  fine and fires on February 30th, so it is refused with `400` rather than saved as a
+  card that reads "next run: never" for a month.
+- **`gate`, when given, must be whole.** `{kind: "git-commits", ref}` with `ref`
+  non-empty; `fetch` defaults `true`. An unknown `kind` is `400`, not silently
+  dropped — a gate that quietly became "no gate" would turn a schedule that reviews
+  new commits into one that starts a session every night regardless.
+
+**A gated schedule resolves its ref before it is stored**, and a ref that cannot be
+resolved is a `400`. That is what seeds `lastMarker`, so the first run reviews what
+arrives *after* you set the schedule up. It also means a typo'd `orgin/main` costs you
+the save rather than a month of silent "nothing new".
+
+`permissionMode` defaults to `auto` as everywhere else. The refusal a remote caller
+gets on `bypassPermissions` and `dontAsk` applies here too and matters more: a schedule
+in one of those modes is an unattended agent with no permission gate, starting itself
+every night. `403` with `{error, remote: true}`.
+
+`409` at 50 schedules. `400` if the directory does not resolve.
+
+### `PATCH /api/schedules/:id`
+
+The same fields, all optional; anything absent is left alone. `→ {schedule}`.
+
+**The run history is not writable here.** `lastMarker`, `runs`, `lastSessionId` and the
+rest are ignored if sent — "which commits have already been reviewed" is not something
+a client gets to decide, and a PATCH that could rewind the marker would silently make
+the next run re-review a month of work.
+
+`enabled: false` pauses without deleting. `enabled: true` **moves the slot cursor to
+now**, so a schedule arming after a fortnight off does not immediately fire for every
+slot it slept through. No other field does that: an unrelated edit at 01:59 must not
+cancel the 02:00 run.
+
+Validation runs *before* the id is looked up, so a refused mode is `403` whether or not
+the schedule exists — the order `PATCH /api/drafts/:id` uses, and for the same reason.
+`404` for an unknown id.
+
+### `DELETE /api/schedules/:id`
+
+`→ {ok: true, id}`, or `404`. Takes the run history and the marker with it, so
+recreating the same schedule afterwards starts its range from scratch. `web/app.js`
+confirms first for that reason, where it does not for a draft.
+
+### `POST /api/schedules/:id/run`
+
+`→ {sessionId, test, schedule}`. Start a run now, whatever the clock says.
+
+**The same function the tick calls**, which is the point: what this produces is what
+tonight would have produced, so it is a trustworthy way to check a schedule before
+leaving it alone. Two differences, both deliberate:
+
+- **The gate is skipped.** You pressed a button, so something should happen even when
+  there are no new commits.
+- **`lastSlotAt` is not touched**, so tonight's scheduled run still happens.
+
+It does **not** skip the permission-mode refusal or the rate limit. `lastMarker`
+advances exactly as a scheduled run's does — otherwise pressing this would make the
+next scheduled run re-review the same commits.
+
+`403` `{error, remote: true}` for a mode a remote caller may not start, `429` past the
+create limit, `400` for a directory or ref that no longer resolves, `404` for an
+unknown id. Every failure is also recorded on the schedule as `lastSkipReason`, so the
+card says what happened even if the response was lost.
 
 ### `POST /api/sessions/:id/handoff`
 

@@ -339,6 +339,10 @@ const state = {
     // `editing` is the id the dialog is currently editing, or null when it is
     // about to make a new one. It is what tells Save which verb to use.
     drafts: { open: false, rows: [], at: 0, loading: false, error: null, editing: null },
+    // Schedules, on exactly the same terms as drafts above — an unconditional
+    // push, held as sent. `editing` is the id the dialog has open, which is also
+    // what puts the dialog into schedule mode at all: see openNew().
+    sched: { open: false, rows: [], at: 0, loading: false, error: null, editing: null },
     // Sessions blocked on an answer, kept whether or not the board is open, so
     // the badge on a shut board still says how many people are waiting.
     waiting: new Set(),
@@ -386,6 +390,9 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'btn-notes', 'notes-badge', 'notes', 'notes-sub', 'notes-body',
     'btn-taskboard', 'tb-badge', 'taskboard', 'tb-sub', 'tb-body', 'tb-refresh',
     'btn-drafts', 'dr-badge', 'drafts', 'dr-sub', 'dr-body', 'dr-new',
+    'btn-sched', 'sched-badge', 'sched', 'sched-sub', 'sched-body', 'sched-new',
+    'new-cron', 'new-cron-row', 'new-cron-note', 'new-gate-ref', 'new-gate-row',
+    'new-sched-save',
     'notes-notable', 'notes-all', 'notes-clear',
     'lock', 'lock-text', 'lock-fork', 'lock-anyway',
     'btn-live', 'live-badge', 'live', 'live-sub', 'live-body', 'live-focus', 'focus-exit',
@@ -3979,6 +3986,7 @@ function showLive(on) {
     if (on) {
         state.dash.open = false; state.notes.open = false;
         state.taskboard.open = false; state.drafts.open = false;
+        state.sched.open = false;
     }
     paintPanels();
     syncBoardWatch();
@@ -4113,6 +4121,9 @@ function rememberView() {
         if (state.live.open) q.set('live', '1');
     } else if (state.drafts.open) {
         q.set('view', 'drafts');
+        if (state.live.open) q.set('live', '1');
+    } else if (state.sched.open) {
+        q.set('view', 'schedules');
         if (state.live.open) q.set('live', '1');
     } else if (state.live.open) {
         q.set('view', 'live');
@@ -4892,16 +4903,17 @@ function paintPanels() {
     const docked = state.live.open && Boolean(state.current) && !state.focus;
     const full = state.live.open && !docked;
 
-    // Four whole-screen panels, and showDash/showNotes/showTaskboard/showDrafts
-    // keep them exclusive, so "one of them is up" is the only thing anything
-    // below has to ask.
+    // Five whole-screen panels, and showDash/showNotes/showTaskboard/showDrafts/
+    // showSched keep them exclusive, so "one of them is up" is the only thing
+    // anything below has to ask.
     const covered = state.dash.open || state.notes.open || state.taskboard.open
-        || state.drafts.open;
+        || state.drafts.open || state.sched.open;
 
     dom.dash.hidden = !state.dash.open;
     dom.notes.hidden = !state.notes.open;
     dom.taskboard.hidden = !state.taskboard.open;
     dom.drafts.hidden = !state.drafts.open;
+    dom.sched.hidden = !state.sched.open;
     dom.live.hidden = !state.live.open || covered;
     dom.live.dataset.mode = docked ? 'dock' : 'full';
     // The orientation lives on both: `main` has to change its flex direction,
@@ -4918,7 +4930,7 @@ function paintPanels() {
 
     for (const [btn, on] of [[dom.btnDash, state.dash.open], [dom.btnLive, state.live.open],
         [dom.btnNotes, state.notes.open], [dom.btnTaskboard, state.taskboard.open],
-        [dom.btnDrafts, state.drafts.open]]) {
+        [dom.btnDrafts, state.drafts.open], [dom.btnSched, state.sched.open]]) {
         btn.classList.toggle('on', on);
         btn.setAttribute('aria-pressed', String(on));
     }
@@ -4932,7 +4944,7 @@ function showDash(on) {
     // Four whole screens; one at a time.
     if (on) {
         state.notes.open = false; state.taskboard.open = false;
-        state.drafts.open = false;
+        state.drafts.open = false; state.sched.open = false;
     }
     // The live board is not closed by this, only covered. It is a strip you
     // leave up; the work-in-flight board is a whole screen you go and read and
@@ -5181,6 +5193,9 @@ const NOTE_LABEL = {
     'agent-done': 'Subagent done',
     'peer-message': 'From another session',
     handoff: 'Handed work',
+    'schedule-findings': 'Scheduled review',
+    'schedule-failed': 'Schedule failed',
+    'schedule-missed': 'Schedule missed',
 };
 
 // The runner's vocabulary for how an ask ended, said the way a person would.
@@ -5210,7 +5225,7 @@ function showNotes(on) {
     state.notes.open = on;
     if (on) {
         state.dash.open = false; state.taskboard.open = false;
-        state.drafts.open = false;
+        state.drafts.open = false; state.sched.open = false;
     } else {
         state.notes.mark = null;
     }
@@ -5462,6 +5477,16 @@ function noteRow(n) {
  * subagent — opening the session at the end is the right answer anyway.
  */
 function openFromNote(n) {
+    // **Not every row is about a session.** A schedule that missed its slot, or
+    // could not resolve its ref, never produced one — and those are the rows most
+    // worth clicking. Sending `null` to openSession closed the panel and reported
+    // "session not found", which reads as the notification being broken rather
+    // than as there being nothing to open. The schedules panel is where the rest
+    // of the story is, so go there instead.
+    if (!n.sessionId) {
+        if (String(n.type).startsWith('schedule-')) showSched(true);
+        return;
+    }
     pendingJump = n.anchorId || null;
     showNotes(false);
     openSession(n.sessionId);
@@ -5514,7 +5539,7 @@ function showTaskboard(on) {
     // Four whole screens; one at a time.
     if (on) {
         state.dash.open = false; state.notes.open = false;
-        state.drafts.open = false;
+        state.drafts.open = false; state.sched.open = false;
     }
     paintPanels();
     syncBoardWatch();
@@ -6077,10 +6102,10 @@ function tbArchive(s) {
 
 function showDrafts(on) {
     state.drafts.open = on;
-    // Four whole screens; one at a time.
+    // Five whole screens; one at a time.
     if (on) {
         state.dash.open = false; state.notes.open = false;
-        state.taskboard.open = false;
+        state.taskboard.open = false; state.sched.open = false;
     }
     paintPanels();
     syncBoardWatch();
@@ -6333,6 +6358,328 @@ async function drDelete(d) {
         await del(`/api/drafts/${d.id}`);
     } catch (err) {
         toast(`Could not delete the draft: ${err.message}`, 'error');
+    }
+}
+
+// ── schedules ────────────────────────────────────────────────────────────
+//
+// Sessions that start on a clock.
+//
+// Drafts' machinery throughout — an unconditional `schedules-changed` push, no
+// watcher gate, no card ranks — because it is the same kind of thing: a create
+// call the bridge is holding. The difference is only who presses Start.
+//
+// **What the card has to answer is not what a draft's card answers.** A draft is
+// read to decide whether to release it, so its card shows the message. A schedule
+// has already been released; you come here to find out whether it is still
+// working. So the card leads with when it next runs and what the last run found,
+// and the prompt is secondary — it is the one screen in this app whose job is to
+// notice that something has quietly stopped happening.
+//
+// `nextRunAt` and `cronText` are computed by the bridge, not here. Three clients
+// read this API and none of them should be reimplementing a cron parser to draw a
+// card — the one that runs the schedule is the one that should say when it runs.
+
+function showSched(on) {
+    state.sched.open = on;
+    // Five whole screens; one at a time.
+    if (on) {
+        state.dash.open = false; state.notes.open = false;
+        state.taskboard.open = false; state.drafts.open = false;
+    }
+    paintPanels();
+    syncBoardWatch();
+    // As in showDrafts: this panel has no watch of its own, but it closes the
+    // task board, whose ~3s tick on the bridge only stops when somebody says
+    // they have stopped watching.
+    syncTaskboardWatch();
+
+    if (on) {
+        renderSched();
+        if (!state.sched.at) loadSched();
+    } else if (state.live.open) {
+        renderLive();
+        if (state.current) termPane.refit();
+    } else if (state.current) {
+        termPane.refit();
+    }
+    rememberView();
+}
+
+const schedVisible = () => state.sched.open;
+
+function applySched(data) {
+    state.sched.rows = data.schedules || [];
+    state.sched.at = data.at || Date.now();
+    state.sched.error = null;
+    paintSchedBadge();
+    if (schedVisible()) renderSched();
+}
+
+async function loadSched() {
+    if (state.sched.loading) return;
+    state.sched.loading = true;
+    try {
+        const data = await get('/api/schedules');
+        state.sched.loading = false;
+        applySched(data);
+    } catch (err) {
+        state.sched.loading = false;
+        state.sched.error = err.message;
+        if (schedVisible()) renderSched();
+    }
+}
+
+/**
+ * How many schedules are armed.
+ *
+ * Armed, not stored: a paused schedule is a decision you already made and is not
+ * news. Never `urgent` — a schedule that needs attention says so through a
+ * notification, which is the surface that can reach you when this window is shut.
+ */
+function paintSchedBadge() {
+    const n = state.sched.rows.filter(s => s.enabled).length;
+    dom.schedBadge.hidden = !n;
+    dom.schedBadge.textContent = String(n);
+    dom.btnSched.title = n
+        ? `${n} schedule${n === 1 ? '' : 's'} armed (Ctrl+7)`
+        : 'Sessions that start on a clock (Ctrl+7)';
+}
+
+// ── drawing it ───────────────────────────────────────────────────────────
+
+function renderSched() {
+    const rows = state.sched.rows;
+    const armed = rows.filter(s => s.enabled).length;
+
+    dom.schedSub.textContent = rows.length
+        ? `${rows.length} schedule${rows.length === 1 ? '' : 's'}, ${armed} armed.`
+        : 'Sessions that start on a clock.';
+
+    if (state.sched.error) {
+        dom.schedBody.replaceChildren(el('div', { class: 'dr-note' },
+            el('p', {}, `Could not read the schedules. ${state.sched.error}`)));
+        return;
+    }
+
+    const scroll = dom.schedBody.scrollTop;
+
+    if (!rows.length) {
+        dom.schedBody.replaceChildren(el('div', { class: 'dr-note' },
+            el('p', {}, 'Nothing scheduled yet.'),
+            el('p', { class: 'dim' }, 'A schedule is a session that starts on its own '
+                + '— an overnight review, a nightly sweep. It can be told to run only '
+                + 'when a branch has new commits, and the range since its last run is '
+                + 'available to the prompt.'),
+            el('button', {
+                class: 'tb-btn primary', type: 'button',
+                onclick: () => openNew({ schedule: true }),
+            }, 'New schedule')));
+        return;
+    }
+
+    dom.schedBody.replaceChildren(...schedCards(rows));
+    dom.schedBody.scrollTop = scroll;
+}
+
+/** Grouped by project once there is more than one, as drafts are. */
+function schedCards(rows) {
+    const groups = new Map();
+    for (const s of rows) {
+        const name = s.projectName || 'unknown';
+        if (!groups.has(name)) groups.set(name, []);
+        groups.get(name).push(s);
+    }
+    if (groups.size < 2) return rows.map(schedCard);
+
+    const out = [];
+    for (const [name, list] of groups) {
+        out.push(el('h3', { class: 'tb-sub-head' }, name,
+            el('span', {}, String(list.length))));
+        out.push(...list.map(schedCard));
+    }
+    return out;
+}
+
+/**
+ * What the last run did, as a phrase and a state.
+ *
+ * The state drives the dot's colour, and the phrase is the line you actually
+ * read. `nothing-new` deserves saying out loud rather than being drawn as
+ * nothing: a gated schedule that has been quiet for a week because the branch has
+ * been quiet is working perfectly, and a card that showed a blank there would be
+ * indistinguishable from one that has broken.
+ */
+function schedLast(s) {
+    if (s.lastSkipReason === 'missed') {
+        return { state: 'bad', text: s.lastError || 'a run was missed' };
+    }
+    if (s.lastSkipReason === 'error') {
+        return { state: 'bad', text: `could not run — ${s.lastError || 'unknown error'}` };
+    }
+    if (s.lastSkipReason === 'rate-limited') {
+        return { state: 'warn', text: 'skipped — too many sessions were starting at once' };
+    }
+    if (s.lastSkipReason === 'nothing-new') {
+        return { state: 'quiet', text: 'nothing new to do' };
+    }
+    if (!s.lastFiredAt) return { state: 'quiet', text: 'has not run yet' };
+
+    const when = ago(new Date(s.lastFiredAt).toISOString());
+    if (s.lastOutcome === 'BLOCK') return { state: 'bad', text: `ran ${when} — BLOCK` };
+    if (s.lastOutcome === 'CONCERNS') return { state: 'warn', text: `ran ${when} — CONCERNS` };
+    if (s.lastOutcome === 'CLEAN') return { state: 'ok', text: `ran ${when} — clean` };
+    if (s.lastOutcome === 'error') return { state: 'bad', text: `ran ${when} — ended in an error` };
+    // Ran, finished, said nothing a verdict could be read out of. Most prompts
+    // are like this, so it is the ordinary case and not a defect.
+    if (s.lastOutcome === 'done') return { state: 'ok', text: `ran ${when}` };
+    return { state: 'ok', text: `started ${when}` };
+}
+
+/** `nextRunAt` as something worth reading, or why there is nothing to read. */
+function schedNext(s) {
+    if (!s.enabled) return 'paused';
+    if (!s.nextRunAt) return 'never — the expression matches no real date';
+    const d = new Date(s.nextRunAt);
+    const soon = s.nextRunAt - Date.now();
+    // Under a day, the clock time is what you want; past that, the date is.
+    const when = soon < 24 * 3600e3
+        ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+        : d.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+    return `next ${when}`;
+}
+
+function schedCard(s) {
+    const last = schedLast(s);
+    return el('article', {
+        class: `tb-card sched-card${s.enabled ? '' : ' is-off'}`, 'data-id': s.id,
+        onclick: (e) => { if (tbCardClickOpens(e)) schedEdit(s); },
+    },
+        el('header', { class: 'tb-card-head' },
+            el('span', { class: `tb-dot sched-dot is-${last.state}` }),
+            el('button', {
+                class: 'tb-card-title', type: 'button',
+                title: 'Open this schedule for editing',
+                onclick: () => schedEdit(s),
+            }, s.title || firstLine(s.prompt)),
+        ),
+        el('div', { class: 'tb-card-meta' },
+            s.test ? el('span', { class: 'tag-test' }, 'test') : null,
+            // The expression in English. The raw text is the tooltip, for when
+            // you do want to check what was typed.
+            el('span', { class: 'sched-when', title: s.cron }, s.cronText || s.cron),
+            el('span', { class: 'dot' }, '·'),
+            el('span', {}, schedNext(s)),
+            el('span', { class: 'dot' }, '·'),
+            el('span', { title: s.cwd }, s.projectName || 'unknown'),
+            el('span', { class: 'dot' }, '·'),
+            el('span', {}, s.permissionMode),
+            s.gate ? el('span', { class: 'dot' }, '·') : null,
+            s.gate ? el('span', { title: `only runs when ${s.gate.ref} has new commits` },
+                `gated on ${s.gate.ref}`) : null,
+        ),
+        // The line the panel exists for. Its own row rather than another chip in
+        // the meta line, because "this stopped working three days ago" should not
+        // have to be found among six other things.
+        el('p', { class: `sched-last is-${last.state}` },
+            last.text,
+            s.runs ? el('span', { class: 'dim' },
+                ` · ${s.runs} run${s.runs === 1 ? '' : 's'}`) : null,
+            s.lastSessionId ? el('button', {
+                class: 'sched-open', type: 'button',
+                title: 'Open the session the last run produced',
+                onclick: () => { showSched(false); openSession(s.lastSessionId); },
+            }, 'open') : null,
+        ),
+        el('p', { class: 'dr-prompt' }, clipLines(s.prompt, 400)),
+        el('div', { class: 'tb-acts' },
+            el('button', {
+                class: 'tb-btn primary', type: 'button',
+                title: 'Start a run now, whatever the clock says',
+                onclick: (e) => schedRun(s, e.currentTarget),
+            }, 'Run now'),
+            el('button', {
+                class: 'tb-btn', type: 'button',
+                title: s.enabled ? 'Stop it firing, without deleting it' : 'Arm it again',
+                onclick: () => schedToggle(s),
+            }, s.enabled ? 'Pause' : 'Resume'),
+            el('button', {
+                class: 'tb-btn', type: 'button',
+                onclick: () => schedEdit(s),
+            }, 'Edit'),
+            el('button', {
+                class: 'tb-btn quiet', type: 'button', title: 'Delete this schedule',
+                onclick: () => schedDelete(s),
+            }, 'Delete'),
+        ),
+    );
+}
+
+// ── acting on a card ─────────────────────────────────────────────────────
+
+/**
+ * Run it now.
+ *
+ * The bridge runs the *same* function the clock runs, so what this produces is
+ * what tonight would have produced — which is the only reason the button is
+ * trustworthy as a way of checking a schedule before leaving it alone. It skips
+ * the gate, since pressing a button should do something, and it advances the
+ * marker exactly as a scheduled run does.
+ */
+async function schedRun(s, btn) {
+    btn.disabled = true;
+    btn.textContent = 'Starting';
+    try {
+        const r = await post(`/api/schedules/${s.id}/run`);
+        toast('Session started.', 'ok');
+        showSched(false);
+        openSessionSoon(r.sessionId);
+    } catch (err) {
+        toast(`Could not run the schedule: ${err.message}`, 'error');
+        btn.disabled = false;
+        btn.textContent = 'Run now';
+    }
+}
+
+/**
+ * Pause or arm it.
+ *
+ * Not a delete, and that distinction is the whole reason the button exists: a
+ * schedule you are switching off for a fortnight is one you still want, and
+ * rebuilding it from memory afterwards is exactly the work this panel is meant to
+ * save. Arming it again does not make it fire for every slot it slept through —
+ * the bridge moves the cursor to now.
+ */
+async function schedToggle(s) {
+    try {
+        await patch(`/api/schedules/${s.id}`, { enabled: !s.enabled });
+    } catch (err) {
+        toast(`Could not ${s.enabled ? 'pause' : 'resume'} the schedule: ${err.message}`,
+            'error');
+    }
+}
+
+function schedEdit(s) {
+    openNew({ schedule: s });
+}
+
+/**
+ * Delete it.
+ *
+ * A confirmation, unlike a draft. Deleting a draft loses a paragraph you can
+ * write again; deleting a schedule loses the run history with it — including the
+ * marker that says which commits have already been reviewed — so recreating it
+ * silently starts the next run's range from scratch. That is worth one press.
+ */
+async function schedDelete(s) {
+    const label = s.title || firstLine(s.prompt);
+    if (!window.confirm(`Delete the schedule “${clip(label, 60)}”?\n\n`
+        + 'Its run history goes with it, including which commits it has already '
+        + 'reviewed.')) return;
+    try {
+        await del(`/api/schedules/${s.id}`);
+    } catch (err) {
+        toast(`Could not delete the schedule: ${err.message}`, 'error');
     }
 }
 
@@ -6827,6 +7174,11 @@ function connect() {
         // watching flag to reset here — the push is unconditional, so a
         // reconnected window starts receiving them again with no subscribe.
         loadDrafts();
+        // And the schedules, on the same terms. It matters a little more here:
+        // the stream is most often down because the bridge restarted, and a
+        // restart is exactly when the catch-up pass runs — so the changes this
+        // window missed are the ones about runs that fired while it was away.
+        loadSched();
         // Same reasoning for the status line, which onerror left reading
         // "Reconnecting to the bridge…". applyRunner derives it from what we
         // already know, so an idle session says Ready again and a busy one is
@@ -6887,6 +7239,7 @@ function connect() {
     // is also how a draft saved or started in another window disappears from
     // this one.
     es.addEventListener('drafts-changed', (e) => applyDrafts(JSON.parse(e.data)));
+    es.addEventListener('schedules-changed', (e) => applySched(JSON.parse(e.data)));
 
     es.addEventListener('sessions-changed', () => loadSessions());
 
@@ -9485,24 +9838,60 @@ async function loadProjects() {
  * `bypassPermissions` draft and then pressing Ctrl+N would offer that mode for a
  * brand-new session, having been asked for once, about something else.
  */
-async function openNew({ cwd = '', tab = null, prompt = '', draft = null } = {}) {
+async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
+    schedule = null } = {}) {
+    // `schedule: true` means "a new one"; a row means "edit that one". The two
+    // have to be told apart because only the second has fields to prefill, and
+    // both have to put the dialog in schedule mode.
+    const sched = schedule && typeof schedule === 'object' ? schedule : null;
+    const schedMode = Boolean(schedule);
+    // A draft and a schedule are the same fields with a different owner, so one
+    // local stands in for whichever is being edited and the prefill below reads
+    // from it once instead of branching on every line.
+    const src = sched || draft;
+
     state.drafts.editing = draft ? draft.id : null;
+    state.sched.editing = sched ? sched.id : null;
 
     dom.newScrim.hidden = false;
-    dom.newPrompt.value = draft ? draft.prompt : prompt;
+    dom.newPrompt.value = src ? src.prompt : prompt;
     growPrompt();
-    dom.newTest.checked = draft ? !!draft.test : false;
-    dom.newModel.value = draft ? (draft.model || '') : '';
+    dom.newTest.checked = src ? !!src.test : false;
+    dom.newModel.value = src ? (src.model || '') : '';
     // The dialog's own default, and deliberately not the composer's: the first
     // message of a session is the one written with the least idea of what it will
     // touch. Spelled out here rather than left to the `selected` attribute, which
     // only decides the very first open.
-    dom.newPerm.value = draft ? draft.permissionMode : 'plan';
-    dom.newCwd.value = (draft && draft.cwd) || cwd || (state.current
+    //
+    // A *new* schedule defaults to `dontAsk` instead, and that is the one place
+    // this dialog's default depends on what is being made. `plan` is right for a
+    // message you are about to watch run and wrong for one that runs at 2 AM: a
+    // scheduled session in `plan` writes a plan nobody reads, and one in `auto`
+    // stops at the first prompt and waits until morning. Editing an existing
+    // schedule keeps whatever it already had.
+    dom.newPerm.value = src ? src.permissionMode : (schedMode ? 'dontAsk' : 'plan');
+    dom.newCwd.value = (src && src.cwd) || cwd || (state.current
         ? (state.current.worktree ? state.current.worktree.originalCwd : state.current.cwd)
         : '');
 
-    dom.newTitle.textContent = draft ? 'Edit draft' : 'Start a session';
+    // The two fields only a schedule has.
+    dom.newCronRow.hidden = !schedMode;
+    dom.newGateRow.hidden = !schedMode;
+    dom.newCron.value = sched ? sched.cron : (schedMode ? '0 2 * * 2-6' : '');
+    dom.newGateRef.value = sched && sched.gate ? sched.gate.ref : '';
+    if (schedMode) describeCronSoon();
+
+    // Schedule mode swaps Start and Save-as-draft for one button: a schedule you
+    // have written has not run and is not meant to yet, so "keep this" and "do
+    // this" are the same press.
+    dom.newGo.hidden = schedMode;
+    dom.newSave.hidden = schedMode;
+    dom.newSchedSave.hidden = !schedMode;
+    dom.newSchedSave.textContent = sched ? 'Save changes' : 'Save schedule';
+
+    dom.newTitle.textContent = schedMode
+        ? (sched ? 'Edit schedule' : 'Schedule a session')
+        : (draft ? 'Edit draft' : 'Start a session');
     dom.newSave.textContent = draft ? 'Save changes' : 'Save as draft';
     cancelMkdir();
     try {
@@ -9536,6 +9925,7 @@ function closeNew() {
     // So a Save that somehow ran after this could not write to a draft the dialog
     // is no longer showing. openNew sets it on the way in either way.
     state.drafts.editing = null;
+    state.sched.editing = null;
 }
 
 // ── the recent-directories menu ──────────────────────────────────────────
@@ -9968,6 +10358,104 @@ function newDialogValues() {
     // unflagged, which is right when the box was never offered.
     if (state.dev) body.test = dom.newTest.checked;
     return body;
+}
+
+/**
+ * The two extra fields, on top of what every caller of this dialog needs.
+ *
+ * Separate from `newDialogValues` rather than folded into it, because the shared
+ * function is shared with Start and Save-as-draft: a `cron` key riding along on a
+ * `POST /api/sessions` body would be silently ignored today and would be a
+ * puzzle the first time somebody added a field by that name.
+ *
+ * The expression is not validated here. The bridge parses it — and its parser is
+ * the one that will actually decide when this runs — so a second parser in the
+ * page could only ever be a way for the two to disagree. What the page does is
+ * ask for the English, which is `describeCronSoon` below.
+ */
+function schedDialogValues() {
+    const body = newDialogValues();
+    if (!body) return null;
+
+    const cron = dom.newCron.value.trim();
+    if (!cron) {
+        toast('Say when it should run — five cron fields, like 0 2 * * 2-6.', 'warn');
+        return null;
+    }
+    body.cron = cron;
+
+    // An empty ref is "run every time", which is a real choice and not an
+    // unfinished one — so it clears the gate rather than refusing the save.
+    const ref = dom.newGateRef.value.trim();
+    body.gate = ref ? { kind: 'git-commits', ref, fetch: true } : null;
+    return body;
+}
+
+/**
+ * Show what the expression means, as typed.
+ *
+ * Asked of the bridge rather than worked out here, for the reason above: the
+ * process that will run the schedule is the one that should say when it runs. A
+ * `POST` that only wants an opinion would be the wrong verb, so this leans on the
+ * validator already in the create route — the dry-run flag exists so this can ask
+ * without saving.
+ *
+ * Debounced because it fires per keystroke, and silent on failure: a half-typed
+ * expression is not an error to report, it is an expression that is not finished.
+ */
+let cronNoteTimer = null;
+function describeCronSoon() {
+    clearTimeout(cronNoteTimer);
+    cronNoteTimer = setTimeout(async () => {
+        const cron = dom.newCron.value.trim();
+        if (!cron) {
+            dom.newCronNote.textContent = 'Five fields, local time: minute hour '
+                + 'day-of-month month day-of-week.';
+            dom.newCronNote.classList.remove('bad');
+            return;
+        }
+        try {
+            const r = await get(`/api/schedules/describe?cron=${encodeURIComponent(cron)}`);
+            dom.newCronNote.textContent = r.next
+                ? `${r.text} — next ${new Date(r.next).toLocaleString()}`
+                : r.text;
+            dom.newCronNote.classList.remove('bad');
+        } catch (err) {
+            dom.newCronNote.textContent = err.message;
+            dom.newCronNote.classList.add('bad');
+        }
+    }, 250);
+}
+
+/**
+ * Save the schedule.
+ *
+ * `drSave` for the other store, and a PATCH when the dialog was opened on an
+ * existing row so editing one twice does not leave two.
+ */
+async function schedSave() {
+    const body = schedDialogValues();
+    if (!body) return;
+
+    const editing = state.sched.editing;
+    const label = dom.newSchedSave.textContent;
+    dom.newSchedSave.disabled = true;
+    dom.newSchedSave.textContent = 'Saving';
+    try {
+        if (editing) await patch(`/api/schedules/${editing}`, body);
+        else await post('/api/schedules', body);
+        closeNew();
+        toast(editing ? 'Schedule saved.' : 'Scheduled.', 'ok');
+        // Straight to the panel after making a new one, so the thing you just
+        // set up is in front of you with its next run on it — the one fact you
+        // want to check and cannot see from the dialog.
+        if (!editing) showSched(true);
+    } catch (err) {
+        toast(`Could not save the schedule: ${err.message}`, 'error');
+        dom.newSchedSave.textContent = label;
+    } finally {
+        dom.newSchedSave.disabled = false;
+    }
 }
 
 /**
@@ -11121,6 +11609,15 @@ dom.btnDrafts.addEventListener('click', () => showDrafts(!state.drafts.open));
 // whole window, and closing it drops you back on the board with the new card
 // already on it rather than on whatever was behind the board.
 dom.drNew.addEventListener('click', () => openNew());
+
+dom.btnSched.addEventListener('click', () => showSched(!state.sched.open));
+// `schedule: true` rather than a row: a new one, so Save posts instead of
+// patching. The panel stays open underneath for the reason drNew's does.
+dom.schedNew.addEventListener('click', () => openNew({ schedule: true }));
+dom.newSchedSave.addEventListener('click', () => schedSave());
+// The English under the box, from the bridge's own parser. `input` rather than
+// `change` so it keeps up with typing; the fetch behind it is debounced.
+dom.newCron.addEventListener('input', () => describeCronSoon());
 dom.notesNotable.addEventListener('click', () => setNotesScope('notable'));
 dom.notesAll.addEventListener('click', () => setNotesScope('all'));
 dom.notesClear.addEventListener('click', async () => {
@@ -11210,16 +11707,17 @@ document.addEventListener('keydown', (e) => {
     //
     // Ctrl rather than a bare digit because the composer is a textarea and these
     // have to work while it has the focus.
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && '123456'.includes(e.key)) {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && '1234567'.includes(e.key)) {
         e.preventDefault();
         if (e.key === '1') {
             showLive(false); showDash(false); showNotes(false);
-            showTaskboard(false); showDrafts(false);
+            showTaskboard(false); showDrafts(false); showSched(false);
         } else if (e.key === '2') showTaskboard(true);
         else if (e.key === '3') showLive(true);
         else if (e.key === '4') showDash(true);
         else if (e.key === '5') showNotes(true);
-        else showDrafts(true);
+        else if (e.key === '6') showDrafts(true);
+        else showSched(true);
     }
 });
 
@@ -11273,10 +11771,12 @@ function restoreView() {
     const dash = q.get('view') === 'dashboard';
     const tb = q.get('view') === 'taskboard';
     const dr = q.get('view') === 'drafts';
+    const sc = q.get('view') === 'schedules';
     if (q.get('view') === 'live' || q.get('live') === '1' || q.get('focus') === '1') showLive(true);
     if (dash) showDash(true);
     if (tb) showTaskboard(true);
     if (dr) showDrafts(true);
+    if (sc) showSched(true);
     if (q.get('focus') === '1') setFocus(true);
 
     // The panels are up and the address they came from is untouched, so from

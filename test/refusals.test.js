@@ -244,6 +244,78 @@ const HOME = os.homedir();
     check('an unknown draft is a 404, not a refusal', (await call('DELETE',
         '/api/drafts/nope', { headers: LOCAL })).status, 404);
 
+    // The same rule on a schedule, where the stakes are higher and the second
+    // gate is different. A draft in a refused mode still needs somebody to press
+    // Start, and that somebody is checked in turn — which is why refusing the
+    // write and the start is enough there. A schedule's second gate is a *timer*,
+    // and the timer is always local, so refusing the write alone leaves a hole:
+    // a phone that cannot save `dontAsk` could still send `{enabled: true}` to a
+    // paused schedule that already had it, and the tick would start it.
+    console.log('\n--- permission modes on a schedule ---');
+    const CRON = '0 2 * * 2-6';
+    const schedBypass = await call('POST', '/api/schedules', {
+        headers: PHONE,
+        body: { cwd: HOME, prompt: 'x', cron: CRON, permissionMode: 'bypassPermissions' },
+    });
+    check('saving a bypassPermissions schedule remotely', schedBypass.status, 403);
+    console.log(`       said: ${schedBypass.body && schedBypass.body.error}`);
+    check('saving a dontAsk schedule remotely', (await call('POST', '/api/schedules', {
+        headers: PHONE, body: { cwd: HOME, prompt: 'x', cron: CRON, permissionMode: 'dontAsk' },
+    })).status, 403);
+    check('escalating a schedule by editing it remotely', (await call(
+        'PATCH', '/api/schedules/abc',
+        { headers: PHONE, body: { permissionMode: 'bypassPermissions' } })).status, 403);
+
+    // The one that matters, and the one that was wrong: a dontAsk schedule saved
+    // at the desk and paused, then armed from the phone. The body carries no
+    // mode at all, so a check that only looks at what was sent lets it through
+    // and the next tick starts an unattended agent with no permission gate.
+    const armed = await call('POST', '/api/schedules', {
+        headers: LOCAL,
+        body: { cwd: HOME, prompt: 'never armed', cron: CRON,
+            permissionMode: 'dontAsk', enabled: false, test: true },
+    });
+    check('saving that schedule from the desk is allowed', armed.status, 200);
+    const armedId = armed.body && armed.body.schedule && armed.body.schedule.id;
+    check('arming it from the phone is refused', (await call(
+        'PATCH', `/api/schedules/${armedId}`,
+        { headers: PHONE, body: { enabled: true } })).status, 403);
+    check('and so is retiming it', (await call(
+        'PATCH', `/api/schedules/${armedId}`,
+        { headers: PHONE, body: { cron: '*/5 * * * *' } })).status, 403);
+    check('and running it now', (await call(
+        'POST', `/api/schedules/${armedId}/run`, { headers: PHONE })).status, 403);
+    // None of that may have taken effect.
+    const stillOff = await call('GET', '/api/schedules', { headers: LOCAL });
+    const row = (stillOff.body.schedules || []).find(s => s.id === armedId);
+    check('the schedule is still paused', row && row.enabled, false);
+    check('and still on its original expression', row && row.cron, CRON);
+    check('tidied up', (await call('DELETE', `/api/schedules/${armedId}`,
+        { headers: LOCAL })).status, 200);
+
+    // Otherwise a phone may manage schedules, for the reason it may manage
+    // drafts: setting work up from anywhere is the case they exist for.
+    check('a phone may read schedules', (await call('GET', '/api/schedules',
+        { headers: PHONE })).status, 200);
+    const phoneSched = await call('POST', '/api/schedules', {
+        headers: PHONE,
+        body: { cwd: HOME, prompt: 'from a phone', cron: CRON, test: true },
+    });
+    check('and may save an ordinary one', phoneSched.status, 200);
+    if (phoneSched.body && phoneSched.body.schedule) {
+        check('and delete it again', (await call('DELETE',
+            `/api/schedules/${phoneSched.body.schedule.id}`, { headers: PHONE })).status, 200);
+    }
+    check('an unknown schedule is a 404, not a refusal', (await call('DELETE',
+        '/api/schedules/nope', { headers: LOCAL })).status, 404);
+    // An expression that parses and never fires is refused rather than saved as a
+    // card that reads "next run: never" forever.
+    const impossible = await call('POST', '/api/schedules', {
+        headers: LOCAL, body: { cwd: HOME, prompt: 'x', cron: '0 0 30 2 *', test: true },
+    });
+    check('February 30th is refused', impossible.status, 400);
+    console.log(`       said: ${impossible.body && impossible.body.error}`);
+
     console.log('\n--- cwd roots ---');
     const etc = await call('POST', '/api/sessions', {
         headers: LOCAL, body: { cwd: '/etc', prompt: 'x' },

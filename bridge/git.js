@@ -231,6 +231,121 @@ async function statusOf(dir, { limit } = {}) {
     return { ...rest, sample: shown, truncated: Math.max(0, entries.length - shown.length) };
 }
 
+// ---------------------------------------------------------------------------
+// Commit ranges
+// ---------------------------------------------------------------------------
+
+// How many subjects a caller gets. A scheduled review puts these in a prompt, so
+// the cap is about what is useful to read rather than about memory: past a few
+// dozen commits the list stops being a summary and the range itself is the
+// better description.
+const SUBJECT_CAP = 50;
+
+/**
+ * What has landed on `ref` since `sinceSha` — the question a schedule asks.
+ *
+ * Not cached, unlike everything above it. The two callers are a schedule about
+ * to decide whether to spawn a session and a person pressing Run now, and both
+ * want the answer as it is at that instant: a cached "nothing new" would mean a
+ * 2 AM run silently skipping commits that arrived while the entry was warm.
+ *
+ * **A failed fetch is not a failed call.** Offline at 2 AM, the remote-tracking
+ * ref is simply stale, so the range comes back empty and the caller skips — the
+ * right outcome, and one that fixes itself on the next run. Treating it as an
+ * error instead would take the marker with it and turn one missed night into a
+ * re-review of everything. The failure is reported in `fetchError` for the log
+ * without changing the verdict.
+ *
+ * `count` is `null`, not `0`, when there is no usable marker. The two mean
+ * opposite things to a caller — "nothing to review" versus "I have no idea what
+ * you have already seen" — and a schedule's first run is the second one.
+ *
+ * @param {string} dir a checkout
+ * @param {string} ref anything `rev-parse` accepts: `origin/main`, a branch, a tag
+ * @param {string|null} sinceSha the commit last reviewed
+ * @param {{fetch?: boolean}} [opts] fetch the ref's remote first
+ * @returns {Promise<{ok: boolean, head?: string, count?: number|null,
+ *   subjects?: string[], truncated?: number, staleMarker?: boolean,
+ *   fetchError?: string|null, error?: string, reason?: string}>}
+ */
+async function commitRange(dir, ref, sinceSha, { fetch = false } = {}) {
+    const inside = await run('git', ['-C', dir, 'rev-parse', '--git-dir']);
+    if (!inside.ok) {
+        return { ok: false, reason: 'not-a-repo', error: firstLine(inside.stderr) };
+    }
+
+    let fetchError = null;
+    if (fetch) {
+        // Only ever the one remote the ref names, and only when it really is a
+        // remote. `git fetch --all` on a repository with a dozen worktrees is
+        // slow enough to matter on a timer, and a local branch needs no fetch at
+        // all — asking for one would just be a network round trip that cannot
+        // change the answer.
+        const remote = String(ref || '').split('/')[0];
+        if (remote) {
+            const remotes = await run('git', ['-C', dir, 'remote']);
+            const known = remotes.stdout.split('\n').map(s => s.trim()).filter(Boolean);
+            if (known.includes(remote)) {
+                // Tags are deliberately left alone: --tags on a busy repository
+                // fetches far more than the one ref anybody asked about.
+                const got = await run(
+                    'git', ['-C', dir, 'fetch', '--quiet', '--no-tags', remote],
+                    { timeout: 60_000 });
+                if (!got.ok) fetchError = firstLine(got.stderr);
+            }
+        }
+    }
+
+    // `^{commit}` rather than the bare ref, so a tag resolves to what it points
+    // at instead of to the tag object — a range against a tag object is an error
+    // several steps later, where it reads as a git bug rather than as this.
+    const head = await run('git', ['-C', dir, 'rev-parse', '--verify', `${ref}^{commit}`]);
+    if (!head.ok) {
+        return {
+            ok: false, reason: 'no-such-ref', fetchError,
+            error: `cannot resolve ${ref} in ${dir}`,
+        };
+    }
+    const headSha = head.stdout.trim();
+
+    // A marker can stop existing: a force-push, a rebase, or a gc after the
+    // branch it was on went away. Reported rather than repaired, because the two
+    // sensible responses differ — a schedule wants to start again from here, and
+    // a person pressing Run now wants to be told why the range looks wrong.
+    let staleMarker = false;
+    if (sinceSha) {
+        const has = await run(
+            'git', ['-C', dir, 'rev-parse', '--verify', `${sinceSha}^{commit}`]);
+        if (!has.ok) staleMarker = true;
+    }
+
+    if (!sinceSha || staleMarker) {
+        return {
+            ok: true, head: headSha, count: null, subjects: [], truncated: 0,
+            staleMarker, fetchError,
+        };
+    }
+
+    const range = `${sinceSha}..${headSha}`;
+    const log = await run('git', ['-C', dir, 'log', '--no-merges', '--format=%h %s', range]);
+    if (!log.ok) {
+        return {
+            ok: false, reason: 'bad-range', fetchError,
+            error: firstLine(log.stderr) || `cannot read ${range}`,
+        };
+    }
+    const lines = log.stdout.split('\n').map(s => s.trim()).filter(Boolean);
+    return {
+        ok: true,
+        head: headSha,
+        count: lines.length,
+        subjects: lines.slice(0, SUBJECT_CAP),
+        truncated: Math.max(0, lines.length - SUBJECT_CAP),
+        staleMarker: false,
+        fetchError,
+    };
+}
+
 /**
  * Forget cached working trees — what a Refresh button means.
  *
@@ -245,5 +360,5 @@ function clearCache(dir) {
 
 module.exports = {
     run, firstLine, samePath, afterFields,
-    parseStatus, workingState, numstat, statusOf, clearCache,
+    parseStatus, workingState, numstat, statusOf, commitRange, clearCache,
 };
