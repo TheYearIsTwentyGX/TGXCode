@@ -1,15 +1,19 @@
 'use strict';
 
-// Exercises the two pure functions in bridge/pulls.js that decide what a pull
+// Exercises the pure functions in bridge/pulls.js that decide what a pull
 // request's status *is* — the part of that module a person reads off an icon and
 // a colour, and therefore the part that must not quietly drift.
 //
-// Both are pure, so none of this needs a bridge or a network. What is worth
-// pinning down is the ordering (a PR is regularly several things at once, and one
-// glyph has to pick) and the two cases where the answer is deliberately silence.
+// All pure, so none of this needs a bridge or a network. What is worth pinning
+// down is the ordering (a PR is regularly several things at once, and one glyph
+// has to pick), the two cases where the answer is deliberately silence, and the
+// *second* ordering — `aggregate` folds a session's whole set of PRs down to the
+// one word a rail row can carry, and it disagrees with `resolveStatus` on purpose.
 
 const assert = require('assert');
-const { resolveStatus, checkSummary } = require('../bridge/pulls.js');
+const {
+    resolveStatus, checkSummary, aggregate, ATTENTION_ORDER,
+} = require('../bridge/pulls.js');
 
 let pass = 0;
 const ok = (name) => { pass++; console.log(`  ok  ${name}`); };
@@ -158,5 +162,71 @@ ok('an awaited review is detail, not the headline');
 // REVIEW_REQUIRED is what an untouched PR reports, so it must not become a status
 // of its own — every open PR on a protected branch would wear it.
 is({ reviewDecision: 'REVIEW_REQUIRED' }, 'open', 'an awaited review still reads as open');
+
+// --- one status for a whole session ---------------------------------------
+// `aggregate` answers a different question from `resolveStatus`: not "what is this
+// PR" but "which of these PRs should the row look like". So it has its own order,
+// and the cases below are the ones where the two disagree.
+
+/** A resolved entry, as `forSession` would hand it over. */
+const at = (status) => ({ status, label: status, url: `https://x/${status}` });
+
+const folds = (statuses, expected, name) => {
+    const got = aggregate(statuses.map(at));
+    assert.strictEqual(got && got.status, expected,
+        `${name}: got "${got && got.status}", wanted "${expected}"`);
+    ok(name);
+};
+
+folds(['merged', 'draft'], 'draft', 'a merged PR does not hide an unfinished one');
+folds(['merged', 'merged'], 'merged', 'all merged reads as merged');
+folds(['merged'], 'merged', 'one merged PR reads as merged');
+folds(['draft'], 'draft', 'one draft reads as a draft');
+
+// The disagreement with `resolveStatus`, and the reason there are two orders.
+// For a single PR, draft outranks a failing check: nobody is being asked to act on
+// a draft yet. Across two PRs the failing one is waiting on you now and the draft
+// is not, so it wins.
+folds(['draft', 'checks-failed'], 'checks-failed', 'a broken PR outranks a draft you left alone');
+folds(['draft', 'conflicting'], 'conflicting', 'so does a conflicting one');
+folds(['changes', 'conflicting'], 'conflicting', 'a conflict outranks a review');
+folds(['approved', 'open'], 'open', 'an approval is more progress than a plain open PR');
+folds(['closed', 'merged'], 'closed', 'a PR nobody merged is not the same as one that landed');
+folds(['approved', 'merged', 'closed'], 'approved', 'anything still live outranks both settled states');
+
+// gh being unreachable is not a state a PR can be in, so it never beats a real
+// answer — but it does beat the settled ones, because "all merged" is a claim that
+// cannot be made about a PR nobody could reach.
+folds(['unknown', 'merged'], 'unknown', 'one unreachable PR stops the row claiming all merged');
+folds(['unknown', 'draft'], 'draft', 'a real answer beats no answer');
+folds(['unknown', 'unknown'], 'unknown', 'nothing reachable says nothing');
+
+assert.strictEqual(aggregate([]), null, 'a session with no PRs aggregates to nothing');
+ok('a session with no PRs aggregates to nothing');
+assert.strictEqual(aggregate(null), null, 'and so does one with no list at all');
+ok('and so does one with no list at all');
+
+// What the single word left out, for the tooltip.
+const mixed = aggregate([at('merged'), at('draft'), at('merged')]);
+assert.deepStrictEqual(mixed.counts, { merged: 2, draft: 1 }, 'counts carry the breakdown');
+ok('counts carry the breakdown');
+assert.strictEqual(mixed.total, 3, 'total is every PR, not just the winning one');
+ok('total is every PR, not just the winning one');
+assert.strictEqual(mixed.label, 'draft', 'the label is the winning PR\'s own words');
+ok('the label is the winning PR\'s own words');
+
+// The two orders have to stay talking about the same vocabulary. A status
+// `resolveStatus` can return and `ATTENTION_ORDER` has never heard of would sort
+// by an index of -1 and win every row in the app, silently.
+const RESOLVABLE = ['merged', 'closed', 'draft', 'changes', 'checks-failed',
+    'conflicting', 'checks-pending', 'approved', 'open'];
+for (const status of RESOLVABLE) {
+    assert.ok(ATTENTION_ORDER.includes(status),
+        `ATTENTION_ORDER is missing "${status}", which resolveStatus can return`);
+}
+assert.ok(ATTENTION_ORDER.includes('unknown'), 'ATTENTION_ORDER must place gh being unreachable');
+assert.strictEqual(ATTENTION_ORDER.length, RESOLVABLE.length + 1,
+    'ATTENTION_ORDER has a status resolveStatus cannot produce');
+ok('the two orderings share one vocabulary');
 
 console.log(`\n  ${pass} checks passed`);

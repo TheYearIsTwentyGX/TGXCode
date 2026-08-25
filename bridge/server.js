@@ -37,6 +37,7 @@ const dashboard = require('./dashboard');
 const git = require('./git');
 const changes = require('./changes');
 const pulls = require('./pulls');
+const { mapLimit } = require('./memo');
 const overview = require('./overview');
 const taskboard = require('./taskboard');
 const { openInExplorer, openFile } = require('./explorer');
@@ -1944,6 +1945,36 @@ async function api(req, res, url, pathname, who) {
             }
         }
         return send(res, 200, data);
+    }
+
+    // One PR status per session, for the rail. The same question the conversation
+    // header asks about one session, asked about all of them at once — and reduced
+    // to a single word each, because a rail row has space for one glyph.
+    //
+    // Its own route rather than a field on `/api/sessions` for that route's own
+    // reason: it shells out to gh and the session list must never wait on GitHub.
+    // The rail fetches this after it has painted and colours the glyphs in place.
+    if (pathname === '/api/prs' && req.method === 'GET') {
+        const sessions = index.list({ limit: 500, includeTest: cfg.IS_DEV })
+            .filter(s => s.prs && s.prs.length);
+
+        // A `pr-link` line without a `prRepository` leaves the repo to be read off
+        // the session's own checkout, exactly as `/api/sessions/:id/prs` does. Only
+        // for the sessions that need it, and once per directory: `repoOf` shells out
+        // to git, and most PRs name their own repository.
+        const needRepo = [...new Set(sessions
+            .filter(s => s.cwd && s.prs.some(p => p && !p.repo))
+            .map(s => s.cwd))];
+        const repoOfDir = new Map();
+        await mapLimit(needRepo, 8, async (dir) => {
+            repoOfDir.set(dir, await pulls.repoOf(dir));
+        });
+
+        return send(res, 200, await pulls.forSessions(sessions.map(s => ({
+            sessionId: s.sessionId,
+            prs: s.prs,
+            repo: repoOfDir.get(s.cwd) || null,
+        }))));
     }
 
     if (pathname === '/api/sessions' && req.method === 'POST') {
