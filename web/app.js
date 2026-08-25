@@ -4085,7 +4085,10 @@ function openRestartDialog(payload) {
             : 'The pull went through, but nothing was restarted.';
 
     dom.restartProblems.replaceChildren(...payload.problems.map((p) => el('li', null,
-        el('span', { class: 'restart-why' }, p.text),
+        // A failed pull's text is git's own stderr, and its line breaks carry the
+        // suggested command you would copy out of it. Everything else here is a
+        // sentence this file wrote.
+        el('span', { class: p.text.includes('\n') ? 'restart-why raw' : 'restart-why' }, p.text),
         p.files && p.files.length
             ? el('ul', { class: 'restart-files' },
                 ...p.files.slice(0, 12).map((f) => el('li', { text: f })),
@@ -4154,11 +4157,12 @@ function fixPrompt(payload) {
         '',
     ];
     for (const p of payload.problems) {
-        lines.push(`- ${p.text}`);
+        // A failed pull's text is several lines of git, so indent the rest of them
+        // to keep the bullet a bullet. No separate "git said" section: that text
+        // already *is* what git said, and printing it twice reads as two problems.
+        const [head, ...rest] = p.text.split('\n');
+        lines.push(`- ${head}`, ...rest.map((l) => `  ${l}`));
         for (const f of p.files || []) lines.push(`    ${f}`);
-    }
-    if (payload.pulled && payload.pulled.error) {
-        lines.push('', 'git pull --ff-only said:', '', payload.pulled.error);
     }
     lines.push(
         '',
