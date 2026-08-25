@@ -1363,8 +1363,12 @@ confirms first for that reason, where it does not for a draft.
 tonight would have produced, so it is a trustworthy way to check a schedule before
 leaving it alone. Two differences, both deliberate:
 
-- **The gate is skipped.** You pressed a button, so something should happen even when
-  there are no new commits.
+- **The gate is skipped**, and when there is nothing new `{{range}}` falls back to
+  `<head>~1..<head>` rather than coming out as the empty `<head>..<head>`. You pressed
+  a button, so something should happen — and a session told to review an empty range
+  correctly reports that there is nothing there, which makes the button useless in the
+  two cases anybody presses it. `{{count}}` reads as `the new` in that case rather than
+  claiming a number.
 - **`lastSlotAt` is not touched**, so tonight's scheduled run still happens.
 
 It does **not** skip the permission-mode refusal or the rate limit. `lastMarker`

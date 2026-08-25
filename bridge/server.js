@@ -1015,11 +1015,24 @@ async function runSchedule(row, { force = false, who = LOCAL_CALLER } = {}) {
         if (!force && range.count === 0) {
             return { ok: false, skip: 'nothing-new', head: range.head };
         }
+        // **A forced run with nothing new reviews the tip commit, not nothing.**
+        //
+        // Run now skips the gate, but skipping the gate alone is not enough:
+        // with the marker already at `head`, `{{range}}` comes out as
+        // `abc123..abc123` — an empty range — and the session dutifully reports
+        // that there is nothing to review. Which makes the button useless in the
+        // two cases anybody presses it: checking a schedule works just after
+        // setting it up, and asking for a review during a quiet week.
+        //
+        // Falling back to `head~1..head` is the same thing `fillPrompt` does when
+        // there is no marker at all, and it costs nothing: the marker still
+        // advances to `head`, which it already was.
+        const empty = force && range.count === 0;
         facts = {
             ...facts,
             head: range.head,
-            since: range.staleMarker ? null : row.lastMarker,
-            count: range.count,
+            since: (range.staleMarker || empty) ? null : row.lastMarker,
+            count: empty ? null : range.count,
             ref: row.gate.ref,
             staleMarker: range.staleMarker,
             fetchError: range.fetchError,
