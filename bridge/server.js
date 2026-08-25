@@ -25,7 +25,7 @@ const { Spinner } = require('./spinner');
 const { Suggestions, STATUSES: SUGGESTION_STATUSES } = require('./suggestions');
 const { Drafts, MAX_DRAFTS } = require('./drafts');
 const { SlashCommandCache } = require('./slash-commands');
-const { NotificationLog } = require('./notifications');
+const { NotificationLog, ReadState } = require('./notifications');
 const devbrowser = require('./devbrowser');
 const tailscale = require('./tailscale');
 const devservers = require('./devservers');
@@ -83,6 +83,11 @@ const notifications = new NotificationLog({
     describe: (id) => index.summary(id),
     isTest: (id) => flags.get(id).test,
 });
+// What of that log you have already seen — a watermark per conversation, so
+// going to a chat and dealing with the thing clears its rows rather than leaving
+// them counted against you. Kept here rather than in the page because two
+// windows and a phone all have to agree about the badge.
+const reads = new ReadState();
 
 // Which sessions are running, from Claude Code's own registry rather than from
 // how recently a file changed. The index works without it; every summary simply
@@ -945,6 +950,12 @@ async function api(req, res, url, pathname, who) {
     // --- notification history ---------------------------------------------
     if (pathname === '/api/notifications' && req.method === 'GET') {
         return send(res, 200, {
+            // Counted over the whole log rather than over the page below it.
+            // The badge used to be worked out client-side from whatever had been
+            // fetched, so it quietly saturated at the fetch limit — a number
+            // that stops being true when it gets large is worse than no number.
+            unread: notifications.countUnread(r => reads.isRead(r), { includeTest: cfg.IS_DEV }),
+            read: reads.get(),
             notifications: notifications.list({
                 limit: Math.min(Number(url.searchParams.get('limit')) || 200, 1000),
                 // 'notable' is the default view: the entries that cleared the bar
@@ -957,8 +968,49 @@ async function api(req, res, url, pathname, who) {
                 // Same rule as /api/sessions: a scratch session belongs to the
                 // instance that started it.
                 includeTest: cfg.IS_DEV,
-            }),
+            // `read` is derived per caller rather than stored on the row: the
+            // row is one thing that happened, and whether it is news is a
+            // question about the reader. Stamped here so a client need not
+            // reimplement the watermark comparison to render a list.
+            }).map(row => ({ ...row, read: reads.isRead(row) })),
         });
+    }
+
+    if (pathname === '/api/notifications/read' && req.method === 'POST') {
+        const body = await readJson(req);
+        // `all` and a session id are two different gestures, not one with a flag:
+        // opening History says "I have seen everything", opening a chat says "I
+        // have seen this conversation". Neither is not a third gesture, so it is
+        // refused rather than treated as a no-op — a client that meant to send
+        // one and sent nothing should hear about it.
+        const wantsAll = body.all === true || Number.isFinite(body.all);
+        const sessionId = wantsAll ? null : String(body.sessionId || '');
+        if (sessionId === '') {
+            return send(res, 400, { error: 'send either {all:true} or {sessionId}' });
+        }
+        // `all` may name the instant instead of meaning "now", which is what a
+        // client migrating an older watermark of its own needs — it knows when it
+        // last looked and that is not now. Clamped, because a mark in the future
+        // would silence everything filed between here and then, and no honest
+        // caller wants that.
+        const now = Date.now();
+        const at = Number.isFinite(body.all) ? Math.min(Number(body.all), now) : now;
+        // `moved` is whether the badge changed, not whether a timestamp did.
+        // Every repeat of this call advances the watermark by however long it has
+        // been, so a timestamp almost always moves and says nothing; a loud row
+        // going from unread to read is the only thing another window would have
+        // to repaint for. Every navigation in the UI comes through here, so the
+        // difference is a broadcast per rail click against a broadcast per thing
+        // actually dealt with.
+        const count = () =>
+            notifications.countUnread(r => reads.isRead(r), { includeTest: cfg.IS_DEV });
+        const before = count();
+        if (sessionId === null) reads.markAll(at);
+        else reads.markSession(sessionId, at);
+        const unread = count();
+        const moved = unread !== before;
+        if (moved) broadcast('notification-read', { sessionId, at, unread });
+        return send(res, 200, { ok: true, moved, unread, read: reads.get() });
     }
 
     if (pathname === '/api/notifications' && req.method === 'DELETE') {
@@ -2816,9 +2868,22 @@ pool.on('failed', (f) => { broadcast('send-failed', f); filed(notifications.send
 // happening" has an answer at all.
 pool.on('agent-done', (a) => filed(notifications.agentDone(a)));
 
-/** Tell any open history view about a new row, so it does not have to re-fetch. */
+/**
+ * Tell any open history view about a new row, so it does not have to re-fetch.
+ *
+ * `read` and `unread` ride along for the same reason the GET carries them: a
+ * client that had to derive the badge itself would need the watermarks, and a
+ * client that guessed "a new row means one more" would be wrong for a quiet row,
+ * for a test session, and for a row filed against a conversation you are already
+ * looking at.
+ */
 function filed(row) {
-    if (row) broadcast('notification', row);
+    if (!row) return;
+    broadcast('notification', {
+        ...row,
+        read: reads.isRead(row),
+        unread: notifications.countUnread(r => reads.isRead(r), { includeTest: cfg.IS_DEV }),
+    });
 }
 pool.on('forked', ({ from, to }) => {
     index.note(to);

@@ -321,6 +321,33 @@
           <footer id="plan-foot" class="plan-foot"></footer>
         </section>
 
+        <!-- Find in conversation. A sibling of the plan pane rather than a child
+             of `.conv-body`, for two reasons: `.conv-main` is already a
+             containing block (see the CSS), so this needs no layout change; and
+             it sits a z-index below the plan pane, so a plan laid over the
+             transcript hides the bar without a line of code saying so. You
+             cannot search a conversation you cannot see. -->
+        <div id="find" class="find" hidden role="search" aria-label="Find in conversation">
+          <input id="find-input" type="text" aria-label="Find in conversation"
+                 placeholder="Find in conversation" autocomplete="off" spellcheck="false">
+          <span id="find-count" class="find-count" role="status" aria-live="polite"></span>
+          <button id="find-prev" class="find-btn" type="button"
+                  title="Previous match — Shift+Enter or Shift+F3"
+                  aria-label="Previous match">&#8593;</button>
+          <button id="find-next" class="find-btn" type="button"
+                  title="Next match — Enter or F3"
+                  aria-label="Next match">&#8595;</button>
+          <!-- Shown only when there is something to search: hidden when the
+               session spawned no subagents, and while you are reading one. -->
+          <label id="find-subs-row" class="find-subs" hidden
+                 title="Also search the transcripts of the subagents this session spawned">
+            <input id="find-subs" type="checkbox">
+            <span>Subagents</span>
+          </label>
+          <button id="find-close" class="find-btn" type="button"
+                  title="Close — Esc" aria-label="Close find">&#10005;</button>
+        </div>
+
         <div class="conv-body">
           <div id="scroll" class="scroll">
             <div id="log" class="log"></div>

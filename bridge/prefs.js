@@ -16,6 +16,14 @@
 // are too many for this file and live one group per file in `~/.tgxcode/verbs/`
 // — see bridge/spinner.js. What lands here is only which groups are in play.
 //
+// `live` is the third, and it is about a view rather than about reading or
+// about wording: how much of a card the live board draws, and whether it draws
+// sessions this window has no process for. Per-browser was the obvious home for
+// it — the board's other layout choice, side or bottom, is localStorage — but it
+// is the same argument as above that puts it here instead. How much of a card
+// you want to see is a preference about the app, not about the machine you
+// happened to open it on.
+//
 // **Where the file lives is the deliberate part.** `~/.tgxcode/settings.json`,
 // not STATE_DIR. Everything under STATE_DIR is state the app owns and nobody is
 // expected to open — a token, a set of archived ids. This is a file a person
@@ -61,6 +69,22 @@ const DEFAULTS = {
         // that thinks between every call into groups of two.
         groupIncludesThinking: true,
     },
+    live: {
+        // Stop a card at the tool-count line: no history preview, no message
+        // box, no Open/Stop, and no approval row either. Everything below that
+        // line goes, which is more than "a bit tighter" — a compact card is a
+        // status light, and answering anything on it means opening the session.
+        // That is the trade being asked for: many sessions readable at a glance
+        // beats any one of them being actionable in place.
+        compact: false,
+        // Leave out sessions running under something that is not this bridge —
+        // a terminal, VS Code, another Claude Sessions window. They are the
+        // cards the board cannot do anything with: no send, no stop, no answer,
+        // because a second process on one transcript is two writers on one file.
+        // Off by default, because a session you cannot drive from here is still
+        // a session you may want to know is running.
+        hideElsewhere: false,
+    },
     spinner: {
         // What a turn in progress calls itself. Off gives back the literal
         // "Thinking…" this app said for its whole life before now.
@@ -87,6 +111,10 @@ const SHAPE = {
         groupToolCalls: (v) => typeof v === 'boolean',
         groupMinCalls: (v) => Number.isInteger(v) && v >= 2 && v <= 1000,
         groupIncludesThinking: (v) => typeof v === 'boolean',
+    },
+    live: {
+        compact: (v) => typeof v === 'boolean',
+        hideElsewhere: (v) => typeof v === 'boolean',
     },
     spinner: {
         randomize: (v) => typeof v === 'boolean',
@@ -221,7 +249,7 @@ class Prefs {
      * @param {string} [dir] a workspace — a session's cwd. Omitted gives the
      *   user-level answer, which is what the page is served before it knows
      *   which conversation it is about to show.
-     * @returns {{version, transcript, spinner, sources: string[], problems: object[]}}
+     * @returns {{version, transcript, live, spinner, sources: string[], problems: object[]}}
      */
     forCwd(dir) {
         const key = dir || '';
@@ -245,6 +273,7 @@ class Prefs {
         const value = {
             version: VERSION,
             transcript: { ...DEFAULTS.transcript },
+            live: { ...DEFAULTS.live },
             spinner: { ...DEFAULTS.spinner },
             sources: [],
             problems: [],
