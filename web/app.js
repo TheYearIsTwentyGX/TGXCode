@@ -182,6 +182,10 @@ const state = {
     // url -> {status, label, detail, title, updatedAt} from /api/sessions/:id/prs.
     // Null until that answers; the header draws its PRs from the summary either way.
     prStatus: null,
+    // sessionId -> {status, label, total, counts} from /api/prs — one word for a
+    // whole session's pull requests, which is all a rail row has space for. Empty
+    // until that answers, and rows draw a colourless glyph in the meantime.
+    railPrs: new Map(),
     // What the session's directory declares in .tgxcode/, and what is running
     // from it. Keyed by nothing — there is only ever one conversation on screen,
     // and the payload is re-fetched when it changes. `cmdsFor` is the directory
@@ -570,12 +574,47 @@ async function loadSessions() {
         state.sessions = sessions;
         rememberOrder(sessions);
         renderRail();
+        // After the paint, never before it: this one asks GitHub.
+        loadRailPrs();
         // `live` rides on the session list, not on runner-status, so this is the
         // only moment the composer learns that a session started or stopped in a
         // terminal. The registry broadcasts sessions-changed for exactly this.
         paintLock();
     } catch (err) {
         toast(`Could not load sessions: ${err.message}`, 'error');
+    }
+}
+
+/**
+ * Ask GitHub what has become of every session's pull requests.
+ *
+ * Its own request, after the rail has painted, for the reason `/api/prs` is its own
+ * route: it shells out to gh and the session list must not wait on GitHub. The
+ * answer is one word per session, and the rows are recoloured in place rather than
+ * rebuilt — a `renderRail()` every minute would throw away hover and focus for a
+ * glyph that usually has not changed.
+ *
+ * One request at a time. The bridge caches a minute per repository, so a burst of
+ * `sessions-changed` mostly asks a warm cache, but there is no reason for two of
+ * these to be in flight at once.
+ */
+let prsInFlight = false;
+async function loadRailPrs() {
+    if (prsInFlight) return;
+    prsInFlight = true;
+    try {
+        const { sessions } = await get('/api/prs');
+        state.railPrs = new Map(Object.entries(sessions || {}));
+        for (const s of state.sessions) {
+            if (!s.prs || !s.prs.length) continue;
+            const strip = dom.rail.querySelector(`[data-id="${CSS.escape(s.sessionId)}"]`);
+            if (strip) patchPrBadge(strip, s);
+        }
+    } catch {
+        // Leaves whatever was known before, which is better than blanking it —
+        // the same silence `loadPrStatus` keeps, and for the same reason.
+    } finally {
+        prsInFlight = false;
     }
 }
 
@@ -812,6 +851,10 @@ function strip(s) {
                 // somebody is sitting in front of, and only the registry knows.
                 (s.live && s.live.kind === 'bg')
                     ? el('span', { class: 'tag-bg', title: 'A background agent' }, 'bg') : null,
+                // What the session left on GitHub, at its worst. Ahead of the
+                // worktree name and the activity, which are the two things this
+                // line is allowed to squeeze out.
+                prBadge(s),
                 s.worktree ? el('span', { class: 'wt' }, s.worktree.name) : null,
                 s.worktree ? el('span', { class: 'dot' }, '·') : null,
                 // The time the list is ordered by, so the order reads as sorted.
@@ -906,6 +949,89 @@ function activityBits(runner) {
             el('span', { class: 'pulse-t' },
                 clip(runner.detail || runner.activity || 'Working', 22))),
     ];
+}
+
+/**
+ * What a session's pull requests have come to, as one glyph.
+ *
+ * The same glyph set and the same colour table as the header chip, at 11px — one
+ * PR vocabulary, learned once. Which of several PRs it draws is the bridge's call
+ * (`ATTENTION_ORDER` in `pulls.js`); having a second copy of that ranking here is
+ * how the two would drift.
+ *
+ * Drawn from `prs` on the summary, which is free, so the glyph appears with the
+ * rail and gains its colour when `/api/prs` answers — exactly what `prLink` does
+ * in the header. A session with no PRs draws nothing at all, which is not the same
+ * as one whose PRs could not be reached: that one is grey.
+ */
+function prBadge(s) {
+    if (!s.prs || !s.prs.length) return null;
+    const agg = state.railPrs.get(s.sessionId) || null;
+    const status = (agg && agg.status) || 'unknown';
+    return el('span', { class: 'tag-pr', 'data-status': status, title: prBadgeTip(s, agg) },
+        icon(PR_ICON[status] || 'pr', 11));
+}
+
+// A status in the few words a breakdown line wants — `resolveStatus`'s own labels,
+// shortened where a count reads badly in front of them ("1 changes requested").
+// Anything missing falls back to the status itself with its hyphen opened out,
+// which is already a readable phrase for every status there is; the map exists for
+// the two that are not, so a new one added to the bridge degrades rather than
+// breaks. The *ranking* is not duplicated here — that stays on the bridge.
+const PR_WORDS = {
+    changes: 'awaiting changes',
+    'checks-failed': 'failing',
+    'checks-pending': 'still checking',
+    unknown: 'unreachable',
+};
+const prWords = (status) => PR_WORDS[status] || status.replace(/-/g, ' ');
+
+/**
+ * The glyph is recognisable without being read; the words are here.
+ *
+ * Same three-part shape as the header's tooltip — what it is, what the one word
+ * left out, then which PRs are being talked about. The breakdown is skipped for a
+ * session with one PR, where it would only say the headline twice.
+ */
+function prBadgeTip(s, agg) {
+    const numbers = s.prs.map(p => `#${p.number}`).join(' · ');
+    const plural = `${s.prs.length} pull request${s.prs.length === 1 ? '' : 's'}`;
+
+    // Before the fetch lands, and after one that failed: the row knows how many
+    // PRs there are and nothing about them, and says exactly that.
+    if (!agg) return `${plural}\nAsking GitHub…\n${numbers}`;
+    if (agg.status === 'unknown') return `${plural}\nGitHub could not be reached\n${numbers}`;
+
+    const breakdown = Object.entries(agg.counts)
+        .sort((a, b) => b[1] - a[1])
+        .map(([status, n]) => `${n} ${prWords(status)}`)
+        .join(' · ');
+
+    return [
+        agg.label || prWords(agg.status),
+        agg.total > 1 ? `${plural} — ${breakdown}` : null,
+        numbers,
+    ].filter(Boolean).join('\n');
+}
+
+/** Recolour one row's PR glyph in place, rather than rebuilding the whole rail. */
+function patchPrBadge(stripEl, s) {
+    const meta = stripEl.querySelector('.strip-meta');
+    if (!meta) return;
+    const existing = meta.querySelector('.tag-pr');
+    const fresh = prBadge(s);
+    if (existing && fresh) { existing.replaceWith(fresh); return; }
+    if (existing) { existing.remove(); return; }
+    if (!fresh) return;
+
+    // A session that raised its first PR mid-conversation has no glyph to replace,
+    // so this has to land where strip() would have put it: after the leading tags
+    // and before everything that is allowed to be squeezed out. Anchoring off the
+    // tags rather than off `.wt` because a session with no worktree has no `.wt`,
+    // and `insertBefore(…, null)` would append it past the activity line.
+    const lead = [...meta.children]
+        .filter(n => n.matches('.tag-pin, .tag-test, .tag-bg')).pop();
+    meta.insertBefore(fresh, lead ? lead.nextSibling : meta.firstChild);
 }
 
 function queuedBadge(queued) {
@@ -11844,6 +11970,11 @@ setInterval(() => {
 // session to say so. Matched to the bridge's own minute of cache, so a window left
 // open on a conversation costs one `gh pr list` a minute at most.
 setInterval(loadPrStatus, 60_000);
+
+// And the same for the rail, which has no conversation open to notice it either.
+// Also the only way a PR raised while you were looking elsewhere reaches a row:
+// nothing about a PR broadcasts, so this poll is the whole mechanism.
+setInterval(loadRailPrs, 60_000);
 
 // The count on the Dashboard button is the only thing that says there is
 // anything to look at, so it is read once at startup — a few seconds in, where

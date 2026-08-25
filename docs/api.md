@@ -227,9 +227,10 @@ from the card.
 `prs` is every pull request the session raised, in the order it raised them:
 `[{number, url, repo}]`, empty for a session that raised none. Read from the
 transcript, so it is free and it is history — what has *become* of those PRs is a
-separate request, below. It is an array because a session that lands one PR and
-opens another is ordinary; it was a single `pr` object until August 2026, which
-silently kept only the newest.
+separate request: `GET /api/sessions/:id/prs` for one session, or `GET /api/prs`
+for a status per session across the whole list, both below. It is an array because
+a session that lands one PR and opens another is ordinary; it was a single `pr`
+object until August 2026, which silently kept only the newest.
 
 ### `GET /api/sessions/:id[?tail=N]`
 
@@ -365,6 +366,50 @@ summary already — and simply not colour it. **This is its own route rather tha
 field on the summary on purpose**: it asks GitHub, and the session list must never
 wait on GitHub. The bridge caches one `gh pr list` per repository for a minute, and
 a merged or closed PR for the life of the process, since neither can change back.
+
+### `GET /api/prs`
+
+`{ sessions: {...}, gh: {ok, error} }` — one *aggregate* status per session, for a
+list that wants a glyph per row and cannot afford a request per row.
+
+`sessions` is **an object keyed by session id, not an array**, and a session with
+no pull requests is **absent from it rather than null** — the client already knows
+which those are from `prs` on the summary. Each value is an object:
+
+| Field | Type |
+|---|---|
+| `status` | string — one of the same ten values `GET /api/sessions/:id/prs` uses |
+| `label` | string or null — the winning PR's own label, in words |
+| `total` | number — how many pull requests the session raised |
+| **`counts`** | **object** — `{[status]: number}` over all of them, e.g. `{"merged": 2, "draft": 1}`. Only the statuses actually present appear as keys |
+
+**The ranking here is not the one `resolveStatus` uses, and that is deliberate.**
+A client that assumes one precedence and is served the other draws the wrong glyph
+and reports no error, so both are written out:
+
+- **One PR** (`/api/sessions/:id/prs`): settled states *first*, because for a merged
+  PR nothing else is worth saying, and draft above anything wrong with the code,
+  because nobody is being asked to act on a draft yet.
+- **A session's whole set** (`/api/prs`): settled states *last*, because they are
+  the ones that no longer need saying, and a broken PR above a draft, because it is
+  the one waiting on you now. In full, least settled first:
+  `conflicting`, `checks-failed`, `changes`, `draft`, `checks-pending`, `open`,
+  `approved`, `unknown`, `closed`, `merged`.
+
+`unknown` sits above the two settled states on purpose: with one PR unreachable and
+one merged, "all merged" is a claim that cannot be made. `ATTENTION_ORDER` and
+`aggregate` in `bridge/pulls.js` are the whole rule and `test/pulls.test.js` pins
+both orderings.
+
+Cost: every call is one cached `gh pr list` per repository, *plus*, the first time a
+given already-settled PR is asked about, one `gh pr view` for it — merged and closed
+cannot change back, so that answer is kept for the life of the process. So the first
+call after a bridge restart can take seconds on a machine with a long history, and
+every later one is fast. Fetch it **after** the session list has painted, never
+before: this is the request `/api/sessions` deliberately does not make.
+
+Nothing pushes PR changes — there is no `/api/events` event for them. Poll this at
+about the bridge's own minute of cache; `web/app.js` uses 60s.
 
 ### `GET /api/sessions/:id/changes[?refresh=1]`
 

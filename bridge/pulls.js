@@ -2,11 +2,13 @@
 
 // Everything this app knows about a pull request comes through here.
 //
-// Two callers with different questions. The work-in-flight board asks "what is
+// Three callers with different questions. The work-in-flight board asks "what is
 // open on this repository" once per repo and matches the answers against what is
 // on disk. A conversation header asks the narrower question "what happened to the
 // PRs *this session* raised", and that one has to be answerable for a PR that has
-// already merged — which the open list, by design, does not mention.
+// already merged — which the open list, by design, does not mention. The session
+// rail asks the header's question about every session at once and then throws all
+// but one word of the answer away, because a row has space for one glyph.
 //
 // So the open list stays the primary source and the per-PR lookup is the
 // exception. A PR absent from `gh pr list --state open` is terminal: merged or
@@ -17,11 +19,13 @@
 // A resolved status is one word, because an icon and a colour can only carry one.
 // A PR is regularly several things at once (open, approved, and conflicting), so
 // `resolveStatus` ranks them by what most needs doing about it and hands the rest
-// back as detail lines for the tooltip.
+// back as detail lines for the tooltip. A *session* is regularly several PRs at
+// once for the same reason, and `aggregate` ranks those — by a different order,
+// which is worth reading the comment above `ATTENTION_ORDER` for.
 
 const { execFile } = require('child_process');
 
-const { cached } = require('./memo');
+const { cached, mapLimit } = require('./memo');
 
 const GH_TIMEOUT_MS = 20_000;
 const GIT_TIMEOUT_MS = 10_000;
@@ -259,19 +263,24 @@ function resolveStatus(pr) {
 /** A PR gh could not be asked about: still a number, still a link, no claim. */
 const unknown = (base) => ({ ...base, status: 'unknown', label: null, detail: [] });
 
-/**
- * Status for the PRs one session raised, in the order it raised them.
- *
- * Takes the `{number, url, repo}` triples the transcript recorded and answers
- * with a status for each. A PR gh could not be asked about reports `unknown`,
- * because a header that has lost its GitHub connection should be no worse than
- * one that never had it.
- */
-async function forSession(prs, fallbackRepo = null) {
-    const list = (prs || []).filter(p => p && p.url);
-    if (!list.length) return { prs: [], gh: { ok: true, error: null } };
+// How many `gh pr view` calls to have in flight when the open lists did not
+// answer. The same figure `dashboard.js` uses, and for the same reason: these are
+// separate processes, not requests on one connection.
+const GH_CONCURRENCY = 4;
 
-    const repos = [...new Set(list.map(p => p.repo || fallbackRepo).filter(Boolean))];
+/**
+ * Resolve a batch of `{number, url, repo}` triples to statuses.
+ *
+ * The batch is the unit rather than the session because the expensive part is
+ * per *repository*: one `gh pr list` answers every open PR anybody asked about,
+ * and only the ones it does not mention cost a call each. A caller with fifty
+ * sessions and three repositories should pay for three repositories.
+ *
+ * Returns a resolved entry per input in input order, so a caller can slice its
+ * own sessions back out, plus the first thing gh could not do.
+ */
+async function resolveBatch(list) {
+    const repos = [...new Set(list.map(p => p.repo).filter(Boolean))];
     const open = new Map();
     let error = null;
 
@@ -281,9 +290,9 @@ async function forSession(prs, fallbackRepo = null) {
         else error = error || r.error;
     }));
 
-    const out = await Promise.all(list.map(async (p) => {
-        const repo = p.repo || fallbackRepo;
-        const base = { number: p.number, url: p.url, repo: repo || null };
+    const out = await mapLimit(list, GH_CONCURRENCY, async (p) => {
+        const repo = p.repo || null;
+        const base = { number: p.number, url: p.url, repo };
 
         const listed = repo ? open.get(repo) : null;
         if (!listed) return unknown(base);
@@ -306,9 +315,123 @@ async function forSession(prs, fallbackRepo = null) {
             label,
             detail,
         };
-    }));
+    });
 
+    return { prs: out, error };
+}
+
+/**
+ * Status for the PRs one session raised, in the order it raised them.
+ *
+ * Takes the `{number, url, repo}` triples the transcript recorded and answers
+ * with a status for each. A PR gh could not be asked about reports `unknown`,
+ * because a header that has lost its GitHub connection should be no worse than
+ * one that never had it.
+ */
+async function forSession(prs, fallbackRepo = null) {
+    const list = (prs || []).filter(p => p && p.url)
+        .map(p => ({ number: p.number, url: p.url, repo: p.repo || fallbackRepo || null }));
+    if (!list.length) return { prs: [], gh: { ok: true, error: null } };
+
+    const { prs: out, error } = await resolveBatch(list);
     return { prs: out, gh: { ok: !error, error } };
+}
+
+// ---------------------------------------------------------------------------
+// One status for a whole session
+// ---------------------------------------------------------------------------
+
+// Which of a session's PRs the rail should colour itself after — least settled
+// first, so the first match wins.
+//
+// Deliberately *not* `resolveStatus`'s order, and the difference is the point of
+// having two. That one ranks the states of a single PR and puts the terminal ones
+// first, because for one merged PR nothing else is worth saying. Across several,
+// the terminal states are the ones that no longer need saying: a session with two
+// merged PRs and a draft has a draft to finish, and that is the whole question a
+// row is answering.
+//
+// It also disagrees about draft. `resolveStatus` puts draft above anything wrong
+// with the code, because nobody is being asked to act on a draft yet. That
+// reasoning is about *one* PR — here a conflict on a second PR is waiting on you
+// now while the draft is not, so the broken one wins.
+//
+// `unknown` is gh being unreachable rather than a state a PR can be in, and it
+// sits above the two settled states on purpose: with one PR unreachable and one
+// merged, "all merged" is a claim this cannot make. Below every live state,
+// because a real answer beats no answer.
+const ATTENTION_ORDER = [
+    'conflicting', 'checks-failed', 'changes', 'draft', 'checks-pending',
+    'open', 'approved', 'unknown', 'closed', 'merged',
+];
+
+const attentionRank = (status) => {
+    const at = ATTENTION_ORDER.indexOf(status);
+    // A status this does not know is more interesting than one it does, not less:
+    // a new one added to `resolveStatus` and forgotten here should show up rather
+    // than sort quietly to the bottom.
+    return at === -1 ? -1 : at;
+};
+
+/**
+ * The one status a session's whole set of pull requests reduces to.
+ *
+ * `counts` carries what the single word left out, so a tooltip can say "1 draft ·
+ * 2 merged" without the caller holding the list. Null for a session with no PRs —
+ * which is not the same as a session whose PRs could not be reached, and a row
+ * draws nothing at all for the first and a grey glyph for the second.
+ *
+ * @param {Array<{status: string, label: string|null}>} resolved
+ */
+function aggregate(resolved) {
+    const list = (resolved || []).filter(p => p && p.status);
+    if (!list.length) return null;
+
+    const counts = {};
+    for (const p of list) counts[p.status] = (counts[p.status] || 0) + 1;
+
+    let worst = list[0];
+    for (const p of list) {
+        if (attentionRank(p.status) < attentionRank(worst.status)) worst = p;
+    }
+
+    return { status: worst.status, label: worst.label || null, total: list.length, counts };
+}
+
+/**
+ * One aggregate per session, for the rail.
+ *
+ * Sessions with no PRs are absent from the answer rather than null: the caller
+ * already knows which those are from `prs` on the summary, and the map is sent to
+ * a client on every poll.
+ *
+ * @param {Array<{sessionId: string, prs: Array, repo?: string|null}>} rows
+ */
+async function forSessions(rows) {
+    const flat = [];
+    const spans = [];      // one {sessionId, from, to} per session with PRs
+
+    for (const row of rows || []) {
+        const list = (row.prs || []).filter(p => p && p.url);
+        if (!list.length) continue;
+        const from = flat.length;
+        for (const p of list) {
+            flat.push({ number: p.number, url: p.url, repo: p.repo || row.repo || null });
+        }
+        spans.push({ sessionId: row.sessionId, from, to: flat.length });
+    }
+
+    if (!flat.length) return { sessions: {}, gh: { ok: true, error: null } };
+
+    const { prs, error } = await resolveBatch(flat);
+
+    const sessions = {};
+    for (const { sessionId, from, to } of spans) {
+        const agg = aggregate(prs.slice(from, to));
+        if (agg) sessions[sessionId] = agg;
+    }
+
+    return { sessions, gh: { ok: !error, error } };
 }
 
 /** Forget the cached open lists, for the board's explicit refresh. */
@@ -320,5 +443,5 @@ function clearCache() {
 
 module.exports = {
     githubRepo, repoOf, openPulls, pullState, resolveStatus, checkSummary,
-    forSession, clearCache, PR_TTL_MS,
+    forSession, forSessions, aggregate, ATTENTION_ORDER, clearCache, PR_TTL_MS,
 };
