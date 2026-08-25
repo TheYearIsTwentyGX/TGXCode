@@ -125,6 +125,23 @@
       <span id="dr-badge" class="bar-badge" hidden></span>
     </button>
 
+    <!-- Sessions that start on a clock. After Drafts on the ladder because it is
+         the least demanding thing here by the same measure: a draft is waiting
+         for you, and a schedule is not waiting for anything. The badge counts
+         what is armed, not what is stored — a paused schedule is not news. -->
+    <button id="btn-sched" class="bar-btn" type="button" aria-pressed="false"
+            title="Sessions that start on a clock (Ctrl+7)">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="12" cy="13" r="8.3" stroke="currentColor" stroke-width="1.7"/>
+        <path d="M12 9.1V13l2.8 1.8" stroke="currentColor" stroke-width="1.7"
+              stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M8.6 2.9 6.2 4.7M15.4 2.9l2.4 1.8" stroke="currentColor"
+              stroke-width="1.7" stroke-linecap="round"/>
+      </svg>
+      <span>Schedules</span>
+      <span id="sched-badge" class="bar-badge" hidden></span>
+    </button>
+
     <!-- The same sessions, on a phone. Icon-only: it is a setup step you do once
          per device, not something to give a word of the bar to forever. -->
     <button id="btn-pair" class="bar-btn icon-only" type="button"
@@ -675,6 +692,22 @@ checks, and merge it once they pass.">LGTM</button>
       <div id="dr-body" class="dr-body"></div>
     </section>
 
+    <!-- Sessions that start on a clock. Beside Drafts rather than inside it: a
+         draft is waiting for you to press Start, and the whole point of a
+         schedule is that nobody does. What the card has to answer is therefore
+         different — when it next runs, what the last run found, and whether it
+         has quietly stopped firing. -->
+    <section id="sched" class="sched" hidden aria-label="Schedules">
+      <header class="sched-head">
+        <div>
+          <h1 class="sched-title">Schedules</h1>
+          <p id="sched-sub" class="sched-sub">Sessions that start on a clock.</p>
+        </div>
+        <button id="sched-new" class="dash-btn" type="button">New schedule</button>
+      </header>
+      <div id="sched-body" class="sched-body"></div>
+    </section>
+
     <div id="placeholder" class="empty">
       <h2>No session selected</h2>
       <p>Pick a session from the board, or start a new one. Sessions running in a
@@ -729,6 +762,29 @@ checks, and merge it once they pass.">LGTM</button>
              empty well. -->
         <textarea id="new-prompt" class="grow" rows="2"
                   placeholder="What should this session do?"></textarea>
+      </div>
+      <!-- Only shown in schedule mode; see openNew(). Two fields rather than a
+           second dialog because everything above — the directory, the message,
+           the model, the permission mode — is the same decision either way, and
+           the directory picker is the expensive half of this form. -->
+      <div class="field" id="new-cron-row" hidden>
+        <label for="new-cron">Runs</label>
+        <input id="new-cron" type="text" spellcheck="false" placeholder="0 2 * * 2-6">
+        <!-- Filled in from the bridge's own describeCron as you type, so the
+             expression is checked by the thing that will actually run it rather
+             than by a second parser in the page. -->
+        <div id="new-cron-note" class="note">Five fields, local time: minute hour
+          day-of-month month day-of-week.</div>
+      </div>
+      <div class="field" id="new-gate-row" hidden>
+        <label for="new-gate-ref">Only when this ref has new commits</label>
+        <input id="new-gate-ref" type="text" spellcheck="false"
+               placeholder="origin/main — leave empty to run every time">
+        <div class="note">The range since the last run is available to the prompt
+          as <code>{{range}}</code>, with <code>{{head}}</code>,
+          <code>{{since}}</code>, <code>{{count}}</code>, <code>{{ref}}</code> and
+          <code>{{date}}</code>. With a ref set, a run with nothing new starts no
+          session at all.</div>
       </div>
       <!-- Only shown by a development bridge; see markInstance(). -->
       <div class="field" id="new-test-row" hidden>
@@ -794,6 +850,11 @@ checks, and merge it once they pass.">LGTM</button>
              you are doing. See openNew() and drSave() in app.js. -->
         <button id="new-save" class="btn tonal" type="button">Save as draft</button>
         <button id="new-go" class="btn primary" type="button">Start</button>
+        <!-- Schedule mode replaces Start rather than joining it: "save this" and
+             "run this now" are the same button's job here, since a schedule you
+             saved has not run and is not meant to yet. Hidden outside that mode
+             so the ordinary footer keeps its three buttons. -->
+        <button id="new-sched-save" class="btn primary" type="button" hidden>Save schedule</button>
       </div>
     </div>
   </div>

@@ -986,6 +986,7 @@ not.
 | `bridge/spinner-verbs.json` | The verb catalogue, and the seed for that directory |
 | `bridge/suggestions.js` | What you did about a suggested follow-up |
 | `bridge/drafts.js` | Sessions set up but not started — a create call, held back |
+| `bridge/schedule.js` | Sessions that start on a clock — the store, the cron, and what counts as new since last time |
 | `bridge/mcp.js` | The tools this app gives a session: offer the next piece of work, find the other sessions, hand one of them a fact |
 | `bridge/handoff.js` | The rules a handoff has to pass: the loop guard, and what waking a session would run into |
 | `bridge/slash-commands.js` | What slash commands a directory has, for composer completion |

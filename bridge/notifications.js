@@ -177,19 +177,28 @@ class NotificationLog {
     // -- recording ----------------------------------------------------------
 
     /**
-     * File one entry. `sessionId` and `type` are required; everything else is
-     * filled in from the session index.
+     * File one entry. `type` is required; everything else is filled in from the
+     * session index.
+     *
+     * **`sessionId` may be absent, and `title` may be given instead.** Every
+     * entry used to be about a session, so the title could always be looked up —
+     * but a schedule can fail *without* producing one: a missed slot, a gate that
+     * could not reach git, a working directory that has moved. Those are exactly
+     * the entries worth raising, and without an override they all filed
+     * themselves as "A session", which is both wrong and unhelpfully identical.
+     * An explicit title wins over the lookup; the lookup is skipped entirely when
+     * there is no id, so `describe` is never called with `undefined`.
      */
     record(entry) {
         const at = Date.now();
-        const s = this.describe(entry.sessionId) || {};
+        const s = (entry.sessionId ? this.describe(entry.sessionId) : null) || {};
         const row = {
             // Unique across both bridges, since both append to one file.
             id: `${at}-${randomUUID().slice(0, 8)}`,
             at,
             type: entry.type,
-            sessionId: entry.sessionId,
-            title: s.title || 'A session',
+            sessionId: entry.sessionId || null,
+            title: entry.title || s.title || 'A session',
             project: s.projectName || null,
             cwd: s.cwd || null,
             summary: clip(entry.summary, 200) || null,

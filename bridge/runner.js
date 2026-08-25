@@ -263,6 +263,7 @@ class Runner extends EventEmitter {
         this.activity = null;          // human-readable "what is it doing right now"
         this.lastError = null;
         this.lastResult = null;        // {costUsd, durationMs, numTurns, isError}
+        this.lastResultText = null;    // the turn's final text, capped; never broadcast
         this.lastUsedAt = Date.now();
         // Messages waiting their turn: {id, text, at}. Held here rather than
         // written straight through, so they stay visible and cancellable — see
@@ -1104,6 +1105,20 @@ class Runner extends EventEmitter {
                 // the CLI, so say what went wrong rather than quietly going idle.
                 const failed = !!msg.is_error;
                 const detail = typeof msg.result === 'string' ? msg.result : '';
+                // What the turn actually said, kept off `lastResult` on purpose.
+                //
+                // `lastResult` is what `turn-complete` broadcasts, and that event
+                // goes to every connected client — a desktop window, a phone over
+                // Tailscale — on every turn. The final assistant message can be
+                // pages long, and every client already has it: they tail the
+                // transcript. So putting it there would be sending the same text
+                // twice, over the slower path, to clients that did not ask.
+                //
+                // It is here because a scheduled run needs its verdict without
+                // waiting for the index to catch up on a session that was created
+                // seconds ago. Capped, since nothing reads more than the last few
+                // lines of it.
+                this.lastResultText = detail.slice(-4000);
                 this.lastResult = {
                     isError: failed,
                     detail: failed ? detail.slice(0, 300) : null,

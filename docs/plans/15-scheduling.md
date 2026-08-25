@@ -3,20 +3,42 @@
 **Effort:** M · **Depends on:** 14 (required), 02 (for it to be useful) ·
 **Touches:** new `bridge/schedule.js`, `bridge/server.js`, `web/app.js`
 
-The weakest plan here. Read the "should this exist" section before building it.
+> **Status: C was built, and A and B were not.** This note recommended the
+> opposite, on a premise that turned out to be wrong — see below. `bridge/schedule.js`
+> and the `/api/schedules` routes are the scheduler; `docs/api.md` is the contract.
+> **A is still worth doing** and is the obvious next piece: the runs a schedule
+> produces are ordinary rail rows, with no grouping and no run history.
 
 ## Should this exist?
 
-Claude Code already has scheduled agents and cron-based routines. Rebuilding
-that in this app duplicates something that works, and duplicated schedulers are
-a classic source of "why did that run twice".
+**This section was wrong, and the way it was wrong is worth keeping.** It argued
+that Claude Code already schedules agents, so building a second scheduler here
+would duplicate something that works. Three things were checked before building
+and none of them held:
 
-The case *for* doing it here is narrow but real: this app is where the results
-get read. A run scheduled elsewhere lands as another row in the rail with no
-indication it was scheduled, no grouping across runs, and no history of "did
-last night's pass find anything".
+- **There is no durable local scheduler to build a view over.** The CLI's own
+  cron is session-scoped and in memory — it dies with the session and expires
+  after a week. It cannot hold a nightly schedule at all.
+- **Cloud routines can, but not for this.** They run against a clone, so a
+  schedule that depends on anything only present in a local checkout — an
+  uncommitted skill, a worktree, a gitignored config — cannot run there. The job
+  this was built for is exactly that case.
+- **"Since the prior run" is state nobody else keeps.** A reviewed-SHA marker per
+  schedule has to live wherever the schedule does.
 
-So the recommendation is: **do not build a scheduler. Build a view over one.**
+The general lesson stands even though the conclusion did not: *check whether the
+thing you would be duplicating actually does what you need* — the answer here was
+"nearly, in a way that never survives contact".
+
+What does survive is the warning in section C, which was the useful half of this
+note and is honoured in full. See the header comment in `bridge/schedule.js`.
+
+## A. Recognise scheduled runs (still to do)
+
+Below as written, minus the "read the schedule from Claude Code's own config"
+line — the schedule is ours now, and `GET /api/schedules` already serves it with
+`lastSessionId`, `runs` and `lastOutcome` on every row. What is missing is a
+`scheduleId` on the session, so the rail can group them.
 
 ## A. Recognise scheduled runs (do this)
 
@@ -34,42 +56,55 @@ agents — and the session registry (plan 04) carries `kind`, `entrypoint`, and
 This is small, it is consistent with the app's "derive everything from Claude
 Code's files" design, and it delivers most of the value.
 
-## B. Trigger a run now (small)
+## B. Trigger a run now — **done**
 
-A button next to a recognised job: run it again immediately. This is just
-`POST /api/sessions` with the recorded cwd and prompt — machinery that already
-exists.
+`POST /api/schedules/:id/run`, and the important part is what it turned out to
+need: it runs the *same function* the tick runs rather than reassembling a create
+call, because "Run now produces a session identical to what the schedule
+produces" is only true if there is one code path.
 
-## C. An actual scheduler (only if A and B prove insufficient)
+## C. An actual scheduler — **built**
 
-If it is built:
+What was predicted here, and what it actually took:
 
-- **Storage.** `~/.local/share/claude-sessions/schedules.json`.
-- **Trigger.** The bridge is not always running — `app/main.js` starts it and
-  `stopBridgeIfIdle` shuts it down when the window closes and nothing is busy.
-  A scheduler inside a process with that lifecycle will silently miss runs. Use
-  the OS: register a systemd user timer or a cron entry inside WSL that calls
-  the bridge, and have the bridge start itself if not running. Do not write a
-  `setInterval` scheduler and call it done.
-- **Permissions.** Unattended runs and `bypassPermissions` are a bad pairing. A
-  scheduled run must declare its mode explicitly, default to `acceptEdits`, and
-  any permission ask (plan 01) auto-denies with a note after the timeout since
-  nobody is watching.
-- **Auth.** Requires plan 14 — an unauthenticated bridge that starts agents on a
-  timer is worse than one that only does it when asked.
-- **Chaining.** `turn-complete` already fires (`server.js:459`). "When this
-  finishes, start that one with this prompt" is a listener. Cap chain depth,
-  because a chain that loops is a machine that runs agents forever.
+- **Storage.** `~/.local/share/claude-sessions/schedules.json`. As written. It
+  also needed drafts.js's *merge-on-write*, which this note did not anticipate:
+  several bridges share the file, and a whole-file rewrite loses the others' rows.
+- **Trigger.** The warning was right and the prescription was not. An in-bridge
+  `setInterval` alone does miss runs — but a cron entry that starts the bridge
+  cannot help either, since cron does not run when WSL is off. What works is a
+  30s tick **plus a catch-up pass on boot**, so a slot missed while the bridge was
+  down is found on the way back up, with a 12-hour cap so a machine that slept for
+  a week does not produce five reviews at breakfast. That cap is the piece that
+  makes "do not write a `setInterval` scheduler and call it done" satisfiable
+  in-process.
+- **Permissions.** Refined. Defaulting to `acceptEdits` is wrong for the
+  read-only reviews this is mostly for: they never edit, and `auto` would sit at
+  the first prompt until morning. The dialog defaults a *schedule* to `dontAsk`
+  where it defaults a session to `plan`, and the existing remote refusal of
+  `dontAsk`/`bypassPermissions` covers the phone case with no new rule. The
+  auto-deny-after-timeout idea was not needed and was not built.
+- **Auth.** Plan 14 landed first, as required.
+- **Chaining.** Not built. Still a listener on `turn-complete`, and the cap on
+  chain depth is still the thing to get right.
+
+One risk this note did not name, found the hard way while building: **an exception
+after the slot is claimed loses the run silently.** The claim is on disk, so the
+schedule believes it ran; nothing is recorded to say it did not. The tick catches
+per schedule and records the throw as a failure.
 
 ## Risks
 
-- **Silent failure.** A schedule that stops firing must be visible. Show last-run
-  and next-run times, and notify (plan 02) when an expected run is missed.
-- **Quota.** Unattended runs eat the same 5-hour window as interactive ones
-  (plan 05). Show a scheduled job's typical consumption before enabling it.
+- **Silent failure.** Handled: the card shows last-run and next-run, `lastSkipReason`
+  distinguishes "nothing to do" from "broken", and a missed slot notifies loudly.
+- **Quota.** Not addressed. Unattended runs eat the same window as interactive ones
+  and nothing shows a schedule's typical consumption before you enable it.
 
-## Acceptance for A + B
+## Acceptance
 
-- Runs from the same scheduled job group into one rail row with a run history.
-- A failed overnight run is visible without opening anything.
-- "Run now" produces a session identical to what the schedule produces.
+- ~~Runs from the same scheduled job group into one rail row with a run history.~~
+  **Not done** — this is A, and it is what is left.
+- A failed overnight run is visible without opening anything. **Done**, on the card
+  and as a notification.
+- "Run now" produces a session identical to what the schedule produces. **Done**,
+  by construction.

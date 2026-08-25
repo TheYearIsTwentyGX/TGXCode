@@ -24,6 +24,10 @@ const { Prefs } = require('./prefs');
 const { Spinner } = require('./spinner');
 const { Suggestions, STATUSES: SUGGESTION_STATUSES } = require('./suggestions');
 const { Drafts, MAX_DRAFTS } = require('./drafts');
+const {
+    Schedules, MAX_SCHEDULES, CATCHUP_MS,
+    parseCron, nextSlot, dueSlot, describeCron, fillPrompt, verdictOf,
+} = require('./schedule');
 const { SlashCommandCache } = require('./slash-commands');
 const { NotificationLog, ReadState } = require('./notifications');
 const devbrowser = require('./devbrowser');
@@ -42,7 +46,7 @@ const commands = require('./commands');
 const { RunPool } = require('./runs');
 // Written here, read back by transcript.js. One format, and the two halves of it
 // live in one file so they cannot drift apart.
-const { handoffEnvelope } = require('./transcript');
+const { handoffEnvelope, firstLine } = require('./transcript');
 const { HandoffLimit, stateOf: handoffState, wakes, wakeFailure } = require('./handoff');
 
 const WEB_DIR = path.join(__dirname, '..', 'web');
@@ -67,6 +71,10 @@ const SUGGESTION_STATES = new Set(['open', ...SUGGESTION_STATUSES]);
 // session that exists: a draft *is* a create call, held back until you press
 // Start. See bridge/drafts.js.
 const drafts = new Drafts();
+// Sessions that start on a clock. A draft that is never consumed, plus a cron
+// expression, plus a gate — see bridge/schedule.js. Only the everyday instance
+// fires them; the tick below says why.
+const schedules = new Schedules();
 const index = new SessionIndex(flags);
 const registry = new SessionRegistry();
 const pool = new RunnerPool();
@@ -763,6 +771,414 @@ function draftFields(body, who, { partial }) {
     return { fields };
 }
 
+// ---------------------------------------------------------------------------
+// Schedules
+// ---------------------------------------------------------------------------
+//
+// The firing half of bridge/schedule.js. The store there is deliberately inert —
+// it holds rows and answers questions about clocks — because everything that
+// actually starts a session needs `pool`, `flags`, `index` and the same refusal
+// rules a create call goes through, and all four live here.
+
+// How often to look. Thirty seconds against a schedule whose finest resolution
+// is a minute means a slot is noticed within half its own granularity, and the
+// check is a `nextSlot` walk per enabled schedule — cheap enough that the
+// interval is not worth tuning. Deliberately not a minute: a tick landing on the
+// same second as the slot every time would put every schedule on this machine on
+// the same instant.
+const SCHEDULE_MS = 30_000;
+
+/**
+ * Let a development bridge fire, for schedules marked as tests only.
+ *
+ * Without this the feature is only exercisable on the everyday instance, which is
+ * the one thing CLAUDE.md is most insistent nobody touch — so "test it properly"
+ * and "do not go near 45888" were in direct conflict, and the way that conflict
+ * usually resolves is that nobody tests it.
+ *
+ * **It is narrow in the direction that matters.** A dev bridge shares
+ * `schedules.json` with the everyday one, so an override that simply lifted the
+ * gate would have an agent's bridge starting the user's real 2 AM sessions —
+ * worse than the problem it solves. With this set, a dev bridge fires *only* rows
+ * with `test: true`, which are the ones it made and which stay out of the
+ * everyday window anyway. The user's schedules are untouched either way.
+ *
+ * The everyday instance ignores it: it already fires everything.
+ */
+const SCHEDULE_ON_DEV = process.env.CLAUDE_SESSIONS_SCHEDULE_ON_DEV === '1';
+
+/**
+ * A schedule as it goes out on the wire.
+ *
+ * The three derived fields are computed here rather than in the store and rather
+ * than in each client, for the reason `draftOut` gives: the desktop, the phone
+ * and the Android app must not be able to come to three different answers about
+ * when a schedule next runs. `cronText` in particular is not something a client
+ * should be reimplementing — `0 2 * * 2-6` is not text anybody should have to
+ * decode to check they typed what they meant.
+ */
+function scheduleOut(row) {
+    const spec = parseCron(row.cron);
+    return {
+        ...row,
+        projectName: projectName(row.cwd),
+        cronText: describeCron(spec),
+        // Null when the expression can never match again, which is a real answer
+        // — `0 0 30 2 *` is a schedule that will never fire — and one the card
+        // should be able to say out loud rather than showing a blank.
+        nextRunAt: row.enabled ? nextSlot(spec, Date.now()) : null,
+    };
+}
+
+/** The whole list, which is both the GET body and the SSE payload. */
+function schedulesPayload() {
+    const rows = schedules.list().map(scheduleOut);
+    return {
+        at: Date.now(),
+        schedules: rows,
+        counts: { total: rows.length, enabled: rows.filter(r => r.enabled).length },
+    };
+}
+
+/**
+ * Validate what a schedule write is asking for, exactly as a create would.
+ *
+ * `draftFields` with three additions, and for the same reason it exists: a
+ * schedule you cannot start is worse than a refused save, because nobody is
+ * watching at 2 AM to see it fail. So the directory has to exist and be inside
+ * the roots here too, and a remote caller is refused the two modes it is refused
+ * on creation.
+ *
+ * That last one matters more here than for a draft. A draft in
+ * `bypassPermissions` is a thing somebody has to press Start on; a *schedule* in
+ * `bypassPermissions` is an unattended agent with no permission gate, starting
+ * itself every night. `modeRefusal` already refuses both modes to a remote
+ * caller, so a phone can create an `auto` schedule and not that one — which
+ * falls out of the existing rule rather than needing a new one.
+ *
+ * @returns {{fields: object} | {error: string, status: number, remote?: boolean}}
+ */
+function scheduleFields(body, who, { partial }) {
+    const fields = {};
+
+    if (!partial || body.cwd !== undefined) {
+        if (!body.cwd) return { error: 'cwd is required', status: 400 };
+        try {
+            fields.cwd = resolveWorkdir(String(body.cwd));
+        } catch (err) {
+            return { error: err.message, status: 400 };
+        }
+    }
+
+    if (!partial || body.prompt !== undefined) {
+        const prompt = body.prompt && String(body.prompt).trim();
+        if (!prompt) return { error: 'prompt is required', status: 400 };
+        fields.prompt = prompt;
+    }
+
+    if (!partial || body.cron !== undefined) {
+        if (!body.cron) return { error: 'cron is required', status: 400 };
+        const spec = parseCron(String(body.cron));
+        if (spec.error) return { error: spec.error, status: 400 };
+        // A syntactically fine expression that can never match is still a
+        // schedule that will never run, and saying so now is far kinder than a
+        // card that sits there for a month saying "next run: never".
+        if (nextSlot(spec, Date.now()) === null) {
+            return {
+                error: `"${spec.text}" parses but never matches a real date`,
+                status: 400,
+            };
+        }
+        fields.cron = spec.text;
+    }
+
+    if (!partial || body.permissionMode !== undefined) {
+        const mode = normalizeMode(body.permissionMode);
+        const refusal = modeRefusal(mode, who);
+        if (refusal) return { error: refusal, status: 403, remote: true };
+        fields.permissionMode = mode;
+    }
+
+    // A gate is stored whole or not at all — the store's `cleanGate` drops a
+    // half-specified one, so a missing ref is caught here where it can be said
+    // rather than silently becoming "no gate".
+    if (!partial || body.gate !== undefined) {
+        const gate = body.gate;
+        if (gate === null || gate === undefined) {
+            fields.gate = null;
+        } else if (typeof gate !== 'object') {
+            return { error: 'gate must be an object or null', status: 400 };
+        } else if (gate.kind !== 'git-commits') {
+            return {
+                error: `unknown gate kind ${JSON.stringify(gate.kind)} — only `
+                    + '"git-commits" is supported',
+                status: 400,
+            };
+        } else if (!gate.ref || !String(gate.ref).trim()) {
+            return { error: 'a git-commits gate needs a ref', status: 400 };
+        } else {
+            fields.gate = {
+                kind: 'git-commits',
+                ref: String(gate.ref).trim(),
+                fetch: gate.fetch !== false,
+            };
+        }
+    }
+
+    // The ones that mean "no choice made" when empty, rather than being invalid.
+    if (!partial || body.model !== undefined) fields.model = body.model || null;
+    if (!partial || body.title !== undefined) fields.title = body.title || null;
+    if (!partial || body.test !== undefined) fields.test = !!body.test;
+    if (!partial || body.enabled !== undefined) fields.enabled = body.enabled !== false;
+
+    return { fields };
+}
+
+/**
+ * Sessions this process started from a schedule, so a finished turn can be
+ * attributed back.
+ *
+ * In memory rather than on the row, and only for runs *this* bridge started.
+ * The row carries `lastSessionId` for the card to link to, but a verdict may only
+ * be recorded by the process that owns the runner — otherwise a dev bridge
+ * watching the same file would file a second notification for somebody else's
+ * run. Bounded because a long-lived bridge would otherwise accumulate one entry
+ * per run forever.
+ * @type {Map<string, string>}
+ */
+const scheduledRuns = new Map();
+const SCHEDULED_RUNS_KEPT = 200;
+
+function rememberScheduledRun(sessionId, scheduleId) {
+    scheduledRuns.set(sessionId, scheduleId);
+    while (scheduledRuns.size > SCHEDULED_RUNS_KEPT) {
+        scheduledRuns.delete(scheduledRuns.keys().next().value);
+    }
+}
+
+/**
+ * Start the session a schedule describes, right now.
+ *
+ * Shared by the tick and by `POST /api/schedules/:id/run`, which is the whole
+ * reason it is a function: "Run now" has to produce a session *identical* to
+ * what the clock produces, and the only way to be sure of that is for there to
+ * be one path. `POST /api/drafts/:id/start` makes the same argument about the
+ * three clients of this API; here the second caller is a timer.
+ *
+ * `force` is what Run now passes. It skips the gate and does not care about
+ * slots — you pressed the button, so something should happen even if there are
+ * no new commits — but it does *not* skip `modeRefusal` or the rate limit.
+ *
+ * `who` is the caller a route was reached by, and **the tick passes `LOCAL_CALLER`
+ * rather than nothing.** A schedule firing is the machine acting on its own, which
+ * is as local as a caller gets — a schedule saved at the desk in `dontAsk` must
+ * still run at 2 AM when there is no request behind it. `modeRefusal` reads
+ * `who.remote`, so the tick handing it `null` was a thrown TypeError inside a
+ * timer: the slot got claimed, the run never happened, and nothing was recorded
+ * against the schedule to say why.
+ *
+ * @returns {Promise<{ok: true, sessionId: string, prompt: string, facts: object}
+ *   | {ok: false, skip: string, error?: string, detail?: string, head?: string}>}
+ */
+const LOCAL_CALLER = { remote: false, peer: 'the schedule', host: null };
+
+async function runSchedule(row, { force = false, who = LOCAL_CALLER } = {}) {
+    // Re-checked at the moment of spawning, not trusted from write time. The
+    // roots are configuration and the mode is the caller's; a directory can be
+    // moved after a schedule is saved, and this file is hand-editable. Same
+    // reasoning as `POST /api/drafts/:id/start`, and it matters more for a row
+    // that may sit unread for months.
+    const mode = normalizeMode(row.permissionMode);
+    const refusal = modeRefusal(mode, who);
+    if (refusal) return { ok: false, skip: 'error', error: refusal };
+
+    try {
+        resolveWorkdir(row.cwd);
+    } catch (err) {
+        return { ok: false, skip: 'error', error: err.message };
+    }
+
+    // The gate, and the marker the prompt will be built from.
+    let facts = { at: Date.now() };
+    if (row.gate && row.gate.kind === 'git-commits') {
+        const range = await git.commitRange(row.cwd, row.gate.ref, row.lastMarker,
+            { fetch: row.gate.fetch });
+        if (!range.ok) {
+            return {
+                ok: false, skip: 'error',
+                error: range.error || `cannot read ${row.gate.ref}`,
+                detail: range.reason,
+            };
+        }
+        // Nothing new: no session, and — the important half — the marker is
+        // left exactly where it was.
+        if (!force && range.count === 0) {
+            return { ok: false, skip: 'nothing-new', head: range.head };
+        }
+        facts = {
+            ...facts,
+            head: range.head,
+            since: range.staleMarker ? null : row.lastMarker,
+            count: range.count,
+            ref: row.gate.ref,
+            staleMarker: range.staleMarker,
+            fetchError: range.fetchError,
+        };
+    }
+
+    if (tooManyCreates()) {
+        return { ok: false, skip: 'rate-limited',
+            error: `more than ${CREATE_LIMIT.max} sessions started in a minute` };
+    }
+
+    const prompt = fillPrompt(row.prompt, facts);
+    let out;
+    try {
+        out = pool.create({ cwd: row.cwd, prompt, model: row.model, permissionMode: mode });
+    } catch (err) {
+        // The marker is untouched, which is the point of doing this in this
+        // order: a directory that has moved since you saved the schedule should
+        // cost you tonight's run, not the commits it was going to review.
+        return { ok: false, skip: 'error', error: err.message };
+    }
+
+    if (row.test) flags.set(out.sessionId, { test: true });
+    index.note(out.sessionId);
+    rememberScheduledRun(out.sessionId, row.id);
+    return { ok: true, sessionId: out.sessionId, prompt, facts };
+}
+
+/**
+ * One pass over every enabled schedule.
+ *
+ * **Only the everyday instance fires**, and that guard is the one that actually
+ * matters. Several bridges share `schedules.json` by design — the everyday one
+ * plus a development bridge per agent working on this codebase — and without
+ * this every one of them would spawn the user's 2 AM sessions. `claim()` is the
+ * net under it rather than the mechanism.
+ *
+ * A dev bridge still lists schedules, still edits them, and still honours Run
+ * now: that is a press, not a clock.
+ */
+async function tickSchedules() {
+    if (cfg.IS_DEV && !SCHEDULE_ON_DEV) return;
+
+    // Start from disk. The everyday instance is the only process that fires, and
+    // schedules get created and edited on others — so without this, one made from
+    // a dev bridge or a phone would sit in the file doing nothing until this
+    // process happened to restart. Cheap at 30s intervals, and `reload()` flushes
+    // our own pending writes first so nothing in flight is lost.
+    schedules.reload();
+
+    const now = Date.now();
+    let changed = false;
+
+    for (const row of schedules.enabled()) {
+        // On a dev bridge with the override, only ever a schedule marked as a
+        // test — see SCHEDULE_ON_DEV. This is the line that keeps an agent's
+        // bridge away from the user's real schedules.
+        if (cfg.IS_DEV && !row.test) continue;
+
+        const spec = parseCron(row.cron);
+        if (spec.error) continue;
+
+        // A schedule that has never run counts from when it was created, not
+        // from the epoch — otherwise its first tick would owe every slot since
+        // 1970 and the walk limit would decide which one it got.
+        const cursor = row.lastSlotAt != null ? row.lastSlotAt : row.createdAt;
+        const { slot, skipped } = dueSlot(spec, { cursor, now });
+        if (slot == null) continue;
+
+        // Past the catch-up cap. Recorded and notified rather than run: a slot
+        // from two days ago must not start an unattended agent at a time nobody
+        // chose it for, and a schedule that has quietly stopped firing is the
+        // failure worth hearing about.
+        if (now - slot > CATCHUP_MS) {
+            const missed = skipped + 1;
+            schedules.note(row.id, {
+                slotAt: slot,
+                skipReason: 'missed',
+                error: `${missed} run${missed === 1 ? '' : 's'} missed — the bridge was `
+                    + 'not running',
+            });
+            fileScheduleNote(row, {
+                type: 'schedule-missed',
+                summary: `${missed} scheduled run${missed === 1 ? '' : 's'} missed`,
+                detail: `"${scheduleTitle(row)}" was due at `
+                    + `${new Date(slot).toLocaleString()} and the bridge was not running. `
+                    + 'The next run is at its normal time.',
+                loud: true,
+            });
+            changed = true;
+            continue;
+        }
+
+        // Take the slot before doing anything expensive. A fetch can take
+        // seconds, and two ticks overlapping on one schedule would otherwise
+        // both get as far as spawning.
+        if (!schedules.claim(row.id, slot)) continue;
+        changed = true;
+
+        // The claim has already been written, so from here every exit has to
+        // leave a reason on the row. An unhandled throw between here and the end
+        // of the loop consumed the slot and recorded nothing — the schedule
+        // simply skipped a night and the card had no idea why. The one that
+        // happened was a TypeError in `modeRefusal`; the catch is here so the
+        // next one is a visible failure rather than a silent one.
+        let result;
+        try {
+            result = await runSchedule(row);
+        } catch (err) {
+            result = { ok: false, skip: 'error', error: err.message };
+            console.error(`[claude-sessions] schedule ${scheduleTitle(row)} threw: `
+                + `${err.stack || err.message}`);
+        }
+
+        if (result.ok) {
+            schedules.note(row.id, { sessionId: result.sessionId, marker: result.facts.head });
+            console.log(`[claude-sessions] schedule ${scheduleTitle(row)} started `
+                + `${result.sessionId}`);
+        } else {
+            // `marker` is deliberately not passed on any of these paths, so a
+            // skip or a failure cannot consume the commits it did not review.
+            schedules.note(row.id, { skipReason: result.skip, error: result.error || null });
+            if (result.skip === 'error') {
+                fileScheduleNote(row, {
+                    type: 'schedule-failed',
+                    summary: 'a scheduled run could not start',
+                    detail: `"${scheduleTitle(row)}": ${result.error}`,
+                    loud: true,
+                });
+            }
+        }
+    }
+
+    if (changed) broadcast('schedules-changed', schedulesPayload());
+}
+
+/** What to call a schedule in a log line or a notification. */
+function scheduleTitle(row) {
+    return row.title || firstLine(row.prompt).slice(0, 60) || 'a schedule';
+}
+
+/**
+ * File a notification about a schedule, unless it is a test one.
+ *
+ * The gate exists because the log's own test filter cannot help here. It asks
+ * `flags.get(sessionId).test`, and the rows most worth raising — a missed slot, a
+ * ref that would not resolve — have **no session at all**, so `isTest(null)` is
+ * false and they read as ordinary. That would put an agent's throwaway probe
+ * failing every two minutes into the user's everyday notification list.
+ *
+ * Checked against the schedule's own flag instead, which is the thing that
+ * actually knows. Nothing is lost: a test schedule's failures are visible on its
+ * card, on the bridge that owns it, which is where anybody looking for them is.
+ */
+function fileScheduleNote(row, entry) {
+    if (row.test) return;
+    filed(notifications.record({ ...entry, title: scheduleTitle(row) }));
+}
+
 /** A bounded `?limit=`, so one caller cannot ask for the whole index. */
 function limitOf(url, fallback, max) {
     const n = Number(url.searchParams.get('limit'));
@@ -1285,6 +1701,210 @@ async function api(req, res, url, pathname, who) {
             drafts.remove(seg[2]);
             broadcast('drafts-changed', draftsPayload());
             return send(res, 200, { ...out, test: !!draft.test });
+        }
+    }
+
+    // ── schedules ────────────────────────────────────────────────────────
+    //
+    // A session that starts on a clock: everything `POST /api/sessions` takes,
+    // plus a cron expression and a gate — see bridge/schedule.js.
+    //
+    // All five in one block, beside drafts and for the same reason: it is a
+    // small self-contained surface, and the write routes are only interesting
+    // next to the read one.
+    if (seg[1] === 'schedules') {
+        if (!seg[2] && req.method === 'GET') {
+            return send(res, 200, schedulesPayload());
+        }
+
+        // What an expression means, without saving anything.
+        //
+        // The dialog shows "Tue–Sat at 2:00 AM" under the box as you type, and
+        // this is where that sentence comes from. A second cron parser in the page
+        // could only ever be a way for the page and the bridge to disagree about
+        // when a schedule runs — so the process that will actually run it is the
+        // one asked. A GET because it changes nothing; before this route existed
+        // the page had to attempt a create to find out whether it had typed
+        // something valid.
+        if (seg[2] === 'describe' && !seg[3] && req.method === 'GET') {
+            const text = url.searchParams.get('cron') || '';
+            const spec = parseCron(text);
+            if (spec.error) return send(res, 400, { error: spec.error });
+            const next = nextSlot(spec, Date.now());
+            return send(res, 200, {
+                cron: spec.text,
+                text: describeCron(spec),
+                // Null is a real answer — `0 0 30 2 *` parses and never matches —
+                // and one the dialog says out loud rather than leaving blank.
+                next,
+            });
+        }
+
+        if (!seg[2] && req.method === 'POST') {
+            const body = await readJson(req);
+            const v = scheduleFields(body, who, { partial: false });
+            if (v.error) {
+                return send(res, v.status,
+                    v.remote ? { error: v.error, remote: true } : { error: v.error });
+            }
+
+            // **Seed the marker before storing, not on the first run.** A gated
+            // schedule whose marker starts empty would review the entire history
+            // of the repository the first time it fired. Resolving the ref now
+            // means the first run covers what arrives after you set it up, which
+            // is what "since the prior run" means when there is no prior run.
+            //
+            // A ref that cannot be resolved is refused rather than seeded empty:
+            // a typo'd `orgin/main` should cost you the save, not a month of
+            // silent "nothing new".
+            if (v.fields.gate) {
+                const seed = await git.commitRange(v.fields.cwd, v.fields.gate.ref, null,
+                    { fetch: v.fields.gate.fetch });
+                if (!seed.ok) {
+                    return send(res, 400, {
+                        error: seed.error || `cannot resolve ${v.fields.gate.ref}`,
+                    });
+                }
+                v.fields.lastMarker = seed.head;
+            }
+
+            const row = schedules.create(v.fields);
+            if (!row) {
+                return send(res, 409, {
+                    error: `there are already ${MAX_SCHEDULES} schedules — delete `
+                        + 'some before adding another',
+                });
+            }
+            broadcast('schedules-changed', schedulesPayload());
+            return send(res, 200, { schedule: scheduleOut(row) });
+        }
+
+        if (seg[2] && !seg[3] && req.method === 'PATCH') {
+            const body = await readJson(req);
+            // Validated *before* the schedule is looked up, so a refused mode is
+            // a 403 whether or not the id exists — the order
+            // `POST /api/drafts/:id` uses, and for the reason given there: the
+            // refusal is about what this caller may ask for, not about what it
+            // aimed at.
+            const v = scheduleFields(body, who, { partial: true });
+            if (v.error) {
+                return send(res, v.status,
+                    v.remote ? { error: v.error, remote: true } : { error: v.error });
+            }
+
+            const before = schedules.get(seg[2]);
+            if (!before) return send(res, 404, { error: 'schedule not found' });
+
+            // **The mode already on the row is refused too, not just one in the
+            // body.** Checking only what was sent leaves a real hole here that
+            // the same check does not leave on a draft: a phone cannot *write*
+            // `dontAsk`, but it could send `{enabled: true}` to a paused schedule
+            // that already had it, and the local tick would then start an
+            // unattended agent with no permission gate. A draft escapes this
+            // because the second gate is somebody pressing Start, who is checked
+            // in turn; a schedule's second gate is a timer, which is always local.
+            //
+            // So a remote caller may not touch a schedule it would not be allowed
+            // to create. After the lookup rather than before, unavoidably — this
+            // one is about the stored row — while the body check above stays
+            // first, so "you may not ask for that mode" is still a 403 whether or
+            // not the id is real.
+            const effective = normalizeMode(
+                v.fields.permissionMode !== undefined
+                    ? v.fields.permissionMode : before.permissionMode);
+            const refusal = modeRefusal(effective, who);
+            if (refusal) return send(res, 403, { error: refusal, remote: true });
+
+            // **Repointing the gate, or the checkout, invalidates the marker**, so
+            // it has to be reseeded: the stored SHA is on the old ref, and against
+            // the new one it is either an ancestor nothing has landed after —
+            // "nothing new" forever, a schedule that silently stops reviewing — or
+            // a commit on a diverged history, which makes `{{range}}` enormous.
+            //
+            // Resolved *before* the update, not after. Doing it after means a ref
+            // that turns out not to exist leaves the row already edited, pointing
+            // somewhere unresolvable, with a marker from the old ref — a 400 that
+            // changed something. This way the refusal costs the edit and nothing
+            // else, which is the same bargain `POST /api/schedules` strikes.
+            const cwd = v.fields.cwd !== undefined ? v.fields.cwd : before.cwd;
+            const gate = v.fields.gate !== undefined ? v.fields.gate : before.gate;
+            const repointed = gate
+                && (cwd !== before.cwd || !before.gate || before.gate.ref !== gate.ref);
+
+            let marker = null;
+            if (repointed) {
+                const seed = await git.commitRange(cwd, gate.ref, null,
+                    { fetch: gate.fetch });
+                if (!seed.ok) {
+                    return send(res, 400, {
+                        error: seed.error || `cannot resolve ${gate.ref}`,
+                    });
+                }
+                marker = seed.head;
+            }
+
+            const row = schedules.update(seg[2], v.fields);
+            if (!row) return send(res, 404, { error: 'schedule not found' });
+            if (marker) schedules.note(seg[2], { marker });
+
+            broadcast('schedules-changed', schedulesPayload());
+            return send(res, 200, { schedule: scheduleOut(schedules.get(seg[2])) });
+        }
+
+        if (seg[2] && !seg[3] && req.method === 'DELETE') {
+            if (!schedules.remove(seg[2])) {
+                return send(res, 404, { error: 'schedule not found' });
+            }
+            broadcast('schedules-changed', schedulesPayload());
+            return send(res, 200, { ok: true, id: seg[2] });
+        }
+
+        // Run it now, whatever the clock says.
+        //
+        // The same function the tick calls, which is the point — a run produced
+        // by this button has to be identical to one produced by the schedule, and
+        // one code path is the only way to be sure. It skips the gate (you
+        // pressed the button, so something should happen even with no new
+        // commits) and it does not touch `lastSlotAt`, so tonight's scheduled run
+        // still happens. It does *not* skip the mode refusal or the rate limit.
+        if (seg[2] && seg[3] === 'run' && req.method === 'POST') {
+            const row = schedules.get(seg[2]);
+            if (!row) return send(res, 404, { error: 'schedule not found' });
+
+            const result = await runSchedule(row, { force: true, who });
+            if (!result.ok) {
+                schedules.note(row.id, { skipReason: result.skip, error: result.error || null });
+                broadcast('schedules-changed', schedulesPayload());
+                // The refusal a remote caller gets is a 403 and says so; a
+                // rate limit is a 429; everything else is the directory or the
+                // ref, which is a 400 about the request.
+                const status = result.skip === 'rate-limited' ? 429
+                    : (modeRefusal(normalizeMode(row.permissionMode), who) ? 403 : 400);
+                return send(res, status, status === 403
+                    ? { error: result.error, remote: true }
+                    : { error: result.error });
+            }
+
+            // A manual run advances the marker exactly as a scheduled one does.
+            // Not doing so would mean pressing Run now caused tonight to review
+            // the same commits over again.
+            //
+            // `note` returns null if the schedule was deleted while this was
+            // running, which a gated run makes a real window rather than a
+            // theoretical one — a fetch can take the best part of a minute. The
+            // session has started either way, so the id must still be reported:
+            // answering with a 500 here would tell the caller the run failed
+            // while an agent was already working.
+            const updated = schedules.note(row.id, {
+                sessionId: result.sessionId,
+                marker: result.facts.head,
+            });
+            broadcast('schedules-changed', schedulesPayload());
+            return send(res, 200, {
+                sessionId: result.sessionId,
+                test: !!row.test,
+                schedule: updated ? scheduleOut(updated) : null,
+            });
         }
     }
 
@@ -2850,7 +3470,55 @@ pool.on('init', ({ cwd, init }) => {
     const entry = slashCommands.note(cwd, init);
     if (entry) broadcast('slash-commands', { cwd, at: entry.at });
 });
-pool.on('turn-complete', (r) => { broadcast('turn-complete', r); filed(notifications.turn(r)); });
+pool.on('turn-complete', (r) => {
+    broadcast('turn-complete', r);
+    filed(notifications.turn(r));
+    noteScheduledOutcome(r);
+});
+
+/**
+ * Attribute a finished turn back to the schedule that started it.
+ *
+ * **Only when there was something to see.** Nobody is awake at 2 AM, so the
+ * useful signal in the morning is "did anything go wrong", and a notification per
+ * clean overnight review is noise that trains you to ignore the ones that
+ * matter. So a BLOCK or CONCERNS verdict, or a turn that errored, is loud; a
+ * CLEAN one is recorded on the row for the card and says nothing.
+ *
+ * A schedule can run any prompt, and most will have no verdict at all. That case
+ * is "finished, nothing to say" — recorded quietly, never treated as a failure.
+ */
+function noteScheduledOutcome(r) {
+    const scheduleId = scheduledRuns.get(r.sessionId);
+    if (!scheduleId) return;
+    scheduledRuns.delete(r.sessionId);
+
+    const row = schedules.get(scheduleId);
+    if (!row) return;   // deleted while its run was in flight
+
+    const runner = pool.get(r.sessionId);
+    const verdict = r.isError ? null : verdictOf(runner && runner.lastResultText);
+    const outcome = r.isError ? 'error' : (verdict || 'done');
+
+    schedules.note(scheduleId, { outcome });
+    broadcast('schedules-changed', schedulesPayload());
+
+    const bad = r.isError || verdict === 'BLOCK' || verdict === 'CONCERNS';
+    if (!bad) return;
+
+    // This one does carry a session, so the log's own test filter would catch it
+    // — but it goes through the same gate as the other two so that "is this
+    // schedule a test" is answered in one place rather than two ways.
+    fileScheduleNote(row, {
+        sessionId: r.sessionId,
+        type: 'schedule-findings',
+        summary: r.isError
+            ? 'a scheduled run ended with an error'
+            : `a scheduled review came back ${verdict}`,
+        detail: r.isError ? r.detail : null,
+        loud: true,
+    });
+}
 pool.on('failed', (f) => { broadcast('send-failed', f); filed(notifications.sendFailed(f)); });
 // Nothing notifies for a subagent finishing; it is logged so that "what has been
 // happening" has an answer at all.
@@ -2902,6 +3570,12 @@ function shutdown(code = 0) {
     // losing it means the draft comes back and can be started a second time.
     // flush() merges, so writing here cannot trample another bridge either.
     try { drafts.flush(); } catch { /* nothing to save */ }
+    // The same argument, and one case where it is sharper: an unflushed
+    // `lastSlotAt` means the slot this bridge just fired is not on disk, so the
+    // next bridge up owes it again and the run happens twice. `claim()` flushes
+    // for exactly that reason, but an outcome or a skip recorded in the last
+    // 400ms before a restart would otherwise be lost.
+    try { schedules.flush(); } catch { /* nothing to save */ }
     try { index.stop(); } catch { /* nothing to clean */ }
     try { registry.stop(); } catch { /* nothing to clean */ }
     try { server.close(); } catch { /* already closed */ }
@@ -2983,6 +3657,37 @@ server.listen(cfg.PORT, cfg.HOST, async () => {
     if (cfg.IS_DEV) {
         console.log('[claude-sessions] development instance — the everyday one on '
             + `${cfg.DEFAULT_PORT} is untouched.`);
+    }
+
+    // Schedules: catch up first, then keep looking.
+    //
+    // The pass here is the whole reason a missed run can be reported at all. The
+    // bridge is not up continuously — the window closes, the machine sleeps, the
+    // nightly restart happens — so a slot that fell while it was down is found on
+    // the way back up rather than never. `tickSchedules` treats that pass and
+    // every later one identically; catching up is not a second code path.
+    //
+    // After the index, because firing needs `index.note` and `flags` to be able
+    // to keep a brand-new session out of the everyday window.
+    if (!cfg.IS_DEV || SCHEDULE_ON_DEV) {
+        const armed = schedules.enabled()
+            .filter(r => !cfg.IS_DEV || r.test).length;
+        if (cfg.IS_DEV) {
+            console.log('[claude-sessions] CLAUDE_SESSIONS_SCHEDULE_ON_DEV=1 — this dev '
+                + 'bridge will fire schedules marked as tests, and only those.');
+        }
+        if (armed) {
+            console.log(`[claude-sessions] ${armed} schedule(s) armed; `
+                + `checking every ${SCHEDULE_MS / 1000}s`);
+        }
+        tickSchedules().catch(err => console.error(
+            `[claude-sessions] schedule catch-up failed: ${err.message}`));
+        // `.unref()` for the reason handoff.js gives: a timer must never be the
+        // thing keeping the bridge from exiting.
+        setInterval(() => {
+            tickSchedules().catch(err => console.error(
+                `[claude-sessions] schedule tick failed: ${err.message}`));
+        }, SCHEDULE_MS).unref();
     }
 
     if (!auth.hostIsLocal(cfg.HOST.replace(/^\[|\]$/g, ''))) {

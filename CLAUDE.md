@@ -259,13 +259,20 @@ npm test -- 45901      # run against a bridge you already have on that port
 start and delete sessions, so pointing them at the everyday instance is exactly
 the accident the rest of this file is about.
 
-The suite is `auth`, `temp`, `recent`, `pulls`, `taskboard`, `ports`, `spinner`
-and `restart` on their own — no bridge needed — plus four that want a live one:
-`gate`, `browser`, `refusals`, `unpaired`. Between them they cover the token, what a remote caller
+The suite is `auth`, `temp`, `recent`, `pulls`, `taskboard`, `ports`, `spinner`,
+`schedule` and `restart` on their own — no bridge needed — plus four that want a
+live one: `gate`, `browser`, `refusals`, `unpaired`. Between them they cover the token, what a remote caller
 is refused, what an unpaired phone sees before and after pairing, and what the
 nightly restart does when there is nobody to ask. If you touch `bridge/auth.js`
 or any route's local/remote rule, run it: that is the part of this codebase with
 tests around it.
+
+`schedule` is the other part worth that treatment, and for a different reason:
+its bugs are ones nobody sees until 2 AM. A slot that fires twice on the night the
+clocks go back, a missed run that is invisible because the lookback could not see
+across a weekend, a marker that advances on a run that never happened — all three
+were real, all three were caught by that file, and none of them would have shown
+up in a window you were looking at. If you touch `bridge/schedule.js`, run it.
 
 Most of the first group are pure functions, but `restart` is not — it runs a
 copy of `scripts/restart-bridge.sh` in a throwaway git repo, with a stub
