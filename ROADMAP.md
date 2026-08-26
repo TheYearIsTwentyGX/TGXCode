@@ -57,7 +57,7 @@ These come out of how the app already works, and every plan respects them.
 
 | | Plan | Caveat |
 |---|---|---|
-| 14 | ~~[Bridge security](docs/plans/14-bridge-security.md)~~ — **built** | `bridge/auth.js` holds the token and classifies local vs remote; every `/api/` route but `/api/health` requires it. §C went further than "recommend a tunnel": there is a phone surface at `/m`, a `/pair` handshake, and the refusals a remote caller meets. See [`docs/remote.md`](docs/remote.md) and [`docs/api.md`](docs/api.md). 5-C and 15 are unblocked. |
+| 14 | ~~[Bridge security](docs/plans/14-bridge-security.md)~~ — **built** | `bridge/auth.js` holds the token and classifies local vs remote; every `/api/` route but `/api/health` requires it. §C went further than "recommend a tunnel": a `/pair` handshake and the refusals a remote caller meets. It also shipped a phone-shaped web page at `/m`, since removed — the phone is the native Android app in `~/Other/tgxcode-mobile` now, a client of `docs/api.md`. See [`docs/remote.md`](docs/remote.md) and [`docs/api.md`](docs/api.md). 5-C and 15 are unblocked. |
 | 15 | [Scheduling and chaining](docs/plans/15-scheduling.md) | Overlaps Claude Code's own cron. Only worth it to collect results in this UI. |
 | 16 | [Retention](docs/plans/16-retention.md) | The app never deletes, which is the right default; this adds an opt-in path with a loud confirmation. |
 

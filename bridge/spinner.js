@@ -20,9 +20,9 @@
 // **It is decided here rather than in the browser**, which is the one design
 // choice worth defending. Eight surfaces show this label — the composer status
 // line, rail rows, the subagent header, the live board, the task board, the
-// dashboard chips, and a phone at /m — and they all read `runner.activity` off
+// dashboard chips, and the Android app — and they all read `runner.activity` off
 // one SSE message, so picking the verb in the bridge means every one of them
-// agrees about what a session is doing, mobile included. Picking it per-client
+// agrees about what a session is doing, the phone included. Picking it per-client
 // would have meant teaching all eight, twice, and two windows would still have
 // disagreed. Only the session rail needed anything: it has room for about
 // twenty characters, not both halves of the label, so it reads the `detail`

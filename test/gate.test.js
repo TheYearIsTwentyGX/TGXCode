@@ -100,10 +100,10 @@ const PHONE = {
         (await call('/api/sessions', { headers: { ...BEARER, host: '10.11.64.43:45901' } })).status, 200);
 
     console.log('\n--- tail=0: metadata without the transcript ---');
-    // The polling fallback in web/mobile.js leans on this: liveness for the open
-    // session at a few hundred bytes rather than a whole conversation. `slice(-0)`
-    // returns everything, so getting this wrong makes the cheapest call the most
-    // expensive one — hence a test rather than trust.
+    // A client's polling fallback leans on this — the Android app's does: liveness
+    // for the open session at a few hundred bytes rather than a whole conversation.
+    // `slice(-0)` returns everything, so getting this wrong makes the cheapest call
+    // the most expensive one — hence a test rather than trust.
     const list = JSON.parse((await call('/api/sessions?limit=1', { headers: BEARER })).body);
     const id = list.sessions[0] && list.sessions[0].sessionId;
     if (id) {
@@ -136,7 +136,7 @@ const PHONE = {
     console.log('\n--- /pair ---');
     const paired = await call(`/pair?token=${TOKEN}`, { headers: PHONE });
     check('pair redirects', paired.status, 303);
-    check('pair lands on /m', paired.headers.location, '/m');
+    check('pair lands on /', paired.headers.location, '/');
     const cookie = String(paired.headers['set-cookie']);
     check('pair sets the cookie', cookie.includes(`cs_token=${TOKEN}`), true);
     check('cookie is HttpOnly', cookie.includes('HttpOnly'), true);

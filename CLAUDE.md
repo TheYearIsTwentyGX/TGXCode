@@ -100,6 +100,33 @@ running `npm run dev` are fine from wherever you are. The rule is about writing
 to tracked files: if you are about to change one, be in a worktree. When in
 doubt, make one — it costs a second and nothing is lost by it.
 
+## There is no mobile web UI
+
+**A UI change lands in `web/app.js` and `web/index.html`. Desktop only.** Do not ask
+whether a feature should also go to mobile, do not build a narrow-screen variant of
+it, and do not add a `/m` back.
+
+The phone client is the native Android app in `~/Other/tgxcode-mobile`. It reads
+`docs/api.md` and nothing else of ours, so if the phone needs what you are building,
+the deliverable here is a field in that document — see the next section. Filing it
+there is the whole of your obligation to the phone; the app is a separate repository
+with its own sessions.
+
+There *was* a phone-shaped web page at `/m` — `web/mobile.js` and friends — and it
+was deleted rather than fixed. It had drifted a long way behind the API (it dropped
+the `tool-result` event, misread `runner`, rendered a slash command as
+`/[object Object]`), and every UI feature was arriving at the question "desktop, or
+desktop and mobile?" — a question with a real cost and no good answer once a native
+client existed. `test/browser.test.js` asserts `/m` and its old assets still 404, so
+the page cannot creep back by accident.
+
+What did *not* go with it, because none of it was mobile-web machinery:
+`web/sw.js` (the desktop registers it for notification action buttons), the
+`/pair` handshake and the **Connect a phone** dialog (the Android app is pointed at
+a bridge by pasting the link they produce), and every `@media` block in
+`web/styles.css` — those are narrow-*desktop*-window and `prefers-reduced-motion`,
+so do not mistake them for phone CSS and delete them.
+
 ## Leave `docs/api.md` true before you land
 
 **If your change touched the bridge's wire surface, updating `docs/api.md` is part
@@ -112,8 +139,8 @@ document has to say so before you land it.
 
 This is heavier than the usual "keep the docs current" because there is now a
 client that cannot read the code. `~/Other/tgxcode-mobile` is a native Android
-app — the third client of this bridge, alongside `web/app.js` and `web/mobile.js`
-— and its whole design premise is that `docs/api.md` *is* the contract: it adds
+app — the second client of this bridge, alongside `web/app.js` — and its whole
+design premise is that `docs/api.md` *is* the contract: it adds
 no code to this repo, and anything it needs and cannot get from that file is
 recorded as a gap to be fixed here. An agent working in that project reads
 `docs/api.md` and nothing else of ours. So a field that changed shape and was
@@ -124,7 +151,7 @@ an afternoon finding out why.
 That has already happened, more than once, which is what this section is made of.
 Four fields were documented by name alone and turned out to be
 objects — `user.command`, `tool.result.patch` and `tool.agent` in the event table,
-and the `status` a send returns. A whole event kind, `tool-result`, was never listed, so the phone client
+and the `status` a send returns. A whole event kind, `tool-result`, was never listed, so a phone client
 left every tool spinning while you watched a live turn. And
 `X-Claude-Sessions-Client: 1` has been mandatory on every non-GET `/api/` route
 since the CSRF guard landed, without appearing in the document at all — so the
@@ -262,7 +289,7 @@ the accident the rest of this file is about.
 The suite is `auth`, `temp`, `recent`, `pulls`, `taskboard`, `ports`, `spinner`,
 `schedule` and `restart` on their own — no bridge needed — plus four that want a
 live one: `gate`, `browser`, `refusals`, `unpaired`. Between them they cover the token, what a remote caller
-is refused, what an unpaired phone sees before and after pairing, and what the
+is refused, what an unpaired remote device sees before and after pairing, and what the
 nightly restart does when there is nobody to ask. If you touch `bridge/auth.js`
 or any route's local/remote rule, run it: that is the part of this codebase with
 tests around it.

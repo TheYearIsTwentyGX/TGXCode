@@ -1,15 +1,20 @@
 'use strict';
 
-// The exact situation the Motorola was in: a remote device loads /m with no
-// cookie. The page must load (it is static), the token must NOT be handed over,
-// and the probe boot() makes must 401 — that combination is what now produces the
-// "not paired" screen instead of an empty app.
+// A remote device loads the page with no cookie. It must load (it is static), the
+// token must NOT be handed over, and the probe the page makes on boot must 401 —
+// that combination is what produces a "not paired" screen instead of an empty app.
+//
+// Written when the remote device was a phone browser on /m. The phone is the native
+// Android app now, which never loads a page of ours, but the three-way combination
+// this pins is a property of the *bridge* rather than of that page: any off-machine
+// caller sees it, including a desktop browser opened over the tunnel. So it is
+// aimed at / and it still earns its place.
 
 const http = require('http');
 
 const PORT = Number(process.argv[2] || 45901);
 
-// No Authorization header: an unpaired phone has only the URL.
+// No Authorization header: an unpaired device has only the URL.
 const PHONE = {
     'x-forwarded-for': '100.75.106.58',
     'x-forwarded-proto': 'https',
@@ -48,8 +53,8 @@ function check(name, got, want) {
 }
 
 (async () => {
-    console.log('\n--- an unpaired phone loading /m ---');
-    const page = await call('/m', PHONE);
+    console.log('\n--- an unpaired remote device loading / ---');
+    const page = await call('/', PHONE);
     check('the page loads', page.status, 200);
     check('but is NOT handed the token', /cs-token/.test(page.body), false);
     check('and gets no cookie', page.headers['set-cookie'], undefined);

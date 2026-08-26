@@ -526,7 +526,7 @@ until you do, both are `false`. Neither is picked up until the page reloads.
 ### What a turn in progress calls itself
 
 While a turn runs, every surface that shows it working — the status line, the
-rail, the boards, a phone at `/m` — says the same thing, because they all read
+rail, the boards, the Android app — says the same thing, because they all read
 one label off one SSE message. For most of this app's life that label was
 `Thinking…`, replaced by a tool's name while a tool ran. Now it has two halves:
 
@@ -913,18 +913,21 @@ changes — and `git status` is cached for 15 seconds, shared with the board bel
 
 ## On a phone
 
-The premise of the app is watching sessions you are not sitting in front of, and
-`/m` is that taken one step further: the same bridge, a screen at a time, opening
-on what is blocked on you rather than on a list of everything.
+The premise of the app is watching sessions you are not sitting in front of, and the
+phone takes that one step further. That surface is the native Android app in
+`~/Other/tgxcode-mobile` — a separate repository, and a client of this bridge exactly
+as the desktop is.
 
-It is a second client, not a second version. Everything it shows comes from the
-same API the desktop uses, which is written down in [`docs/api.md`](docs/api.md) so
-that a native Android client can be a third client rather than a rewrite.
+**It is a client, not a second version of this app.** Everything it shows comes over
+the same API, written down as a contract in [`docs/api.md`](docs/api.md); it adds no
+code here, and cannot read `bridge/`. So a feature the phone needs is a field in that
+document rather than a page in `web/`. There was a phone-shaped web page at `/m` for a
+while and it has been removed — it had drifted behind the API, and maintaining a
+second web UI to sit beside a native one bought nothing.
 
-**Getting there.** Press the phone button in the top bar for a pairing link. Open
-it once on the device: it trades the token for a year-long `HttpOnly` cookie and
-lands on `/m`, so the token is never in a URL again. Add it to the home screen and
-it opens standalone.
+**Getting there.** Press the phone button in the top bar for a pairing link, and paste
+it into the app. It keeps the token and sends it as a header; the link is only how the
+token travels.
 
 Reaching the bridge from outside the flat is a deployment choice, and
 [`docs/remote.md`](docs/remote.md) is the runbook. The short version is
@@ -933,25 +936,17 @@ runs mirrored and the proxy talks to Windows loopback — **the bridge never bin
 anything but `127.0.0.1`**. That matters here, where the home network is a subnet
 shared with the building.
 
-**What it does differently.** Tool calls are one line you can tap rather than
-rendered inline; on a 390px screen an expanded Bash result buries the sentence you
-opened the phone to read. Long transcripts arrive tail-first (`?tail=`), because
-half a megabyte of JSON over a relay is not a loading state anyone waits through.
-And it assumes reconnection rather than treating it as an error: there is no SSE
-replay, so it re-subscribes from the byte offset it holds and catches up over
-`/since`.
-
-**What it will not let you do.** A phone can watch, send, answer permissions, plans
+**What a phone will not let you do.** It can watch, send, answer permissions, plans
 and questions, and start an ordinary session. It cannot open a terminal, shut the
-bridge down, stop a dev server, or start anything in `bypassPermissions` — the
-bridge refuses those with a 403 rather than the UI merely omitting a button. The
+bridge down, stop a dev server, attach a file, or start anything in
+`bypassPermissions` — the bridge refuses those with a 403 rather than the UI merely
+omitting a button, so the rule holds for any client that holds a valid token. The
 reasoning is in `docs/plans/14-bridge-security.md` §C and the table in
 `docs/remote.md`.
 
-**One thing worth knowing.** An ask is denied outright when no client is connected
-— there is nobody to ask. So a connected phone is what makes a session answerable
-while you are away from the desk, and a phone that has dropped its connection is
-not.
+**One thing worth knowing.** An ask is denied outright when no client is connected —
+there is nobody to ask. So a connected phone is what makes a session answerable while
+you are away from the desk, and a phone that has dropped its connection is not.
 
 ## Layout
 
@@ -997,9 +992,8 @@ not.
 | `scripts/import-spinner-verbs.js` | Rebuilds the verb catalogue from upstream |
 | `web/` | The UI. No build step, no dependencies |
 | `web/terminal.js` | The terminal pane — a shell, or a run's output |
-| `web/mobile.*` | The phone surface at `/m` — a second client of the same API |
 | `app/main.js` | The Electron shell |
-| `app/make-icon.js` | Generates `app/icon.ico` and the PWA icons in `web/` |
+| `app/make-icon.js` | Generates `app/icon.ico`, the packaged shell's icon |
 | `docs/api.md` | The bridge API, as a contract for other clients |
 | `docs/remote.md` | Reaching the bridge from a phone |
 
