@@ -250,7 +250,7 @@ const MESSAGE = {
         'Write `text` for an agent that has none of your context. Name the files',
         'you changed, say what changed about them, and say what you expect it to',
         'do. "I updated the API" is useless; "GET /api/sites now returns',
-        '{sites:[...]} instead of a bare array, and web/mobile.js:412 still unwraps',
+        '{sites:[...]} instead of a bare array, and web/app.js:412 still unwraps',
         'the old shape" is not.',
         '',
         'The session you wake resumes in plan mode, so it will investigate and come',

@@ -110,20 +110,14 @@ function check(name, got, want) {
         check(`GET ${asset}`, (await call(asset)).status, 200);
     }
 
-    console.log('\n--- the phone surface and its assets ---');
-    const manifest = await call('/manifest.webmanifest');
-    check('manifest is served', manifest.status, 200);
-    check('with the right content type',
-        manifest.headers['content-type'], 'application/manifest+json');
-    const icon = await call('/icon-192.png');
-    check('icon is served', icon.status, 200);
-    check('as a PNG', icon.headers['content-type'], 'image/png');
-    for (const p of ['/m', '/m/', '/mobile.js', '/mobile.css']) {
-        check(`GET ${p}`, (await call(p)).status, 200);
+    // The phone web view is gone — the phone is the native Android app now, and it
+    // is a client of /api/ only. Pinned because a stale PAGES entry or a manifest
+    // left in web/ would otherwise resurrect a page nothing maintains.
+    console.log('\n--- the removed phone surface stays removed ---');
+    for (const p of ['/m', '/m/', '/mobile.js', '/mobile.css', '/manifest.webmanifest',
+        '/icon-192.png']) {
+        check(`GET ${p} is gone`, (await call(p)).status, 404);
     }
-    const m = await call('/m');
-    check('/m is the mobile page', /mobile\.js/.test(m.body), true);
-    check('and it too is handed the token', /name="cs-token"/.test(m.body), true);
 
     console.log(fails ? `\n${fails} FAILED` : '\nall passed');
     process.exit(fails ? 1 : 0);

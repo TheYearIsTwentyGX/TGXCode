@@ -215,14 +215,3 @@ if (process.argv.includes('--preview')) {
     fs.writeFileSync(p, big.png);
     console.log(`wrote ${p}`);
 }
-
-// The same mark, as PNGs, for the phone surface: Android's home screen reads the
-// web app manifest and wants 192 and 512. They live in web/ rather than app/
-// because the bridge serves them and the packaged shell does not — and they are
-// committed for the same reason the .ico is, so no build step depends on this file.
-const PWA_SIZES = [192, 512];
-for (const size of PWA_SIZES) {
-    const file = path.join(__dirname, '..', 'web', `icon-${size}.png`);
-    fs.writeFileSync(file, encodePng(render(size), size));
-    console.log(`wrote ${file}`);
-}

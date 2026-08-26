@@ -5,10 +5,15 @@ now that stopped at the edge of the desk. This is how it reaches further.
 
 Two halves, and they are independent:
 
-- **The bridge** now authenticates, tells local from remote apart, and serves a
-  phone-shaped UI at `/m`. That part is done and needs no configuration.
+- **The bridge** now authenticates and tells local from remote apart. That part is
+  done and needs no configuration.
 - **The transport** — how a phone reaches the bridge at all — is a deployment
   choice, and this document is the runbook for it.
+
+The phone itself is the native Android app in `~/Other/tgxcode-mobile`, a client of
+the API in [`docs/api.md`](api.md). There was a phone-shaped web page at `/m` for a
+while and it has been removed; everything below is about getting the bridge within
+reach, which is the same problem either way.
 
 ## The constraint this is designed around
 
@@ -54,8 +59,9 @@ Tailscale is exposed, and only to your own devices.
    --json` reports `CertDomains: null` — and `--https=443` will not work until it
    is.
 
-   It matters for more than comfort: the phone UI is a PWA, and a service worker,
-   installability and (later) web push all require a secure context.
+   It matters for more than comfort: it is the difference between a token that only
+   Tailscale can see and one that anything on the path can read. It is also what
+   FCM push will need if it is ever built — see the note in `docs/api.md`.
 
 3. **Publish the bridge**, from a Windows shell:
 
@@ -78,7 +84,7 @@ Tailscale is exposed, and only to your own devices.
    `home` withheld — so Tailscale's `x-forwarded-*` headers are arriving and the
    classification in `bridge/auth.js` is reading them correctly against the real
    proxy. The refusals fire over the same path: `/api/terminals/*` and
-   `bypassPermissions` both 403 while `/api/sessions` and `/m` are fine.
+   `bypassPermissions` both 403 while `/api/sessions` and `/api/overview` are fine.
 
 4. **Install Tailscale on the phone** and sign in to the same tailnet.
 
@@ -94,13 +100,15 @@ Tailscale is exposed, and only to your own devices.
      )/pair?token=$(cat ~/.local/share/claude-sessions/token)"
    ```
 
-   Open it once on the phone. It sets an `HttpOnly` cookie good for a year and
-   redirects to `/m`; after that the token is never in a URL again. Add it to the
-   home screen and it opens standalone.
+   Get that link onto the phone and paste it into the Android app's settings form,
+   which keeps the token and sends it as `Authorization: Bearer` from then on. The
+   app never fetches `/pair`; it only wants the token out of the query. Opening the
+   link in a phone browser still works too — it trades the token for a year-long
+   `HttpOnly` cookie — but that only signs *that browser* in, and there is no longer
+   a phone page for it to be signed in to.
 
-   **If the phone shows "This device is not paired"**, that is the pairing link not
-   having been opened, or having been opened on a different browser than the one you
-   are looking at. The bridge log says so plainly:
+   **If the app says it is not paired**, the token is wrong, mistyped, or from before
+   the bridge last created one. The bridge log says so plainly:
    `rejected GET /api/sessions from <ip> — no valid token`.
 
 6. **Test it properly — with Wi-Fi off.** On the same Wi-Fi you may be talking
@@ -177,12 +185,13 @@ specifically.
 **So the named tunnel is the supported setup, and SSE works on it.** Do not judge
 this transport by a quick tunnel — that is a test of a different code path.
 
-**The fallback stays anyway.** `web/mobile.js` watches for `hello` and switches to
-polling if it does not arrive within six seconds. It costs nothing when the stream
-works (it never engages) and it is what makes a quick tunnel, a corporate proxy, or
-some hotel network degrade into "a couple of seconds behind" instead of "silently
-frozen". Polling was measured through the same tunnel at 62ms for the board and
-42 bytes for an empty transcript delta, so the degraded mode is barely degraded.
+**A client should keep the fallback anyway**, and the Android app does: watch for
+`hello` and switch to polling if it does not arrive within six seconds. It costs
+nothing when the stream works (it never engages) and it is what makes a quick tunnel,
+a corporate proxy, or some hotel network degrade into "a couple of seconds behind"
+instead of "silently frozen". Polling was measured through the same tunnel at 62ms
+for the board and 42 bytes for an empty transcript delta, so the degraded mode is
+barely degraded. `docs/api.md` has the cadence.
 
 ### Setup — and what is already done on this machine
 

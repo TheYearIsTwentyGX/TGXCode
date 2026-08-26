@@ -12187,8 +12187,8 @@ function pairNote(base) {
         return 'Anything terminating TLS in front of the bridge works. Add its '
             + 'hostname to CLAUDE_SESSIONS_ORIGINS if the origin check refuses it.';
     }
-    return 'Plain HTTP: the phone view will work, but it cannot be installed as an '
-        + 'app and the service worker will not run.';
+    return 'Plain HTTP: the Android app will connect, but nothing about the link '
+        + 'is confidential in transit — anything on the path can read the token.';
 }
 
 async function openPair() {

@@ -1,9 +1,12 @@
 # The bridge API
 
-What a client needs to know to talk to the bridge. `web/app.js` (desktop) and
-`web/mobile.js` (phone) are both clients of this; the native Android app in
-`~/Other/tgxcode-mobile` is the third, and this document exists so that it is a
-*client* rather than a rewrite.
+What a client needs to know to talk to the bridge. `web/app.js` (desktop) is one
+client; the native Android app in `~/Other/tgxcode-mobile` is the other, and this
+document exists so that it is a *client* rather than a rewrite.
+
+There used to be a third — a phone-shaped web page at `/m` — and it is gone. The
+phone surface is the Android app now, so a feature the phone needs is a field in
+here, not a page in `web/`.
 
 Anything a client needs and cannot get from here is a gap in the API, and belongs
 fixed here rather than worked around in the client.
@@ -60,8 +63,8 @@ request that is missing it fails the same way whether or not the token was good.
 It is a CSRF guard, not a secret: the value is a constant published in this
 repository, and the point is only that a form post or an image tag from another
 origin cannot set a custom header without a preflight. Nothing in `web/` mentions
-it in prose because `web/app.js`, `web/mobile.js`, `web/terminal.js` and
-`web/sw.js` each carry it in their own `HEADERS` constant.
+it in prose because `web/app.js`, `web/terminal.js` and `web/sw.js` each carry it
+in their own `HEADERS` constant.
 
 It is the first thing a new client trips over, because the read surface works
 perfectly without it and then the *entire* write surface 403s at once —
@@ -84,14 +87,19 @@ amount of correct token fixes.
 ### Pairing a device
 
 ```
-GET /pair?token=<token>   →  303 to /m, Set-Cookie: cs_token=…; HttpOnly; SameSite=Lax; Max-Age=31536000
+GET /pair?token=<token>   →  303 to /, Set-Cookie: cs_token=…; HttpOnly; SameSite=Lax; Max-Age=31536000
 POST /pair/forget         →  303, cookie expired
 ```
 
 `Secure` is added when the request arrived over HTTPS (or the host is a `.ts.net`
 name). This is what keeps the token out of URLs and history after the first open.
 
-A native client does not need this — it should store the token and send the header.
+A native client does not need the handshake — it should store the token and send the
+header. **It does still depend on this URL's shape**, because pasting the link the
+desktop's *Connect a phone* dialog builds (`<origin>/pair?token=<token>`) is how the
+token gets onto a device at all. Parse the token out of the query and never fetch the
+route. The `303` target is the desktop page and means nothing to a native client; it
+was `/m` until the phone web view was removed, so do not key on it.
 
 ### Local browsers
 
@@ -218,8 +226,8 @@ is what makes it worth a table.
 
 **The practical consequence: `runner.pendingPermission` is `undefined` on every payload
 except the three in the first row.** A client that reads it off a session summary to
-decide whether to draw an ask dot draws it never and reports no error, which is what
-`web/mobile.js` does today. **To find out which sessions are blocked, read
+decide whether to draw an ask dot draws it never and reports no error — this was a real
+bug in a real client, not a hypothetical. **To find out which sessions are blocked, read
 `GET /api/overview` and use the card's `ask` field** — not `card.runner`, which does not
 carry it either. `ask` is the whole ask object, so a tool ask can be answered straight
 from the card.
@@ -308,8 +316,8 @@ strips `<system-reminder>` and `<local-command-stdout>` and nothing else, so a
 and the parsed `command` beside it. Render from `command` when it is present —
 `{name: "foo", args: "bar"}`, the name with its leading slash **already removed**, so
 put one back; `args` is `""` for a command that takes none — and strip the
-`<command-…>` tags out of `text` yourself if you show it at all. `web/mobile.js` does
-neither, which is why a slash command reads as `/[object Object]` there.
+`<command-…>` tags out of `text` yourself if you show it at all. A client that does
+neither renders a slash command as `/[object Object]`, which is how this got noticed.
 
 ### A tool call resolves in one of two ways
 
@@ -328,14 +336,15 @@ same read**, and on a live tail they usually do not:
 
 **A client with no `tool-result` case leaves every tool spinning for the whole of a
 live turn** and looks perfectly fine on a finished session, because a full read never
-produces one. `web/app.js` handles it; `web/mobile.js` does not.
+produces one — which is why it is easy to ship without noticing. `web/app.js` handles
+it.
 
 ### `GET /api/sessions/:id/since?offset=N`
 
 `{ events, offset, reset }`. The catch-up call. `reset: true` means the transcript
 shrank — it was compacted or forked — and the client should reload from scratch.
 
-This is how a mobile client resumes after a network change, and it is much cheaper
+This is how a phone client resumes after a network change, and it is much cheaper
 than refetching.
 
 ### `GET /api/sessions/:id/prs`
@@ -495,8 +504,8 @@ says how many it left out rather than dropping them silently). Both default
 Note that the page reads these from its `<meta>` copy, which is the **user-level**
 answer — the board draws sessions from every project at once, so a project's
 `<workspace>/.tgxcode/settings.json` can set `live` and will see it echoed back
-on `?cwd=`, but it does not change what the board draws. Nothing in `/m` reads
-`live`: the phone builds its own cards.
+on `?cwd=`, but it does not change what the board draws. A client that builds its
+own cards has no reason to read `live` at all — the Android app does not.
 
 `spinner`: `randomize` (whether a turn in progress wears a themed verb in front
 of what it is doing, or says only what it is doing as before), `groups` (which
@@ -1225,7 +1234,8 @@ A client that must work everywhere should detect this and fall back:
 - **Fall back** to polling `GET /api/overview`, `GET /api/sessions/:id?tail=0` for
   liveness, and `GET /api/sessions/:id/since?offset=` for new events. Measured
   through the same tunnel: ~60ms per call, 7KB for the board, **42 bytes** for an
-  empty delta. `web/mobile.js` does this at 2.5s, polling the board at half rate.
+  empty delta. 2.5s for the transcript and half that rate for the board is a
+  measured-comfortable cadence.
 
 Liveness becomes a couple of seconds granular rather than instant, which for "has
 it finished, does it need me" is a distinction without a difference.
@@ -1870,8 +1880,8 @@ These are cheap now and expensive later, so they are settled:
 - **No dependency on the Electron shell.** There is exactly one native method
   (`app/preload.js` → `revealWindow`) and both of its call sites are already
   feature-guarded. Everything else comes over HTTP.
-- **Push is not built.** When it is, it is FCM from the Android app or Web Push from
-  the PWA; both need the HTTPS origin that `docs/remote.md` sets up. Until then, a
+- **Push is not built.** When it is, it is FCM from the Android app, which needs the
+  HTTPS origin that `docs/remote.md` sets up. Until then, a
   client only learns about an ask while it is connected — and see *Being connected
   is load-bearing* above for why that matters more than it sounds.
 

@@ -32,7 +32,7 @@ process.on('exit', () => { try { fs.rmSync(TMP, { recursive: true, force: true }
 
 // --- the wrapper round-trips ----------------------------------------------
 
-const MSG = 'GET /api/sites returns {sites:[…]} now, not a bare array.\n\nweb/mobile.js:412 unwraps the old shape.';
+const MSG = 'GET /api/sites returns {sites:[…]} now, not a bare array.\n\nweb/app.js:412 unwraps the old shape.';
 const wrapped = handoffEnvelope({
     text: MSG,
     fromId: '0f8c3a1e-1111-2222-3333-444455556666',

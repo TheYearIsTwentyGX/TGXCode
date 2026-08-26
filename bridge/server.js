@@ -621,8 +621,8 @@ function isKnownHost(host) {
  *     as /api/fs — a phone reading what a project declares learns nothing it
  *     could not learn by reading the repo; a phone running it does not.
  *
- * Refusing at the route rather than in the UI is the point: /m not drawing a button
- * is a courtesy, and this is the rule.
+ * Refusing at the route rather than in the UI is the point: a client not drawing a
+ * button is a courtesy, and this is the rule.
  */
 function remoteRefusal(pathname, method) {
     if (pathname.startsWith('/api/terminals')) {
@@ -668,10 +668,12 @@ function remoteRefusal(pathname, method) {
     //
     // This is the weakest of the refusals on this list and it is worth saying so:
     // a phone taking a photo has nowhere *else* to put it, so "write it on the
-    // machine you are sitting at" is advice a phone cannot take. It is refused in
-    // v1 because /m has no attach affordance to refuse anything for yet. When it
-    // grows one, the answer is a smaller cap for a remote caller — not deleting
-    // this line and letting a leaked token write 25MB files into a repo.
+    // machine you are sitting at" is advice a phone cannot take. It was refused in
+    // v1 because the phone surface of the day had no attach affordance to refuse
+    // anything for, and it stays refused because nothing has replaced that reason
+    // yet — not because the argument is strong. If the Android app grows an attach
+    // button, the answer is a smaller cap for a remote caller, not deleting this
+    // line and letting a leaked token write 25MB files into a repo.
     if (/^\/api\/sessions\/[^/]+\/attachments(\/open)?$/.test(pathname)) {
         return 'files can only be attached on the machine they are saved to';
     }
@@ -4105,26 +4107,23 @@ const MIME = {
     '.svg': 'image/svg+xml',
     '.json': 'application/json; charset=utf-8',
     '.woff2': 'font/woff2',
-    // Added for the phone surface: a PWA that cannot fetch its own manifest or
-    // icons is not installable, and both would otherwise be served as
-    // application/octet-stream and ignored.
-    '.png': 'image/png',
-    // The other three the composer will accept and inline. Nothing in web/ is a
+    // The image types the composer will accept and inline, which would otherwise
+    // be served as application/octet-stream and ignored. Nothing in web/ is a
     // jpeg today; the table being one short of the set it claims to cover is the
     // kind of gap that only shows up as a broken image months later.
+    '.png': 'image/png',
     '.jpg': 'image/jpeg',
     '.jpeg': 'image/jpeg',
     '.gif': 'image/gif',
     '.webp': 'image/webp',
     '.ico': 'image/x-icon',
-    '.webmanifest': 'application/manifest+json',
 };
 
-// The two HTML entry points, and what each is reached by.
+// The one HTML entry point. There used to be a second, `/m`, serving a
+// phone-shaped page; the phone is the native Android app now and `/m` 404s like
+// any other path that is not a file.
 const PAGES = new Map([
     ['/', 'index.html'],
-    ['/m', 'mobile.html'],
-    ['/m/', 'mobile.html'],
 ]);
 
 function serveStatic(req, res, pathname, who) {
@@ -4147,7 +4146,7 @@ function serveStatic(req, res, pathname, who) {
     // EventSource sends same-origin cookies too, so every existing call — including
     // the two SSE streams and the service worker's, which is the one place a header
     // could not have been threaded through — carries it already. It also puts the
-    // desktop on exactly the path a paired phone uses, rather than a second one.
+    // desktop on exactly the path a paired remote browser uses, not a second one.
     //
     // The **<meta> tag** is not for authentication; it is so the page can *read* the
     // token, which it needs to build the pairing URL for "Connect a phone". An
@@ -4183,12 +4182,17 @@ function serveStatic(req, res, pathname, who) {
 // Pairing
 // ---------------------------------------------------------------------------
 //
-// The handshake that gets a phone onto the bridge. You open one long URL — the
-// token in the query — and it comes back as an HttpOnly cookie and a redirect to
-// /m. Afterwards nothing carries the token in a URL: fetches send the cookie, and
-// so does EventSource, which is the point. EventSource cannot set headers, so
-// without a cookie the only way to authenticate a stream is `?token=` on the
-// stream's URL, in the page, forever.
+// The handshake that gets a browser onto the bridge from off-machine. You open one
+// long URL — the token in the query — and it comes back as an HttpOnly cookie and a
+// redirect to /. Afterwards nothing carries the token in a URL: fetches send the
+// cookie, and so does EventSource, which is the point. EventSource cannot set
+// headers, so without a cookie the only way to authenticate a stream is `?token=`
+// on the stream's URL, in the page, forever.
+//
+// The native Android app does not come through here — it stores the token and sends
+// `Authorization: Bearer`. It still depends on this URL's *shape*, because pasting
+// the link the desktop's "Connect a phone" dialog generates is how the token gets
+// onto the device. So the link is the contract even where the handshake is not.
 //
 // The gate above has already validated the token — /pair is not under /api/, so it
 // is checked here rather than there.
@@ -4196,7 +4200,7 @@ function serveStatic(req, res, pathname, who) {
 function pair(req, res, url, pathname, who) {
     if (pathname === '/pair/forget') {
         res.writeHead(303, {
-            Location: '/m',
+            Location: '/',
             'Set-Cookie': auth.pairCookie('', { secure: who.secure }),
             'Cache-Control': 'no-store',
         });
@@ -4230,8 +4234,8 @@ function pair(req, res, url, pathname, who) {
     console.log(`[claude-sessions] paired ${who.peer} via ${who.host}`);
     res.writeHead(303, {
         // 303 with the token stripped, so the address bar and history keep the
-        // bare /m rather than the credential.
-        Location: '/m',
+        // bare / rather than the credential.
+        Location: '/',
         'Set-Cookie': auth.pairCookie(auth.current(), { secure: who.secure }),
         'Cache-Control': 'no-store',
         'Referrer-Policy': 'no-referrer',
