@@ -6,6 +6,11 @@ sidebar.png
 # Agent worktrees are full checkouts of this repo; never commit them into it.
 .claude/worktrees/
 
+# Page snapshots and screenshots the Playwright MCP tools drop beside whatever
+# directory they were driven from. Verifying a UI change writes a dozen of them,
+# and they are worth exactly as much as the run that made them.
+.playwright-mcp/
+
 # Personal overrides of the commands this project declares. The shared file
 # beside it is checked in; this one is yours, and the app says so out loud if
 # this line ever goes missing.
