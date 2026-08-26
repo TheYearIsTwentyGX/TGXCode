@@ -27,8 +27,8 @@ process.env.XDG_DATA_HOME = home;
 
 const {
     Schedules, STATE_FILE, MAX_SCHEDULES, CATCHUP_MS,
-    parseCron, matches, nextSlot, dueSlot, describeCron, fillPrompt, verdictOf,
-    reviewKey, unreviewedPulls, pruneReviews, capReviews, MAX_REVIEWED,
+    parseCron, matches, nextSlot, dueSlot, describeCron, cronForm, fillPrompt,
+    verdictOf, reviewKey, unreviewedPulls, pruneReviews, capReviews, MAX_REVIEWED,
 } = require('../bridge/schedule');
 
 // Where the module will actually write, now that the env var is in place.
@@ -280,6 +280,76 @@ const show = (ms) => (ms == null ? 'null' : new Date(ms).toString().slice(0, 21)
     ok('the day-of-month / day-of-week OR rule');
 }
 
+// --- the shape a picker draws -------------------------------------------
+
+{
+    const form = (text) => cronForm(parseCron(text));
+
+    // Every kind the dialog can select, and the expression it selects it from.
+    assert.deepStrictEqual(form('*/15 * * * *'), { kind: 'minutes', every: 15 });
+    assert.deepStrictEqual(form('* * * * *'), { kind: 'minutes', every: 1 },
+        '`*` and `*/1` are the same schedule and read the same way');
+    assert.deepStrictEqual(form('*/1 * * * *'), { kind: 'minutes', every: 1 });
+    assert.deepStrictEqual(form('0 */3 * * *'), { kind: 'hours', every: 3, minute: 0 });
+    assert.deepStrictEqual(form('30 * * * *'), { kind: 'hours', every: 1, minute: 30 });
+    assert.deepStrictEqual(form('0 2 * * *'), { kind: 'daily', hour: 2, minute: 0 });
+    assert.deepStrictEqual(form('0 2 * * 2-6'),
+        { kind: 'weekly', days: [2, 3, 4, 5, 6], hour: 2, minute: 0 });
+    assert.deepStrictEqual(form('30 14 1 * *'),
+        { kind: 'monthly', day: 1, hour: 14, minute: 30 });
+    assert.deepStrictEqual(form('0 17 29 8 *'),
+        { kind: 'date', month: 8, day: 29, hour: 17, minute: 0 });
+
+    // **The shapes it must not claim it can draw.** A picker that reported
+    // `0 9,17 * * 1-5` as "weekdays at 9" would silently drop the 5 PM run the
+    // moment somebody opened it for an unrelated edit and pressed save.
+    for (const text of ['0 9,17 * * 1-5', '0 2 1 * 1', '0 0-6/2 * * *',
+        '15,45 * * * *', '0 2 1,15 * *', '0 2 * 3 *']) {
+        assert.deepStrictEqual(form(text), { kind: 'custom' }, `${text} is not drawable`);
+    }
+
+    // `{0,2,4,6}` out of 24 hours is a list that stops, not a repetition — the
+    // distinction the `custom` case above turns on.
+    assert.deepStrictEqual(form('0 */2 * * *'), { kind: 'hours', every: 2, minute: 0 },
+        'but a step that does reach the end of the range is one');
+
+    // A day list written the long way round is still a week. Worth pinning: the
+    // days come back sorted, so the checkboxes tick in calendar order however
+    // the expression happened to spell them.
+    assert.deepStrictEqual(form('0 2 * * 1-5,0'),
+        { kind: 'weekly', days: [0, 1, 2, 3, 4, 5], hour: 2, minute: 0 });
+
+    assert.strictEqual(cronForm(parseCron('nonsense')), null);
+    assert.strictEqual(cronForm(null), null);
+    ok('cronForm names the shapes a picker can draw and refuses the rest');
+}
+
+{
+    // The round trip the dialog depends on: a form drawn from an expression has
+    // to compose back to that same expression, or opening a schedule and saving
+    // it without touching anything would quietly reschedule it.
+    const back = (f) => {
+        const hhmm = (o) => `${o.minute} ${o.hour}`;
+        switch (f.kind) {
+            case 'minutes': return `*/${f.every} * * * *`;
+            case 'hours': return `${f.minute} */${f.every} * * *`;
+            case 'daily': return `${hhmm(f)} * * *`;
+            case 'weekly': return `${hhmm(f)} * * ${f.days.join(',')}`;
+            case 'monthly': return `${hhmm(f)} ${f.day} * *`;
+            case 'date': return `${hhmm(f)} ${f.day} ${f.month} *`;
+            default: return null;
+        }
+    };
+    for (const text of ['*/15 * * * *', '0 */3 * * *', '0 2 * * *', '0 2 * * 3',
+        '30 14 1 * *', '0 17 29 8 *', '0 9 * * 1,4']) {
+        const spec = parseCron(text);
+        const composed = back(cronForm(spec));
+        assert.strictEqual(parseCron(composed).text, spec.text,
+            `${text} composed back as ${composed}`);
+    }
+    ok('a form composes back to the expression it was drawn from');
+}
+
 // --- English ------------------------------------------------------------
 
 {
@@ -299,6 +369,33 @@ const show = (ms) => (ms == null ? 'null' : new Date(ms).toString().slice(0, 21)
     assert.strictEqual(say('0 0-6/2 * * *'), '0 0-6/2 * * *');
     assert.strictEqual(describeCron(parseCron('nonsense')), null);
     ok('describeCron says the common shapes in English and falls back to the expression');
+}
+
+{
+    const say = (text) => describeCron(parseCron(text));
+
+    // The shapes the picker added. `* * * * *` is the one *existing* output this
+    // changed: it used to read "every 1 minutes", which nothing pinned and
+    // nobody would have written on purpose.
+    assert.strictEqual(say('* * * * *'), 'every minute');
+    assert.strictEqual(say('*/1 * * * *'), 'every minute');
+    assert.strictEqual(say('*/15 * * * *'), 'every 15 minutes');
+    assert.strictEqual(say('0 * * * *'), 'every hour');
+    assert.strictEqual(say('30 * * * *'), 'every hour at :30');
+    assert.strictEqual(say('0 */3 * * *'), 'every 3 hours');
+    assert.strictEqual(say('5 */6 * * *'), 'every 6 hours at :05');
+
+    // A dated expression says something different depending on the flag, because
+    // it *is* something different: without `once` it comes round again in a year.
+    assert.strictEqual(say('0 17 29 8 *'), '29 August every year at 5:00 PM');
+    assert.strictEqual(describeCron(parseCron('0 17 29 8 *'), { once: true }),
+        'once, on 29 August at 5:00 PM');
+
+    // The flag is about the row, not the expression, so it cannot invent a date
+    // out of a repeating one — a `once` daily still reads as daily.
+    assert.strictEqual(describeCron(parseCron('0 2 * * *'), { once: true }),
+        'every day at 2:00 AM');
+    ok('describeCron says the picker\'s new shapes, and `once` changes only the dated one');
 }
 
 // --- the prompt ---------------------------------------------------------
@@ -377,9 +474,9 @@ const show = (ms) => (ms == null ? 'null' : new Date(ms).toString().slice(0, 21)
 // --- the store ----------------------------------------------------------
 
 const FIELDS = ['id', 'enabled', 'title', 'cwd', 'prompt', 'model', 'permissionMode',
-    'test', 'cron', 'gate', 'lastSlotAt', 'lastFiredAt', 'lastSessionId', 'lastOutcome',
-    'lastSkipReason', 'lastError', 'lastMarker', 'reviewed', 'sweepSlotAt', 'sweepUntil',
-    'runs', 'createdAt', 'updatedAt'];
+    'test', 'cron', 'once', 'gate', 'lastSlotAt', 'lastFiredAt', 'lastSessionId',
+    'lastOutcome', 'lastSkipReason', 'lastError', 'lastMarker', 'reviewed',
+    'sweepSlotAt', 'sweepUntil', 'runs', 'createdAt', 'updatedAt'];
 
 {
     const s = fresh();
@@ -396,6 +493,7 @@ const FIELDS = ['id', 'enabled', 'title', 'cwd', 'prompt', 'model', 'permissionM
     assert.deepStrictEqual(Object.keys(made).sort(), [...FIELDS].sort(),
         'the wire shape is the whitelist, so a body cannot smuggle a key in');
     assert.strictEqual(made.enabled, true, 'a new schedule is on');
+    assert.strictEqual(made.once, false, 'and repeats unless it was asked not to');
     assert.strictEqual(made.runs, 0);
     assert.strictEqual(made.lastSlotAt, null);
     assert.strictEqual(made.lastMarker, 'c'.repeat(40), 'the seed marker is kept');
@@ -452,6 +550,113 @@ const FIELDS = ['id', 'enabled', 'title', 'cwd', 'prompt', 'model', 'permissionM
     const marked = s.update(row.id, { lastSlotAt: undefined, title: 'renamed' });
     assert.strictEqual(marked.lastSlotAt, on.lastSlotAt, 'a plain edit leaves the cursor alone');
     ok('the off→on transition resets the slot cursor, and nothing else does');
+}
+
+{
+    // A one-time schedule is spent by its slot, not by its run — so the two ways
+    // a slot cursor advances both switch it off, and neither of the ways it does
+    // not touches it.
+    const spent = () => {
+        const s = fresh();
+        const row = s.create({
+            cwd: '/a', prompt: 'p', cron: '0 17 29 8 *', once: true,
+        });
+        assert.strictEqual(row.once, true);
+        assert.strictEqual(row.enabled, true, 'armed until its slot comes round');
+        return { s, row };
+    };
+
+    // The tick taking the slot.
+    {
+        const { s, row } = spent();
+        assert.strictEqual(s.claim(row.id, at(2026, 8, 29, 17, 0)), true);
+        assert.strictEqual(s.get(row.id).enabled, false, 'claiming its slot spends it');
+        assert.strictEqual(s.enabled().length, 0, 'so the tick stops walking it');
+    }
+
+    // The slot found too old to run. It did not fire and it is still spent: a
+    // one-time trigger the machine slept through does not run late.
+    {
+        const { s, row } = spent();
+        s.note(row.id, { slotAt: at(2026, 8, 29, 17, 0), skipReason: 'missed' });
+        assert.strictEqual(s.get(row.id).enabled, false, 'a missed slot spends it too');
+        assert.strictEqual(s.get(row.id).runs, 0, 'without ever having run');
+    }
+
+    // Run now, which does not touch `lastSlotAt` — pressing the button to try a
+    // one-time schedule out must leave it armed for the slot it was made for.
+    {
+        const { s, row } = spent();
+        s.note(row.id, { sessionId: 'sess-1', marker: 'aa' });
+        assert.strictEqual(s.get(row.id).enabled, true, 'Run now does not spend it');
+        assert.strictEqual(s.get(row.id).runs, 1, 'though it really did run');
+
+        // Nor does the verdict arriving afterwards.
+        s.note(row.id, { outcome: 'CLEAN' });
+        assert.strictEqual(s.get(row.id).enabled, true);
+    }
+
+    // A repeating schedule is untouched by any of it.
+    {
+        const s = fresh();
+        const row = s.create({ cwd: '/a', prompt: 'p', cron: '0 2 * * *' });
+        s.claim(row.id, at(2026, 8, 29, 2, 0));
+        s.note(row.id, { slotAt: at(2026, 8, 30, 2, 0), skipReason: 'missed' });
+        assert.strictEqual(s.get(row.id).enabled, true, 'and repeats regardless');
+    }
+
+    // Spent, then turned back on by hand: the off→on cursor reset still applies,
+    // so it does not immediately owe the slot it was spent for.
+    {
+        const { s, row } = spent();
+        s.claim(row.id, at(2026, 8, 29, 17, 0));
+        const before = Date.now();
+        const on = s.update(row.id, { enabled: true });
+        assert.strictEqual(on.enabled, true);
+        assert.ok(on.lastSlotAt >= before, 'and starts from now, not from its old slot');
+    }
+    ok('a one-time schedule is spent by its slot, and Run now does not spend it');
+}
+
+{
+    // **Where the two features meet.** A one-time schedule is spent by `claim()`,
+    // and a PR gate's slot does not finish there — it opens a window that drains
+    // over the ticks that follow. So the row is disabled while its own slot is
+    // still being worked, and `tickSchedules`' drain pass walks `list()` rather
+    // than `enabled()` for exactly this row. If that guard is ever narrowed back
+    // to `enabled()`, a one-time PR review abandons its batch after the first pull
+    // request, leaves the window open forever, and never files the "N went
+    // unreviewed" notification that exists to make that visible.
+    //
+    // This pins the state the drain pass has to be able to find.
+    const s = fresh();
+    const row = s.create({
+        cwd: '/a', prompt: 'p', cron: '0 17 29 8 *', once: true,
+        gate: { kind: 'open-prs' },
+    });
+
+    const slot = at(2026, 8, 29, 17, 0);
+    assert.strictEqual(s.claim(row.id, slot), true);
+    s.openSweep(row.id, slot, 30 * 60_000);
+
+    const mid = s.get(row.id);
+    assert.strictEqual(mid.enabled, false, 'spent the moment the slot was claimed');
+    assert.ok(mid.sweepUntil > Date.now(), 'but its window is still open');
+    assert.strictEqual(mid.once, true);
+    assert.strictEqual(s.enabled().length, 0,
+        'so pass one cannot see it — which is right, it must not claim another slot');
+    // The condition pass two uses. Spelled out here because it lives in server.js
+    // and this is the file that would catch it regressing.
+    assert.ok(!mid.enabled && mid.once && mid.sweepUntil,
+        'and pass two finds it by being a spent one-time with a window still open');
+
+    // Draining to the end closes the window and leaves it spent, not re-armed.
+    const done = s.closeSweep(row.id);
+    assert.strictEqual(done.sweepUntil, null);
+    assert.strictEqual(done.enabled, false, 'still spent once the window closes');
+    assert.ok(!(done.once && done.sweepUntil),
+        'and stops matching pass two, so it is not walked forever');
+    ok('a spent one-time schedule with a PR gate is still findable while it drains');
 }
 
 {

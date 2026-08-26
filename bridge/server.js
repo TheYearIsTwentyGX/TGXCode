@@ -26,7 +26,7 @@ const { Suggestions, STATUSES: SUGGESTION_STATUSES } = require('./suggestions');
 const { Drafts, MAX_DRAFTS } = require('./drafts');
 const {
     Schedules, MAX_SCHEDULES, CATCHUP_MS,
-    parseCron, nextSlot, dueSlot, describeCron, fillPrompt, verdictOf,
+    parseCron, nextSlot, dueSlot, describeCron, cronForm, fillPrompt, verdictOf,
     reviewKey, unreviewedPulls,
 } = require('./schedule');
 const { SlashCommandCache } = require('./slash-commands');
@@ -875,7 +875,12 @@ function scheduleOut(row) {
         reviewsInFlight: Object.values(row.reviewed || {})
             .filter(e => e.sessionId && !e.outcome).length,
         projectName: projectName(row.cwd),
-        cronText: describeCron(spec),
+        cronText: describeCron(spec, { once: row.once }),
+        // The same expression as controls rather than as prose, so the dialog can
+        // draw a picker without parsing cron in the page. Derived here for the
+        // reason above: three clients reading five fields each is three chances
+        // to disagree about what `0 2 * * 2-6` selects.
+        cronForm: cronForm(spec),
         // Null when the expression can never match again, which is a real answer
         // — `0 0 30 2 *` is a schedule that will never fire — and one the card
         // should be able to say out loud rather than showing a blank.
@@ -989,6 +994,11 @@ function scheduleFields(body, who, { partial }) {
     if (!partial || body.title !== undefined) fields.title = body.title || null;
     if (!partial || body.test !== undefined) fields.test = !!body.test;
     if (!partial || body.enabled !== undefined) fields.enabled = body.enabled !== false;
+    // Not checked against the expression, deliberately. `once` on `0 2 * * *` is
+    // a schedule that runs tomorrow at 2 AM and then switches itself off, which
+    // is odd but coherent — and a dated expression *without* the flag is a
+    // birthday reminder. Neither is the store's business to refuse.
+    if (!partial || body.once !== undefined) fields.once = !!body.once;
 
     return { fields };
 }
@@ -1557,7 +1567,18 @@ async function runTick() {
     // have been opened by this tick or by one twenty minutes ago, and either way
     // the question is the same: what does this schedule still owe, and how much of
     // it may start now. Re-read so a window pass one just opened is seen.
-    for (const row of schedules.enabled()) {
+    //
+    // **`list()` rather than `enabled()`, because a one-time schedule is disabled
+    // by the very slot whose window this is draining.** `claim()` spends a `once`
+    // row the moment it takes the slot — deliberately, so a crash cannot leave one
+    // armed for a slot it already had — and a PR gate then opens a window that
+    // outlives that write by up to half an hour. Walking `enabled()` here would
+    // abandon the batch after its first pull request, leave `sweepUntil` set
+    // forever, and skip the "N went unreviewed" notification that exists to make
+    // exactly that visible. Anything else that is off was turned off by a person,
+    // and stays off.
+    for (const row of schedules.list()) {
+        if (!row.enabled && !(row.once && row.sweepUntil)) continue;
         if (cfg.IS_DEV !== !!row.test) continue;
         if (!row.gate || row.gate.kind !== 'open-prs') continue;
         if (!row.sweepUntil) continue;
@@ -2390,9 +2411,16 @@ async function api(req, res, url, pathname, who) {
             const spec = parseCron(text);
             if (spec.error) return send(res, 400, { error: spec.error });
             const next = nextSlot(spec, Date.now());
+            // `once` because the dialog is asking what it is about to save, and a
+            // dated expression means two different things with the flag and
+            // without it. Read off the query rather than guessed from the shape.
+            const once = url.searchParams.get('once') === '1';
             return send(res, 200, {
                 cron: spec.text,
-                text: describeCron(spec),
+                text: describeCron(spec, { once }),
+                // The controls that would produce this expression, so a client
+                // that has one can select the right row without parsing it.
+                form: cronForm(spec),
                 // Null is a real answer — `0 0 30 2 *` parses and never matches —
                 // and one the dialog says out loud rather than leaving blank.
                 next,

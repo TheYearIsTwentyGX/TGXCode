@@ -46,6 +46,16 @@
 //   * **The marker advances only after a session actually starts.** A failed
 //     spawn that consumed the commit range would lose a night's review silently.
 //
+// **A one-time schedule is spent by its slot, not by its run.** Cron has no year
+// field, so `once` is a flag on the row rather than a shape of the expression:
+// the cron says 5 PM on the 29th of August and the flag is what stops it coming
+// round again next August. It disables itself the moment `lastSlotAt` advances —
+// in `claim()` for a slot the tick took, and in `note()` for one it found too old
+// to run. That is the distinction Run now already draws by leaving `lastSlotAt`
+// alone: pressing the button to try a one-time schedule out must not consume it,
+// and a slot the bridge slept through is a one-time trigger that simply did not
+// fire, which is what Task Scheduler does with one too.
+//
 // **Merge-on-write, not last-writer-wins**, the same as drafts.js and for a
 // sharper version of the same reason. Two bridges share `schedules.json`; a
 // whole-file rewrite from a startup snapshot would mean the first write by any
@@ -365,6 +375,8 @@ function dueSlot(spec, { cursor, now = Date.now(), limit = WALK_LIMIT } = {}) {
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const DAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
+    'August', 'September', 'October', 'November', 'December'];
 
 /** `[0,1,2]` → `"Sun–Tue"`, `[1,3]` → `"Mon, Wed"`. */
 function daysText(values) {
@@ -398,6 +410,94 @@ function clockText(hour, minute) {
 }
 
 /**
+ * The shape of an expression, as fields rather than as a sentence.
+ *
+ * The dialog needs this and `describeCron` needs the same knowledge, so there is
+ * one classifier and the English is derived from it. Two would be two chances
+ * for the sentence under the picker to disagree with the controls above it.
+ *
+ * A tagged union, and `custom` is a real answer rather than a failure: crontab
+ * says plenty of things no picker should pretend to draw — `0 9,17 * * 1-5`, or
+ * the day-of-month/day-of-week OR — and the honest move is to hand those back as
+ * an expression to be edited as text.
+ *
+ * Never null for a parseable spec, so a caller can switch on `kind` without a
+ * null check in front of it.
+ *
+ * @param {object} spec from `parseCron`
+ * @returns {{kind: 'minutes', every: number}
+ *   | {kind: 'hours', every: number, minute: number}
+ *   | {kind: 'daily', hour: number, minute: number}
+ *   | {kind: 'weekly', days: number[], hour: number, minute: number}
+ *   | {kind: 'monthly', day: number, hour: number, minute: number}
+ *   | {kind: 'date', month: number, day: number, hour: number, minute: number}
+ *   | {kind: 'custom'} | null}
+ */
+function cronForm(spec) {
+    if (!spec || spec.error) return null;
+    const { minute, hour, dom, month, dow } = spec;
+
+    const everyMonth = month.values.size === 12;
+    const oneMinute = minute.values.size === 1;
+    const oneHour = hour.values.size === 1;
+    const at = () => ({ hour: [...hour.values][0], minute: [...minute.values][0] });
+
+    // The `n` a field was written with, if it was written `*/n` — and null if it
+    // only looks like it. `{0,2,4,6}` in a 24-hour field is not "every 2 hours",
+    // it is four hours that happen to be evenly spaced and then stop; the run has
+    // to reach the end of the range, which is what `*/n` expands to.
+    const step = (field, max) => {
+        if (field.star || field.values.size < 2) return null;
+        const sorted = [...field.values].sort((a, b) => a - b);
+        if (sorted[0] !== 0) return null;
+        const n = sorted[1];
+        if (!sorted.every((v, i) => v === i * n)) return null;
+        if (sorted[sorted.length - 1] + n <= max) return null;
+        return n;
+    };
+
+    // The repeating shapes: every day, all day, so only the clock fields say
+    // anything. `*` and `*/1` mean the same thing and are reported the same way.
+    if (everyMonth && dom.star && dow.star) {
+        if (hour.star) {
+            if (minute.star) return { kind: 'minutes', every: 1 };
+            const every = step(minute, 59);
+            if (every) return { kind: 'minutes', every };
+            if (oneMinute) return { kind: 'hours', every: 1, minute: [...minute.values][0] };
+        } else if (oneMinute) {
+            const every = step(hour, 23);
+            if (every) return { kind: 'hours', every, minute: [...minute.values][0] };
+        }
+    }
+
+    // The once-a-day shapes, which is most of them.
+    if (oneMinute && oneHour && everyMonth) {
+        if (dom.star && dow.star) return { kind: 'daily', ...at() };
+        if (dom.star) {
+            return { kind: 'weekly', days: [...dow.values].sort((a, b) => a - b), ...at() };
+        }
+        if (dow.star && dom.values.size === 1) {
+            return { kind: 'monthly', day: [...dom.values][0], ...at() };
+        }
+    }
+
+    // A dated expression — the shape a one-time schedule wears, cron having no
+    // year to pin it to. Whether it is *meant* once is the row's `once` flag,
+    // not something the expression itself can say.
+    if (oneMinute && oneHour && dow.star
+        && month.values.size === 1 && dom.values.size === 1) {
+        return {
+            kind: 'date',
+            month: [...month.values][0],
+            day: [...dom.values][0],
+            ...at(),
+        };
+    }
+
+    return { kind: 'custom' };
+}
+
+/**
  * The expression in English, for the card.
  *
  * The card shows this instead of the raw expression because `0 2 * * 2-6` is not
@@ -405,34 +505,51 @@ function clockText(hour, minute) {
  * It covers the shapes the dialog can produce and falls back to the expression
  * itself for anything hand-written and odd — a wrong-looking sentence would be
  * worse than the honest raw text.
+ *
+ * `once` comes from the row rather than from the expression, because a one-time
+ * schedule is a dated expression plus a row that switches itself off. Without
+ * the flag this would say "29 August every year", which is what the expression
+ * on its own actually means.
  */
-function describeCron(spec) {
-    if (!spec || spec.error) return null;
-    const { minute, hour, dom, month, dow } = spec;
+function describeCron(spec, { once = false } = {}) {
+    const form = cronForm(spec);
+    if (!form) return null;
+    const time = () => clockText(form.hour, form.minute);
 
-    const everyMonth = month.values.size === 12;
-    const oneTime = minute.values.size === 1 && hour.values.size === 1;
+    switch (form.kind) {
+        case 'minutes':
+            return form.every === 1 ? 'every minute' : `every ${form.every} minutes`;
 
-    if (oneTime && everyMonth && dom.star) {
-        const time = clockText([...hour.values][0], [...minute.values][0]);
-        if (dow.star) return `every day at ${time}`;
-        return `${daysText(dow.values)} at ${time}`;
+        case 'hours': {
+            const every = form.every === 1 ? 'every hour' : `every ${form.every} hours`;
+            return form.minute === 0
+                ? every
+                : `${every} at :${String(form.minute).padStart(2, '0')}`;
+        }
+
+        case 'daily':
+            return `every day at ${time()}`;
+
+        // `daysText` is what turns the whole week into "every day" and 1-5 into
+        // "weekdays", so this one line says rather more shapes than it looks.
+        case 'weekly':
+            return `${daysText(form.days)} at ${time()}`;
+
+        case 'monthly':
+            return `the ${ordinal(form.day)} of each month at ${time()}`;
+
+        // Phrased by the flag, because the two really are different schedules:
+        // one of them fires next August too.
+        case 'date': {
+            const date = `${form.day} ${MONTH_NAMES[form.month - 1]}`;
+            return once
+                ? `once, on ${date} at ${time()}`
+                : `${date} every year at ${time()}`;
+        }
+
+        default:
+            return spec.text;
     }
-
-    if (oneTime && everyMonth && dow.star && dom.values.size === 1) {
-        const time = clockText([...hour.values][0], [...minute.values][0]);
-        return `the ${ordinal([...dom.values][0])} of each month at ${time}`;
-    }
-
-    // `*/n * * * *` and friends — the shape a test schedule uses.
-    if (dom.star && dow.star && everyMonth && hour.star && minute.values.size > 1) {
-        const sorted = [...minute.values].sort((a, b) => a - b);
-        const step = sorted.length > 1 ? sorted[1] - sorted[0] : 0;
-        const even = step > 0 && sorted.every((v, i) => v === sorted[0] + i * step);
-        if (even && sorted[0] === 0) return `every ${step} minutes`;
-    }
-
-    return spec.text;
 }
 
 function ordinal(n) {
@@ -710,6 +827,9 @@ function clean(row) {
         permissionMode: row.permissionMode,
         test: row.test,
         cron: row.cron,
+        // Beside the cron because it qualifies it: the expression says 5 PM on
+        // the 29th of August, and this is what stops that meaning "every year".
+        once: row.once,
         gate: row.gate,
         // What has happened. Kept on the row rather than derived from the
         // notification log because the card must be able to say "last run 3 days
@@ -780,6 +900,9 @@ function read() {
                     ? row.permissionMode : 'auto',
                 test: !!row.test,
                 cron: row.cron,
+                // Absent reads as false — a row from before this field existed
+                // is a repeating schedule, which is what every row was then.
+                once: !!row.once,
                 gate: cleanGate(row.gate),
                 lastSlotAt: numOrNull(row.lastSlotAt),
                 lastFiredAt: numOrNull(row.lastFiredAt),
@@ -933,6 +1056,7 @@ class Schedules {
             permissionMode: String(fields.permissionMode || 'auto'),
             test: !!fields.test,
             cron: String(fields.cron),
+            once: !!fields.once,
             gate: cleanGate(fields.gate),
             // **Seeded, not zero.** The caller resolves the gate's ref before
             // creating and passes the SHA, so the first run reviews what arrives
@@ -987,6 +1111,7 @@ class Schedules {
         }
         if (fields.test !== undefined) row.test = !!fields.test;
         if (fields.cron !== undefined) row.cron = String(fields.cron);
+        if (fields.once !== undefined) row.once = !!fields.once;
         if (fields.gate !== undefined) row.gate = cleanGate(fields.gate);
 
         // A schedule re-enabled after a long pause must not fire for every slot
@@ -1027,6 +1152,11 @@ class Schedules {
         const row = this.rows.find(r => r.id === id);
         if (!row) return false;
         row.lastSlotAt = slotAt;
+        // Spent by the slot, not by the run. Written here rather than after the
+        // spawn so that a crash between the two cannot leave a one-time schedule
+        // armed for a slot it has already been given — the same reasoning that
+        // puts the claim itself before the expensive part.
+        if (row.once) row.enabled = false;
         row.updatedAt = this._stamp();
         this._sort();
         this.flush();
@@ -1173,7 +1303,15 @@ class Schedules {
         const row = this.rows.find(r => r.id === id);
         if (!row) return null;
 
-        if (slotAt != null) row.lastSlotAt = slotAt;
+        // `slotAt` here is a slot nobody claimed — the missed branch, past the
+        // catch-up cap. It spends a one-time schedule for the same reason the
+        // claim does: the moment it was set for has been and gone. A one-time
+        // trigger the machine slept through does not run late, which is what
+        // Task Scheduler does with one too.
+        if (slotAt != null) {
+            row.lastSlotAt = slotAt;
+            if (row.once) row.enabled = false;
+        }
         if (sessionId) {
             row.lastSessionId = sessionId;
             row.lastFiredAt = Date.now();
@@ -1216,6 +1354,7 @@ module.exports = {
     nextSlot,
     dueSlot,
     describeCron,
+    cronForm,
     fillPrompt,
     verdictOf,
     reviewKey,

@@ -777,16 +777,101 @@ checks, and merge it once they pass.">LGTM</button>
         <textarea id="new-prompt" class="grow" rows="2"
                   placeholder="What should this session do?"></textarea>
       </div>
-      <!-- Only shown in schedule mode; see openNew(). Two fields rather than a
+      <!-- Only shown in schedule mode; see openNew(). These rows rather than a
            second dialog because everything above — the directory, the message,
            the model, the permission mode — is the same decision either way, and
-           the directory picker is the expensive half of this form. -->
+           the directory picker is the expensive half of this form.
+
+           A trigger picker rather than the cron box this used to be: five fields
+           in the bridge's local time is a thing you have to already know, and
+           "every weekday at 9" is the sentence most schedules actually are. The
+           expression is still what gets stored — the rows compose one, and the
+           bridge hands back the shape of one so an existing schedule can select
+           its own row. Custom keeps the box for everything a picker should not
+           pretend to draw. -->
       <div class="field" id="new-cron-row" hidden>
-        <label for="new-cron">Runs</label>
-        <input id="new-cron" type="text" spellcheck="false" placeholder="0 2 * * 2-6">
-        <!-- Filled in from the bridge's own describeCron as you type, so the
-             expression is checked by the thing that will actually run it rather
-             than by a second parser in the page. -->
+        <label id="new-when-label">Runs</label>
+        <div class="when" role="radiogroup" aria-labelledby="new-when-label">
+          <!-- Each row is a div with its own label for the radio, not a label
+               wrapping the lot: a label wrapping its own time input re-targets
+               clicks meant for the input at the radio, so you could not put the
+               caret in the hour without the row jumping. The arguments select
+               their row on input instead — see whenWire() in app.js. -->
+          <div class="when-opt">
+            <label class="when-pick" for="new-when-once">
+              <input type="radio" name="new-when" id="new-when-once" value="once">
+              <span>One time</span>
+            </label>
+            <span class="when-args">
+              on <input id="new-when-date" class="when-in" type="date"
+                        aria-label="Date to run on">
+              at <input id="new-when-once-time" class="when-in" type="time"
+                        aria-label="Time to run at">
+            </span>
+          </div>
+          <div class="when-opt">
+            <label class="when-pick" for="new-when-every">
+              <input type="radio" name="new-when" id="new-when-every" value="every">
+              <span>Every</span>
+            </label>
+            <span class="when-args">
+              <input id="new-when-count" class="when-in num" type="number" min="1"
+                     max="59" step="1" aria-label="How often">
+              <select id="new-when-unit" aria-label="Minutes or hours">
+                <option value="minutes">minutes</option>
+                <option value="hours">hours</option>
+              </select>
+            </span>
+          </div>
+          <div class="when-opt">
+            <label class="when-pick" for="new-when-daily">
+              <input type="radio" name="new-when" id="new-when-daily" value="daily">
+              <span>Daily</span>
+            </label>
+            <span class="when-args">
+              at <input id="new-when-daily-time" class="when-in" type="time"
+                        aria-label="Time to run at">
+            </span>
+          </div>
+          <div class="when-opt">
+            <label class="when-pick" for="new-when-weekly">
+              <input type="radio" name="new-when" id="new-when-weekly" value="weekly">
+              <span>Weekly</span>
+            </label>
+            <span class="when-args">
+              at <input id="new-when-weekly-time" class="when-in" type="time"
+                        aria-label="Time to run at">
+            </span>
+            <!-- Sunday first, matching DAY_SHORT in bridge/schedule.js — so the
+                 ticks read in the same order as the sentence underneath. -->
+            <div id="new-when-days" class="when-days" role="group"
+                 aria-label="Days of the week"></div>
+          </div>
+          <div class="when-opt">
+            <label class="when-pick" for="new-when-monthly">
+              <input type="radio" name="new-when" id="new-when-monthly" value="monthly">
+              <span>Monthly</span>
+            </label>
+            <span class="when-args">
+              on the <select id="new-when-dom" aria-label="Day of the month"></select>
+              at <input id="new-when-monthly-time" class="when-in" type="time"
+                        aria-label="Time to run at">
+            </span>
+          </div>
+          <div class="when-opt">
+            <label class="when-pick" for="new-when-custom">
+              <input type="radio" name="new-when" id="new-when-custom" value="custom">
+              <span>Custom</span>
+            </label>
+            <span class="when-args grow">
+              <input id="new-cron" type="text" spellcheck="false"
+                     placeholder="0 2 * * 2-6" aria-label="Cron expression">
+            </span>
+          </div>
+        </div>
+        <!-- Filled in from the bridge's own describeCron as the controls change,
+             so what it says is checked by the thing that will actually run it
+             rather than by a second parser in the page. -->
         <div id="new-cron-note" class="note">Five fields, local time: minute hour
           day-of-month month day-of-week.</div>
       </div>

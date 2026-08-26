@@ -805,7 +805,9 @@ expression and an optional gate, held and fired by the bridge itself.
       "prompt": "/adversarial-reviewer --diff {{range}}",
       "model": null, "permissionMode": "dontAsk", "test": false,
       "cron": "0 2 * * 2-6",
+      "once": false,
       "cronText": "Tue–Sat at 2:00 AM",
+      "cronForm": { "kind": "weekly", "days": [2, 3, 4, 5, 6], "hour": 2, "minute": 0 },
       "nextRunAt": 1787727600000,
       "gate": { "kind": "git-commits", "ref": "origin/main", "fetch": true },
       "reviewed": {}, "reviewedCount": 0, "reviewsInFlight": 0,
@@ -839,7 +841,7 @@ is not reserved punctuation in it. With no usable marker `{{range}}` narrows to
 | Field | Type |
 |---|---|
 | `id` | string, a UUID |
-| `enabled` | boolean. `false` is paused, not deleted — it keeps its history and its marker, and is skipped by the tick |
+| `enabled` | boolean. `false` is paused, not deleted — it keeps its history and its marker, and is skipped by the tick. **The bridge itself clears this** on a `once` schedule whose slot has passed, so a client must treat it as something that changes underneath it rather than only in response to a `PATCH` |
 | **`title`** | **string or null.** `null` means *derive it* — take the first line of `prompt`. Not an empty heading, not the string `"null"` |
 | `cwd` | string — expanded and checked when it was saved, and **checked again at fire time**, so a directory that has since moved costs one run rather than being trusted from disk |
 | **`projectName`** | string — derived, not stored. The same label the rail uses |
@@ -848,7 +850,9 @@ is not reserved punctuation in it. With no usable marker `{{range}}` narrows to
 | `permissionMode` | string, one of the six in `POST /api/sessions/:id/send` |
 | `test` | boolean — the flag the started session will get |
 | `cron` | string, **five space-separated fields in the bridge's local timezone**: minute hour day-of-month month day-of-week. `*`, `N`, `a-b`, `*/n` and comma lists. Day-of-week 0 and 7 are both Sunday. **No** names (`MON`), `@daily`, `L`, `#` or `?` — those are refused, not ignored. When day-of-month and day-of-week are both restricted, a day matching **either** fires, which is crontab(5)'s rule |
-| **`cronText`** | **string or null** — derived. `cron` in English, e.g. `"Tue–Sat at 2:00 AM"`. Falls back to the raw expression for shapes it cannot phrase, so it is safe to render directly. `null` only if `cron` is unparseable, which a stored row cannot be |
+| **`once`** | **boolean.** `true` is a one-time schedule: cron has no year field, so the expression names a date (`0 17 29 8 *`) and this is what stops it coming round again next August. **It switches itself off the moment its slot passes** — `enabled` goes `false` whether the run happened or was missed. Pressing `POST /:id/run` does *not* spend it, because Run now does not touch `lastSlotAt`. A `once` on a repeating expression is accepted and coherent: it runs at the next slot and then stops. With an `open-prs` gate a spent one-time keeps a `sweepUntil` in the future for as long as its batch is still draining, so **`enabled: false` and an open window is a real, transient state** and not a contradiction — the row is finishing the slot that disabled it |
+| **`cronText`** | **string or null** — derived. `cron` in English, e.g. `"Tue–Sat at 2:00 AM"`. Falls back to the raw expression for shapes it cannot phrase, so it is safe to render directly. `null` only if `cron` is unparseable, which a stored row cannot be. Reads the `once` flag: the same dated expression is `"once, on 29 August at 5:00 PM"` with it and `"29 August every year at 5:00 PM"` without |
+| **`cronForm`** | **object** — derived, and the *same expression as controls* so a client can draw a schedule picker without parsing cron. A tagged union on `kind`, one of: `{kind: "minutes", every}` · `{kind: "hours", every, minute}` · `{kind: "daily", hour, minute}` · `{kind: "weekly", days, hour, minute}` (`days` is an **array of numbers**, 0=Sunday, ascending) · `{kind: "monthly", day, hour, minute}` · `{kind: "date", month, day, hour, minute}` (1-based `month`) · `{kind: "custom"}`. All values are numbers. **`custom` is a real answer, not an error** — it means no picker row represents this expression (`0 9,17 * * 1-5`, or the day-of-month/day-of-week OR) and a client should offer the raw text instead of approximating. `kind` is `"date"` whether or not `once` is set; the flag is what says which of the two it means. Never null for a stored row |
 | **`nextRunAt`** | **number or null**, epoch ms — derived, computed per request. `null` when the schedule is paused **or** when the expression matches no future date (`0 0 30 2 *` parses and never fires). Those two are different states; `enabled` tells them apart |
 | **`gate`** | **object or null**, and one of **two shapes** — `null` means fire every time the clock says so. `{kind: "git-commits", ref: string, fetch: boolean}` fires one session when `ref` has moved; `ref` is anything `git rev-parse` accepts and `fetch` defaults to `true`, fetching only that ref's remote, never `--all`, never tags. `{kind: "open-prs", includeDrafts: boolean, post: boolean}` fires **one session per open pull request** — see *The pull-request gate* below. Both booleans default to `true` |
 | **`reviewed`** | **object** — the pull-request gate's marker, `{"<owner>/<name>#<number>": {sha, at, sessionId, outcome, posted, postError}}`. Empty `{}` for every other kind of schedule. **On the wire this is a TAIL, not the store**: the twenty most recent by `at`, with `reviewedCount` giving the real size. A client that treated it as complete would decide a pull request was unreviewed because it fell off the end |
@@ -937,15 +941,30 @@ is delivery, so re-running a whole session to retry a comment would spend minute
 of quota re-deriving text that already exists. It raises a loud notification
 instead.
 
-### `GET /api/schedules/describe?cron=<expr>`
+### `GET /api/schedules/describe?cron=<expr>&once=1`
 
 What an expression means, without saving anything. This is where a "runs Tue–Sat at
 2:00 AM" line under an input box comes from — **do not ship a second cron parser in a
 client**, or it will eventually disagree with the one that actually fires.
 
 ```json
-{ "cron": "0 2 * * 2-6", "text": "Tue–Sat at 2:00 AM", "next": 1787727600000 }
+{ "cron": "0 2 * * 2-6",
+  "text": "Tue–Sat at 2:00 AM",
+  "form": { "kind": "weekly", "days": [2, 3, 4, 5, 6], "hour": 2, "minute": 0 },
+  "next": 1787727600000 }
 ```
+
+`once=1` is optional and says the caller is asking about a *one-time* schedule, which
+changes `text` and nothing else — a dated expression means two different things with
+the flag and without it, and this route has no row to read it off. Any other value,
+including its absence, is `false`.
+
+`form` is the same tagged union as `cronForm` on a schedule, documented under
+`GET /api/schedules` — the expression as controls. **Composing cron in a client is
+fine; parsing it is what this route is for.** A picker builds five fields out of
+numbers it already has, which cannot misread anything; going the other way — deciding
+that `0 0-6/2 * * *` is or is not "every 2 hours" — is the judgement that has to match
+the process that fires. So: compose on the way out, and read `form` on the way back in.
 
 `text` is never null here. `next` is a number or `null`, and `null` is a real answer:
 the expression parses and matches no future date. `400` with `{error}` for anything
@@ -1438,8 +1457,8 @@ same bucket `POST /api/sessions` draws on, because both spawn a process.
 
 ### `POST /api/schedules`
 
-`{cwd, prompt, cron, gate?, title?, model?, permissionMode?, test?, enabled?, seed?}`
-→ `{schedule}`, the row as `GET /api/schedules` returns it.
+`{cwd, prompt, cron, once?, gate?, title?, model?, permissionMode?, test?, enabled?,
+seed?}` → `{schedule}`, the row as `GET /api/schedules` returns it.
 
 Validated exactly as `POST /api/drafts` is — `cwd` resolved and checked against the
 allowed roots, `permissionMode` normalised — plus the two of its own:
@@ -1462,6 +1481,15 @@ the save rather than a month of silent "nothing new".
 gets on `bypassPermissions` and `dontAsk` applies here too and matters more: a schedule
 in one of those modes is an unattended agent with no permission gate, starting itself
 every night. `403` with `{error, remote: true}`.
+
+`once` defaults `false` and is **not** checked against the expression. `once` on a
+repeating cron is coherent — it runs at the next slot and stops — and a dated
+expression without it is an annual schedule, which is a real thing to want. Nor can a
+date in the past be refused here: `0 17 29 8 *` saved on the 30th of August matches
+next August, so the bridge sees a perfectly good expression that fires in eleven
+months. **A client offering a one-time schedule should refuse a past date itself**,
+while it still has the date somebody picked rather than a cron expression that has
+forgotten the year.
 
 **An `open-prs` schedule is seeded the same way, and for a sharper reason.** The
 create call lists the repository's open pull requests and records each one at its
@@ -1487,7 +1515,10 @@ the next run re-review a month of work.
 `enabled: false` pauses without deleting. `enabled: true` **moves the slot cursor to
 now**, so a schedule arming after a fortnight off does not immediately fire for every
 slot it slept through. No other field does that: an unrelated edit at 01:59 must not
-cancel the 02:00 run.
+cancel the 02:00 run. That cursor reset is also what makes a spent `once` schedule
+re-armable: turning one back on starts it from now, not from the slot it was spent
+for — though it will then next match a year later, which is why re-arming one is
+usually a matter of editing its date.
 
 Validation runs *before* the id is looked up, so a refused mode is `403` whether or not
 the schedule exists — the order `PATCH /api/drafts/:id` uses, and for the same reason.
