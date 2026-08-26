@@ -399,7 +399,8 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'btn-drafts', 'dr-badge', 'drafts', 'dr-sub', 'dr-body', 'dr-new',
     'btn-sched', 'sched-badge', 'sched', 'sched-sub', 'sched-body', 'sched-new',
     'new-cron', 'new-cron-row', 'new-cron-note', 'new-gate-ref', 'new-gate-row',
-    'new-sched-save',
+    'new-gate-kind', 'new-gate-note', 'new-gate-ref-row', 'new-pr-row',
+    'new-pr-drafts', 'new-pr-post', 'new-sched-save',
     'notes-notable', 'notes-all', 'notes-clear',
     'lock', 'lock-text', 'lock-fork', 'lock-anyway',
     'btn-live', 'live-badge', 'live', 'live-sub', 'live-body', 'live-focus', 'focus-exit',
@@ -6857,6 +6858,15 @@ function schedCards(rows) {
  * indistinguishable from one that has broken.
  */
 function schedLast(s) {
+    // A pull-request schedule mid-sweep is doing something right now, which is
+    // more useful than whatever the last finished review said.
+    if (s.reviewsInFlight) {
+        return { state: 'ok',
+            text: `reviewing ${s.reviewsInFlight} pull request${s.reviewsInFlight === 1 ? '' : 's'}` };
+    }
+    if (s.lastSkipReason === 'sweep-expired') {
+        return { state: 'bad', text: s.lastError || 'the review window closed with work left' };
+    }
     if (s.lastSkipReason === 'missed') {
         return { state: 'bad', text: s.lastError || 'a run was missed' };
     }
@@ -6921,8 +6931,25 @@ function schedCard(s) {
             el('span', { class: 'dot' }, '·'),
             el('span', {}, s.permissionMode),
             s.gate ? el('span', { class: 'dot' }, '·') : null,
-            s.gate ? el('span', { title: `only runs when ${s.gate.ref} has new commits` },
-                `gated on ${s.gate.ref}`) : null,
+            s.gate && s.gate.kind === 'git-commits'
+                ? el('span', { title: `only runs when ${s.gate.ref} has new commits` },
+                    `gated on ${s.gate.ref}`) : null,
+            // A PR gate has no ref to name; what it has is a count of what it has
+            // looked at, and whether it is posting.
+            s.gate && s.gate.kind === 'open-prs'
+                ? el('span', {
+                    title: s.gate.post
+                        ? 'reviews each open pull request and comments on it'
+                        : 'reviews each open pull request; posting is switched off',
+                }, s.reviewedCount
+                    ? `open PRs · ${s.reviewedCount} reviewed`
+                    : 'open PRs')
+                : null,
+            s.gate && s.gate.kind === 'open-prs' && !s.gate.post
+                ? el('span', { class: 'tag-test', title: 'nothing is written to GitHub' },
+                    'no posting') : null,
+            s.gate && s.gate.kind === 'open-prs' && !s.gate.includeDrafts
+                ? el('span', { title: 'draft pull requests are skipped' }, 'ready only') : null,
         ),
         // The line the panel exists for. Its own row rather than another chip in
         // the meta line, because "this stopped working three days ago" should not
@@ -10224,7 +10251,14 @@ async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     dom.newCronRow.hidden = !schedMode;
     dom.newGateRow.hidden = !schedMode;
     dom.newCron.value = sched ? sched.cron : (schedMode ? '0 2 * * 2-6' : '');
-    dom.newGateRef.value = sched && sched.gate ? sched.gate.ref : '';
+    const gate = sched ? sched.gate : null;
+    dom.newGateKind.value = gate ? gate.kind : '';
+    dom.newGateRef.value = gate && gate.kind === 'git-commits' ? gate.ref : '';
+    dom.newPrDrafts.checked = gate && gate.kind === 'open-prs'
+        ? gate.includeDrafts !== false : true;
+    dom.newPrPost.checked = gate && gate.kind === 'open-prs'
+        ? gate.post !== false : true;
+    paintGateFields();
     if (schedMode) describeCronSoon();
 
     // Schedule mode swaps Start and Save-as-draft for one button: a schedule you
@@ -10707,6 +10741,25 @@ function newDialogValues() {
 }
 
 /**
+ * Show only the fields the chosen gate needs.
+ *
+ * A branch gate wants a ref and a PR gate does not — it watches whatever the
+ * checkout's origin has open — so a single always-visible ref box would be a
+ * field that silently means nothing half the time.
+ */
+function paintGateFields() {
+    const kind = dom.newGateKind.value;
+    dom.newGateRefRow.hidden = kind !== 'git-commits';
+    dom.newPrRow.hidden = kind !== 'open-prs';
+    dom.newGateNote.textContent = kind === 'open-prs'
+        ? 'One review session per open pull request that has not been reviewed at '
+            + 'its current commit.'
+        : (kind === 'git-commits'
+            ? 'One session per run, and only when the ref below has moved.'
+            : 'A gated run that finds nothing new starts no session at all.');
+}
+
+/**
  * The two extra fields, on top of what every caller of this dialog needs.
  *
  * Separate from `newDialogValues` rather than folded into it, because the shared
@@ -10730,10 +10783,24 @@ function schedDialogValues() {
     }
     body.cron = cron;
 
-    // An empty ref is "run every time", which is a real choice and not an
-    // unfinished one — so it clears the gate rather than refusing the save.
-    const ref = dom.newGateRef.value.trim();
-    body.gate = ref ? { kind: 'git-commits', ref, fetch: true } : null;
+    const kind = dom.newGateKind.value;
+    if (kind === 'open-prs') {
+        body.gate = {
+            kind: 'open-prs',
+            includeDrafts: dom.newPrDrafts.checked,
+            post: dom.newPrPost.checked,
+        };
+    } else if (kind === 'git-commits') {
+        const ref = dom.newGateRef.value.trim();
+        if (!ref) {
+            toast('Name the ref to watch, or choose "every time".', 'warn');
+            return null;
+        }
+        body.gate = { kind: 'git-commits', ref, fetch: true };
+    } else {
+        // No gate is a real choice rather than an unfinished one.
+        body.gate = null;
+    }
     return body;
 }
 
@@ -11980,6 +12047,7 @@ dom.newSchedSave.addEventListener('click', () => schedSave());
 // The English under the box, from the bridge's own parser. `input` rather than
 // `change` so it keeps up with typing; the fetch behind it is debounced.
 dom.newCron.addEventListener('input', () => describeCronSoon());
+dom.newGateKind.addEventListener('change', () => paintGateFields());
 dom.notesNotable.addEventListener('click', () => setNotesScope('notable'));
 dom.notesAll.addEventListener('click', () => setNotesScope('all'));
 dom.notesClear.addEventListener('click', async () => {
