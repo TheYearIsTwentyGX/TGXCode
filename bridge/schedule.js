@@ -99,7 +99,11 @@ const HORIZON_DAYS = 5 * 366;
 const MINUTE_MS = 60_000;
 
 /** Why a slot passed without starting a session. */
-const SKIP_REASONS = ['nothing-new', 'missed', 'disabled', 'error', 'rate-limited'];
+const SKIP_REASONS = ['nothing-new', 'missed', 'disabled', 'error', 'rate-limited',
+    // The PR gate's own: the review window closed with pull requests still
+    // unreviewed. Recorded rather than swallowed, because a cap that truncates
+    // silently reads as "everything was reviewed".
+    'sweep-expired'];
 
 // ---------------------------------------------------------------------------
 // Cron
@@ -595,6 +599,26 @@ function fillPrompt(prompt, facts = {}) {
         date: new Date(facts.at || Date.now()).toISOString().slice(0, 10),
     };
 
+    // The pull-request keys, and **only when this run is about one.**
+    //
+    // Added conditionally rather than defaulted to '' because of the rule above:
+    // a key this function does not know is left verbatim, precisely so a prompt
+    // that happens to contain `{{pr}}` as prose does not silently lose it. If
+    // these were always present, every branch-gated schedule would start
+    // expanding them to nothing — which is the same "quietly delete part of a
+    // message somebody wrote" failure, arrived at from the other direction.
+    if (facts.pr) {
+        values.pr = String(facts.pr.number);
+        values.prUrl = facts.pr.url || '';
+        values.prTitle = facts.pr.title || '';
+        values.prBranch = facts.pr.branch || '';
+        // Not shortened: a branch name is not a SHA, and `short()` would take
+        // the first twelve characters of it.
+        values.prBase = facts.pr.base || '';
+        values.prAuthor = facts.pr.author || '';
+        values.repo = facts.pr.repo || '';
+    }
+
     return String(prompt).replace(/\{\{\s*(\w+)\s*\}\}/g, (whole, key) => (
         Object.prototype.hasOwnProperty.call(values, key) ? values[key] : whole
     ));
@@ -656,10 +680,131 @@ function numOrNull(v) {
  */
 function cleanGate(gate) {
     if (!gate || typeof gate !== 'object') return null;
-    if (gate.kind !== 'git-commits') return null;
-    const ref = orNull(gate.ref);
-    if (!ref) return null;
-    return { kind: 'git-commits', ref, fetch: gate.fetch !== false };
+
+    if (gate.kind === 'git-commits') {
+        const ref = orNull(gate.ref);
+        if (!ref) return null;
+        return { kind: 'git-commits', ref, fetch: gate.fetch !== false };
+    }
+
+    // The second kind, and the one the tagged-object shape above was written for.
+    //
+    // `post` is the safety catch rather than a preference. A dev bridge fires
+    // schedules marked `test` on purpose, and `gh` is authenticated as the same
+    // person either way — so without an explicit opt-out, *testing this feature
+    // comments on real pull requests*. The route forces it false for a test
+    // schedule; this default only decides what an ordinary one does.
+    if (gate.kind === 'open-prs') {
+        return {
+            kind: 'open-prs',
+            includeDrafts: gate.includeDrafts !== false,
+            post: gate.post !== false,
+        };
+    }
+
+    return null;
+}
+
+/**
+ * The reviewed map, validated entry by entry.
+ *
+ * Validated on load rather than trusted, the way suggestions.js validates its
+ * statuses: this file is hand-editable, it outlives the process that wrote it,
+ * and a malformed entry here does not fail loudly — it silently makes a PR look
+ * reviewed, so the review never happens and nothing says why. An entry without a
+ * usable `sha` is therefore dropped rather than repaired, which puts the PR back
+ * in the queue: the safe direction.
+ */
+function cleanReviewed(reviewed) {
+    if (!reviewed || typeof reviewed !== 'object' || Array.isArray(reviewed)) return {};
+    const out = {};
+    for (const [key, e] of Object.entries(reviewed)) {
+        if (!e || typeof e !== 'object') continue;
+        const sha = orNull(e.sha);
+        if (!sha) continue;
+        out[key] = {
+            sha,
+            at: Number.isFinite(e.at) ? e.at : 0,
+            sessionId: orNull(e.sessionId),
+            outcome: orNull(e.outcome),
+            posted: orNull(e.posted),
+            postError: orNull(e.postError),
+        };
+    }
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+// Which pull requests still need looking at
+// ---------------------------------------------------------------------------
+//
+// All pure, all exported, all tested — this is the batch logic, and it is the
+// part of the PR gate where being subtly wrong costs either a review that never
+// happens or a review that happens every thirty seconds forever.
+
+/** How a reviewed PR is keyed. Repo-qualified, because a schedule names a cwd. */
+const reviewKey = (repo, number) => `${repo}#${number}`;
+
+// A ceiling on the reviewed map, in case a repository stops being listable —
+// renamed, deleted, or a token that lost access. Pruning against the open list
+// is the real bound; this is the backstop for when that list never arrives.
+const MAX_REVIEWED = 200;
+
+/**
+ * The open PRs this schedule owes a review, newest-updated first.
+ *
+ * A PR is owed when the head SHA on it is not the head SHA we recorded — the
+ * per-PR analogue of `lastMarker`. Keyed on the SHA and not on `updatedAt`
+ * because `updatedAt` moves when somebody leaves a comment, which would buy a
+ * fresh review session for a PR whose code has not changed.
+ */
+function unreviewedPulls(pulls, reviewed = {}, { includeDrafts = true } = {}) {
+    return (pulls || [])
+        .filter(pr => pr && pr.headSha)
+        .filter(pr => includeDrafts || !pr.draft)
+        .filter((pr) => {
+            const seen = reviewed[reviewKey(pr.repo, pr.number)];
+            return !seen || seen.sha !== pr.headSha;
+        })
+        .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+}
+
+/**
+ * Drop entries for PRs that are no longer open.
+ *
+ * How the reviewed map stays bounded without a cap doing the work: a merged or
+ * closed PR falls out on the first sweep after it settles, so the map can only
+ * be as large as the repository's open PR count.
+ *
+ * **The caller must only call this on a successful list.** `openPulls` caches
+ * failures for its full TTL, so pruning against a failed one would empty the map
+ * and buy a fresh review of every PR in the repository — the single most
+ * expensive mistake available in this feature. The signature takes numbers rather
+ * than a result object so that it cannot be handed one without the caller having
+ * looked at `ok` first.
+ */
+function pruneReviews(reviewed = {}, repo, openNumbers = []) {
+    const keep = new Set(openNumbers.map(n => reviewKey(repo, n)));
+    const out = {};
+    const dropped = [];
+    for (const [key, entry] of Object.entries(reviewed)) {
+        // Only ever prunes this repo's keys. A schedule's cwd does not change
+        // often, but when it does the old repo's entries are not ours to judge.
+        if (key.startsWith(`${repo}#`) && !keep.has(key)) dropped.push(key);
+        else out[key] = entry;
+    }
+    return { reviewed: out, dropped };
+}
+
+/** Oldest-first eviction down to the cap. See MAX_REVIEWED for when this bites. */
+function capReviews(reviewed = {}, max = MAX_REVIEWED) {
+    const keys = Object.keys(reviewed);
+    if (keys.length <= max) return { reviewed, dropped: [] };
+    const byAge = keys.sort((a, b) => (reviewed[a].at || 0) - (reviewed[b].at || 0));
+    const dropped = byAge.slice(0, keys.length - max);
+    const out = { ...reviewed };
+    for (const k of dropped) delete out[k];
+    return { reviewed: out, dropped };
 }
 
 /**
@@ -696,6 +841,14 @@ function clean(row) {
         lastSkipReason: row.lastSkipReason,
         lastError: row.lastError,
         lastMarker: row.lastMarker,
+        // The PR gate's marker: one per pull request rather than one per
+        // schedule, because a set of PRs is a set of independent questions.
+        // `{ "owner/name#12": {sha, at, sessionId, outcome, posted, postError} }`
+        reviewed: row.reviewed,
+        // A slot does not do all the work for a PR gate — it opens a window and
+        // the batch drains over subsequent ticks. These two are that window.
+        sweepSlotAt: row.sweepSlotAt,
+        sweepUntil: row.sweepUntil,
         runs: row.runs,
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
@@ -758,6 +911,9 @@ function read() {
                 lastSkipReason: orNull(row.lastSkipReason),
                 lastError: orNull(row.lastError),
                 lastMarker: orNull(row.lastMarker),
+                reviewed: cleanReviewed(row.reviewed),
+                sweepSlotAt: numOrNull(row.sweepSlotAt),
+                sweepUntil: numOrNull(row.sweepUntil),
                 runs: Number.isFinite(row.runs) ? row.runs : 0,
                 createdAt: Number.isFinite(row.createdAt) ? row.createdAt : 0,
                 updatedAt: Number.isFinite(row.updatedAt) ? row.updatedAt : 0,
@@ -913,6 +1069,12 @@ class Schedules {
             lastSkipReason: null,
             lastError: null,
             lastMarker: orNull(fields.lastMarker),
+            // Seeded by the route for the same reason `lastMarker` is: an
+            // `open-prs` schedule that started with an empty map would review
+            // every PR already open the moment you pressed Save.
+            reviewed: cleanReviewed(fields.reviewed),
+            sweepSlotAt: null,
+            sweepUntil: null,
             runs: 0,
             createdAt: now,
             updatedAt: now,
@@ -1002,6 +1164,133 @@ class Schedules {
     }
 
     /**
+     * Record — or update — one pull request's review.
+     *
+     * **`claim()`'s read-merge-write shape, and for a sharper version of
+     * `claim()`'s reason.** Every other field on a row is a scalar, so the
+     * whole-row merge in `flush()` costs at most a lost race. `reviewed` is a map
+     * that grows, and a whole-row merge from a stale snapshot would not lose a
+     * race — it would silently *drop entries another bridge added*, and the
+     * symptom of that is duplicate review sessions and duplicate comments on
+     * somebody's pull request. So this re-reads first and merges per key.
+     *
+     * A genuine patch: an absent field leaves the stored one alone, which is what
+     * lets the write at session start and the write at completion be the same
+     * call.
+     *
+     * @param {string} id
+     * @param {string} key `reviewKey(repo, number)`
+     * @param {{sha?, sessionId?, outcome?, posted?, postError?}} patch
+     */
+    noteReview(id, key, patch = {}) {
+        const row = this.rows.find(r => r.id === id);
+        if (!row) return null;
+
+        // Start from disk so another bridge's entries survive this write.
+        const fresh = read().find(r => r.id === id);
+        const merged = { ...(fresh ? fresh.reviewed : {}), ...row.reviewed };
+
+        const before = merged[key] || {};
+        merged[key] = cleanReviewed({
+            [key]: {
+                sha: patch.sha !== undefined ? patch.sha : before.sha,
+                at: patch.at !== undefined ? patch.at : (before.at || Date.now()),
+                sessionId: patch.sessionId !== undefined ? patch.sessionId : before.sessionId,
+                outcome: patch.outcome !== undefined ? patch.outcome : before.outcome,
+                posted: patch.posted !== undefined ? patch.posted : before.posted,
+                postError: patch.postError !== undefined ? patch.postError : before.postError,
+            },
+        })[key];
+
+        // An entry cleanReviewed refused — no usable sha — must not be stored as
+        // a hole that reads as "reviewed".
+        if (!merged[key]) delete merged[key];
+
+        row.reviewed = capReviews(merged).reviewed;
+        row.updatedAt = this._stamp();
+        this._sort();
+        this.flush();
+        return clean(row);
+    }
+
+    /**
+     * Replace the reviewed map wholesale.
+     *
+     * The one writer that is not a patch, and it exists for one caller: an edit
+     * that repoints a schedule at a different repository, where the old entries
+     * describe pull requests in a repository this schedule no longer watches.
+     * Merging those forward would be worse than dropping them.
+     */
+    setReviewed(id, reviewed) {
+        const row = this.rows.find(r => r.id === id);
+        if (!row) return null;
+        row.reviewed = capReviews(cleanReviewed(reviewed)).reviewed;
+        row.updatedAt = this._stamp();
+        this.flush();
+        return clean(row);
+    }
+
+    /**
+     * Drop reviewed entries for PRs that are no longer open.
+     *
+     * Only ever called with the numbers from a **successful** list — see
+     * `pruneReviews`, which is where the reason lives.
+     */
+    pruneReviewed(id, repo, openNumbers) {
+        const row = this.rows.find(r => r.id === id);
+        if (!row) return null;
+        const { reviewed, dropped } = pruneReviews(row.reviewed, repo, openNumbers);
+        if (!dropped.length) return { row: clean(row), dropped };
+        row.reviewed = reviewed;
+        row.updatedAt = this._stamp();
+        this.save();
+        return { row: clean(row), dropped };
+    }
+
+    /**
+     * Open a review window for a slot.
+     *
+     * A `git-commits` slot is one question, so firing answers it and the slot is
+     * done. A slot with twenty pull requests behind it cannot be: twenty
+     * concurrent `claude` processes is not something to do to a laptop at 2 AM,
+     * and the create limit would refuse most of them anyway. So the slot opens a
+     * window and the batch drains across the ticks that follow.
+     *
+     * `lastSlotAt` is still claimed up front by `claim()` and still means exactly
+     * what it meant — do not repurpose it as batch progress. A cursor that can
+     * move backwards, or that stays open across a restart, re-fires the whole
+     * schedule, which is the one thing `dueSlot` exists to prevent.
+     */
+    openSweep(id, slotAt, windowMs) {
+        const row = this.rows.find(r => r.id === id);
+        if (!row) return null;
+        row.sweepSlotAt = slotAt;
+        // **From now, not from the slot.** The catch-up cap is twelve hours and the
+        // window is thirty minutes, so a bridge starting at 09:00 with a 02:00 slot
+        // would open a window that closed seven hours ago — and the drain pass in
+        // that same tick would find it expired, close it, and raise a loud "N pull
+        // requests went unreviewed" having reviewed nothing at all. The window is a
+        // budget for doing the work, so it starts when the work can start.
+        row.sweepUntil = Math.max(slotAt, Date.now()) + windowMs;
+        row.updatedAt = this._stamp();
+        this.flush();
+        return clean(row);
+    }
+
+    /** Close it, whether it drained or ran out of time. */
+    closeSweep(id, { skipReason = null, error = null } = {}) {
+        const row = this.rows.find(r => r.id === id);
+        if (!row) return null;
+        row.sweepSlotAt = null;
+        row.sweepUntil = null;
+        if (skipReason !== null) row.lastSkipReason = skipReason;
+        if (error !== null) row.lastError = error;
+        row.updatedAt = this._stamp();
+        this.flush();
+        return clean(row);
+    }
+
+    /**
      * Record what a slot did.
      *
      * One method for every outcome rather than `fired()`/`skipped()`/`failed()`,
@@ -1068,4 +1357,9 @@ module.exports = {
     cronForm,
     fillPrompt,
     verdictOf,
+    reviewKey,
+    unreviewedPulls,
+    pruneReviews,
+    capReviews,
+    MAX_REVIEWED,
 };

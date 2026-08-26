@@ -810,6 +810,8 @@ expression and an optional gate, held and fired by the bridge itself.
       "cronForm": { "kind": "weekly", "days": [2, 3, 4, 5, 6], "hour": 2, "minute": 0 },
       "nextRunAt": 1787727600000,
       "gate": { "kind": "git-commits", "ref": "origin/main", "fetch": true },
+      "reviewed": {}, "reviewedCount": 0, "reviewsInFlight": 0,
+      "sweepSlotAt": null, "sweepUntil": null,
       "lastSlotAt": 1787641200000,
       "lastFiredAt": 1787641203115,
       "lastSessionId": "c7e384e8-1a5c-495f-b02c-7d48a7d63095",
@@ -848,11 +850,15 @@ is not reserved punctuation in it. With no usable marker `{{range}}` narrows to
 | `permissionMode` | string, one of the six in `POST /api/sessions/:id/send` |
 | `test` | boolean — the flag the started session will get |
 | `cron` | string, **five space-separated fields in the bridge's local timezone**: minute hour day-of-month month day-of-week. `*`, `N`, `a-b`, `*/n` and comma lists. Day-of-week 0 and 7 are both Sunday. **No** names (`MON`), `@daily`, `L`, `#` or `?` — those are refused, not ignored. When day-of-month and day-of-week are both restricted, a day matching **either** fires, which is crontab(5)'s rule |
-| **`once`** | **boolean.** `true` is a one-time schedule: cron has no year field, so the expression names a date (`0 17 29 8 *`) and this is what stops it coming round again next August. **It switches itself off the moment its slot passes** — `enabled` goes `false` whether the run happened or was missed. Pressing `POST /:id/run` does *not* spend it, because Run now does not touch `lastSlotAt`. A `once` on a repeating expression is accepted and coherent: it runs at the next slot and then stops |
+| **`once`** | **boolean.** `true` is a one-time schedule: cron has no year field, so the expression names a date (`0 17 29 8 *`) and this is what stops it coming round again next August. **It switches itself off the moment its slot passes** — `enabled` goes `false` whether the run happened or was missed. Pressing `POST /:id/run` does *not* spend it, because Run now does not touch `lastSlotAt`. A `once` on a repeating expression is accepted and coherent: it runs at the next slot and then stops. With an `open-prs` gate a spent one-time keeps a `sweepUntil` in the future for as long as its batch is still draining, so **`enabled: false` and an open window is a real, transient state** and not a contradiction — the row is finishing the slot that disabled it |
 | **`cronText`** | **string or null** — derived. `cron` in English, e.g. `"Tue–Sat at 2:00 AM"`. Falls back to the raw expression for shapes it cannot phrase, so it is safe to render directly. `null` only if `cron` is unparseable, which a stored row cannot be. Reads the `once` flag: the same dated expression is `"once, on 29 August at 5:00 PM"` with it and `"29 August every year at 5:00 PM"` without |
 | **`cronForm`** | **object** — derived, and the *same expression as controls* so a client can draw a schedule picker without parsing cron. A tagged union on `kind`, one of: `{kind: "minutes", every}` · `{kind: "hours", every, minute}` · `{kind: "daily", hour, minute}` · `{kind: "weekly", days, hour, minute}` (`days` is an **array of numbers**, 0=Sunday, ascending) · `{kind: "monthly", day, hour, minute}` · `{kind: "date", month, day, hour, minute}` (1-based `month`) · `{kind: "custom"}`. All values are numbers. **`custom` is a real answer, not an error** — it means no picker row represents this expression (`0 9,17 * * 1-5`, or the day-of-month/day-of-week OR) and a client should offer the raw text instead of approximating. `kind` is `"date"` whether or not `once` is set; the flag is what says which of the two it means. Never null for a stored row |
 | **`nextRunAt`** | **number or null**, epoch ms — derived, computed per request. `null` when the schedule is paused **or** when the expression matches no future date (`0 0 30 2 *` parses and never fires). Those two are different states; `enabled` tells them apart |
-| **`gate`** | **object or null** — `{kind: "git-commits", ref: string, fetch: boolean}`. `null` means fire every time the clock says so. `ref` is anything `git rev-parse` accepts. `fetch` defaults to `true` and fetches only that ref's remote, never `--all`, never tags |
+| **`gate`** | **object or null**, and one of **two shapes** — `null` means fire every time the clock says so. `{kind: "git-commits", ref: string, fetch: boolean}` fires one session when `ref` has moved; `ref` is anything `git rev-parse` accepts and `fetch` defaults to `true`, fetching only that ref's remote, never `--all`, never tags. `{kind: "open-prs", includeDrafts: boolean, post: boolean}` fires **one session per open pull request** — see *The pull-request gate* below. Both booleans default to `true` |
+| **`reviewed`** | **object** — the pull-request gate's marker, `{"<owner>/<name>#<number>": {sha, at, sessionId, outcome, posted, postError}}`. Empty `{}` for every other kind of schedule. **On the wire this is a TAIL, not the store**: the twenty most recent by `at`, with `reviewedCount` giving the real size. A client that treated it as complete would decide a pull request was unreviewed because it fell off the end |
+| `reviewedCount` | number — how many entries the store actually holds |
+| `reviewsInFlight` | number — reviews started and not yet finished. What a card says during a sweep |
+| **`sweepSlotAt`, `sweepUntil`** | **number or null**, epoch ms. A pull-request slot does not do all its work at once: it opens a *window*, and the batch drains over the ticks that follow. These are that window. `null` on every other kind of schedule, and on a PR schedule that is not mid-sweep |
 | **`lastSlotAt`** | **number or null**, epoch ms — the cron slot already satisfied. This, not `lastFiredAt`, is what makes firing idempotent; a client should treat it as bookkeeping rather than as "when it last ran" |
 | **`lastFiredAt`** | **number or null**, epoch ms — when a session was actually started. `null` if it has never run. A slot that skipped does **not** move this |
 | **`lastSessionId`** | **string or null** — the session the last run produced. Safe to link to; it may 404 briefly right after a run, for the reason `POST /api/sessions` gives |
@@ -876,6 +882,64 @@ and only those. A client cannot see which bridge it is talking to beyond `dev` i
 `/api/health`, and should not need to.
 
 Also pushed as the `schedules-changed` SSE event, carrying this same payload.
+
+#### The pull-request gate
+
+`{kind: "open-prs"}` is a different shape of schedule and the difference is worth
+stating plainly: **a branch gate fires one session and a pull-request gate fires
+one per pull request.**
+
+A PR is due when its current head SHA is not the SHA in `reviewed`. Keyed on the
+SHA and not on `updatedAt`, because `updatedAt` moves when somebody leaves a
+comment — which would buy a full review session for a pull request whose code has
+not changed.
+
+**A slot opens a window rather than doing the work.** Twenty concurrent `claude`
+processes is not a thing to do to a laptop at 2 AM, and the create limit would
+refuse most of them, so the slot sets `sweepUntil` and the batch drains across the
+ticks that follow — at most two starts per tick, at most three reviews in flight,
+and never spending the last of the shared create budget (a sweep that did would
+`429` the next Start *you* pressed). Anything still unreviewed when the window
+closes is reported as `lastSkipReason: "sweep-expired"` with a count, never
+dropped silently.
+
+`{{range}}` for a PR run is `<mergeBase>..<head>`, computed per pull request.
+Two dots and a merge base, both deliberate: two dots against the *tip* of the base
+branch would include whatever other people landed on it since the branch diverged,
+and three dots — right for `git diff`, and what GitHub's Files-changed tab shows —
+means the *symmetric difference* to `git log`. The prompt is prose and the session
+may reach for either command, so the range has to mean one thing to both. The base
+comes from each PR's own `baseRefName`, which on these repositories is regularly
+not `main`.
+
+**What the bridge writes to GitHub when a review finishes**, if `gate.post` is
+true and the schedule is not a `test` one:
+
+- a review **comment** carrying the report, prefixed with the head SHA it was
+  looking at so a re-review is legible in the timeline;
+- one of `review-clean` / `review-concerns` / `review-blocked`, **and the other two
+  removed** — a pull request wearing both `review-blocked` and `review-clean` is
+  worse than one wearing neither. The labels are created on first use.
+
+It is a *comment*, never an approval, and that is a constraint rather than a
+choice: GitHub refuses to let an account approve its own pull request, and on this
+machine every open PR is authored by the account `gh` is authenticated as.
+`review-clean` is the "ready to merge" signal instead.
+
+**A `test: true` schedule never posts.** A development bridge fires test schedules
+on purpose and `gh` is the same credentials either way, so without that rule
+testing this feature would comment on real pull requests. `posted` reads
+`skipped-test` in that case. `gate.post: false` is the same switch for an ordinary
+schedule that wants the reviews without writing anything.
+
+`posted` on a reviewed entry is `null` before the turn ends, then one of `ok`,
+`failed`, `skipped-test`, `seeded` (never reviewed — recorded at create time so
+the first run does not review the whole backlog), or `interrupted` (the bridge
+stopped mid-review; the findings are in the transcript and were never posted).
+**A failed post never unwinds the entry** — the review is the artefact and posting
+is delivery, so re-running a whole session to retry a comment would spend minutes
+of quota re-deriving text that already exists. It raises a loud notification
+instead.
 
 ### `GET /api/schedules/describe?cron=<expr>&once=1`
 
@@ -927,9 +991,33 @@ transcript named a still-open PR whose directory has since been removed, in whic
 `status-failed`, `gone`) or a parsed `git status`: `{ok: true, branch, upstream, ahead,
 behind, staged, unstaged, untracked, conflicts, files, dirty, detached, sample[]}`,
 where `sample` is up to ten `{path, status}` entries — enough to recognise the change,
-not a whole `git status`. `prs[]` are `pulls.js` records with `matched` of `"branch"`
-(the workspace has that branch checked out) or `"session"` (only a transcript
-connects them). `sessions[]` are chips — `{sessionId, title, lastTs, userMessages,
+not a whole `git status`.
+
+`prs[]` are the whole `pulls.js` record plus `matched`, which is `"branch"` (the
+workspace has that branch checked out) or `"session"` (only a transcript connects
+them). The record, field by field — it was documented by reference before, which is
+the "write the type, not the field name" mistake this document is supposed to avoid:
+
+| Field | Type |
+|---|---|
+| `number` | number |
+| `title`, `url` | strings |
+| `branch` | string — the **head** ref name |
+| **`headSha`** | **string or null** — the head commit. What a scheduled review keys "have I seen this pull request as it stands" on; `updatedAt` cannot serve, because a comment moves it |
+| **`base`** | **string or null** — the base ref name, and on these repositories regularly **not** `main`: pull requests here stack, so one may target another branch's worktree. A diff computed against a fixed ref would attribute somebody else's commits to the PR |
+| **`labels`** | **array of strings** — names only. gh returns objects; the id is a node id nothing here can use, and the full array would be hundreds of bytes per PR on a payload carrying a hundred of them |
+| `draft` | boolean |
+| **`reviewDecision`** | **string or null** — `"APPROVED"`, `"CHANGES_REQUESTED"`, `"REVIEW_REQUIRED"`, or null for none |
+| `author` | string or null — a login, falling back to a display name |
+| `createdAt`, `updatedAt` | ISO strings or null |
+| `state` | string — `"OPEN"`, `"MERGED"`, `"CLOSED"` |
+| `mergeable` | string — `"MERGEABLE"`, `"CONFLICTING"`, `"UNKNOWN"`. `UNKNOWN` says nothing, deliberately |
+| **`checks`** | **object or null** — `{total, failed, pending, passed}`. **`null` means the repository has no CI**, which is not the same as zero of everything, and a client that renders it as "0 checks passed" is saying something untrue |
+| `repo` | string — `owner/name` |
+
+**A failed `gh` is cached for its full 60s TTL**, empty list and all. So one hiccup
+looks exactly like "nothing is open" for a minute — which for a reader is a blank
+panel, and for anything deciding what to act on is a trap worth knowing about. `sessions[]` are chips — `{sessionId, title, lastTs, userMessages,
 active}` — capped at six per workspace with `moreSessions` counting the rest, and
 carrying the same narrow four-field `runner` as `GET /api/sessions` where one is live.
 
@@ -1369,8 +1457,8 @@ same bucket `POST /api/sessions` draws on, because both spawn a process.
 
 ### `POST /api/schedules`
 
-`{cwd, prompt, cron, once?, gate?, title?, model?, permissionMode?, test?, enabled?}` →
-`{schedule}`, the row as `GET /api/schedules` returns it.
+`{cwd, prompt, cron, once?, gate?, title?, model?, permissionMode?, test?, enabled?,
+seed?}` → `{schedule}`, the row as `GET /api/schedules` returns it.
 
 Validated exactly as `POST /api/drafts` is — `cwd` resolved and checked against the
 allowed roots, `permissionMode` normalised — plus the two of its own:
@@ -1379,9 +1467,10 @@ allowed roots, `permissionMode` normalised — plus the two of its own:
   fine and fires on February 30th, so it is refused with `400` rather than saved as a
   card that reads "next run: never" for a month.
 - **`gate`, when given, must be whole.** `{kind: "git-commits", ref}` with `ref`
-  non-empty; `fetch` defaults `true`. An unknown `kind` is `400`, not silently
-  dropped — a gate that quietly became "no gate" would turn a schedule that reviews
-  new commits into one that starts a session every night regardless.
+  non-empty; `fetch` defaults `true`. `{kind: "open-prs"}` needs nothing beyond the
+  kind — `includeDrafts` and `post` both default `true`. An unknown `kind` is `400`,
+  not silently dropped: a gate that quietly became "no gate" would turn a schedule
+  that reviews new commits into one that starts a session every night regardless.
 
 **A gated schedule resolves its ref before it is stored**, and a ref that cannot be
 resolved is a `400`. That is what seeds `lastMarker`, so the first run reviews what
@@ -1401,6 +1490,16 @@ next August, so the bridge sees a perfectly good expression that fires in eleven
 months. **A client offering a one-time schedule should refuse a past date itself**,
 while it still has the date somebody picked rather than a cron expression that has
 forgotten the year.
+
+**An `open-prs` schedule is seeded the same way, and for a sharper reason.** The
+create call lists the repository's open pull requests and records each one at its
+current head, so the first run reviews what arrives *afterwards*. Without it,
+pressing Save would start a review session for every pull request already open —
+five, on a machine where that is a normal number. `seed: "all"` asks for exactly
+that instead, which is how you say "review everything I have open right now". A
+`cwd` with no GitHub origin, or a repository `gh` cannot list, is a `400` rather
+than an empty seed: a schedule that cannot see the repository is one that reports
+"nothing new" every night and never says why.
 
 `409` at 50 schedules. `400` if the directory does not resolve.
 
@@ -1433,7 +1532,15 @@ confirms first for that reason, where it does not for a draft.
 
 ### `POST /api/schedules/:id/run`
 
-`→ {sessionId, test, schedule}`. Start a run now, whatever the clock says.
+`→ {sessionId, sessionIds[], deferred, test, schedule}`. Start a run now, whatever
+the clock says.
+
+**`sessionIds` is the real answer and `sessionId` is kept for compatibility.** A
+pull-request gate starts one session per PR, so a single id cannot describe what
+happened; `sessionId` is `sessionIds[0]` so a client written against the older shape
+gets a session it can open rather than `undefined`. `deferred` counts pull requests
+that were due but did not fit this run's budget — they drain on the ticks that
+follow, so a non-zero `deferred` is progress rather than a failure.
 
 **The same function the tick calls**, which is the point: what this produces is what
 tonight would have produced, so it is a trustworthy way to check a schedule before

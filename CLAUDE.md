@@ -267,6 +267,31 @@ nightly restart does when there is nobody to ask. If you touch `bridge/auth.js`
 or any route's local/remote rule, run it: that is the part of this codebase with
 tests around it.
 
+**Testing a schedule needs its own store, not the shared one.** Two things bite
+otherwise, and both were measured rather than guessed. `schedules.json` lives in
+`STATE_DIR`, which every bridge shares — so the everyday instance reads it every
+thirty seconds and writes the rows back through a whitelist `clean()` that has
+never heard of whatever field you just added, stripping it within half a minute
+and resurrecting rows you deleted. And a schedule marked `test` is only skipped by
+the *everyday* bridge as of the pull-request work; before that the guard narrowed a
+dev bridge alone, and a probe schedule created while 45888 was up got run by 45888,
+in the user's own checkout. So:
+
+```bash
+XDG_DATA_HOME=$(mktemp -d) CLAUDE_SESSIONS_SCHEDULE_ON_DEV=1 \
+  CLAUDE_SESSIONS_PORT=45921 node bridge/server.js
+```
+
+That gets its own store *and* its own token, which is the point: nothing you do
+there can reach the user's schedules. `CLAUDE_SESSIONS_SCHEDULE_ON_DEV=1` is what
+lets a dev bridge fire at all, and it fires only `test` rows.
+
+**A `test` schedule never writes to GitHub.** The pull-request gate comments on
+pull requests and labels them, and `gh` is authenticated as the user on every
+bridge — so that one line in `postReviewToPr` is the only thing between testing
+this feature and commenting on real PRs. `gate.post: false` is the same switch for
+a schedule you want quiet.
+
 `schedule` is the other part worth that treatment, and for a different reason:
 its bugs are ones nobody sees until 2 AM. A slot that fires twice on the night the
 clocks go back, a missed run that is invisible because the lookback could not see

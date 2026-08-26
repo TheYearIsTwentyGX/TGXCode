@@ -320,6 +320,36 @@ const HOME = os.homedir();
     check('February 30th is refused', impossible.status, 400);
     console.log(`       said: ${impossible.body && impossible.body.error}`);
 
+    // The second gate kind. A pull-request gate fans out to one unattended session
+    // per PR, so the mode refusal matters at least as much here as on a branch one.
+    console.log('\n--- the pull-request gate ---');
+    const prRemote = await call('POST', '/api/schedules', {
+        headers: PHONE,
+        body: { cwd: HOME, prompt: 'x', cron: CRON, permissionMode: 'dontAsk',
+            gate: { kind: 'open-prs' } },
+    });
+    check('a dontAsk PR schedule remotely', prRemote.status, 403);
+    // A directory with no GitHub origin has no pull requests to watch, and saying
+    // so now beats a card that reports "nothing new" every night forever. $HOME is
+    // not a checkout, so this is the case.
+    const noOrigin = await call('POST', '/api/schedules', {
+        headers: LOCAL,
+        body: { cwd: HOME, prompt: 'x', cron: CRON, test: true,
+            gate: { kind: 'open-prs' } },
+    });
+    check('a PR gate on a directory with no origin', noOrigin.status, 400);
+    console.log(`       said: ${noOrigin.body && noOrigin.body.error}`);
+    // An unknown kind is still refused, and the message now names both.
+    const badKind = await call('POST', '/api/schedules', {
+        headers: LOCAL,
+        body: { cwd: HOME, prompt: 'x', cron: CRON, test: true,
+            gate: { kind: 'phase-of-moon' } },
+    });
+    check('an unknown gate kind', badKind.status, 400);
+    check('and the message names both supported kinds',
+        /git-commits/.test(String(badKind.body && badKind.body.error))
+        && /open-prs/.test(String(badKind.body && badKind.body.error)), true);
+
     console.log('\n--- cwd roots ---');
     const etc = await call('POST', '/api/sessions', {
         headers: LOCAL, body: { cwd: '/etc', prompt: 'x' },

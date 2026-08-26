@@ -27,6 +27,7 @@ const { Drafts, MAX_DRAFTS } = require('./drafts');
 const {
     Schedules, MAX_SCHEDULES, CATCHUP_MS,
     parseCron, nextSlot, dueSlot, describeCron, cronForm, fillPrompt, verdictOf,
+    reviewKey, unreviewedPulls,
 } = require('./schedule');
 const { SlashCommandCache } = require('./slash-commands');
 const { NotificationLog, ReadState } = require('./notifications');
@@ -705,11 +706,25 @@ function modeRefusal(mode, who) {
  */
 const CREATE_LIMIT = { max: 8, windowMs: 60_000, hits: [] };
 
-function tooManyCreates() {
+function tooManyCreates({ reserve = 0, peek = false } = {}) {
     const now = Date.now();
     CREATE_LIMIT.hits = CREATE_LIMIT.hits.filter(t => now - t < CREATE_LIMIT.windowMs);
-    if (CREATE_LIMIT.hits.length >= CREATE_LIMIT.max) return true;
-    CREATE_LIMIT.hits.push(now);
+    // `reserve` keeps creates back for somebody pressing a button.
+    //
+    // This bucket is global, which was fine while every caller was a person: they
+    // cannot press Start eight times a minute by accident. A scheduled sweep can
+    // start a session per open pull request, and spending the whole budget on that
+    // means the user's own next Start returns 429 from a limit they never touched.
+    // So the sweep asks for less than the whole thing.
+    if (CREATE_LIMIT.hits.length >= CREATE_LIMIT.max - reserve) return true;
+    // `peek` asks without spending. This function charges a create as a side
+    // effect of answering, which is fine for a route that goes on to create one —
+    // but the pull-request sweep asks first, against a reserve, and then
+    // `runSchedule` asks again. That charged two of the eight for every review:
+    // three starts a minute instead of four, and a reserve of two that could be
+    // eaten down to one. A pull request whose range would not resolve spent a hit
+    // for a session that never happened.
+    if (!peek) CREATE_LIMIT.hits.push(now);
     return false;
 }
 
@@ -815,9 +830,14 @@ const SCHEDULE_MS = 30_000;
  * gate would have an agent's bridge starting the user's real 2 AM sessions —
  * worse than the problem it solves. With this set, a dev bridge fires *only* rows
  * with `test: true`, which are the ones it made and which stay out of the
- * everyday window anyway. The user's schedules are untouched either way.
+ * everyday window anyway.
  *
- * The everyday instance ignores it: it already fires everything.
+ * **And the rule is symmetric, which it was not at first.** The everyday instance
+ * skips test schedules rather than firing everything: the original guard narrowed
+ * a dev bridge and left 45888 running whatever was in the shared file, so a probe
+ * schedule created while it was up got run by it — in the user's own checkout.
+ * `test` now means "belongs to a development bridge" in both directions, which is
+ * what it already meant for a session.
  */
 const SCHEDULE_ON_DEV = process.env.CLAUDE_SESSIONS_SCHEDULE_ON_DEV === '1';
 
@@ -831,10 +851,29 @@ const SCHEDULE_ON_DEV = process.env.CLAUDE_SESSIONS_SCHEDULE_ON_DEV === '1';
  * should be reimplementing — `0 2 * * 2-6` is not text anybody should have to
  * decode to check they typed what they meant.
  */
+// How many reviewed entries go out on the wire. The store holds up to
+// MAX_REVIEWED, and `schedules-changed` fires unprompted — every time a review
+// starts or finishes — so sending two hundred entries would be tens of kilobytes
+// per push for history no card draws. A tail plus a count says everything the UI
+// needs and the full map stays where it is used.
+const REVIEWED_ON_WIRE = 20;
+
 function scheduleOut(row) {
     const spec = parseCron(row.cron);
+    const reviewedKeys = Object.keys(row.reviewed || {});
+    const recent = reviewedKeys
+        .sort((a, b) => (row.reviewed[b].at || 0) - (row.reviewed[a].at || 0))
+        .slice(0, REVIEWED_ON_WIRE);
     return {
         ...row,
+        // **A tail, not the store.** See REVIEWED_ON_WIRE — a client that treated
+        // this as the whole map would decide a PR was unreviewed on the strength of
+        // it not being in the twenty most recent.
+        reviewed: Object.fromEntries(recent.map(k => [k, row.reviewed[k]])),
+        reviewedCount: reviewedKeys.length,
+        // How many are still going, which is what the card says during a sweep.
+        reviewsInFlight: Object.values(row.reviewed || {})
+            .filter(e => e.sessionId && !e.outcome).length,
         projectName: projectName(row.cwd),
         cronText: describeCron(spec, { once: row.once }),
         // The same expression as controls rather than as prose, so the dialog can
@@ -927,10 +966,16 @@ function scheduleFields(body, who, { partial }) {
             fields.gate = null;
         } else if (typeof gate !== 'object') {
             return { error: 'gate must be an object or null', status: 400 };
+        } else if (gate.kind === 'open-prs') {
+            fields.gate = {
+                kind: 'open-prs',
+                includeDrafts: gate.includeDrafts !== false,
+                post: gate.post !== false,
+            };
         } else if (gate.kind !== 'git-commits') {
             return {
                 error: `unknown gate kind ${JSON.stringify(gate.kind)} — only `
-                    + '"git-commits" is supported',
+                    + '"git-commits" and "open-prs" are supported',
                 status: 400,
             };
         } else if (!gate.ref || !String(gate.ref).trim()) {
@@ -968,13 +1013,21 @@ function scheduleFields(body, who, { partial }) {
  * watching the same file would file a second notification for somebody else's
  * run. Bounded because a long-lived bridge would otherwise accumulate one entry
  * per run forever.
- * @type {Map<string, string>}
+ *
+ * The value carries the pull request when there is one, because the GitHub write
+ * that follows the turn needs to know its target. **It is not the durable record
+ * of that, though** — the reviewed entry on the row is, written at session start,
+ * which is what lets a finished review still be attributed after this map has
+ * evicted it or a restart has emptied it. See `scheduleOfSession`.
+ * @type {Map<string, {scheduleId: string, target: object|null}>}
  */
 const scheduledRuns = new Map();
-const SCHEDULED_RUNS_KEPT = 200;
+// Raised from 200: a sweep can start a dozen in a night, so the fan-out makes the
+// eviction path reachable in a way one-session-per-slot never did.
+const SCHEDULED_RUNS_KEPT = 400;
 
-function rememberScheduledRun(sessionId, scheduleId) {
-    scheduledRuns.set(sessionId, scheduleId);
+function rememberScheduledRun(sessionId, scheduleId, target = null) {
+    scheduledRuns.set(sessionId, { scheduleId, target });
     while (scheduledRuns.size > SCHEDULED_RUNS_KEPT) {
         scheduledRuns.delete(scheduledRuns.keys().next().value);
     }
@@ -1006,7 +1059,7 @@ function rememberScheduledRun(sessionId, scheduleId) {
  */
 const LOCAL_CALLER = { remote: false, peer: 'the schedule', host: null };
 
-async function runSchedule(row, { force = false, who = LOCAL_CALLER } = {}) {
+async function runSchedule(row, { force = false, who = LOCAL_CALLER, target = null } = {}) {
     // Re-checked at the moment of spawning, not trusted from write time. The
     // roots are configuration and the mode is the caller's; a directory can be
     // moved after a schedule is saved, and this file is hand-editable. Same
@@ -1023,8 +1076,13 @@ async function runSchedule(row, { force = false, who = LOCAL_CALLER } = {}) {
     }
 
     // The gate, and the marker the prompt will be built from.
-    let facts = { at: Date.now() };
-    if (row.gate && row.gate.kind === 'git-commits') {
+    //
+    // A `target` is a pull request whose range `fireSchedule` has already worked
+    // out, so the gate below is skipped entirely: for a PR gate the "has anything
+    // changed" question was answered per PR by `unreviewedPulls`, and asking a
+    // second time here against `lastMarker` would be asking about the wrong thing.
+    let facts = target ? target.facts : { at: Date.now() };
+    if (!target && row.gate && row.gate.kind === 'git-commits') {
         const range = await git.commitRange(row.cwd, row.gate.ref, row.lastMarker,
             { fetch: row.gate.fetch });
         if (!range.ok) {
@@ -1081,8 +1139,282 @@ async function runSchedule(row, { force = false, who = LOCAL_CALLER } = {}) {
 
     if (row.test) flags.set(out.sessionId, { test: true });
     index.note(out.sessionId);
-    rememberScheduledRun(out.sessionId, row.id);
+    rememberScheduledRun(out.sessionId, row.id, target);
     return { ok: true, sessionId: out.sessionId, prompt, facts };
+}
+
+// ── the pull-request gate ────────────────────────────────────────────────
+
+// How long a slot's review window stays open. A slot does not do all the work
+// for a PR gate — twenty concurrent `claude` processes is not a thing to do to a
+// laptop at 2 AM, and the create limit would refuse most of them — so it opens a
+// window and the batch drains across the ticks that follow. Thirty minutes drains
+// far more than any real repository has open, and closes long before the next
+// night's slot could collide with it.
+const SWEEP_MS = 30 * 60_000;
+
+// Starts per tick, per schedule. The tick is 30s, so two is four a minute —
+// comfortably under the create limit even before the reserve below.
+const REVIEWS_PER_TICK = 2;
+
+// Concurrent review sessions. Chosen against `MAX_LIVE = 4` in the runner pool
+// and the fact that `_evictTo` refuses to evict a *busy* runner: without this cap
+// the pool does not bound the fan-out at all, it just quietly grows to one
+// `claude` per open pull request. Three leaves the fourth slot for the person
+// using the app.
+const REVIEWS_IN_FLIGHT = 3;
+
+// Creates a minute kept back for the user. `CREATE_LIMIT` is global, so a sweep
+// that spent the whole budget would 429 somebody's own next Start button from a
+// limit they never touched.
+const CREATE_RESERVE = 2;
+
+/**
+ * Pull requests whose range would not resolve, for the sweep they failed in.
+ *
+ * These are deliberately left *unmarked* in `reviewed` so that the next slot tries
+ * them again — a review of the wrong range is worse than a missing one, so a base
+ * branch that has been deleted must not be papered over. But "still due" means the
+ * drain pass finds it again thirty seconds later, and the first version filed a
+ * loud notification each time: about sixty per sweep, per broken pull request,
+ * followed by a `sweep-expired` because it never got anywhere.
+ *
+ * So the failure is remembered for the life of the sweep. Keyed by head SHA as
+ * well, so a push that might have fixed it is tried immediately rather than
+ * waiting. Cleared when the window closes.
+ * @type {Map<string, Set<string>>} scheduleId -> `${key}@${headSha}`
+ */
+const rangeFailures = new Map();
+
+function noteRangeFailure(scheduleId, key, headSha) {
+    if (!rangeFailures.has(scheduleId)) rangeFailures.set(scheduleId, new Set());
+    rangeFailures.get(scheduleId).add(`${key}@${headSha}`);
+}
+
+const sawRangeFailure = (scheduleId, key, headSha) => Boolean(
+    rangeFailures.get(scheduleId)?.has(`${key}@${headSha}`));
+
+// An in-flight review with no outcome that is older than this is not in flight
+// any more — its process died with a bridge, or its turn was lost. Without a
+// backstop one lost turn would hold a slot in REVIEWS_IN_FLIGHT forever and wedge
+// the batch.
+const REVIEW_STALE_MS = 2 * 60 * 60_000;
+
+/**
+ * The open pull requests a schedule still owes a review, and the repo they are in.
+ *
+ * @returns {Promise<{ok: boolean, repo: string|null, error: string|null,
+ *   pulls: object[], due: object[], openNumbers: number[]}>}
+ */
+async function pullsForSchedule(row) {
+    const repo = await pulls.repoOf(row.cwd);
+    if (!repo) {
+        return { ok: false, repo: null, pulls: [], due: [], openNumbers: [],
+            error: `${row.cwd} has no GitHub origin` };
+    }
+    const list = await pulls.openPulls(repo);
+    if (!list.ok) {
+        // **Not a prune, and not an empty batch.** `openPulls` caches a failure
+        // for its full TTL, so treating this as "no PRs are open" would look
+        // exactly like "everything is reviewed" — and pruning against it would
+        // empty the reviewed map and buy a fresh review of the whole repository.
+        return { ok: false, repo, pulls: [], due: [], openNumbers: [],
+            error: list.error || `cannot list pull requests for ${repo}` };
+    }
+    const due = unreviewedPulls(list.pulls, row.reviewed, {
+        includeDrafts: row.gate.includeDrafts,
+    });
+    return {
+        ok: true, repo, error: null,
+        pulls: list.pulls,
+        due,
+        openNumbers: list.pulls.map(p => p.number),
+    };
+}
+
+/** How many of this schedule's reviews are still running. */
+function reviewsInFlight(row) {
+    const now = Date.now();
+    let n = 0;
+    for (const entry of Object.values(row.reviewed || {})) {
+        if (!entry.sessionId || entry.outcome) continue;
+        // A lost turn stops counting, or it would hold a slot forever.
+        if (now - (entry.at || 0) > REVIEW_STALE_MS) continue;
+        const runner = pool.get(entry.sessionId);
+        if (runner && runner.state === 'busy') n++;
+    }
+    return n;
+}
+
+/**
+ * Work out the diff range for one pull request.
+ *
+ * **A merge base, and two dots.** Not `origin/<base>..<head>`, which against the
+ * *tip* of base includes whatever other people landed on base since this branch
+ * diverged — so the review would contain changes the PR did not make. And not
+ * three dots either: `A...B` is the right thing for `git diff` and is what
+ * GitHub's Files-changed tab shows, but for `git log` the same spelling means the
+ * symmetric difference, which is wrong and wrong silently. The prompt is prose and
+ * the session may reach for either command, so the range has to mean one thing to
+ * both. `mergeBase..head` does.
+ *
+ * @returns {Promise<{ok: true, range: string, since: string, count: number|null}
+ *   | {ok: false, error: string}>}
+ */
+async function prRange(cwd, pr) {
+    // The head has to be reachable locally. `git fetch origin` at the top of the
+    // sweep brings down every branch on the remote, which covers every same-repo
+    // PR; a fork's head is not there and needs its own ref.
+    let have = await git.run('git', ['-C', cwd, 'cat-file', '-e', `${pr.headSha}^{commit}`]);
+    if (!have.ok) {
+        // Named rather than left in FETCH_HEAD, so the SHA keeps a name that
+        // survives the next fetch.
+        await git.run('git', ['-C', cwd, 'fetch', '--quiet', '--no-tags', 'origin',
+            `pull/${pr.number}/head:refs/claude-sessions/pr/${pr.number}`],
+            { timeout: 60_000 });
+        have = await git.run('git', ['-C', cwd, 'cat-file', '-e', `${pr.headSha}^{commit}`]);
+        if (!have.ok) {
+            return { ok: false, error: `cannot reach ${pr.headSha.slice(0, 12)} in ${cwd}` };
+        }
+    }
+
+    const mb = await git.run('git', ['-C', cwd, 'merge-base',
+        `origin/${pr.base}`, pr.headSha]);
+    if (!mb.ok) {
+        // A base branch that merged and was deleted while the PR stayed open.
+        // Deliberately **no fallback to `head~1..head`**: a review of the wrong
+        // range is worse than a missing one, and the PR is left unreviewed so it
+        // comes back rather than being marked done against a guess.
+        return { ok: false, error: `cannot resolve origin/${pr.base} in ${cwd}` };
+    }
+    const since = mb.stdout.trim();
+    const range = `${since.slice(0, 12)}..${pr.headSha.slice(0, 12)}`;
+
+    const counted = await git.run('git', ['-C', cwd, 'rev-list', '--count',
+        `${since}..${pr.headSha}`]);
+    const count = counted.ok ? Number(counted.stdout.trim()) : null;
+    return { ok: true, range, since, count: Number.isFinite(count) ? count : null };
+}
+
+/**
+ * Resolve the gate, decide what to start, and start as much as the budget allows.
+ *
+ * The one entry point for both the tick and `POST /api/schedules/:id/run`, which
+ * is what keeps "Run now produces what the clock produces" true at the level that
+ * matters. For a `git-commits` or ungated row it starts 0 or 1 sessions and the
+ * behaviour is exactly what it was before this existed.
+ *
+ * @returns {Promise<{kind, started: Array<{sessionId, target}>,
+ *   skipped: Array<{target, reason, error}>, deferred: number,
+ *   remaining: number, gateError: string|null, repo: string|null}>}
+ */
+async function fireSchedule(row, { force = false, who = LOCAL_CALLER } = {}) {
+    const kind = row.gate ? row.gate.kind : null;
+    const out = {
+        kind, started: [], skipped: [], deferred: 0, remaining: 0,
+        gateError: null, repo: null,
+    };
+
+    if (kind !== 'open-prs') {
+        const one = await runSchedule(row, { force, who });
+        if (one.ok) out.started.push({ sessionId: one.sessionId, target: null, facts: one.facts });
+        else out.skipped.push({ target: null, reason: one.skip, error: one.error || null });
+        return out;
+    }
+
+    const found = await pullsForSchedule(row);
+    out.repo = found.repo;
+    if (!found.ok) {
+        out.gateError = found.error;
+        out.skipped.push({ target: null, reason: 'error', error: found.error });
+        return out;
+    }
+
+    // Only on a successful list — see pruneReviews.
+    schedules.pruneReviewed(row.id, found.repo, found.openNumbers);
+
+    let due = found.due;
+    // Run now with nothing due reviews the most recently updated PR anyway, the
+    // same bargain the branch gate strikes: you pressed a button, so something
+    // should happen. Commit 5c69146's reasoning, applied to a set.
+    if (force && !due.length && found.pulls.length) {
+        due = [found.pulls.slice().sort((a, b) =>
+            String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))[0]];
+    }
+    out.remaining = due.length;
+    if (!due.length) return out;
+
+    // One fetch for the whole batch rather than one per PR.
+    await git.run('git', ['-C', row.cwd, 'fetch', '--quiet', '--no-tags', 'origin'],
+        { timeout: 60_000 });
+
+    const inFlight = reviewsInFlight(row);
+    let budget = Math.max(0, Math.min(REVIEWS_PER_TICK, REVIEWS_IN_FLIGHT - inFlight));
+
+    for (const pr of due) {
+        if (budget <= 0) { out.deferred++; continue; }
+        // Peek: `runSchedule` is the one that actually spends it.
+        if (tooManyCreates({ reserve: CREATE_RESERVE, peek: true })) {
+            out.deferred++;
+            continue;
+        }
+
+        const key = reviewKey(found.repo, pr.number);
+        // Already failed in this sweep at this SHA: still due, deliberately, but
+        // not worth saying again every thirty seconds. See rangeFailures.
+        if (sawRangeFailure(row.id, key, pr.headSha)) { out.deferred++; continue; }
+
+        const range = await prRange(row.cwd, pr);
+        if (!range.ok) {
+            // No reviewed entry, so it comes back at the next slot.
+            noteRangeFailure(row.id, key, pr.headSha);
+            out.skipped.push({ target: pr, reason: 'error', error: range.error });
+            continue;
+        }
+
+        const one = await runSchedule(row, {
+            force, who,
+            target: {
+                pr,
+                repo: found.repo,
+                facts: {
+                    at: Date.now(),
+                    head: pr.headSha,
+                    since: range.since,
+                    count: range.count,
+                    ref: pr.branch,
+                    pr: {
+                        number: pr.number, url: pr.url, title: pr.title,
+                        branch: pr.branch, base: pr.base, author: pr.author,
+                        repo: found.repo,
+                    },
+                },
+            },
+        });
+
+        if (one.ok) {
+            out.started.push({ sessionId: one.sessionId, target: pr, facts: one.facts });
+            // **Written at start, not at completion**, and that inversion of this
+            // file's usual rule is deliberate. The tick is thirty seconds away and
+            // a review takes minutes, so an entry written only on completion means
+            // the same PR fires again on every tick until it lands. The crash-after
+            // -start case is covered by the boot sweep instead — see
+            // recoverInterruptedReviews.
+            schedules.noteReview(row.id, key, {
+                sha: pr.headSha, at: Date.now(), sessionId: one.sessionId,
+                outcome: null, posted: null, postError: null,
+            });
+            budget--;
+        } else {
+            out.skipped.push({ target: pr, reason: one.skip, error: one.error || null });
+            // A rate limit or a full pool is not this PR's fault; stop starting
+            // rather than burning through the rest of the list on the same wall.
+            if (one.skip === 'rate-limited') { out.deferred += 1; break; }
+        }
+    }
+
+    out.deferred = Math.max(0, due.length - out.started.length - out.skipped.length);
+    return out;
 }
 
 /**
@@ -1097,8 +1429,34 @@ async function runSchedule(row, { force = false, who = LOCAL_CALLER } = {}) {
  * A dev bridge still lists schedules, still edits them, and still honours Run
  * now: that is a press, not a clock.
  */
+// One pass at a time.
+//
+// `tickSchedules` is `await`-heavy — a fetch inside the drain is given sixty
+// seconds — and it runs off a thirty-second interval, so two passes overlapping is
+// ordinary rather than exotic. Pass one is safe either way because `claim()`
+// settles it on disk, but the drain pass has no equivalent: it decides what to
+// start from `reviewed`, and the entry for a pull request is only written *after*
+// `pool.create` returns. Two overlapping drains could therefore both see the same
+// pull request as due, start two review sessions for it, and post two comments.
+//
+// A boolean rather than a per-schedule lock because the passes are cheap and the
+// interval is long: skipping a tick costs thirty seconds of latency on a batch
+// that has half an hour, and a lock per schedule would be machinery guarding a
+// window this closes entirely.
+let ticking = false;
+
 async function tickSchedules() {
     if (cfg.IS_DEV && !SCHEDULE_ON_DEV) return;
+    if (ticking) return;
+    ticking = true;
+    try {
+        await runTick();
+    } finally {
+        ticking = false;
+    }
+}
+
+async function runTick() {
 
     // Start from disk. The everyday instance is the only process that fires, and
     // schedules get created and edited on others — so without this, one made from
@@ -1111,10 +1469,15 @@ async function tickSchedules() {
     let changed = false;
 
     for (const row of schedules.enabled()) {
-        // On a dev bridge with the override, only ever a schedule marked as a
-        // test — see SCHEDULE_ON_DEV. This is the line that keeps an agent's
-        // bridge away from the user's real schedules.
-        if (cfg.IS_DEV && !row.test) continue;
+        // **A test schedule belongs to whichever bridge is developing, and to no
+        // other.** The rule reads both ways and the first version only wrote one
+        // of them: `cfg.IS_DEV && !row.test` narrows a *dev* bridge and does
+        // nothing at all on the everyday one, which went on firing everything in
+        // the shared file. So a probe schedule created while 45888 was up got run
+        // by 45888 — measured, not guessed: it started a session in the user's own
+        // checkout. Test *sessions* are hidden from the everyday window; a test
+        // schedule should be equally invisible to it, and now is.
+        if (cfg.IS_DEV !== !!row.test) continue;
 
         const spec = parseCron(row.cron);
         if (spec.error) continue;
@@ -1156,6 +1519,14 @@ async function tickSchedules() {
         if (!schedules.claim(row.id, slot)) continue;
         changed = true;
 
+        // A pull-request slot opens a window rather than doing the work; the
+        // drain pass below picks it up in this same tick.
+        if (row.gate && row.gate.kind === 'open-prs') {
+            schedules.openSweep(row.id, slot, SWEEP_MS);
+            continue;
+        }
+
+
         // The claim has already been written, so from here every exit has to
         // leave a reason on the row. An unhandled throw between here and the end
         // of the loop consumed the slot and recorded nothing — the schedule
@@ -1190,7 +1561,159 @@ async function tickSchedules() {
         }
     }
 
+    // ── pass two: drain any open review window ───────────────────────────
+    //
+    // Separate from the loop above because it is not about slots. A window may
+    // have been opened by this tick or by one twenty minutes ago, and either way
+    // the question is the same: what does this schedule still owe, and how much of
+    // it may start now. Re-read so a window pass one just opened is seen.
+    //
+    // **`list()` rather than `enabled()`, because a one-time schedule is disabled
+    // by the very slot whose window this is draining.** `claim()` spends a `once`
+    // row the moment it takes the slot — deliberately, so a crash cannot leave one
+    // armed for a slot it already had — and a PR gate then opens a window that
+    // outlives that write by up to half an hour. Walking `enabled()` here would
+    // abandon the batch after its first pull request, leave `sweepUntil` set
+    // forever, and skip the "N went unreviewed" notification that exists to make
+    // exactly that visible. Anything else that is off was turned off by a person,
+    // and stays off.
+    for (const row of schedules.list()) {
+        if (!row.enabled && !(row.once && row.sweepUntil)) continue;
+        if (cfg.IS_DEV !== !!row.test) continue;
+        if (!row.gate || row.gate.kind !== 'open-prs') continue;
+        if (!row.sweepUntil) continue;
+
+        if (now > row.sweepUntil) {
+            // Out of time with work left. Said out loud rather than dropped: a cap
+            // that truncates silently reads as "everything was reviewed".
+            const found = await pullsForSchedule(row).catch(() => null);
+            const left = found && found.ok ? found.due.length : 0;
+            if (left > 0) {
+                schedules.closeSweep(row.id, {
+                    skipReason: 'sweep-expired',
+                    error: `${left} pull request${left === 1 ? '' : 's'} were not reviewed `
+                        + 'before the review window closed',
+                });
+                fileScheduleNote(row, {
+                    type: 'schedule-failed',
+                    summary: `${left} pull request${left === 1 ? '' : 's'} went unreviewed`,
+                    detail: `"${scheduleTitle(row)}" ran out of its review window with `
+                        + `${left} still to do. They will be picked up at the next run.`,
+                    loud: true,
+                });
+            } else {
+                schedules.closeSweep(row.id);
+            }
+            rangeFailures.delete(row.id);
+            changed = true;
+            continue;
+        }
+
+        let swept;
+        try {
+            swept = await fireSchedule(row);
+        } catch (err) {
+            swept = null;
+            console.error(`[claude-sessions] sweep ${scheduleTitle(row)} threw: `
+                + `${err.stack || err.message}`);
+            schedules.closeSweep(row.id, { skipReason: 'error', error: err.message });
+            changed = true;
+            continue;
+        }
+
+        if (swept.started.length) {
+            changed = true;
+            // One `note` per session, not one per tick. `runs` counts sessions, so
+            // recording only the last of a fan-out made a card that had just
+            // reviewed three pull requests say "1 run". The last call also leaves
+            // `lastSessionId` on the newest, which is what the card links to.
+            for (const { sessionId, target } of swept.started) {
+                console.log(`[claude-sessions] schedule ${scheduleTitle(row)} started `
+                    + `${sessionId} for #${target.number}`);
+                schedules.note(row.id, { sessionId });
+            }
+        }
+
+        for (const bad of swept.skipped) {
+            changed = true;
+            schedules.note(row.id, { skipReason: bad.reason, error: bad.error });
+            if (bad.reason !== 'error') continue;
+            fileScheduleNote(row, {
+                type: 'schedule-failed',
+                summary: bad.target
+                    ? `#${bad.target.number} could not be reviewed`
+                    : 'a scheduled review could not start',
+                detail: `"${scheduleTitle(row)}": ${bad.error}`,
+                loud: true,
+            });
+        }
+
+        // Nothing due and nothing deferred: the batch is done and the window can
+        // close early rather than sitting open for the rest of its half hour.
+        if (!swept.remaining && !swept.deferred) {
+            // "Nothing new" is about the *sweep*, not about this tick. The last
+            // tick of a successful batch has nothing left to start by definition,
+            // so asking only about this tick made a card that had just reviewed
+            // three pull requests report that there was nothing to do.
+            const workedThisSweep = row.lastFiredAt && row.sweepSlotAt
+                && row.lastFiredAt >= row.sweepSlotAt;
+            if (!workedThisSweep && !swept.started.length && !swept.skipped.length) {
+                schedules.note(row.id, { skipReason: 'nothing-new', error: null });
+            }
+            schedules.closeSweep(row.id);
+            rangeFailures.delete(row.id);
+            changed = true;
+        }
+    }
+
     if (changed) broadcast('schedules-changed', schedulesPayload());
+}
+
+/**
+ * Reviews whose process died with a previous bridge.
+ *
+ * A reviewed entry is written at session start so the fan-out is idempotent —
+ * without that, a PR whose review takes minutes would fire again on every
+ * thirty-second tick. The cost of writing early is this case: the bridge goes
+ * down mid-review, and the entry says the PR was reviewed while nothing was ever
+ * posted. Killing a bridge kills its turns, so there is no chance the run is
+ * still going.
+ *
+ * **The SHA is deliberately left in place rather than cleared.** Clearing it is
+ * the tidy-looking option and it is the wrong one twice over: a bridge that
+ * crashes on startup would re-review the same pull requests every boot, and the
+ * review that did run is sitting complete in its transcript — throwing that away
+ * to buy a second copy is the expensive direction. Marked `interrupted` with a
+ * link instead, which costs one paste and tells the truth.
+ */
+function recoverInterruptedReviews() {
+    let found = 0;
+    for (const row of schedules.list()) {
+        if (!row.gate || row.gate.kind !== 'open-prs') continue;
+        if (cfg.IS_DEV !== !!row.test) continue;
+        for (const [key, entry] of Object.entries(row.reviewed || {})) {
+            if (!entry.sessionId || entry.outcome || entry.posted) continue;
+            found++;
+            schedules.noteReview(row.id, key, {
+                outcome: 'error', posted: 'interrupted',
+                postError: 'the bridge stopped while this review was running',
+            });
+            fileScheduleNote(row, {
+                sessionId: entry.sessionId,
+                type: 'schedule-failed',
+                summary: `the review of ${key} was interrupted`,
+                detail: `"${scheduleTitle(row)}" was reviewing ${key} when the bridge `
+                    + 'stopped. Whatever it had written is in the session transcript; it '
+                    + 'was not posted, and the pull request will not be reviewed again '
+                    + 'unless it gets new commits.',
+                loud: true,
+            });
+        }
+    }
+    if (found) {
+        console.log(`[claude-sessions] ${found} interrupted review(s) marked`);
+        broadcast('schedules-changed', schedulesPayload());
+    }
 }
 
 /** What to call a schedule in a log line or a notification. */
@@ -1921,7 +2444,7 @@ async function api(req, res, url, pathname, who) {
             // A ref that cannot be resolved is refused rather than seeded empty:
             // a typo'd `orgin/main` should cost you the save, not a month of
             // silent "nothing new".
-            if (v.fields.gate) {
+            if (v.fields.gate && v.fields.gate.kind === 'git-commits') {
                 const seed = await git.commitRange(v.fields.cwd, v.fields.gate.ref, null,
                     { fetch: v.fields.gate.fetch });
                 if (!seed.ok) {
@@ -1930,6 +2453,40 @@ async function api(req, res, url, pathname, who) {
                     });
                 }
                 v.fields.lastMarker = seed.head;
+            }
+
+            // The same seeding for a PR gate, and it matters more: without it,
+            // pressing Save starts a review session for every pull request already
+            // open — five of them, on a machine where that is a normal number.
+            // `seed: "all"` is how you ask for exactly that.
+            if (v.fields.gate && v.fields.gate.kind === 'open-prs') {
+                const repo = await pulls.repoOf(v.fields.cwd);
+                if (!repo) {
+                    return send(res, 400, {
+                        error: `${v.fields.cwd} has no GitHub origin, so it has no `
+                            + 'pull requests to watch',
+                    });
+                }
+                const list = await pulls.openPulls(repo);
+                if (!list.ok) {
+                    // Refused rather than seeded empty, for the reason a bad ref is
+                    // refused: a schedule that cannot see the repository is one that
+                    // will report "nothing new" every night and never say why.
+                    return send(res, 400, {
+                        error: list.error || `cannot list pull requests for ${repo}`,
+                    });
+                }
+                if (String(body.seed || 'skip') !== 'all') {
+                    const reviewed = {};
+                    for (const pr of list.pulls) {
+                        if (!pr.headSha) continue;
+                        reviewed[reviewKey(repo, pr.number)] = {
+                            sha: pr.headSha, at: Date.now(),
+                            sessionId: null, outcome: null, posted: 'seeded', postError: null,
+                        };
+                    }
+                    v.fields.reviewed = reviewed;
+                }
             }
 
             const row = schedules.create(v.fields);
@@ -1992,11 +2549,25 @@ async function api(req, res, url, pathname, who) {
             // else, which is the same bargain `POST /api/schedules` strikes.
             const cwd = v.fields.cwd !== undefined ? v.fields.cwd : before.cwd;
             const gate = v.fields.gate !== undefined ? v.fields.gate : before.gate;
-            const repointed = gate
-                && (cwd !== before.cwd || !before.gate || before.gate.ref !== gate.ref);
+            const kind = gate ? gate.kind : null;
+            const wasKind = before.gate ? before.gate.kind : null;
+            const movedCwd = cwd !== before.cwd;
 
             let marker = null;
-            if (repointed) {
+            let reseeded = null;
+
+            // **Branch on the kind, which the first version did not.** It reached
+            // for `gate.ref` whatever the gate was, so switching an existing
+            // schedule to `open-prs` — which has no ref — called `commitRange` with
+            // `undefined` and answered 400 "cannot resolve undefined". The edit
+            // dialog could offer that gate and never save it.
+            if (kind === 'git-commits'
+                && (movedCwd || wasKind !== 'git-commits' || before.gate.ref !== gate.ref)) {
+                // Repointing invalidates the marker: it is a SHA on the old ref, and
+                // against the new one it is either an ancestor nothing has landed
+                // after — "nothing new" forever — or a commit on a diverged history,
+                // which makes `{{range}}` enormous. Resolved before the update so a
+                // ref that turns out not to exist costs the edit and nothing else.
                 const seed = await git.commitRange(cwd, gate.ref, null,
                     { fetch: gate.fetch });
                 if (!seed.ok) {
@@ -2007,9 +2578,46 @@ async function api(req, res, url, pathname, who) {
                 marker = seed.head;
             }
 
+            // Becoming a PR gate, or pointing at a different checkout, means the
+            // reviewed map describes the wrong repository. Reseeded for the reason
+            // the create route seeds: otherwise saving the edit reviews everything
+            // already open.
+            if (kind === 'open-prs' && (movedCwd || wasKind !== 'open-prs')) {
+                const repo = await pulls.repoOf(cwd);
+                if (!repo) {
+                    return send(res, 400, {
+                        error: `${cwd} has no GitHub origin, so it has no pull `
+                            + 'requests to watch',
+                    });
+                }
+                const list = await pulls.openPulls(repo);
+                if (!list.ok) {
+                    return send(res, 400, {
+                        error: list.error || `cannot list pull requests for ${repo}`,
+                    });
+                }
+                reseeded = {};
+                if (String(body.seed || 'skip') !== 'all') {
+                    for (const pr of list.pulls) {
+                        if (!pr.headSha) continue;
+                        reseeded[reviewKey(repo, pr.number)] = {
+                            sha: pr.headSha, at: Date.now(),
+                            sessionId: null, outcome: null, posted: 'seeded',
+                            postError: null,
+                        };
+                    }
+                }
+            }
+
             const row = schedules.update(seg[2], v.fields);
             if (!row) return send(res, 404, { error: 'schedule not found' });
             if (marker) schedules.note(seg[2], { marker });
+            if (reseeded) schedules.setReviewed(seg[2], reseeded);
+            // A window belongs to the gate that opened it. Leaving one open across a
+            // change of kind meant the drain pass skipped it on the kind guard and
+            // nothing ever closed it, so the row carried a stale `sweepUntil`
+            // indefinitely.
+            if (kind !== wasKind && before.sweepUntil) schedules.closeSweep(seg[2]);
 
             broadcast('schedules-changed', schedulesPayload());
             return send(res, 200, { schedule: scheduleOut(schedules.get(seg[2])) });
@@ -2035,37 +2643,62 @@ async function api(req, res, url, pathname, who) {
             const row = schedules.get(seg[2]);
             if (!row) return send(res, 404, { error: 'schedule not found' });
 
-            const result = await runSchedule(row, { force: true, who });
-            if (!result.ok) {
-                schedules.note(row.id, { skipReason: result.skip, error: result.error || null });
+            const fired = await fireSchedule(row, { force: true, who });
+
+            if (!fired.started.length) {
+                const first = fired.skipped[0]
+                    || { reason: 'nothing-new', error: fired.gateError };
+                schedules.note(row.id, { skipReason: first.reason, error: first.error || null });
                 broadcast('schedules-changed', schedulesPayload());
                 // The refusal a remote caller gets is a 403 and says so; a
                 // rate limit is a 429; everything else is the directory or the
                 // ref, which is a 400 about the request.
-                const status = result.skip === 'rate-limited' ? 429
+                const status = first.reason === 'rate-limited' ? 429
                     : (modeRefusal(normalizeMode(row.permissionMode), who) ? 403 : 400);
                 return send(res, status, status === 403
-                    ? { error: result.error, remote: true }
-                    : { error: result.error });
+                    ? { error: first.error, remote: true }
+                    : { error: first.error || 'nothing to review' });
             }
 
             // A manual run advances the marker exactly as a scheduled one does.
             // Not doing so would mean pressing Run now caused tonight to review
-            // the same commits over again.
+            // the same commits over again. For a PR gate the per-PR entries were
+            // already written by `fireSchedule` at the moment each session started.
             //
             // `note` returns null if the schedule was deleted while this was
             // running, which a gated run makes a real window rather than a
             // theoretical one — a fetch can take the best part of a minute. The
-            // session has started either way, so the id must still be reported:
-            // answering with a 500 here would tell the caller the run failed
-            // while an agent was already working.
-            const updated = schedules.note(row.id, {
-                sessionId: result.sessionId,
-                marker: result.facts.head,
-            });
+            // sessions have started either way, so their ids must still be
+            // reported: answering with a 500 here would tell the caller the run
+            // failed while an agent was already working.
+            // One per session, so `runs` counts reviews rather than sweeps — see
+            // the same loop in tickSchedules.
+            const last = fired.started[fired.started.length - 1];
+            let updated = null;
+            for (const started of fired.started) {
+                updated = schedules.note(row.id, {
+                    sessionId: started.sessionId,
+                    marker: fired.kind === 'open-prs' ? undefined : last.facts.head,
+                });
+            }
+
+            // A PR sweep that could not start everything keeps its window open so
+            // the rest drains on the ticks that follow, rather than waiting for
+            // tomorrow's slot. Only on the everyday instance, which is the only one
+            // whose tick will come back for it.
+            if (fired.kind === 'open-prs' && fired.deferred && !row.sweepUntil) {
+                schedules.openSweep(row.id, Date.now(), SWEEP_MS);
+            }
+
             broadcast('schedules-changed', schedulesPayload());
             return send(res, 200, {
-                sessionId: result.sessionId,
+                // Singular first, and kept: `web/app.js` and the Android client
+                // both read `sessionId`, and a client that has not been updated
+                // should get the session it asked for rather than `undefined`.
+                // It is the first of `sessionIds` — for a branch gate the only one.
+                sessionId: fired.started[0].sessionId,
+                sessionIds: fired.started.map(x => x.sessionId),
+                deferred: fired.deferred,
                 test: !!row.test,
                 schedule: updated ? scheduleOut(updated) : null,
             });
@@ -3695,21 +4328,35 @@ pool.on('turn-complete', (r) => {
  * is "finished, nothing to say" — recorded quietly, never treated as a failure.
  */
 function noteScheduledOutcome(r) {
-    const scheduleId = scheduledRuns.get(r.sessionId);
-    if (!scheduleId) return;
+    const found = scheduleOfSession(r.sessionId);
+    if (!found) return;
     scheduledRuns.delete(r.sessionId);
 
-    const row = schedules.get(scheduleId);
-    if (!row) return;   // deleted while its run was in flight
+    const { row, target } = found;
 
     const runner = pool.get(r.sessionId);
     const verdict = r.isError ? null : verdictOf(runner && runner.lastResultText);
     const outcome = r.isError ? 'error' : (verdict || 'done');
 
-    schedules.note(scheduleId, { outcome });
+    schedules.note(row.id, { outcome });
+    if (target) {
+        schedules.noteReview(row.id, reviewKey(target.repo, target.number), { outcome });
+    }
     broadcast('schedules-changed', schedulesPayload());
 
     const bad = r.isError || verdict === 'BLOCK' || verdict === 'CONCERNS';
+
+    // The GitHub half. Deliberately after the verdict is recorded and before the
+    // notification, so a failed post can add to what the notification says.
+    if (target) {
+        postReviewToPr(row, target, {
+            sessionId: r.sessionId, verdict, outcome,
+            body: runner && runner.lastResultBody,
+        }).catch(err => console.error(
+            `[claude-sessions] posting review for #${target.number} threw: ${err.message}`));
+        return;   // postReviewToPr files the notification, once it knows the outcome
+    }
+
     if (!bad) return;
 
     // This one does carry a session, so the log's own test filter would catch it
@@ -3724,6 +4371,194 @@ function noteScheduledOutcome(r) {
         detail: r.isError ? r.detail : null,
         loud: true,
     });
+}
+
+/**
+ * Which schedule — and which pull request — a finished session belonged to.
+ *
+ * `scheduledRuns` first, then the reviewed map on disk. The in-memory map is
+ * faster and carries the resolved target, but it is lost to a restart and evicted
+ * past `SCHEDULED_RUNS_KEPT`, and for a PR run that loss is not cosmetic: the
+ * review ran, cost money, and its findings would never be posted anywhere. The
+ * reviewed entry is written at session *start* precisely so the mapping survives
+ * on disk, which makes it the fallback.
+ *
+ * @returns {{row: object, target: {repo, number, headSha}|null}|null}
+ */
+function scheduleOfSession(sessionId) {
+    const held = scheduledRuns.get(sessionId);
+    if (held) {
+        const row = schedules.get(held.scheduleId);
+        if (!row) return null;   // deleted while its run was in flight
+        const t = held.target;
+        return {
+            row,
+            target: t ? { repo: t.repo, number: t.pr.number, headSha: t.pr.headSha } : null,
+        };
+    }
+
+    for (const row of schedules.list()) {
+        if (!row.gate || row.gate.kind !== 'open-prs') continue;
+        for (const [key, entry] of Object.entries(row.reviewed || {})) {
+            if (entry.sessionId !== sessionId) continue;
+            // **Only a review that has not finished.** Matching on the session id
+            // alone meant any later turn in that session — you open the review and
+            // ask it a follow-up question — was re-attributed to the pull request
+            // and posted a second comment with a second relabel. Before the
+            // fallback existed the in-memory map had already been deleted, so the
+            // function simply returned; the fallback has to reproduce that.
+            if (entry.outcome || entry.posted) continue;
+            const hash = key.lastIndexOf('#');
+            return {
+                row,
+                target: {
+                    repo: key.slice(0, hash),
+                    number: Number(key.slice(hash + 1)),
+                    headSha: entry.sha,
+                },
+            };
+        }
+    }
+    return null;
+}
+
+/**
+ * Put the finished review on the pull request.
+ *
+ * The governing rule: **the review is the artefact and this is delivery.** It has
+ * already been written to a transcript that is not going anywhere, so nothing here
+ * ever unwinds the reviewed entry — re-running a whole review session to retry a
+ * *post* would spend minutes of somebody's quota re-deriving text that already
+ * exists. A failed post is recorded and said out loud instead.
+ *
+ * A comment is posted whatever the verdict, including CLEAN: on a pull request,
+ * "somebody looked at this and found nothing" is information, unlike in a
+ * notification where it is noise.
+ */
+async function postReviewToPr(row, target, { sessionId, verdict, outcome, body }) {
+    const key = reviewKey(target.repo, target.number);
+    const bad = outcome === 'error' || verdict === 'BLOCK' || verdict === 'CONCERNS';
+
+    // **A test schedule does not touch GitHub.** `SCHEDULE_ON_DEV` exists so a
+    // development bridge fires test schedules, and `gh` is authenticated as the
+    // same person either way — so without this line, testing this feature comments
+    // on the user's real pull requests. `gate.post` is the same switch for an
+    // ordinary schedule that wants the reviews without the noise.
+    // Null-safe: the gate can be cleared while a review is in flight, and this
+    // path runs minutes after it started. Treating an absent gate as "do not post"
+    // is the safe reading — a schedule that is no longer a PR schedule has not
+    // asked for a comment.
+    if (row.test || !row.gate || row.gate.kind !== 'open-prs' || row.gate.post === false) {
+        schedules.noteReview(row.id, key, { posted: 'skipped-test' });
+        console.log(`[claude-sessions] not posting #${target.number} (`
+            + `${row.test ? 'test schedule' : 'posting is off'}); `
+            + `verdict ${verdict || outcome}`);
+        broadcast('schedules-changed', schedulesPayload());
+        // **Still notify.** Not posting is about not writing to somebody else's
+        // repository; it is not about keeping the finding from *you*. Returning
+        // early here meant a BLOCK on a schedule with posting switched off told
+        // nobody anything — the one configuration where the notification is the
+        // only way you would ever hear about it.
+        if (bad) {
+            fileScheduleNote(row, {
+                sessionId,
+                type: 'schedule-findings',
+                summary: `#${target.number} came back ${verdict || outcome}`,
+                detail: `"${scheduleTitle(row)}" reviewed #${target.number} and did not `
+                    + 'post, because posting is switched off for this schedule.',
+                loud: true,
+            });
+        }
+        return;
+    }
+
+    let postError = null;
+    let commentOk = false;
+    if (body) {
+        const wrapped = wrapReviewBody(target, body);
+        const posted = await pulls.comment(target.repo, target.number, wrapped);
+        commentOk = posted.ok;
+        if (!posted.ok) postError = posted.error;
+    } else {
+        postError = 'the review produced no text to post';
+    }
+
+    // The label is decoration, so its failure rides along in `postError` for the
+    // log and never raises anything of its own — a toast about a label is exactly
+    // the kind that teaches you to ignore the ones that matter.
+    if (verdict) {
+        // The current labels have to be *known*, not assumed. Passing an empty
+        // list when the re-list failed would make `setVerdictLabel`'s remove set
+        // empty, so a pull request that was BLOCK last week and is CLEAN today
+        // would end up wearing both — a contradiction is worse than a missing
+        // label, so a list we could not read means the label is left alone.
+        pulls.clearCache();
+        const fresh = await pulls.openPulls(target.repo);
+        const pr = fresh.ok
+            ? fresh.pulls.find(x => x.number === target.number) : null;
+        if (!pr) {
+            const why = fresh.ok
+                ? `#${target.number} is no longer open`
+                : (fresh.error || 'could not list pull requests');
+            console.error(`[claude-sessions] not labelling #${target.number}: ${why}`);
+            if (!postError) postError = `label: ${why}`;
+        } else {
+            const labelled = await pulls.setVerdictLabel(
+                target.repo, target.number, verdict, pr.labels);
+            if (!labelled.ok) {
+                console.error(`[claude-sessions] could not label #${target.number}: `
+                    + labelled.error);
+                if (!postError) postError = `label: ${labelled.error}`;
+            }
+        }
+    }
+
+    // `posted` tracks the *comment* only. A label that would not go on is noted in
+    // `postError` but does not make the delivery a failure — the findings landed,
+    // which is the part anybody needs.
+    schedules.noteReview(row.id, key, {
+        posted: commentOk ? 'ok' : 'failed',
+        postError,
+    });
+    broadcast('schedules-changed', schedulesPayload());
+
+    // Loud when there is something to act on. A comment that would not post is one
+    // of those: the review exists and nobody would otherwise know where.
+    if (!bad && commentOk) return;
+    fileScheduleNote(row, {
+        sessionId,
+        type: postError ? 'schedule-failed' : 'schedule-findings',
+        summary: postError
+            ? `#${target.number} was reviewed but the comment did not post`
+            : `#${target.number} came back ${verdict || outcome}`,
+        detail: postError
+            ? `"${scheduleTitle(row)}" reviewed #${target.number} and could not post it: `
+                + `${postError}. The review is in the session transcript.`
+            : null,
+        loud: true,
+    });
+}
+
+/**
+ * The comment as it appears on the pull request.
+ *
+ * Wrapped rather than posted raw so that a re-review at a new head SHA is legible
+ * in the timeline: three bare reports in a row say nothing about which commit each
+ * was looking at.
+ */
+function wrapReviewBody(target, body) {
+    const head = String(target.headSha || '').slice(0, 12);
+    // 60_000 is `lastResultBody`'s cap, so a body at exactly that length is one
+    // the runner cut rather than one that happened to end there.
+    const clipped = body.length >= 60_000;
+    // Built by concatenation rather than `[...].filter(Boolean).join()`, which is
+    // how the blank line after the header got eaten: an empty string is falsy, so
+    // the separator was filtered out along with the optional footer — and without
+    // it GitHub renders the review's first paragraph *inside* the blockquote, so
+    // the opening sentence reads as part of the machine header.
+    let out = `> Automated review of \`${head}\`.\n\n${body}`;
+    if (clipped) out += '\n\n_Truncated — the full review is in the session transcript._';
+    return out;
 }
 pool.on('failed', (f) => { broadcast('send-failed', f); filed(notifications.sendFailed(f)); });
 // Nothing notifies for a subagent finishing; it is logged so that "what has been
@@ -3876,8 +4711,10 @@ server.listen(cfg.PORT, cfg.HOST, async () => {
     // After the index, because firing needs `index.note` and `flags` to be able
     // to keep a brand-new session out of the everyday window.
     if (!cfg.IS_DEV || SCHEDULE_ON_DEV) {
+        // The same symmetric rule the tick applies: a dev bridge counts only test
+        // schedules, and the everyday one counts only the rest.
         const armed = schedules.enabled()
-            .filter(r => !cfg.IS_DEV || r.test).length;
+            .filter(r => cfg.IS_DEV === !!r.test).length;
         if (cfg.IS_DEV) {
             console.log('[claude-sessions] CLAUDE_SESSIONS_SCHEDULE_ON_DEV=1 — this dev '
                 + 'bridge will fire schedules marked as tests, and only those.');
@@ -3885,6 +4722,11 @@ server.listen(cfg.PORT, cfg.HOST, async () => {
         if (armed) {
             console.log(`[claude-sessions] ${armed} schedule(s) armed; `
                 + `checking every ${SCHEDULE_MS / 1000}s`);
+        }
+        // Before the first tick: a review this process cannot own must be marked
+        // before the sweep looks at what is still in flight.
+        try { recoverInterruptedReviews(); } catch (err) {
+            console.error(`[claude-sessions] review recovery failed: ${err.message}`);
         }
         tickSchedules().catch(err => console.error(
             `[claude-sessions] schedule catch-up failed: ${err.message}`));

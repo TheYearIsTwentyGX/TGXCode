@@ -28,7 +28,7 @@ process.env.XDG_DATA_HOME = home;
 const {
     Schedules, STATE_FILE, MAX_SCHEDULES, CATCHUP_MS,
     parseCron, matches, nextSlot, dueSlot, describeCron, cronForm, fillPrompt,
-    verdictOf,
+    verdictOf, reviewKey, unreviewedPulls, pruneReviews, capReviews, MAX_REVIEWED,
 } = require('../bridge/schedule');
 
 // Where the module will actually write, now that the env var is in place.
@@ -475,8 +475,8 @@ const show = (ms) => (ms == null ? 'null' : new Date(ms).toString().slice(0, 21)
 
 const FIELDS = ['id', 'enabled', 'title', 'cwd', 'prompt', 'model', 'permissionMode',
     'test', 'cron', 'once', 'gate', 'lastSlotAt', 'lastFiredAt', 'lastSessionId',
-    'lastOutcome', 'lastSkipReason', 'lastError', 'lastMarker', 'runs', 'createdAt',
-    'updatedAt'];
+    'lastOutcome', 'lastSkipReason', 'lastError', 'lastMarker', 'reviewed',
+    'sweepSlotAt', 'sweepUntil', 'runs', 'createdAt', 'updatedAt'];
 
 {
     const s = fresh();
@@ -616,6 +616,47 @@ const FIELDS = ['id', 'enabled', 'title', 'cwd', 'prompt', 'model', 'permissionM
         assert.ok(on.lastSlotAt >= before, 'and starts from now, not from its old slot');
     }
     ok('a one-time schedule is spent by its slot, and Run now does not spend it');
+}
+
+{
+    // **Where the two features meet.** A one-time schedule is spent by `claim()`,
+    // and a PR gate's slot does not finish there — it opens a window that drains
+    // over the ticks that follow. So the row is disabled while its own slot is
+    // still being worked, and `tickSchedules`' drain pass walks `list()` rather
+    // than `enabled()` for exactly this row. If that guard is ever narrowed back
+    // to `enabled()`, a one-time PR review abandons its batch after the first pull
+    // request, leaves the window open forever, and never files the "N went
+    // unreviewed" notification that exists to make that visible.
+    //
+    // This pins the state the drain pass has to be able to find.
+    const s = fresh();
+    const row = s.create({
+        cwd: '/a', prompt: 'p', cron: '0 17 29 8 *', once: true,
+        gate: { kind: 'open-prs' },
+    });
+
+    const slot = at(2026, 8, 29, 17, 0);
+    assert.strictEqual(s.claim(row.id, slot), true);
+    s.openSweep(row.id, slot, 30 * 60_000);
+
+    const mid = s.get(row.id);
+    assert.strictEqual(mid.enabled, false, 'spent the moment the slot was claimed');
+    assert.ok(mid.sweepUntil > Date.now(), 'but its window is still open');
+    assert.strictEqual(mid.once, true);
+    assert.strictEqual(s.enabled().length, 0,
+        'so pass one cannot see it — which is right, it must not claim another slot');
+    // The condition pass two uses. Spelled out here because it lives in server.js
+    // and this is the file that would catch it regressing.
+    assert.ok(!mid.enabled && mid.once && mid.sweepUntil,
+        'and pass two finds it by being a spent one-time with a window still open');
+
+    // Draining to the end closes the window and leaves it spent, not re-armed.
+    const done = s.closeSweep(row.id);
+    assert.strictEqual(done.sweepUntil, null);
+    assert.strictEqual(done.enabled, false, 'still spent once the window closes');
+    assert.ok(!(done.once && done.sweepUntil),
+        'and stops matching pass two, so it is not walked forever');
+    ok('a spent one-time schedule with a PR gate is still findable while it drains');
 }
 
 {
@@ -857,6 +898,268 @@ const FIELDS = ['id', 'enabled', 'title', 'cwd', 'prompt', 'model', 'permissionM
     s.remove(s.list()[0].id);
     assert.ok(s.create({ cwd: '/a', prompt: 'room again', cron: '0 2 * * *' }));
     ok(`the ${MAX_SCHEDULES}-schedule cap refuses the next one, and lifts when one is deleted`);
+}
+
+// --- the pull-request gate -----------------------------------------------
+
+/** A gh PR as `pulls.js` normalises one, with only the fields the gate reads. */
+const pr = (number, over = {}) => ({
+    number,
+    repo: 'o/r',
+    headSha: `sha${number}`,
+    draft: false,
+    updatedAt: `2026-08-2${number}T00:00:00Z`,
+    ...over,
+});
+
+{
+    // A gate is stored whole or not at all, and the second kind has its own
+    // defaults rather than borrowing the first kind's.
+    const s = fresh();
+    const row = s.create({
+        cwd: '/a', prompt: 'p', cron: '0 2 * * *',
+        gate: { kind: 'open-prs' },
+    });
+    assert.deepStrictEqual(row.gate, { kind: 'open-prs', includeDrafts: true, post: true },
+        'drafts and posting both default on');
+
+    const off = s.create({
+        cwd: '/a', prompt: 'p', cron: '0 2 * * *',
+        gate: { kind: 'open-prs', includeDrafts: false, post: false },
+    });
+    assert.deepStrictEqual(off.gate,
+        { kind: 'open-prs', includeDrafts: false, post: false },
+        'and both can be turned off');
+
+    // The first kind is untouched by the second existing.
+    const branch = s.create({
+        cwd: '/a', prompt: 'p', cron: '0 2 * * *',
+        gate: { kind: 'git-commits', ref: 'origin/main' },
+    });
+    assert.deepStrictEqual(branch.gate,
+        { kind: 'git-commits', ref: 'origin/main', fetch: true });
+
+    // An unknown kind is still refused rather than stored.
+    assert.strictEqual(s.create({
+        cwd: '/a', prompt: 'p', cron: '0 2 * * *',
+        gate: { kind: 'phase-of-moon' },
+    }).gate, null);
+    ok('the open-prs gate, its defaults, and the branch gate still intact');
+}
+
+{
+    // What the batch actually is. This is the function that decides whether a
+    // review happens at all, so both directions matter.
+    const reviewed = {
+        'o/r#1': { sha: 'sha1', at: 1 },     // reviewed at its current head
+        'o/r#2': { sha: 'older', at: 2 },    // reviewed, but it has moved since
+    };
+    const pulls = [pr(1), pr(2), pr(3)];
+
+    assert.deepStrictEqual(
+        unreviewedPulls(pulls, reviewed).map(p => p.number), [3, 2],
+        'a PR at a head we have seen is done; one that moved is owed again');
+
+    // Newest-updated first, so a backlog is worked through in the order a person
+    // would care about.
+    assert.deepStrictEqual(
+        unreviewedPulls([pr(1, { headSha: 'x' }), pr(3), pr(2, { headSha: 'y' })], {})
+            .map(p => p.number), [3, 2, 1]);
+
+    // Drafts, both ways.
+    const withDraft = [pr(1, { draft: true }), pr(2)];
+    assert.deepStrictEqual(unreviewedPulls(withDraft, {}).map(p => p.number), [2, 1]);
+    assert.deepStrictEqual(
+        unreviewedPulls(withDraft, {}, { includeDrafts: false }).map(p => p.number), [2],
+        'a draft is skipped when the schedule says so');
+
+    // A PR gh could not give a head SHA for is skipped rather than reviewed
+    // against nothing — there is no range to build without it.
+    assert.deepStrictEqual(
+        unreviewedPulls([pr(1, { headSha: null }), pr(2)], {}).map(p => p.number), [2]);
+
+    assert.deepStrictEqual(unreviewedPulls([], {}), []);
+    assert.deepStrictEqual(unreviewedPulls(null, {}), []);
+    ok('unreviewedPulls keys on the head SHA, honours drafts, and skips the unusable');
+}
+
+{
+    // Pruning is what bounds the map, and it must only ever touch this repo.
+    const reviewed = {
+        'o/r#1': { sha: 'a', at: 1 },
+        'o/r#9': { sha: 'b', at: 2 },     // merged since — should go
+        'other/repo#5': { sha: 'c', at: 3 },  // not ours to judge
+    };
+    const { reviewed: kept, dropped } = pruneReviews(reviewed, 'o/r', [1, 2, 3]);
+    assert.deepStrictEqual(dropped, ['o/r#9']);
+    assert.deepStrictEqual(Object.keys(kept).sort(), ['o/r#1', 'other/repo#5'],
+        'another repo’s entries survive a prune of this one');
+
+    // Nothing open means everything for that repo goes — which is why the caller
+    // must never call this on a failed list. Pinned here so the shape of that
+    // mistake is at least visible in the test file.
+    assert.deepStrictEqual(
+        Object.keys(pruneReviews(reviewed, 'o/r', []).reviewed), ['other/repo#5']);
+    ok('pruneReviews drops settled PRs and leaves other repos alone');
+}
+
+{
+    // The backstop for a repository that stops being listable at all.
+    const many = {};
+    for (let i = 0; i < MAX_REVIEWED + 10; i++) many[`o/r#${i}`] = { sha: 's', at: i };
+    const { reviewed, dropped } = capReviews(many);
+    assert.strictEqual(Object.keys(reviewed).length, MAX_REVIEWED);
+    assert.strictEqual(dropped.length, 10);
+    assert.deepStrictEqual(dropped, Array.from({ length: 10 }, (_, i) => `o/r#${i}`),
+        'oldest by `at` go first, which is why the entry carries a timestamp');
+    // Under the cap it is a no-op, and the same object comes back.
+    const few = { 'o/r#1': { sha: 's', at: 1 } };
+    assert.strictEqual(capReviews(few).reviewed, few);
+    ok(`capReviews evicts oldest-first past ${MAX_REVIEWED}`);
+}
+
+{
+    // The reviewed map through the store: written at start, patched at
+    // completion, and surviving a reload.
+    const s = fresh();
+    const row = s.create({
+        cwd: '/a', prompt: 'p', cron: '0 2 * * *',
+        gate: { kind: 'open-prs' },
+    });
+    const key = reviewKey('o/r', 12);
+    assert.strictEqual(reviewKey('o/r', 12), 'o/r#12');
+
+    // At session start: the SHA and the session, nothing else known yet.
+    s.noteReview(row.id, key, { sha: 'abc', sessionId: 'sess-1' });
+    let e = s.get(row.id).reviewed[key];
+    assert.strictEqual(e.sha, 'abc');
+    assert.strictEqual(e.sessionId, 'sess-1');
+    assert.strictEqual(e.outcome, null);
+    assert.ok(e.at > 0, 'stamped, so capReviews has something to sort on');
+
+    // At completion: a patch, so the SHA and session are left alone.
+    s.noteReview(row.id, key, { outcome: 'CONCERNS', posted: 'ok' });
+    e = s.get(row.id).reviewed[key];
+    assert.strictEqual(e.sha, 'abc', 'a patch does not clear what it omits');
+    assert.strictEqual(e.sessionId, 'sess-1');
+    assert.strictEqual(e.outcome, 'CONCERNS');
+    assert.strictEqual(e.posted, 'ok');
+
+    s.flush();
+    assert.strictEqual(new Schedules().get(row.id).reviewed[key].outcome, 'CONCERNS',
+        'and it survives a reload');
+
+    // An entry with no usable sha is refused rather than stored as a hole that
+    // would read as "reviewed" and stop the PR ever being looked at.
+    s.noteReview(row.id, 'o/r#99', { sessionId: 'sess-2' });
+    assert.strictEqual(s.get(row.id).reviewed['o/r#99'], undefined);
+    ok('noteReview writes at start, patches at completion, and refuses a holed entry');
+}
+
+{
+    // noteReview merges over the file rather than over its own snapshot — the
+    // difference between losing a race and silently dropping another bridge's
+    // entries, which for this map means a duplicate review and a duplicate
+    // comment on somebody's pull request.
+    const a = fresh();
+    const row = a.create({
+        cwd: '/a', prompt: 'p', cron: '0 2 * * *', gate: { kind: 'open-prs' },
+    });
+    a.noteReview(row.id, 'o/r#1', { sha: 'one' });
+    a.flush();
+
+    const b = new Schedules();
+    b.noteReview(row.id, 'o/r#2', { sha: 'two' });
+
+    // `a` has never seen #2, and writing must not lose it.
+    a.noteReview(row.id, 'o/r#3', { sha: 'three' });
+    const onDisk = new Schedules().get(row.id).reviewed;
+    assert.deepStrictEqual(Object.keys(onDisk).sort(), ['o/r#1', 'o/r#2', 'o/r#3'],
+        'both bridges’ entries survive');
+    ok('noteReview merges per key over the file, not over its own snapshot');
+}
+
+{
+    // pruneReviewed on the store, and the sweep window.
+    const s = fresh();
+    const row = s.create({
+        cwd: '/a', prompt: 'p', cron: '0 2 * * *', gate: { kind: 'open-prs' },
+    });
+    s.noteReview(row.id, 'o/r#1', { sha: 'a' });
+    s.noteReview(row.id, 'o/r#2', { sha: 'b' });
+
+    const { dropped } = s.pruneReviewed(row.id, 'o/r', [1]);
+    assert.deepStrictEqual(dropped, ['o/r#2']);
+    assert.deepStrictEqual(Object.keys(s.get(row.id).reviewed), ['o/r#1']);
+
+    // The window a slot opens.
+    assert.strictEqual(s.get(row.id).sweepUntil, null);
+
+    // **A window is a budget for doing the work, so it never opens already shut.**
+    // Measured from the slot, a caught-up run would be born expired: the catch-up
+    // cap is twelve hours and the window is thirty minutes, so a bridge starting at
+    // 09:00 on a 02:00 slot would open a window that closed at 02:30 — and the
+    // drain pass in that same tick would close it and shout that nothing had been
+    // reviewed. Which is true, and its own fault.
+    const stale = s.openSweep(row.id, 5000, 60_000);
+    assert.strictEqual(stale.sweepSlotAt, 5000, 'the slot is recorded as it was');
+    assert.ok(stale.sweepUntil > Date.now(),
+        'but the window runs from now, so a caught-up slot still gets its full budget');
+
+    // A slot in the present measures from the slot, so an on-time run is not given
+    // extra time by the arithmetic.
+    const now = Date.now() + 5_000;
+    const fresh2 = s.openSweep(row.id, now, 60_000);
+    assert.strictEqual(fresh2.sweepUntil, now + 60_000);
+
+    // Closing it says why, when there is a why.
+    const closed = s.closeSweep(row.id, {
+        skipReason: 'sweep-expired', error: '2 pull request(s) were not reviewed',
+    });
+    assert.strictEqual(closed.sweepUntil, null);
+    assert.strictEqual(closed.sweepSlotAt, null);
+    assert.strictEqual(closed.lastSkipReason, 'sweep-expired');
+    assert.ok(closed.lastError.includes('not reviewed'));
+
+    // And a clean close says nothing, leaving the last real outcome in place.
+    s.openSweep(row.id, 9000, 60_000);
+    const quiet = s.closeSweep(row.id);
+    assert.strictEqual(quiet.sweepUntil, null);
+    assert.strictEqual(quiet.lastSkipReason, 'sweep-expired', 'unchanged, not cleared');
+    ok('pruneReviewed on the store, and the sweep window opening and closing');
+}
+
+{
+    // The PR placeholders, and the rule that keeps them from damaging an
+    // ordinary schedule's prose.
+    const facts = {
+        head: 'a'.repeat(40),
+        since: 'b'.repeat(40),
+        count: 3,
+        pr: {
+            number: 42, url: 'https://github.com/o/r/pull/42', title: 'Fix the thing',
+            branch: 'worktree-fix', base: 'replit-dev', author: 'someone', repo: 'o/r',
+        },
+    };
+    assert.strictEqual(
+        fillPrompt('#{{pr}} "{{prTitle}}" {{prBranch}}->{{prBase}} by {{prAuthor}} in {{repo}}',
+            facts),
+        '#42 "Fix the thing" worktree-fix->replit-dev by someone in o/r');
+    assert.strictEqual(fillPrompt('{{prUrl}}', facts), 'https://github.com/o/r/pull/42');
+    // The range still means the range.
+    assert.strictEqual(fillPrompt('{{range}}', facts),
+        `${'b'.repeat(12)}..${'a'.repeat(12)}`);
+    // A base branch is not a SHA and must not be shortened.
+    assert.strictEqual(
+        fillPrompt('{{prBase}}', { pr: { base: 'a-very-long-branch-name-indeed' } }),
+        'a-very-long-branch-name-indeed');
+
+    // **The rule.** On a run that is not about a PR, these keys are unknown and
+    // so are left verbatim — not blanked. A branch schedule whose prose happens
+    // to contain "{{pr}}" must not silently lose it.
+    assert.strictEqual(fillPrompt('see {{pr}} and {{repo}}', { head: 'c'.repeat(40) }),
+        'see {{pr}} and {{repo}}');
+    ok('PR placeholders fill on a PR run and stay verbatim on one that is not');
 }
 
 fs.rmSync(home, { recursive: true, force: true });
