@@ -963,7 +963,7 @@ not.
 | `bridge/git.js` | Every question the bridge asks git about a directory, cached once for all of them |
 | `bridge/restart.js` | Pulling this checkout and handing over to `scripts/restart-bridge.sh` — the one mutating git call |
 | `bridge/changes.js` | What a session changed, out of its transcript and its subagents' |
-| `bridge/pulls.js` | Everything that asks GitHub about a pull request, and what its status *is* |
+| `bridge/pulls.js` | Everything this app asks GitHub about a pull request, what its status *is*, and the review it leaves behind |
 | `bridge/overview.js` | The live board: what every session is doing right now |
 | `bridge/taskboard.js` | The task board: everything outstanding, in a column per state |
 | `bridge/sessions.js` | The session index — incremental, cached, watched |
@@ -987,7 +987,7 @@ not.
 | `bridge/spinner-verbs.json` | The verb catalogue, and the seed for that directory |
 | `bridge/suggestions.js` | What you did about a suggested follow-up |
 | `bridge/drafts.js` | Sessions set up but not started — a create call, held back |
-| `bridge/schedule.js` | Sessions that start on a clock — the store, the cron, and what counts as new since last time |
+| `bridge/schedule.js` | Sessions that start on a clock — the store, the cron, and what counts as new since last time (a branch's commits, or a pull request nobody has reviewed) |
 | `bridge/mcp.js` | The tools this app gives a session: offer the next piece of work, find the other sessions, hand one of them a fact |
 | `bridge/handoff.js` | The rules a handoff has to pass: the loop guard, and what waking a session would run into |
 | `bridge/slash-commands.js` | What slash commands a directory has, for composer completion |

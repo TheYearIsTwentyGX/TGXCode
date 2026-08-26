@@ -791,14 +791,45 @@ checks, and merge it once they pass.">LGTM</button>
           day-of-month month day-of-week.</div>
       </div>
       <div class="field" id="new-gate-row" hidden>
-        <label for="new-gate-ref">Only when this ref has new commits</label>
+        <label for="new-gate-kind">Only run when there is something to do</label>
+        <select id="new-gate-kind">
+          <option value="">every time — no gate</option>
+          <option value="git-commits">a branch has new commits</option>
+          <option value="open-prs">there are open pull requests to review</option>
+        </select>
+        <div class="note" id="new-gate-note">A gated run that finds nothing new
+          starts no session at all.</div>
+      </div>
+      <div class="field" id="new-gate-ref-row" hidden>
+        <label for="new-gate-ref">Which ref to watch</label>
         <input id="new-gate-ref" type="text" spellcheck="false"
-               placeholder="origin/main — leave empty to run every time">
-        <div class="note">The range since the last run is available to the prompt
-          as <code>{{range}}</code>, with <code>{{head}}</code>,
+               placeholder="origin/main">
+        <div class="note">The range since the last run reaches the prompt as
+          <code>{{range}}</code>, with <code>{{head}}</code>,
           <code>{{since}}</code>, <code>{{count}}</code>, <code>{{ref}}</code> and
-          <code>{{date}}</code>. With a ref set, a run with nothing new starts no
-          session at all.</div>
+          <code>{{date}}</code>.</div>
+      </div>
+      <!-- Only in schedule mode, and only for a pull-request gate. One session
+           per unreviewed PR, so the two switches here are about cost and about
+           what gets written to somebody else's repository. -->
+      <div class="field" id="new-pr-row" hidden>
+        <label class="check">
+          <input id="new-pr-drafts" type="checkbox" checked>
+          <span>Review drafts too</span>
+        </label>
+        <label class="check">
+          <input id="new-pr-post" type="checkbox" checked>
+          <span>Comment on the pull request and label it</span>
+        </label>
+        <div class="note">One review session per pull request whose latest commit
+          has not been reviewed yet, newest first. The PR reaches the prompt as
+          <code>{{pr}}</code>, with <code>{{prTitle}}</code>,
+          <code>{{prBranch}}</code>, <code>{{prBase}}</code>,
+          <code>{{prUrl}}</code>, <code>{{repo}}</code> and a
+          <code>{{range}}</code> covering just that PR. With commenting on, the
+          bridge posts the review and a <code>review-clean</code> /
+          <code>review-concerns</code> / <code>review-blocked</code> label when
+          the session finishes. A test schedule never posts.</div>
       </div>
       <!-- Only shown by a development bridge; see markInstance(). -->
       <div class="field" id="new-test-row" hidden>

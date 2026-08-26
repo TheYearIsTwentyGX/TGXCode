@@ -263,7 +263,8 @@ class Runner extends EventEmitter {
         this.activity = null;          // human-readable "what is it doing right now"
         this.lastError = null;
         this.lastResult = null;        // {costUsd, durationMs, numTurns, isError}
-        this.lastResultText = null;    // the turn's final text, capped; never broadcast
+        this.lastResultText = null;    // the turn's final text, tail-capped; never broadcast
+        this.lastResultBody = null;    // the same text from the front; never broadcast
         this.lastUsedAt = Date.now();
         // Messages waiting their turn: {id, text, at}. Held here rather than
         // written straight through, so they stay visible and cancellable — see
@@ -1119,6 +1120,23 @@ class Runner extends EventEmitter {
                 // seconds ago. Capped, since nothing reads more than the last few
                 // lines of it.
                 this.lastResultText = detail.slice(-4000);
+                // The same message from the *front*, for a scheduled review the
+                // bridge is going to post to GitHub.
+                //
+                // Two fields rather than one widened one, because the two readers
+                // want opposite ends of the same string. `verdictOf` uses `exec`
+                // and so takes the *first* match, and the tail slice above is what
+                // makes that first match be the real trailing `VERDICT:` line — on
+                // a 60KB body it would instead find whichever earlier paragraph
+                // happens to mention a verdict. Meanwhile a comment that begins
+                // mid-sentence, which is what posting the tail would produce, is
+                // worse than no comment.
+                //
+                // 60KB against GitHub's 65536-character comment limit, leaving
+                // room for the wrapper the bridge puts around it. Never broadcast,
+                // for `lastResultText`'s reason; four live runners at 60KB is
+                // nothing.
+                this.lastResultBody = detail.slice(0, 60_000);
                 this.lastResult = {
                     isError: failed,
                     detail: failed ? detail.slice(0, 300) : null,
