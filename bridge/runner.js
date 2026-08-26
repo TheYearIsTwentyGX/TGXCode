@@ -1506,11 +1506,15 @@ class RunnerPool extends EventEmitter {
     }
 
     /** Create a brand-new session and deliver its first prompt. */
-    create({ cwd, model, permissionMode, prompt }) {
+    create({ cwd, model, permissionMode, prompt, attachments = [] }) {
         const dir = resolveWorkdir(cwd);
         const sessionId = randomUUID();
         const r = this.ensure(sessionId, { cwd: dir, model, permissionMode, isNew: true });
-        r.send(prompt);
+        // The first message takes files like any other. `send` has always accepted
+        // them and `userContent` has always known what to do with them; this was the
+        // one caller that dropped them on the floor, so a session could not be
+        // started with the screenshot that was the reason for starting it.
+        r.send(prompt, attachments);
         return { sessionId, status: r.status() };
     }
 

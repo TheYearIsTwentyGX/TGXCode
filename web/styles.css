@@ -3146,7 +3146,11 @@ body.term-resizing { user-select: none; cursor: row-resize; }
        what there is — so this is the window onto the list rather than the whole
        of it. Tall enough that a dozen are in view and paging feels like paging,
        short enough to leave the turn you are replying to on screen. */
-    max-height: 400px;
+    /* A token, because a floating menu is told at draw time how much room there
+       actually is between its box and the edge of the window. The fallback is
+       what the anchored one has always used — get it wrong and the live menu
+       grows without limit up the transcript. */
+    max-height: var(--menu-max, 400px);
     overflow-y: auto;
     /* The keys move a highlight the scrollbar has to follow, so the jumps are
        driven by scrollIntoView and should not be animated on top of that. */
@@ -3203,8 +3207,12 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 
 /* A session is found by its title and sent to by its name, so the row leads
    with the title in the reading face and follows with the name in the mono one
-   — which is also the shape of what gets inserted. */
-#mention-menu .picker-row .name {
+   — which is also the shape of what gets inserted.
+
+   By class rather than by the id this used to hang off: there are two mention
+   menus now, and rows that look the same in one composer and not the other is
+   the kind of difference nobody reports and everybody notices. */
+.slash-menu.mention .picker-row .name {
     font-family: var(--sans);
     font-size: 13px;
     flex: 0 1 auto;
@@ -3213,11 +3221,51 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     white-space: nowrap;
     text-overflow: ellipsis;
 }
-#mention-menu .picker-row .desc {
+.slash-menu.mention .picker-row .desc {
     font-family: var(--mono);
     font-size: 11.5px;
     flex: none;
 }
+
+/* ── a popover that cannot be clipped ─────────────────────────────────────
+   The anchored menu above hangs off `.input-row`, which works because the
+   composer sits in open page. Inside the new-session dialog it cannot: `.modal`
+   is `overflow: hidden` and `.modal-body` scrolls, so an absolutely positioned
+   popover is cut by both — and the box it belongs to is the last field in the
+   dialog, so "cut" means "mostly gone".
+
+   Fixed leaves every ancestor's overflow out of it. The cost is that the anchor
+   moves — the textarea grows as you type, and the modal body scrolls — so
+   `left`, `width` and one of `top`/`bottom` are written from script on every
+   redraw. Same idea and the same z-index as `.turn-pop`. */
+.slash-menu.floating {
+    position: fixed;
+    left: auto;
+    right: auto;
+    bottom: auto;
+    transform-origin: top left;
+}
+/* Opening upward when there is more room above. The transform-origin is what
+   makes the entry animation grow from the edge nearest the box. */
+.slash-menu.floating.up { transform-origin: bottom left; }
+
+/* Nothing but a positioning context and a hit-test target for the
+   click-outside rule; the popovers inside it are `position: fixed`. */
+.composer-field { position: relative; }
+/* The strip sits above the box, so its gap belongs underneath it. */
+.composer-field .attach { margin-bottom: 8px; }
+/* The paperclip row under the box. Wraps rather than squeezing the note, which is
+   the half that can be truncated without losing the affordance. */
+.compose-foot {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 8px;
+}
+.compose-foot .note { margin-top: 0; flex: 1 1 12ch; }
+/* Same treatment the live composer gets, so a drop reads as a drop in both. */
+.composer-field.drop-target { outline: 2px dashed var(--blue); outline-offset: 4px; }
 
 @media (prefers-reduced-motion: reduce) { .slash-menu { animation: none; } }
 

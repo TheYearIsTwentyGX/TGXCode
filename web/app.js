@@ -223,11 +223,6 @@ const state = {
     busyTimer: null,        // ticks the elapsed-time readout while a turn runs
     queue: [],              // the current session's waiting messages, from the bridge
     queueDrag: null,        // id of the chip being dragged
-    // Files staged for the next message. Each is already on disk in the session's
-    // attached_assets/ by the time it reaches `ready` — see the attachments section
-    // below — so this holds metadata and a local preview URL, never file bytes.
-    attach: [],
-    attachSeq: 0,
     queueOpen: new Set(),   // ids of chips expanded to their full text
     // Slash commands the composer can complete, per working directory — the
     // bridge keys them that way because that is what decides them. Held here so
@@ -375,7 +370,9 @@ const dom = {};
 for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-sub',
     'channels', 'scroll', 'log', 'status-line', 'status-text', 'btn-stop', 'input',
     'btn-send', 'btn-lgtm', 'btn-attach', 'attach', 'attach-input', 'composer',
-    'slash-menu', 'mention-menu', 'queue', 'queue-list', 'queue-count', 'queue-clear',
+    'slash-menu', 'mention-menu', 'new-slash-menu', 'new-mention-menu',
+    'new-attach', 'new-attach-input', 'new-attach-btn', 'new-attach-row',
+    'queue', 'queue-list', 'queue-count', 'queue-clear',
     'model', 'perm', 'btn-new', 'btn-new-menu', 'new-menu', 'db-status', 'db-label', 'toasts',
     'btn-bell', 'bell-menu', 'opt-desktop', 'opt-sound', 'bell-note', 'bell-try',
     'btn-pin', 'btn-changes', 'btn-folder', 'btn-term', 'btn-archive', 'btn-delete',
@@ -571,7 +568,7 @@ function restoreToComposer(text, files) {
         dom.input.setSelectionRange(dom.input.value.length, dom.input.value.length);
         if (state.current) saveDraft(state.current.sessionId, dom.input.value);
     }
-    if (files && files.length) adoptAttachments(files);
+    if (files && files.length) adoptAttachments(live, files);
 }
 
 // ── rail ─────────────────────────────────────────────────────────────────
@@ -1224,8 +1221,7 @@ async function openSession(id, { quiet = false, keepDash = false } = {}) {
     if (state.current) saveDraft(state.current.sessionId, dom.input.value);
     // The menu belongs to the directory being left, and the draft arriving in
     // the box is not something anybody typed.
-    closeSlashMenu();
-    closeMentionMenu();
+    closeMenus(live);
 
     // Switching should feel like switching, not like waiting: a long transcript
     // is megabytes and the fetch is most of the delay. The rail summary is the
@@ -1381,9 +1377,9 @@ function beginOpen(summary, { keepDash = false } = {}) {
     // The files staged against this session, from the same place. Cleared without
     // saving first, so switching away does not write the outgoing session's chips over
     // the incoming one's.
-    clearAttach({ save: false });
-    state.attach = loadAttach(summary.sessionId);
-    renderAttach();
+    clearAttach(live, { save: false });
+    live.attach = loadAttach(summary.sessionId);
+    renderAttach(live);
     autoGrow();
     dom.input.focus();
 
@@ -7686,7 +7682,7 @@ function connect() {
     es.addEventListener('slash-commands', (e) => {
         const d = JSON.parse(e.data);
         state.slashCommands.delete(d.cwd);
-        if (slashMenuOpen()) updateSlashMenu();
+        for (const c of composers) if (menuOpen(c.slash)) updateSlashMenu(c);
     });
 
     // A message arrived from another session — possibly at the conversation on
@@ -7702,7 +7698,7 @@ function connect() {
         // card that has just drawn itself off the transcript wants its name.
         state.peers.at = 0;
         warmPeers();
-        if (mentionMenuOpen()) updateMentionMenu();
+        for (const c of composers) if (menuOpen(c.mention)) updateMentionMenu(c);
     });
 
     // A suggested follow-up was started or waved away, here or in another
@@ -9229,14 +9225,28 @@ async function refreshQueue() {
 }
 
 // ── attachments ──────────────────────────────────────────────────────────
-// Files pasted or dropped onto the composer.
+// Files pasted or dropped onto a composer.
 //
-// Each one is uploaded the moment it arrives, before the message is sent. That is
-// what makes the rest of this simple: the chip shows the name the file really has on
-// disk, a staged file survives a reload because only its path has to be remembered,
-// and the send stays the same small JSON POST it always was — a list of paths, not a
-// payload. The bridge writes them into attached_assets/ at the root of the session's
-// checkout; see bridge/attachments.js for why there.
+// Under a live conversation each one is uploaded the moment it arrives, before the
+// message is sent. That is what makes the rest of this simple: the chip shows the name
+// the file really has on disk, a staged file survives a reload because only its path
+// has to be remembered, and the send stays the same small JSON POST it always was — a
+// list of paths, not a payload. The bridge writes them into attached_assets/ at the
+// root of the session's checkout; see bridge/attachments.js for why there.
+//
+// **The Start-a-session dialog cannot do that, and holds its files instead.** Where a
+// file lands is decided by the working directory, and that box is still editable after
+// you have pasted — so uploading on arrival would put the screenshot in whichever
+// project happened to be selected at the time, and leave it there when you browsed
+// somewhere else and pressed Start. Held chips are committed by startNew, once the
+// directory has stopped moving.
+//
+// Three things follow from holding them, and they are the price of it. A held chip
+// shows the name you gave rather than the name on disk, because a collision has not
+// renamed it yet. It does not survive a reload, since the bytes are in this page — and
+// nothing is lost, because a reload closes the dialog anyway. And Start becomes two
+// phases, which is why it refuses to start at all if an upload fails: a first message
+// naming a file that was never written is worse than not starting.
 
 // Matches the bridge, which is the side that enforces them. Checked here so that
 // dropping a video says what the limit is instead of uploading 200MB to be refused.
@@ -9283,13 +9293,17 @@ function dragHasFiles(dt) {
  * wire together, and it makes the per-chip failure story true: four succeed and the
  * fifth goes red, instead of a batch that half-worked.
  */
-async function attachFiles(list) {
-    if (!state.current) return;
-    const sessionId = state.current.sessionId;
+async function attachFiles(c, list) {
+    if (!c.ctx()) {
+        // The dialog can be in this state — no directory chosen — and a file that
+        // arrives now has nowhere to be described relative to.
+        if (c.notReady) toast(c.notReady, 'warn');
+        return;
+    }
     const files = Array.from(list || []).filter(f => f && f.size !== undefined);
     if (!files.length) return;
 
-    const room = MAX_ATTACH_FILES - state.attach.length;
+    const room = MAX_ATTACH_FILES - c.attach.length;
     if (room <= 0) {
         toast(`${MAX_ATTACH_FILES} files is the limit for one message.`, 'warn');
         return;
@@ -9312,7 +9326,7 @@ async function attachFiles(list) {
         }
 
         const entry = {
-            key: `a${++state.attachSeq}`,
+            key: `a${++c.attachSeq}`,
             name: attachName(file),
             bytes: file.size,
             mediaType: file.type || 'application/octet-stream',
@@ -9320,24 +9334,41 @@ async function attachFiles(list) {
             // Revoked on removal, on send and on leaving the session.
             previewUrl: ATTACH_IMAGE_TYPES.has(file.type) ? URL.createObjectURL(file) : null,
             path: null, relPath: null,
-            status: 'uploading',
+            // `held` is the deferred composer's resting state: on disk nowhere, and
+            // waiting for a directory to stop moving.
+            status: c.uploadMode === 'deferred' ? 'held' : 'uploading',
             error: null,
             file,
         };
-        state.attach.push(entry);
-        renderAttach();
-        await uploadAttachment(sessionId, entry);
+        c.attach.push(entry);
+        renderAttach(c);
+        if (c.uploadMode !== 'deferred') await uploadAttachment(c, entry);
     }
 }
 
-async function uploadAttachment(sessionId, entry) {
+/**
+ * Where one file goes: this composer's session if it has one, its directory if not.
+ *
+ * The two routes are the same upload — the session in the path was only ever a way of
+ * naming a working directory. See docs/api.md on POST /api/attachments.
+ */
+function attachUrl(c, name) {
+    const at = c.ctx();
+    if (!at) return null;
+    const n = `name=${encodeURIComponent(name)}`;
+    return at.sessionId
+        ? `/api/sessions/${at.sessionId}/attachments?${n}`
+        : `/api/attachments?cwd=${encodeURIComponent(at.cwd)}&${n}`;
+}
+
+async function uploadAttachment(c, entry) {
+    const url = attachUrl(c, entry.name);
+    if (!url || !entry.file) return;
     entry.status = 'uploading';
     entry.error = null;
-    renderAttach();
+    renderAttach(c);
     try {
-        const r = await postFile(
-            `/api/sessions/${sessionId}/attachments?name=${encodeURIComponent(entry.name)}`,
-            entry.file);
+        const r = await postFile(url, entry.file);
         // The name on disk wins. A collision made it `shot-2.png`, and a chip still
         // saying `shot.png` would name a file the message does not attach.
         entry.name = r.name;
@@ -9349,21 +9380,48 @@ async function uploadAttachment(sessionId, entry) {
         // Nothing needs the File once the bytes are on disk, and holding it keeps a
         // blob alive for as long as the chip does.
         entry.file = null;
-        saveAttach(sessionId, state.attach);
+        saveAttachFor(c);
     } catch (err) {
         entry.status = 'failed';
         entry.error = err.message;
     }
-    renderAttach();
+    renderAttach(c);
+}
+
+/**
+ * Put every held file on disk, and answer with what a create call should carry —
+ * or null, meaning do not start.
+ *
+ * Refusing on the first failure is the whole point. The alternative is a session
+ * whose first message names a file that was never written, which reads to the agent
+ * as a missing file and to the person as the feature being broken. The chip keeps its
+ * File, so the Retry button on it still works.
+ */
+async function commitAttachments(c) {
+    for (const a of c.attach) {
+        if (a.status === 'ready') continue;
+        await uploadAttachment(c, a);
+        if (a.status !== 'ready') {
+            toast(`Could not attach ${a.name}: ${a.error || 'upload failed'}`, 'error');
+            return null;
+        }
+    }
+    return readyAttachments(c);
+}
+
+/** Only a composer with somewhere to persist to — see the section header. */
+function saveAttachFor(c) {
+    const id = c.persistKey && c.persistKey();
+    if (id) saveAttach(id, c.attach);
 }
 
 /** Chips for files the bridge already knows about — a restored draft, or an edit. */
-function adoptAttachments(files) {
+function adoptAttachments(c, files) {
     for (const f of files || []) {
-        if (state.attach.length >= MAX_ATTACH_FILES) break;
-        if (state.attach.some(a => a.path && a.path === f.path)) continue;
-        state.attach.push({
-            key: `a${++state.attachSeq}`,
+        if (c.attach.length >= MAX_ATTACH_FILES) break;
+        if (c.attach.some(a => a.path && a.path === f.path)) continue;
+        c.attach.push({
+            key: `a${++c.attachSeq}`,
             name: f.name || String(f.relPath || '').split('/').pop(),
             bytes: f.bytes || 0,
             mediaType: f.mediaType || 'application/octet-stream',
@@ -9377,21 +9435,22 @@ function adoptAttachments(files) {
             file: null,
         });
     }
-    renderAttach();
-    if (state.current) saveAttach(state.current.sessionId, state.attach);
+    renderAttach(c);
+    saveAttachFor(c);
 }
 
-function removeAttach(key) {
-    const i = state.attach.findIndex(a => a.key === key);
+function removeAttach(c, key) {
+    const i = c.attach.findIndex(a => a.key === key);
     if (i < 0) return;
-    const [gone] = state.attach.splice(i, 1);
+    const [gone] = c.attach.splice(i, 1);
     if (gone.previewUrl) URL.revokeObjectURL(gone.previewUrl);
     // Deliberately not deleted from disk. A delete route is a second thing that
     // writes to a checkout and a second refusal to reason about, and an unsent file
     // in attached_assets/ is a harmless untracked file you can see — where a delete
-    // that resolves the wrong path is not harmless.
-    renderAttach();
-    if (state.current) saveAttach(state.current.sessionId, state.attach);
+    // that resolves the wrong path is not harmless. A held file was never written at
+    // all, so there is nothing to say about it either way.
+    renderAttach(c);
+    saveAttachFor(c);
 }
 
 /**
@@ -9403,11 +9462,11 @@ function removeAttach(key) {
  * appeared. So the send hands them to the pending row, which revokes them when it
  * goes — and every path that does not draw one revokes them itself.
  */
-function clearAttach({ save = true, revoke = true } = {}) {
-    if (revoke) revokePreviews(state.attach.map(a => a.previewUrl));
-    state.attach = [];
-    renderAttach();
-    if (save && state.current) saveAttach(state.current.sessionId, []);
+function clearAttach(c, { save = true, revoke = true } = {}) {
+    if (revoke) revokePreviews(c.attach.map(a => a.previewUrl));
+    c.attach = [];
+    renderAttach(c);
+    if (save) saveAttachFor(c);
 }
 
 function revokePreviews(urls) {
@@ -9415,7 +9474,7 @@ function revokePreviews(urls) {
 }
 
 /** What a send may carry: the ones that made it to disk. */
-const readyAttachments = () => state.attach
+const readyAttachments = (c) => c.attach
     .filter(a => a.status === 'ready' && a.path)
     .map(a => ({ path: a.path, relPath: a.relPath, mediaType: a.mediaType, name: a.name }));
 
@@ -9425,10 +9484,10 @@ function attachExt(name) {
     return m ? m[1].toLowerCase() : 'file';
 }
 
-function renderAttach() {
-    const list = state.attach;
-    dom.attach.hidden = !list.length;
-    dom.attach.replaceChildren(...list.map((a) => {
+function renderAttach(c) {
+    const list = c.attach;
+    c.attachNode.hidden = !list.length;
+    c.attachNode.replaceChildren(...list.map((a) => {
         const bits = [];
         if (a.previewUrl) {
             bits.push(el('img', { class: 'attach-thumb', src: a.previewUrl, alt: '' }));
@@ -9441,15 +9500,12 @@ function renderAttach() {
         if (a.status === 'failed') {
             bits.push(el('button', {
                 class: 'attach-act', type: 'button', title: a.error || 'Upload failed',
-                onclick: () => {
-                    if (!a.file || !state.current) return;
-                    uploadAttachment(state.current.sessionId, a);
-                },
+                onclick: () => uploadAttachment(c, a),
             }, 'Retry'));
         }
         bits.push(el('button', {
             class: 'attach-act danger', type: 'button', 'aria-label': `Remove ${a.name}`,
-            title: 'Remove', onclick: () => removeAttach(a.key),
+            title: 'Remove', onclick: () => removeAttach(c, a.key),
         }, '×'));
 
         return el('div', {
@@ -9457,9 +9513,9 @@ function renderAttach() {
             title: a.status === 'failed' ? a.error : (a.relPath || a.name),
         }, ...bits);
     }));
-    // An attachment on its own is a message, so the buttons have to follow the strip
-    // and not only the box.
-    enableSend(Boolean(state.current));
+    // An attachment on its own is a message, so whatever sends it has to follow the
+    // strip and not only the box.
+    if (c.afterRender) c.afterRender();
 }
 
 /**
@@ -9473,7 +9529,7 @@ function renderAttach() {
  * copied out of an editor brings `text/plain` and no files at all. So: files, and
  * either nothing textual or an actual image.
  */
-function onComposerPaste(e) {
+function onComposerPaste(c, e) {
     const dt = e.clipboardData;
     if (!dt) return;
     const items = Array.from(dt.items || []);
@@ -9485,7 +9541,7 @@ function onComposerPaste(e) {
     if (hasText && !anyImage) return;
 
     e.preventDefault();
-    attachFiles(files.length ? files
+    attachFiles(c, files.length ? files
         : items.filter(i => i.kind === 'file').map(i => i.getAsFile()).filter(Boolean));
 }
 
@@ -9497,27 +9553,51 @@ function onComposerPaste(e) {
  * transfer, so `dragHasFiles` is false, this returns early, and #queue-list's own
  * dragover still sees the event exactly as it did before.
  */
-function onComposerDragOver(e) {
+function onComposerDragOver(c, e) {
     if (state.queueDrag) return;
     if (!dragHasFiles(e.dataTransfer)) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'copy';
-    dom.composer.classList.add('drop-target');
+    c.dropZone.classList.add('drop-target');
 }
 
-function onComposerDragLeave(e) {
+function onComposerDragLeave(c, e) {
     // Only when the pointer has actually left the composer. Without the check the
     // highlight flickers off every time the drag crosses a child element.
-    if (e.relatedTarget && dom.composer.contains(e.relatedTarget)) return;
-    dom.composer.classList.remove('drop-target');
+    if (e.relatedTarget && c.dropZone.contains(e.relatedTarget)) return;
+    c.dropZone.classList.remove('drop-target');
 }
 
-function onComposerDrop(e) {
+function onComposerDrop(c, e) {
     if (state.queueDrag) return;
     if (!dragHasFiles(e.dataTransfer)) return;
     e.preventDefault();
-    dom.composer.classList.remove('drop-target');
-    attachFiles(e.dataTransfer.files);
+    c.dropZone.classList.remove('drop-target');
+    attachFiles(c, e.dataTransfer.files);
+}
+
+/**
+ * Everything a composer needs to take files: the strip, the picker, the drop zone.
+ *
+ * Separate from wireComposer because not every composer has one — a composer with no
+ * `attachNode` simply never gets these listeners, and nothing else has to know.
+ */
+function wireAttachments(c) {
+    if (!c.attachNode) return;
+    c.input.addEventListener('paste', (e) => onComposerPaste(c, e));
+    c.dropZone.addEventListener('dragover', (e) => onComposerDragOver(c, e));
+    c.dropZone.addEventListener('dragleave', (e) => onComposerDragLeave(c, e));
+    c.dropZone.addEventListener('drop', (e) => onComposerDrop(c, e));
+    if (c.attachBtn) {
+        c.attachBtn.addEventListener('click', () => c.attachInput.click());
+    }
+    if (c.attachInput) {
+        c.attachInput.addEventListener('change', () => {
+            attachFiles(c, c.attachInput.files);
+            // So picking the same file twice in a row fires `change` the second time.
+            c.attachInput.value = '';
+        });
+    }
 }
 
 /**
@@ -9665,7 +9745,7 @@ async function sendMessage({ fork = false, text: override = null, canned = false
     // Attachments only ride on a message that came out of the box. A canned send — the
     // LGTM button, a follow-up card — must not walk off with a screenshot you staged
     // for something else, by the same argument that leaves the half-typed text alone.
-    const files = override == null ? readyAttachments() : [];
+    const files = override == null ? readyAttachments(live) : [];
     // A screenshot with nothing typed under it is a message: "look at this" is the
     // whole content of it.
     if ((!text && !files.length) || !state.current) return;
@@ -9688,14 +9768,14 @@ async function sendMessage({ fork = false, text: override = null, canned = false
     // where it was, rather than dropping it on the way past.
     // Taken before the strip is emptied, because emptying it is what would revoke them.
     const previews = files.length
-        ? state.attach.filter(a => a.previewUrl).map(a => a.previewUrl)
+        ? live.attach.filter(a => a.previewUrl).map(a => a.previewUrl)
         : [];
 
     if (override == null) {
         dom.input.value = '';
         autoGrow();
         saveDraft(sessionId, '');
-        clearAttach({ revoke: false });
+        clearAttach(live, { revoke: false });
     }
 
     // Drawn in the same frame the box empties, so the message moves from one to the
@@ -10229,6 +10309,11 @@ async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     state.drafts.editing = draft ? draft.id : null;
     state.sched.editing = sched ? sched.id : null;
 
+    // Ctrl+N over a live composer with `/rev` half-typed in it is reachable, and
+    // a popover anchored to a box that is now behind a modal is nothing but
+    // debris on screen.
+    closeMenus(live);
+
     dom.newScrim.hidden = false;
     dom.newPrompt.value = src ? src.prompt : prompt;
     growPrompt();
@@ -10277,6 +10362,13 @@ async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     dom.newSchedSave.hidden = !schedMode;
     dom.newSchedSave.textContent = sched ? 'Save changes' : 'Save schedule';
 
+    // Only where the dialog is about to start a session. A draft and a schedule are
+    // records of a create call, and neither store carries attachments — see
+    // docs/api.md — so offering the control there would be offering something that
+    // silently does not survive being saved.
+    dom.newAttachRow.hidden = schedMode || Boolean(draft);
+    clearAttach(newC);
+
     dom.newTitle.textContent = schedMode
         ? (sched ? 'Edit schedule' : 'Schedule a session')
         : (draft ? 'Edit draft' : 'Start a session');
@@ -10310,6 +10402,14 @@ async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
 
 function closeNew() {
     dom.newScrim.hidden = true;
+    // Hiding the scrim does not blur the box inside it, so the blur-to-close
+    // never fires and a popover would still be up — fixed to the viewport, over
+    // nothing — the next time the dialog opened.
+    closeMenus(newC);
+    // Held files are bytes in this page and were never written anywhere, so closing
+    // the dialog really does discard them — which is the whole benefit of holding
+    // them rather than uploading on arrival.
+    clearAttach(newC);
     // So a Save that somehow ran after this could not write to a draft the dialog
     // is no longer showing. openNew sets it on the way in either way.
     state.drafts.editing = null;
@@ -10727,7 +10827,9 @@ function newDialogValues() {
     const cwd = dom.newCwd.value.trim();
     const prompt = dom.newPrompt.value.trim();
     if (!cwd) { toast('Pick a working directory first.', 'warn'); return null; }
-    if (!prompt) {
+    // A screenshot with nothing typed is a message — "look at this" is the whole
+    // content of it — and the create route takes it that way too.
+    if (!prompt && !newC.attach.length) {
         toast('Write a first message so the session has something to do.', 'warn');
         return null;
     }
@@ -10979,6 +11081,22 @@ function whenBuild() {
 }
 
 /**
+ * What the dialog's footer may do while files are held.
+ *
+ * Save as draft is disabled rather than quietly dropping them. Both buttons are on
+ * screen at once in start mode, a draft cannot carry a file, and a Save that
+ * discarded a screenshot without saying so is the one outcome here worth refusing
+ * outright. Start is unaffected: it is the button that can honour them.
+ */
+function paintNewAttach() {
+    const held = newC.attach.length;
+    dom.newSave.disabled = held > 0;
+    dom.newSave.title = held
+        ? 'A draft cannot carry attachments. Start the session, or remove the files.'
+        : '';
+}
+
+/**
  * Show only the fields the chosen gate needs.
  *
  * A branch gate wants a ref and a PR gate does not — it watches whatever the
@@ -11152,6 +11270,14 @@ async function startNew() {
     dom.newGo.disabled = true;
     dom.newGo.textContent = 'Starting';
     try {
+        // Now, and not when they were pasted: this is the first moment the working
+        // directory has stopped being editable, and it is what decides where they go.
+        // A failure here stops the whole thing — see commitAttachments.
+        if (newC.attach.length) {
+            const files = await commitAttachments(newC);
+            if (!files) return;
+            body.attachments = files;
+        }
         const r = await post('/api/sessions', body);
         closeNew();
         toast('Session started.', 'ok');
@@ -11219,17 +11345,8 @@ for (const log of [dom.log, dom.agentLog]) {
 
 dom.btnSend.addEventListener('click', () => sendMessage());
 
-// Paste, drop, and the paperclip all end up in attachFiles.
-dom.input.addEventListener('paste', onComposerPaste);
-dom.composer.addEventListener('dragover', onComposerDragOver);
-dom.composer.addEventListener('dragleave', onComposerDragLeave);
-dom.composer.addEventListener('drop', onComposerDrop);
-dom.btnAttach.addEventListener('click', () => dom.attachInput.click());
-dom.attachInput.addEventListener('change', () => {
-    attachFiles(dom.attachInput.files);
-    // Cleared so that picking the same file twice in a row fires `change` both times.
-    dom.attachInput.value = '';
-});
+// Paste, drop and the paperclip are wired where the composers are built, beside
+// wireComposer — `live` is declared down there and cannot be touched from here.
 // A file dropped anywhere else in the window would otherwise navigate away to it,
 // which loses the conversation and every draft on screen. Gated exactly like the
 // composer's own handlers, so a queue chip being dragged is still none of our
@@ -11421,28 +11538,108 @@ dom.input.addEventListener('keydown', (e) => {
 // be promising something that will not happen.
 const SLASH_RE = /^\/[A-Za-z0-9_:-]*$/;
 
-// Two popovers now hang off the composer — `/` commands and `@` mentions — and
-// they share everything except what opens them and what accepting one inserts.
-// So the selection, the paging and the keyboard map below take a menu rather
-// than reaching for one: `node` is the element it draws into, `id` prefixes its
-// rows' DOM ids so aria-activedescendant can name one unambiguously.
-const slashMenu = { rows: [], index: 0, seq: 0, node: dom.slashMenu, id: 'slash' };
-const mentionMenu = { rows: [], index: 0, seq: 0, node: dom.mentionMenu, id: 'mention' };
+// Two popovers hang off each composer — `/` commands and `@` mentions — and they
+// share everything except what opens them and what accepting one inserts. So the
+// selection, the paging and the keyboard map below take a menu rather than
+// reaching for one: `node` is the element it draws into, `id` prefixes its rows'
+// DOM ids so aria-activedescendant can name one unambiguously, and `row` is what
+// one of its rows looks like — which is a thing a menu knows about itself.
+//
+// **There are two composers now.** The one under a live conversation, and the
+// first-message box in the Start-a-session dialog. What differs between them is
+// *data* — where the working directory comes from, what else on screen has to be
+// shut on the way up, whether Home and End belong to the menu — so this is a
+// descriptor and deliberately not a closure over the functions below.
+//
+// A closure was the obvious shape and it is worse here. It would re-indent five
+// hundred lines of comment-dense code into a diff where nothing is unchanged, in
+// a file whose reviewable substance *is* those comments; it would make two copies
+// of every function object, which quietly undoes the "one implementation" these
+// comments keep claiming; and the callers outside this section would have to say
+// `live.closeMenus()`, a factory-of-methods pattern that appears nowhere else in
+// this file. So: data here, and every function below takes the composer it is
+// acting on.
+function makeComposer({ input, slashNode, mentionNode, id, ctx, container,
+    closeOthers = () => {}, notReady = null, homeEnd = true, float = false,
+    onInput = null,
+    // Attachments. A composer with no `attachNode` takes no files at all, and
+    // wireAttachments simply skips it — nothing else has to know.
+    attachNode = null, attachInput = null, attachBtn = null, dropZone = null,
+    uploadMode = 'eager', persistKey = null, afterRender = null }) {
+    const c = { input, container, ctx, closeOthers, notReady, homeEnd, onInput,
+        attachNode, attachInput, attachBtn, dropZone, uploadMode, persistKey,
+        afterRender,
+        // Staged files, and the counter their keys come from. Per composer, because
+        // a screenshot pasted into one box has nothing to do with the other.
+        attach: [], attachSeq: 0 };
+    c.slash = { rows: [], index: 0, seq: 0, node: slashNode,
+        id: `${id}-slash`, row: slashRow, float, c };
+    c.mention = { rows: [], index: 0, seq: 0, node: mentionNode,
+        id: `${id}-mention`, row: mentionRow, float, c };
+    return c;
+}
 
 const menuOpen = (m) => !m.node.hidden;
-const slashMenuOpen = () => menuOpen(slashMenu);
-const mentionMenuOpen = () => menuOpen(mentionMenu);
 
-/** Whichever popover is up, or null. Only ever one — each closes the other. */
-function openMenu() {
-    if (slashMenuOpen()) return slashMenu;
-    if (mentionMenuOpen()) return mentionMenu;
+/** The other popover on the same composer. */
+const otherMenu = (m) => (m === m.c.slash ? m.c.mention : m.c.slash);
+
+/**
+ * Whichever of this composer's popovers is up, or null.
+ *
+ * Only ever one of the two — each closes the other on the way open. Per composer
+ * rather than global: two composers can each have a menu up, which is what the
+ * single `openMenu()` this replaces could not express.
+ */
+function openMenuOf(c) {
+    if (menuOpen(c.slash)) return c.slash;
+    if (menuOpen(c.mention)) return c.mention;
     return null;
 }
 
+// The composer under a live conversation. The dialog's is built beside the
+// dialog's own wiring, further down.
+const live = makeComposer({
+    input: dom.input,
+    slashNode: dom.slashMenu,
+    mentionNode: dom.mentionMenu,
+    id: 'live',
+    container: '.input-row',
+    // Addressed by session id, and the cwd rides along only as a cache key: the
+    // bridge is what resolves a session to a working directory, through a
+    // worktree that has since been landed and removed. A client cannot, having no
+    // way to ask whether a path still exists.
+    ctx: () => (state.current
+        ? { cwd: state.current.cwd, sessionId: state.current.sessionId }
+        : null),
+    // Both are main-window furniture that would otherwise sit over the popover.
+    // A composer inside a modal has neither, and passes nothing.
+    closeOthers: () => { showBell(false); showNewMenu(false); },
+
+    // Attachments. The strip is above the input row and the drop zone is the whole
+    // composer, so a file can be let go anywhere near the box rather than exactly on
+    // it. Uploaded on arrival, because a live composer already knows the checkout its
+    // files belong in.
+    attachNode: dom.attach,
+    attachInput: dom.attachInput,
+    attachBtn: dom.btnAttach,
+    dropZone: dom.composer,
+    uploadMode: 'eager',
+    // Which localStorage key its chips belong under, or null while no session is on
+    // screen. Only the eager composer has one: a held file is bytes in this page, and
+    // there is no path to write down.
+    persistKey: () => state.current && state.current.sessionId,
+    afterRender: () => enableSend(Boolean(state.current)),
+});
+
+// Filled by wireComposer below, live first. The keyboard map and the
+// click-outside rule both walk this, so a composer that is not in it is a box
+// whose popovers no key and no click can reach.
+const composers = [];
+
 /** The typed fragment after the slash, or null when this is not a command. */
-function slashFragment() {
-    const v = dom.input.value;
+function slashFragment(c) {
+    const v = c.input.value;
     return SLASH_RE.test(v) ? v.slice(1) : null;
 }
 
@@ -11450,14 +11647,22 @@ function slashFragment() {
  * Cached per working directory, because that is what decides the answer — every
  * session in a checkout shares a list, so one session's fetch warms the rest.
  */
-async function loadSlashCommands() {
-    const cur = state.current;
-    if (!cur) return [];
-    const key = cur.cwd || cur.sessionId;
+async function loadSlashCommands(c) {
+    const at = c.ctx();
+    if (!at) return [];
+    const key = at.cwd || at.sessionId;
     const hit = state.slashCommands.get(key);
     if (hit) return hit.commands;
 
-    const r = await get(`/api/slash-commands?session=${cur.sessionId}`);
+    // By session where there is one and by path where there is not. The bridge
+    // answers both, and says in its own comment that the second form exists for
+    // exactly this caller — a dialog that has not started a session yet knows
+    // only a path. Encoded because that path is typed by hand: a space, a `#` or
+    // an `&` in it would otherwise reach the bridge truncated.
+    const q = at.sessionId
+        ? `session=${encodeURIComponent(at.sessionId)}`
+        : `cwd=${encodeURIComponent(at.cwd)}`;
+    const r = await get(`/api/slash-commands?${q}`);
     const entry = { commands: r.commands || [], at: r.at, exact: r.exact };
     state.slashCommands.set(key, entry);
     // The bridge resolves a cwd that no longer exists to the project directory,
@@ -11506,82 +11711,191 @@ function matchSlashCommands(items, frag) {
     return pre.sort(bySlashName).concat(sub.sort(bySlashName));
 }
 
-function closeSlashMenu() {
-    if (dom.slashMenu.hidden) return;
-    dom.slashMenu.hidden = true;
-    dom.slashMenu.replaceChildren();
-    dom.input.setAttribute('aria-expanded', 'false');
-    dom.input.removeAttribute('aria-activedescendant');
-    slashMenu.rows = [];
-    slashMenu.index = 0;
+/**
+ * Hide one popover and forget what was highlighted in it.
+ *
+ * The combobox state is only given up when the *other* popover on the same
+ * composer is not the one using it. That clause arrived with the mention menu and
+ * belongs to both: `aria-expanded` describes the box, not the list. Closing the
+ * slash menu used to clear it unconditionally, which would have lied the moment
+ * both were somehow up — unreachable, and now unreachable by construction.
+ */
+function closeMenu(m) {
+    if (m.node.hidden) return;
+    m.node.hidden = true;
+    m.node.replaceChildren();
+    if (otherMenu(m).node.hidden) {
+        m.c.input.setAttribute('aria-expanded', 'false');
+        m.c.input.removeAttribute('aria-activedescendant');
+    }
+    m.rows = [];
+    m.index = 0;
 }
 
-/** Re-read the composer and show, filter or hide the menu to match. */
-async function updateSlashMenu() {
-    const frag = slashFragment();
-    if (frag === null || !state.current) return closeSlashMenu();
+/** Both of one composer's popovers — what a blur or a session switch wants. */
+const closeMenus = (c) => { closeMenu(c.slash); closeMenu(c.mention); };
 
-    const seq = ++slashMenu.seq;
-    const key = state.current.cwd || state.current.sessionId;
+/** Re-read the composer and show, filter or hide the menu to match. */
+async function updateSlashMenu(c) {
+    const frag = slashFragment(c);
+    if (frag === null) return closeMenu(c.slash);
+
+    // No working directory to ask about yet. Only the dialog can be in this
+    // state — a live composer with no session is not on screen — and it says so
+    // rather than showing nothing, because a `/` that quietly does nothing reads
+    // as a feature that is broken rather than as a field you have not filled in.
+    const at = c.ctx();
+    if (!at) {
+        if (!c.notReady) return closeMenu(c.slash);
+        return drawMenu(c.slash, null, c.notReady);
+    }
+
+    const seq = ++c.slash.seq;
+    const key = at.cwd || at.sessionId;
     let items = state.slashCommands.has(key) ? state.slashCommands.get(key).commands : null;
 
     if (!items) {
         // First `/` in this directory. Show the box rather than nothing, so a
         // slow bridge reads as loading instead of as no commands.
-        drawSlashMenu(null, 'Loading commands…');
+        drawMenu(c.slash, null, 'Loading commands…');
         try {
-            items = await loadSlashCommands();
+            items = await loadSlashCommands(c);
         } catch {
             // Not a toast: the person pressed a key, they did not ask for this.
-            if (seq === slashMenu.seq) drawSlashMenu(null, 'Could not load commands.');
+            if (seq === c.slash.seq) drawMenu(c.slash, null, 'Could not load commands.');
             return;
         }
         // Typed on, or moved away, while that was in flight.
-        if (seq !== slashMenu.seq) return;
-        if (slashFragment() === null) return closeSlashMenu();
+        if (seq !== c.slash.seq) return;
+        if (slashFragment(c) === null) return closeMenu(c.slash);
     }
 
-    const rows = matchSlashCommands(items, slashFragment() || '');
+    const rows = matchSlashCommands(items, slashFragment(c) || '');
     // Nothing matches, so there is nothing to choose: get out of the way
     // entirely rather than showing an empty box that also swallows Enter.
-    if (!rows.length) return closeSlashMenu();
+    if (!rows.length) return closeMenu(c.slash);
 
-    slashMenu.rows = rows;
-    slashMenu.index = 0;
-    drawSlashMenu(rows, null);
+    c.slash.rows = rows;
+    c.slash.index = 0;
+    drawMenu(c.slash, rows, null);
 }
 
-function drawSlashMenu(rows, note) {
+/** One command. */
+function slashRow(m, cmd, i) {
+    return el('button', {
+        class: 'picker-row', type: 'button', role: 'option',
+        id: `${m.id}-row-${i}`, tabindex: -1,
+        'aria-selected': String(i === m.index),
+        // Keeps the caret in the textarea, so clicking a row neither blurs
+        // the box nor fires the blur-to-close below.
+        onmousedown: (e) => e.preventDefault(),
+        onclick: () => acceptSlashCommand(m, i),
+    },
+    el('span', { class: 'name' }, `/${cmd.name}`),
+    cmd.description ? el('span', { class: 'desc' }, clip(cmd.description, 90)) : null,
+    cmd.argumentHint ? el('span', { class: 'hint' }, clip(cmd.argumentHint, 24)) : null,
+    );
+}
+
+/**
+ * Draw a popover: a list of rows, or a note in place of one.
+ *
+ * One function for both menus. They differed in the row builder — which now rides
+ * on the menu, where it belongs — and in the group headings, which the `r.group &&`
+ * below makes optional rather than a second copy of this whole loop.
+ */
+function drawMenu(m, rows, note) {
     // Two popovers on screen at once is nobody's intention. Only on the way
     // open: this redraws on every keystroke, and the others are already shut.
-    if (dom.slashMenu.hidden) { showBell(false); showNewMenu(false); closeMentionMenu(); }
+    if (m.node.hidden) { m.c.closeOthers(); closeMenu(otherMenu(m)); }
 
     // A note is a message, not a list. Clearing the rows behind it matters:
     // otherwise Enter during "Loading…" would accept whatever the *previous*
     // fragment had highlighted, which is not what is on screen.
-    if (note) { slashMenu.rows = []; slashMenu.index = 0; }
+    if (note) { m.rows = []; m.index = 0; }
 
-    dom.slashMenu.replaceChildren(...(note
-        ? [el('div', { class: 'menu-note' }, note)]
-        : rows.map((c, i) => el('button', {
-            class: 'picker-row', type: 'button', role: 'option',
-            id: `slash-row-${i}`, tabindex: -1,
-            'aria-selected': String(i === slashMenu.index),
-            // Keeps the caret in the textarea, so clicking a row neither blurs
-            // the box nor fires the blur-to-close below.
-            onmousedown: (e) => e.preventDefault(),
-            onclick: () => acceptSlashCommand(i),
-        },
-        el('span', { class: 'name' }, `/${c.name}`),
-        c.description ? el('span', { class: 'desc' }, clip(c.description, 90)) : null,
-        c.argumentHint ? el('span', { class: 'hint' }, clip(c.argumentHint, 24)) : null,
-        ))));
+    const kids = [];
+    let group = null;
+    (rows || []).forEach((r, i) => {
+        // A row with no group — every slash command — skips this entirely, which
+        // is what lets one loop serve both menus. Not a `.picker-row`,
+        // deliberately: the shared selection code counts those, so a heading that
+        // were one would be a row you could land on and press Enter at.
+        if (r.group && r.group !== group) {
+            group = r.group;
+            kids.push(el('div', { class: 'menu-group', role: 'presentation' }, group));
+        }
+        kids.push(m.row(m, r, i));
+    });
 
-    dom.slashMenu.hidden = false;
-    dom.input.setAttribute('aria-expanded', 'true');
-    if (rows && rows.length) paintSelection(slashMenu);
-    else dom.input.removeAttribute('aria-activedescendant');
+    m.node.replaceChildren(...(note ? [el('div', { class: 'menu-note' }, note)] : kids));
+    m.node.hidden = false;
+    // After it is on screen and before the highlight is painted: paintSelection
+    // scrolls a row into view, and it should be scrolling inside a box that has
+    // already been given its height.
+    if (m.float) positionMenu(m);
+    m.c.input.setAttribute('aria-expanded', 'true');
+    if (rows && rows.length) paintSelection(m);
+    else m.c.input.removeAttribute('aria-activedescendant');
 }
+
+/**
+ * Put a floating popover under the box it belongs to, or over it when there is
+ * more room that way.
+ *
+ * Fixed rather than absolute, and this is the whole reason the `float` flag
+ * exists: the dialog's box lives inside `.modal-body`, which scrolls, inside
+ * `.modal`, which is `overflow: hidden`. An absolutely positioned popover is
+ * clipped by both, and that field is the last one in the dialog — so it would be
+ * cut almost entirely. Fixed positioning leaves every ancestor's overflow out of
+ * it, at the price of having to be told where to go.
+ *
+ * Measured on every redraw because the anchor moves: the textarea is sized from
+ * its contents, so it grows under the popover as you type. Same show-then-place
+ * idiom as showTurnPop, and the same z-index.
+ *
+ * `--menu-max` is the room actually available rather than the flat 400px the
+ * anchored menu uses, so a short window gets a short menu instead of one running
+ * off the screen. The floor stops it collapsing to nothing when the box is almost
+ * at the bottom — better to overhang a little than to show two rows.
+ */
+function positionMenu(m) {
+    const r = m.c.input.getBoundingClientRect();
+    const gap = 6;
+    const below = window.innerHeight - r.bottom - gap * 2;
+    const above = r.top - gap * 2;
+    const up = below < 220 && above > below;
+
+    m.node.classList.toggle('up', up);
+    m.node.style.setProperty('--menu-max', `${Math.max(140, Math.min(400, up ? above : below))}px`);
+    m.node.style.left = `${r.left}px`;
+    m.node.style.width = `${r.width}px`;
+    if (up) {
+        m.node.style.top = 'auto';
+        m.node.style.bottom = `${window.innerHeight - r.top + gap}px`;
+    } else {
+        m.node.style.bottom = 'auto';
+        m.node.style.top = `${r.bottom + gap}px`;
+    }
+}
+
+/**
+ * Keep a floating popover attached to its box when the page moves under it.
+ *
+ * Reposition rather than close: the caret is still in the box and the list is
+ * still the answer, so a menu that vanished because the modal scrolled a pixel
+ * would be the wrong reading of what happened. Cheap — one rect read per open
+ * menu, and there is at most one.
+ */
+function repositionFloatingMenus() {
+    for (const c of composers) {
+        for (const m of [c.slash, c.mention]) {
+            if (m.float && !m.node.hidden) positionMenu(m);
+        }
+    }
+}
+
+window.addEventListener('resize', repositionFloatingMenus);
 
 /**
  * The highlight is a property of the list, never of focus — see below.
@@ -11594,7 +11908,7 @@ function paintSelection(menu) {
     rows.forEach((r, i) => r.setAttribute('aria-selected', String(i === menu.index)));
     const on = rows[menu.index];
     if (!on) return;
-    dom.input.setAttribute('aria-activedescendant', on.id);
+    menu.c.input.setAttribute('aria-activedescendant', on.id);
     on.scrollIntoView({ block: 'nearest' });
 }
 
@@ -11648,14 +11962,15 @@ function jumpSelection(menu, to) {
  * wired to the box, so every draft guarantee holds by construction instead of by
  * a second copy of the logic that can drift from the first.
  */
-function acceptSlashCommand(i) {
-    const c = slashMenu.rows[i == null ? slashMenu.index : i];
-    if (!c) return;
-    closeSlashMenu();
-    dom.input.value = `/${c.name} `;
-    dom.input.setSelectionRange(dom.input.value.length, dom.input.value.length);
-    dom.input.dispatchEvent(new Event('input'));
-    dom.input.focus();
+function acceptSlashCommand(m, i) {
+    const cmd = m.rows[i == null ? m.index : i];
+    if (!cmd) return;
+    const box = m.c.input;
+    closeMenu(m);
+    box.value = `/${cmd.name} `;
+    box.setSelectionRange(box.value.length, box.value.length);
+    box.dispatchEvent(new Event('input'));
+    box.focus();
 }
 
 /**
@@ -11665,20 +11980,41 @@ function acceptSlashCommand(i) {
  * order, so "register ours first" would work today and break silently the day
  * somebody moves a block in this file. Capturing on an ancestor provably runs
  * before any listener on the target, so stopping propagation here reliably keeps
- * Enter-to-send from also firing. The target check keeps this off the queue
- * chips, whose own Enter/Escape map is a few hundred lines up.
+ * Enter-to-send from also firing.
+ *
+ * **The target decides which composer this is about, and only then do we ask
+ * whether that composer has a popover open.** The other way round — one global
+ * "is any menu up" — stopped being answerable the moment there were two
+ * composers. It is also the check that keeps this off every other box with an
+ * Enter or Escape map of its own: the queue chips, #new-cwd, the New-folder name,
+ * the terminal.
  */
 document.addEventListener('keydown', (e) => {
-    const menu = openMenu();
-    if (!menu || e.target !== dom.input) return;
+    const c = composers.find(x => x.input === e.target);
+    if (!c) return;
+    const menu = openMenuOf(c);
+    if (!menu) return;
     if (e.isComposing || e.keyCode === 229) return;
+
+    // Above the rows check, deliberately. Escape is the one key that means
+    // something even when there is nothing to choose: a note is still something
+    // on screen, and something on screen is what Escape dismisses. Left below
+    // that check, an Escape during "Loading commands…" fell through to the
+    // central ladder — which over the Start-a-session dialog is closeNew(), and
+    // a first message you had written. Leaves the text exactly as typed.
+    if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        closeMenu(menu);
+        return;
+    }
+
     // Open but with nothing to choose — a note, or a list still loading. Every
-    // key belongs to the composer then; swallowing Enter here would lose a
+    // other key belongs to the composer then; swallowing Enter here would lose a
     // message to a box that had no answer for it.
     if (!menu.rows.length) return;
 
-    const accept = () => (menu === slashMenu ? acceptSlashCommand() : acceptMention());
-    const close = () => (menu === slashMenu ? closeSlashMenu() : closeMentionMenu());
+    const accept = () => (menu === c.slash ? acceptSlashCommand(menu) : acceptMention(menu));
 
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
@@ -11689,10 +12025,11 @@ document.addEventListener('keydown', (e) => {
         e.stopPropagation();
         const step = menuPageSize(menu);
         jumpSelection(menu, menu.index + (e.key === 'PageDown' ? step : -step));
-    } else if (e.key === 'Home' || e.key === 'End') {
+    } else if (c.homeEnd && (e.key === 'Home' || e.key === 'End')) {
         // Only worth taking while the menu is open, and only because the box it
         // sits on is one line: Home and End in a one-line composer move the
-        // caret somewhere it already effectively is.
+        // caret somewhere it already effectively is. A composer whose box is
+        // several lines tall keeps them for the caret — see `homeEnd`.
         e.preventDefault();
         e.stopPropagation();
         jumpSelection(menu, e.key === 'Home' ? 0 : menu.rows.length - 1);
@@ -11701,24 +12038,42 @@ document.addEventListener('keydown', (e) => {
         e.preventDefault();
         e.stopPropagation();
         accept();
-    } else if (e.key === 'Escape') {
-        // Leaves the text exactly as typed. Stopped so it closes the menu rather
-        // than whatever Escape means to the panel behind it.
-        e.preventDefault();
-        e.stopPropagation();
-        close();
     }
 }, true);
 
-// One listener feeding both, because both are derived from the text rather than
-// from a keystroke — see the note above SLASH_RE. Order matters only in that a
-// composer holding one slash-word is never also holding an `@` fragment.
-dom.input.addEventListener('input', () => { updateSlashMenu(); updateMentionMenu(); });
-dom.input.addEventListener('blur', () => { closeSlashMenu(); closeMentionMenu(); });
+/**
+ * One listener feeding both popovers, because both are derived from the text
+ * rather than from a keystroke — see the note above SLASH_RE. Order matters only
+ * in that a composer holding one slash-word is never also holding an `@`
+ * fragment.
+ *
+ * `onInput` runs first where a composer has one. The dialog's box is sized from
+ * its contents, and a popover positioned against it has to be placed after that
+ * has happened rather than against the height it had a keystroke ago.
+ */
+function wireComposer(c) {
+    c.input.addEventListener('input', () => {
+        if (c.onInput) c.onInput();
+        updateSlashMenu(c);
+        updateMentionMenu(c);
+    });
+    c.input.addEventListener('blur', () => closeMenus(c));
+    composers.push(c);
+}
+
+wireComposer(live);
+wireAttachments(live);
+
+// A click anywhere outside a composer's own row closes that composer's popovers,
+// and only that composer's. Per composer rather than "everything not in
+// .input-row": clicking a row of the dialog's menu is outside the live composer,
+// and shutting the live one there is harmless, but shutting the dialog's would
+// cancel the click that was choosing something.
 document.addEventListener('click', (e) => {
-    if (e.target.closest('.input-row')) return;
-    closeSlashMenu();
-    closeMentionMenu();
+    for (const c of composers) {
+        if (e.target.closest(c.container)) continue;
+        closeMenus(c);
+    }
 });
 
 // ── @ mentions ───────────────────────────────────────────────────────────
@@ -11763,12 +12118,12 @@ const PEERS_TTL_MS = 5_000;
  * `start` is the index of the `@`, so accepting can replace exactly the fragment
  * and leave everything either side of it alone.
  */
-function mentionFragment() {
-    const caret = dom.input.selectionStart;
+function mentionFragment(c) {
+    const caret = c.input.selectionStart;
     // Only with no selection: `@` with a range selected is somebody about to
     // overtype it, not somebody addressing a session.
-    if (caret !== dom.input.selectionEnd) return null;
-    const before = dom.input.value.slice(0, caret);
+    if (caret !== c.input.selectionEnd) return null;
+    const before = c.input.value.slice(0, caret);
     const m = MENTION_RE.exec(before);
     if (!m) return null;
     // m[0] may open with the whitespace that made the `@` a word boundary, and
@@ -11799,11 +12154,14 @@ function peerByName(name) {
  * `.picker-row` is what the selection counts.
  *
  * The session you are in is dropped: it is running, so the bridge lists it, but
- * telling an agent to message itself is never the intention.
+ * telling an agent to message itself is never the intention. A composer that is
+ * not *in* a session — the Start-a-session dialog — drops nothing, and that is
+ * right rather than merely harmless: a session open behind the modal is a
+ * perfectly good thing for the one you are about to start to go and talk to.
  */
-function matchPeers(peers, frag) {
+function matchPeers(c, peers, frag) {
     const q = frag.trim().toLowerCase();
-    const mine = state.current && state.current.sessionId;
+    const mine = (c.ctx() || {}).sessionId;
     const usable = peers.filter(p => p.sessionId !== mine);
 
     // Matched on the title and the project as well as the name, because the title
@@ -11827,82 +12185,52 @@ function matchPeers(peers, frag) {
         .map(p => ({ group: 'Sessions', peer: p, insert: `@[${p.name}] ` }));
 }
 
-function closeMentionMenu() {
-    if (dom.mentionMenu.hidden) return;
-    dom.mentionMenu.hidden = true;
-    dom.mentionMenu.replaceChildren();
-    // Only give up the combobox state if the other menu is not the one using it.
-    if (!slashMenuOpen()) {
-        dom.input.setAttribute('aria-expanded', 'false');
-        dom.input.removeAttribute('aria-activedescendant');
-    }
-    mentionMenu.rows = [];
-    mentionMenu.index = 0;
-}
+/**
+ * Re-read the composer and show, filter or hide the menu to match.
+ *
+ * No check for a session here, unlike the slash menu's check for a directory:
+ * peers are a fact about the machine rather than about this composer, so every
+ * composer offers the same names and one with nothing behind it still has an
+ * answer.
+ */
+async function updateMentionMenu(c) {
+    const frag = mentionFragment(c);
+    if (frag === null) return closeMenu(c.mention);
 
-/** Re-read the composer and show, filter or hide the menu to match. */
-async function updateMentionMenu() {
-    const frag = mentionFragment();
-    if (frag === null || !state.current) return closeMentionMenu();
-
-    const seq = ++mentionMenu.seq;
+    const seq = ++c.mention.seq;
     let peers = (Date.now() - state.peers.at < PEERS_TTL_MS) ? state.peers.list : null;
 
     if (!peers) {
         // Something on screen straight away, because the fetch is a round trip and
         // an `@` that does nothing for a moment reads as an `@` that does nothing.
-        drawMentionMenu(null, 'Looking for sessions…');
+        drawMenu(c.mention, null, 'Looking for sessions…');
         try {
             peers = await loadPeers();
         } catch {
-            if (seq === mentionMenu.seq) drawMentionMenu(null, 'Could not list sessions.');
+            if (seq === c.mention.seq) drawMenu(c.mention, null, 'Could not list sessions.');
             return;
         }
         // Typed on, or moved away, while that was in flight.
-        if (seq !== mentionMenu.seq) return;
-        if (mentionFragment() === null) return closeMentionMenu();
+        if (seq !== c.mention.seq) return;
+        if (mentionFragment(c) === null) return closeMenu(c.mention);
     }
 
-    const now = mentionFragment();
-    if (!now) return closeMentionMenu();
+    const now = mentionFragment(c);
+    if (!now) return closeMenu(c.mention);
 
-    const rows = matchPeers(peers, now.text);
+    const rows = matchPeers(c, peers, now.text);
     if (!rows.length) {
         // A bare `@` with nothing to offer is worth saying, because the reason is
         // interesting — one session running is a normal state, and the silent
         // alternative is a menu that mysteriously never appears. A fragment that
         // matches nothing is just a typo, and gets out of the way.
-        if (!now.text.trim()) return drawMentionMenu(null, 'No other sessions are running.');
-        return closeMentionMenu();
+        if (!now.text.trim()) return drawMenu(c.mention, null, 'No other sessions are running.');
+        return closeMenu(c.mention);
     }
 
-    mentionMenu.rows = rows;
-    mentionMenu.index = 0;
-    drawMentionMenu(rows, null);
-}
-
-function drawMentionMenu(rows, note) {
-    if (dom.mentionMenu.hidden) { showBell(false); showNewMenu(false); closeSlashMenu(); }
-    if (note) { mentionMenu.rows = []; mentionMenu.index = 0; }
-
-    const kids = [];
-    let group = null;
-    (rows || []).forEach((r, i) => {
-        if (r.group !== group) {
-            group = r.group;
-            // Not a `.picker-row`, deliberately: the shared selection code counts
-            // those, so a heading that were one would be a row you could land on
-            // and press Enter at.
-            kids.push(el('div', { class: 'menu-group', role: 'presentation' }, group));
-        }
-        kids.push(mentionRow(r, i));
-    });
-
-    dom.mentionMenu.replaceChildren(...(note ? [el('div', { class: 'menu-note' }, note)] : kids));
-    dom.mentionMenu.hidden = false;
-    dom.input.setAttribute('aria-expanded', 'true');
-    if (rows && rows.length) paintSelection(mentionMenu);
-    else dom.input.removeAttribute('aria-activedescendant');
+    c.mention.rows = rows;
+    c.mention.index = 0;
+    drawMenu(c.mention, rows, null);
 }
 
 /**
@@ -11913,14 +12241,14 @@ function drawMentionMenu(rows, note) {
  * filling with something you did not expect. A session with no transcript indexed
  * here has no title, and shows its name alone rather than an empty row.
  */
-function mentionRow(r, i) {
+function mentionRow(m, r, i) {
     const p = r.peer;
     return el('button', {
         class: 'picker-row', type: 'button', role: 'option',
-        id: `mention-row-${i}`, tabindex: -1,
-        'aria-selected': String(i === mentionMenu.index),
+        id: `${m.id}-row-${i}`, tabindex: -1,
+        'aria-selected': String(i === m.index),
         onmousedown: (e) => e.preventDefault(),
-        onclick: () => acceptMention(i),
+        onclick: () => acceptMention(m, i),
     },
     el('span', { class: 'name' }, p.title || p.name),
     el('span', { class: 'desc' }, p.name),
@@ -11934,12 +12262,13 @@ function mentionRow(r, i) {
  * A splice rather than the whole-value replace the slash menu does, because a
  * mention belongs mid-sentence: the words either side of it are the message.
  */
-function acceptMention(i) {
-    const r = mentionMenu.rows[i == null ? mentionMenu.index : i];
-    const frag = mentionFragment();
-    if (!r || !frag) return closeMentionMenu();
-    closeMentionMenu();
-    insertAt(frag.start, dom.input.selectionStart, r.insert);
+function acceptMention(m, i) {
+    const c = m.c;
+    const r = m.rows[i == null ? m.index : i];
+    const frag = mentionFragment(c);
+    if (!r || !frag) return closeMenu(m);
+    closeMenu(m);
+    insertAt(c, frag.start, c.input.selectionStart, r.insert);
 }
 
 /**
@@ -11948,27 +12277,33 @@ function acceptMention(i) {
  * Reply on a received message is the caller. It goes to the front rather than to
  * the caret: replying is the first thing the message is for, so the sentence
  * being written is the reply and the name belongs at the start of it.
+ *
+ * Hard-wired to the live composer, and staying that way. Its one caller means the
+ * box under the conversation the message arrived in and could not mean anything
+ * else, so a parameter here would only be a way to get it wrong.
  */
 function insertMention(name) {
     const text = `@[${name}] `;
-    if (dom.input.value.startsWith(text)) { dom.input.focus(); return; }
-    insertAt(0, 0, text);
+    if (live.input.value.startsWith(text)) { live.input.focus(); return; }
+    insertAt(live, 0, 0, text);
 }
 
 /**
- * Splice `text` over [from, to) in the composer, caret after it.
+ * Splice `text` over [from, to) in a composer, caret after it.
  *
  * Dispatching `input` rather than calling autoGrow() and saveDraft() by hand runs
  * the listeners already wired to the box, so every draft guarantee holds by
- * construction instead of by a second copy of the logic that can drift.
+ * construction instead of by a second copy of the logic that can drift. It is
+ * also what makes a second composer work for nothing: the dialog's box has its
+ * own input listener, which sizes it, and this runs that too.
  */
-function insertAt(from, to, text) {
-    const v = dom.input.value;
-    dom.input.value = v.slice(0, from) + text + v.slice(to);
+function insertAt(c, from, to, text) {
+    const v = c.input.value;
+    c.input.value = v.slice(0, from) + text + v.slice(to);
     const caret = from + text.length;
-    dom.input.setSelectionRange(caret, caret);
-    dom.input.dispatchEvent(new Event('input'));
-    dom.input.focus();
+    c.input.setSelectionRange(caret, caret);
+    c.input.dispatchEvent(new Event('input'));
+    c.input.focus();
 }
 
 // Two stops, because the consequences differ. The first asks the turn to end
@@ -12063,7 +12398,59 @@ dom.agentScroll.addEventListener('scroll', () => {
 // The tooltip is positioned against a tick, so it cannot follow one that moves.
 dom.turns.addEventListener('scroll', hideTurnPop);
 
-dom.newPrompt.addEventListener('input', growPrompt);
+/**
+ * The first-message box, as a composer.
+ *
+ * Everything that differs from the live one is here and nowhere else, which is
+ * the point of the descriptor: where the working directory comes from, what to
+ * say when there is not one yet, and the two things about the box itself — it is
+ * several lines tall, so Home and End stay with the caret; and it is inside a
+ * modal that clips, so its popovers are positioned from script.
+ *
+ * No `closeOthers`: the bell and the recent-directories menu are main-window
+ * furniture, and this dialog is laid over both of them already.
+ */
+const newC = makeComposer({
+    input: dom.newPrompt,
+    slashNode: dom.newSlashMenu,
+    mentionNode: dom.newMentionMenu,
+    id: 'new',
+    container: '.composer-field',
+    // Read fresh on every keystroke, deliberately: the box below this one is a
+    // text field, and walking into a folder in the picker writes it too, so the
+    // directory can change while the menu is open. `sessionId: null` is what
+    // sends the request as `?cwd=` and what leaves every running session in the
+    // `@` menu rather than dropping the one you are in — there is not one yet.
+    ctx: () => {
+        const cwd = dom.newCwd.value.trim();
+        return cwd ? { cwd, sessionId: null } : null;
+    },
+    notReady: 'Pick a working directory first.',
+    homeEnd: false,
+    float: true,
+
+    // Held rather than uploaded, because where a file lands is decided by the box
+    // above this one and that box is still editable. The drop zone is the field
+    // rather than the whole modal: a file let go over the directory picker is much
+    // more likely to be aimed at the picker than at the message.
+    attachNode: dom.newAttach,
+    attachInput: dom.newAttachInput,
+    attachBtn: dom.newAttachBtn,
+    dropZone: dom.newScrim.querySelector('.composer-field'),
+    uploadMode: 'deferred',
+    afterRender: () => paintNewAttach(),
+    // Sizing the box is what this listener used to be for on its own. It stays
+    // first: a popover placed against the box has to be placed against the height
+    // it has now, not the height it had a keystroke ago.
+    onInput: growPrompt,
+});
+wireComposer(newC);
+wireAttachments(newC);
+
+// A popover positioned from script has to be told when the page moves under it.
+// The modal body is the one scroll container between this box and the window.
+dom.newScrim.querySelector('.modal-body')
+    .addEventListener('scroll', repositionFloatingMenus);
 
 for (const n of dom.newScrim.querySelectorAll('[data-close]')) {
     n.addEventListener('click', closeNew);
@@ -12104,6 +12491,10 @@ dom.newCwd.addEventListener('keydown', (e) => {
 });
 dom.newCwd.addEventListener('input', () => {
     if (state.browse.tab === 'browse') dom.newBrowseNote.textContent = browseNote(state.browse);
+    // The commands on screen belong to the directory that was in this box when
+    // `/` was pressed. Leaving them there while the directory changes underneath
+    // is offering a list that will not run.
+    if (menuOpen(newC.slash)) updateSlashMenu(newC);
 });
 
 for (const n of dom.delScrim.querySelectorAll('[data-close-del]')) {

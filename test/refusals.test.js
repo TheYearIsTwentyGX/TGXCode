@@ -110,6 +110,13 @@ const HOME = os.homedir();
     check('attaching a file', (await upload('/api/sessions/abc/attachments?name=x.png', {
         headers: PHONE, bytes: 'x',
     })).status, 403);
+    // The cwd-addressed upload is the same refusal for the same reason, and it
+    // needs its own case: the clause it used to be covered by is a regex on
+    // /api/sessions/:id/attachments, which this path does not match. Without this
+    // assertion a future prefix rule could take one and leave the other.
+    check('attaching a file by path', (await upload(`/api/attachments?cwd=${encodeURIComponent(HOME)}&name=x.png`, {
+        headers: PHONE, bytes: 'x',
+    })).status, 403);
     check('opening an attachment', (await call('POST', '/api/sessions/abc/attachments/open', {
         headers: PHONE, body: { path: 'x.png' },
     })).status, 403);
@@ -370,6 +377,24 @@ const HOME = os.homedir();
     // are the whole interface.
     check('slash commands with no target', (await call('GET', '/api/slash-commands',
         { headers: LOCAL })).status, 400);
+    // And the same rule again for the upload that takes a path. A directory no
+    // session may start in is not one a file may be written into either.
+    check('attaching into /etc', (await upload('/api/attachments?cwd=/etc&name=x.png',
+        { headers: LOCAL, bytes: 'x' })).status, 403);
+    check('attaching with no directory', (await upload('/api/attachments?name=x.png',
+        { headers: LOCAL, bytes: 'x' })).status, 400);
+    // The name is checked before the directory is looked at, so a request that is
+    // wrong about both is refused for the name. Worth pinning: the other order
+    // hides the refusal that actually mattered behind an unrelated one.
+    check('a traversing name beats a bad directory',
+        (await upload('/api/attachments?cwd=/etc&name=../evil.png',
+            { headers: LOCAL, bytes: 'x' })).status, 400);
+    // A path that exists but is not a directory. The session form cannot reach
+    // this — the bridge chose that path — and this form can, because a caller
+    // typed it.
+    check('attaching into a file rather than a directory',
+        (await upload(`/api/attachments?cwd=${encodeURIComponent(`${HOME}/.bashrc`)}&name=x.png`,
+            { headers: LOCAL, bytes: 'x' })).status, 400);
     check('listing home', (await call('GET', `/api/fs?path=${encodeURIComponent(HOME)}`, { headers: LOCAL })).status, 200);
     const home = await call('GET', `/api/fs?path=${encodeURIComponent(HOME)}`, { headers: LOCAL });
     check('and home reports no parent to climb to', home.body.parent, null);

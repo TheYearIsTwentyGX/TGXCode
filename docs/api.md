@@ -124,7 +124,9 @@ the thing you are about to approve is running on a machine you are sitting at.
 **saving or starting a draft**; all
 of `/api/terminals/*`; all of `/api/runs/*`; `POST /api/commands/run`;
 `/api/shutdown`; `/api/restart` (both methods); `/api/devservers/stop`; `/api/devbrowser/*`;
-`POST /api/sessions/:id/reveal`; `POST /api/sessions/:id/handoff`; `POST /api/fs/mkdir`.
+`POST /api/sessions/:id/reveal`; `POST /api/sessions/:id/handoff`; `POST /api/fs/mkdir`;
+both attachment uploads — `POST /api/sessions/:id/attachments` and
+`POST /api/attachments`.
 
 The draft routes are otherwise fully open to a remote caller, deliberately: setting
 work up at the desk and releasing it from a phone when quota frees up is the case the
@@ -764,6 +766,11 @@ permission mode, held until somebody presses Start.
 down, so a client that can build one form can do both, and nothing about the session is
 decided at start time that was not decided when it was saved.
 
+One exception, and it is one-way: **`attachments` is not stored.** The create call
+takes it and a draft does not, so a file cannot be set up now and sent later. It is
+left out rather than forgotten — the bytes live in a checkout, and a draft that
+referred to them would be a promise about a directory nobody is watching.
+
 `title` is the one field that is **not** part of the create call, and it does not survive
 the start — there is nothing to hand it to, because a session names itself from its first
 message like every other session. It names the *draft*, on a board that may hold a
@@ -1332,11 +1339,32 @@ causes auto-denials.
 
 ### `POST /api/sessions`
 
-`{cwd, prompt, model?, permissionMode?, test?}` → `{sessionId, status, test}`.
+`{cwd, prompt, model?, permissionMode?, test?, attachments?}` →
+`{sessionId, status, test}`.
 
 `cwd` must be inside the allowed roots. `test: true` keeps it out of the everyday
 window — use it for anything exploratory. `plan` is the sensible default mode for a
 first message.
+
+**`attachments` is an array of objects, not of strings**: `[{path}]`, where `path`
+is the `path` a `POST /api/attachments` returned. `relPath` is accepted in its
+place, and so is a bare string, but only the basename of whatever you send is
+used — the directory is recomputed from `cwd`, so there is nothing for a `..` to
+traverse out of. At most **five**; more is a `400`. Each one is re-checked against
+that directory's `attached_assets/`, and **a file that no longer resolves is
+dropped rather than refused** — losing a session because a staged file was tidied
+away would be the worse outcome. The same rule and the same code as
+`POST /api/sessions/:id/send`.
+
+Because of that, `prompt` may be **empty** when `attachments` is non-empty: a
+screenshot with nothing typed is a message. The check reads the request's array
+rather than the resolved list, so a stale path does not turn into
+`prompt is required`, which would be advice about the wrong field.
+
+The first turn then carries the note naming each file *and* an inline image block
+for each real PNG, JPEG, GIF or WebP within the inline budget — the same content
+any later message gets. Before this field existed a session could not be started
+with the screenshot that was the reason for starting it.
 
 **`status` is a whole runner status object** — the `runner-status` payload, for the
 process that was just started — not a word describing the outcome. Same on
@@ -1707,6 +1735,37 @@ browses this directory. An existing name is never overwritten: `shot.png` become
 decides whether the turn carries an inline image block.
 
 `413` is the cap. `403` is a directory outside the allowed roots, or a remote caller.
+
+### `POST /api/attachments?cwd=…&name=…`
+
+The same upload, for a composer whose session does not exist yet — the
+Start-a-session dialog. Raw bytes, and the identical response.
+
+Addressed by path because there is nothing else to address it by. The session form
+above uses the id only to *find a working directory*; that is the whole of what
+decides where the file goes, so this form supplies it directly. Everything from the
+directory onward — the roots check, the rename-on-collision, the `.git/info/exclude`
+entry, the sniffed `mediaType` — is the same code, not a second copy of it.
+
+`cwd` is expanded (`~` works) and must be inside the allowed roots (`403`), must
+exist, and must be a directory (`400` for either). That last pair matters here and
+not on the session form: a session id names a directory the bridge chose, and a
+`?cwd=` names one the caller typed.
+
+`name` is checked **before** `cwd` is looked at, so a request carrying both a bad
+name and a bad directory is refused for the name. `400` for a missing `cwd`, `413`
+for the cap, `403` for a remote caller.
+
+**The order a client wants is upload, then create.** Stage each file here, then pass
+the returned `path` in `POST /api/sessions`'s `attachments`. There is no way to add
+a file to a session's first message after the session exists, because that message
+has already been sent.
+
+Drafts and schedules do **not** carry attachments: neither `POST /api/drafts` nor
+`POST /api/schedules` accepts the field, and neither record stores it. So the claim
+that a draft is exactly the body of `POST /api/sessions` is now one field short, and
+this is the field. A client that wants a file on a session it is setting up for later
+has to attach it at the moment it starts it.
 
 ### `POST /api/sessions/:id/attachments/open`
 
