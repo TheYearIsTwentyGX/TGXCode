@@ -375,7 +375,8 @@ const dom = {};
 for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-sub',
     'channels', 'scroll', 'log', 'status-line', 'status-text', 'btn-stop', 'input',
     'btn-send', 'btn-lgtm', 'btn-attach', 'attach', 'attach-input', 'composer',
-    'slash-menu', 'mention-menu', 'queue', 'queue-list', 'queue-count', 'queue-clear',
+    'slash-menu', 'mention-menu', 'new-slash-menu', 'new-mention-menu',
+    'queue', 'queue-list', 'queue-count', 'queue-clear',
     'model', 'perm', 'btn-new', 'btn-new-menu', 'new-menu', 'db-status', 'db-label', 'toasts',
     'btn-bell', 'bell-menu', 'opt-desktop', 'opt-sound', 'bell-note', 'bell-try',
     'btn-pin', 'btn-changes', 'btn-folder', 'btn-term', 'btn-archive', 'btn-delete',
@@ -10228,6 +10229,11 @@ async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     state.drafts.editing = draft ? draft.id : null;
     state.sched.editing = sched ? sched.id : null;
 
+    // Ctrl+N over a live composer with `/rev` half-typed in it is reachable, and
+    // a popover anchored to a box that is now behind a modal is nothing but
+    // debris on screen.
+    closeMenus(live);
+
     dom.newScrim.hidden = false;
     dom.newPrompt.value = src ? src.prompt : prompt;
     growPrompt();
@@ -10309,6 +10315,10 @@ async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
 
 function closeNew() {
     dom.newScrim.hidden = true;
+    // Hiding the scrim does not blur the box inside it, so the blur-to-close
+    // never fires and a popover would still be up — fixed to the viewport, over
+    // nothing — the next time the dialog opened.
+    closeMenus(newC);
     // So a Save that somehow ran after this could not write to a draft the dialog
     // is no longer showing. openNew sets it on the way in either way.
     state.drafts.editing = null;
@@ -11687,10 +11697,72 @@ function drawMenu(m, rows, note) {
 
     m.node.replaceChildren(...(note ? [el('div', { class: 'menu-note' }, note)] : kids));
     m.node.hidden = false;
+    // After it is on screen and before the highlight is painted: paintSelection
+    // scrolls a row into view, and it should be scrolling inside a box that has
+    // already been given its height.
+    if (m.float) positionMenu(m);
     m.c.input.setAttribute('aria-expanded', 'true');
     if (rows && rows.length) paintSelection(m);
     else m.c.input.removeAttribute('aria-activedescendant');
 }
+
+/**
+ * Put a floating popover under the box it belongs to, or over it when there is
+ * more room that way.
+ *
+ * Fixed rather than absolute, and this is the whole reason the `float` flag
+ * exists: the dialog's box lives inside `.modal-body`, which scrolls, inside
+ * `.modal`, which is `overflow: hidden`. An absolutely positioned popover is
+ * clipped by both, and that field is the last one in the dialog — so it would be
+ * cut almost entirely. Fixed positioning leaves every ancestor's overflow out of
+ * it, at the price of having to be told where to go.
+ *
+ * Measured on every redraw because the anchor moves: the textarea is sized from
+ * its contents, so it grows under the popover as you type. Same show-then-place
+ * idiom as showTurnPop, and the same z-index.
+ *
+ * `--menu-max` is the room actually available rather than the flat 400px the
+ * anchored menu uses, so a short window gets a short menu instead of one running
+ * off the screen. The floor stops it collapsing to nothing when the box is almost
+ * at the bottom — better to overhang a little than to show two rows.
+ */
+function positionMenu(m) {
+    const r = m.c.input.getBoundingClientRect();
+    const gap = 6;
+    const below = window.innerHeight - r.bottom - gap * 2;
+    const above = r.top - gap * 2;
+    const up = below < 220 && above > below;
+
+    m.node.classList.toggle('up', up);
+    m.node.style.setProperty('--menu-max', `${Math.max(140, Math.min(400, up ? above : below))}px`);
+    m.node.style.left = `${r.left}px`;
+    m.node.style.width = `${r.width}px`;
+    if (up) {
+        m.node.style.top = 'auto';
+        m.node.style.bottom = `${window.innerHeight - r.top + gap}px`;
+    } else {
+        m.node.style.bottom = 'auto';
+        m.node.style.top = `${r.bottom + gap}px`;
+    }
+}
+
+/**
+ * Keep a floating popover attached to its box when the page moves under it.
+ *
+ * Reposition rather than close: the caret is still in the box and the list is
+ * still the answer, so a menu that vanished because the modal scrolled a pixel
+ * would be the wrong reading of what happened. Cheap — one rect read per open
+ * menu, and there is at most one.
+ */
+function repositionFloatingMenus() {
+    for (const c of composers) {
+        for (const m of [c.slash, c.mention]) {
+            if (m.float && !m.node.hidden) positionMenu(m);
+        }
+    }
+}
+
+window.addEventListener('resize', repositionFloatingMenus);
 
 /**
  * The highlight is a property of the list, never of focus — see below.
@@ -12192,7 +12264,47 @@ dom.agentScroll.addEventListener('scroll', () => {
 // The tooltip is positioned against a tick, so it cannot follow one that moves.
 dom.turns.addEventListener('scroll', hideTurnPop);
 
-dom.newPrompt.addEventListener('input', growPrompt);
+/**
+ * The first-message box, as a composer.
+ *
+ * Everything that differs from the live one is here and nowhere else, which is
+ * the point of the descriptor: where the working directory comes from, what to
+ * say when there is not one yet, and the two things about the box itself — it is
+ * several lines tall, so Home and End stay with the caret; and it is inside a
+ * modal that clips, so its popovers are positioned from script.
+ *
+ * No `closeOthers`: the bell and the recent-directories menu are main-window
+ * furniture, and this dialog is laid over both of them already.
+ */
+const newC = makeComposer({
+    input: dom.newPrompt,
+    slashNode: dom.newSlashMenu,
+    mentionNode: dom.newMentionMenu,
+    id: 'new',
+    container: '.composer-field',
+    // Read fresh on every keystroke, deliberately: the box below this one is a
+    // text field, and walking into a folder in the picker writes it too, so the
+    // directory can change while the menu is open. `sessionId: null` is what
+    // sends the request as `?cwd=` and what leaves every running session in the
+    // `@` menu rather than dropping the one you are in — there is not one yet.
+    ctx: () => {
+        const cwd = dom.newCwd.value.trim();
+        return cwd ? { cwd, sessionId: null } : null;
+    },
+    notReady: 'Pick a working directory first.',
+    homeEnd: false,
+    float: true,
+    // Sizing the box is what this listener used to be for on its own. It stays
+    // first: a popover placed against the box has to be placed against the height
+    // it has now, not the height it had a keystroke ago.
+    onInput: growPrompt,
+});
+wireComposer(newC);
+
+// A popover positioned from script has to be told when the page moves under it.
+// The modal body is the one scroll container between this box and the window.
+dom.newScrim.querySelector('.modal-body')
+    .addEventListener('scroll', repositionFloatingMenus);
 
 for (const n of dom.newScrim.querySelectorAll('[data-close]')) {
     n.addEventListener('click', closeNew);
@@ -12233,6 +12345,10 @@ dom.newCwd.addEventListener('keydown', (e) => {
 });
 dom.newCwd.addEventListener('input', () => {
     if (state.browse.tab === 'browse') dom.newBrowseNote.textContent = browseNote(state.browse);
+    // The commands on screen belong to the directory that was in this box when
+    // `/` was pressed. Leaving them there while the directory changes underneath
+    // is offering a list that will not run.
+    if (menuOpen(newC.slash)) updateSlashMenu(newC);
 });
 
 for (const n of dom.delScrim.querySelectorAll('[data-close-del]')) {

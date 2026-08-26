@@ -503,10 +503,14 @@
               <!-- Session mentions, on the same anchor and the same class, so the
                    two popovers are one shape in two places rather than two
                    things that look alike. Only ever one is open — each closes
-                   the other on the way up. Grouped, because files join this
-                   menu later and a group heading arriving with them would move
-                   every row the day it shipped. -->
-              <div id="mention-menu" class="slash-menu" role="listbox" hidden
+                   the other on the way up. Grouped, because a heading arriving
+                   later would move every row the day it shipped.
+
+                   The `mention` class carries the typography — the title in the
+                   reading face, the name in the mono one. It used to hang off
+                   this element's id, which stopped working the day a second
+                   composer needed the same rows to look the same. -->
+              <div id="mention-menu" class="slash-menu mention" role="listbox" hidden
                    aria-label="Mentions"></div>
               <textarea id="input" rows="1" placeholder="Send a message to this session…"
                         aria-label="Message" role="combobox" aria-expanded="false"
@@ -771,11 +775,31 @@ checks, and merge it once they pass.">LGTM</button>
       </div>
       <div class="field">
         <label for="new-prompt">First message</label>
-        <!-- rows="2" and no min-height: the box is sized by its contents from
-             the first keystroke, so a one-line prompt does not sit in a tall
-             empty well. -->
-        <textarea id="new-prompt" class="grow" rows="2"
-                  placeholder="What should this session do?"></textarea>
+        <!-- The same two popovers the live composer has, on the box you write a
+             session's first message in — `/` for the commands that directory can
+             run, `@` for the sessions already running.
+
+             Wrapped in a .composer-field rather than sitting loose in the .field,
+             because two things need one stable element to ask about: the
+             click-outside rule, which closes a composer's menus on a click that
+             is not in it, and the paste and drop handlers that an attachment
+             strip will hang off. The popovers themselves are positioned from
+             script — see positionMenu — because .modal is `overflow: hidden` and
+             .modal-body scrolls, so an absolutely positioned one is clipped twice
+             over and this field is the last one in the dialog. -->
+        <div class="composer-field">
+          <div id="new-slash-menu" class="slash-menu floating" role="listbox" hidden
+               aria-label="Slash commands"></div>
+          <div id="new-mention-menu" class="slash-menu mention floating" role="listbox" hidden
+               aria-label="Mentions"></div>
+          <!-- rows="2" and no min-height: the box is sized by its contents from
+               the first keystroke, so a one-line prompt does not sit in a tall
+               empty well. -->
+          <textarea id="new-prompt" class="grow" rows="2"
+                    placeholder="What should this session do?"
+                    role="combobox" aria-expanded="false" aria-autocomplete="list"
+                    aria-controls="new-slash-menu new-mention-menu"></textarea>
+        </div>
       </div>
       <!-- Only shown in schedule mode; see openNew(). These rows rather than a
            second dialog because everything above — the directory, the message,
