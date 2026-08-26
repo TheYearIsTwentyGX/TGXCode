@@ -674,7 +674,8 @@ function remoteRefusal(pathname, method) {
     // yet — not because the argument is strong. If the Android app grows an attach
     // button, the answer is a smaller cap for a remote caller, not deleting this
     // line and letting a leaked token write 25MB files into a repo.
-    if (/^\/api\/sessions\/[^/]+\/attachments(\/open)?$/.test(pathname)) {
+    if (/^\/api\/sessions\/[^/]+\/attachments(\/open)?$/.test(pathname)
+        || pathname === '/api/attachments') {
         return 'files can only be attached on the machine they are saved to';
     }
     return null;
@@ -2767,7 +2768,32 @@ async function api(req, res, url, pathname, who) {
         const cwd = body.cwd && String(body.cwd);
         const prompt = body.prompt && String(body.prompt).trim();
         if (!cwd) return send(res, 400, { error: 'cwd is required' });
-        if (!prompt) return send(res, 400, { error: 'prompt is required' });
+        // A screenshot with nothing typed is a message, exactly as it is on the send
+        // route. Asked of the request rather than of the resolved list, also as it is
+        // there: a file that has been tidied away since it was staged should not turn
+        // into "prompt is required", which is advice about the wrong field.
+        if (!prompt && !(Array.isArray(body.attachments) && body.attachments.length)) {
+            return send(res, 400, { error: 'prompt is required' });
+        }
+
+        // Staged by POST /api/attachments a moment ago, and re-derived here against
+        // the directory they claim to be in — the same guard the send route uses, and
+        // for the same reason: the client is handing back a path we gave it, which is
+        // not the same thing as a path we are willing to act on.
+        let files = [];
+        if (Array.isArray(body.attachments) && body.attachments.length) {
+            let dir;
+            try {
+                dir = resolveWorkdir(cwd);
+            } catch (err) {
+                return send(res, 400, { error: err.message });
+            }
+            try {
+                files = resolveAttachments(dir, body.attachments);
+            } catch (err) {
+                return send(res, 400, { error: err.message });
+            }
+        }
 
         const mode = normalizeMode(body.permissionMode);
         const refusal = modeRefusal(mode, who);
@@ -2786,6 +2812,7 @@ async function api(req, res, url, pathname, who) {
                 prompt,
                 model: body.model || null,
                 permissionMode: mode,
+                attachments: files,
             });
             // Label it before it exists on disk, so it is never briefly visible
             // in the everyday window while the first rescan catches up.
@@ -3176,82 +3203,19 @@ async function api(req, res, url, pathname, who) {
         // sent rather than with it: the strip shows real files with real names, the
         // send stays a small JSON POST, and a staged file survives a reload because
         // it is already on disk. See bridge/attachments.js for where it lands.
+        //
+        // The session in the path is only ever a way of naming a working directory —
+        // that is the whole of what decides where the file goes. POST /api/attachments
+        // is the same route for a composer that has no session to name yet, and the
+        // two share everything from the cwd onward.
         if (tail === 'attachments' && !seg[4] && req.method === 'POST') {
-            // The name first, before the session is even looked up. It is refused for
-            // reasons that have nothing to do with which session asked, and answering
-            // "session not found" to a request that also carried `../evil.png` hides
-            // the refusal that actually mattered behind an unrelated one.
             const name = url.searchParams.get('name');
-            const bad = attachments.attachmentNameProblem(name);
-            if (bad) return send(res, 400, { error: bad });
-
-            // And the size, for the same reason and before the same lookup. Answered
-            // from Content-Length, so an oversized upload is refused before its bytes
-            // travel rather than after.
-            if (declaredOverMax(req, attachments.MAX_ATTACHMENT_BYTES)) {
-                return refuseUpload(req, res, 413, overMax(attachments.MAX_ATTACHMENT_BYTES));
-            }
+            if (attachmentRefused(req, res, name)) return;
 
             const summary = index.summary(sessionId);
             if (!summary) return send(res, 404, { error: 'session not found' });
-            const cwd = sessionCwd(summary);
 
-            const { dir, root } = attachments.attachmentsDirFor(cwd);
-            if (!cfg.withinRoots(dir)) {
-                return send(res, 403, {
-                    error: 'that directory is outside the allowed roots',
-                    path: dir, roots: cfg.ALLOWED_ROOTS,
-                });
-            }
-
-            let buffer;
-            try {
-                buffer = await readBinary(req, attachments.MAX_ATTACHMENT_BYTES);
-            } catch (err) {
-                if (err.oversized) return refuseUpload(req, res, err.status, err.message);
-                return send(res, err.status || 400, { error: err.message });
-            }
-            if (!buffer.length) return send(res, 400, { error: 'that file is empty' });
-
-            let written;
-            try {
-                written = attachments.writeAttachment({ dir, name, buffer });
-            } catch (err) {
-                if (err.code === 'ENOTDIR') {
-                    return send(res, 400, {
-                        error: `${dir} exists but is not a directory`,
-                    });
-                }
-                return send(res, 500, { error: `could not save the file: ${err.message}` });
-            }
-
-            // After the mkdir, not before: this is the check that catches an
-            // attached_assets symlinked out of the roots, which cannot be seen until
-            // the directory exists.
-            let real = dir;
-            try { real = fs.realpathSync(dir); } catch { /* just written; treat as itself */ }
-            if (!cfg.withinRoots(real)) {
-                try { fs.unlinkSync(written.path); } catch { /* nothing better to do */ }
-                return send(res, 403, {
-                    error: 'that directory resolves outside the allowed roots',
-                    path: real, roots: cfg.ALLOWED_ROOTS,
-                });
-            }
-
-            attachments.ensureExcluded(root);
-
-            return send(res, 200, {
-                ok: true,
-                name: written.name,
-                renamed: written.renamed,
-                path: written.path,
-                relPath: attachments.relativeTo(cwd, written.path),
-                dir,
-                bytes: buffer.length,
-                // Sniffed from the bytes, not taken from Content-Type — this is what
-                // decides whether the turn carries an inline image block.
-                mediaType: attachments.sniffType(buffer, req.headers['content-type']),
-            });
+            return receiveAttachment(req, res, sessionCwd(summary), name);
         }
 
         // Open a staged or sent attachment in whatever Windows opens that kind of
@@ -3692,6 +3656,51 @@ async function api(req, res, url, pathname, who) {
         return send(res, 200, listDir(dir));
     }
 
+    // --- attachments, before there is a session -----------------------------
+    //
+    // The same upload as POST /api/sessions/:id/attachments, for the composer in
+    // the Start-a-session dialog. That one names a working directory by naming a
+    // session; this one names it directly, because the session does not exist yet
+    // and cannot until its first message — which is the message the file is going
+    // on — has been composed.
+    //
+    // Beside /api/fs/mkdir rather than beside its own sibling, because these two
+    // are the pair that matters: both take a client-supplied path and write into
+    // the checkout it names, and remoteRefusal treats them the same way for the
+    // same reason.
+    if (pathname === '/api/attachments' && req.method === 'POST') {
+        const name = url.searchParams.get('name');
+        if (attachmentRefused(req, res, name)) return;
+
+        const given = cfg.expandHome(url.searchParams.get('cwd') || '');
+        if (!given) return send(res, 400, { error: 'cwd is required' });
+
+        // The roots check by hand and first, so the refusal is the same shape every
+        // other cwd-addressed route answers with. resolveWorkdir would refuse it
+        // too, but only as a sentence — and a sentence is not something a client
+        // can show a breadcrumb from.
+        if (!cfg.withinRoots(given)) {
+            return send(res, 403, {
+                error: 'that directory is outside the allowed roots',
+                path: path.resolve(given), roots: cfg.ALLOWED_ROOTS,
+            });
+        }
+
+        // Unlike a session id, a client-supplied path is arbitrary: it may not
+        // exist, and it may be a file. attachmentsDirFor would compute a plausible
+        // directory beside either of those without complaint, so the question has
+        // to be asked here — by the same function that asks it when a session is
+        // about to be started in a directory.
+        let cwd;
+        try {
+            cwd = resolveWorkdir(given);
+        } catch (err) {
+            return send(res, 400, { error: err.message });
+        }
+
+        return receiveAttachment(req, res, cwd, name);
+    }
+
     // Somewhere to put a project that does not exist yet. The picker can navigate,
     // so this only ever has to make one directory in a place you are already
     // standing — which is why the body is {parent, name} rather than one joined
@@ -3778,6 +3787,102 @@ function sessionCwd(summary) {
     if (summary.cwd && fs.existsSync(summary.cwd)) return summary.cwd;
     if (summary.projectCwd && fs.existsSync(summary.projectCwd)) return summary.projectCwd;
     return cfg.HOME;
+}
+
+/**
+ * Refuse an upload for a reason that has nothing to do with where it was going.
+ *
+ * Both checks run before the caller has even worked out a working directory, and
+ * that ordering is the point: answering "session not found" to a request that
+ * also carried `../evil.png` hides the refusal that actually mattered behind an
+ * unrelated one. The size is answered from Content-Length, so an oversized upload
+ * is refused before its bytes travel rather than after.
+ *
+ * Returns true when it has already answered.
+ */
+function attachmentRefused(req, res, name) {
+    const bad = attachments.attachmentNameProblem(name);
+    if (bad) {
+        send(res, 400, { error: bad });
+        return true;
+    }
+    if (declaredOverMax(req, attachments.MAX_ATTACHMENT_BYTES)) {
+        refuseUpload(req, res, 413, overMax(attachments.MAX_ATTACHMENT_BYTES));
+        return true;
+    }
+    return false;
+}
+
+/**
+ * Read an upload's bytes and write them into a working directory's attachments.
+ *
+ * Everything the two upload routes do once they agree on a directory, which is
+ * everything that matters: the roots check before the write and the realpath
+ * check after it, the empty-file refusal, the rename-on-collision, the
+ * gitignore entry, and sniffing the media type from the bytes. One copy, because
+ * two would be two places for the roots check to be got right and one of them to
+ * be forgotten later.
+ *
+ * `cwd` is already resolved by the caller — from a session for one of them, from
+ * a validated `?cwd=` for the other.
+ */
+async function receiveAttachment(req, res, cwd, name) {
+    const { dir, root } = attachments.attachmentsDirFor(cwd);
+    if (!cfg.withinRoots(dir)) {
+        return send(res, 403, {
+            error: 'that directory is outside the allowed roots',
+            path: dir, roots: cfg.ALLOWED_ROOTS,
+        });
+    }
+
+    let buffer;
+    try {
+        buffer = await readBinary(req, attachments.MAX_ATTACHMENT_BYTES);
+    } catch (err) {
+        if (err.oversized) return refuseUpload(req, res, err.status, err.message);
+        return send(res, err.status || 400, { error: err.message });
+    }
+    if (!buffer.length) return send(res, 400, { error: 'that file is empty' });
+
+    let written;
+    try {
+        written = attachments.writeAttachment({ dir, name, buffer });
+    } catch (err) {
+        if (err.code === 'ENOTDIR') {
+            return send(res, 400, {
+                error: `${dir} exists but is not a directory`,
+            });
+        }
+        return send(res, 500, { error: `could not save the file: ${err.message}` });
+    }
+
+    // After the mkdir, not before: this is the check that catches an
+    // attached_assets symlinked out of the roots, which cannot be seen until
+    // the directory exists.
+    let real = dir;
+    try { real = fs.realpathSync(dir); } catch { /* just written; treat as itself */ }
+    if (!cfg.withinRoots(real)) {
+        try { fs.unlinkSync(written.path); } catch { /* nothing better to do */ }
+        return send(res, 403, {
+            error: 'that directory resolves outside the allowed roots',
+            path: real, roots: cfg.ALLOWED_ROOTS,
+        });
+    }
+
+    attachments.ensureExcluded(root);
+
+    return send(res, 200, {
+        ok: true,
+        name: written.name,
+        renamed: written.renamed,
+        path: written.path,
+        relPath: attachments.relativeTo(cwd, written.path),
+        dir,
+        bytes: buffer.length,
+        // Sniffed from the bytes, not taken from Content-Type — this is what
+        // decides whether the turn carries an inline image block.
+        mediaType: attachments.sniffType(buffer, req.headers['content-type']),
+    });
 }
 
 /**
