@@ -375,6 +375,8 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'queue', 'queue-list', 'queue-count', 'queue-clear',
     'model', 'perm', 'btn-new', 'btn-new-menu', 'new-menu', 'db-status', 'db-label', 'toasts',
     'btn-bell', 'bell-menu', 'opt-desktop', 'opt-sound', 'bell-note', 'bell-try',
+    'quota-wrap', 'quota-pill', 'quota-pill-body', 'quota-menu', 'quota-windows',
+    'quota-events', 'quota-note',
     'btn-pin', 'btn-changes', 'btn-folder', 'btn-term', 'btn-archive', 'btn-delete',
     'turns', 'turn-pop',
     'find', 'find-input', 'find-count', 'find-prev', 'find-next',
@@ -7468,7 +7470,7 @@ function showBell(on) {
     // Both triggers stop the click from reaching the document, so neither
     // popover's outside-click listener sees the other one being opened. Without
     // this the two sit on screen together.
-    if (on) { renderBell(); showNewMenu(false); }
+    if (on) { renderBell(); showNewMenu(false); showQuota(false); }
 }
 
 dom.btnBell.addEventListener('click', (e) => {
@@ -7509,6 +7511,231 @@ dom.bellTry.addEventListener('click', () => {
 document.addEventListener('click', (e) => {
     if (!dom.bellMenu.hidden && !e.target.closest('.bell-wrap')) showBell(false);
 });
+
+// ── quota ────────────────────────────────────────────────────────────────
+//
+// How much of the 5-hour window and the week are gone. Two sources feed the
+// snapshot this draws — see bridge/usage.js — and the thing to keep in mind
+// here is that **the percentage can be old**. It comes from the status line,
+// which only renders in an interactive terminal, so a day spent entirely inside
+// this app leaves the number frozen while the stream keeps `status` and
+// `resetsAt` current.
+//
+// So nothing in here shows a bare percentage. Every reading is drawn with its
+// age, and a reading past STALE_AFTER goes grey and says so in words. An old
+// number presented as current is the one outcome worse than no number, because
+// it is the one somebody would plan an afternoon around.
+
+// Past this, the number is presented as a last-known reading rather than as the
+// state of the account. Half an hour: long enough that a terminal open in the
+// background keeps the pill live, short enough that a stale reading cannot
+// quietly survive a working session.
+const QUOTA_STALE_AFTER = 30 * 60;
+
+const quota = {
+    snap: null,
+    // Client clock at the moment `snap` was taken, so ages and countdowns can
+    // advance without refetching and without trusting the two clocks to agree.
+    at: 0,
+    timer: null,
+};
+
+/** Seconds since the snapshot was taken, on this window's clock. */
+function quotaDrift() {
+    return quota.at ? Math.max(0, (Date.now() - quota.at) / 1000) : 0;
+}
+
+/** Age of a server-stamped reading, in seconds, or null if it has no stamp. */
+function quotaAge(at) {
+    if (!quota.snap || typeof at !== 'number') return null;
+    return Math.max(0, (quota.snap.now - at) + quotaDrift());
+}
+
+function fmtAge(seconds) {
+    if (seconds === null) return '';
+    if (seconds < 90) return 'just now';
+    if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
+    if (seconds < 86400) return `${Math.round(seconds / 3600)}h ago`;
+    return `${Math.round(seconds / 86400)}d ago`;
+}
+
+/** Time until a reset, phrased as a wait rather than a clock time. */
+function fmtLeft(resetsAt) {
+    if (!quota.snap || typeof resetsAt !== 'number') return '';
+    const s = resetsAt - (quota.snap.now + quotaDrift());
+    if (s <= 0) return 'due now';
+    if (s < 3600) return `${Math.max(1, Math.round(s / 60))}m`;
+    const h = Math.floor(s / 3600);
+    const m = Math.round((s % 3600) / 60);
+    if (h < 24) return m ? `${h}h ${m}m` : `${h}h`;
+    const d = Math.floor(s / 86400);
+    return `${d}d ${Math.round((s % 86400) / 3600)}h`;
+}
+
+function quotaBar(pct, stale) {
+    // A window with no percentage draws no bar at all rather than an empty one:
+    // an empty bar reads as zero used, which is a very different claim from
+    // "nobody has told us".
+    if (pct === null) return null;
+    return el('span', { class: 'q-bar' },
+        el('i', { style: `width:${Math.max(stale ? 0 : 2, Math.min(100, pct))}%` }));
+}
+
+/** The pill: one compact group per window, worst first is not needed — the
+ *  server already orders them 5-hour then weekly, which is how people ask. */
+function renderQuotaPill() {
+    const body = dom.quotaPillBody;
+    body.textContent = '';
+
+    const windows = (quota.snap && quota.snap.windows) || [];
+    const shown = windows.filter(w => w.usedPercent !== null || w.status);
+    if (!shown.length) {
+        dom.quotaWrap.hidden = true;
+        return;
+    }
+    dom.quotaWrap.hidden = false;
+
+    const titles = [];
+    for (const w of shown) {
+        const age = quotaAge(w.usedPercentAt);
+        const stale = age !== null && age > QUOTA_STALE_AFTER;
+        const pct = w.usedPercent;
+
+        const group = el('span', {
+            class: 'q-win' + (stale ? ' stale' : ''),
+            'data-status': w.status || '',
+        }, el('span', { class: 'q-label', text: w.shortLabel }));
+
+        const bar = quotaBar(pct, stale);
+        if (bar) group.append(bar);
+        group.append(el('span', {
+            class: 'q-num',
+            text: pct === null ? '—' : `${Math.round(pct)}%`,
+        }));
+        body.append(group);
+
+        titles.push(pct === null
+            ? `${w.label}: no reading yet`
+            : `${w.label}: ${Math.round(pct)}% used${age === null ? '' : ` (${fmtAge(age)})`}`);
+    }
+
+    dom.quotaPill.title = titles.join(' · ');
+}
+
+function renderQuotaPanel() {
+    const rows = dom.quotaWindows;
+    rows.textContent = '';
+
+    const windows = (quota.snap && quota.snap.windows) || [];
+    for (const w of windows) {
+        const age = quotaAge(w.usedPercentAt);
+        const stale = age !== null && age > QUOTA_STALE_AFTER;
+        const pct = w.usedPercent;
+
+        const row = el('div', { class: 'q-row' + (stale ? ' stale' : '') });
+        row.append(el('div', { class: 'q-row-top' },
+            el('span', { text: w.label }),
+            el('span', { class: 'q-pct', text: pct === null ? 'no reading' : `${pct.toFixed(1)}%` })));
+
+        const bar = quotaBar(pct, stale);
+        if (bar) {
+            const holder = el('span', { class: 'q-win', 'data-status': w.status || '' }, bar);
+            row.append(holder);
+        }
+
+        // Left: where the number came from and when. Right: the reset, which is
+        // the other half of the question and comes from the stream, so it stays
+        // current even when the percentage does not.
+        const left = pct === null
+            ? (w.status ? 'status only — no percentage sent' : 'not observed yet')
+            : `${w.usedPercentSource === 'stream' ? 'from a turn' : 'from the status line'}, ${fmtAge(age)}`;
+
+        const sub = el('div', { class: 'q-row-sub' },
+            el('span', { class: stale ? 'warn' : '', text: left }));
+
+        const bits = [];
+        if (w.resetsAt) bits.push(`resets in ${fmtLeft(w.resetsAt)}`);
+        if (w.isUsingOverage) bits.push('on overage');
+        sub.append(el('span', {
+            class: w.status === 'rejected' ? 'bad' : w.status === 'allowed_warning' ? 'warn' : '',
+            text: bits.join(' · '),
+        }));
+        row.append(sub);
+        rows.append(row);
+    }
+
+    if (!windows.length) {
+        rows.append(el('div', { class: 'q-row-sub' },
+            el('span', { text: 'Nothing observed yet. A turn or an open terminal will fill this in.' })));
+    }
+
+    // The history. Only status changes are kept, so this is short by
+    // construction and empty most of the time.
+    const evs = dom.quotaEvents;
+    evs.textContent = '';
+    const events = (quota.snap && quota.snap.events) || [];
+    if (events.length) {
+        evs.append(el('div', { class: 'q-ev-head', text: 'Limit events' }));
+        for (const ev of events.slice(0, 6)) {
+            const when = fmtAge(quotaAge(ev.at));
+            const what = ev.from ? `${ev.from} → ${ev.to}` : ev.to;
+            evs.append(el('div', { text: `${ev.label}: ${what.replace(/_/g, ' ')} · ${when}` }));
+        }
+    }
+
+    // And the one thing the user can act on.
+    const note = dom.quotaNote;
+    note.textContent = '';
+    const sl = quota.snap && quota.snap.statusLine;
+    if (sl && !sl.present) {
+        note.append(el('div', { text: 'Percentages come from the Claude Code status line, which only runs in a terminal. To turn it on:' }));
+        note.append(el('code', { text: 'node scripts/install-quota-statusline.js' }));
+    } else if (sl && sl.present) {
+        note.append(el('div', {
+            text: `Percentages are harvested from the status line while a terminal session is open — last seen ${fmtAge(quotaAge(sl.capturedAt))}.`,
+        }));
+    }
+}
+
+function renderQuota() {
+    renderQuotaPill();
+    if (!dom.quotaMenu.hidden) renderQuotaPanel();
+}
+
+function showQuota(on) {
+    dom.quotaMenu.hidden = !on;
+    dom.quotaPill.setAttribute('aria-expanded', String(on));
+    // Same reason the bell does this: the two popovers must not sit open
+    // together, and each one's outside-click listener is stopped by the other's
+    // trigger.
+    if (on) { renderQuotaPanel(); showBell(false); showNewMenu(false); }
+}
+
+async function loadQuota() {
+    try {
+        const snap = await get('/api/quota');
+        quota.snap = snap;
+        quota.at = Date.now();
+        renderQuota();
+    } catch {
+        // A bridge without the route, or one that is down. The pill simply does
+        // not appear; there is nothing here worth a toast.
+    }
+}
+
+dom.quotaPill.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showQuota(dom.quotaMenu.hidden);
+});
+
+document.addEventListener('click', (e) => {
+    if (!dom.quotaMenu.hidden && !e.target.closest('.quota-wrap')) showQuota(false);
+});
+
+// Ages and reset countdowns move on their own, so the pill is repainted on a
+// clock rather than only when a snapshot arrives. Half a minute is enough for a
+// countdown in minutes and cheap enough to leave running.
+quota.timer = setInterval(renderQuota, 30000);
 
 // ── streaming ────────────────────────────────────────────────────────────
 
@@ -7551,6 +7778,11 @@ function connect() {
         // restart is exactly when the catch-up pass runs — so the changes this
         // window missed are the ones about runs that fired while it was away.
         loadSched();
+        // And the quota, which matters here for a reason the others do not
+        // share: every `quota` push while the stream was down was missed, and
+        // the pill has been quietly ageing the whole time. A reconnect is the
+        // one moment it can be brought back to the truth for free.
+        loadQuota();
         // Same reasoning for the status line, which onerror left reading
         // "Reconnecting to the bridge…". applyRunner derives it from what we
         // already know, so an idle session says Ready again and a busy one is
@@ -7673,6 +7905,14 @@ function connect() {
     es.addEventListener('notice', (e) => {
         const n = JSON.parse(e.data);
         toast(n.text, n.level === 'warn' ? 'warn' : 'info', 7000);
+    });
+
+    // The whole snapshot, not a delta: it is a handful of windows and the
+    // bridge only sends it when a reading actually moved.
+    es.addEventListener('quota', (e) => {
+        quota.snap = JSON.parse(e.data);
+        quota.at = Date.now();
+        renderQuota();
     });
 
     // A process reported a command list that differs from the one we hold —
@@ -12712,6 +12952,7 @@ dom.lockAnyway.addEventListener('click', () => {
 document.addEventListener('keydown', (e) => {
     // The confirm sits over the new-session dialog, so it answers Escape first.
     if (e.key === 'Escape' && !dom.bellMenu.hidden) { showBell(false); dom.btnBell.focus(); return; }
+    if (e.key === 'Escape' && !dom.quotaMenu.hidden) { showQuota(false); dom.quotaPill.focus(); return; }
     if (e.key === 'Escape' && !dom.newMenu.hidden) { showNewMenu(false); dom.btnNewMenu.focus(); return; }
     if (e.key === 'Escape' && !dom.delScrim.hidden) { closeDelete(); return; }
     if (e.key === 'Escape' && !dom.pairScrim.hidden) { closePair(); dom.btnPair.focus(); return; }

@@ -96,6 +96,7 @@ function check(name, got, want) {
     check('GET /api/projects', (await call('/api/projects')).status, 200);
     check('GET /api/overview', (await call('/api/overview')).status, 200);
     check('GET /api/dashboard', (await call('/api/dashboard')).status, 200);
+    check('GET /api/quota', (await call('/api/quota')).status, 200);
     check('POST /api/subscribe reaches its own 404, not the gate',
         (await call('/api/subscribe', {
             method: 'POST', headers: { 'x-claude-sessions-client': '1' },

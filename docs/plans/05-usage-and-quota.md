@@ -1,5 +1,31 @@
 # 05 — Usage and quota, for a subscription plan
 
+> **Tier A shipped, and the survey below is out of date in one important way.**
+> This document says the rate-limit data gives no percentage. That was true when
+> it was written and is not true now. Checked against CLI 2.1.241:
+>
+> - The status line payload carries `rate_limits.five_hour.used_percentage` and
+>   `rate_limits.seven_day.used_percentage`, parsed from
+>   `anthropic-ratelimit-unified-{5h,7d}-{utilization,reset}` on **every API
+>   response**. `used_percentage` is `utilization * 100` — the header is a 0–1
+>   fraction, the status-line field is 0–100.
+> - The stream's `rate_limit_event` carries `utilization` too, but only on the
+>   `allowed_warning` path. Plain `allowed` still carries none, which is what
+>   point 1 below was seeing.
+> - `rateLimitType` is a known enum: `five_hour`, `seven_day`, `seven_day_opus`,
+>   `seven_day_sonnet`, `seven_day_overage_included`, `overage`. The guess below
+>   that the weekly window has its own id was right.
+>
+> What shipped is tier A plus a percentage: `bridge/usage.js` merges the stream
+> events with what `scripts/quota-statusline.py` harvests from the status line.
+> Point 4 still holds — `/usage` is a slash command, not a CLI subcommand — and
+> **tier C was not built.** If the harvested number proves too stale, the cleaner
+> fallback than the undocumented endpoint imagined below is the CLI's own
+> `probeQuotaStatus`: a `max_tokens: 1` Messages request whose response headers
+> carry the same fields. Ordinary API surface, not a private endpoint.
+>
+> Tier B is untouched and still worth doing.
+
 **Effort:** M · **Depends on:** 14 for tier C · **Touches:** `bridge/runner.js`,
 new `bridge/usage.js`, `bridge/server.js`, `web/app.js`
 

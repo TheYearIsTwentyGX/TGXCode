@@ -1164,7 +1164,15 @@ class Runner extends EventEmitter {
             }
 
             case 'rate_limit_event':
-                if (msg.rate_limit_info && msg.rate_limit_info.status !== 'allowed') {
+                if (!msg.rate_limit_info) break;
+                // The whole payload, every time — not just the ones that are
+                // going wrong. An `allowed` event is where `resetsAt` for a
+                // window lives, so dropping it (which is what this did) threw
+                // away the only free source of "when does the quota come back".
+                // bridge/usage.js decides what is worth showing; see the note
+                // there on why `utilization` is usually absent.
+                this.emit('quota', msg.rate_limit_info);
+                if (msg.rate_limit_info.status !== 'allowed') {
                     this.emit('notice', {
                         level: 'warn', kind: 'rate_limit',
                         text: `Rate limit: ${msg.rate_limit_info.status}`,
@@ -1476,6 +1484,9 @@ class RunnerPool extends EventEmitter {
         r.hasViewer = () => this.hasViewer(r.sessionId);
         r.on('status', (s) => this.emit('status', s));
         r.on('notice', (n) => this.emit('notice', { sessionId: r.sessionId, ...n }));
+        // Quota is account-wide, so this one deliberately does not carry a
+        // sessionId: which session happened to observe it says nothing.
+        r.on('quota', (info) => this.emit('quota', info));
         r.on('permission-request', (p) => this.emit('permission-request', p));
         r.on('permission-resolved', (p) => this.emit('permission-resolved', p));
         r.on('turn-complete', (res) => this.emit('turn-complete', { sessionId: r.sessionId, ...res }));

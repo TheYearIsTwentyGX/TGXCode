@@ -1217,6 +1217,64 @@ have no file.
 `exact: false`) or `none`. An unknown directory is `commands: []` and 200, never
 a 404: the caller pressed a key, and an empty list is a real answer.
 
+### `GET /api/quota`
+
+How much of the subscription quota is gone, and when it comes back. On a quota
+plan `costUsd` in the transcripts is `0`, so this is the only answer to "can I
+start another one of these".
+
+```
+{ version: 1,
+  now: number,                     // unix seconds, the bridge's clock
+  windows: [ { type, label, shortLabel, usedPercent, usedPercentAt,
+               usedPercentSource, resetsAt, status, statusAt,
+               isUsingOverage, overageStatus, overageResetsAt,
+               overageDisabledReason, surpassedThreshold } ],
+  events:  [ { type, label, from, to, usedPercent, at } ],
+  statusLine: { present: boolean, capturedAt: number|null, path: string } }
+```
+
+An **array**, not an object keyed by window — the order is meaningful (5-hour
+first, then the weekly ones, then anything unrecognised) and a client should
+render it as given.
+
+| Field | Type |
+| --- | --- |
+| `type` | string — `five_hour`, `seven_day`, `seven_day_opus`, `seven_day_sonnet`, `seven_day_overage_included`, `overage`, or `unspecified` for an event the CLI sent with no window named. **Not a closed set** — render an unknown one from `label` rather than dropping it |
+| `label` / `shortLabel` | string — humanised (`5-hour` / `5h`). For an unknown `type` both are the raw id |
+| `usedPercent` | **number 0–100, or null.** Null means nobody has said, which is *not* zero. Note the scale: the CLI's own `rate_limit_event` carries `utilization` as a 0–1 fraction and the bridge multiplies it here |
+| `usedPercentAt` | number, unix seconds, or null — **when that percentage was true.** See below; it can be hours old |
+| `usedPercentSource` | `"statusline"`, `"stream"`, or null |
+| `resetsAt` | number, unix seconds, or null |
+| `status` | `"allowed"`, `"allowed_warning"`, `"rejected"`, or **null when never observed.** Null is not "allowed" — a window the status line reported and no turn ever did has a percentage and no status |
+| `isUsingOverage` | boolean |
+| `overageStatus` | same three strings, or null |
+| `surpassedThreshold` | number 0–1, or null — the threshold the account crossed |
+| `events[].from` | string, or **null** for a window first observed already in trouble |
+
+**`usedPercent` can be stale, and a client must show its age.** The percentage
+has two possible sources and neither is continuous. The stream's
+`rate_limit_event` only carries `utilization` once you are near a limit — on the
+ordinary `allowed` path it sends a reset time and no percentage at all. The rest
+of the time the number comes from `scripts/quota-statusline.py`, which harvests
+`rate_limits.{five_hour,seven_day}.used_percentage` out of the Claude Code
+status line — and the status line is rendered only by the interactive TUI, so
+nothing this bridge spawns produces one. A day spent entirely inside the app
+leaves the percentage frozen at whatever a terminal last saw, while `status` and
+`resetsAt` stay current from the stream.
+
+So: compare `usedPercentAt` against `now` and say how old the reading is.
+`web/app.js` greys it past 30 minutes. Presenting an old percentage as current
+is the one failure this shape exists to prevent — do not render a bare number.
+
+`statusLine.present` is false when the harvester has never run, which is what
+lets a client offer the setup step (`node scripts/install-quota-statusline.js`)
+rather than showing an empty gauge.
+
+**Readable by a remote caller**, deliberately: it names no session, no path and
+no machine, and deciding from a phone whether there is room to release a draft is
+the same case the draft routes are open for.
+
 ## The live channel
 
 **SSE is best-effort. Polling is the guaranteed path.** Some transports buffer
@@ -1289,6 +1347,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `permission-request` | `{sessionId, ...ask}` |
 | `permission-resolved` | `{sessionId, requestId, outcome}` |
 | `notice` | `{sessionId, level, kind, text}` |
+| `quota` | **the whole `GET /api/quota` payload**, so there is nothing to refetch. Ungated, like `drafts-changed`. Fires only when a reading actually moved — the CLI sends an identical `rate_limit_event` on every turn and those are dropped rather than pushed. Note it carries **no `sessionId`**: quota is account-wide, and which session happened to observe it says nothing. A window that has been near a limit for an hour will therefore push nothing at all, which is why `usedPercentAt` matters more than the arrival time of this event |
 | `turn-complete` | `{sessionId, isError, detail, retries, costUsd, durationMs, numTurns, stopReason}` — the runner's `lastResult` with the session id on it. `detail` is null unless `isError` |
 | `send-failed` | `{sessionId, kind, message, unsent: [text]}` — hand the text back to the user |
 | `session-forked` | `{from, to}` — follow the new id |
