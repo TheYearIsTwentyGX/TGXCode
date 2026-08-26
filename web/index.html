@@ -186,6 +186,30 @@
       </div>
     </div>
 
+    <!-- How much of the 5-hour window and the week are gone. Beside DevBrowser
+         because it is the same kind of thing: the state of the machine rather
+         than a place to go.
+
+         The percentage comes from the status line, which only renders in a
+         terminal — so it can be older than the window you are looking at, and
+         the pill says how old rather than passing an old number off as current.
+         Everything the panel needs to explain that is in bridge/usage.js. -->
+    <div class="quota-wrap" id="quota-wrap" hidden>
+      <button id="quota-pill" class="quota-pill" type="button"
+              aria-haspopup="dialog" aria-expanded="false" aria-controls="quota-menu"
+              title="Quota used">
+        <span id="quota-pill-body"></span>
+      </button>
+
+      <div id="quota-menu" class="quota-menu" role="dialog"
+           aria-label="Quota usage" hidden>
+        <div class="quota-head">Quota used</div>
+        <div id="quota-windows"></div>
+        <div id="quota-events" class="quota-events"></div>
+        <div id="quota-note" class="quota-note"></div>
+      </div>
+    </div>
+
     <!-- Grouped with the DevBrowser pill rather than with Tasks and Board: those
          are places to go, and these two are the state of the machine. Hidden for
          a remote caller, which is a courtesy — the route refuses it either way. -->

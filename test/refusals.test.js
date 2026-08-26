@@ -480,6 +480,9 @@ const HOME = os.homedir();
     console.log('\n--- what a phone may still do ---');
     check('read sessions', (await call('GET', '/api/sessions?limit=1', { headers: PHONE })).status, 200);
     check('read the board', (await call('GET', '/api/overview', { headers: PHONE })).status, 200);
+    // Deliberately open: it names no session and no path, and "release the work
+    // from a phone when quota frees up" is the case the drafts routes exist for.
+    check('read the quota', (await call('GET', '/api/quota', { headers: PHONE })).status, 200);
     check('answer an ask (404 = no such session, not refused)',
         (await call('POST', '/api/sessions/abc/permission', {
             headers: PHONE, body: { requestId: 'x', decision: 'allow' },

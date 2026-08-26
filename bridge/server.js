@@ -31,6 +31,7 @@ const {
 } = require('./schedule');
 const { SlashCommandCache } = require('./slash-commands');
 const { NotificationLog, ReadState } = require('./notifications');
+const { Usage } = require('./usage');
 const devbrowser = require('./devbrowser');
 const tailscale = require('./tailscale');
 const devservers = require('./devservers');
@@ -66,6 +67,10 @@ const spinner = new Spinner(prefs);
 // What you did about a suggested follow-up — started it, or waved it away. The
 // suggestion itself is in the transcript; only the decision is ours to keep.
 const suggestions = new Suggestions();
+// How much of the 5-hour window and the week are gone. Fed by the stream events
+// the runner forwards and by whatever scripts/quota-statusline.py has harvested
+// — see bridge/usage.js for why it takes two sources to answer one question.
+const usage = new Usage();
 // What `?status=` on /api/suggestions accepts: the two decisions the store
 // knows, plus `open` for a task nobody has decided about — which is the absence
 // of an entry rather than a status, so the store has no name for it.
@@ -2733,6 +2738,15 @@ async function api(req, res, url, pathname, who) {
         return send(res, 200, data);
     }
 
+    // How much of the quota is gone. Deliberately open to a remote caller: it
+    // carries no filesystem detail and names no session, and "release the work
+    // from a phone when quota frees up" is a case the drafts routes are already
+    // open for. The snapshot is cheap — one stat of a small file, and everything
+    // else is in memory — so it needs no caching beyond the one in usage.js.
+    if (pathname === '/api/quota' && req.method === 'GET') {
+        return send(res, 200, usage.snapshot());
+    }
+
     // One PR status per session, for the rail. The same question the conversation
     // header asks about one session, asked about all of them at once — and reduced
     // to a single word each, because a rail row has space for one glyph.
@@ -4410,6 +4424,11 @@ pool.on('permission-resolved', (p) => {
     tickBoard();
 });
 pool.on('notice', (n) => broadcast('notice', n));
+// The identical `allowed` event arrives on every turn, so only a reading that
+// moved is worth a broadcast — `noteRateLimitEvent` says which.
+pool.on('quota', (info) => {
+    if (usage.noteRateLimitEvent(info)) broadcast('quota', usage.snapshot());
+});
 // Every process announces what slash commands its directory has. Recorded so a
 // composer can offer them without a process of its own, and broadcast only when
 // the list actually moved — otherwise each session start would push an identical

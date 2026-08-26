@@ -213,6 +213,137 @@ a:hover { text-decoration: underline; }
 .db-status .led { width: 7px; height: 7px; border-radius: 50%; background: var(--text-4); }
 .db-status[data-up="true"] .led { background: var(--green); }
 
+/* ── quota ───────────────────────────────────────────────────────────── */
+
+.quota-wrap { position: relative; }
+.quota-wrap[hidden] { display: none; }
+
+.quota-pill {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    height: 34px;
+    padding: 0 13px;
+    font: 500 12.5px/1 var(--sans);
+    color: var(--text-2);
+    background: var(--s2);
+    border-radius: var(--pill);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.quota-pill:hover { background: var(--s3); color: var(--text); }
+.quota-pill[aria-expanded="true"] { background: var(--s3); color: var(--text); }
+
+.quota-pill #quota-pill-body { display: flex; align-items: center; gap: 9px; }
+
+/* One window's worth: a label, a bar, a number. */
+.q-win { display: flex; align-items: center; gap: 5px; }
+.q-win .q-label { color: var(--text-4); font-size: 11.5px; }
+
+.q-bar {
+    position: relative;
+    width: 34px;
+    height: 4px;
+    border-radius: var(--pill);
+    background: var(--s4);
+    overflow: hidden;
+}
+.q-bar i {
+    position: absolute;
+    inset: 0 auto 0 0;
+    display: block;
+    border-radius: var(--pill);
+    background: var(--green);
+    transition: width var(--t-fast) var(--ease);
+}
+.q-win[data-status="allowed_warning"] .q-bar i { background: var(--yellow); }
+.q-win[data-status="rejected"] .q-bar i { background: var(--red); }
+
+/* Aged out. The number is still the last thing we know, and saying so quietly
+   is the whole point of the feature — a stale percentage rendered as current is
+   the failure this is designed against. */
+.q-win.stale .q-bar i { background: var(--text-4); }
+.q-win.stale .q-num { color: var(--text-4); }
+
+.q-num { font-variant-numeric: tabular-nums; }
+
+.quota-menu {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    z-index: 60;
+    width: 306px;
+    padding: 13px 15px 12px;
+    background: var(--s3);
+    border-radius: var(--r);
+    box-shadow: 0 10px 30px #000a;
+    animation: bell-in var(--t-fast) var(--ease);
+    transform-origin: top right;
+}
+.quota-menu[hidden] { display: none; }
+
+.quota-head {
+    margin-bottom: 10px;
+    font: 500 11px/1 var(--sans);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-4);
+}
+
+.q-row { padding: 7px 0; border-top: 1px solid var(--s2); }
+.q-row:first-child { border-top: 0; padding-top: 0; }
+
+.q-row-top {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    font: 400 13px/1.4 var(--sans);
+    color: var(--text-2);
+}
+.q-row-top .q-pct { font: 500 13px/1.4 var(--sans); color: var(--text); font-variant-numeric: tabular-nums; }
+.q-row.stale .q-row-top .q-pct { color: var(--text-4); }
+
+.q-row .q-bar { width: 100%; height: 5px; margin: 6px 0 5px; }
+
+.q-row-sub {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    font: 400 11.5px/1.5 var(--sans);
+    color: var(--text-4);
+}
+.q-row-sub .warn { color: var(--yellow); }
+.q-row-sub .bad { color: var(--red); }
+
+.quota-events {
+    margin-top: 10px;
+    font: 400 11.5px/1.6 var(--sans);
+    color: var(--text-4);
+}
+.quota-events:empty { display: none; }
+.quota-events .q-ev-head {
+    font: 500 11px/1 var(--sans);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-4);
+    margin-bottom: 5px;
+}
+.quota-events div + .q-ev-head { margin-top: 9px; }
+
+.quota-note {
+    margin-top: 10px;
+    font: 400 11.5px/1.55 var(--sans);
+    color: var(--text-4);
+}
+.quota-note:empty { display: none; }
+.quota-note code {
+    font: 400 11px/1.5 var(--mono);
+    color: var(--text-3);
+    word-break: break-all;
+}
+
+@media (prefers-reduced-motion: reduce) { .quota-menu { animation: none; } }
+
 /* ── notifications ───────────────────────────────────────────────────── */
 
 .bell-wrap { position: relative; }

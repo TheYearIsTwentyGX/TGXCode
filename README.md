@@ -982,6 +982,7 @@ you are away from the desk, and a phone that has dropped its connection is not.
 | `bridge/spinner-verbs.json` | The verb catalogue, and the seed for that directory |
 | `bridge/suggestions.js` | What you did about a suggested follow-up |
 | `bridge/drafts.js` | Sessions set up but not started — a create call, held back |
+| `bridge/usage.js` | How much of the 5-hour window and the week are gone, merged from turn events and the status line |
 | `bridge/schedule.js` | Sessions that start on a clock — the store, the cron, and what counts as new since last time (a branch's commits, or a pull request nobody has reviewed) |
 | `bridge/mcp.js` | The tools this app gives a session: offer the next piece of work, find the other sessions, hand one of them a fact |
 | `bridge/handoff.js` | The rules a handoff has to pass: the loop guard, and what waking a session would run into |
@@ -990,6 +991,8 @@ you are away from the desk, and a phone that has dropped its connection is not.
 | `bridge/tailscale.js` | What this machine is reachable as, for pairing |
 | `bridge/launch.sh` | Finds a node, then starts the bridge |
 | `scripts/import-spinner-verbs.js` | Rebuilds the verb catalogue from upstream |
+| `scripts/quota-statusline.py` | Claude Code's status line, harvesting the quota percentages on the way past |
+| `scripts/install-quota-statusline.js` | Points `~/.claude/settings.json` at that script, and refuses to clobber one you already have |
 | `web/` | The UI. No build step, no dependencies |
 | `web/terminal.js` | The terminal pane — a shell, or a run's output |
 | `app/main.js` | The Electron shell |
