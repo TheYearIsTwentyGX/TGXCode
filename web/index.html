@@ -792,6 +792,11 @@ checks, and merge it once they pass.">LGTM</button>
                aria-label="Slash commands"></div>
           <div id="new-mention-menu" class="slash-menu mention floating" role="listbox" hidden
                aria-label="Mentions"></div>
+          <!-- Held files, above the box for the same reason the live composer's
+               strip is above its input row: they are part of the message you are
+               writing, and reading downward should reach the box last. -->
+          <div id="new-attach" class="attach" hidden
+               aria-label="Files attached to this message"></div>
           <!-- rows="2" and no min-height: the box is sized by its contents from
                the first keystroke, so a one-line prompt does not sit in a tall
                empty well. -->
@@ -799,6 +804,15 @@ checks, and merge it once they pass.">LGTM</button>
                     placeholder="What should this session do?"
                     role="combobox" aria-expanded="false" aria-autocomplete="list"
                     aria-controls="new-slash-menu new-mention-menu"></textarea>
+          <!-- Hidden in draft and schedule mode; see openNew(). Paste and drop are
+               the gestures people use, and this is for the times there is nothing
+               to drag from. -->
+          <div class="compose-foot" id="new-attach-row">
+            <input id="new-attach-input" type="file" multiple hidden aria-hidden="true">
+            <button id="new-attach-btn" class="btn small" type="button">Attach files</button>
+            <span class="note">Or paste a screenshot, or drop files here. They are
+              saved into this directory when the session starts.</span>
+          </div>
         </div>
       </div>
       <!-- Only shown in schedule mode; see openNew(). These rows rather than a

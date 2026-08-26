@@ -223,11 +223,6 @@ const state = {
     busyTimer: null,        // ticks the elapsed-time readout while a turn runs
     queue: [],              // the current session's waiting messages, from the bridge
     queueDrag: null,        // id of the chip being dragged
-    // Files staged for the next message. Each is already on disk in the session's
-    // attached_assets/ by the time it reaches `ready` — see the attachments section
-    // below — so this holds metadata and a local preview URL, never file bytes.
-    attach: [],
-    attachSeq: 0,
     queueOpen: new Set(),   // ids of chips expanded to their full text
     // Slash commands the composer can complete, per working directory — the
     // bridge keys them that way because that is what decides them. Held here so
@@ -376,6 +371,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'channels', 'scroll', 'log', 'status-line', 'status-text', 'btn-stop', 'input',
     'btn-send', 'btn-lgtm', 'btn-attach', 'attach', 'attach-input', 'composer',
     'slash-menu', 'mention-menu', 'new-slash-menu', 'new-mention-menu',
+    'new-attach', 'new-attach-input', 'new-attach-btn', 'new-attach-row',
     'queue', 'queue-list', 'queue-count', 'queue-clear',
     'model', 'perm', 'btn-new', 'btn-new-menu', 'new-menu', 'db-status', 'db-label', 'toasts',
     'btn-bell', 'bell-menu', 'opt-desktop', 'opt-sound', 'bell-note', 'bell-try',
@@ -572,7 +568,7 @@ function restoreToComposer(text, files) {
         dom.input.setSelectionRange(dom.input.value.length, dom.input.value.length);
         if (state.current) saveDraft(state.current.sessionId, dom.input.value);
     }
-    if (files && files.length) adoptAttachments(files);
+    if (files && files.length) adoptAttachments(live, files);
 }
 
 // ── rail ─────────────────────────────────────────────────────────────────
@@ -1381,9 +1377,9 @@ function beginOpen(summary, { keepDash = false } = {}) {
     // The files staged against this session, from the same place. Cleared without
     // saving first, so switching away does not write the outgoing session's chips over
     // the incoming one's.
-    clearAttach({ save: false });
-    state.attach = loadAttach(summary.sessionId);
-    renderAttach();
+    clearAttach(live, { save: false });
+    live.attach = loadAttach(summary.sessionId);
+    renderAttach(live);
     autoGrow();
     dom.input.focus();
 
@@ -9229,14 +9225,28 @@ async function refreshQueue() {
 }
 
 // ── attachments ──────────────────────────────────────────────────────────
-// Files pasted or dropped onto the composer.
+// Files pasted or dropped onto a composer.
 //
-// Each one is uploaded the moment it arrives, before the message is sent. That is
-// what makes the rest of this simple: the chip shows the name the file really has on
-// disk, a staged file survives a reload because only its path has to be remembered,
-// and the send stays the same small JSON POST it always was — a list of paths, not a
-// payload. The bridge writes them into attached_assets/ at the root of the session's
-// checkout; see bridge/attachments.js for why there.
+// Under a live conversation each one is uploaded the moment it arrives, before the
+// message is sent. That is what makes the rest of this simple: the chip shows the name
+// the file really has on disk, a staged file survives a reload because only its path
+// has to be remembered, and the send stays the same small JSON POST it always was — a
+// list of paths, not a payload. The bridge writes them into attached_assets/ at the
+// root of the session's checkout; see bridge/attachments.js for why there.
+//
+// **The Start-a-session dialog cannot do that, and holds its files instead.** Where a
+// file lands is decided by the working directory, and that box is still editable after
+// you have pasted — so uploading on arrival would put the screenshot in whichever
+// project happened to be selected at the time, and leave it there when you browsed
+// somewhere else and pressed Start. Held chips are committed by startNew, once the
+// directory has stopped moving.
+//
+// Three things follow from holding them, and they are the price of it. A held chip
+// shows the name you gave rather than the name on disk, because a collision has not
+// renamed it yet. It does not survive a reload, since the bytes are in this page — and
+// nothing is lost, because a reload closes the dialog anyway. And Start becomes two
+// phases, which is why it refuses to start at all if an upload fails: a first message
+// naming a file that was never written is worse than not starting.
 
 // Matches the bridge, which is the side that enforces them. Checked here so that
 // dropping a video says what the limit is instead of uploading 200MB to be refused.
@@ -9283,13 +9293,17 @@ function dragHasFiles(dt) {
  * wire together, and it makes the per-chip failure story true: four succeed and the
  * fifth goes red, instead of a batch that half-worked.
  */
-async function attachFiles(list) {
-    if (!state.current) return;
-    const sessionId = state.current.sessionId;
+async function attachFiles(c, list) {
+    if (!c.ctx()) {
+        // The dialog can be in this state — no directory chosen — and a file that
+        // arrives now has nowhere to be described relative to.
+        if (c.notReady) toast(c.notReady, 'warn');
+        return;
+    }
     const files = Array.from(list || []).filter(f => f && f.size !== undefined);
     if (!files.length) return;
 
-    const room = MAX_ATTACH_FILES - state.attach.length;
+    const room = MAX_ATTACH_FILES - c.attach.length;
     if (room <= 0) {
         toast(`${MAX_ATTACH_FILES} files is the limit for one message.`, 'warn');
         return;
@@ -9312,7 +9326,7 @@ async function attachFiles(list) {
         }
 
         const entry = {
-            key: `a${++state.attachSeq}`,
+            key: `a${++c.attachSeq}`,
             name: attachName(file),
             bytes: file.size,
             mediaType: file.type || 'application/octet-stream',
@@ -9320,24 +9334,41 @@ async function attachFiles(list) {
             // Revoked on removal, on send and on leaving the session.
             previewUrl: ATTACH_IMAGE_TYPES.has(file.type) ? URL.createObjectURL(file) : null,
             path: null, relPath: null,
-            status: 'uploading',
+            // `held` is the deferred composer's resting state: on disk nowhere, and
+            // waiting for a directory to stop moving.
+            status: c.uploadMode === 'deferred' ? 'held' : 'uploading',
             error: null,
             file,
         };
-        state.attach.push(entry);
-        renderAttach();
-        await uploadAttachment(sessionId, entry);
+        c.attach.push(entry);
+        renderAttach(c);
+        if (c.uploadMode !== 'deferred') await uploadAttachment(c, entry);
     }
 }
 
-async function uploadAttachment(sessionId, entry) {
+/**
+ * Where one file goes: this composer's session if it has one, its directory if not.
+ *
+ * The two routes are the same upload — the session in the path was only ever a way of
+ * naming a working directory. See docs/api.md on POST /api/attachments.
+ */
+function attachUrl(c, name) {
+    const at = c.ctx();
+    if (!at) return null;
+    const n = `name=${encodeURIComponent(name)}`;
+    return at.sessionId
+        ? `/api/sessions/${at.sessionId}/attachments?${n}`
+        : `/api/attachments?cwd=${encodeURIComponent(at.cwd)}&${n}`;
+}
+
+async function uploadAttachment(c, entry) {
+    const url = attachUrl(c, entry.name);
+    if (!url || !entry.file) return;
     entry.status = 'uploading';
     entry.error = null;
-    renderAttach();
+    renderAttach(c);
     try {
-        const r = await postFile(
-            `/api/sessions/${sessionId}/attachments?name=${encodeURIComponent(entry.name)}`,
-            entry.file);
+        const r = await postFile(url, entry.file);
         // The name on disk wins. A collision made it `shot-2.png`, and a chip still
         // saying `shot.png` would name a file the message does not attach.
         entry.name = r.name;
@@ -9349,21 +9380,48 @@ async function uploadAttachment(sessionId, entry) {
         // Nothing needs the File once the bytes are on disk, and holding it keeps a
         // blob alive for as long as the chip does.
         entry.file = null;
-        saveAttach(sessionId, state.attach);
+        saveAttachFor(c);
     } catch (err) {
         entry.status = 'failed';
         entry.error = err.message;
     }
-    renderAttach();
+    renderAttach(c);
+}
+
+/**
+ * Put every held file on disk, and answer with what a create call should carry —
+ * or null, meaning do not start.
+ *
+ * Refusing on the first failure is the whole point. The alternative is a session
+ * whose first message names a file that was never written, which reads to the agent
+ * as a missing file and to the person as the feature being broken. The chip keeps its
+ * File, so the Retry button on it still works.
+ */
+async function commitAttachments(c) {
+    for (const a of c.attach) {
+        if (a.status === 'ready') continue;
+        await uploadAttachment(c, a);
+        if (a.status !== 'ready') {
+            toast(`Could not attach ${a.name}: ${a.error || 'upload failed'}`, 'error');
+            return null;
+        }
+    }
+    return readyAttachments(c);
+}
+
+/** Only a composer with somewhere to persist to — see the section header. */
+function saveAttachFor(c) {
+    const id = c.persistKey && c.persistKey();
+    if (id) saveAttach(id, c.attach);
 }
 
 /** Chips for files the bridge already knows about — a restored draft, or an edit. */
-function adoptAttachments(files) {
+function adoptAttachments(c, files) {
     for (const f of files || []) {
-        if (state.attach.length >= MAX_ATTACH_FILES) break;
-        if (state.attach.some(a => a.path && a.path === f.path)) continue;
-        state.attach.push({
-            key: `a${++state.attachSeq}`,
+        if (c.attach.length >= MAX_ATTACH_FILES) break;
+        if (c.attach.some(a => a.path && a.path === f.path)) continue;
+        c.attach.push({
+            key: `a${++c.attachSeq}`,
             name: f.name || String(f.relPath || '').split('/').pop(),
             bytes: f.bytes || 0,
             mediaType: f.mediaType || 'application/octet-stream',
@@ -9377,21 +9435,22 @@ function adoptAttachments(files) {
             file: null,
         });
     }
-    renderAttach();
-    if (state.current) saveAttach(state.current.sessionId, state.attach);
+    renderAttach(c);
+    saveAttachFor(c);
 }
 
-function removeAttach(key) {
-    const i = state.attach.findIndex(a => a.key === key);
+function removeAttach(c, key) {
+    const i = c.attach.findIndex(a => a.key === key);
     if (i < 0) return;
-    const [gone] = state.attach.splice(i, 1);
+    const [gone] = c.attach.splice(i, 1);
     if (gone.previewUrl) URL.revokeObjectURL(gone.previewUrl);
     // Deliberately not deleted from disk. A delete route is a second thing that
     // writes to a checkout and a second refusal to reason about, and an unsent file
     // in attached_assets/ is a harmless untracked file you can see — where a delete
-    // that resolves the wrong path is not harmless.
-    renderAttach();
-    if (state.current) saveAttach(state.current.sessionId, state.attach);
+    // that resolves the wrong path is not harmless. A held file was never written at
+    // all, so there is nothing to say about it either way.
+    renderAttach(c);
+    saveAttachFor(c);
 }
 
 /**
@@ -9403,11 +9462,11 @@ function removeAttach(key) {
  * appeared. So the send hands them to the pending row, which revokes them when it
  * goes — and every path that does not draw one revokes them itself.
  */
-function clearAttach({ save = true, revoke = true } = {}) {
-    if (revoke) revokePreviews(state.attach.map(a => a.previewUrl));
-    state.attach = [];
-    renderAttach();
-    if (save && state.current) saveAttach(state.current.sessionId, []);
+function clearAttach(c, { save = true, revoke = true } = {}) {
+    if (revoke) revokePreviews(c.attach.map(a => a.previewUrl));
+    c.attach = [];
+    renderAttach(c);
+    if (save) saveAttachFor(c);
 }
 
 function revokePreviews(urls) {
@@ -9415,7 +9474,7 @@ function revokePreviews(urls) {
 }
 
 /** What a send may carry: the ones that made it to disk. */
-const readyAttachments = () => state.attach
+const readyAttachments = (c) => c.attach
     .filter(a => a.status === 'ready' && a.path)
     .map(a => ({ path: a.path, relPath: a.relPath, mediaType: a.mediaType, name: a.name }));
 
@@ -9425,10 +9484,10 @@ function attachExt(name) {
     return m ? m[1].toLowerCase() : 'file';
 }
 
-function renderAttach() {
-    const list = state.attach;
-    dom.attach.hidden = !list.length;
-    dom.attach.replaceChildren(...list.map((a) => {
+function renderAttach(c) {
+    const list = c.attach;
+    c.attachNode.hidden = !list.length;
+    c.attachNode.replaceChildren(...list.map((a) => {
         const bits = [];
         if (a.previewUrl) {
             bits.push(el('img', { class: 'attach-thumb', src: a.previewUrl, alt: '' }));
@@ -9441,15 +9500,12 @@ function renderAttach() {
         if (a.status === 'failed') {
             bits.push(el('button', {
                 class: 'attach-act', type: 'button', title: a.error || 'Upload failed',
-                onclick: () => {
-                    if (!a.file || !state.current) return;
-                    uploadAttachment(state.current.sessionId, a);
-                },
+                onclick: () => uploadAttachment(c, a),
             }, 'Retry'));
         }
         bits.push(el('button', {
             class: 'attach-act danger', type: 'button', 'aria-label': `Remove ${a.name}`,
-            title: 'Remove', onclick: () => removeAttach(a.key),
+            title: 'Remove', onclick: () => removeAttach(c, a.key),
         }, '×'));
 
         return el('div', {
@@ -9457,9 +9513,9 @@ function renderAttach() {
             title: a.status === 'failed' ? a.error : (a.relPath || a.name),
         }, ...bits);
     }));
-    // An attachment on its own is a message, so the buttons have to follow the strip
-    // and not only the box.
-    enableSend(Boolean(state.current));
+    // An attachment on its own is a message, so whatever sends it has to follow the
+    // strip and not only the box.
+    if (c.afterRender) c.afterRender();
 }
 
 /**
@@ -9473,7 +9529,7 @@ function renderAttach() {
  * copied out of an editor brings `text/plain` and no files at all. So: files, and
  * either nothing textual or an actual image.
  */
-function onComposerPaste(e) {
+function onComposerPaste(c, e) {
     const dt = e.clipboardData;
     if (!dt) return;
     const items = Array.from(dt.items || []);
@@ -9485,7 +9541,7 @@ function onComposerPaste(e) {
     if (hasText && !anyImage) return;
 
     e.preventDefault();
-    attachFiles(files.length ? files
+    attachFiles(c, files.length ? files
         : items.filter(i => i.kind === 'file').map(i => i.getAsFile()).filter(Boolean));
 }
 
@@ -9497,27 +9553,51 @@ function onComposerPaste(e) {
  * transfer, so `dragHasFiles` is false, this returns early, and #queue-list's own
  * dragover still sees the event exactly as it did before.
  */
-function onComposerDragOver(e) {
+function onComposerDragOver(c, e) {
     if (state.queueDrag) return;
     if (!dragHasFiles(e.dataTransfer)) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'copy';
-    dom.composer.classList.add('drop-target');
+    c.dropZone.classList.add('drop-target');
 }
 
-function onComposerDragLeave(e) {
+function onComposerDragLeave(c, e) {
     // Only when the pointer has actually left the composer. Without the check the
     // highlight flickers off every time the drag crosses a child element.
-    if (e.relatedTarget && dom.composer.contains(e.relatedTarget)) return;
-    dom.composer.classList.remove('drop-target');
+    if (e.relatedTarget && c.dropZone.contains(e.relatedTarget)) return;
+    c.dropZone.classList.remove('drop-target');
 }
 
-function onComposerDrop(e) {
+function onComposerDrop(c, e) {
     if (state.queueDrag) return;
     if (!dragHasFiles(e.dataTransfer)) return;
     e.preventDefault();
-    dom.composer.classList.remove('drop-target');
-    attachFiles(e.dataTransfer.files);
+    c.dropZone.classList.remove('drop-target');
+    attachFiles(c, e.dataTransfer.files);
+}
+
+/**
+ * Everything a composer needs to take files: the strip, the picker, the drop zone.
+ *
+ * Separate from wireComposer because not every composer has one — a composer with no
+ * `attachNode` simply never gets these listeners, and nothing else has to know.
+ */
+function wireAttachments(c) {
+    if (!c.attachNode) return;
+    c.input.addEventListener('paste', (e) => onComposerPaste(c, e));
+    c.dropZone.addEventListener('dragover', (e) => onComposerDragOver(c, e));
+    c.dropZone.addEventListener('dragleave', (e) => onComposerDragLeave(c, e));
+    c.dropZone.addEventListener('drop', (e) => onComposerDrop(c, e));
+    if (c.attachBtn) {
+        c.attachBtn.addEventListener('click', () => c.attachInput.click());
+    }
+    if (c.attachInput) {
+        c.attachInput.addEventListener('change', () => {
+            attachFiles(c, c.attachInput.files);
+            // So picking the same file twice in a row fires `change` the second time.
+            c.attachInput.value = '';
+        });
+    }
 }
 
 /**
@@ -9665,7 +9745,7 @@ async function sendMessage({ fork = false, text: override = null, canned = false
     // Attachments only ride on a message that came out of the box. A canned send — the
     // LGTM button, a follow-up card — must not walk off with a screenshot you staged
     // for something else, by the same argument that leaves the half-typed text alone.
-    const files = override == null ? readyAttachments() : [];
+    const files = override == null ? readyAttachments(live) : [];
     // A screenshot with nothing typed under it is a message: "look at this" is the
     // whole content of it.
     if ((!text && !files.length) || !state.current) return;
@@ -9688,14 +9768,14 @@ async function sendMessage({ fork = false, text: override = null, canned = false
     // where it was, rather than dropping it on the way past.
     // Taken before the strip is emptied, because emptying it is what would revoke them.
     const previews = files.length
-        ? state.attach.filter(a => a.previewUrl).map(a => a.previewUrl)
+        ? live.attach.filter(a => a.previewUrl).map(a => a.previewUrl)
         : [];
 
     if (override == null) {
         dom.input.value = '';
         autoGrow();
         saveDraft(sessionId, '');
-        clearAttach({ revoke: false });
+        clearAttach(live, { revoke: false });
     }
 
     // Drawn in the same frame the box empties, so the message moves from one to the
@@ -10282,6 +10362,13 @@ async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     dom.newSchedSave.hidden = !schedMode;
     dom.newSchedSave.textContent = sched ? 'Save changes' : 'Save schedule';
 
+    // Only where the dialog is about to start a session. A draft and a schedule are
+    // records of a create call, and neither store carries attachments — see
+    // docs/api.md — so offering the control there would be offering something that
+    // silently does not survive being saved.
+    dom.newAttachRow.hidden = schedMode || Boolean(draft);
+    clearAttach(newC);
+
     dom.newTitle.textContent = schedMode
         ? (sched ? 'Edit schedule' : 'Schedule a session')
         : (draft ? 'Edit draft' : 'Start a session');
@@ -10319,6 +10406,10 @@ function closeNew() {
     // never fires and a popover would still be up — fixed to the viewport, over
     // nothing — the next time the dialog opened.
     closeMenus(newC);
+    // Held files are bytes in this page and were never written anywhere, so closing
+    // the dialog really does discard them — which is the whole benefit of holding
+    // them rather than uploading on arrival.
+    clearAttach(newC);
     // So a Save that somehow ran after this could not write to a draft the dialog
     // is no longer showing. openNew sets it on the way in either way.
     state.drafts.editing = null;
@@ -10736,7 +10827,9 @@ function newDialogValues() {
     const cwd = dom.newCwd.value.trim();
     const prompt = dom.newPrompt.value.trim();
     if (!cwd) { toast('Pick a working directory first.', 'warn'); return null; }
-    if (!prompt) {
+    // A screenshot with nothing typed is a message — "look at this" is the whole
+    // content of it — and the create route takes it that way too.
+    if (!prompt && !newC.attach.length) {
         toast('Write a first message so the session has something to do.', 'warn');
         return null;
     }
@@ -10988,6 +11081,22 @@ function whenBuild() {
 }
 
 /**
+ * What the dialog's footer may do while files are held.
+ *
+ * Save as draft is disabled rather than quietly dropping them. Both buttons are on
+ * screen at once in start mode, a draft cannot carry a file, and a Save that
+ * discarded a screenshot without saying so is the one outcome here worth refusing
+ * outright. Start is unaffected: it is the button that can honour them.
+ */
+function paintNewAttach() {
+    const held = newC.attach.length;
+    dom.newSave.disabled = held > 0;
+    dom.newSave.title = held
+        ? 'A draft cannot carry attachments. Start the session, or remove the files.'
+        : '';
+}
+
+/**
  * Show only the fields the chosen gate needs.
  *
  * A branch gate wants a ref and a PR gate does not — it watches whatever the
@@ -11161,6 +11270,14 @@ async function startNew() {
     dom.newGo.disabled = true;
     dom.newGo.textContent = 'Starting';
     try {
+        // Now, and not when they were pasted: this is the first moment the working
+        // directory has stopped being editable, and it is what decides where they go.
+        // A failure here stops the whole thing — see commitAttachments.
+        if (newC.attach.length) {
+            const files = await commitAttachments(newC);
+            if (!files) return;
+            body.attachments = files;
+        }
         const r = await post('/api/sessions', body);
         closeNew();
         toast('Session started.', 'ok');
@@ -11228,17 +11345,8 @@ for (const log of [dom.log, dom.agentLog]) {
 
 dom.btnSend.addEventListener('click', () => sendMessage());
 
-// Paste, drop, and the paperclip all end up in attachFiles.
-dom.input.addEventListener('paste', onComposerPaste);
-dom.composer.addEventListener('dragover', onComposerDragOver);
-dom.composer.addEventListener('dragleave', onComposerDragLeave);
-dom.composer.addEventListener('drop', onComposerDrop);
-dom.btnAttach.addEventListener('click', () => dom.attachInput.click());
-dom.attachInput.addEventListener('change', () => {
-    attachFiles(dom.attachInput.files);
-    // Cleared so that picking the same file twice in a row fires `change` both times.
-    dom.attachInput.value = '';
-});
+// Paste, drop and the paperclip are wired where the composers are built, beside
+// wireComposer — `live` is declared down there and cannot be touched from here.
 // A file dropped anywhere else in the window would otherwise navigate away to it,
 // which loses the conversation and every draft on screen. Gated exactly like the
 // composer's own handlers, so a queue chip being dragged is still none of our
@@ -11452,8 +11560,18 @@ const SLASH_RE = /^\/[A-Za-z0-9_:-]*$/;
 // this file. So: data here, and every function below takes the composer it is
 // acting on.
 function makeComposer({ input, slashNode, mentionNode, id, ctx, container,
-    closeOthers = () => {}, notReady = null, homeEnd = true, float = false }) {
-    const c = { input, container, ctx, closeOthers, notReady, homeEnd };
+    closeOthers = () => {}, notReady = null, homeEnd = true, float = false,
+    onInput = null,
+    // Attachments. A composer with no `attachNode` takes no files at all, and
+    // wireAttachments simply skips it — nothing else has to know.
+    attachNode = null, attachInput = null, attachBtn = null, dropZone = null,
+    uploadMode = 'eager', persistKey = null, afterRender = null }) {
+    const c = { input, container, ctx, closeOthers, notReady, homeEnd, onInput,
+        attachNode, attachInput, attachBtn, dropZone, uploadMode, persistKey,
+        afterRender,
+        // Staged files, and the counter their keys come from. Per composer, because
+        // a screenshot pasted into one box has nothing to do with the other.
+        attach: [], attachSeq: 0 };
     c.slash = { rows: [], index: 0, seq: 0, node: slashNode,
         id: `${id}-slash`, row: slashRow, float, c };
     c.mention = { rows: [], index: 0, seq: 0, node: mentionNode,
@@ -11497,6 +11615,21 @@ const live = makeComposer({
     // Both are main-window furniture that would otherwise sit over the popover.
     // A composer inside a modal has neither, and passes nothing.
     closeOthers: () => { showBell(false); showNewMenu(false); },
+
+    // Attachments. The strip is above the input row and the drop zone is the whole
+    // composer, so a file can be let go anywhere near the box rather than exactly on
+    // it. Uploaded on arrival, because a live composer already knows the checkout its
+    // files belong in.
+    attachNode: dom.attach,
+    attachInput: dom.attachInput,
+    attachBtn: dom.btnAttach,
+    dropZone: dom.composer,
+    uploadMode: 'eager',
+    // Which localStorage key its chips belong under, or null while no session is on
+    // screen. Only the eager composer has one: a held file is bytes in this page, and
+    // there is no path to write down.
+    persistKey: () => state.current && state.current.sessionId,
+    afterRender: () => enableSend(Boolean(state.current)),
 });
 
 // Filled by wireComposer below, live first. The keyboard map and the
@@ -11929,6 +12062,7 @@ function wireComposer(c) {
 }
 
 wireComposer(live);
+wireAttachments(live);
 
 // A click anywhere outside a composer's own row closes that composer's popovers,
 // and only that composer's. Per composer rather than "everything not in
@@ -12294,12 +12428,24 @@ const newC = makeComposer({
     notReady: 'Pick a working directory first.',
     homeEnd: false,
     float: true,
+
+    // Held rather than uploaded, because where a file lands is decided by the box
+    // above this one and that box is still editable. The drop zone is the field
+    // rather than the whole modal: a file let go over the directory picker is much
+    // more likely to be aimed at the picker than at the message.
+    attachNode: dom.newAttach,
+    attachInput: dom.newAttachInput,
+    attachBtn: dom.newAttachBtn,
+    dropZone: dom.newScrim.querySelector('.composer-field'),
+    uploadMode: 'deferred',
+    afterRender: () => paintNewAttach(),
     // Sizing the box is what this listener used to be for on its own. It stays
     // first: a popover placed against the box has to be placed against the height
     // it has now, not the height it had a keystroke ago.
     onInput: growPrompt,
 });
 wireComposer(newC);
+wireAttachments(newC);
 
 // A popover positioned from script has to be told when the page moves under it.
 // The modal body is the one scroll container between this box and the window.

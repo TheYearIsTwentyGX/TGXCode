@@ -3252,6 +3252,20 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 /* Nothing but a positioning context and a hit-test target for the
    click-outside rule; the popovers inside it are `position: fixed`. */
 .composer-field { position: relative; }
+/* The strip sits above the box, so its gap belongs underneath it. */
+.composer-field .attach { margin-bottom: 8px; }
+/* The paperclip row under the box. Wraps rather than squeezing the note, which is
+   the half that can be truncated without losing the affordance. */
+.compose-foot {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 8px;
+}
+.compose-foot .note { margin-top: 0; flex: 1 1 12ch; }
+/* Same treatment the live composer gets, so a drop reads as a drop in both. */
+.composer-field.drop-target { outline: 2px dashed var(--blue); outline-offset: 4px; }
 
 @media (prefers-reduced-motion: reduce) { .slash-menu { animation: none; } }
 
