@@ -266,6 +266,20 @@ a:hover { text-decoration: underline; }
 
 .q-num { font-variant-numeric: tabular-nums; }
 
+/* When the window comes back. Set apart by a rule rather than another dot:
+   the groups before it are percentages and this is a duration, and the eye
+   should not have to read the units to tell them apart. */
+.q-reset {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding-left: 9px;
+    border-left: 1px solid var(--s4);
+    color: var(--text-4);
+    font-variant-numeric: tabular-nums;
+}
+.q-reset svg { flex: none; }
+
 .quota-menu {
     position: absolute;
     top: calc(100% + 8px);
