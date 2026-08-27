@@ -280,7 +280,7 @@ strings by a client that then rendered `[object Object]`:
 | `tool` | `name` string · `input` object · `status` — see below · `result` object or null · **`agent` object or null** · `persistedPath` string or null · `durationMs` number or null · `resultTs` ISO string once resolved |
 | `tool-result` | `toolId` string, plus every field of a resolved `tool` — a **patch**, see below |
 | `system` | `subtype` string · `isError` bool · `text` string |
-| `agent-done` | `taskId`, `toolUseId`, `status` (`"completed"` unless the notification said otherwise), `summary`, `result` — all strings or null — plus `tokens`, `toolUses`, `durationMs`, numbers or null |
+| `agent-done` | `taskId`, `toolUseId`, `status` (`"completed"` unless the notification said otherwise), `summary`, `result` — all strings or null — plus `tokens`, `toolUses`, `durationMs`, numbers or null, and `hasTranscript`, a boolean. **`toolUseId` is not on its own a subagent you can open.** A background shell reports itself through the same notification and its `toolUseId` names a `Bash` call, which has nothing filed under `subagents/`; `GET /api/sessions/:id/subagent` then answers `404`. Offer a way in only when `hasTranscript` is true |
 | `suggestion` | `prompt` string · `why`, `title` strings or null · `cwd` string — follow-up work an agent offered rather than did |
 | `peer-message` | `from` (socket address), `fromName` (the peer's name, which is its address), `text` |
 | `handoff` | `text` string — work another session handed this one, which is what woke it · `from` (the sending session's id), `fromTitle`, `fromProject`, `title`, all strings or null |
@@ -1349,7 +1349,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `notice` | `{sessionId, level, kind, text}` |
 | `quota` | **the whole `GET /api/quota` payload**, so there is nothing to refetch. Ungated, like `drafts-changed`. Fires only when a reading actually moved — the CLI sends an identical `rate_limit_event` on every turn and those are dropped rather than pushed. Note it carries **no `sessionId`**: quota is account-wide, and which session happened to observe it says nothing. A window that has been near a limit for an hour will therefore push nothing at all, which is why `usedPercentAt` matters more than the arrival time of this event |
 | `turn-complete` | `{sessionId, isError, detail, retries, costUsd, durationMs, numTurns, stopReason}` — the runner's `lastResult` with the session id on it. `detail` is null unless `isError` |
-| `send-failed` | `{sessionId, kind, message, unsent: [text]}` — hand the text back to the user |
+| `send-failed` | `{sessionId, kind, message, unsent: [text]}` — a send that never became a turn; hand the text back to the user. `unsent` is an array of **strings**, in send order, and may be empty — the event still means the send failed, and `message` is then the whole of it. `kind` is one of `busy-elsewhere` (the session is running somewhere else; offer to branch), `no-claude`, `missing`, `unknown`, `exited` (the process ended without answering) or `retired` (the bridge shut the process down with messages still queued). Treat an unrecognised kind as `unknown`. Attachments are **not** carried: a message that had files comes back as its text alone |
 | `session-forked` | `{from, to}` — follow the new id |
 | `slash-commands` | `{cwd, at}` — that directory's slash commands changed; drop what you cached |
 | `run-changed` | `{runId, workspace, commandId, label, state, port, exit, stopped, at}` — a project command moved; state only, never output |
@@ -1885,7 +1885,7 @@ nobody to ask.
 
 | Route | Body | Notes |
 |---|---|---|
-| `POST /api/sessions/:id/stop` | `{hard?}` | `{ok, how, dropped[]}` |
+| `POST /api/sessions/:id/stop` | `{hard?}` | `{ok, how, dropped[]}` — see below |
 | `GET/DELETE /api/sessions/:id/queue[/:qid]` | | inspect, drop one, clear |
 | `POST /api/sessions/:id/queue/reorder` | `{ids}` | |
 | `POST /api/sessions/:id/flags` | `{pinned?, archived?, test?}` | |
@@ -1895,6 +1895,25 @@ nobody to ask.
 | `GET /api/fs?path=` | | directory picker; roots-scoped |
 | `POST /api/fs/mkdir` | `{parent, name}` | one new folder; roots-scoped, local callers only |
 | `GET /api/pairing` | | local callers only — what this machine is reachable as |
+
+`POST /api/sessions/:id/stop` answers `{ok, how, dropped}`. `404` when the session
+has no runner at all. Otherwise `how` says what actually happened, and the three
+values are not interchangeable:
+
+- `soft` — the CLI was asked to interrupt itself. The turn stops, the process stays
+  alive, and the session is resumable. Escalate by posting again with `hard: true`.
+- `hard` — SIGTERM then SIGKILL, possibly mid-tool-call.
+- `null` with `ok: false` — **there was no process to stop.** Not an error: the
+  session's process had already gone, and a client should say so rather than
+  claiming a kill. It still matters, because `dropped` can be non-empty here.
+
+`dropped` is an array of **strings** — the text of the messages that were still
+waiting, in send order. Never the turn that was in flight, which is already in the
+transcript. Attachments do not come back with them even though the files are still
+on disk. They have been taken off the queue, so a client that does not put them
+somewhere (the composer, a draft) loses them; that includes the `how: null` case,
+which is the one where a session looked stuck and Stop was the obvious thing to
+press.
 
 `/api/fs` returns `{path, parent, roots, isGit, truncated, entries[]}`, where each
 entry is `{name, path, git}`. Directories only, dotfiles omitted, symlinks to

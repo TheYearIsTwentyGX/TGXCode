@@ -172,6 +172,16 @@ class Terminal {
         // script(1) says nothing on stderr in normal use, so anything here is
         // worth seeing in the pane rather than swallowing.
         this.proc.stderr.on('data', (buf) => this.push(buf));
+        // The same asynchronous EPIPE `bridge/runner.js` guards against, in the
+        // one other place this bridge writes to a child's stdin. `write()` below
+        // has a try/catch, but a broken pipe on a socket does not throw there — it
+        // arrives as an 'error' on the stream, and unhandled that is thrown and
+        // takes the whole bridge down. A keystroke in flight as the shell exits is
+        // all it needs.
+        this.proc.stdin.on('error', () => { /* the shell is going away */ });
+        this.proc.stdout.on('error', () => { /* ditto */ });
+        this.proc.stderr.on('error', () => { /* ditto */ });
+
         this.proc.on('error', (err) => {
             this.push(Buffer.from(`\r\n[claude-sessions] could not start a shell: ${err.message}\r\n`));
             this.finish(null, null);
