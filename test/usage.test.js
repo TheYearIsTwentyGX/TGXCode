@@ -359,5 +359,67 @@ const now = () => Math.floor(Date.now() / 1000);
     ok('two bridges sharing the state file merge rather than overwrite');
 }
 
+// --- the beacon ---------------------------------------------------------
+//
+// Only the parts that do not spawn anything. Actually running a beacon needs a
+// directory the user has trusted and costs a real API call, so it is a manual
+// check rather than a test — see docs/plans/05-usage-and-quota.md.
+//
+// DEFAULTS and SHAPE are read without constructing Prefs on purpose: the
+// constructor writes ~/.tgxcode/settings.json, which is keyed off HOME rather
+// than XDG_DATA_HOME and would therefore reach outside this test's sandbox.
+
+const { DEFAULTS: PREF_DEFAULTS, SHAPE: PREF_SHAPE } = require('../bridge/prefs');
+const { plain } = require('../bridge/beacon');
+
+{
+    // Off, and pointed nowhere. A feature that starts Claude in a directory
+    // must not have a directory until somebody names one.
+    assert.strictEqual(PREF_DEFAULTS.quota.beacon, false);
+    assert.strictEqual(PREF_DEFAULTS.quota.beaconDir, null);
+
+    const shape = PREF_SHAPE.quota;
+    assert.strictEqual(shape.beacon(true), true);
+    assert.strictEqual(shape.beacon('yes'), false);
+
+    assert.strictEqual(shape.beaconDir(null), true, 'unset is how it ships');
+    assert.strictEqual(shape.beaconDir('/home/x/proj'), true);
+    assert.strictEqual(shape.beaconDir(''), false, 'empty is not a directory');
+    assert.strictEqual(shape.beaconDir(42), false);
+
+    // The floor matters: each run is a process and an API call, so a file
+    // asking for one a minute is a mistake to reject rather than obey.
+    assert.strictEqual(shape.beaconEveryMinutes(20), true);
+    assert.strictEqual(shape.beaconEveryMinutes(5), true);
+    assert.strictEqual(shape.beaconEveryMinutes(4), false);
+    assert.strictEqual(shape.beaconEveryMinutes(0), false);
+    assert.strictEqual(shape.beaconEveryMinutes(2000), false);
+    assert.strictEqual(shape.beaconEveryMinutes(20.5), false);
+
+    ok('the beacon ships off, with no directory, and refuses a silly interval');
+}
+
+{
+    // When a run fails it is almost always a dialog waiting in a TUI nobody can
+    // see, and the panel has to name it. This is that text arriving as the CLI
+    // actually emits it — the real settings-warning modal, ANSI and all, whose
+    // cursor moves split "Enter to confirm" into three pieces.
+    const soup = '\x1b[93m\x1b[1mSettings Warning\x1b[22m\x1b[39m\n'
+        + '\x1b[2Gpermissions.allow: invalid rule was skipped\n'
+        + '\x1b[37mEnter \x1b[8Gto \x1b[11Gconfirm\x1b[39m\n';
+    const out = plain(soup);
+    assert.ok(out.includes('Settings Warning'), out);
+    assert.ok(out.includes('Enter to confirm'), 'the cursor moves must not shred the words');
+    assert.ok(!out.includes('\x1b'), 'no escapes survive into the panel');
+
+    // And it must never be the thing that throws while reporting a failure.
+    assert.strictEqual(plain(''), '');
+    assert.strictEqual(plain(null), '');
+    assert.strictEqual(plain(undefined), '');
+    assert.ok(plain('x'.repeat(50_000)).length <= 400, 'the panel gets a line, not a screen dump');
+
+    ok('a blocking dialog is rendered as readable text for the panel to show');
+}
+
 fs.rmSync(home, { recursive: true, force: true });
 console.log(`\n${pass} groups passed`);

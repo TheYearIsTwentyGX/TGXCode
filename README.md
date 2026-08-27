@@ -983,6 +983,7 @@ you are away from the desk, and a phone that has dropped its connection is not.
 | `bridge/suggestions.js` | What you did about a suggested follow-up |
 | `bridge/drafts.js` | Sessions set up but not started — a create call, held back |
 | `bridge/usage.js` | How much of the 5-hour window and the week are gone, merged from turn events and the status line |
+| `bridge/beacon.js` | A `claude` started for four seconds and killed, so the quota percentages refresh with no terminal open |
 | `bridge/schedule.js` | Sessions that start on a clock — the store, the cron, and what counts as new since last time (a branch's commits, or a pull request nobody has reviewed) |
 | `bridge/mcp.js` | The tools this app gives a session: offer the next piece of work, find the other sessions, hand one of them a fact |
 | `bridge/handoff.js` | The rules a handoff has to pass: the loop guard, and what waking a session would run into |

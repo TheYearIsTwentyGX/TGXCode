@@ -66,7 +66,11 @@ def windows(payload):
         pct = win.get('used_percentage')
         if not isinstance(pct, (int, float)) or isinstance(pct, bool):
             continue
-        entry = {'used_percentage': float(pct)}
+        # Rounded, and not only to keep 7.000000000000001 out of the file: the
+        # status line multiplies a float fraction by 100, so two readings of the
+        # same percentage can differ in the last bits. Without this the
+        # unchanged-content check below would miss and rewrite on noise.
+        entry = {'used_percentage': round(float(pct), 2)}
         resets = win.get('resets_at')
         if isinstance(resets, (int, float)) and not isinstance(resets, bool):
             entry['resets_at'] = int(resets)

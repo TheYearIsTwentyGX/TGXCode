@@ -1231,7 +1231,8 @@ start another one of these".
                isUsingOverage, overageStatus, overageResetsAt,
                overageDisabledReason, surpassedThreshold } ],
   events:  [ { type, label, from, to, usedPercent, at } ],
-  statusLine: { present: boolean, capturedAt: number|null, path: string } }
+  statusLine: { present: boolean, capturedAt: number|null, path: string },
+  beacon:  { enabled, dir, everyMinutes, running, at, ok, reason, screen, ms } }
 ```
 
 An **array**, not an object keyed by window — the order is meaningful (5-hour
@@ -1270,6 +1271,26 @@ is the one failure this shape exists to prevent — do not render a bare number.
 `statusLine.present` is false when the harvester has never run, which is what
 lets a client offer the setup step (`node scripts/install-quota-statusline.js`)
 rather than showing an empty gauge.
+
+**`beacon` says why the number is or is not moving**, and a client should show
+it rather than leaving a stale reading unexplained. The beacon starts a
+short-lived `claude` in a directory the user has named, purely so its startup
+quota probe runs and the status line can be harvested — see `bridge/beacon.js`.
+
+| Field | Type |
+| --- | --- |
+| `enabled` | boolean — on *and* pointed at a directory. Off is the default and means the percentage only refreshes while a terminal is open |
+| `dir` | string or null — where it runs. The user names it in `~/.tgxcode/settings.json`, **user file only**: a project's `.tgxcode/settings.json` is checked into a repository and cannot set this |
+| `everyMinutes` | number or null — floor of 5 |
+| `running` | boolean — a run is in flight right now |
+| `at` | number, unix seconds, or absent — when the last run finished |
+| `ok` | boolean or absent. **Absent means it has never run**, which is not the same as failing |
+| `reason` | string, present when `ok` is false — usually a timeout, meaning a dialog is waiting in a TUI nobody can see |
+| `screen` | string or absent — a one-line readable tail of that TUI, so the dialog can be named. Escape sequences are stripped and it is capped at 400 chars |
+| `ms` | number or absent — how long the run took. A healthy one is a few seconds |
+
+A failing beacon is **not** an error condition for a client: the previous
+reading stands and ages visibly. Draw the reason, do not raise anything.
 
 **Readable by a remote caller**, deliberately: it names no session, no path and
 no machine, and deciding from a phone whether there is room to release a draft is

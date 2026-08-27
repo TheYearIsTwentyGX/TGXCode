@@ -18,11 +18,73 @@
 >
 > What shipped is tier A plus a percentage: `bridge/usage.js` merges the stream
 > events with what `scripts/quota-statusline.py` harvests from the status line.
-> Point 4 still holds — `/usage` is a slash command, not a CLI subcommand — and
-> **tier C was not built.** If the harvested number proves too stale, the cleaner
-> fallback than the undocumented endpoint imagined below is the CLI's own
-> `probeQuotaStatus`: a `max_tokens: 1` Messages request whose response headers
-> carry the same fields. Ordinary API surface, not a private endpoint.
+> Point 4 still holds — `/usage` is a slash command, not a CLI subcommand.
+>
+> **Tier C is not available. Measured, not assumed — do not spend an afternoon
+> rediscovering this.** The CLI has an internal `probeQuotaStatus`: a
+> `max_tokens: 1` Messages request whose response headers carry the same
+> `anthropic-ratelimit-unified-*` fields. Reproducing it from outside the CLI
+> with the OAuth token from `~/.claude/.credentials.json` returns **`429`,
+> `{"type":"rate_limit_error","message":"Error"}`, and no
+> `anthropic-ratelimit-*` headers at all** — including with the CLI's own
+> `user-agent`, and on an account that was demonstrably not rate limited at the
+> time. The missing headers are the tell: a real quota rejection carries
+> `anthropic-ratelimit-unified-status: rejected` plus the utilization figures,
+> which is how the CLI itself detects that state. So the request is being
+> refused before it reaches the quota system.
+>
+> The token does carry `user:inference`, so getting further is probably a matter
+> of replicating more of the first-party client's identity. **That is the point
+> at which to stop** — it is circumventing an access control Anthropic put there
+> deliberately, and the prize is a percentage we already get for free whenever a
+> terminal is open. The undocumented-endpoint version imagined below is the same
+> objection with worse odds.
+>
+> **A background `claude` as a quota beacon: shipped, after two wrong turns.**
+> Since the numbers come from the status line and the status line needs a TUI,
+> the way to refresh without a terminal open is to *be* a TUI for a few seconds.
+> `bridge/beacon.js` starts `claude`, lets its startup prefetch run the quota
+> probe, takes what the harvester wrote, and kills it. Measured at ~4.4s a run.
+>
+> Two things were assumed wrong on the way, both worth recording:
+>
+> - **"Keep one open."** No: `probeQuotaStatus` is called from exactly one
+>   place, the startup prefetch. The CLI probes once per process start and never
+>   on a timer, so a long-lived beacon takes one reading and holds it forever.
+>   It has to be *restarted*, not kept.
+> - **"Then it will litter the rail, so pin one conversation and `--resume` it."**
+>   Also no, and this is the good part: **a session that is never sent a message
+>   writes no transcript at all.** No `<id>.jsonl`, so no row, nothing to clean
+>   up, no conversation to pin. Verified by watching the project directory
+>   across runs. The resume machinery was designed and then deleted unbuilt.
+>
+> What remains true, and is why the feature is off by default:
+>
+> - **Modals stop it**, and it will not press keys to get past them. The trust
+>   prompt grants read, edit and execute on a directory; a background process
+>   confirming dialogs it cannot read is not worth a percentage. Hence
+>   `quota.beaconDir` is the user's to name, from the **user settings file only**
+>   — a repository does not get to choose where this app starts Claude — and the
+>   instruction is to open Claude there yourself once first.
+> - **`--bare` must never be passed.** It is what would make startup cheap and
+>   it explicitly skips background prefetches, i.e. the probe. `CLAUDE_CODE_SIMPLE`
+>   is the same switch and is scrubbed from the child's environment.
+> - **Each run costs** a CLI start and one `max_tokens: 1` request. Hence the
+>   five-minute floor on the interval.
+> - **`tengu_cicada_nap_ms`** gates the prefetch remotely. It is 0 today; raised,
+>   runs inside the nap window would skip the probe and the beacon would quietly
+>   stop refreshing.
+>
+> Every one of those fails the same safe way — no new reading, the pill ages
+> visibly — and `beacon` in the `/api/quota` payload carries the reason and a
+> readable line of whatever dialog is in the way, so the panel can say *why*
+> rather than just going stale.
+>
+> The other mitigation is still in place, and is a property
+> worth knowing: the stream's `rate_limit_event` starts carrying `utilization`
+> once the account crosses a warning threshold. So the percentage is guaranteed
+> live exactly when it is close to mattering, and can only go stale in the range
+> where being approximate is cheap.
 >
 > Tier B is untouched and still worth doing.
 

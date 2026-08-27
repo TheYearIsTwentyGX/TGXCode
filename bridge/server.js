@@ -32,6 +32,7 @@ const {
 const { SlashCommandCache } = require('./slash-commands');
 const { NotificationLog, ReadState } = require('./notifications');
 const { Usage } = require('./usage');
+const { Beacon } = require('./beacon');
 const devbrowser = require('./devbrowser');
 const tailscale = require('./tailscale');
 const devservers = require('./devservers');
@@ -71,6 +72,11 @@ const suggestions = new Suggestions();
 // the runner forwards and by whatever scripts/quota-statusline.py has harvested
 // — see bridge/usage.js for why it takes two sources to answer one question.
 const usage = new Usage();
+// And the thing that keeps those percentages current with no terminal open: a
+// `claude` started for a few seconds and killed. Off unless the user has named
+// a directory they trust — see bridge/beacon.js for why that consent is theirs
+// to give rather than ours to assume.
+const beacon = new Beacon();
 // What `?status=` on /api/suggestions accepts: the two decisions the store
 // knows, plus `open` for a task nobody has decided about — which is the absence
 // of an entry rather than a status, so the store has no name for it.
@@ -2744,7 +2750,7 @@ async function api(req, res, url, pathname, who) {
     // open for. The snapshot is cheap — one stat of a small file, and everything
     // else is in memory — so it needs no caching beyond the one in usage.js.
     if (pathname === '/api/quota' && req.method === 'GET') {
-        return send(res, 200, usage.snapshot());
+        return send(res, 200, quotaPayload());
     }
 
     // One PR status per session, for the rail. The same question the conversation
@@ -4427,8 +4433,77 @@ pool.on('notice', (n) => broadcast('notice', n));
 // The identical `allowed` event arrives on every turn, so only a reading that
 // moved is worth a broadcast — `noteRateLimitEvent` says which.
 pool.on('quota', (info) => {
-    if (usage.noteRateLimitEvent(info)) broadcast('quota', usage.snapshot());
+    if (usage.noteRateLimitEvent(info)) broadcast('quota', quotaPayload());
 });
+
+// How often to *consider* running the beacon. Not how often it runs — that is
+// `quota.beaconEveryMinutes`, read fresh each time so an edit to the settings
+// file lands without a restart. Checking on a shorter clock than the interval
+// is what makes that possible.
+const BEACON_TICK_MS = 60_000;
+let beaconLastRunAt = 0;
+
+/**
+ * The quota snapshot plus what the beacon is doing about it.
+ *
+ * One payload rather than two routes because they answer one question between
+ * them: the number, and why it is or is not moving. A panel that showed a
+ * two-hour-old percentage without being able to say "the beacon is off" or
+ * "every run is hitting a dialog" would be the same unexplained staleness this
+ * feature exists to avoid.
+ */
+function quotaPayload() {
+    const snap = usage.snapshot();
+    let q = {};
+    try { q = prefs.forCwd().quota || {}; } catch { /* defaults below */ }
+    snap.beacon = {
+        enabled: !!q.beacon && !!q.beaconDir,
+        dir: q.beaconDir || null,
+        everyMinutes: q.beaconEveryMinutes || null,
+        ...beacon.status(),
+    };
+    return snap;
+}
+
+/**
+ * Refresh the quota percentages, if it is time and the user asked for it.
+ *
+ * Deliberately quiet about failure. A beacon run that hits a dialog, or a
+ * directory that was never trusted, leaves the last reading in place and the
+ * pill goes on showing its age — which is the honest outcome and needs no
+ * toast. The reason is kept for the panel, which is where somebody who wonders
+ * why the number stopped moving will actually look.
+ */
+async function tickBeacon() {
+    let q;
+    try {
+        // No cwd: the user-level file only. A project's `.tgxcode/settings.json`
+        // is checked into a repository, and where this app starts Claude is not
+        // a repository's decision to make.
+        q = prefs.forCwd().quota || {};
+    } catch { return; }
+
+    if (!q.beacon || !q.beaconDir) return;
+    if (beacon.busy) return;
+
+    const everyMs = Math.max(5, q.beaconEveryMinutes || 20) * 60_000;
+    if (Date.now() - beaconLastRunAt < everyMs) return;
+    beaconLastRunAt = Date.now();
+
+    const before = usage.snapshot();
+    const out = await beacon.run(q.beaconDir);
+    if (!out.ok) return;
+
+    // The harvester wrote a new file; usage.js will pick it up on its next read.
+    // Only tell the windows if the merged view actually moved — a run that
+    // confirms 12% is still 12% is not news, though its fresher timestamp is,
+    // so `capturedAt` counts as a change too.
+    const after = usage.snapshot();
+    if (JSON.stringify(after.windows) !== JSON.stringify(before.windows)
+        || after.statusLine.capturedAt !== before.statusLine.capturedAt) {
+        broadcast('quota', quotaPayload());
+    }
+}
 // Every process announces what slash commands its directory has. Recorded so a
 // composer can offer them without a process of its own, and broadcast only when
 // the list actually moved — otherwise each session start would push an identical
@@ -4865,6 +4940,18 @@ server.listen(cfg.PORT, cfg.HOST, async () => {
                 `[claude-sessions] schedule tick failed: ${err.message}`));
         }, SCHEDULE_MS).unref();
     }
+
+    // The quota beacon. Its own timer rather than a fold into the schedule
+    // tick: that one fires every SCHEDULE_MS and is about starting sessions,
+    // and this is neither that often nor that consequential.
+    //
+    // The interval is read on every tick rather than captured here, so editing
+    // `~/.tgxcode/settings.json` takes effect without a restart — the same
+    // property every other preference in that file has.
+    setInterval(() => { tickBeacon(); }, BEACON_TICK_MS).unref();
+    // And once at startup, so a bridge that has just come up is not showing a
+    // reading from before it went down for however long the first interval is.
+    tickBeacon();
 
     if (!auth.hostIsLocal(cfg.HOST.replace(/^\[|\]$/g, ''))) {
         console.warn(`[claude-sessions] bound ${cfg.HOST} — reachable from the network. `
