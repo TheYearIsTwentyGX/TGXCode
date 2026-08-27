@@ -40,6 +40,29 @@
 > terminal is open. The undocumented-endpoint version imagined below is the same
 > objection with worse odds.
 >
+> **The other idea that does not work: a background `claude` as a quota beacon.**
+> Since the numbers come from the status line, and the status line needs a TUI,
+> the natural next thought is to have the bridge keep its own interactive
+> `claude` open in a pty and harvest from that. Tried it. Do not.
+>
+> - `probeQuotaStatus` is called from exactly one place — the **startup
+>   prefetch**. The CLI probes quota once per process start and never on a
+>   timer, so a long-lived beacon takes one reading and then holds it forever.
+>   Only a *periodically restarted* beacon would refresh anything.
+> - Every start is a gauntlet of modals. Two attempts hit two different ones —
+>   a feature announcement, then the directory **trust prompt** — and neither
+>   ever rendered a status line.
+> - Getting past them means keystrokes at dialogs the beacon cannot read. The
+>   trust prompt grants read, edit and execute on the directory. That is the end
+>   of the idea: a background process whose job includes blindly confirming
+>   dialogs is not worth a percentage.
+> - `--bare` would make the startup cheap and **explicitly skips background
+>   prefetches**, i.e. the probe. So each run pays full startup — MCP servers,
+>   plugins — plus a real API call.
+> - The prefetch is gated by `tengu_cicada_nap_ms`, a remote config value. It is
+>   0 today (always prefetch); raised, startups inside the nap window skip the
+>   probe and the beacon silently stops refreshing.
+>
 > The mitigation that makes this bearable is already in place, and is a property
 > worth knowing: the stream's `rate_limit_event` starts carrying `utilization`
 > once the account crosses a warning threshold. So the percentage is guaranteed
