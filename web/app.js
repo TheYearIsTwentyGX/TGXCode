@@ -7551,25 +7551,43 @@ function quotaAge(at) {
     return Math.max(0, (quota.snap.now - at) + quotaDrift());
 }
 
+/** Age of a reading, in words. Carries the same rounding trap as fmtLeft:
+ *  bucketing on the raw seconds while rounding to minutes prints "60m ago". */
 function fmtAge(seconds) {
     if (seconds === null) return '';
     if (seconds < 90) return 'just now';
-    if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
-    if (seconds < 86400) return `${Math.round(seconds / 3600)}h ago`;
+    const mins = Math.round(seconds / 60);
+    if (mins < 60) return `${mins}m ago`;
+    const hours = Math.round(seconds / 3600);
+    if (hours < 24) return `${hours}h ago`;
     return `${Math.round(seconds / 86400)}d ago`;
 }
 
 /** Time until a reset, phrased as a wait rather than a clock time. */
+/**
+ * Time until a reset, phrased as a wait rather than a clock time.
+ *
+ * **Both halves come out of one rounded total**, which is the whole trick. The
+ * obvious way — floor the hours, round the leftover minutes — prints "3h 60m"
+ * at three hours fifty-nine and a half, because the two units are decided
+ * independently and nothing reconciles them. Same shape of bug gives "1d 24h".
+ * Round once to the smaller unit, then divide.
+ */
 function fmtLeft(resetsAt) {
     if (!quota.snap || typeof resetsAt !== 'number') return '';
     const s = resetsAt - (quota.snap.now + quotaDrift());
     if (s <= 0) return 'due now';
-    if (s < 3600) return `${Math.max(1, Math.round(s / 60))}m`;
-    const h = Math.floor(s / 3600);
-    const m = Math.round((s % 3600) / 60);
-    if (h < 24) return m ? `${h}h ${m}m` : `${h}h`;
-    const d = Math.floor(s / 86400);
-    return `${d}d ${Math.round((s % 86400) / 3600)}h`;
+
+    const mins = Math.round(s / 60);
+    if (mins < 60) return `${Math.max(1, mins)}m`;
+
+    const hours = Math.floor(mins / 60);
+    const restMins = mins % 60;
+    if (hours < 24) return restMins ? `${hours}h ${restMins}m` : `${hours}h`;
+
+    const days = Math.floor(hours / 24);
+    const restHours = hours % 24;
+    return restHours ? `${days}d ${restHours}h` : `${days}d`;
 }
 
 function quotaBar(pct, stale) {
@@ -7617,6 +7635,34 @@ function renderQuotaPill() {
         titles.push(pct === null
             ? `${w.label}: no reading yet`
             : `${w.label}: ${Math.round(pct)}% used${age === null ? '' : ` (${fmtAge(age)})`}`);
+        if (typeof w.resetsAt === 'number') {
+            titles[titles.length - 1] += `, resets in ${fmtLeft(w.resetsAt)}`;
+        }
+    }
+
+    // When the window comes back. The percentage says whether to worry; this
+    // says whether to wait, and it is the half you plan an afternoon around.
+    //
+    // The first window that has one, rather than a hardcoded `five_hour`: the
+    // bridge orders the 5-hour window first, so that is what this is in
+    // practice, but a machine that only ever reports a weekly window still gets
+    // a countdown instead of nothing.
+    const clock = shown.find(w => typeof w.resetsAt === 'number');
+    if (clock) {
+        // `html` rather than child elements: el() namespaces an <svg> tag but
+        // builds its children with createElement, which yields unknown HTML
+        // nodes that never draw. innerHTML on an SVG element parses in the
+        // right namespace, so the shape stays declarative and no helper is
+        // needed for the one icon this file draws.
+        body.append(el('span', { class: 'q-reset', title: `${clock.label} resets` },
+            el('svg', {
+                width: '11', height: '11', viewBox: '0 0 24 24', fill: 'none',
+                'aria-hidden': 'true',
+                html: '<circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/>'
+                    + '<path d="M12 7v5.2l3.4 2" stroke="currentColor" stroke-width="2"'
+                    + ' stroke-linecap="round" stroke-linejoin="round"/>',
+            }),
+            el('span', { text: fmtLeft(clock.resetsAt) })));
     }
 
     dom.quotaPill.title = titles.join(' · ');
