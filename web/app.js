@@ -1982,7 +1982,13 @@ function renderAgentDone(ev) {
 
     // The notification carries the id of the call that spawned it, which is the
     // same key the transcripts are filed under — so this can be a way in.
-    if (ev.toolUseId && state.tools.has(ev.toolUseId)) {
+    //
+    // `hasTranscript` rather than "is this call on screen": a *background shell*
+    // reports itself through the same notification, and its `tool-use-id` names a
+    // Bash call with nothing filed under `subagents/`, so the old check drew a
+    // button that 404'd on click. The bridge answers it, because the bridge is
+    // holding the directory — see bridge/transcript.js.
+    if (ev.toolUseId && ev.hasTranscript) {
         body.push(el('div', { class: 'subagent-btns' },
             el('button', {
                 class: 'more-btn primary', type: 'button',
@@ -12584,6 +12590,18 @@ dom.btnStop.addEventListener('click', async () => {
         if (out.how === 'soft') {
             toast('Asked the turn to stop — the session stays resumable.' + back, 'ok');
             armForce();
+        } else if (out.how === null) {
+            // A runner with no process behind it — the route 404s when there is no
+            // runner at all, so this is a session whose process has already gone.
+            // There was nothing to kill, and saying otherwise is what this branch
+            // exists to stop: the old wording claimed a kill and a transcript
+            // entry for a turn that had ended minutes ago.
+            state.stopArmed = 0;
+            dom.btnStop.textContent = 'Stop';
+            dom.btnStop.classList.remove('force');
+            toast(back
+                ? 'That session\u2019s process had already stopped.' + back
+                : 'That session\u2019s process had already stopped — nothing to stop.', 'ok');
         } else {
             state.stopArmed = 0;
             dom.btnStop.textContent = 'Stop';

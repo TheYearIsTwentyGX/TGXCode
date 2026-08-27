@@ -696,8 +696,19 @@ function buildEvents(entries, ctx = {}) {
 
         const notification = parseTaskNotification(text);
         if (notification) {
+            // Whether there is a transcript to open, decided here rather than in
+            // the client. Not every one of these is about a subagent: a background
+            // *shell* reports the same way, and its `tool-use-id` names a Bash call
+            // with nothing filed under `subagents/`. The UI cannot work that out on
+            // its own in time — its list of agents is fetched after the transcript
+            // is drawn, so a row would either offer a button that 404s or offer
+            // none at all on first render. The directory is right here.
+            const spawned = ctx.subagentsByToolUse
+                && notification.toolUseId
+                && ctx.subagentsByToolUse.get(notification.toolUseId);
             events.push({
                 id: e.uuid, kind: 'agent-done', ts: e.timestamp, ...notification,
+                hasTranscript: !!spawned,
             });
             continue;
         }

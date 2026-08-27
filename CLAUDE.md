@@ -287,12 +287,28 @@ start and delete sessions, so pointing them at the everyday instance is exactly
 the accident the rest of this file is about.
 
 The suite is `auth`, `temp`, `recent`, `pulls`, `taskboard`, `ports`, `spinner`,
-`schedule` and `restart` on their own — no bridge needed — plus four that want a
-live one: `gate`, `browser`, `refusals`, `unpaired`. Between them they cover the token, what a remote caller
-is refused, what an unpaired remote device sees before and after pairing, and what the
-nightly restart does when there is nobody to ask. If you touch `bridge/auth.js`
-or any route's local/remote rule, run it: that is the part of this codebase with
-tests around it.
+`changes`, `restart`, `handoff`, `drafts`, `notifications`, `schedule`, `usage` and
+`runner` on their own — no bridge needed — plus four that want a live one: `gate`,
+`browser`, `refusals`, `unpaired`. Between them they cover the token, what a remote
+caller is refused, what an unpaired remote device sees before and after pairing, and
+what the nightly restart does when there is nobody to ask. If you touch
+`bridge/auth.js` or any route's local/remote rule, run it: that is the part of this
+codebase with tests around it.
+
+**`runner` is the one to run when you touch `bridge/runner.js`**, and for the same
+reason `schedule` exists: its bugs do not announce themselves. `inFlight` is both the
+record of the turn being answered and the gate in `_flushQueue`, so an exit path that
+forgets to empty it does not throw or log — it leaves a session that accepts a
+message, draws a chip for it, reports `idle`, and never sends it. That is
+indistinguishable from a slow turn from every surface the app has, and it is what a
+hard stop did for months. The test drives a real `Runner` against a stub `claude`
+(`CLAUDE_SESSIONS_CLAUDE_BIN`, set before the require — the constant is destructured
+at load), and asserts three things per case rather than one: that nothing is left in
+flight, that the next message is actually delivered, and that the *stopped* turn is
+not delivered again. The third is not padding. The obvious fix for this bug is to
+re-queue what was in flight, and that is wrong: `claude` writes its user entry at
+submission, so a stopped turn is already in the transcript and re-sending it re-runs
+work the user cancelled.
 
 **Testing a schedule needs its own store, not the shared one.** Two things bite
 otherwise, and both were measured rather than guessed. `schedules.json` lives in

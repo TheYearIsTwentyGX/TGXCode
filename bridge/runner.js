@@ -293,12 +293,34 @@ class Runner extends EventEmitter {
         // process restart, when the CLI's own copy is gone and ours is not.
         this._sessionAllow = new Set();
         this._autoDenies = 0;
+        // This process did not answer an interrupt in time. Not the same claim as
+        // `caps.interrupt`, which is about the build and is shared by the whole
+        // pool — see stop().
+        this._interruptTimedOut = false;
     }
 
     // -- lifecycle ---------------------------------------------------------
 
     start() {
         if (this.proc) return;
+
+        // A process that has just spawned cannot have anything in flight, and a
+        // restart that succeeds is not still carrying the last one's failure.
+        // Both belong to the process that went away; the close handler decided
+        // what to do about the text, and this is only the invariant.
+        //
+        // **Clear, never re-queue.** It is tempting, because the entry holds the
+        // only copy of the message — but `claude` writes its user entry at
+        // submission, seconds before the first assistant block, so by the time a
+        // process has died holding a turn that turn is usually already in the
+        // transcript. Re-sending it here would re-run work the user watched
+        // happen, or explicitly cancelled. The one exit where re-queueing is
+        // provably safe does it itself, in `close`.
+        this.inFlight.length = 0;
+        this.lastError = null;
+        this.errorKind = null;
+        // A fresh process is not the one that was too busy to answer.
+        this._interruptTimedOut = false;
 
         const args = [
             '-p',
@@ -349,6 +371,9 @@ class Runner extends EventEmitter {
         // containment the wrapper asks for in prose, enforced.
         args.push('--mcp-config', mcpConfig(this.sessionId));
         for (const tool of AGENT_TOOLS) args.push('--allowedTools', tool);
+        // `--session-id` mints the id; `--resume` continues it. Which one is right
+        // is a fact about *this start*, not about the runner — see the reset below
+        // the spawn, and the bug that reset fixes.
         if (this.isNew) args.push('--session-id', this.sessionId);
         else args.push('--resume', this.sessionId);
         if (this.fork) args.push('--fork-session');
@@ -378,12 +403,53 @@ class Runner extends EventEmitter {
             return;
         }
 
+        // Both of these describe the *first* start of a conversation, and neither
+        // survives it. They used to live for the life of the runner, which was
+        // invisible for as long as a process only ever started once — but a runner
+        // whose process died and is being restarted starts twice, and then:
+        //
+        //   `isNew` re-passed `--session-id` for an id that now exists on disk, and
+        //   the CLI refuses with "Session ID … is already in use". So the second
+        //   turn of a session created in this app, after anything killed its
+        //   process, could never start at all.
+        //
+        //   `fork` re-passed `--fork-session`, which would branch again — off the
+        //   copy this runner had already adopted — and quietly leave the user's
+        //   message in a third transcript they were not looking at.
+        //
+        // Clearing them here rather than on `system/init`: the id exists from the
+        // moment the CLI opens the file, so a restart has to resume whether or not
+        // the handshake got as far as telling us so. The one exit that restarts
+        // deliberately puts them back — see the permission-prompt branch of
+        // `close`, which is reached before the CLI has done anything at all.
+        const wasNew = this.isNew;
+        const wasFork = this.fork;
+        this.isNew = false;
+        this.fork = false;
+
         this.proc.stdout.setEncoding('utf8');
         this.proc.stdout.on('data', (chunk) => this._onStdout(chunk));
         this.proc.stderr.setEncoding('utf8');
         this.proc.stderr.on('data', (chunk) => {
             this._stderr = (this._stderr + chunk).slice(-4000);
         });
+
+        // A dying child reports a broken pipe *asynchronously*, as an 'error' on
+        // the stream — which `_write`'s try/catch cannot see, and `proc.on('error')`
+        // below is not: that one is the spawn channel. `stdin.writable` also stays
+        // true until Node destroys the stream on 'close', so the guard misses it
+        // too. An unhandled 'error' on a stream is thrown, and there is no
+        // uncaughtException handler anywhere in this bridge, so losing that race
+        // took down every session at once. Several writers aim straight at the
+        // window: the interrupt in stop(), the stdin.end() beside it, the 1500ms
+        // SIGKILL timer, a permission answered as the process dies, and the queue
+        // flush itself.
+        //
+        // There is nothing to *do* about it — 'close' is already on its way and
+        // accounts for the turn. Same case and same answer as bridge/pulls.js.
+        this.proc.stdin.on('error', () => { /* the process is going away */ });
+        this.proc.stdout.on('error', () => { /* ditto */ });
+        this.proc.stderr.on('error', () => { /* ditto */ });
 
         this.proc.on('error', (err) => {
             this.lastError = err.message;
@@ -394,10 +460,45 @@ class Runner extends EventEmitter {
             this.proc = null;
             this._pendingTools.clear();
             this._abandonControl('the Claude process exited');
+            // The turn this process was answering, taken before any branch below
+            // gets an opinion about it.
+            //
+            // The invariant is *nothing is in flight when there is no process*,
+            // and this is the line that holds it however the exit is classified —
+            // so a branch added later cannot forget. Two of them used to: a hard
+            // stop and a clean exit both left the entry sitting there, and since
+            // _flushQueue refuses to write while anything is in flight, the next
+            // message the user sent was accepted, chipped, and never delivered.
+            // What happens to the *text* is each branch's decision. Whether it is
+            // still held here is not.
+            const flight = this.inFlight.splice(0);
             if (this._stopping) {
                 this._stopping = false;
+                // Stopping means stopping. `flight` is the turn the user asked to
+                // end, and `claude` writes its user entry at submission rather
+                // than at completion — so by the time anyone has decided to stop
+                // a turn, that message is in the transcript and on screen. Handing
+                // it back would put the same text in the composer as well.
+                //
+                // The queue is a different matter. `stop()` empties it and returns
+                // it to the caller, which hands it to the composer — but retire()
+                // sets `_stopping` too and does not, so anything still waiting here
+                // came from a retire and has been offered to nobody.
+                if (this.queue.length) {
+                    this._handBack('retired',
+                        'The Claude process was shut down before these messages were sent.');
+                }
                 this._setState('stopped', null);
             } else if (code === 0) {
+                // An exit nobody asked for. There is no way to tell from here
+                // whether the CLI got as far as reading the line, so this takes
+                // the same side the error branch below does: text in the composer
+                // beside a turn in the log is a confusion the user can undo, and a
+                // message that is simply gone is not.
+                if (flight.length || this.queue.length) {
+                    this._handBack('exited',
+                        'Claude Code exited without answering.', flight);
+                }
                 this._setState('stopped', null);
             } else {
                 const raw = this._stderr.trim();
@@ -408,8 +509,15 @@ class Runner extends EventEmitter {
                 // and put the turn back on the queue so nothing is lost.
                 if (this.caps.permissionPrompt && /permission-prompt-tool/i.test(raw)) {
                     this.caps.permissionPrompt = false;
-                    this.queue = this.inFlight.concat(this.queue);
-                    this.inFlight.length = 0;
+                    // The one branch where re-queueing is provably right: a build
+                    // that does not know the flag rejects it while parsing argv,
+                    // so the line was never read and no turn was ever recorded.
+                    // Nothing was minted or branched either, which is why the
+                    // start flags go back rather than the retry resuming an id
+                    // that does not exist yet.
+                    this.queue = flight.concat(this.queue);
+                    this.isNew = wasNew;
+                    this.fork = wasFork;
                     this._stderr = '';
                     this.emit('notice', {
                         level: 'warn', kind: 'no_permission_prompt',
@@ -424,15 +532,16 @@ class Runner extends EventEmitter {
                 const classified = classifyError(raw, code);
                 this.errorKind = classified.kind;
                 this.lastError = classified.message;
-                // The turn never started, so whatever the user typed was never
-                // recorded anywhere. Hand it back so the UI can restore it.
-                this.emit('failed', {
-                    kind: classified.kind,
-                    message: classified.message,
-                    unsent: this.inFlight.concat(this.queue).map(q => q.text),
-                });
-                this.inFlight.length = 0;
-                this.queue.length = 0;
+                // Mostly this catches a refusal at startup — busy-elsewhere,
+                // no-claude, missing — where the CLI never read stdin and the text
+                // exists nowhere else, so handing it back is the only thing that
+                // saves it. It also catches deaths mid-turn, though: `code` is null
+                // for a signal, so an OOM-killed `claude` lands here too, and for
+                // that one the message is already in the transcript and this puts a
+                // second copy in the composer. Kept anyway, deliberately — the two
+                // outcomes are a confusion the user can undo and a message that is
+                // gone, and they are not equally bad.
+                this._handBack(classified.kind, classified.message, flight);
                 this._setState('error', null);
             }
             this.emit('exit', code);
@@ -479,6 +588,12 @@ class Runner extends EventEmitter {
      */
     _flushQueue() {
         if (!this.proc || !this.proc.stdin.writable) return;
+        // `inFlight` is the gate, not just bookkeeping: while anything is in it
+        // nothing else is written, which is what keeps one turn in flight at a
+        // time. That makes a stale entry silent and total — the runner reports
+        // `idle`, the route reports `queued`, and no message will ever be written
+        // again. Every path that nulls `this.proc` therefore has to empty it; see
+        // the close handler, `detach`, and the top of `start`.
         if (this.state === 'busy' || this.inFlight.length) return;
         const entry = this.queue.shift();
         if (!entry) return;
@@ -542,6 +657,30 @@ class Runner extends EventEmitter {
     }
 
     /**
+     * Give unsent text back to whoever typed it, and stop holding it.
+     *
+     * The two halves are one call on purpose. Handing back *without* clearing is
+     * how a lost message becomes a duplicated one: the copy still on the queue
+     * flushes the next time the process starts, alongside the copy now sitting in
+     * the composer. One or the other, never both.
+     *
+     * Always emits, even with nothing to hand back, because the event is also how
+     * the UI learns the send failed at all — `handleSendFailure` toasts the
+     * message on its own when there is no text with it.
+     *
+     * @param {string} kind matched by the UI; see the `send-failed` kinds in docs/api.md
+     * @param {string} message what to tell the user, without "your message is back"
+     * @param {Array} [extra] entries to hand back ahead of the queue — the turn
+     *   that was in flight, where the branch has decided it was never recorded
+     */
+    _handBack(kind, message, extra = []) {
+        const unsent = extra.concat(this.queue).map(q => q.text).filter(Boolean);
+        this.queue.length = 0;
+        this.emit('failed', { kind, message, unsent });
+        this._queueChanged();
+    }
+
+    /**
      * End the current turn.
      *
      * The soft path asks the CLI to interrupt itself: the turn stops where it
@@ -559,7 +698,20 @@ class Runner extends EventEmitter {
      * @returns {Promise<{ok:boolean, how:'soft'|'hard'|null, dropped:Array}>}
      */
     async stop({ hard = false } = {}) {
-        if (!this.proc) return { ok: false, how: null, dropped: [] };
+        // Nothing to signal, but there can still be messages waiting: a process
+        // that died leaves its queue behind, and Stop is the obvious thing to
+        // press when a session looks stuck with chips on the composer. Returning
+        // an empty `dropped` from here left them in place while the UI announced
+        // that it had killed something, so the one recovery the user had did
+        // nothing and said otherwise.
+        if (!this.proc) {
+            const orphaned = this.queue.slice();
+            if (orphaned.length) {
+                this.queue.length = 0;
+                this._queueChanged();
+            }
+            return { ok: false, how: null, dropped: orphaned };
+        }
 
         // Taken before either path clears it, so both can hand it back.
         const dropped = this.queue.slice();
@@ -576,7 +728,7 @@ class Runner extends EventEmitter {
             this._clearPermission('stopped');
         }
 
-        if (!hard && this.caps.interrupt) {
+        if (!hard && this.caps.interrupt && !this._interruptTimedOut) {
             this.queue.length = 0;
             try {
                 await this._control('interrupt', { cancel_queued: true });
@@ -584,10 +736,25 @@ class Runner extends EventEmitter {
                 // `result` like any other turn ending, and that is what should
                 // move us back to idle.
                 return { ok: true, how: 'soft', dropped };
-            } catch {
-                // Either this build has no interrupt or it did not answer in
-                // time. Stop asking, and stop it the way that always works.
-                this.caps.interrupt = false;
+            } catch (err) {
+                // Fall through to the signal path either way — this must never
+                // become a way to fail to stop something.
+                //
+                // What to remember from it is the part that was wrong. `caps` is
+                // one object shared by every runner in the pool, and latching it
+                // off on a *timeout* meant a single CLI whose event loop was
+                // blocked by a long tool call turned every Stop for the rest of the
+                // bridge's life into a hard kill — in every session, including ones
+                // started afterwards. That is the road into the wedge this whole
+                // area is about, and it was reached by pressing Stop once, gently,
+                // some time earlier.
+                //
+                // So: a refusal is a fact about the build and stays pool-wide. A
+                // timeout is a fact about this process, and is remembered only
+                // here — enough that a second Stop does not wait another eight
+                // seconds, and forgotten when the process is replaced.
+                if (err && err.reason === 'refused') this.caps.interrupt = false;
+                else this._interruptTimedOut = true;
             }
         }
 
@@ -618,19 +785,27 @@ class Runner extends EventEmitter {
         }
     }
 
-    /** Outbound request; resolves with the CLI's response payload. */
+    /**
+     * Outbound request; resolves with the CLI's response payload.
+     *
+     * A rejection carries `reason` alongside its message, because the four ways
+     * this fails are not interchangeable to a caller. Only `refused` means "this
+     * build does not speak this request"; `timeout` means a busy CLI, and latching
+     * a capability off on one of those is how a single slow turn degrades every
+     * session in the bridge for the rest of its life.
+     */
     _control(subtype, payload = {}, { timeoutMs = CONTROL_TIMEOUT_MS } = {}) {
         return new Promise((resolve, reject) => {
             const id = `req_${++this._ctlSeq}`;
             if (!this._write({
                 type: 'control_request', request_id: id, request: { subtype, ...payload },
             })) {
-                reject(new Error('the Claude process is not accepting input'));
+                reject(controlError('the Claude process is not accepting input', 'closed'));
                 return;
             }
             const timer = setTimeout(() => {
                 this._pending.delete(id);
-                reject(new Error(`no answer to control request "${subtype}"`));
+                reject(controlError(`no answer to control request "${subtype}"`, 'timeout'));
             }, timeoutMs);
             timer.unref();
             this._pending.set(id, { resolve, reject, timer });
@@ -641,7 +816,7 @@ class Runner extends EventEmitter {
     _abandonControl(why) {
         for (const [, p] of this._pending) {
             clearTimeout(p.timer);
-            p.reject(new Error(why));
+            p.reject(controlError(why, 'gone'));
         }
         this._pending.clear();
         // Nothing can answer it now, and nothing is waiting for the answer.
@@ -939,6 +1114,19 @@ class Runner extends EventEmitter {
     }
 
     /**
+     * Hand any waiting messages back before something takes this runner away.
+     *
+     * For the pool: evicting a runner used to bin its queue, and a message the
+     * user is still owed must not disappear because a fifth session was opened.
+     * Silent when there is nothing waiting — most evictions are of a runner
+     * nobody is owed anything by.
+     */
+    handOverQueue(message) {
+        if (!this.queue.length) return;
+        this._handBack('retired', message);
+    }
+
+    /**
      * Stop managing the process without signalling it.
      *
      * Used when the bridge is going away mid-turn. It buys the process a chance
@@ -953,6 +1141,11 @@ class Runner extends EventEmitter {
         const proc = this.proc;
         this.proc = null;
         this._abandonControl('the bridge stopped managing this process');
+        // The third place `this.proc` goes null, and so the third place the
+        // in-flight invariant has to hold. Nothing is handed back: the bridge is
+        // going away, there is no client left to hand it to, and the turn is in
+        // the transcript.
+        this.inFlight.length = 0;
         try { proc.unref(); } catch { /* already gone */ }
         this._setState('stopped', null);
     }
@@ -999,7 +1192,9 @@ class Runner extends EventEmitter {
                 if (!p) break;
                 this._pending.delete(r.request_id);
                 clearTimeout(p.timer);
-                if (r.subtype === 'error') p.reject(new Error(r.error || 'the request was refused'));
+                if (r.subtype === 'error') {
+                    p.reject(controlError(r.error || 'the request was refused', 'refused'));
+                }
                 else p.resolve(r.response || {});
                 break;
             }
@@ -1313,6 +1508,19 @@ class Runner extends EventEmitter {
 }
 
 /** The ask as the UI sees it — no timer handle, nothing it cannot serialise. */
+/**
+ * A control-channel rejection, with the reason machine-readable.
+ *
+ * `message` is for a human and drifts; `reason` is what code may branch on:
+ * `refused` (the CLI answered "no"), `timeout` (it did not answer), `closed`
+ * (stdin would not take the request) or `gone` (the process exited under it).
+ */
+function controlError(message, reason) {
+    const err = new Error(message);
+    err.reason = reason;
+    return err;
+}
+
 function publicAsk(ask) {
     return {
         requestId: ask.id,
@@ -1549,13 +1757,31 @@ class RunnerPool extends EventEmitter {
         return true;
     }
 
+    /**
+     * Retire a runner and take it out of the pool.
+     *
+     * Both eviction paths go through here so that neither can quietly take a
+     * queue with it. `retire()` only closes stdin, so a runner holding messages
+     * that were never written used to leave the map with them still inside — and
+     * because the runner was then unreachable, the user's messages were not
+     * delayed, they were gone. `ensure` already knew this (it carries the queue
+     * across a model change); eviction did not.
+     */
+    _evict(id, r, why) {
+        // Before retire(), so the pool's own `failed` listener is still attached
+        // and the hand-back actually reaches a window.
+        r.handOverQueue(why);
+        r.retire();
+        this.runners.delete(id);
+    }
+
     _evictIdle() {
         const now = Date.now();
         for (const [id, r] of this.runners) {
             if (r.state === 'busy') continue;
             if (now - r.lastUsedAt < IDLE_EVICT_MS) continue;
-            r.retire();
-            this.runners.delete(id);
+            this._evict(id, r,
+                'That session had been idle for a while, so its process was shut down.');
         }
     }
 
@@ -1565,8 +1791,8 @@ class RunnerPool extends EventEmitter {
             .sort((a, b) => a[1].lastUsedAt - b[1].lastUsedAt);
         while (this.runners.size > limit && idle.length) {
             const [id, r] = idle.shift();
-            r.retire();
-            this.runners.delete(id);
+            this._evict(id, r,
+                'That session\u2019s process was shut down to make room for another one.');
         }
     }
 
