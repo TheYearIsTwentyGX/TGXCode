@@ -18,11 +18,33 @@
 >
 > What shipped is tier A plus a percentage: `bridge/usage.js` merges the stream
 > events with what `scripts/quota-statusline.py` harvests from the status line.
-> Point 4 still holds — `/usage` is a slash command, not a CLI subcommand — and
-> **tier C was not built.** If the harvested number proves too stale, the cleaner
-> fallback than the undocumented endpoint imagined below is the CLI's own
-> `probeQuotaStatus`: a `max_tokens: 1` Messages request whose response headers
-> carry the same fields. Ordinary API surface, not a private endpoint.
+> Point 4 still holds — `/usage` is a slash command, not a CLI subcommand.
+>
+> **Tier C is not available. Measured, not assumed — do not spend an afternoon
+> rediscovering this.** The CLI has an internal `probeQuotaStatus`: a
+> `max_tokens: 1` Messages request whose response headers carry the same
+> `anthropic-ratelimit-unified-*` fields. Reproducing it from outside the CLI
+> with the OAuth token from `~/.claude/.credentials.json` returns **`429`,
+> `{"type":"rate_limit_error","message":"Error"}`, and no
+> `anthropic-ratelimit-*` headers at all** — including with the CLI's own
+> `user-agent`, and on an account that was demonstrably not rate limited at the
+> time. The missing headers are the tell: a real quota rejection carries
+> `anthropic-ratelimit-unified-status: rejected` plus the utilization figures,
+> which is how the CLI itself detects that state. So the request is being
+> refused before it reaches the quota system.
+>
+> The token does carry `user:inference`, so getting further is probably a matter
+> of replicating more of the first-party client's identity. **That is the point
+> at which to stop** — it is circumventing an access control Anthropic put there
+> deliberately, and the prize is a percentage we already get for free whenever a
+> terminal is open. The undocumented-endpoint version imagined below is the same
+> objection with worse odds.
+>
+> The mitigation that makes this bearable is already in place, and is a property
+> worth knowing: the stream's `rate_limit_event` starts carrying `utilization`
+> once the account crosses a warning threshold. So the percentage is guaranteed
+> live exactly when it is close to mattering, and can only go stale in the range
+> where being approximate is cheap.
 >
 > Tier B is untouched and still worth doing.
 
