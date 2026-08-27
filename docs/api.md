@@ -375,10 +375,18 @@ reports no check state at all — an empty rollup is not a pending one. And GitH
 reports mergeability as `UNKNOWN` until it has computed it, which is common on a
 freshly-pushed branch, so nothing is said about conflicts until it does.
 
-`unknown` means the bridge has no answer for that PR — gh could not be reached, or
-its repository has not been listed yet — and `gh.error` says which in one line. The
-client is expected to keep showing the PR, since it has the number and the link
-from the summary already, and simply not colour it.
+`unknown` means the bridge has no answer for that PR *yet*, and it covers three
+cases, only one of which is a problem: gh could not be reached, the PR's repository
+has not been listed yet, or the PR is settled and the one `gh pr view` that
+resolves it has not run. The client is expected to keep showing the PR, since it
+has the number and the link from the summary already, and simply not colour it.
+
+**`gh.ok` is what says whether GitHub is reachable — `unknown` does not.** The last
+two cases report `unknown` with `gh.ok: true`, and on a first run with no cache
+file that is every merged PR on the machine for one pass. A client that renders
+`unknown` as "GitHub could not be reached" will say so, wrongly, every time a
+bridge starts cold. Use `gh.error` for the wording and fall back to something that
+does not blame the network.
 
 **This route does not shell out.** It reads a snapshot that a background refresher
 in the bridge keeps current, so it answers in memory and never waits on GitHub. It

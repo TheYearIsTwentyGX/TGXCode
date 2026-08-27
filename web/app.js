@@ -999,6 +999,18 @@ const PR_WORDS = {
 const prWords = (status) => PR_WORDS[status] || status.replace(/-/g, ' ');
 
 /**
+ * Why a PR has no status, which is two different things.
+ *
+ * `unknown` used to mean one: gh could not be reached. It now also covers a PR the
+ * bridge has simply not resolved yet — a settled one it has yet to look up, which
+ * on a first run is every merged PR on the machine and clears within a pass. So
+ * `gh.error` decides, and a tooltip only claims GitHub is unreachable when GitHub
+ * actually was. Saying so when it is merely early is the kind of wrong that sends
+ * somebody to check their token.
+ */
+const prUnknownWhy = () => state.prsError || 'not looked up yet';
+
+/**
  * The glyph is recognisable without being read; the words are here.
  *
  * Same three-part shape as the header's tooltip — what it is, what the one word
@@ -1011,12 +1023,8 @@ function prBadgeTip(s, agg) {
 
     // Before the first payload lands, and after one that could not answer: the row
     // knows how many PRs there are and nothing about them, and says exactly that.
-    // `prsError` is why, in gh's own words — an expired token used to show here as
-    // an unexplained grey glyph, because this surface threw the reason away.
     if (!agg) return `${plural}\nAsking GitHub…\n${numbers}`;
-    if (agg.status === 'unknown') {
-        return `${plural}\n${state.prsError || 'GitHub could not be reached'}\n${numbers}`;
-    }
+    if (agg.status === 'unknown') return `${plural}\n${prUnknownWhy()}\n${numbers}`;
 
     const breakdown = Object.entries(agg.counts)
         .sort((a, b) => b[1] - a[1])
@@ -1535,10 +1543,10 @@ function prLink(pr) {
 
     const tip = [
         live && live.label,
-        // Why there is no colour, in gh's own words. Only when there is genuinely
-        // nothing to say about the PR — an expired token showed here as an
-        // unexplained grey glyph, because this surface dropped the reason.
-        status === 'unknown' ? state.prsError : null,
+        // Why there is no colour. Only when there is genuinely nothing to say about
+        // the PR — an expired token showed here as an unexplained grey glyph,
+        // because this surface dropped the reason.
+        status === 'unknown' ? prUnknownWhy() : null,
         live && live.title,
         ...((live && live.detail) || []),
         [`#${pr.number}`, pr.repo, live && live.updatedAt && `updated ${ago(live.updatedAt)} ago`]
