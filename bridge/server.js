@@ -41,6 +41,7 @@ const git = require('./git');
 const restart = require('./restart');
 const changes = require('./changes');
 const pulls = require('./pulls');
+const prStore = require('./pr-store');
 const { mapLimit } = require('./memo');
 const overview = require('./overview');
 const taskboard = require('./taskboard');
@@ -1208,6 +1209,103 @@ function noteRangeFailure(scheduleId, key, headSha) {
 const sawRangeFailure = (scheduleId, key, headSha) => Boolean(
     rangeFailures.get(scheduleId)?.has(`${key}@${headSha}`));
 
+// ---------------------------------------------------------------------------
+// Keeping pull request status fresh
+// ---------------------------------------------------------------------------
+//
+// The only thing in this process that calls gh about a pull request on a clock.
+// Every route that shows PR status reads `pr-store.js`, which reads memory; this
+// is what puts anything in it.
+//
+// It replaced three client polls at sixty seconds each — the conversation header,
+// the rail and the board, none of them aware of the others — and the minute of
+// server-side cache that existed to stop them tripling the cost. What the store
+// decides, and why twenty minutes is the idle floor, is in that file's header.
+//
+// One pass at a time, for `tickSchedules`' reason rather than its own: the pass is
+// `await`-heavy and the interval is short enough that two overlapping is ordinary.
+// Nothing here is unsafe to run twice — the worst case is two identical `gh pr
+// list` calls — but the second pass would see the first's half-written `seen`
+// marks and conclude the conversations had not moved.
+//
+// The promise is kept rather than a boolean, because unlike the schedule tick this
+// one has a caller who is *waiting*: pressing Refresh on the board while the timer
+// happens to be mid-pass would otherwise return before anything was asked, and the
+// press would look like it did nothing.
+/** @type {Promise<{changed: boolean}>|null} */
+let prPass = null;
+
+/**
+ * One pass of the PR refresher.
+ *
+ * @param {{force?: boolean}} opts `force` lists every repository in play
+ *   regardless of when it was last asked — the board's Refresh button, and the
+ *   moment after a scheduled review posts a label it wants to read back.
+ */
+function tickPrs({ force = false } = {}) {
+    // A forced press waits for the pass in front of it and then runs its own:
+    // the running one may have started before whatever the user is trying to see.
+    if (prPass) return force ? prPass.then(() => tickPrs({ force })) : prPass;
+    prPass = runPrPass(force).finally(() => { prPass = null; });
+    return prPass;
+}
+
+async function runPrPass(force) {
+    // The whole index, as the board uses: a repository is in play because a
+    // project on this machine has that remote, not only because a recent session
+    // linked a PR in it. Test sessions on a dev bridge for the same reason the
+    // rail shows them — a probe session's PR is still a PR somebody wants coloured.
+    const sessions = index.list({ limit: 100_000, includeTest: cfg.IS_DEV });
+    const running = new Set(Object.entries(pool.statuses())
+        .filter(([, st]) => st && st.state === 'busy')
+        .map(([id]) => id));
+
+    // The remote of every project root, which is what the board matches branches
+    // against. Without these, a project whose PRs no transcript happens to name
+    // would have its repository pruned out of the store and its rows would lose
+    // every pull request they had. `repoOf` is memoised for ten minutes, so this
+    // is one `git remote` per project on the first pass and free after that.
+    const roots = [...new Set(sessions.map(s => s.projectCwd || s.cwd).filter(Boolean))];
+    const extraRepos = (await mapLimit(roots, 8, (dir) => pulls.repoOf(dir)))
+        .filter(Boolean);
+
+    const result = await prStore.tick({ sessions, running, extraRepos, force });
+
+    // Only when something actually moved. The store compares the answer it got
+    // against the one it had, so a pass that re-lists a quiet repository and finds
+    // it unchanged tells nobody — otherwise this would be a heartbeat with a
+    // payload, waking every open window every thirty seconds.
+    if (result.changed) broadcast('prs-changed', await prsPayload(sessions));
+    return result;
+}
+
+/**
+ * What the rail should look like: one aggregate status per session.
+ *
+ * The body of `GET /api/prs`, and the payload of the `prs-changed` event, because
+ * they are the same answer to the same question — small enough to push whole
+ * rather than making every window come back and ask.
+ *
+ * The conversation header is deliberately *not* in here. It wants per-PR detail
+ * for one session, which would mean either sending every session's detail to every
+ * window or knowing which session each window has open; the client refetches the
+ * one session it is showing instead, off the same event.
+ *
+ * `reposFor` is what fills in a `pr-link` line that never named its repository —
+ * one `git remote` per directory, memoised for ten minutes in `pulls.repoOf`, so
+ * this is free after the first pass.
+ */
+async function prsPayload(sessions = null) {
+    const list = (sessions || index.list({ limit: 500, includeTest: cfg.IS_DEV }))
+        .filter(s => s.prs && s.prs.length);
+    const { repoOfDir } = await prStore.reposFor(list);
+    return prStore.forSessions(list.map(s => ({
+        sessionId: s.sessionId,
+        prs: s.prs,
+        repo: repoOfDir.get(s.cwd) || null,
+    })));
+}
+
 // An in-flight review with no outcome that is older than this is not in flight
 // any more — its process died with a bridge, or its turn was lost. Without a
 // backstop one lost turn would hold a slot in REVIEWS_IN_FLIGHT forever and wedge
@@ -1226,12 +1324,20 @@ async function pullsForSchedule(row) {
         return { ok: false, repo: null, pulls: [], due: [], openNumbers: [],
             error: `${row.cwd} has no GitHub origin` };
     }
-    const list = await pulls.openPulls(repo);
+    // From the store, which may never have been asked about this repository —
+    // a schedule can name a checkout no session has a PR in. Ask now if so; a
+    // schedule tick is a background pass itself and can afford to wait.
+    let list = prStore.openPulls(repo);
+    if (!list.checkedAt) {
+        await prStore.refreshRepo(repo);
+        list = prStore.openPulls(repo);
+    }
     if (!list.ok) {
-        // **Not a prune, and not an empty batch.** `openPulls` caches a failure
-        // for its full TTL, so treating this as "no PRs are open" would look
-        // exactly like "everything is reviewed" — and pruning against it would
-        // empty the reviewed map and buy a fresh review of the whole repository.
+        // **Not a prune, and not an empty batch.** Treating this as "no PRs are
+        // open" would look exactly like "everything is reviewed" — and pruning
+        // against it would empty the reviewed map and buy a fresh review of the
+        // whole repository. The store keeps the last good list beside the error
+        // for exactly this reason, but the answer is still "do not act on it".
         return { ok: false, repo, pulls: [], due: [], openNumbers: [],
             error: list.error || `cannot list pull requests for ${repo}` };
     }
@@ -2481,7 +2587,12 @@ async function api(req, res, url, pathname, who) {
                             + 'pull requests to watch',
                     });
                 }
-                const list = await pulls.openPulls(repo);
+                // Asked now rather than read from the store: this is a press, and
+                // seeding a reviewed map against a twenty-minute-old list would
+                // quietly mark a PR raised since then as already reviewed.
+                // `refreshRepo` folds the answer in, so the next tick inherits it.
+                await prStore.refreshRepo(repo);
+                const list = prStore.openPulls(repo);
                 if (!list.ok) {
                     // Refused rather than seeded empty, for the reason a bad ref is
                     // refused: a schedule that cannot see the repository is one that
@@ -2604,7 +2715,9 @@ async function api(req, res, url, pathname, who) {
                             + 'requests to watch',
                     });
                 }
-                const list = await pulls.openPulls(repo);
+                // Asked now, not read from the store — see the create route.
+                await prStore.refreshRepo(repo);
+                const list = prStore.openPulls(repo);
                 if (!list.ok) {
                     return send(res, 400, {
                         error: list.error || `cannot list pull requests for ${repo}`,
@@ -2720,12 +2833,22 @@ async function api(req, res, url, pathname, who) {
     }
 
     // Work in flight: uncommitted changes and unmerged pull requests, by project.
-    // Shells out to git and gh, so it is not on the session list's path — the rail
-    // must not wait on GitHub — and everything it reads is cached behind it.
+    // Still shells out to git — a working tree can only be read by looking at it —
+    // but no longer to gh: pull requests come from the store the refresher fills.
+    //
+    // `?refresh=1` is the board's Refresh button. It drops the working-tree cache
+    // *and* forces a pass of the refresher, which is the only way to ask GitHub
+    // out of turn. Awaited, because the whole point of the press is to see the
+    // answer it produces.
     if (pathname === '/api/dashboard' && req.method === 'GET') {
+        const refresh = url.searchParams.get('refresh') === '1';
+        if (refresh) {
+            await tickPrs({ force: true }).catch(err => console.error(
+                `[claude-sessions] forced PR refresh failed: ${err.message}`));
+        }
         const data = await dashboard.build(index, {
             includeTest: cfg.IS_DEV,
-            refresh: url.searchParams.get('refresh') === '1',
+            refresh,
         });
         // The same live status the rail carries, so a row can say that one of
         // its sessions is working right now rather than looking abandoned.
@@ -2757,30 +2880,12 @@ async function api(req, res, url, pathname, who) {
     // header asks about one session, asked about all of them at once — and reduced
     // to a single word each, because a rail row has space for one glyph.
     //
-    // Its own route rather than a field on `/api/sessions` for that route's own
-    // reason: it shells out to gh and the session list must never wait on GitHub.
-    // The rail fetches this after it has painted and colours the glyphs in place.
+    // It reads the store and answers immediately; the only thing that asks GitHub
+    // is `tickPrs`. It stays its own route rather than becoming a field on
+    // `/api/sessions` because it is also the payload of `prs-changed`, and because
+    // a client that has not received an event yet needs somewhere to start.
     if (pathname === '/api/prs' && req.method === 'GET') {
-        const sessions = index.list({ limit: 500, includeTest: cfg.IS_DEV })
-            .filter(s => s.prs && s.prs.length);
-
-        // A `pr-link` line without a `prRepository` leaves the repo to be read off
-        // the session's own checkout, exactly as `/api/sessions/:id/prs` does. Only
-        // for the sessions that need it, and once per directory: `repoOf` shells out
-        // to git, and most PRs name their own repository.
-        const needRepo = [...new Set(sessions
-            .filter(s => s.cwd && s.prs.some(p => p && !p.repo))
-            .map(s => s.cwd))];
-        const repoOfDir = new Map();
-        await mapLimit(needRepo, 8, async (dir) => {
-            repoOfDir.set(dir, await pulls.repoOf(dir));
-        });
-
-        return send(res, 200, await pulls.forSessions(sessions.map(s => ({
-            sessionId: s.sessionId,
-            prs: s.prs,
-            repo: repoOfDir.get(s.cwd) || null,
-        }))));
+        return send(res, 200, await prsPayload());
     }
 
     if (pathname === '/api/sessions' && req.method === 'POST') {
@@ -3018,11 +3123,11 @@ async function api(req, res, url, pathname, who) {
 
         // The status of the pull requests this session raised.
         //
-        // Its own route rather than a field on the summary, because it asks
-        // GitHub and the session list must never wait on GitHub — the same reason
-        // `/api/dashboard` is not on that path either. The header renders its PRs
-        // from the summary immediately and fills the statuses in when this
-        // answers, so a slow or absent gh only ever costs the colour.
+        // Its own route rather than a field on the summary, because the summary is
+        // free and this is a lookup into a store a timer fills — they answer
+        // different questions and go stale on different clocks. It no longer waits
+        // on gh; a PR the store has not resolved yet reports `unknown`, and the
+        // header renders it from the summary uncoloured either way.
         if (tail === 'prs' && req.method === 'GET') {
             const summary = index.summary(sessionId);
             if (!summary) return send(res, 404, { error: 'session not found' });
@@ -3034,7 +3139,7 @@ async function api(req, res, url, pathname, who) {
                 ? await pulls.repoOf(summary.cwd)
                 : null;
 
-            return send(res, 200, await pulls.forSession(list, repo));
+            return send(res, 200, prStore.forSession(list, repo));
         }
 
         if (tail === 'subagents' && req.method === 'GET') {
@@ -4695,8 +4800,11 @@ async function postReviewToPr(row, target, { sessionId, verdict, outcome, body }
         // empty, so a pull request that was BLOCK last week and is CLEAN today
         // would end up wearing both — a contradiction is worse than a missing
         // label, so a list we could not read means the label is left alone.
-        pulls.clearCache();
-        const fresh = await pulls.openPulls(target.repo);
+        // One repository, not every repository. This used to be
+        // `pulls.clearCache()`, which emptied every open list the process held to
+        // get one of them re-read — the whole board paid for a label on one PR.
+        await prStore.refreshRepo(target.repo);
+        const fresh = prStore.openPulls(target.repo);
         const pr = fresh.ok
             ? fresh.pulls.find(x => x.number === target.number) : null;
         if (!pr) {
@@ -4940,6 +5048,25 @@ server.listen(cfg.PORT, cfg.HOST, async () => {
                 `[claude-sessions] schedule tick failed: ${err.message}`));
         }, SCHEDULE_MS).unref();
     }
+
+    // Pull request status. The only thing in this process that asks gh about a PR
+    // on a clock, and the reason no route has to.
+    //
+    // Once at startup, before the interval, for `tickSchedules`' reason: a bridge
+    // that has just come up should not be showing what GitHub looked like when it
+    // went down. It is cheap where it used to be expensive — the store's settled
+    // PRs come off disk, so a restart no longer costs a `gh pr view` per merged
+    // PR on the machine.
+    //
+    // Unconditional on dev, unlike schedules: reading GitHub changes nothing on
+    // GitHub, so there is no everyday-instance-only rule to draw here. Two bridges
+    // both refreshing is two `gh pr list` calls and one file rewritten twice.
+    tickPrs().catch(err => console.error(
+        `[claude-sessions] PR catch-up failed: ${err.message}`));
+    setInterval(() => {
+        tickPrs().catch(err => console.error(
+            `[claude-sessions] PR refresh failed: ${err.message}`));
+    }, prStore.TICK_MS).unref();
 
     // The quota beacon. Its own timer rather than a fold into the schedule
     // tick: that one fires every SCHEDULE_MS and is about starting sessions,

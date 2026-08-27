@@ -185,10 +185,15 @@ const state = {
     // url -> {status, label, detail, title, updatedAt} from /api/sessions/:id/prs.
     // Null until that answers; the header draws its PRs from the summary either way.
     prStatus: null,
-    // sessionId -> {status, label, total, counts} from /api/prs — one word for a
-    // whole session's pull requests, which is all a rail row has space for. Empty
-    // until that answers, and rows draw a colourless glyph in the meantime.
+    // sessionId -> {status, label, total, counts} — one word for a whole session's
+    // pull requests, which is all a rail row has space for. Seeded from /api/prs at
+    // boot and kept current by the `prs-changed` event; empty until the first of
+    // those, and rows draw a colourless glyph in the meantime.
     railPrs: new Map(),
+    // Why GitHub could not be reached, from the same payload. Grey glyphs with no
+    // explanation is what an expired `gh` token used to look like on every surface
+    // but the board.
+    prsError: null,
     // What the session's directory declares in .tgxcode/, and what is running
     // from it. Keyed by nothing — there is only ever one conversation on screen,
     // and the payload is re-fetched when it changes. `cmdsFor` is the directory
@@ -582,8 +587,10 @@ async function loadSessions() {
         state.sessions = sessions;
         rememberOrder(sessions);
         renderRail();
-        // After the paint, never before it: this one asks GitHub.
-        loadRailPrs();
+        // The glyphs are coloured from `state.railPrs`, which the bridge pushes
+        // and which survives a re-render — so nothing is fetched here. This used
+        // to call `loadRailPrs()` after the paint, which meant a `/api/prs` per
+        // `sessions-changed` broadcast on a busy machine.
         // `live` rides on the session list, not on runner-status, so this is the
         // only moment the composer learns that a session started or stopped in a
         // terminal. The registry broadcasts sessions-changed for exactly this.
@@ -594,35 +601,32 @@ async function loadSessions() {
 }
 
 /**
- * Ask GitHub what has become of every session's pull requests.
+ * Take one word per session's pull requests and recolour the rail.
  *
- * Its own request, after the rail has painted, for the reason `/api/prs` is its own
- * route: it shells out to gh and the session list must not wait on GitHub. The
- * answer is one word per session, and the rows are recoloured in place rather than
- * rebuilt — a `renderRail()` every minute would throw away hover and focus for a
- * glyph that usually has not changed.
+ * Rows are patched in place rather than rebuilt: a `renderRail()` on every update
+ * would throw away hover and focus for a glyph that usually has not changed.
  *
- * One request at a time. The bridge caches a minute per repository, so a burst of
- * `sessions-changed` mostly asks a warm cache, but there is no reason for two of
- * these to be in flight at once.
+ * Called with the `prs-changed` payload the bridge pushes, and once at boot with
+ * the body of `/api/prs`, which is the same shape — a window that has just opened
+ * needs somewhere to start, because the next push may be twenty minutes away.
  */
-let prsInFlight = false;
+function applyRailPrs(payload) {
+    state.railPrs = new Map(Object.entries((payload && payload.sessions) || {}));
+    state.prsError = (payload && payload.gh && payload.gh.error) || null;
+    for (const s of state.sessions) {
+        if (!s.prs || !s.prs.length) continue;
+        const strip = dom.rail.querySelector(`[data-id="${CSS.escape(s.sessionId)}"]`);
+        if (strip) patchPrBadge(strip, s);
+    }
+}
+
+/** The one fetch of `/api/prs` a window makes: its first paint. */
 async function loadRailPrs() {
-    if (prsInFlight) return;
-    prsInFlight = true;
     try {
-        const { sessions } = await get('/api/prs');
-        state.railPrs = new Map(Object.entries(sessions || {}));
-        for (const s of state.sessions) {
-            if (!s.prs || !s.prs.length) continue;
-            const strip = dom.rail.querySelector(`[data-id="${CSS.escape(s.sessionId)}"]`);
-            if (strip) patchPrBadge(strip, s);
-        }
+        applyRailPrs(await get('/api/prs'));
     } catch {
         // Leaves whatever was known before, which is better than blanking it —
         // the same silence `loadPrStatus` keeps, and for the same reason.
-    } finally {
-        prsInFlight = false;
     }
 }
 
@@ -1005,10 +1009,14 @@ function prBadgeTip(s, agg) {
     const numbers = s.prs.map(p => `#${p.number}`).join(' · ');
     const plural = `${s.prs.length} pull request${s.prs.length === 1 ? '' : 's'}`;
 
-    // Before the fetch lands, and after one that failed: the row knows how many
-    // PRs there are and nothing about them, and says exactly that.
+    // Before the first payload lands, and after one that could not answer: the row
+    // knows how many PRs there are and nothing about them, and says exactly that.
+    // `prsError` is why, in gh's own words — an expired token used to show here as
+    // an unexplained grey glyph, because this surface threw the reason away.
     if (!agg) return `${plural}\nAsking GitHub…\n${numbers}`;
-    if (agg.status === 'unknown') return `${plural}\nGitHub could not be reached\n${numbers}`;
+    if (agg.status === 'unknown') {
+        return `${plural}\n${state.prsError || 'GitHub could not be reached'}\n${numbers}`;
+    }
 
     const breakdown = Object.entries(agg.counts)
         .sort((a, b) => b[1] - a[1])
@@ -1527,6 +1535,10 @@ function prLink(pr) {
 
     const tip = [
         live && live.label,
+        // Why there is no colour, in gh's own words. Only when there is genuinely
+        // nothing to say about the PR — an expired token showed here as an
+        // unexplained grey glyph, because this surface dropped the reason.
+        status === 'unknown' ? state.prsError : null,
         live && live.title,
         ...((live && live.detail) || []),
         [`#${pr.number}`, pr.repo, live && live.updatedAt && `updated ${ago(live.updatedAt)} ago`]
@@ -1540,12 +1552,17 @@ function prLink(pr) {
 }
 
 /**
- * Ask GitHub what became of this session's PRs.
+ * What became of this session's PRs, in the detail a header has room for.
  *
- * Its own request rather than part of the session payload, because that one is
- * also the rail's and must not wait on a network call. Failure is silent for the
- * same reason a missing channel strip is: the links are already on screen and
- * still work, they simply stay grey.
+ * Its own request rather than part of the session payload, and rather than part of
+ * the `prs-changed` push: this is per-PR detail for one session, and pushing every
+ * session's detail to every window to serve the one conversation on screen is the
+ * trade that made it a request in the first place. So the event says *that*
+ * something moved and this asks *what* — off a store, so it costs no network call
+ * to GitHub and no wait.
+ *
+ * Failure is silent for the same reason a missing channel strip is: the links are
+ * already on screen and still work, they simply stay grey.
  */
 async function loadPrStatus() {
     if (!state.current) return;
@@ -1554,9 +1571,10 @@ async function loadPrStatus() {
     // bridge answers a session with none from its index without asking GitHub.
     const id = state.current.sessionId;
     try {
-        const { prs } = await get(`/api/sessions/${id}/prs`);
+        const { prs, gh } = await get(`/api/sessions/${id}/prs`);
         if (!state.current || state.current.sessionId !== id) return;
         state.prStatus = new Map((prs || []).map(pr => [pr.url, pr]));
+        if (gh && gh.error) state.prsError = gh.error;
         renderHeader();
     } catch {
         // Leaves whatever was known before, which is better than blanking it.
@@ -5442,19 +5460,27 @@ function dashRow(project, w) {
     if (g.ahead) signals.push(el('span', { class: 'sig quiet' }, `${g.ahead} unpushed`));
     if (g.conflicts) signals.push(el('span', { class: 'sig bad' }, `${g.conflicts} conflicted`));
 
+    // The same one word, glyph and colour the header and the rail use. This used
+    // to read `draft` and `reviewDecision` off the raw record and draw its own
+    // conclusions, which meant a merged PR, one conflicting with its base and one
+    // with a failing build were three identical blue chips here while the other
+    // two surfaces showed three different glyphs. The bridge resolves `status`
+    // now, so there is one PR vocabulary in the app rather than two.
     for (const pr of w.prs) {
+        const status = pr.status || 'unknown';
         signals.push(el('a', {
-            class: 'sig pr' + (pr.draft ? ' draft' : ''),
+            class: 'sig pr', 'data-status': status,
             href: pr.url, target: '_blank', rel: 'noreferrer',
-            title: `${pr.title}\n${pr.url}\nopened by ${pr.author || 'someone'}, `
-                + `updated ${ago(pr.updatedAt)} ago`,
+            title: [
+                pr.label || prWords(status),
+                pr.title,
+                `${pr.url}\nopened by ${pr.author || 'someone'}, `
+                    + `updated ${ago(pr.updatedAt)} ago`,
+            ].filter(Boolean).join('\n'),
         },
+            icon(PR_ICON[status] || 'pr', 12),
             el('span', { class: 'pr-num' }, `#${pr.number}`),
             el('span', { class: 'pr-title' }, clip(pr.title, 46)),
-            pr.draft ? el('span', { class: 'pr-tag' }, 'draft') : null,
-            pr.reviewDecision === 'APPROVED' ? el('span', { class: 'pr-tag ok' }, 'approved') : null,
-            pr.reviewDecision === 'CHANGES_REQUESTED'
-                ? el('span', { class: 'pr-tag bad' }, 'changes requested') : null,
         ));
     }
 
@@ -7887,6 +7913,22 @@ function connect() {
     es.addEventListener('schedules-changed', (e) => applySched(JSON.parse(e.data)));
 
     es.addEventListener('sessions-changed', () => loadSessions());
+
+    // A pull request moved — a review landed, a build finished, somebody merged.
+    // Nothing in a conversation says so, and this used to be three independent
+    // sixty-second polls finding out: the header, the rail and the board, each
+    // asking whether anything had changed and almost always being told no.
+    //
+    // The payload is the rail's whole answer, because one word per session is
+    // small enough to send outright. The header's per-PR detail is not, so this
+    // refetches the one session on screen — see `loadPrStatus`. The board is only
+    // reloaded when it is actually open; it is a heavier payload and an invisible
+    // panel does not need to be right.
+    es.addEventListener('prs-changed', (e) => {
+        applyRailPrs(JSON.parse(e.data));
+        if (state.current) loadPrStatus();
+        if (state.dash.open) loadDash();
+    });
 
     // Someone deleted a session — possibly in another window, possibly this one.
     es.addEventListener('session-deleted', (e) => {
@@ -13200,22 +13242,18 @@ setInterval(() => {
     if (state.current && !dom.channels.querySelector('[data-arm="true"], .busy')) loadChannels();
 }, 25_000);
 
-// A PR changes under you — a review lands, checks finish — with nothing in this
-// session to say so. Matched to the bridge's own minute of cache, so a window left
-// open on a conversation costs one `gh pr list` a minute at most.
-setInterval(loadPrStatus, 60_000);
-
-// And the same for the rail, which has no conversation open to notice it either.
-// Also the only way a PR raised while you were looking elsewhere reaches a row:
-// nothing about a PR broadcasts, so this poll is the whole mechanism.
-setInterval(loadRailPrs, 60_000);
+// One fetch, to have something to draw before the first push arrives. A PR
+// changing under you — a review landing, checks finishing — reaches every surface
+// on the `prs-changed` event now; there were three sixty-second polls here, none
+// of them aware of the others, and between them they were the whole mechanism.
+loadRailPrs();
 
 // The count on the Dashboard button is the only thing that says there is
 // anything to look at, so it is read once at startup — a few seconds in, where
-// it cannot slow the first paint of the session list — and then only while the
-// board is actually on screen.
+// it cannot slow the first paint of the session list. After that it is `prs-changed`
+// that reloads it, and only while it is on screen: a board nobody is looking at
+// does not need to be right, and it is the heaviest of the three payloads.
 setTimeout(() => loadDash(), 3000);
-setInterval(() => { if (state.dash.open) loadDash(); }, 60_000);
 
 // Same reasoning for the History badge, and the same delay: the number of things
 // that wanted you while this window was shut is the one piece of news the button

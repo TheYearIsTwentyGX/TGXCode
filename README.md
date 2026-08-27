@@ -868,8 +868,18 @@ and it reads none of it from the transcripts:
   stops there. A conversation header wants the opposite — it keeps a merged PR on
   screen as the record that the work landed — so it asks after that one PR by
   number, once, and remembers the answer for good: merged and closed are the two
-  states nothing can move a PR out of. Both go through `bridge/pulls.js` and share
-  its cache, so the extra question costs one call per settled PR and no more.
+  states nothing can move a PR out of. Both go through `bridge/pulls.js`, and both
+  read the same snapshot, so the extra question costs one call per settled PR ever
+  — it is written to disk, so a restart does not buy it again.
+
+Nothing on this board, or in the rail, or in a conversation header, calls `gh` on
+the path of a request. A refresher in the bridge does that on a timer and pushes a
+`prs-changed` event when the answer moves; `bridge/pr-store.js` decides which
+repositories are worth asking about and holds the last answer. It replaced three
+sixty-second client polls that between them re-listed every repository every minute
+forever, awake or idle. The trade is written down in that file's header: a PR can be
+twenty minutes stale on a repository nobody is working in, and anything a
+conversation on this machine can see is picked up within a minute.
 
 A workspace shows the PRs raised from the branch it has checked out, and only
 those — a session that raises a PR from a worktree and then leaves reports the
@@ -959,6 +969,7 @@ you are away from the desk, and a phone that has dropped its connection is not.
 | `bridge/restart.js` | Pulling this checkout and handing over to `scripts/restart-bridge.sh` — the one mutating git call |
 | `bridge/changes.js` | What a session changed, out of its transcript and its subagents' |
 | `bridge/pulls.js` | Everything this app asks GitHub about a pull request, what its status *is*, and the review it leaves behind |
+| `bridge/pr-store.js` | When to ask, and last time's answer kept on disk — so no route ever waits on GitHub |
 | `bridge/overview.js` | The live board: what every session is doing right now |
 | `bridge/taskboard.js` | The task board: everything outstanding, in a column per state |
 | `bridge/sessions.js` | The session index — incremental, cached, watched |
