@@ -40,30 +40,47 @@
 > terminal is open. The undocumented-endpoint version imagined below is the same
 > objection with worse odds.
 >
-> **The other idea that does not work: a background `claude` as a quota beacon.**
-> Since the numbers come from the status line, and the status line needs a TUI,
-> the natural next thought is to have the bridge keep its own interactive
-> `claude` open in a pty and harvest from that. Tried it. Do not.
+> **A background `claude` as a quota beacon: shipped, after two wrong turns.**
+> Since the numbers come from the status line and the status line needs a TUI,
+> the way to refresh without a terminal open is to *be* a TUI for a few seconds.
+> `bridge/beacon.js` starts `claude`, lets its startup prefetch run the quota
+> probe, takes what the harvester wrote, and kills it. Measured at ~4.4s a run.
 >
-> - `probeQuotaStatus` is called from exactly one place — the **startup
->   prefetch**. The CLI probes quota once per process start and never on a
->   timer, so a long-lived beacon takes one reading and then holds it forever.
->   Only a *periodically restarted* beacon would refresh anything.
-> - Every start is a gauntlet of modals. Two attempts hit two different ones —
->   a feature announcement, then the directory **trust prompt** — and neither
->   ever rendered a status line.
-> - Getting past them means keystrokes at dialogs the beacon cannot read. The
->   trust prompt grants read, edit and execute on the directory. That is the end
->   of the idea: a background process whose job includes blindly confirming
->   dialogs is not worth a percentage.
-> - `--bare` would make the startup cheap and **explicitly skips background
->   prefetches**, i.e. the probe. So each run pays full startup — MCP servers,
->   plugins — plus a real API call.
-> - The prefetch is gated by `tengu_cicada_nap_ms`, a remote config value. It is
->   0 today (always prefetch); raised, startups inside the nap window skip the
->   probe and the beacon silently stops refreshing.
+> Two things were assumed wrong on the way, both worth recording:
 >
-> The mitigation that makes this bearable is already in place, and is a property
+> - **"Keep one open."** No: `probeQuotaStatus` is called from exactly one
+>   place, the startup prefetch. The CLI probes once per process start and never
+>   on a timer, so a long-lived beacon takes one reading and holds it forever.
+>   It has to be *restarted*, not kept.
+> - **"Then it will litter the rail, so pin one conversation and `--resume` it."**
+>   Also no, and this is the good part: **a session that is never sent a message
+>   writes no transcript at all.** No `<id>.jsonl`, so no row, nothing to clean
+>   up, no conversation to pin. Verified by watching the project directory
+>   across runs. The resume machinery was designed and then deleted unbuilt.
+>
+> What remains true, and is why the feature is off by default:
+>
+> - **Modals stop it**, and it will not press keys to get past them. The trust
+>   prompt grants read, edit and execute on a directory; a background process
+>   confirming dialogs it cannot read is not worth a percentage. Hence
+>   `quota.beaconDir` is the user's to name, from the **user settings file only**
+>   — a repository does not get to choose where this app starts Claude — and the
+>   instruction is to open Claude there yourself once first.
+> - **`--bare` must never be passed.** It is what would make startup cheap and
+>   it explicitly skips background prefetches, i.e. the probe. `CLAUDE_CODE_SIMPLE`
+>   is the same switch and is scrubbed from the child's environment.
+> - **Each run costs** a CLI start and one `max_tokens: 1` request. Hence the
+>   five-minute floor on the interval.
+> - **`tengu_cicada_nap_ms`** gates the prefetch remotely. It is 0 today; raised,
+>   runs inside the nap window would skip the probe and the beacon would quietly
+>   stop refreshing.
+>
+> Every one of those fails the same safe way — no new reading, the pill ages
+> visibly — and `beacon` in the `/api/quota` payload carries the reason and a
+> readable line of whatever dialog is in the way, so the panel can say *why*
+> rather than just going stale.
+>
+> The other mitigation is still in place, and is a property
 > worth knowing: the stream's `rate_limit_event` starts carrying `utilization`
 > once the account crosses a warning threshold. So the percentage is guaranteed
 > live exactly when it is close to mattering, and can only go stale in the range

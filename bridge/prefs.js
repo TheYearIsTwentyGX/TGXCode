@@ -85,6 +85,30 @@ const DEFAULTS = {
         // a session you may want to know is running.
         hideElsewhere: false,
     },
+    quota: {
+        // Refresh the quota percentages by starting a short-lived `claude`,
+        // letting its startup probe run, harvesting the status line and killing
+        // it — so the pill stays current with no terminal open. It leaves
+        // nothing behind: a session that is never sent a message writes no
+        // transcript, so there is no row in the rail and nothing to clean up.
+        //
+        // Off until `beaconDir` names somewhere, and deliberately **read from
+        // the user file only** — a project's `.tgxcode/settings.json` is
+        // checked into a repository, and what directory this app starts Claude
+        // in is not a repository's business.
+        beacon: false,
+        // Where it runs. **Open Claude Code there yourself at least once
+        // first.** The beacon never answers the trust prompt — that dialog
+        // grants read, edit and execute on the directory, and a background
+        // process confirming it on your behalf is not a thing this app will do.
+        // Naming a directory you have not trusted just makes every run time
+        // out, which the quota panel will tell you about.
+        beaconDir: null,
+        // How often, in minutes. Each run costs a CLI start and one
+        // `max_tokens: 1` API call — a rounding error against a window, but not
+        // nothing, so this is a floor of five rather than a free knob.
+        beaconEveryMinutes: 20,
+    },
     spinner: {
         // What a turn in progress calls itself. Off gives back the literal
         // "Thinking…" this app said for its whole life before now.
@@ -115,6 +139,14 @@ const SHAPE = {
     live: {
         compact: (v) => typeof v === 'boolean',
         hideElsewhere: (v) => typeof v === 'boolean',
+    },
+    quota: {
+        beacon: (v) => typeof v === 'boolean',
+        beaconDir: (v) => v === null || (typeof v === 'string' && v.length > 0 && v.length <= 4096),
+        // A floor of five minutes. Each run is a process and an API call, and a
+        // settings file asking for one every ten seconds is a mistake rather
+        // than a preference.
+        beaconEveryMinutes: (v) => Number.isInteger(v) && v >= 5 && v <= 1440,
     },
     spinner: {
         randomize: (v) => typeof v === 'boolean',
@@ -274,6 +306,7 @@ class Prefs {
             version: VERSION,
             transcript: { ...DEFAULTS.transcript },
             live: { ...DEFAULTS.live },
+            quota: { ...DEFAULTS.quota },
             spinner: { ...DEFAULTS.spinner },
             sources: [],
             problems: [],

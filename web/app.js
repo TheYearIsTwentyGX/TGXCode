@@ -7687,13 +7687,48 @@ function renderQuotaPanel() {
     const note = dom.quotaNote;
     note.textContent = '';
     const sl = quota.snap && quota.snap.statusLine;
+    const bc = quota.snap && quota.snap.beacon;
+
     if (sl && !sl.present) {
         note.append(el('div', { text: 'Percentages come from the Claude Code status line, which only runs in a terminal. To turn it on:' }));
         note.append(el('code', { text: 'node scripts/install-quota-statusline.js' }));
     } else if (sl && sl.present) {
         note.append(el('div', {
-            text: `Percentages are harvested from the status line while a terminal session is open — last seen ${fmtAge(quotaAge(sl.capturedAt))}.`,
+            text: `Last harvested from the status line ${fmtAge(quotaAge(sl.capturedAt))}.`,
         }));
+    }
+
+    // Why the number is or is not moving. Without this a stale reading is
+    // unexplained, which is the failure this whole feature is arranged against
+    // — the pill can say a number is old, but only the beacon knows why.
+    if (!bc) return;
+
+    if (!bc.enabled) {
+        note.append(el('div', {
+            text: 'Refreshing it without a terminal open needs the quota beacon: '
+                + 'set quota.beacon and quota.beaconDir in ~/.tgxcode/settings.json. '
+                + 'Open Claude Code in that directory yourself once first — the beacon '
+                + 'will not answer the trust prompt.',
+        }));
+        return;
+    }
+
+    const every = bc.everyMinutes ? `every ${bc.everyMinutes}m` : '';
+    if (bc.running) {
+        note.append(el('div', { text: `Beacon running now in ${bc.dir}.` }));
+    } else if (bc.ok === false) {
+        // The interesting case: it is on, and not working. Say which directory
+        // and what went wrong, because the usual cause is a dialog waiting in a
+        // TUI nobody can see.
+        note.append(el('div', { class: 'warn', text: `Beacon failing — ${bc.reason}` }));
+        if (bc.screen) note.append(el('code', { text: bc.screen }));
+    } else if (bc.ok) {
+        note.append(el('div', {
+            text: `Beacon on, ${every}, in ${bc.dir} — last run ${fmtAge(quotaAge(bc.at))}`
+                + `${typeof bc.ms === 'number' ? ` (${(bc.ms / 1000).toFixed(1)}s)` : ''}.`,
+        }));
+    } else {
+        note.append(el('div', { text: `Beacon on, ${every}, in ${bc.dir} — not run yet.` }));
     }
 }
 

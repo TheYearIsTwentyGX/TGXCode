@@ -336,6 +336,8 @@ a:hover { text-decoration: underline; }
     color: var(--text-4);
 }
 .quota-note:empty { display: none; }
+.quota-note div + div { margin-top: 7px; }
+.quota-note .warn { color: var(--yellow); }
 .quota-note code {
     font: 400 11px/1.5 var(--mono);
     color: var(--text-3);
