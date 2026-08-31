@@ -189,9 +189,32 @@ project filter on `GET /api/sessions?project=`.
 | `userMessages`, `assistantMessages`, `toolCalls`, `bytes`, `mtimeMs` | numbers |
 | `pinned`, `archived`, `test`, `active` | bools |
 | **`worktree`** | **object or null** — `{name, branch, path, originalCwd}` |
+| **`schedule`** | **object or null** — `{id, title}`, both strings; see below |
 | `prs` | array of `{number, url, repo}`, empty if none |
 | **`live`** | **object or null** — see below |
 | **`runner`** | **object or absent** — four fields only, see below |
+
+**`schedule` is an object, not an id**, and its presence changes `title`. It is
+`{id, title}` when a schedule started this session and `null` for everything else,
+which is nearly everything. `id` is the row in `GET /api/schedules`; `title` is that
+schedule's *resolved* name — a schedule's own `title` is nullable and falls back to the
+first line of its prompt, and this field has already done that, so it is never empty.
+
+When it is present, **`title` is composed** rather than read from the transcript:
+`"<schedule title> - <M/D/YY>"`, dated from `firstTs`, with `titleSource: "schedule"`.
+A headless scheduled run gets none of Claude Code's own title entries, so without this
+every run of a schedule is titled with the same slash command and a fortnight of them
+is indistinguishable. **A title the user set by hand wins** — `custom-title` and
+`agent-name` are left alone, and the field is then absent from `titleSource` while
+`schedule` is still there. A client that wants the schedule's name without the date
+reads `schedule.title`; one that wants to group scheduled runs tests `schedule` for
+null and needs nothing else.
+
+`titleSource` says where `title` came from: `custom-title`, `agent-name`, `ai-title`
+(Claude Code's own entries), `schedule` (composed as above), `prompt` (the first line
+of the first user message, with a slash-command invocation unwrapped to
+`/name args` rather than left as its `<command-message>` tags), `registry` (the live
+process's label), or `none`.
 
 **`worktree` is an object, not a name.** `{name, branch, path, originalCwd}`, where
 `originalCwd` is the checkout the worktree was branched from — which is what makes a
@@ -1036,6 +1059,9 @@ looks exactly like "nothing is open" for a minute — which for a reader is a bl
 panel, and for anything deciding what to act on is a trap worth knowing about. `sessions[]` are chips — `{sessionId, title, lastTs, userMessages,
 active}` — capped at six per workspace with `moreSessions` counting the rest, and
 carrying the same narrow four-field `runner` as `GET /api/sessions` where one is live.
+A chip carries **no `schedule`**, so a client cannot tell a scheduled run from any
+other here; its `title` is still the composed one, so the schedule's name and the date
+it ran are in the text even though the field is not there to group on.
 
 Only unfinished rows survive: a workspace with a clean tree and no open PR is dropped,
 and so is a project left with no workspaces. `gh` fails once for everything rather than

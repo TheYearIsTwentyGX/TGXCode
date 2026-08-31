@@ -281,7 +281,7 @@ function scanMeta(filePath) {
                 if (!meta.firstPrompt) {
                     const parsed = safeParse(line);
                     const t = parsed ? userText(parsed) : null;
-                    if (t) meta.firstPrompt = t.slice(0, 400);
+                    if (t) meta.firstPrompt = commandText(t).slice(0, 400);
                 }
             } else {
                 meta.assistantMessages++;
@@ -532,8 +532,13 @@ function userText(entry) {
     return parts.length ? stripEnvelope(parts.join('\n')) : null;
 }
 
-// User messages arrive wrapped in bookkeeping tags (command invocations,
-// system reminders, stdout captures). Strip them for display purposes.
+// User messages arrive wrapped in bookkeeping tags (system reminders, stdout
+// captures). Strip them for display purposes.
+//
+// **A command invocation is deliberately left in.** `buildEvents` runs
+// `parseCommand` over the result to draw the command chip, so taking the tags
+// off here would leave it nothing to read. Somewhere that wants the command as
+// text rather than as a chip — a title, a search haystack — calls `commandText`.
 function stripEnvelope(s) {
     return String(s)
         .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
@@ -1083,6 +1088,25 @@ function parseCommand(text) {
     return { name: name[1].trim().replace(/^\/+/, ''), args: args ? args[1].trim() : '' };
 }
 
+/**
+ * A user message as text, with a command invocation written the way it was typed.
+ *
+ * The conversation view renders a command from the parsed `{name, args}` and
+ * never looks at the raw text, so for a long time nothing noticed that the tags
+ * survive `stripEnvelope`. Everywhere that treats a prompt *as prose* did: the
+ * first line of `<command-message>foo</command-message>\n<command-name>…` is the
+ * whole of the first tag, so a session started by a slash command — which is
+ * every scheduled run — took that as its title.
+ *
+ * Not folded into `stripEnvelope` for the reason given on it: deleting the tags
+ * would lose the command rather than render it.
+ */
+function commandText(text) {
+    const cmd = parseCommand(text);
+    if (!cmd) return text;
+    return `/${cmd.name}${cmd.args ? ' ' + cmd.args : ''}`;
+}
+
 // The heading the bridge writes above a turn's attached files, and the line shape
 // under it. One definition, because it is written on the way out (see
 // `buildAttachmentNote` in bridge/attachments.js) and read back on the way in — and a
@@ -1459,6 +1483,7 @@ function todoProgress(file) {
 module.exports = {
     parseLines, scanMeta, buildEvents, readSubagentIndex, readSubagentTranscript,
     lastActivity, recentActivity, todoProgress, describeTool, stripEnvelope, firstLine,
+    commandText,
     // For bridge/notifications.js, which decides whether a message from another
     // session is worth interrupting you for, and needs to recognise one first.
     parsePeerMessage,

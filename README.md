@@ -103,7 +103,7 @@ create one in `%APPDATA%\claude-sessions\`:
 
 | | |
 |---|---|
-| **Left rail** | Every session on disk, grouped by project. Worktrees fold under the checkout that owns them. A green dot means the transcript changed in the last 90 seconds — something is working. |
+| **Left rail** | Every session on disk, grouped by project. Worktrees fold under the checkout that owns them. Sessions a schedule started fold into a **Scheduled** section inside their project's card, shut until you open it — they are the same work in the same directory, but a fortnight of nightly reviews between you and the conversation you want is what the rail exists to prevent. Each is named after the schedule and the day it ran. A green dot means the transcript changed in the last 90 seconds — something is working. |
 | **Ordering** | By when *you* last wrote, not by last activity. Sorting on activity meant a busy agent kept bumping its session to the top and shuffling the rest out from under the cursor. The timestamp on each row is the one it sorts by. |
 | **Pin / archive** | Hover a row for its two buttons, or use the ones beside the session title. Pinned sessions sit in their own group at the top, across projects. Archived ones collapse into a group at the bottom. |
 | **Conversation** | Your turns, Claude's replies with syntax-highlighted code, and one collapsible block per tool call. A run of tool calls between one message and the next folds into a single row — *16 tool calls · Bash ×6 · Read ×7* — which opens to the rows themselves; see *Folded tool calls*. Edits render as diffs, and output too large to inline loads on demand. |

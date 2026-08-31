@@ -27,7 +27,7 @@ const { Drafts, MAX_DRAFTS } = require('./drafts');
 const {
     Schedules, MAX_SCHEDULES, CATCHUP_MS,
     parseCron, nextSlot, dueSlot, describeCron, cronForm, fillPrompt, verdictOf,
-    reviewKey, unreviewedPulls,
+    reviewKey, unreviewedPulls, scheduleTitle,
 } = require('./schedule');
 const { SlashCommandCache } = require('./slash-commands');
 const { NotificationLog, ReadState } = require('./notifications');
@@ -51,7 +51,7 @@ const commands = require('./commands');
 const { RunPool } = require('./runs');
 // Written here, read back by transcript.js. One format, and the two halves of it
 // live in one file so they cannot drift apart.
-const { handoffEnvelope, firstLine } = require('./transcript');
+const { handoffEnvelope } = require('./transcript');
 const { HandoffLimit, stateOf: handoffState, wakes, wakeFailure } = require('./handoff');
 
 const WEB_DIR = path.join(__dirname, '..', 'web');
@@ -118,6 +118,9 @@ index.registry = registry;
 // So a decision about a suggestion goes when its transcript does, the way a pin
 // or an archive does.
 index.suggestions = suggestions;
+// So a session a schedule started says so, and the rail can group them. Absent,
+// every summary carries `schedule: null` and nothing else changes.
+index.schedules = schedules;
 
 /**
  * @type {Map<string, {
@@ -1045,6 +1048,11 @@ function rememberScheduledRun(sessionId, scheduleId, target = null) {
     while (scheduledRuns.size > SCHEDULED_RUNS_KEPT) {
         scheduledRuns.delete(scheduledRuns.keys().next().value);
     }
+    // The half that outlives this process. This map carries the pull request a
+    // run is about and is deliberately in memory only — a restart mid-review is
+    // a review that stops. *Which schedule started a session* is a different
+    // fact with a different lifetime: the rail groups on it forever.
+    schedules.rememberRun(sessionId, scheduleId);
 }
 
 /**
@@ -1728,11 +1736,6 @@ function recoverInterruptedReviews() {
         console.log(`[claude-sessions] ${found} interrupted review(s) marked`);
         broadcast('schedules-changed', schedulesPayload());
     }
-}
-
-/** What to call a schedule in a log line or a notification. */
-function scheduleTitle(row) {
-    return row.title || firstLine(row.prompt).slice(0, 60) || 'a schedule';
 }
 
 /**
