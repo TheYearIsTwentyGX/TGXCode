@@ -359,6 +359,37 @@ const now = () => Math.floor(Date.now() / 1000);
     ok('two bridges sharing the state file merge rather than overwrite');
 }
 
+{
+    const a = fresh();
+    a.noteBeaconRun(5000);
+    a._writeNow();
+
+    // Why this is persisted at all: it used to be a module-level `0` in
+    // server.js, so every bridge start fired a beacon immediately. Restarting a
+    // dev bridge six times in thirteen minutes then meant six runs, six API
+    // calls, and six chances to leak a detached TUI — which is exactly how four
+    // orphans appeared at once.
+    assert.strictEqual(new Usage().beaconRanAt(), 5000, 'survives a restart');
+
+    // Max-wins rather than newest-writer-wins: the interval is measured from
+    // the last run on the *machine*, and a bridge that has been up for hours
+    // must not reset it by writing its own older idea of when that was.
+    const b = new Usage();
+    b.beaconAt = 4000;
+    b._writeNow();
+    assert.strictEqual(new Usage().beaconRanAt(), 5000, 'an older run does not win');
+
+    b.noteBeaconRun(9000);
+    b._writeNow();
+    assert.strictEqual(new Usage().beaconRanAt(), 9000, 'a newer one does');
+
+    // And it does not go backwards in memory either.
+    b.noteBeaconRun(1);
+    assert.strictEqual(b.beaconRanAt(), 9000);
+
+    ok("the beacon's clock survives a restart and takes the newest run");
+}
+
 // --- the beacon ---------------------------------------------------------
 //
 // Only the parts that do not spawn anything. Actually running a beacon needs a
@@ -370,7 +401,9 @@ const now = () => Math.floor(Date.now() / 1000);
 // than XDG_DATA_HOME and would therefore reach outside this test's sandbox.
 
 const { DEFAULTS: PREF_DEFAULTS, SHAPE: PREF_SHAPE } = require('../bridge/prefs');
-const { plain } = require('../bridge/beacon');
+const {
+    plain, isBeaconArgv, ownerPidOf, shouldReap,
+} = require('../bridge/beacon');
 
 {
     // Off, and pointed nowhere. A feature that starts Claude in a directory
@@ -419,6 +452,77 @@ const { plain } = require('../bridge/beacon');
     assert.ok(plain('x'.repeat(50_000)).length <= 400, 'the panel gets a line, not a screen dump');
 
     ok('a blocking dialog is rendered as readable text for the panel to show');
+}
+
+{
+    // One of the five orphans, copied out of `ps` verbatim. They ran for
+    // twenty-eight hours after their worktree's dev bridges were gone, each
+    // re-rendering its status line every three seconds and writing a frozen
+    // quota reading over the shared harvest file — which is what made the pill
+    // show a number that was both wrong and apparently fresh.
+    const orphan = 'script -qfec stty rows 45 cols 120 2>/dev/null; exec claude --settings '
+        + '\'{"statusLine":{"type":"command","command":"python3 \\"/home/dylan_hays/Other/'
+        + 'claude-sessions/.claude/worktrees/scheduled-rail-section/scripts/quota-statusline.py'
+        + '\\"","refreshInterval":3}}\' --mcp-config \'{"mcpServers":{}}\' '
+        + '--strict-mcp-config /dev/null';
+
+    assert.ok(isBeaconArgv(orphan), 'the shape this whole mechanism exists for');
+
+    // The false positives, which matter more than the positive: this function
+    // decides what gets a SIGKILL.
+    assert.ok(!isBeaconArgv('claude --resume 1346fbba-5f43-4070-800e-e97980cebdcb'));
+    assert.ok(!isBeaconArgv('node /home/x/claude-sessions/bridge/server.js'));
+    assert.ok(!isBeaconArgv(''));
+    assert.ok(!isBeaconArgv(null));
+
+    // The dangerous one. A user's own terminal runs the harvester — that is the
+    // entire point of installing it — so `quota-statusline.py` alone must never
+    // be enough. Killing these would be the app destroying the sessions it
+    // exists to serve.
+    assert.ok(!isBeaconArgv('python3 /home/x/scripts/quota-statusline.py'),
+        'the harvester itself is not a beacon');
+    assert.ok(!isBeaconArgv('claude --settings \'{"statusLine":{"command":'
+        + '"python3 /x/scripts/quota-statusline.py"}}\''),
+        "a user's terminal with our status line installed is not a beacon");
+    // Nor is a beacon-ish CLI that is actually carrying MCP servers.
+    assert.ok(!isBeaconArgv('claude --settings \'{"statusLine":{"command":'
+        + '"python3 /x/quota-statusline.py"}}\' --mcp-config \'{"mcpServers":'
+        + '{"claude-sessions":{}}}\' --strict-mcp-config'));
+
+    ok('the reaper recognises a beacon and nothing else');
+}
+
+{
+    // The receipt path doubles as the ownership tag, which is why it goes on
+    // the command line rather than in the environment — `ps` shows argv, and
+    // the reaper has nothing else to go on.
+    assert.strictEqual(
+        ownerPidOf('claude --receipt /x/quota-beacon.12345.aabbccddeeff.json'), 12345);
+    assert.strictEqual(ownerPidOf('claude --strict-mcp-config'), null,
+        'the legacy shape carries no owner, and must not claim one');
+    assert.strictEqual(ownerPidOf('--receipt /x/quota-beacon.1.aabbcc.json'), null,
+        'pid 1 is not an owner');
+
+    // A live bridge's own run is never touched: TIMEOUT_MS is 90 seconds and
+    // the floor here is 600, so there is no window in which a healthy run looks
+    // reapable.
+    assert.strictEqual(shouldReap({ etimes: 30, ownerAlive: true }), false);
+    assert.strictEqual(shouldReap({ etimes: 90, ownerAlive: true }), false);
+    assert.strictEqual(shouldReap({ etimes: 599, ownerAlive: true }), false);
+
+    // Owner gone: nothing else will ever clean it up, so age is irrelevant.
+    assert.strictEqual(shouldReap({ etimes: 5, ownerAlive: false }), true);
+
+    // No owner to ask — the legacy shape. Age alone decides, which is what
+    // lets a bridge running this code clear orphans that predate it.
+    assert.strictEqual(shouldReap({ etimes: 30, ownerAlive: null }), false);
+    assert.strictEqual(shouldReap({ etimes: 100715, ownerAlive: null }), true,
+        'the twenty-eight-hour orphan, by the number ps actually reported');
+
+    assert.strictEqual(shouldReap({ etimes: NaN, ownerAlive: null }), false,
+        'an unparseable age is not a licence to kill');
+
+    ok('the reaper spares a live run and takes an orphaned one');
 }
 
 fs.rmSync(home, { recursive: true, force: true });

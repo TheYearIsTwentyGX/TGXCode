@@ -1258,7 +1258,8 @@ start another one of these".
                overageDisabledReason, surpassedThreshold } ],
   events:  [ { type, label, from, to, usedPercent, at } ],
   statusLine: { present: boolean, capturedAt: number|null, path: string },
-  beacon:  { enabled, dir, everyMinutes, running, at, ok, reason, screen, ms } }
+  beacon:  { enabled, suppressed, dir, everyMinutes, running,
+             at, ok, reaped, reason, screen, ms } }
 ```
 
 An **array**, not an object keyed by window — the order is meaningful (5-hour
@@ -1306,11 +1307,13 @@ quota probe runs and the status line can be harvested — see `bridge/beacon.js`
 | Field | Type |
 | --- | --- |
 | `enabled` | boolean — on *and* pointed at a directory. Off is the default and means the percentage only refreshes while a terminal is open |
+| `suppressed` | `"dev-bridge"` or null. A development bridge does not run the beacon even when `enabled` is true: the reading is account-wide, so the everyday instance owns the probe, and a worktree bridge doing it too spends quota to measure quota. `CLAUDE_SESSIONS_BEACON_ON_DEV=1` overrides it. When this is set, `at`/`ok` describe some older run and will not advance |
 | `dir` | string or null — where it runs. The user names it in `~/.tgxcode/settings.json`, **user file only**: a project's `.tgxcode/settings.json` is checked into a repository and cannot set this |
 | `everyMinutes` | number or null — floor of 5 |
 | `running` | boolean — a run is in flight right now |
 | `at` | number, unix seconds, or absent — when the last run finished |
 | `ok` | boolean or absent. **Absent means it has never run**, which is not the same as failing |
+| `reaped` | number or absent — beacons left behind by bridges that are no longer running, killed before this run started. Normally 0. A number that stays non-zero means something is still leaking them and is worth reporting; it is not a status to draw for its own sake |
 | `reason` | string, present when `ok` is false — usually a timeout, meaning a dialog is waiting in a TUI nobody can see |
 | `screen` | string or absent — a one-line readable tail of that TUI, so the dialog can be named. Escape sequences are stripped and it is capped at 400 chars |
 | `ms` | number or absent — how long the run took. A healthy one is a few seconds |

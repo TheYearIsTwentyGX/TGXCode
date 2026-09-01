@@ -126,8 +126,32 @@ class Usage {
         this.events = [];
         // Cached parse of STATUSLINE_FILE, keyed by (size, mtime).
         this._slCache = { key: null, value: null };
+        // When a beacon last ran on this machine, unix seconds, or null. Here
+        // rather than in bridge/server.js because it has to survive a restart
+        // and be shared between bridges — see `beaconRanAt()`.
+        this.beaconAt = null;
         this._saveTimer = null;
         this.load();
+    }
+
+    // -- the beacon's clock -----------------------------------------------
+
+    /**
+     * When a beacon last ran, according to any bridge on this machine.
+     *
+     * The interval lived in a module-level `beaconLastRunAt = 0`, which meant
+     * every bridge start fired a run immediately. That is a wasted API call per
+     * restart, and — while the beacon could still orphan itself — a fresh
+     * chance to leak one on every restart. An agent restarting a dev bridge six
+     * times in thirteen minutes is how four orphans happened at once.
+     */
+    beaconRanAt() { return this.beaconAt; }
+
+    noteBeaconRun(at) {
+        if (!isNumber(at)) return;
+        if (isNumber(this.beaconAt) && at <= this.beaconAt) return;
+        this.beaconAt = at;
+        this.save();
     }
 
     // -- the stream -------------------------------------------------------
@@ -359,6 +383,10 @@ class Usage {
                 }
             }
             if (Array.isArray(data.events)) this.events = data.events.slice(-MAX_EVENTS);
+            // Added after the first version of this file shipped. Absent is
+            // null, which is why it did not need a version bump — bumping
+            // would have thrown away everybody's stream state to gain nothing.
+            if (isNumber(data.beaconAt)) this.beaconAt = data.beaconAt;
         } catch {
             // Corrupt state costs us the pill until the next turn, and nothing
             // else. Not worth failing a bridge start over.
@@ -407,7 +435,18 @@ class Usage {
             .sort((a, b) => a.at - b.at)
             .slice(-MAX_EVENTS);
 
-        const body = JSON.stringify({ version: VERSION, stream, events });
+        // Max-wins, for the same reason the stream merge above is newest-wins:
+        // the point of persisting it is that a bridge restart does not re-fire
+        // a beacon the interval says is not due, and the *latest* run on this
+        // machine is what the interval is measured from — whichever bridge did
+        // it.
+        let beaconAt = this.beaconAt;
+        if (onDisk && isNumber(onDisk.beaconAt)
+            && (!isNumber(beaconAt) || onDisk.beaconAt > beaconAt)) {
+            beaconAt = onDisk.beaconAt;
+        }
+
+        const body = JSON.stringify({ version: VERSION, stream, events, beaconAt });
         try {
             fs.mkdirSync(STATE_DIR, { recursive: true });
             const tmp = `${STATE_FILE}.${process.pid}.tmp`;
