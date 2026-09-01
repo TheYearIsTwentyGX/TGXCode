@@ -1441,7 +1441,30 @@ function lastActivity(file) {
 }
 
 /**
- * How far through its todo list a session is: {done, total} or null.
+ * The items out of a `TodoWrite` call's input, whatever shape they arrived in.
+ *
+ * Two shapes occur on disk and neither is announced. The key is `todos`, except
+ * when it is `tasks` — `web/app.js` has read `i.tasks || i.todos` for as long as
+ * it has rendered the block, so both are accepted here and the client stops
+ * guessing. And the array is sometimes a *string* holding the array's JSON:
+ * there is a transcript on this machine whose `input.todos` is
+ * `"[{\"content\": …}]"`, and until this repair that whole session reported no
+ * progress at all.
+ *
+ * The `Array.isArray` test has to run *after* the parse. A `JSON.parse` that
+ * succeeds into `"nope"` or `{}` is precisely the failure a naive repair
+ * introduces.
+ */
+function todoInput(input) {
+    let items = input && (input.todos !== undefined ? input.todos : input.tasks);
+    if (typeof items === 'string') {
+        try { items = JSON.parse(items); } catch { return []; }
+    }
+    return Array.isArray(items) ? items : [];
+}
+
+/**
+ * The current todo list out of a transcript's tail: {items, ts} or null.
  *
  * The newest TodoWrite in the tail is the current list — the tool is called with
  * the whole list every time, so the most recent call is the whole answer and
@@ -1449,10 +1472,10 @@ function lastActivity(file) {
  * from, so a card costs one read rather than two.
  *
  * A session whose last TodoWrite has scrolled out of the tail reports null and
- * simply shows no progress bar. Widening the window to chase it would make every
- * card more expensive to spare the oldest ones a missing line.
+ * simply shows no list. Widening the window to chase it would make every card
+ * more expensive to spare the oldest ones a missing line.
  */
-function todoProgress(file) {
+function todoList(file) {
     const lines = tailLines(file);
     if (!lines) return null;
 
@@ -1465,25 +1488,53 @@ function todoProgress(file) {
         for (let j = content.length - 1; j >= 0; j--) {
             const b = content[j];
             if (b.type !== 'tool_use' || b.name !== 'TodoWrite') continue;
-            const items = (b.input && b.input.todos) || [];
-            if (!Array.isArray(items) || !items.length) continue;
-            return {
-                done: items.filter(t => t && t.status === 'completed').length,
-                total: items.length,
-                // What it is on right now, which is the useful half of a todo
-                // list you are only glancing at.
-                current: (items.find(t => t && t.status === 'in_progress') || {}).content || null,
-                ts: e.timestamp,
-            };
+            const items = todoInput(b.input);
+            if (!items.length) continue;
+            return { items, ts: e.timestamp };
         }
     }
     return null;
+}
+
+/**
+ * How far through its todo list a session is: {done, total, …} or null.
+ *
+ * Returns the same five keys `bridge/tasks.js` returns off the task directory,
+ * so the two sources behind one documented field cannot disagree about their
+ * shape. They did: this one had `ts` and no `idle`, the directory had `idle` and
+ * no `ts`, and `docs/api.md` described a third thing that was neither.
+ */
+function todoProgress(file) {
+    const list = todoList(file);
+    if (!list) return null;
+
+    const { items, ts } = list;
+    const active = items.find(t => t && t.status === 'in_progress') || null;
+    const done = items.filter(t => t && t.status === 'completed').length;
+    return {
+        done,
+        total: items.length,
+        // What it is on right now, which is the useful half of a todo list you
+        // are only glancing at.
+        current: active ? (active.content || active.activeForm || null) : null,
+        // Worth knowing that nothing is moving: a list with work left and
+        // nothing in progress is a session that has stopped, not one that is
+        // between steps.
+        idle: !active && done < items.length,
+        ts,
+    };
 }
 
 module.exports = {
     parseLines, scanMeta, buildEvents, readSubagentIndex, readSubagentTranscript,
     lastActivity, recentActivity, todoProgress, describeTool, stripEnvelope, firstLine,
     commandText,
+    // The three parts of the TodoWrite format: what shape it arrived in
+    // (`todoInput`), the list itself (`todoList`) and the count over it
+    // (`todoProgress`). Exported together for the handoff pair's reason below —
+    // bridge/tasks.js renders the list and the boards count it, and neither
+    // should be re-deriving what the shape is.
+    todoList, todoInput,
     // For bridge/notifications.js, which decides whether a message from another
     // session is worth interrupting you for, and needs to recognise one first.
     parsePeerMessage,

@@ -911,6 +911,36 @@ tree is shown beside the transcript's answer rather than instead of it.
 It refetches when a turn ends rather than on a timer — between turns nothing
 changes — and `git status` is cached for 15 seconds, shared with the board below.
 
+### The session's own task list
+
+Its sibling panel, on the other side of the transcript: the checklist the agent
+keeps for *itself*, with what it has finished. Where the drawer above is a record
+of what happened, this is the part that has not happened yet, which is why it sits
+on the left and is **on by default**. Clicking an item jumps to the call that last
+touched it, and an item's description — where it has one — is in its tooltip.
+
+Two formats feed it, and they are not equally rich. Newer builds keep a directory
+at `~/.claude/tasks/<session-id>/`, one small JSON file per task, with ids,
+descriptions and dependencies; others write a `TodoWrite` call into the transcript
+holding the whole list, with none of those three. `bridge/tasks.js` reads the
+first and falls back to the second, normalises both to one item shape, and never
+writes either — the same rule as everything else under `~/.claude`.
+
+It arrives on the same follow the transcript does, pushed when the list actually
+moves, because a task list moves *during* a turn and watching step 3 of 7 become
+step 4 is the whole point. Nothing polls it.
+
+**Claude Code stopped offering the task tools by default.** Opus 4.8, Sonnet 5 and
+newer models are not given `TaskCreate`/`TaskUpdate` or `TodoWrite` unless
+`CLAUDE_CODE_ENABLE_TODO_TOOLS=1` is set — so this panel, and the progress bars on
+the boards, were drawing a list nothing had written since the day that landed. The
+bridge therefore sets it for the sessions it starts. `CLAUDE_SESSIONS_TODO_TOOLS=0`
+in front of the bridge opts out, and `/api/health` reports which way it went.
+
+Two limits worth knowing: it reaches only sessions **this app starts**, so one you
+run in your own terminal keeps no list unless you set the variable yourself; and it
+takes effect at the next process start, so a session already running is unaffected.
+
 ## On a phone
 
 The premise of the app is watching sessions you are not sitting in front of, and the
@@ -964,7 +994,7 @@ you are away from the desk, and a phone that has dropped its connection is not.
 | `bridge/sessions.js` | The session index — incremental, cached, watched |
 | `bridge/registry.js` | Which sessions have a process, from Claude Code's own registry |
 | `bridge/transcript.js` | JSONL → render events; pairs tool calls with results; reads subagent transcripts |
-| `bridge/tasks.js` | Subagent task records |
+| `bridge/tasks.js` | A session's own task list — the items, and how far through them it is |
 | `bridge/attachments.js` | Files pasted into the composer — where they land, and out of git |
 | `bridge/memo.js` | Small notes the UI keeps against a session |
 | `bridge/runner.js` | `claude` processes, one per active conversation |
