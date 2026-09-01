@@ -7829,6 +7829,17 @@ function renderQuotaPanel() {
         return;
     }
 
+    // On, but not on this bridge. Worth saying rather than showing a last-run
+    // age that will never move: on a dev window the beacon is the everyday
+    // instance's job, and the reading here is whatever that one last harvested.
+    if (bc.suppressed === 'dev-bridge') {
+        note.append(el('div', {
+            text: 'Beacon on, but not on a dev bridge — the everyday instance runs it. '
+                + 'The percentages here are whatever it last harvested.',
+        }));
+        return;
+    }
+
     const every = bc.everyMinutes ? `every ${bc.everyMinutes}m` : '';
     if (bc.running) {
         note.append(el('div', { text: `Beacon running now in ${bc.dir}.` }));
@@ -7837,6 +7848,18 @@ function renderQuotaPanel() {
         // and what went wrong, because the usual cause is a dialog waiting in a
         // TUI nobody can see.
         note.append(el('div', { class: 'warn', text: `Beacon failing — ${bc.reason}` }));
+        // `probed` splits the two failures that used to look identical, and the
+        // user's next move is different for each: a run that never rendered is
+        // sitting behind a dialog they have to go and answer, while one that
+        // rendered and got no percentage is the CLI's own quota probe not
+        // firing, which no amount of clicking here will fix.
+        note.append(el('div', {
+            text: bc.probed
+                ? 'It started fine — the CLI just never produced a percentage. '
+                    + 'Nothing to answer; the reading below stands until it does.'
+                : 'It never got as far as drawing a status line. Open Claude Code '
+                    + `in ${bc.dir} yourself and clear whatever is waiting.`,
+        }));
         if (bc.screen) note.append(el('code', { text: bc.screen }));
     } else if (bc.ok) {
         note.append(el('div', {

@@ -402,7 +402,7 @@ const now = () => Math.floor(Date.now() / 1000);
 
 const { DEFAULTS: PREF_DEFAULTS, SHAPE: PREF_SHAPE } = require('../bridge/prefs');
 const {
-    plain, isBeaconArgv, ownerPidOf, shouldReap,
+    plain, isBeaconArgv, ownerPidOf, shouldReap, readReceipt,
 } = require('../bridge/beacon');
 
 {
@@ -523,6 +523,48 @@ const {
         'an unparseable age is not a licence to kill');
 
     ok('the reaper spares a live run and takes an orphaned one');
+}
+
+{
+    // The receipt is how a run knows *it* produced a reading rather than some
+    // unrelated terminal moving the shared harvest file underneath it. Its
+    // tolerance matters as much as its parse: it is read on a 400ms poll while
+    // the harvester is writing, so a torn or half-written file has to read as
+    // "not yet" and never as a throw.
+    const rp = path.join(home, 'receipt.json');
+
+    assert.strictEqual(readReceipt(rp), null, 'not written yet');
+
+    fs.writeFileSync(rp, '{"version":1,"at":123,"windows":');
+    assert.strictEqual(readReceipt(rp), null, 'a torn write is not a reading');
+
+    fs.writeFileSync(rp, 'null');
+    assert.strictEqual(readReceipt(rp), null);
+
+    // The distinction the whole mechanism exists for. An empty `windows` is a
+    // *successful* render that simply had no rate_limits in its payload yet —
+    // it proves the CLI got up and drew a status line, which is what separates
+    // "a dialog is in the way" from "the quota probe never answered".
+    fs.writeFileSync(rp, JSON.stringify({ version: 1, at: 500, windows: {} }));
+    const empty = readReceipt(rp);
+    assert.ok(empty, 'an empty reading is still a receipt');
+    assert.deepStrictEqual(empty.windows, {});
+    assert.strictEqual(empty.at, 500);
+
+    fs.writeFileSync(rp, JSON.stringify({
+        version: 1, at: 900, windows: { five_hour: { used_percentage: 25 } },
+    }));
+    const full = readReceipt(rp);
+    assert.strictEqual(full.at, 900);
+    assert.strictEqual(Object.keys(full.windows).length, 1);
+
+    // A receipt missing `at` is still usable — the caller only needs to know
+    // something was written.
+    fs.writeFileSync(rp, JSON.stringify({ windows: { five_hour: {} } }));
+    assert.strictEqual(readReceipt(rp).at, null);
+
+    fs.rmSync(rp);
+    ok('a receipt tells a rendered run from a blocked one, and never throws');
 }
 
 fs.rmSync(home, { recursive: true, force: true });

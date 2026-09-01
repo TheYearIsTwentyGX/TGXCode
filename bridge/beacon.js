@@ -50,12 +50,12 @@
 // window size from its own stdin, which is a pipe, so the pty starts 0×0 and
 // Ink draws into nothing. Hence the `stty` on the way in.
 
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 
 const cfg = require('./config');
-const { STATUSLINE_FILE } = require('./usage');
 
 // The harvester. Passed by absolute path because `--settings` is read by a
 // process whose cwd is the beacon directory, not ours.
@@ -76,13 +76,52 @@ function shq(s) {
     return `'${String(s).replace(/'/g, `'\\''`)}'`;
 }
 
-/** What the harvester last wrote, or null. Only `capturedAt` is used here. */
-function capturedAt() {
+// Where a run's receipt goes. The `quota-beacon.` prefix is what the reaper
+// greps for and the bridge pid in the middle is what `ownerPidOf` reads back,
+// so this name is load-bearing in two places besides here — and it is on the
+// command line rather than in the environment because `ps` shows argv.
+function receiptPath() {
+    return path.join(cfg.STATE_DIR,
+        `quota-beacon.${process.pid}.${crypto.randomBytes(6).toString('hex')}.json`);
+}
+
+/**
+ * What *this run's* harvester wrote, or null if it has not written yet.
+ *
+ * This replaced watching the shared harvest file's `capturedAt`, which was a
+ * false positive waiting to happen and duly happened: any other open terminal
+ * moves that file, so a beacon sitting behind a folder-trust dialog — having
+ * rendered nothing whatsoever — reported `ok: true` while somebody else's
+ * terminal did the writing. Measured, not theorised: with five orphans churning
+ * the file every three seconds, every run "succeeded".
+ */
+function readReceipt(p) {
     try {
-        const d = JSON.parse(fs.readFileSync(STATUSLINE_FILE, 'utf8'));
-        return typeof d.capturedAt === 'number' ? d.capturedAt : null;
+        const d = JSON.parse(fs.readFileSync(p, 'utf8'));
+        if (!d || typeof d !== 'object') return null;
+        return {
+            at: typeof d.at === 'number' ? d.at : null,
+            windows: (d.windows && typeof d.windows === 'object') ? d.windows : {},
+        };
     } catch {
         return null;
+    }
+}
+
+// Receipts from runs whose bridge died before it could unlink one. Old enough
+// that nothing in flight can be caught: TIMEOUT_MS is 90 seconds.
+const RECEIPT_STALE_MS = 10 * 60_000;
+
+function sweepReceipts() {
+    let names;
+    try { names = fs.readdirSync(cfg.STATE_DIR); } catch { return; }
+    const cutoff = Date.now() - RECEIPT_STALE_MS;
+    for (const name of names) {
+        if (!name.startsWith('quota-beacon.')) continue;
+        const full = path.join(cfg.STATE_DIR, name);
+        try {
+            if (fs.statSync(full).mtimeMs < cutoff) fs.unlinkSync(full);
+        } catch { /* raced with another bridge, or gone */ }
     }
 }
 
@@ -120,7 +159,8 @@ class Beacon {
             return this._done({ ok: false, reaped, reason: `harvester missing: ${HARVESTER}` });
         }
 
-        const before = capturedAt();
+        sweepReceipts();
+        const receipt = receiptPath();
         const started = Date.now();
 
         // Inline JSON rather than a temp file — `--settings` takes either, and
@@ -128,7 +168,8 @@ class Beacon {
         const settings = JSON.stringify({
             statusLine: {
                 type: 'command',
-                command: `python3 ${JSON.stringify(HARVESTER)}`,
+                command: `python3 ${JSON.stringify(HARVESTER)}`
+                    + ` --receipt ${JSON.stringify(receipt)}`,
                 // The status line renders once on startup, which is usually
                 // before the quota probe has answered. This is what gets a
                 // second render after it has.
@@ -187,17 +228,32 @@ class Beacon {
                 resolve(o);
             };
 
+            // Did the status line render at all? A receipt with no windows in
+            // it says yes, and that is the distinction the old code could not
+            // draw: a run stopped by a dialog and a run whose quota probe never
+            // answered were the same ninety-second timeout with the same
+            // unhelpful reason, and the user's next move is different for each.
+            let probed = false;
+
+            const look = () => {
+                const r = readReceipt(receipt);
+                if (!r) return null;
+                probed = true;
+                return Object.keys(r.windows).length ? r : null;
+            };
+
             const poll = setInterval(() => {
                 if (spawnError) return finish({ ok: false, reason: spawnError });
-                const now = capturedAt();
-                if (now !== null && now !== before) {
-                    finish({ ok: true, capturedAt: now });
-                }
+                const r = look();
+                if (r) finish({ ok: true, probed: true, capturedAt: r.at });
             }, POLL_MS);
 
             const cap = setTimeout(() => finish({
                 ok: false,
-                reason: 'timed out with no new reading — a dialog is probably waiting',
+                probed,
+                reason: probed
+                    ? 'the status line rendered but the quota probe never answered'
+                    : 'timed out with no reading — a dialog is probably waiting',
                 screen: plain(tail),
             }), TIMEOUT_MS);
 
@@ -205,16 +261,23 @@ class Beacon {
                 // It ended on its own. Give the harvester's last write a moment
                 // to land before calling it a failure.
                 setTimeout(() => {
-                    const now = capturedAt();
-                    finish(now !== null && now !== before
-                        ? { ok: true, capturedAt: now }
-                        : { ok: false, reason: 'claude exited without producing a reading', screen: plain(tail) });
+                    const r = look();
+                    if (r) return finish({ ok: true, probed: true, capturedAt: r.at });
+                    finish({
+                        ok: false,
+                        probed,
+                        reason: probed
+                            ? 'claude exited before the quota probe answered'
+                            : 'claude exited without rendering a status line',
+                        screen: plain(tail),
+                    });
                 }, 300);
             });
         });
 
         this._kill(proc);
         this.running = null;
+        try { fs.unlinkSync(receipt); } catch { /* never written, or already gone */ }
         return this._done({ ...outcome, reaped, ms: Date.now() - started });
     }
 
@@ -394,5 +457,5 @@ function plain(s) {
 
 module.exports = {
     Beacon, HARVESTER, TIMEOUT_MS, plain,
-    isBeaconArgv, ownerPidOf, pidAlive, shouldReap,
+    isBeaconArgv, ownerPidOf, pidAlive, shouldReap, readReceipt,
 };

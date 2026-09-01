@@ -78,6 +78,50 @@ def windows(payload):
     return out
 
 
+def receipt_path(argv):
+    """`--receipt <path>` off our own command line, or None.
+
+    Hand-parsed rather than argparse: this runs on somebody's prompt, and a
+    usage error printed where the status line should be is exactly the loud
+    failure the rest of this file is arranged to avoid.
+    """
+    for i, a in enumerate(argv):
+        if a == '--receipt' and i + 1 < len(argv):
+            return argv[i + 1]
+        if a.startswith('--receipt='):
+            return a.split('=', 1)[1] or None
+    return None
+
+
+def write_receipt(path, payload, found):
+    """Proof, for the one beacon run that asked for it, that we rendered.
+
+    bridge/beacon.js used to decide a run had succeeded by watching the shared
+    harvest file's `capturedAt` change. Any other open terminal changes that, so
+    a beacon blocked behind a trust dialog — having rendered nothing at all —
+    reported success while some unrelated terminal did the writing. This file is
+    named by the beacon and written by nobody else, so it answers the question
+    the beacon is actually asking.
+
+    Written on **every** render, including one where the payload carries no
+    `rate_limits` yet. That is what separates "a dialog is in the way" from "the
+    CLI came up fine and the quota probe never answered", which were previously
+    the same unhelpful ninety-second timeout. And written independently of
+    `save()`: whether the shared file changed says nothing about whether we ran.
+    """
+    body = {
+        'version': 1,
+        'at': int(time.time()),
+        'windows': found,
+        'sessionId': payload.get('session_id'),
+        'pid': os.getpid(),
+    }
+    tmp = '%s.%d.tmp' % (path, os.getpid())
+    with open(tmp, 'w', encoding='utf8') as fh:
+        json.dump(body, fh)
+    os.replace(tmp, path)
+
+
 def save(found):
     """Write the block, but only if it says something new."""
     try:
@@ -154,6 +198,16 @@ def main():
             # The status line is not the place to report a failed write. The
             # pill degrading to "as of a while ago" is the visible symptom, and
             # it is the honest one.
+            pass
+
+    # Unconditional, and outside the `if found` above on purpose — see
+    # write_receipt(). Only a beacon run passes --receipt; an ordinary terminal
+    # never has one and does none of this.
+    receipt = receipt_path(sys.argv[1:])
+    if receipt:
+        try:
+            write_receipt(receipt, payload, found)
+        except Exception:
             pass
 
     print(line(payload, found))
