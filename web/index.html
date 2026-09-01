@@ -288,6 +288,19 @@
                 <path d="M12 13v8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
               </svg>
             </button>
+            <!-- Before the Changed button, so the toolbar reads in the same
+                 order the columns sit in: task list left, changes right. -->
+            <button id="btn-checklist" class="icon-btn" type="button"
+                    title="This session's own task list" aria-pressed="false">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M4 7.5l2 2 3.5-4" stroke="currentColor" stroke-width="1.7"
+                      stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M13 7.5h7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                <path d="M4 16.5l2 2 3.5-4" stroke="currentColor" stroke-width="1.7"
+                      stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M13 16.5h7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+              </svg>
+            </button>
             <button id="btn-changes" class="icon-btn" type="button"
                     title="What this session changed" aria-pressed="false">
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -404,6 +417,37 @@
         </div>
 
         <div class="conv-body">
+          <!-- The agent's own task list, and how much of it is done. Leftmost,
+               between the sessions rail and the transcript, because it is
+               something you glance at while reading rather than somewhere you
+               go — and because the two panels on the right are both about what
+               has already happened, where this is about what has not.
+
+               Carries `class="tasks checklist"` for the reason #changes does:
+               the box, the strip and the narrow-window behaviour are the
+               suggestions panel's, styled once, and only the border side is
+               different. The ids say `checklist` and the label says "Tasks" on
+               purpose — `tasks` in web/ already means suggested follow-ups, and
+               renaming these to match the label would collide with it. -->
+          <aside id="checklist" class="tasks checklist" hidden
+                 aria-label="This session's own task list">
+            <button id="checklist-strip" class="tasks-strip" type="button" hidden>
+              <span class="tasks-strip-label">Tasks</span>
+              <span id="checklist-strip-count" class="tasks-count"></span>
+            </button>
+            <div id="checklist-open" class="tasks-open">
+              <div class="tasks-head">
+                <span class="tasks-title">Tasks</span>
+                <span id="checklist-count" class="tasks-count"></span>
+                <!-- No refresh button: there is nothing to ask again. The list
+                     is pushed on the same follow the transcript arrives on. -->
+                <button id="checklist-collapse" class="tasks-collapse" type="button"
+                        title="Put this to one side">Hide</button>
+              </div>
+              <div id="checklist-body" class="checklist-body"></div>
+            </div>
+          </aside>
+
           <div id="scroll" class="scroll">
             <div id="log" class="log"></div>
           </div>

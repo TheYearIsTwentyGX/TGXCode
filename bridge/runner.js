@@ -88,6 +88,10 @@ let queueSeq = 0;
 function sessionEnv() {
     const env = { ...process.env, CLAUDE_CODE_ENTRYPOINT: 'claude-sessions' };
     delete env.CLAUDE_SESSIONS_PORT;
+    // And this one goes the same way as the entrypoint: the app shows a
+    // session's own task list, and current models are not offered the tools that
+    // keep one unless this is set. See cfg.TODO_TOOLS for the opt-out.
+    if (cfg.TODO_TOOLS) env.CLAUDE_CODE_ENABLE_TODO_TOOLS = '1';
     return env;
 }
 

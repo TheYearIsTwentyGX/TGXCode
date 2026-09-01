@@ -1755,6 +1755,67 @@ a:hover { text-decoration: underline; }
 .ch-del { color: var(--red); }
 .ch-meta { flex: none; min-width: 2.5ch; text-align: right; color: var(--text-4); }
 
+/* ── the session's own task list ──────────────────────────────────────────
+   `class="tasks checklist"`, so everything but the border side comes from the
+   suggestions panel — including its two narrow-window rules, which is the whole
+   point of sharing the class: a third column has to give way on a narrow window
+   exactly as the other two do, and inheriting that is one rule less to keep in
+   step. Only the differences are here. */
+
+/* Leftmost, so the divider goes the other way. After `.tasks` in the file
+   rather than by !important. */
+.checklist { border-left: 0; border-right: 1px solid var(--outline-soft); }
+
+.checklist-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0 8px 12px;
+}
+
+/* The bar and the step it is on, above the list. `.tbar` is the board card's,
+   so a session reads the same here as it does on a tile. */
+.checklist-body .tbar { margin: 2px 4px 8px; }
+.cl-current {
+    margin: 0 4px 8px;
+    font: 400 11.5px/1.5 var(--sans);
+    color: var(--text-3);
+}
+.cl-note { margin: 6px 4px 0; font: 400 11.5px/1.5 var(--sans); color: var(--text-4); }
+
+.cl-list { list-style: none; margin: 0; padding: 0; }
+
+/* One task. A button because clicking jumps to the call that last touched it —
+   the same affordance `.ch-row` carries, and a plain row would be a lie about
+   it. `.flat` for an item no call in this conversation matches. */
+.cl-row {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    width: 100%;
+    padding: 4px 5px;
+    border: 0;
+    border-radius: var(--r-xs);
+    background: none;
+    color: var(--text-2);
+    font: 400 12px/1.55 var(--sans);
+    text-align: left;
+    cursor: pointer;
+}
+.cl-row.flat { cursor: default; }
+.cl-row:not(.flat):hover { background: var(--s3); color: var(--text); }
+
+/* The status is an attribute, so the mark is CSS rather than four inline style
+   strings built per render — which is what todoView did before this existed. */
+.cl-mark { flex: none; width: 1.1em; font: 400 12px/1.55 var(--mono); }
+.cl-name { flex: 1; min-width: 0; }
+.cl-row[data-status="completed"] .cl-mark { color: var(--green); }
+.cl-row[data-status="completed"] .cl-name { color: var(--text-4); }
+.cl-row[data-status="in_progress"] .cl-mark { color: var(--yellow); }
+.cl-row[data-status="in_progress"] .cl-name { color: var(--text); }
+.cl-row[data-status="pending"] .cl-mark { color: var(--text-4); }
+
 /* ── turn rail ───────────────────────────────────────────────────────── */
 /* One tick per thing you said, down the right edge. Hover reads it back,
    clicking jumps to it. Deliberately mute: it is a map, not a second rail. */
