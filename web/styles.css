@@ -581,6 +581,22 @@ a:hover { text-decoration: underline; }
 }
 .group-head[aria-expanded="true"] .twist { transform: rotate(90deg); }
 
+/* A group inside a group: the Scheduled runs of one project.
+   One more tonal step in, so the nesting is a change of surface like the outer
+   card is, rather than an indent the eye has to measure. Everything below is
+   consequences of that step: --s2 is now the card, so the row hover that used it
+   has to move up to --s3 or a hovered row would be invisible. */
+.rail-group.nested {
+    background: var(--s2);
+    margin: 2px 2px 4px;
+}
+.rail-group.nested > .group-head { padding: 7px 10px; font-size: 11px; }
+.rail-group.nested > .group-head:hover { background: var(--s3); }
+/* --row-bg is what .strip-actions fades its overlay into. Left at --s1 the
+   buttons would sit on a visible seam over a card that is no longer --s1. */
+.rail-group.nested .strip { --row-bg: var(--s2); }
+.rail-group.nested .strip:hover { background: var(--s3); --row-bg: var(--s3); }
+
 /* An archived row reads as set aside, without being hard to read. */
 .strip[data-archived="true"] .strip-title { color: var(--text-3); }
 

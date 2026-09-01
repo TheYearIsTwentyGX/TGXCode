@@ -209,6 +209,12 @@ const state = {
             return new Set(localStorage.getItem('archiveOpen') === '1' ? [] : ['archived']);
         } catch { return new Set(['archived']); }
     })(),
+    // And which Scheduled subsections are *open* — the other way round, on
+    // purpose. See isOpen.
+    schedOpen: (() => {
+        try { return new Set(JSON.parse(localStorage.getItem('railSchedOpen') || '[]')); }
+        catch { return new Set(); }
+    })(),
     // Where each row and each group card sits, decided once — see rememberOrder.
     order: new Map(),       // sessionId -> rank
     groupOrder: new Map(),  // group key -> rank
@@ -787,42 +793,99 @@ function renderRail() {
     const byGroupRank = [...groups].sort(
         (a, b) => (state.groupOrder.get(a[0]) ?? 0) - (state.groupOrder.get(b[0]) ?? 0));
     for (const [key, { label, list }] of byGroupRank) {
-        dom.rail.append(groupCard(key, label, list));
+        // Sessions a schedule started fold into their own subsection inside the
+        // project card. They are the same work in the same directory — so a card
+        // of their own at the foot of the rail, the way test sessions get one,
+        // would file them away from the project they are about — but there can
+        // be a great many of them and they are all alike, and a fortnight of
+        // nightly reviews between you and the conversation you are looking for
+        // is what the rail exists to prevent.
+        const sched = list.filter(s => s.schedule);
+        const plain = list.filter(s => !s.schedule);
+        dom.rail.append(groupCard(key, label, plain, {
+            // The project heading still counts what it contains, subsection
+            // included: a card saying 3 above a shut section holding 11 is
+            // wrong about the project, which is what the heading names.
+            all: list,
+            lead: sched.length
+                ? groupCard(`sched:${key}`, 'Scheduled', sched, { nested: true })
+                : null,
+        }));
     }
 
     if (test.length) dom.rail.append(groupCard('test', 'Test sessions', test));
     if (archived.length) dom.rail.append(groupCard('archived', 'Archived', archived));
 }
 
-/** A rail group: a card whose heading shuts it. `key` is what the open/shut
- *  state is remembered under, so it has to outlive a re-render. */
-function groupCard(key, label, list) {
-    // A filter that matches inside a shut group must not hide its own results.
-    // The heading still toggles while filtering; it takes effect once the
-    // filter clears.
-    const open = !state.collapsed.has(key) || Boolean(state.query);
-    const live = list.filter(s => s.active || (s.runner && s.runner.state === 'busy')).length;
+/**
+ * A rail group: a card whose heading shuts it. `key` is what the open/shut
+ * state is remembered under, so it has to outlive a re-render.
+ *
+ * `opts.lead` is a node rendered above the rows — a nested card, in the one case
+ * there is. `opts.all` is the list the *heading* counts, when that is wider than
+ * the rows beneath it. `opts.nested` marks a card that sits inside another, which
+ * changes both how it is drawn and where its open/shut state lives: see
+ * `isOpen`.
+ */
+function groupCard(key, label, list, opts = {}) {
+    const open = isOpen(key, opts.nested);
+    const counted = opts.all || list;
+    const live = counted.filter(s => s.active || (s.runner && s.runner.state === 'busy')).length;
     const bodyId = `group-${key.replace(/[^\w-]/g, '_')}`;
 
-    return el('section', { class: 'rail-group', 'data-key': key },
+    return el('section', {
+        class: 'rail-group' + (opts.nested ? ' nested' : ''), 'data-key': key,
+    },
         el('button', {
             class: 'group-head',
             type: 'button',
             'aria-expanded': String(open),
             'aria-controls': bodyId,
-            onclick: () => {
-                state.collapsed[open ? 'add' : 'delete'](key);
-                saveCollapsed();
-                renderRail();
-            },
+            onclick: () => { toggleGroup(key, open, opts.nested); renderRail(); },
         },
             el('span', { class: 'twist' }, icon('caret', 13)),
             el('span', { class: 'group-label' }, label),
             live ? el('span', { class: 'live' }, `${live} live`) : null,
-            el('span', { class: 'count' }, String(list.length)),
+            el('span', { class: 'count' }, String(counted.length)),
         ),
-        open ? el('div', { class: 'group-body', id: bodyId }, list.map(strip)) : null,
+        open
+            ? el('div', { class: 'group-body', id: bodyId }, opts.lead || null, list.map(strip))
+            : null,
     );
+}
+
+/**
+ * Is a rail group open?
+ *
+ * Two sets, because the two kinds of group want opposite defaults and one set
+ * cannot express both. `state.collapsed` holds the *shut* keys, so a project
+ * seen for the first time defaults open — which is right for a project and
+ * wrong for the Scheduled subsection, whose whole point is to be out of the way
+ * until you go looking. `state.schedOpen` holds the *open* ones instead, so a
+ * project that starts running a schedule tomorrow does not silently grow eleven
+ * rows in the rail.
+ *
+ * Inverting per-kind rather than seeding a default at first sight, because
+ * seeding writes to storage during a render and gets the answer wrong exactly
+ * once — on the render where the key first appears.
+ *
+ * A filter that matches inside a shut group must not hide its own results, so a
+ * live query forces every group open. The heading still toggles while filtering;
+ * it takes effect once the filter clears.
+ */
+function isOpen(key, nested) {
+    if (state.query) return true;
+    return nested ? state.schedOpen.has(key) : !state.collapsed.has(key);
+}
+
+function toggleGroup(key, open, nested) {
+    if (nested) {
+        state.schedOpen[open ? 'delete' : 'add'](key);
+        saveCollapsed();
+        return;
+    }
+    state.collapsed[open ? 'add' : 'delete'](key);
+    saveCollapsed();
 }
 
 function strip(s) {
@@ -1099,6 +1162,7 @@ async function setFlags(summary, change) {
 function saveCollapsed() {
     try {
         localStorage.setItem('railCollapsed', JSON.stringify([...state.collapsed]));
+        localStorage.setItem('railSchedOpen', JSON.stringify([...state.schedOpen]));
     } catch { /* private mode */ }
 }
 

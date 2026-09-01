@@ -18,7 +18,7 @@ const { scanMeta, parseLines, buildEvents, readSubagentIndex,
 const CACHE_FILE = path.join(CACHE_DIR, 'index.json');
 // Bump whenever scanMeta's output shape or derivation changes, so a stale cache
 // is discarded rather than silently serving metadata from the old rules.
-const CACHE_VERSION = 13;
+const CACHE_VERSION = 14;
 
 // A transcript touched this recently is treated as live.
 const ACTIVE_WINDOW_MS = 90_000;
@@ -47,6 +47,14 @@ class SessionIndex extends EventEmitter {
          * @type {import('./suggestions').Suggestions|null}
          */
         this.suggestions = null;
+        /**
+         * The schedules, so a session can say which one started it. Set from
+         * server.js for the same reason as the two above: a store the index does
+         * not need to work, and one that is absent must change nothing — every
+         * session simply reports `schedule: null`.
+         * @type {import('./schedule').Schedules|null}
+         */
+        this.schedules = null;
         /** @type {Map<string, {file, dir, size, mtimeMs, meta}>} keyed by sessionId */
         this.sessions = new Map();
         /**
@@ -276,8 +284,16 @@ class SessionIndex extends EventEmitter {
             if (inTemp(m)) continue;
             if (!includeTest && this.flags && this.flags.test.has(m.sessionId)) continue;
             if (q) {
+                // The schedule's name too, or filtering on the name shown in
+                // the rail would fail to find the very rows showing it — the
+                // title is composed in `_summary` and is not on `meta`.
+                const sched = this.schedules
+                    ? this.schedules.forSession({
+                        sessionId: m.sessionId, cwd: m.cwd, firstPrompt: m.firstPrompt,
+                    })
+                    : null;
                 const hay = [m.title, m.firstPrompt, m.lastPrompt, m.cwd,
-                    m.worktree && m.worktree.name, m.sessionId]
+                    m.worktree && m.worktree.name, m.sessionId, sched && sched.title]
                     .filter(Boolean).join(' ').toLowerCase();
                 if (!hay.includes(q)) continue;
             }
@@ -368,17 +384,32 @@ class SessionIndex extends EventEmitter {
             ? this.flags.get(m.sessionId)
             : { pinned: false, archived: false, test: false };
         const live = this.registry ? this.registry.for(m.sessionId) : null;
+        const schedule = this.schedules
+            ? this.schedules.forSession({
+                sessionId: m.sessionId, cwd: m.cwd, firstPrompt: m.firstPrompt,
+            })
+            : null;
+        // Three sources, in order. A schedule's name beats a prompt-derived
+        // title but not one somebody chose — scheduledTitle is where that rule
+        // lives. The registry's label is only for a session with no title at all.
+        const named = (m.titleSource === 'none' && live && live.name)
+            ? { title: live.name, source: 'registry' }
+            : { title: m.title, source: m.titleSource };
+        const fromSchedule = scheduledTitle(m, schedule);
         return {
             sessionId: m.sessionId,
             pinned: flags.pinned,
             archived: flags.archived,
             test: flags.test,
-            // The registry's own label, for a session whose transcript produced
-            // no title of its own — scanMeta falls back to "Untitled session",
-            // and a name Claude Code already derived beats that.
-            title: (m.titleSource === 'none' && live && live.name) ? live.name : m.title,
-            titleSource: (m.titleSource === 'none' && live && live.name)
-                ? 'registry' : m.titleSource,
+            // `registry` is the live process's own label, for a session whose
+            // transcript produced no title at all — scanMeta falls back to
+            // "Untitled session", and a name Claude Code derived beats that.
+            title: fromSchedule || named.title,
+            titleSource: fromSchedule ? 'schedule' : named.source,
+            // The schedule that started this session, if one did — `{id, title}`
+            // with the title already resolved, since a schedule's own `title` is
+            // nullable. Null for everything else, which is nearly everything.
+            schedule,
             cwd: m.cwd,
             projectCwd: m.projectCwd,
             projectName: projectName(m.projectCwd || m.cwd),
@@ -732,6 +763,37 @@ function sortKey(s) {
     return ts ? Date.parse(ts) : s.mtimeMs;
 }
 
+/**
+ * What to call a session a schedule started, or null to leave the title alone.
+ *
+ * A headless scheduled run gets none of Claude Code's own title entries — no
+ * `custom-title`, no `agent-name`, and usually no `ai-title` either — so it
+ * falls all the way through to the first line of its prompt. That prompt is a
+ * slash command, which is why these read as `/adversarial-reviewer --diff …`:
+ * true, but the same for every run, so a fortnight of them is a wall of
+ * identical rows. The schedule's name and the date it ran are what tell them
+ * apart, which is what the rail's Scheduled section is for.
+ *
+ * **A title you set by hand wins.** `custom-title` is a decision about this one
+ * conversation and outranks a name derived from where it came from; `agent-name`
+ * is likewise a name something else chose deliberately. Everything below that —
+ * the generated `ai-title`, the prompt, nothing at all — is a fallback, and this
+ * is a better one.
+ *
+ * The date is formatted here rather than in a client so the rail, the header and
+ * the phone cannot disagree about it, and by hand rather than through
+ * `toLocaleDateString` because that gives a four-digit year and moves with the
+ * host's locale.
+ */
+function scheduledTitle(m, schedule) {
+    if (!schedule) return null;
+    if (m.titleSource === 'custom-title' || m.titleSource === 'agent-name') return null;
+    const at = m.firstTs ? new Date(m.firstTs) : null;
+    if (!at || Number.isNaN(at.getTime())) return schedule.title;
+    const yy = String(at.getFullYear() % 100).padStart(2, '0');
+    return `${schedule.title} - ${at.getMonth() + 1}/${at.getDate()}/${yy}`;
+}
+
 /** A readable label for a project directory. */
 function projectName(cwd) {
     if (!cwd) return 'unknown';
@@ -778,4 +840,10 @@ function inTemp(meta) {
     return isTemp(meta.projectCwd) || isTemp(meta.cwd);
 }
 
-module.exports = { SessionIndex, projectName, isTemp, ACTIVE_WINDOW_MS };
+module.exports = {
+    SessionIndex, projectName, isTemp, ACTIVE_WINDOW_MS,
+    // Exported for test/titles.test.js: which title wins is a rule, not a
+    // formatting detail, and it is not reachable from a request without a
+    // transcript and a schedule that matches it.
+    scheduledTitle,
+};

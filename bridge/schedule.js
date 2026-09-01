@@ -926,6 +926,172 @@ function read() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Which sessions a schedule started
+// ---------------------------------------------------------------------------
+
+/**
+ * The session ids each schedule has started, on disk.
+ *
+ * **Why this is not a field on the schedule row.** `clean()` above is a
+ * whitelist, and every bridge on this machine re-reads `schedules.json` on its
+ * tick and writes it back through it. A field the *running* everyday bridge has
+ * not heard of is therefore stripped within half a minute of being written — so
+ * a new row field cannot be relied on until every bridge is on the new code,
+ * which is exactly the window in which this feature would be tested. A separate
+ * file is untouched by an old bridge and needs no version bump on the other one.
+ *
+ * **Why it exists at all**, given `lastSessionId`: that field holds one id and
+ * is overwritten by the next run, so it can only ever group the newest session
+ * of each schedule. `scheduledRuns` in server.js holds the rest, and is an
+ * in-memory Map emptied by every restart. Nothing survived a restart, which is
+ * what `docs/plans/15-scheduling.md` §A means by "missing a `scheduleId` on the
+ * session".
+ */
+const RUNS_FILE = path.join(STATE_DIR, 'schedule-runs.json');
+const RUNS_VERSION = 1;
+
+// Ids kept before the oldest is dropped. Matches SCHEDULED_RUNS_KEPT in
+// server.js: a PR sweep can start a dozen in a night, and a session old enough
+// to fall off this list is old enough that the prompt matcher can have it.
+const RUNS_KEPT = 400;
+
+function readRuns() {
+    try {
+        const data = JSON.parse(fs.readFileSync(RUNS_FILE, 'utf8').replace(/^﻿/, ''));
+        if (data.version !== RUNS_VERSION || !data.runs || typeof data.runs !== 'object') {
+            return new Map();
+        }
+        return new Map(Object.entries(data.runs).filter(
+            ([id, sched]) => typeof id === 'string' && typeof sched === 'string'));
+    } catch {
+        // Absent is the normal state until the first scheduled run, and an
+        // unreadable one costs a grouping rather than anything a user typed.
+        return new Map();
+    }
+}
+
+class ScheduleRuns {
+    constructor() {
+        /** @type {Map<string, string>} sessionId -> scheduleId, oldest first. */
+        this.map = readRuns();
+        /**
+         * Ids dropped by `forget`, held until the write carries the deletion
+         * out — the tombstone set `Schedules` keeps, for the same reason. The
+         * merge below is a union, so without this a deleted schedule's ids
+         * would come straight back off disk on the next flush.
+         * @type {Set<string>}
+         */
+        this._removed = new Set();
+        this._saveTimer = null;
+    }
+
+    get(sessionId) { return this.map.get(sessionId) || null; }
+
+    /** Record a run. Re-inserting moves an id to the young end, as the Map orders. */
+    remember(sessionId, scheduleId) {
+        if (!sessionId || !scheduleId) return;
+        if (this.map.get(sessionId) === scheduleId) return;
+        this.map.delete(sessionId);
+        this.map.set(sessionId, scheduleId);
+        while (this.map.size > RUNS_KEPT) this.map.delete(this.map.keys().next().value);
+        this.save();
+    }
+
+    /** Forget a whole schedule's runs — it was deleted. */
+    forget(scheduleId) {
+        let changed = false;
+        for (const [id, sched] of this.map) {
+            if (sched === scheduleId) {
+                this.map.delete(id);
+                this._removed.add(id);
+                changed = true;
+            }
+        }
+        if (changed) this.save();
+    }
+
+    save() {
+        if (this._saveTimer) return;
+        this._saveTimer = setTimeout(() => this.flush(), 400);
+        this._saveTimer.unref();
+    }
+
+    flush() {
+        clearTimeout(this._saveTimer);
+        this._saveTimer = null;
+        try {
+            // Merged over the file for the reason `Schedules#flush` is: two
+            // bridges run at once here as a matter of routine, and a run one of
+            // them recorded must not be dropped by the other's next write. A
+            // union is enough — unlike a schedule row, an entry is never edited,
+            // only added and (on delete) removed, and a delete is carried by
+            // `forget` on the bridge that did it.
+            const merged = readRuns();
+            for (const [id, sched] of this.map) merged.set(id, sched);
+            for (const id of this._removed) merged.delete(id);
+            this._removed.clear();
+            while (merged.size > RUNS_KEPT) merged.delete(merged.keys().next().value);
+            this.map = merged;
+
+            fs.mkdirSync(STATE_DIR, { recursive: true });
+            const tmp = RUNS_FILE + '.tmp';
+            fs.writeFileSync(tmp, JSON.stringify(
+                { version: RUNS_VERSION, runs: Object.fromEntries(merged) }, null, 2));
+            fs.renameSync(tmp, RUNS_FILE);
+        } catch (err) {
+            console.error(`[claude-sessions] could not save schedule runs: ${err.message}`);
+        }
+    }
+}
+
+/**
+ * What to call a schedule in a log line, a notification, or a session title.
+ *
+ * Moved here from server.js when the rail started naming sessions after the
+ * schedule that started them: `row.title` is nullable — "derive it from the
+ * first line of the prompt" — so there has to be one answer to what a schedule
+ * is called, and it cannot live in the file that only logs.
+ */
+function scheduleTitle(row) {
+    const first = String(row.prompt || '').split('\n').find(l => l.trim()) || '';
+    return row.title || first.trim().slice(0, 60) || 'a schedule';
+}
+
+/**
+ * The literal head of a schedule's prompt — everything before the first
+ * `{{placeholder}}`.
+ *
+ * This is what lets a session that predates the run store still be recognised.
+ * `fillPrompt` substitutes the placeholders and leaves the rest alone, so the
+ * head reaches the transcript verbatim: `/adversarial-reviewer --diff {{range}}`
+ * becomes `/adversarial-reviewer --diff `, and every run of that schedule starts
+ * with it.
+ *
+ * Short heads are refused. A prompt whose very first token is a placeholder
+ * would otherwise match every session in the directory.
+ */
+const MIN_PREFIX = 12;
+
+function promptPrefix(prompt) {
+    const head = String(prompt || '').split(/\{\{\s*\w+\s*\}\}/)[0];
+    return head.length >= MIN_PREFIX ? head : null;
+}
+
+/**
+ * Is `dir` the schedule's directory, or inside it?
+ *
+ * Inside counts, because a scheduled session that enters a worktree reports the
+ * worktree as its cwd — `.claude/worktrees/<name>` under the checkout — and that
+ * is still the schedule's own work.
+ */
+function under(dir, base) {
+    if (!dir || !base) return false;
+    const a = path.resolve(dir);
+    const b = path.resolve(base);
+    return a === b || a.startsWith(b.endsWith(path.sep) ? b : b + path.sep);
+}
+
 class Schedules {
     constructor() {
         /** @type {Array<object>} newest-updated first; see list(). */
@@ -938,11 +1104,24 @@ class Schedules {
          */
         this._removed = new Set();
         this._saveTimer = null;
+        /** Which sessions each schedule started. See ScheduleRuns. */
+        this.runs = new ScheduleRuns();
+        /**
+         * `forSession` answers, keyed by session id. `_summary` in sessions.js
+         * calls it for every row of a several-hundred-row rail on every
+         * `/api/sessions`, and the fallback arm walks every schedule — so
+         * without this the rail pays that walk a few hundred times a refresh.
+         * Dropped whenever the rows change, which is the only thing that can
+         * change an answer.
+         * @type {Map<string, {id: string, title: string}|null>}
+         */
+        this._sessionCache = new Map();
         this.load();
     }
 
     load() {
         this.rows = read();
+        if (this._sessionCache) this._sessionCache.clear();
     }
 
     /**
@@ -965,10 +1144,14 @@ class Schedules {
     reload() {
         this.flush();
         this.rows = read();
+        this._sessionCache.clear();
     }
 
     /** Debounced atomic write — the shape flags.js uses, for the same reason. */
     save() {
+        // Every path that changes a row goes through here, which makes it the
+        // one place that has to drop the session lookups derived from them.
+        this._sessionCache.clear();
         if (this._saveTimer) return;
         this._saveTimer = setTimeout(() => this.flush(), 400);
         this._saveTimer.unref();
@@ -1036,6 +1219,70 @@ class Schedules {
     get(id) {
         const row = this.rows.find(r => r.id === id);
         return row ? clean(row) : null;
+    }
+
+    /** Record that a schedule started a session. See ScheduleRuns. */
+    rememberRun(sessionId, scheduleId) {
+        this.runs.remember(sessionId, scheduleId);
+        this._sessionCache.delete(sessionId);
+    }
+
+    /**
+     * The schedule that started a session, if one did.
+     *
+     * Three arms, most reliable first, and the second two exist only because
+     * the first cannot see backwards: the run store was added long after
+     * schedules were, so every session already on disk predates it.
+     *
+     *   1. **The run store.** Exact, and covers every run from now on.
+     *   2. **`lastSessionId`.** Free, and recovers the newest run of every
+     *      schedule that already exists.
+     *   3. **The prompt head.** `promptPrefix` above: a session whose first
+     *      prompt starts with the literal part of the schedule's prompt, in a
+     *      directory under the schedule's own. Note that the *tags* a slash
+     *      command leaves in a transcript are no help here — every slash command
+     *      you type by hand writes the same ones — which is why this matches the
+     *      schedule's own text rather than "looks like a command".
+     *
+     * The third arm can be fooled: run a schedule's command by hand, in its
+     * directory, and the session is filed under that schedule. That costs a row
+     * in the wrong section of a sidebar and nothing else, which is the right
+     * trade for recovering history that is otherwise unrecoverable.
+     *
+     * `firstPrompt` must be the *unwrapped* prompt — `commandText` in
+     * transcript.js — or nothing starting with a slash command will ever match.
+     *
+     * @returns {{id: string, title: string}|null}
+     */
+    forSession({ sessionId, cwd, firstPrompt } = {}) {
+        if (!sessionId) return null;
+        if (this._sessionCache.has(sessionId)) return this._sessionCache.get(sessionId);
+
+        const found = this._findForSession(sessionId, cwd, firstPrompt);
+        const out = found ? { id: found.id, title: scheduleTitle(found) } : null;
+        this._sessionCache.set(sessionId, out);
+        return out;
+    }
+
+    _findForSession(sessionId, cwd, firstPrompt) {
+        const held = this.runs.get(sessionId);
+        if (held) {
+            // A run whose schedule has since been deleted is not attributed to
+            // it — the row is gone, so there is no name to show and no card to
+            // open. It falls back to the title its prompt gives it.
+            const row = this.rows.find(r => r.id === held);
+            if (row) return row;
+        }
+
+        for (const row of this.rows) if (row.lastSessionId === sessionId) return row;
+
+        if (!firstPrompt || !cwd) return null;
+        for (const row of this.rows) {
+            if (!under(cwd, row.cwd)) continue;
+            const prefix = promptPrefix(row.prompt);
+            if (prefix && firstPrompt.startsWith(prefix)) return row;
+        }
+        return null;
     }
 
     /**
@@ -1314,6 +1561,10 @@ class Schedules {
         }
         if (sessionId) {
             row.lastSessionId = sessionId;
+            // The durable half of the same fact. `lastSessionId` is overwritten
+            // by the next run; this is what still knows, a year of nightly runs
+            // later, which schedule started a given session.
+            this.runs.remember(sessionId, row.id);
             row.lastFiredAt = Date.now();
             row.runs += 1;
             // A run supersedes whatever the previous slot decided not to do.
@@ -1338,6 +1589,10 @@ class Schedules {
         // Remembered until the write goes out. `flush()` starts from the file,
         // so without this the row we just dropped would be read straight back in.
         this._removed.add(id);
+        // The sessions it started keep their transcripts and stay in the rail;
+        // what they lose is the grouping, which is right — the schedule they
+        // were grouped under no longer exists to open.
+        this.runs.forget(id);
         this.save();
         return true;
     }
@@ -1345,7 +1600,11 @@ class Schedules {
 
 module.exports = {
     Schedules,
+    ScheduleRuns,
+    scheduleTitle,
+    promptPrefix,
     STATE_FILE,
+    RUNS_FILE,
     MAX_SCHEDULES,
     CATCHUP_MS,
     SKIP_REASONS,

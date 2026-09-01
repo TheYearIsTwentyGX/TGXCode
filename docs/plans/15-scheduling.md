@@ -33,12 +33,32 @@ thing you would be duplicating actually does what you need* — the answer here 
 What does survive is the warning in section C, which was the useful half of this
 note and is honoured in full. See the header comment in `bridge/schedule.js`.
 
-## A. Recognise scheduled runs (still to do)
+## A. Recognise scheduled runs (done)
 
 Below as written, minus the "read the schedule from Claude Code's own config"
 line — the schedule is ours now, and `GET /api/schedules` already serves it with
-`lastSessionId`, `runs` and `lastOutcome` on every row. What is missing is a
-`scheduleId` on the session, so the rail can group them.
+`lastSessionId`, `runs` and `lastOutcome` on every row. What was missing was a
+`scheduleId` on the session, so the rail could group them.
+
+It is there now, as `schedule: {id, title}` on every session summary, and the rail
+folds a project's scheduled runs into a **Scheduled** subsection of its card.
+Three things about how, because none of them was the obvious answer:
+
+- **`jobId` and `sessionKind` were the wrong place to look.** Neither is written
+  for a session this bridge starts — `pool.create` mints an ordinary session, on
+  purpose, so that "Run now" and the clock produce the same thing. The link has to
+  be recorded on our side or not at all.
+- **The record is a file of its own**, `schedule-runs.json`, not a field on the
+  schedule row. `clean()` in `bridge/schedule.js` is a whitelist and every bridge
+  rewrites `schedules.json` through it on its tick, so a row field a *running*
+  older bridge has not heard of is stripped within half a minute of being written.
+- **Sessions that predate all of this are still recognised**, by matching the
+  literal head of a schedule's prompt — everything before its first
+  `{{placeholder}}` — against the session's first prompt, in the schedule's own
+  directory. Without that arm the grouping would have started empty and filled in
+  over a fortnight of nights. Note that the `<command-message>` tags a scheduled
+  prompt leaves in a transcript are *not* the signal: every slash command typed by
+  hand writes the same ones.
 
 ## A. Recognise scheduled runs (do this)
 

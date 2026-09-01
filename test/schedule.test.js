@@ -26,9 +26,10 @@ const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-schedule-'));
 process.env.XDG_DATA_HOME = home;
 
 const {
-    Schedules, STATE_FILE, MAX_SCHEDULES, CATCHUP_MS,
+    Schedules, STATE_FILE, RUNS_FILE, MAX_SCHEDULES, CATCHUP_MS,
     parseCron, matches, nextSlot, dueSlot, describeCron, cronForm, fillPrompt,
     verdictOf, reviewKey, unreviewedPulls, pruneReviews, capReviews, MAX_REVIEWED,
+    scheduleTitle, promptPrefix,
 } = require('../bridge/schedule');
 
 // Where the module will actually write, now that the env var is in place.
@@ -43,6 +44,9 @@ const ok = (name) => { pass++; console.log(`  ok  ${name}`); };
 /** A fresh store over a wiped file, so groups cannot leak into each other. */
 function fresh() {
     try { fs.unlinkSync(STATE_FILE); } catch { /* first run */ }
+    // The run store is a second file and would otherwise survive the wipe,
+    // attributing one group's sessions to another group's schedule ids.
+    try { fs.unlinkSync(RUNS_FILE); } catch { /* first run */ }
     return new Schedules();
 }
 
@@ -1160,6 +1164,105 @@ const pr = (number, over = {}) => ({
     assert.strictEqual(fillPrompt('see {{pr}} and {{repo}}', { head: 'c'.repeat(40) }),
         'see {{pr}} and {{repo}}');
     ok('PR placeholders fill on a PR run and stay verbatim on one that is not');
+}
+
+// --- which schedule started a session ------------------------------------
+//
+// The rail groups scheduled runs into their own section, so `forSession` is
+// what decides whether a row is in it. Three arms, and the two fallbacks are
+// the ones worth pinning: they exist because the run store was added long after
+// schedules were, so every session already on disk predates it and would
+// otherwise be invisible to the grouping forever.
+
+{
+    assert.ok(RUNS_FILE.startsWith(home),
+        `refusing to run: RUNS_FILE is ${RUNS_FILE}, outside the throwaway ${home}`);
+
+    const s = fresh();
+    const row = s.create({
+        cwd: '/proj', prompt: '/adversarial-reviewer --diff {{range}}\n\nReview {{count}}.',
+        cron: '0 2 * * *', title: 'nightly review',
+    });
+
+    // 1. The run store: exact, and what every run from now on gets.
+    s.rememberRun('sess-store', row.id);
+    assert.deepStrictEqual(s.forSession({ sessionId: 'sess-store', cwd: '/proj' }),
+        { id: row.id, title: 'nightly review' });
+
+    // 2. lastSessionId, which `note` writes anyway — the newest run of a
+    //    schedule that existed before any of this did.
+    s.note(row.id, { sessionId: 'sess-last' });
+    assert.strictEqual(s.forSession({ sessionId: 'sess-last' }).id, row.id);
+
+    // 3. The prompt head. This is the arm that recovers history: an older run,
+    //    in the schedule's directory, whose first prompt starts with the literal
+    //    part of the schedule's own prompt.
+    const old = { sessionId: 'sess-old', cwd: '/proj',
+        firstPrompt: '/adversarial-reviewer --diff abc..def\n\nReview 3.' };
+    assert.strictEqual(s.forSession(old).id, row.id, 'the prompt head matches');
+
+    // A worktree is still the schedule's own work.
+    assert.strictEqual(s.forSession({ ...old, sessionId: 'sess-wt',
+        cwd: '/proj/.claude/worktrees/x' }).id, row.id);
+
+    // **The near misses.** Right prompt, wrong directory; and right directory,
+    // a different command. Neither is this schedule's, and a section that
+    // swept up either would be worse than no section.
+    assert.strictEqual(s.forSession({ ...old, sessionId: 'sess-elsewhere', cwd: '/other' }),
+        null, 'a matching prompt outside the schedule directory is not its run');
+    assert.strictEqual(s.forSession({ sessionId: 'sess-other-cmd', cwd: '/proj',
+        firstPrompt: '/code-review --diff abc..def' }), null);
+    assert.strictEqual(s.forSession({ sessionId: 'sess-prose', cwd: '/proj',
+        firstPrompt: 'have a look at the auth module' }), null);
+    assert.strictEqual(s.forSession({ sessionId: 'sess-none' }), null,
+        'no cwd and no prompt cannot match by prompt');
+
+    // A prompt that is all placeholder has no head worth matching on — it would
+    // claim every session in the directory.
+    assert.strictEqual(promptPrefix('{{range}}'), null);
+    assert.strictEqual(promptPrefix('/adversarial-reviewer --diff {{range}} x'),
+        '/adversarial-reviewer --diff ');
+
+    ok('forSession finds a run by the store, by lastSessionId, and by the prompt head');
+}
+
+{
+    const s = fresh();
+    const row = s.create({ cwd: '/proj', prompt: 'a'.repeat(30), cron: '0 2 * * *' });
+    s.rememberRun('sess-1', row.id);
+    // Both stores, because they debounce separately and a run whose schedule
+    // row has not landed is deliberately not attributed to it.
+    s.flush();
+    s.runs.flush();
+
+    // A second store over the same file is a second bridge, or this one after a
+    // restart — which is the whole reason the run store is on disk rather than
+    // in the Map server.js keeps.
+    assert.strictEqual(new Schedules().forSession({ sessionId: 'sess-1' }).id, row.id,
+        'the link survives a restart');
+
+    // Deleting the schedule takes the grouping with it. The session keeps its
+    // transcript and stays in the rail; what it loses is a card to open.
+    s.remove(row.id);
+    s.flush();
+    s.runs.flush();
+    assert.strictEqual(s.forSession({ sessionId: 'sess-1' }), null);
+    assert.strictEqual(new Schedules().forSession({ sessionId: 'sess-1' }), null,
+        'and the deletion reaches disk rather than coming back on the next read');
+
+    ok('a run link survives a restart, and a deleted schedule prunes its runs');
+}
+
+{
+    // The name a scheduled session is titled after. `title` is nullable — the
+    // card falls back to the first line of the prompt — so there has to be one
+    // answer, and this is it.
+    assert.strictEqual(scheduleTitle({ title: 'nightly', prompt: 'x' }), 'nightly');
+    assert.strictEqual(scheduleTitle({ title: null, prompt: '/review --diff x\nmore' }),
+        '/review --diff x');
+    assert.strictEqual(scheduleTitle({ title: null, prompt: '\n\n  spaced  \n' }), 'spaced');
+    assert.strictEqual(scheduleTitle({ title: null, prompt: '' }), 'a schedule');
+    ok('scheduleTitle falls back through the prompt to a name that is never empty');
 }
 
 fs.rmSync(home, { recursive: true, force: true });
