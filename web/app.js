@@ -288,6 +288,23 @@ const state = {
         shut: localStorage.getItem('changesShut') === '1',
         sessionId: null, data: null, at: 0, loading: false, error: null,
     },
+    // The session's own task list. `on` and `shut` are the same two window
+    // properties the drawers either side of the transcript have, remembered for
+    // the same reason.
+    //
+    // Read as `!== '0'` rather than `=== '1'`, unlike `changesOn` right above:
+    // this panel is on by default, so a window that has never been told
+    // anything has to show it. That one character is the whole of "visible by
+    // default", and an `=== '1'` habit silently undoes it.
+    //
+    // No `at`, `loading` or `error`, which `changes` needs: there is nothing to
+    // fetch and nothing to go stale. The bridge pushes this on the same follow
+    // the transcript arrives on.
+    checklist: {
+        on: localStorage.getItem('checklistOn') !== '0',
+        shut: localStorage.getItem('checklistShut') === '1',
+        sessionId: null, data: null,
+    },
     // The board of unfinished work. `at` is when the bridge last answered, so
     // opening it again does not re-run git over every worktree on the machine.
     dash: { open: false, data: null, at: 0, loading: false, error: null, files: new Set() },
@@ -389,6 +406,8 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'find-subs', 'find-subs-row', 'find-close',
     'changes', 'changes-strip', 'changes-strip-count', 'changes-open', 'changes-count',
     'changes-refresh', 'changes-collapse', 'changes-body',
+    'checklist', 'checklist-strip', 'checklist-strip-count', 'checklist-open',
+    'checklist-count', 'checklist-collapse', 'checklist-body', 'btn-checklist',
     'term-pane', 'term-grip', 'term-dir', 'term-moved', 'term-body', 'term-restart', 'term-close',
     'term-tabs', 'term-stop', 'cmds',
     'tasks', 'tasks-strip', 'tasks-strip-count', 'tasks-open', 'tasks-count',
@@ -1248,6 +1267,8 @@ function clearCurrent() {
     state.busyTimer = null;
     resetChanges();
     renderChanges();        // hides the drawer: there is no session to be about
+    resetChecklist();
+    renderChecklist();      // and the same for the task list on the other side
     dom.log.replaceChildren();
     dom.turns.replaceChildren();
     dom.agents.replaceChildren();
@@ -1396,6 +1417,8 @@ function beginOpen(summary, { keepDash = false } = {}) {
     renderTasks();              // empties the aside, and hides it
     resetChanges();             // and the files listed were the old session's
     renderChanges();            // which leaves the drawer saying it is looking
+    resetChecklist();           // as was the task list — the push will refill it
+    renderChecklist();
     // A row drawn for one session is not evidence about another. The log is
     // replaced below in any case; this is what disarms the timer holding it.
     clearPendingSend();
@@ -1636,6 +1659,10 @@ function renderHeaderActions() {
     dom.btnArchive.classList.toggle('on', !!s.archived);
     dom.btnArchive.title = s.archived ? 'Restore from archive' : 'Archive this session';
     dom.btnDelete.title = `Delete “${clip(s.title, 40)}” permanently`;
+    dom.btnChecklist.classList.toggle('on', state.checklist.on);
+    dom.btnChecklist.setAttribute('aria-pressed', String(state.checklist.on));
+    dom.btnChecklist.title = state.checklist.on
+        ? 'Hide this session’s task list' : 'This session’s own task list';
     dom.btnChanges.classList.toggle('on', state.changes.on);
     dom.btnChanges.setAttribute('aria-pressed', String(state.changes.on));
     dom.btnChanges.title = state.changes.on
@@ -2592,6 +2619,160 @@ function plusMinus(f) {
     return box;
 }
 
+// ── the session's own task list ────────────────────────────────────────────
+//
+// The list the agent keeps for itself, on the left of the transcript. Nothing
+// here fetches: the bridge pushes `task-list` on the same follow the transcript
+// arrives on, because the list moves *during* a turn and that is the only time
+// anybody is watching it. So there is no stale window, no loading state and no
+// refresh button — the three things the changes drawer above needs.
+//
+// Ids and classes say `checklist` while the panel says "Tasks", because `tasks`
+// in this file already means suggested follow-ups.
+
+/** `✓`, `▸` or `○`. Shared with todoView, so the transcript and the panel agree. */
+function statusMark(status) {
+    return status === 'completed' ? '✓' : status === 'in_progress' ? '▸' : '○';
+}
+
+/** Put the panel in the layout, or take it out. Remembered across sessions. */
+function showChecklist(on) {
+    state.checklist.on = on;
+    localStorage.setItem('checklistOn', on ? '1' : '0');
+    // Asking for it from the header means wanting to see it, not wanting a 34px
+    // strip — the same promise the Changed button makes.
+    if (on) collapseChecklist(false, { render: false });
+    renderChecklist();
+    renderHeaderActions();
+}
+
+/** Collapse it to its strip, or bring it back. */
+function collapseChecklist(shut, { render = true } = {}) {
+    state.checklist.shut = shut;
+    localStorage.setItem('checklistShut', shut ? '1' : '0');
+    if (!render) return;
+    renderChecklist();
+    // Focus follows whatever replaced the thing that was clicked.
+    (shut ? dom.checklistStrip : dom.checklistCollapse).focus();
+}
+
+/** Forget what is on screen — the conversation it was about has changed. */
+function resetChecklist() {
+    state.checklist.data = null;
+    state.checklist.sessionId = null;
+}
+
+/**
+ * The call that last touched this item, or null.
+ *
+ * One backwards walk over the tools in this conversation, first hit wins — which
+ * *is* "last touched", because a TaskUpdate always follows its TaskCreate in
+ * document order, so no preference rule is needed on top of the order.
+ *
+ * The three clauses are the three ways an item can be reached, and they are not
+ * symmetrical. `TaskUpdate` carries `taskId`, so it matches by id. `TaskCreate`
+ * carries no id at all — only `{subject, description, activeForm}` — so it can
+ * only be matched by subject, which is why the bridge sends `subject` as one
+ * field rather than leaving the client to pick between four. And a TodoWrite
+ * list came from exactly one call which rewrote every item in it, so that call
+ * is the answer for any item without matching anything.
+ *
+ * Resolved here rather than sent by the bridge on purpose: on the directory path
+ * the bridge never opens the transcript, so supplying an event id would mean a
+ * transcript scan every 400ms to produce something this page already holds
+ * indexed by tool_use id.
+ */
+function callForTask(item) {
+    const entries = [...state.tools.values()];
+    for (let n = entries.length - 1; n >= 0; n--) {
+        const ev = entries[n].ev;
+        const input = ev.input || {};
+        if (ev.name === 'TaskUpdate' && item.id && String(input.taskId) === item.id) {
+            return entries[n];
+        }
+        if (ev.name === 'TaskCreate' && input.subject && input.subject === item.subject) {
+            return entries[n];
+        }
+        if (ev.name === 'TodoWrite') return entries[n];
+    }
+    return null;
+}
+
+/** One task. Clicking jumps to the call that last touched it. */
+function checklistRow(item) {
+    const entry = callForTask(item);
+
+    // More than the description, the way an edit row's tooltip is more than the
+    // path. Left off entirely when it would only repeat the line already on
+    // screen — a todo-sourced item has no description, and a tooltip that says
+    // what you can already read is noise.
+    const extra = [item.description,
+        item.status === 'in_progress' && item.activeForm,
+        item.blockedBy.length && `blocked by ${item.blockedBy.join(', ')}`,
+    ].filter(Boolean);
+    const tip = extra.length ? [item.subject, ...extra].join('\n\n') : null;
+
+    return el('li', {},
+        el('button', {
+            // A button either way. An item nothing matches yet may match later
+            // once the call lands, and a row that is sometimes a button is worse
+            // than one that always is and sometimes says why not.
+            class: `cl-row${entry ? '' : ' flat'}`,
+            type: 'button',
+            'data-status': item.status,
+            ...(tip ? { title: tip, 'data-desc': item.description || '' } : {}),
+            onclick: () => {
+                if (entry) return jumpToTurn(entry);
+                toast('No call in this conversation has touched that item.', 'warn');
+            },
+        },
+        el('span', { class: 'cl-mark', 'aria-hidden': 'true' }, statusMark(item.status)),
+        el('span', { class: 'cl-name' }, item.subject)));
+}
+
+/** The whole panel, rebuilt from state.checklist. Cheap: there are never many. */
+function renderChecklist() {
+    const d = state.checklist.data;
+    const items = (d && d.items) || [];
+
+    // Off, no conversation, or a session that never kept a list: no box at all
+    // rather than an empty one. Most sessions keep no list, and a permanently
+    // empty column would be worse than no column.
+    dom.checklist.hidden = !state.checklist.on || !state.current || !items.length;
+    if (dom.checklist.hidden) {
+        // Emptied rather than just hidden. The rows and the count belonged to
+        // whichever session was here before, and a hidden panel holding another
+        // conversation's list is the kind of thing that resurfaces later looking
+        // like a bug in whatever reveals it.
+        dom.checklistBody.replaceChildren();
+        dom.checklistCount.textContent = '';
+        dom.checklistStripCount.textContent = '';
+        return;
+    }
+
+    const label = `${d.done}/${d.total}`;
+    dom.checklistCount.textContent = label;
+    dom.checklistStripCount.textContent = label;
+
+    dom.checklistStrip.hidden = !state.checklist.shut;
+    dom.checklistOpen.hidden = state.checklist.shut;
+    dom.checklist.classList.toggle('shut', state.checklist.shut);
+    if (state.checklist.shut) return;   // nothing behind the strip needs building
+
+    const body = [taskBar(d)];
+    // The step it is on, spelled out. `current` is the in-progress task's
+    // activeForm, which is written for exactly this.
+    if (d.current) body.push(el('div', { class: 'cl-current' }, d.current));
+    body.push(el('ul', { class: 'cl-list' }, ...items.map(checklistRow)));
+    // The cap is a bug somewhere else, but say so rather than showing a short
+    // list as if it were the whole one.
+    if (d.truncated) {
+        body.push(el('div', { class: 'cl-note' },
+            `and ${d.truncated} more not shown`));
+    }
+    dom.checklistBody.replaceChildren(...body);
+}
+
 /** The first line of a block of text, for a row with room for one. */
 function firstLine(text, max = 70) {
     const line = String(text || '').split('\n').find(l => l.trim()) || '';
@@ -3407,7 +3588,7 @@ function toolSummary(ev) {
         case 'Agent': return i.description || clip(i.prompt, 80);
         case 'WebFetch': return i.url;
         case 'WebSearch': return i.query;
-        case 'TodoWrite': return `${(i.tasks || i.todos || []).length} items`;
+        case 'TodoWrite': return `${todoItemsOf(i).length} items`;
         case 'Skill': return '/' + (i.skill || '');
         // The first heading of a plan is what it is a plan for.
         case 'ExitPlanMode': return clip((i.plan || '').replace(/^#+\s*/, ''), 80);
@@ -3488,7 +3669,7 @@ function toolBody(ev) {
             out.push(section('With', codePre(i.new_string || '', langOf(i.file_path))));
         }
     } else if (ev.name === 'TodoWrite') {
-        out.push(section('Tasks', todoView(i.tasks || i.todos || [])));
+        out.push(section('Tasks', todoView(todoItemsOf(i))));
     } else if (ev.name === 'Task' || ev.name === 'Agent') {
         out.push(section('Prompt', el('div', { class: 'prose', html: renderMarkdown(i.prompt || '') })));
     } else if (ev.name === 'ExitPlanMode') {
@@ -3653,18 +3834,43 @@ function diffView(patch) {
     return box;
 }
 
-function todoView(items) {
-    const list = el('div', { style: 'font:400 12px/1.7 var(--mono)' });
-    for (const t of items) {
-        const st = t.status || t.state || 'pending';
-        const mark = st === 'completed' ? '✓' : st === 'in_progress' ? '▸' : '○';
-        const color = st === 'completed' ? 'var(--green)'
-            : st === 'in_progress' ? 'var(--yellow)' : 'var(--text-4)';
-        list.append(el('div', { style: `color:${st === 'completed' ? 'var(--text-4)' : 'var(--text)'}` },
-            el('span', { style: `color:${color}; margin-right:8px` }, mark),
-            t.subject || t.content || t.description || t.activeForm || ''));
+/**
+ * The items out of a raw TodoWrite input — the client's half of `todoInput` in
+ * bridge/transcript.js, and the same two malformed shapes.
+ *
+ * The panel gets its list normalised by the bridge, but a tool block in the
+ * transcript is rendered from `ev.input` as the tool wrote it, so the repair has
+ * to exist on this side too. There is a real transcript on this machine whose
+ * `input.todos` is a JSON *string*, and every call site here read
+ * `i.tasks || i.todos` and trusted it: the summary counted the string's
+ * *characters* and reported "1041 items", and iterating it walked the list one
+ * character at a time.
+ */
+function todoItemsOf(input) {
+    let items = input && (input.todos !== undefined ? input.todos : input.tasks);
+    if (typeof items === 'string') {
+        try { items = JSON.parse(items); } catch { return []; }
     }
-    return list;
+    return Array.isArray(items) ? items : [];
+}
+
+/**
+ * The list inside a TodoWrite or Task tool block in the transcript.
+ *
+ * The same marks and colours the task list panel uses, off the same classes and
+ * the same `statusMark`, so the two places a list is drawn cannot drift apart.
+ * These items come straight off the tool input rather than through the bridge's
+ * normaliser, so the name is still whichever of the keys the tool used.
+ */
+function todoView(items) {
+    return el('ul', { class: 'cl-list' }, ...items.map((t) => {
+        const status = t.status || t.state || 'pending';
+        return el('li', {},
+            el('div', { class: 'cl-row flat', 'data-status': status },
+                el('span', { class: 'cl-mark', 'aria-hidden': 'true' }, statusMark(status)),
+                el('span', { class: 'cl-name' },
+                    t.subject || t.content || t.description || t.activeForm || '')));
+    }));
 }
 
 /**
@@ -7989,6 +8195,22 @@ function connect() {
 
     es.addEventListener('overview', (e) => applyOverview(JSON.parse(e.data)));
     es.addEventListener('taskboard', (e) => applyTaskboard(JSON.parse(e.data)));
+
+    // The session's own task list, pushed on the transcript follow: once as soon
+    // as a session is followed, and after that only when the list has moved.
+    // It carries the whole payload, so there is nothing to refetch.
+    //
+    // Stored even when the panel is off or collapsed, so opening it paints
+    // straight away rather than waiting up to 400ms for the next push — the
+    // signature check in the bridge means a push that changed nothing never
+    // arrives, so there would be no second chance to catch up on.
+    es.addEventListener('task-list', (e) => {
+        const d = JSON.parse(e.data);
+        if (!state.current || d.sessionId !== state.current.sessionId) return;
+        state.checklist.sessionId = d.sessionId;
+        state.checklist.data = d;
+        renderChecklist();
+    });
     // The whole list, every time, and not gated on watching the panel — see the
     // drafts section. It carries the rows, so there is nothing to refetch: this
     // is also how a draft saved or started in another window disappears from
@@ -8743,7 +8965,7 @@ function toolText(ev) {
         if (r.patch) out.push(patchText(r.patch));
         else out.push(i.old_string, i.new_string);
     } else if (ev.name === 'TodoWrite') {
-        for (const t of i.tasks || i.todos || []) {
+        for (const t of todoItemsOf(i)) {
             out.push(t.subject || t.content || t.description || t.activeForm || '');
         }
     } else if (ev.name === 'Task' || ev.name === 'Agent') {
@@ -11761,6 +11983,8 @@ dom.tasksStrip.addEventListener('click', () => showTasks(true));
 
 dom.changesCollapse.addEventListener('click', () => collapseChanges(true));
 dom.changesStrip.addEventListener('click', () => collapseChanges(false));
+dom.checklistCollapse.addEventListener('click', () => collapseChecklist(true));
+dom.checklistStrip.addEventListener('click', () => collapseChecklist(false));
 // Refresh means "ask git again about this directory", and only this one — the
 // work-in-flight board's answers for forty other worktrees are not stale
 // because you clicked here. See git.clearCache.
@@ -11803,6 +12027,10 @@ dom.delGo.addEventListener('click', confirmDelete);
 
 dom.btnChanges.addEventListener('click', () => {
     if (state.current) showChanges(!state.changes.on);
+});
+
+dom.btnChecklist.addEventListener('click', () => {
+    if (state.current) showChecklist(!state.checklist.on);
 });
 
 dom.btnFolder.addEventListener('click', async () => {

@@ -44,6 +44,7 @@ const pulls = require('./pulls');
 const { mapLimit } = require('./memo');
 const overview = require('./overview');
 const taskboard = require('./taskboard');
+const tasks = require('./tasks');
 const { openInExplorer, openFile } = require('./explorer');
 const attachments = require('./attachments');
 const { TerminalPool } = require('./terminal');
@@ -418,6 +419,31 @@ function stopAgentWatch(client) {
 }
 
 /**
+ * The session's own task list, when it has moved since this client last heard.
+ *
+ * Rides the transcript follow rather than a timer of its own, because the list
+ * only ever moves while a turn is running and that is exactly when somebody is
+ * following. `bridge/tasks.js` caches for a second, so the 400ms tick costs at
+ * most one directory read per second per session however many windows are open.
+ *
+ * The mark lives on the *sub* rather than on the client or in a module-level
+ * map: a client's follow is what it is about, and the board's comment above
+ * records what sharing one mark between clients cost last time.
+ *
+ * Deliberately not on the session summary. Every session opened would then read
+ * the tasks directory whether or not anything drew the list, and it still would
+ * not answer liveness — the same reasoning `/changes` already carries.
+ */
+function pushTasks(client, sessionId, sub) {
+    const rec = index.get(sessionId);
+    const data = tasks.items(sessionId, rec ? rec.file : null);
+    const sig = signature(data);
+    if (sub.taskSig === sig) return;
+    sub.taskSig = sig;
+    sseSend(client, 'task-list', { sessionId, ...data });
+}
+
+/**
  * Follow a transcript for one client. Content always comes from the file, never
  * from the runner's stream, so a session running in the user's terminal streams
  * into the UI exactly like one this app started.
@@ -429,7 +455,7 @@ function startWatch(clientId, sessionId, fromOffset) {
     const existing = client.subs.get(sessionId);
     if (existing) stopWatch(existing);
 
-    const sub = { offset: fromOffset, watcher: null };
+    const sub = { offset: fromOffset, watcher: null, taskSig: null };
     client.subs.set(sessionId, sub);
 
     let inFlight = false;
@@ -449,11 +475,18 @@ function startWatch(clientId, sessionId, fromOffset) {
                     sub.offset = delta.offset;
                 }
             }
+            pushTasks(client, sessionId, sub);
         } finally {
             inFlight = false;
         }
     }, 400);
     sub.watcher.unref();
+
+    // Once now, rather than up to 400ms of an empty panel — `sendBoardNow` is
+    // here for the same reason. It also means `subscribe` needs no extra line,
+    // and an SSE reconnect re-pushes for free. The cost is one identical push
+    // per re-subscribe, which the signature check makes free after the first.
+    pushTasks(client, sessionId, sub);
 }
 
 /**
@@ -1876,6 +1909,11 @@ async function api(req, res, url, pathname, who) {
             // answering is not proof it is answering for the right tree.
             ...(local ? { root: cfg.ROOT, home: cfg.HOME } : {}),
             worktree: cfg.IS_WORKTREE,
+            // Whether sessions this bridge starts are given the task tools back.
+            // False means a task list will usually be empty, which is worth a
+            // client explaining rather than drawing as "no tasks". Says nothing
+            // about sessions this bridge did not start.
+            todoTools: cfg.TODO_TOOLS,
             // Live SSE connections — a quick way to tell whether a UI attached.
             clients: clients.size, runners: Object.keys(pool.statuses()).length,
             terminals: terminals.live().length, runs: runs.live().length,
@@ -2965,6 +3003,30 @@ async function api(req, res, url, pathname, who) {
                 lastTs: s.lastTs,
             });
             return send(res, 200, out);
+        }
+
+        // The session's own task list, items and all.
+        //
+        // The panel is fed by the `task-list` event on the transcript follow, so
+        // this route is not what the desktop uses. It is here because SSE is
+        // best-effort and polling is the guaranteed path — a Cloudflare quick
+        // tunnel delivers zero event bytes in 75 seconds, measured — and a
+        // feature reachable only over SSE is a feature a client behind one
+        // cannot have. It is also what makes this answerable with curl.
+        //
+        // Read-only over the user's own files with nothing shelled out, so no
+        // remote refusal rule: the same classification as `changes` below.
+        if (tail === 'tasks' && req.method === 'GET') {
+            const summary = index.summary(sessionId);
+            if (!summary) return send(res, 404, { error: 'session not found' });
+            const rec = index.get(sessionId);
+            // Always 200, even with nothing in it. A session that kept no list
+            // and a session that does not exist are different things, and only
+            // the second is a 404.
+            return send(res, 200, {
+                sessionId,
+                ...tasks.items(sessionId, rec ? rec.file : null),
+            });
         }
 
         // What this session changed — the two answers, side by side.

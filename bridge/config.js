@@ -107,6 +107,24 @@ const HOST = process.env.CLAUDE_SESSIONS_HOST || '127.0.0.1';
 // able to publish the bridge to the building.
 const ALLOW_REMOTE_BIND = process.env.CLAUDE_SESSIONS_ALLOW_REMOTE_BIND === '1';
 
+// Whether a session this app starts gets the task tools back.
+//
+// Claude Code stopped offering them — TaskCreate/Get/Update/List and TodoWrite —
+// to Opus 4.8, Sonnet 5 and every newer model, behind
+// CLAUDE_CODE_ENABLE_TODO_TOOLS=1. Nothing on this machine has written a task
+// list since that landed, so the conversation view's task panel and the boards'
+// progress bars are both drawing a list that no longer exists.
+//
+// An opt-out rather than an opt-in, because the panel is on by default and a
+// panel that is empty for everybody is worse than no panel at all. Set
+// CLAUDE_SESSIONS_TODO_TOOLS=0 in front of the bridge and it adds nothing.
+//
+// It reaches only sessions the bridge *starts* — see sessionEnv in runner.js —
+// and only from the next process start, so a session already running is
+// unaffected. A session in somebody's own terminal keeps no list unless they set
+// the variable for themselves.
+const TODO_TOOLS = process.env.CLAUDE_SESSIONS_TODO_TOOLS !== '0';
+
 /**
  * `~` and `~/thing` mean the home directory; `~other` is somebody else's and is
  * left alone. Used for the roots below and for any path a person may have typed
@@ -170,7 +188,7 @@ module.exports = {
     TGX_DIR, COMMANDS_FILE, COMMANDS_LOCAL_FILE, RUNS_LOG_DIR,
     SETTINGS_FILE, SETTINGS_LOCAL_FILE, USER_TGX_DIR, USER_PREFS_FILE,
     VERBS_DIR, USER_VERBS_DIR,
-    ALLOW_REMOTE_BIND, ALLOWED_ROOTS, EXTRA_ORIGINS, withinRoots, expandHome,
+    ALLOW_REMOTE_BIND, TODO_TOOLS, ALLOWED_ROOTS, EXTRA_ORIGINS, withinRoots, expandHome,
     DEFAULT_PORT, DEV_PORT, IS_DEV,
     DEVBROWSER_DEFAULT_PORT, CLAUDE_BIN, PORT_DENYLIST,
 };

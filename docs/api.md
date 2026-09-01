@@ -170,6 +170,14 @@ The only unauthenticated route. Counts, a pid, and:
 than hardcoding the list; a remote client should drop `bypassPermissions` and
 `dontAsk` from what it offers, because the bridge will refuse them.
 
+`todoTools` is a boolean: whether this bridge sets `CLAUDE_CODE_ENABLE_TODO_TOOLS=1`
+on the sessions it starts (`CLAUDE_SESSIONS_TODO_TOOLS=0` in front of the bridge turns
+that off). It is worth reading before drawing an empty task list as "no tasks": Claude
+Code stopped offering the task tools to current models by default, so `false` means a
+session's list will usually be empty for that reason rather than because the agent chose
+not to keep one. It says nothing about sessions this bridge did not start — one run from
+somebody's own terminal keeps no list unless they set the variable themselves.
+
 ### `GET /api/projects`
 
 `{projects: [{cwd, name, sessions, mtimeMs, active}]}` — one entry per directory
@@ -445,6 +453,81 @@ before: this is the request `/api/sessions` deliberately does not make.
 Nothing pushes PR changes — there is no `/api/events` event for them. Poll this at
 about the bridge's own minute of cache; `web/app.js` uses 60s.
 
+### `GET /api/sessions/:id/tasks`
+
+The session's own task list — the checklist the agent keeps for itself, with
+per-item status.
+
+```
+{ sessionId, source, items: [...], done, total, current, idle, ts, truncated }
+```
+
+| field | type |
+|---|---|
+| `source` | **`"directory"`, `"todo"`, or `null`** — which of two places answered; `null` when neither did |
+| `items[]` | **array of objects** — see the item table below |
+| `done` | number — items with `status: "completed"` |
+| `total` | number — `items.length` |
+| `current` | string or null — the in-progress item's `activeForm`, falling back to its `subject` |
+| `idle` | boolean — work is left and *nothing* is in progress: a list that has stopped, not one between steps |
+| `ts` | **ISO 8601 string or null** — see the note below; null for `source: "directory"` |
+| `truncated` | number — items dropped past the 200-item cap, `0` normally |
+
+One item:
+
+| field | type |
+|---|---|
+| `id` | **string or null** — see below; always null for `source: "todo"` |
+| `subject` | string — what the task is |
+| `description` | string or null — a sentence or two of detail; always null for `source: "todo"` |
+| `activeForm` | string or null — the present-tense phrasing, written for a status line |
+| `status` | **`"pending"`, `"in_progress"` or `"completed"`** — a closed set |
+| `blocks` | array of strings — ids of tasks this one blocks; always `[]` for `source: "todo"` |
+| `blockedBy` | array of strings — ids blocking this one; always `[]` for `source: "todo"` |
+
+**The two sources are not equally rich, which is what `source` is for.** A
+`directory` list (from `~/.claude/tasks/<session-id>/`, written by the
+`TaskCreate`/`TaskUpdate` tools) has ids, descriptions and dependencies. A `todo`
+list (reconstructed from the newest `TodoWrite` call in the transcript) has none
+of those three. A client that draws a description affordance on a `todo` list is
+drawing something that can never be filled.
+
+**`id` is null for `source: "todo"`, and that is not an omission.** TodoWrite is
+called with the whole list every time and carries no ids, so anything this API
+invented would be positional and unstable across pushes — a client keying its
+DOM or its storage on one would silently mis-associate items the moment the agent
+inserted a step. Do not synthesise one from the index.
+
+**TodoWrite's `content` arrives as `subject`.** One name field, not two, so there
+is nothing to guess. (Two malformed shapes are also repaired rather than passed
+on: the key is accepted as `tasks` as well as `todos`, and a `todos` that arrived
+as a JSON *string* holding the array is parsed. Both occur in real transcripts.)
+
+**`status` is a closed set.** Anything outside those three values is normalised
+to `"pending"` rather than passed through, so a client's switch never falls
+through to nothing.
+
+**`ts` is only ever non-null for `source: "todo"`** — it is the timestamp of the
+TodoWrite entry. The directory format records no times at all, so `ts` must not
+be used to judge how fresh a `directory` list is.
+
+**An empty list is a 200, not a 404.** A session that kept no task list answers
+`{source: null, items: [], total: 0, …}`. Only an unknown session id is a 404
+(`{"error": "session not found"}`) — an empty answer and a missing session are
+different things.
+
+Items are in the order the agent keeps them: numerically by `id` for
+`directory`, call order for `todo`. Answered from a ~1s cache. **There is no
+write side** — this app reads `~/.claude/tasks/` and never writes it.
+
+**This route is wider than the `tasks` field on a board card.** `/api/overview`
+and `/api/taskboard` carry only the five-field aggregate (`{done, total, current,
+idle, ts}`) and **no items**; a client that wants the list has to ask here.
+
+**The list moves mid-turn**, which is the whole reason to show it — so the
+`task-list` event under *The live channel* is the live path, and polling this at
+the end of a turn is not the same thing.
+
 ### `GET /api/sessions/:id/changes[?refresh=1]`
 
 `{ dir, checkedAt, git: {...}, edits: [...], agents: {total, edited}, added, deleted }`
@@ -671,7 +754,7 @@ waiting, running }`, already ordered needs-you-first. A card is:
 | **`runner`** | **object or null — seven fields**, not the `runner-status` payload: `{state, activity, queued, busySince, retry, error, errorKind}` |
 | **`ask`** | **object or null** — the *whole* ask (`runner.pendingPermission`), so a tool ask is answerable from the card. Same shape as `permission-request` |
 | **`headlines[]`** | **array of objects**, not strings — `{text, ts}`, oldest first, up to three |
-| `tasks` | object or null — `{done, total, current, ts}` |
+| `tasks` | object or null — **five fields, and no items**: `{done: number, total: number, current: string\|null, idle: boolean, ts: string\|null}`. `current` is the in-progress task's `activeForm`. `idle` is true when work is left and *nothing* is in progress — a list that has stopped, not one between steps. `ts` is ISO 8601 and non-null only when the answer came from a `TodoWrite` in the transcript rather than from `~/.claude/tasks`. **The items are not here** — `GET /api/sessions/:id/tasks` has them. (Previously documented as `{done, total, current, ts}`, which was true of only one of the two sources: the directory returned `idle` and no `ts`, the transcript the reverse.) |
 | **`devservers`** | **array of objects or null** — `{port, title, owned}`, listening ports only; `null` until the first probe has run |
 | `sig` | string — see below |
 
@@ -730,6 +813,10 @@ fields — so a client draws a task the same way wherever it meets one. A `sessi
 a trimmed `/api/overview` card: no `headlines` and no `devservers`, because both cost a
 transcript read or a port probe per session and this board is several times wider than
 that one. What is left is state, which is free.
+
+Its `tasks` is the same five-field aggregate an overview card carries, documented above,
+and carries no items — and it is only ever non-null in the `working` column, because that
+is the only one it is asked for. `GET /api/sessions/:id/tasks` is where the items are.
 
 Which column a session is in is `column(s, runner)` in `bridge/taskboard.js`, and it is
 deliberately the same predicates in the same order as `why()` in `overview.js`:
@@ -1347,7 +1434,9 @@ A client that must work everywhere should detect this and fall back:
   liveness, and `GET /api/sessions/:id/since?offset=` for new events. Measured
   through the same tunnel: ~60ms per call, 7KB for the board, **42 bytes** for an
   empty delta. 2.5s for the transcript and half that rate for the board is a
-  measured-comfortable cadence.
+  measured-comfortable cadence. `GET /api/sessions/:id/tasks` is the poll that
+  replaces `task-list`, and only while a conversation is open — it is a small
+  answer off a 1s cache, so the transcript's cadence suits it.
 
 Liveness becomes a couple of seconds granular rather than instant, which for "has
 it finished, does it need me" is a distinction without a difference.
@@ -1377,6 +1466,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `tail` | `{sessionId, events, offset}` |
 | `reset` | `{sessionId}` — reload from scratch |
 | `agent-tail` / `agent-reset` | as above, for a subagent |
+| `task-list` | `{sessionId, source, items[], done, total, current, idle, ts, truncated}` — the **whole** `GET /api/sessions/:id/tasks` payload, so there is nothing to refetch. **Not a `POST /api/subscribe` flag of its own**: it rides the transcript follow, because a task list only moves while a turn is running and that is exactly when a client is following one. Sent **once as soon as a session is followed** — an open panel does not wait for the first change — and after that only when the list has actually moved, so a session with a static list is silent. Carries `sessionId`, so a payload for a conversation the client has left is safe to drop |
 | `overview` | the board; sent only when it has actually changed |
 | `taskboard` | the task board; every ~3s while watched, and only when it has actually changed. Never carries `?idle=all` |
 | `drafts-changed` | `{at, drafts[], counts}` — the whole `GET /api/drafts` payload, so there is nothing to refetch. **Not gated by a `POST /api/subscribe` flag**, unlike `overview` and `taskboard`: a draft only changes because somebody changed it, so there is no tick to switch on and every window gets every change. Fires on create, edit, delete, and on a start (which deletes one) |
