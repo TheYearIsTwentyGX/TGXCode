@@ -4994,8 +4994,11 @@ server.listen(cfg.PORT, cfg.HOST, async () => {
     try {
         const reaped = beacon.reap();
         if (reaped) {
-            console.log(`[claude-sessions] killed ${reaped} orphaned quota beacon(s) `
-                + 'left by a bridge that is no longer running.');
+            // Process groups, not beacons: `script` and the `claude` it runs
+            // in the pty end up in groups of their own, so one leaked beacon
+            // is two of these.
+            console.log(`[claude-sessions] killed ${reaped} orphaned quota beacon `
+                + 'process group(s) left by a bridge that is no longer running.');
         }
     } catch { /* ps(1) is best-effort */ }
 

@@ -321,7 +321,11 @@ class Beacon {
      * the only one taken. Every beacon run therefore tidies up after its
      * predecessors, and so does a bridge coming up.
      *
-     * @returns {number} how many process groups were killed
+     * @returns {number} how many process groups were killed. One leaked
+     *          beacon is two of them: script(1) and the `claude` it runs in the
+     *          pty each end up leading a group of their own, which is also why
+     *          this collects groups from every matching row rather than
+     *          assuming the leader's row is the one ps rendered legibly.
      */
     reap() {
         let out;
