@@ -4506,7 +4506,23 @@ pool.on('quota', (info) => {
 // file lands without a restart. Checking on a shorter clock than the interval
 // is what makes that possible.
 const BEACON_TICK_MS = 60_000;
-let beaconLastRunAt = 0;
+
+// A development bridge does not probe the quota, for the same reason it does
+// not fire schedules: the reading is account-wide, so the everyday instance is
+// the one that should own it, and a worktree bridge doing it too is an API call
+// spent to measure the API calls being spent. It was also where every orphaned
+// beacon came from — a dev bridge is restarted constantly and killed abruptly,
+// which is exactly the shape that leaks a detached child.
+const BEACON_ON_DEV = process.env.CLAUDE_SESSIONS_BEACON_ON_DEV === '1';
+
+/** Why the beacon is not running, for the panel to say, or null. */
+function beaconSuppressed() {
+    return (cfg.IS_DEV && !BEACON_ON_DEV) ? 'dev-bridge' : null;
+}
+
+// Seeded from disk rather than 0, so a restart inherits the interval instead of
+// firing a run on every bridge start. See usage.beaconRanAt().
+let beaconLastRunAt = (usage.beaconRanAt() || 0) * 1000;
 
 /**
  * The quota snapshot plus what the beacon is doing about it.
@@ -4523,6 +4539,7 @@ function quotaPayload() {
     try { q = prefs.forCwd().quota || {}; } catch { /* defaults below */ }
     snap.beacon = {
         enabled: !!q.beacon && !!q.beaconDir,
+        suppressed: beaconSuppressed(),
         dir: q.beaconDir || null,
         everyMinutes: q.beaconEveryMinutes || null,
         ...beacon.status(),
@@ -4540,6 +4557,8 @@ function quotaPayload() {
  * why the number stopped moving will actually look.
  */
 async function tickBeacon() {
+    if (beaconSuppressed()) return;
+
     let q;
     try {
         // No cwd: the user-level file only. A project's `.tgxcode/settings.json`
@@ -4554,6 +4573,10 @@ async function tickBeacon() {
     const everyMs = Math.max(5, q.beaconEveryMinutes || 20) * 60_000;
     if (Date.now() - beaconLastRunAt < everyMs) return;
     beaconLastRunAt = Date.now();
+    // Recorded before the run, not after: a run that hangs for its full ninety
+    // seconds and then fails must still push the next attempt out by the
+    // interval, or a broken beacon becomes a busy loop.
+    usage.noteBeaconRun(Math.floor(beaconLastRunAt / 1000));
 
     const before = usage.snapshot();
     const out = await beacon.run(q.beaconDir);
@@ -4870,8 +4893,17 @@ function shutdown(code = 0) {
     // outlive us if we did not take them with us. A run is the same, and worse
     // if left: its stdout is a pipe nobody is reading any more, so it would fill
     // the buffer, block on write() and go on holding its port while hung.
+    //
+    // The beacon is the third of these, and the worst of the three to leave: it
+    // is a `claude` TUI re-rendering its status line every three seconds, and
+    // every render writes a now-frozen quota reading over the shared harvest
+    // file that every bridge on this machine reads. Five of them survived a
+    // worktree's dev bridges for twenty-eight hours and made the pill show a
+    // number that was wrong and looked fresh. Anything spawned `detached`
+    // belongs on this list.
     try { terminals.shutdown(); } catch { /* nothing to clean */ }
     try { runs.shutdown(); } catch { /* nothing to clean */ }
+    try { beacon.shutdown(); } catch { /* nothing to clean */ }
     // Drafts are written on a 400ms debounce and this process exits 200ms from
     // here, so a draft saved in the last moment before a restart would simply be
     // gone — having been acknowledged with a 200. Worse in one direction than the
@@ -5014,8 +5046,27 @@ server.listen(cfg.PORT, cfg.HOST, async () => {
     // `~/.tgxcode/settings.json` takes effect without a restart — the same
     // property every other preference in that file has.
     setInterval(() => { tickBeacon(); }, BEACON_TICK_MS).unref();
-    // And once at startup, so a bridge that has just come up is not showing a
-    // reading from before it went down for however long the first interval is.
+
+    // Reap before anything else, and on *every* bridge including a dev one that
+    // will never run a beacon of its own. A leaked beacon is machine-wide
+    // damage — it writes to the shared harvest file — so whichever bridge comes
+    // up next is the right one to clear it, not whichever bridge happens to be
+    // configured to probe. This is also the only cleanup that survives the
+    // bridge being killed with SIGKILL, where `shutdown()` never runs.
+    try {
+        const reaped = beacon.reap();
+        if (reaped) {
+            // Process groups, not beacons: `script` and the `claude` it runs
+            // in the pty end up in groups of their own, so one leaked beacon
+            // is two of these.
+            console.log(`[claude-sessions] killed ${reaped} orphaned quota beacon `
+                + 'process group(s) left by a bridge that is no longer running.');
+        }
+    } catch { /* ps(1) is best-effort */ }
+
+    // And a run once at startup, so a bridge that has just come up is not
+    // showing a reading from before it went down. Gated by the persisted
+    // interval, so this is a no-op on a restart that happened inside it.
     tickBeacon();
 
     if (!auth.hostIsLocal(cfg.HOST.replace(/^\[|\]$/g, ''))) {

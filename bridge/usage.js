@@ -126,8 +126,32 @@ class Usage {
         this.events = [];
         // Cached parse of STATUSLINE_FILE, keyed by (size, mtime).
         this._slCache = { key: null, value: null };
+        // When a beacon last ran on this machine, unix seconds, or null. Here
+        // rather than in bridge/server.js because it has to survive a restart
+        // and be shared between bridges — see `beaconRanAt()`.
+        this.beaconAt = null;
         this._saveTimer = null;
         this.load();
+    }
+
+    // -- the beacon's clock -----------------------------------------------
+
+    /**
+     * When a beacon last ran, according to any bridge on this machine.
+     *
+     * The interval lived in a module-level `beaconLastRunAt = 0`, which meant
+     * every bridge start fired a run immediately. That is a wasted API call per
+     * restart, and — while the beacon could still orphan itself — a fresh
+     * chance to leak one on every restart. An agent restarting a dev bridge six
+     * times in thirteen minutes is how four orphans happened at once.
+     */
+    beaconRanAt() { return this.beaconAt; }
+
+    noteBeaconRun(at) {
+        if (!isNumber(at)) return;
+        if (isNumber(this.beaconAt) && at <= this.beaconAt) return;
+        this.beaconAt = at;
+        this.save();
     }
 
     // -- the stream -------------------------------------------------------
@@ -220,18 +244,37 @@ class Usage {
             const data = JSON.parse(fs.readFileSync(STATUSLINE_FILE, 'utf8'));
             if (data && data.version === VERSION && data.windows && typeof data.windows === 'object') {
                 const windows = Object.create(null);
+                const capturedAt = unixOrNull(data.capturedAt);
+                // A sibling map of window id -> when that reading was learned,
+                // written by scripts/quota-statusline.py. Added after the first
+                // version of this file shipped, so absent is normal rather than
+                // wrong: a file from an older copy of the harvester (there are
+                // ~60 in .claude/worktrees) has one timestamp for the lot, and
+                // treating every window as observed then is exactly the
+                // assumption that file was written under.
+                const stamps = (data.observedAt && typeof data.observedAt === 'object')
+                    ? data.observedAt : {};
+                const now = nowSeconds();
                 for (const [type, win] of Object.entries(data.windows)) {
                     if (!win || typeof win !== 'object') continue;
                     // Already 0–100 — the harvester publishes what the status
                     // line publishes, and the status line has multiplied.
                     const pct = clampPercent(win.used_percentage);
                     if (pct === null) continue;
-                    windows[type] = { usedPercent: pct, resetsAt: unixOrNull(win.resets_at) };
+                    const resetsAt = unixOrNull(win.resets_at);
+                    // A window whose reset has passed describes a period that no
+                    // longer exists, and its percentage is not a smaller version
+                    // of the current one — it is about something else. The
+                    // harvester prunes these too; this is the half that also
+                    // works on a file written by a copy that does not.
+                    if (resetsAt !== null && resetsAt <= now) continue;
+                    windows[type] = {
+                        usedPercent: pct,
+                        resetsAt,
+                        observedAt: unixOrNull(stamps[type]) ?? capturedAt,
+                    };
                 }
-                value = {
-                    windows,
-                    capturedAt: unixOrNull(data.capturedAt),
-                };
+                value = { windows, capturedAt };
             }
         } catch {
             // A torn or hand-edited file. The harvester writes via rename so a
@@ -268,7 +311,14 @@ class Usage {
         for (const type of types) {
             const s = this.stream[type] || null;
             const l = (sl && sl.windows[type]) || null;
-            const lAt = sl ? sl.capturedAt : null;
+            // Per window, not per file. The harvest file holds readings learned
+            // at different moments by different terminals — a five-hour window
+            // refreshed a minute ago next to a weekly one nobody has updated
+            // since this morning — and one shared `capturedAt` claimed they were
+            // the same age. `usedPercentAt` is what a client greys a stale
+            // number by, so that timestamp being wrong is the pill quietly
+            // presenting an old reading as current.
+            const lAt = l ? l.observedAt : null;
 
             let usedPercent = null;
             let usedPercentAt = null;
@@ -359,6 +409,10 @@ class Usage {
                 }
             }
             if (Array.isArray(data.events)) this.events = data.events.slice(-MAX_EVENTS);
+            // Added after the first version of this file shipped. Absent is
+            // null, which is why it did not need a version bump — bumping
+            // would have thrown away everybody's stream state to gain nothing.
+            if (isNumber(data.beaconAt)) this.beaconAt = data.beaconAt;
         } catch {
             // Corrupt state costs us the pill until the next turn, and nothing
             // else. Not worth failing a bridge start over.
@@ -407,7 +461,18 @@ class Usage {
             .sort((a, b) => a.at - b.at)
             .slice(-MAX_EVENTS);
 
-        const body = JSON.stringify({ version: VERSION, stream, events });
+        // Max-wins, for the same reason the stream merge above is newest-wins:
+        // the point of persisting it is that a bridge restart does not re-fire
+        // a beacon the interval says is not due, and the *latest* run on this
+        // machine is what the interval is measured from — whichever bridge did
+        // it.
+        let beaconAt = this.beaconAt;
+        if (onDisk && isNumber(onDisk.beaconAt)
+            && (!isNumber(beaconAt) || onDisk.beaconAt > beaconAt)) {
+            beaconAt = onDisk.beaconAt;
+        }
+
+        const body = JSON.stringify({ version: VERSION, stream, events, beaconAt });
         try {
             fs.mkdirSync(STATE_DIR, { recursive: true });
             const tmp = `${STATE_FILE}.${process.pid}.tmp`;

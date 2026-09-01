@@ -51,11 +51,14 @@ function fresh() {
 }
 
 /** Stand in for scripts/quota-statusline.py having run. */
-function writeStatusLine(windows, capturedAt) {
+function writeStatusLine(windows, capturedAt, observedAt) {
     fs.mkdirSync(path.dirname(STATUSLINE_FILE), { recursive: true });
-    fs.writeFileSync(STATUSLINE_FILE, JSON.stringify({
+    const body = {
         version: VERSION, windows, capturedAt: capturedAt || Math.floor(Date.now() / 1000),
-    }));
+    };
+    // Omitted means the old shape, which is a case worth writing on purpose.
+    if (observedAt) body.observedAt = observedAt;
+    fs.writeFileSync(STATUSLINE_FILE, JSON.stringify(body));
 }
 
 function clearStatusLine() {
@@ -64,6 +67,14 @@ function clearStatusLine() {
 
 const win = (snap, type) => snap.windows.find(w => w.type === type);
 const now = () => Math.floor(Date.now() / 1000);
+
+// Reset times, relative to the run. These used to be two fixed unix seconds
+// chosen when they were comfortably in the future; they have since gone past,
+// and a window whose reset has passed is now dropped on read — so as literals
+// they would quietly empty the fixtures and take most of this file's assertions
+// with them. Relative is the only form that stays true.
+const RESET_5H = now() + 2 * 3600;
+const RESET_7D = now() + 5 * 86400;
 
 // --- units --------------------------------------------------------------
 
@@ -105,19 +116,19 @@ const now = () => Math.floor(Date.now() / 1000);
     // all: `allowed` carries no utilization, so there is a reset time and no
     // percentage.
     assert.strictEqual(
-        u.noteRateLimitEvent({ status: 'allowed', resetsAt: 1786134000, rateLimitType: 'five_hour' }),
+        u.noteRateLimitEvent({ status: 'allowed', resetsAt: RESET_5H, rateLimitType: 'five_hour' }),
         true, 'the first sighting of a window is a change');
 
     const w = win(u.snapshot(), 'five_hour');
     assert.strictEqual(w.usedPercent, null, 'an allowed event has no percentage to give');
     assert.strictEqual(w.usedPercentSource, null);
-    assert.strictEqual(w.resetsAt, 1786134000);
+    assert.strictEqual(w.resetsAt, RESET_5H);
     assert.strictEqual(w.status, 'allowed');
 
     // The identical event on the next turn must not be broadcast — it arrives
     // every turn, and the pill would repaint for nothing.
     assert.strictEqual(
-        u.noteRateLimitEvent({ status: 'allowed', resetsAt: 1786134000, rateLimitType: 'five_hour' }),
+        u.noteRateLimitEvent({ status: 'allowed', resetsAt: RESET_5H, rateLimitType: 'five_hour' }),
         false, 'an unchanged repeat is not a change');
 
     ok('an allowed event gives a reset and no percentage, and repeats do not re-broadcast');
@@ -130,7 +141,7 @@ const now = () => Math.floor(Date.now() / 1000);
     // Near a limit the stream does send utilization, which is the one case the
     // percentage works with no status line installed at all.
     u.noteRateLimitEvent({
-        status: 'allowed_warning', resetsAt: 1786500000, rateLimitType: 'seven_day',
+        status: 'allowed_warning', resetsAt: RESET_7D, rateLimitType: 'seven_day',
         utilization: 0.82, surpassedThreshold: 0.8,
     });
     const w = win(u.snapshot(), 'seven_day');
@@ -173,7 +184,7 @@ const now = () => Math.floor(Date.now() / 1000);
 
     // `rateLimitType` is optional on the wire. Filing such an event under
     // `five_hour` would be a guess presented as a fact.
-    u.noteRateLimitEvent({ status: 'rejected', resetsAt: 1786134000 });
+    u.noteRateLimitEvent({ status: 'rejected', resetsAt: RESET_5H });
     const snap = u.snapshot();
     assert.strictEqual(win(snap, 'five_hour'), undefined, 'nothing is invented');
     assert.ok(win(snap, 'unspecified'), 'and the event is not lost either');
@@ -188,10 +199,10 @@ const now = () => Math.floor(Date.now() / 1000);
     // The everyday shape: the status line has both windows, the stream has
     // status and resets for one of them and no percentage for either.
     writeStatusLine({
-        five_hour: { used_percentage: 12.5, resets_at: 1786134000 },
-        seven_day: { used_percentage: 34.2, resets_at: 1786500000 },
+        five_hour: { used_percentage: 12.5, resets_at: RESET_5H },
+        seven_day: { used_percentage: 34.2, resets_at: RESET_7D },
     });
-    u.noteRateLimitEvent({ status: 'allowed', resetsAt: 1786134000, rateLimitType: 'five_hour' });
+    u.noteRateLimitEvent({ status: 'allowed', resetsAt: RESET_5H, rateLimitType: 'five_hour' });
 
     const snap = u.snapshot();
     const five = win(snap, 'five_hour');
@@ -216,9 +227,9 @@ const now = () => Math.floor(Date.now() / 1000);
     // Both have a percentage. Near a limit the stream is the fresher of the
     // two, because it arrives on the turn while the status line waits for a
     // terminal to render.
-    writeStatusLine({ seven_day: { used_percentage: 34.2, resets_at: 1786500000 } }, now() - 3600);
+    writeStatusLine({ seven_day: { used_percentage: 34.2, resets_at: RESET_7D } }, now() - 3600);
     u.noteRateLimitEvent({
-        status: 'allowed_warning', resetsAt: 1786500000, rateLimitType: 'seven_day', utilization: 0.9,
+        status: 'allowed_warning', resetsAt: RESET_7D, rateLimitType: 'seven_day', utilization: 0.9,
     });
     const w = win(u.snapshot(), 'seven_day');
     assert.strictEqual(w.usedPercent, 90, 'the newer reading wins');
@@ -231,9 +242,9 @@ const now = () => Math.floor(Date.now() / 1000);
     const u = fresh();
     // And the other way round: a status line harvested a moment ago beats a
     // warning the stream reported an hour back.
-    writeStatusLine({ seven_day: { used_percentage: 34.2, resets_at: 1786500000 } }, now() + 600);
+    writeStatusLine({ seven_day: { used_percentage: 34.2, resets_at: RESET_7D } }, now() + 600);
     u.noteRateLimitEvent({
-        status: 'allowed_warning', resetsAt: 1786500000, rateLimitType: 'seven_day', utilization: 0.9,
+        status: 'allowed_warning', resetsAt: RESET_7D, rateLimitType: 'seven_day', utilization: 0.9,
     });
     const w = win(u.snapshot(), 'seven_day');
     assert.strictEqual(w.usedPercent, 34.2);
@@ -250,7 +261,7 @@ const now = () => Math.floor(Date.now() / 1000);
     // show the age rather than pass an old number off as current. A snapshot
     // that lost the stamp would take that ability away silently.
     const captured = now() - 7200;
-    writeStatusLine({ five_hour: { used_percentage: 12.5, resets_at: 1786134000 } }, captured);
+    writeStatusLine({ five_hour: { used_percentage: 12.5, resets_at: RESET_5H } }, captured);
 
     const snap = u.snapshot();
     const w = win(snap, 'five_hour');
@@ -259,6 +270,69 @@ const now = () => Math.floor(Date.now() / 1000);
     assert.ok(snap.now - w.usedPercentAt > 3600, 'so a two-hour-old reading is visibly two hours old');
 
     ok('a reading carries its own timestamp, and the snapshot the clock to read it by');
+}
+
+{
+    // Windows in one harvest file are not the same age. They are written by
+    // whichever terminals happen to be open, each holding a reading it learned
+    // at a different moment — so a five-hour window refreshed a minute ago sits
+    // next to a weekly one nobody has touched since this morning. One file-level
+    // `capturedAt` claimed they were the same age, and `usedPercentAt` is the
+    // field a client greys a stale number by.
+    const u = fresh();
+    const t = now();
+    writeStatusLine(
+        {
+            five_hour: { used_percentage: 12.5, resets_at: RESET_5H },
+            seven_day: { used_percentage: 34.2, resets_at: RESET_7D },
+        },
+        t,
+        { five_hour: t - 60, seven_day: t - 6 * 3600 },
+    );
+
+    const snap = u.snapshot();
+    assert.strictEqual(win(snap, 'five_hour').usedPercentAt, t - 60);
+    assert.strictEqual(win(snap, 'seven_day').usedPercentAt, t - 6 * 3600,
+        'six hours old, and it must say so');
+
+    ok('each window carries the age of its own reading, not the file\'s');
+}
+
+{
+    // The old shape, which is what ~60 harvester copies under
+    // .claude/worktrees still write. No stamp map: every window is as old as
+    // the file, which is exactly the assumption it was written under.
+    const u = fresh();
+    const t = now() - 900;
+    writeStatusLine({
+        five_hour: { used_percentage: 12.5, resets_at: RESET_5H },
+        seven_day: { used_percentage: 34.2, resets_at: RESET_7D },
+    }, t);
+
+    const snap = u.snapshot();
+    assert.strictEqual(win(snap, 'five_hour').usedPercentAt, t);
+    assert.strictEqual(win(snap, 'seven_day').usedPercentAt, t);
+
+    ok('a harvest file with no per-window stamps falls back to its capturedAt');
+}
+
+{
+    // A window whose reset has passed is not a smaller version of the current
+    // one — it is about a period that has ended, and 25% of a window that is
+    // over says nothing about the window you are in. This is the half of the
+    // rule that works on files written by a harvester copy that does not prune.
+    const u = fresh();
+    writeStatusLine({
+        five_hour: { used_percentage: 99, resets_at: now() - 60 },
+        seven_day: { used_percentage: 34.2, resets_at: RESET_7D },
+    });
+
+    const snap = u.snapshot();
+    assert.strictEqual(win(snap, 'five_hour'), undefined,
+        'an expired window is dropped, not shown at 99%');
+    assert.strictEqual(win(snap, 'seven_day').usedPercent, 34.2, 'the live one stands');
+
+    ok('a window whose reset has passed is not reported');
 }
 
 {
@@ -276,10 +350,10 @@ const now = () => Math.floor(Date.now() / 1000);
     const u = fresh();
     // A torn or hand-mangled file must cost the percentage and nothing else.
     fs.writeFileSync(STATUSLINE_FILE, '{"version":1,"windows":{"five_hour":');
-    u.noteRateLimitEvent({ status: 'allowed', resetsAt: 1786134000, rateLimitType: 'five_hour' });
+    u.noteRateLimitEvent({ status: 'allowed', resetsAt: RESET_5H, rateLimitType: 'five_hour' });
     const snap = u.snapshot();
     assert.strictEqual(snap.statusLine.present, false);
-    assert.strictEqual(win(snap, 'five_hour').resetsAt, 1786134000,
+    assert.strictEqual(win(snap, 'five_hour').resetsAt, RESET_5H,
         'the stream half still works');
 
     ok('an unreadable harvest file costs the percentage, not the pill');
@@ -327,13 +401,13 @@ const now = () => Math.floor(Date.now() / 1000);
 {
     const u = fresh();
     clearStatusLine();
-    u.noteRateLimitEvent({ status: 'allowed', resetsAt: 1786134000, rateLimitType: 'five_hour' });
+    u.noteRateLimitEvent({ status: 'allowed', resetsAt: RESET_5H, rateLimitType: 'five_hour' });
     u._writeNow();
 
     // The point of persisting: a restart has a pill before the first turn
     // rather than an empty header for however long the next turn takes.
     const reloaded = new Usage();
-    assert.strictEqual(win(reloaded.snapshot(), 'five_hour').resetsAt, 1786134000);
+    assert.strictEqual(win(reloaded.snapshot(), 'five_hour').resetsAt, RESET_5H);
 
     ok('a reset time survives a restart');
 }
@@ -359,6 +433,37 @@ const now = () => Math.floor(Date.now() / 1000);
     ok('two bridges sharing the state file merge rather than overwrite');
 }
 
+{
+    const a = fresh();
+    a.noteBeaconRun(5000);
+    a._writeNow();
+
+    // Why this is persisted at all: it used to be a module-level `0` in
+    // server.js, so every bridge start fired a beacon immediately. Restarting a
+    // dev bridge six times in thirteen minutes then meant six runs, six API
+    // calls, and six chances to leak a detached TUI — which is exactly how four
+    // orphans appeared at once.
+    assert.strictEqual(new Usage().beaconRanAt(), 5000, 'survives a restart');
+
+    // Max-wins rather than newest-writer-wins: the interval is measured from
+    // the last run on the *machine*, and a bridge that has been up for hours
+    // must not reset it by writing its own older idea of when that was.
+    const b = new Usage();
+    b.beaconAt = 4000;
+    b._writeNow();
+    assert.strictEqual(new Usage().beaconRanAt(), 5000, 'an older run does not win');
+
+    b.noteBeaconRun(9000);
+    b._writeNow();
+    assert.strictEqual(new Usage().beaconRanAt(), 9000, 'a newer one does');
+
+    // And it does not go backwards in memory either.
+    b.noteBeaconRun(1);
+    assert.strictEqual(b.beaconRanAt(), 9000);
+
+    ok("the beacon's clock survives a restart and takes the newest run");
+}
+
 // --- the beacon ---------------------------------------------------------
 //
 // Only the parts that do not spawn anything. Actually running a beacon needs a
@@ -370,7 +475,9 @@ const now = () => Math.floor(Date.now() / 1000);
 // than XDG_DATA_HOME and would therefore reach outside this test's sandbox.
 
 const { DEFAULTS: PREF_DEFAULTS, SHAPE: PREF_SHAPE } = require('../bridge/prefs');
-const { plain } = require('../bridge/beacon');
+const {
+    plain, isBeaconArgv, ownerPidOf, shouldReap, readReceipt,
+} = require('../bridge/beacon');
 
 {
     // Off, and pointed nowhere. A feature that starts Claude in a directory
@@ -419,6 +526,119 @@ const { plain } = require('../bridge/beacon');
     assert.ok(plain('x'.repeat(50_000)).length <= 400, 'the panel gets a line, not a screen dump');
 
     ok('a blocking dialog is rendered as readable text for the panel to show');
+}
+
+{
+    // One of the five orphans, copied out of `ps` verbatim. They ran for
+    // twenty-eight hours after their worktree's dev bridges were gone, each
+    // re-rendering its status line every three seconds and writing a frozen
+    // quota reading over the shared harvest file — which is what made the pill
+    // show a number that was both wrong and apparently fresh.
+    const orphan = 'script -qfec stty rows 45 cols 120 2>/dev/null; exec claude --settings '
+        + '\'{"statusLine":{"type":"command","command":"python3 \\"/home/dylan_hays/Other/'
+        + 'claude-sessions/.claude/worktrees/scheduled-rail-section/scripts/quota-statusline.py'
+        + '\\"","refreshInterval":3}}\' --mcp-config \'{"mcpServers":{}}\' '
+        + '--strict-mcp-config /dev/null';
+
+    assert.ok(isBeaconArgv(orphan), 'the shape this whole mechanism exists for');
+
+    // The false positives, which matter more than the positive: this function
+    // decides what gets a SIGKILL.
+    assert.ok(!isBeaconArgv('claude --resume 1346fbba-5f43-4070-800e-e97980cebdcb'));
+    assert.ok(!isBeaconArgv('node /home/x/claude-sessions/bridge/server.js'));
+    assert.ok(!isBeaconArgv(''));
+    assert.ok(!isBeaconArgv(null));
+
+    // The dangerous one. A user's own terminal runs the harvester — that is the
+    // entire point of installing it — so `quota-statusline.py` alone must never
+    // be enough. Killing these would be the app destroying the sessions it
+    // exists to serve.
+    assert.ok(!isBeaconArgv('python3 /home/x/scripts/quota-statusline.py'),
+        'the harvester itself is not a beacon');
+    assert.ok(!isBeaconArgv('claude --settings \'{"statusLine":{"command":'
+        + '"python3 /x/scripts/quota-statusline.py"}}\''),
+        "a user's terminal with our status line installed is not a beacon");
+    // Nor is a beacon-ish CLI that is actually carrying MCP servers.
+    assert.ok(!isBeaconArgv('claude --settings \'{"statusLine":{"command":'
+        + '"python3 /x/quota-statusline.py"}}\' --mcp-config \'{"mcpServers":'
+        + '{"claude-sessions":{}}}\' --strict-mcp-config'));
+
+    ok('the reaper recognises a beacon and nothing else');
+}
+
+{
+    // The receipt path doubles as the ownership tag, which is why it goes on
+    // the command line rather than in the environment — `ps` shows argv, and
+    // the reaper has nothing else to go on.
+    assert.strictEqual(
+        ownerPidOf('claude --receipt /x/quota-beacon.12345.aabbccddeeff.json'), 12345);
+    assert.strictEqual(ownerPidOf('claude --strict-mcp-config'), null,
+        'the legacy shape carries no owner, and must not claim one');
+    assert.strictEqual(ownerPidOf('--receipt /x/quota-beacon.1.aabbcc.json'), null,
+        'pid 1 is not an owner');
+
+    // A live bridge's own run is never touched: TIMEOUT_MS is 90 seconds and
+    // the floor here is 600, so there is no window in which a healthy run looks
+    // reapable.
+    assert.strictEqual(shouldReap({ etimes: 30, ownerAlive: true }), false);
+    assert.strictEqual(shouldReap({ etimes: 90, ownerAlive: true }), false);
+    assert.strictEqual(shouldReap({ etimes: 599, ownerAlive: true }), false);
+
+    // Owner gone: nothing else will ever clean it up, so age is irrelevant.
+    assert.strictEqual(shouldReap({ etimes: 5, ownerAlive: false }), true);
+
+    // No owner to ask — the legacy shape. Age alone decides, which is what
+    // lets a bridge running this code clear orphans that predate it.
+    assert.strictEqual(shouldReap({ etimes: 30, ownerAlive: null }), false);
+    assert.strictEqual(shouldReap({ etimes: 100715, ownerAlive: null }), true,
+        'the twenty-eight-hour orphan, by the number ps actually reported');
+
+    assert.strictEqual(shouldReap({ etimes: NaN, ownerAlive: null }), false,
+        'an unparseable age is not a licence to kill');
+
+    ok('the reaper spares a live run and takes an orphaned one');
+}
+
+{
+    // The receipt is how a run knows *it* produced a reading rather than some
+    // unrelated terminal moving the shared harvest file underneath it. Its
+    // tolerance matters as much as its parse: it is read on a 400ms poll while
+    // the harvester is writing, so a torn or half-written file has to read as
+    // "not yet" and never as a throw.
+    const rp = path.join(home, 'receipt.json');
+
+    assert.strictEqual(readReceipt(rp), null, 'not written yet');
+
+    fs.writeFileSync(rp, '{"version":1,"at":123,"windows":');
+    assert.strictEqual(readReceipt(rp), null, 'a torn write is not a reading');
+
+    fs.writeFileSync(rp, 'null');
+    assert.strictEqual(readReceipt(rp), null);
+
+    // The distinction the whole mechanism exists for. An empty `windows` is a
+    // *successful* render that simply had no rate_limits in its payload yet —
+    // it proves the CLI got up and drew a status line, which is what separates
+    // "a dialog is in the way" from "the quota probe never answered".
+    fs.writeFileSync(rp, JSON.stringify({ version: 1, at: 500, windows: {} }));
+    const empty = readReceipt(rp);
+    assert.ok(empty, 'an empty reading is still a receipt');
+    assert.deepStrictEqual(empty.windows, {});
+    assert.strictEqual(empty.at, 500);
+
+    fs.writeFileSync(rp, JSON.stringify({
+        version: 1, at: 900, windows: { five_hour: { used_percentage: 25 } },
+    }));
+    const full = readReceipt(rp);
+    assert.strictEqual(full.at, 900);
+    assert.strictEqual(Object.keys(full.windows).length, 1);
+
+    // A receipt missing `at` is still usable — the caller only needs to know
+    // something was written.
+    fs.writeFileSync(rp, JSON.stringify({ windows: { five_hour: {} } }));
+    assert.strictEqual(readReceipt(rp).at, null);
+
+    fs.rmSync(rp);
+    ok('a receipt tells a rendered run from a blocked one, and never throws');
 }
 
 fs.rmSync(home, { recursive: true, force: true });
