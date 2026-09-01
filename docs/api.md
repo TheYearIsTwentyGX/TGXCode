@@ -1271,7 +1271,7 @@ render it as given.
 | `type` | string — `five_hour`, `seven_day`, `seven_day_opus`, `seven_day_sonnet`, `seven_day_overage_included`, `overage`, or `unspecified` for an event the CLI sent with no window named. **Not a closed set** — render an unknown one from `label` rather than dropping it |
 | `label` / `shortLabel` | string — humanised (`5-hour` / `5h`). For an unknown `type` both are the raw id |
 | `usedPercent` | **number 0–100, or null.** Null means nobody has said, which is *not* zero. Note the scale: the CLI's own `rate_limit_event` carries `utilization` as a 0–1 fraction and the bridge multiplies it here |
-| `usedPercentAt` | number, unix seconds, or null — **when that percentage was true.** See below; it can be hours old |
+| `usedPercentAt` | number, unix seconds, or null — **when that percentage was learned**, per window. Not one timestamp shared by the response: two windows here can be stamped hours apart, because they are written by whichever terminals happen to be open and each holds a reading of its own age. It also advances only when the percentage itself *changes* — a terminal re-reporting the same 3% has learned nothing, so a steady number ages and eventually greys by design |
 | `usedPercentSource` | `"statusline"`, `"stream"`, or null |
 | `resetsAt` | number, unix seconds, or null |
 | `status` | `"allowed"`, `"allowed_warning"`, `"rejected"`, or **null when never observed.** Null is not "allowed" — a window the status line reported and no turn ever did has a percentage and no status |
@@ -1295,9 +1295,22 @@ So: compare `usedPercentAt` against `now` and say how old the reading is.
 `web/app.js` greys it past 30 minutes. Presenting an old percentage as current
 is the one failure this shape exists to prevent — do not render a bare number.
 
+**A window can disappear, and a client must let it.** One whose `resetsAt` has
+passed is dropped rather than shown: its percentage describes a period that has
+ended, and 25% of a window that is over says nothing about the window you are in
+now. So treat `windows` as the whole truth on every snapshot — do not keep the
+last-seen entry for a type that stopped appearing, and do not carry a value
+across a reset. Absent means *unknown*, which is the same claim `usedPercent:
+null` makes and needs the same rendering. A window comes back with a real
+percentage the first time a terminal reports the new period.
+
 `statusLine.present` is false when the harvester has never run, which is what
 lets a client offer the setup step (`node scripts/install-quota-statusline.js`)
-rather than showing an empty gauge.
+rather than showing an empty gauge. `statusLine.capturedAt` is the freshest
+per-window stamp in that file, so it does **not** advance merely because some
+terminal re-rendered and re-confirmed a number nobody has changed. Do not read
+it as "the harvester is alive": on a quiet account it legitimately stops moving
+while everything is working. `beacon.at` is the liveness signal.
 
 **`beacon` says why the number is or is not moving**, and a client should show
 it rather than leaving a stale reading unexplained. The beacon starts a

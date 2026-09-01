@@ -250,3 +250,46 @@ clear note in the README that this part is unsupported and may break.
 - With no `rate_limit_event` ever seen, the UI degrades to tier B's raw token
   counts instead of showing an empty or fake gauge.
 - Nothing in this feature can block or slow a send.
+
+## What went wrong afterwards: the beacon orphaned itself and then lied
+
+Worth recording next to the two routes that never worked, because this one
+worked and then broke, and none of the three failures announced itself.
+
+Five beacons were found still running after their worktrees' dev bridges were
+gone — four of them for twenty-eight hours, reparented to init. The beacon
+spawns `detached`, in its own process group, exactly like a terminal and a run;
+`shutdown()` takes those two with it and the beacon was never added to the list,
+so Ctrl-C during the ninety seconds a run can take leaked one permanently.
+
+The damage was not the wasted processes. Each orphan re-rendered its status line
+every three seconds and the harvester wrote its now-frozen snapshot over the
+shared file that every bridge reads. Two consequences, both of which looked like
+something else:
+
+- Their five-hour window had expired, so the CLI had dropped it from the
+  payload — and `save()` replaced the whole `windows` object, so every three
+  seconds a good five-hour reading was *deleted*. The pill read `5h —`, which
+  looks like a harvester that never ran.
+- `capturedAt` was restamped `time.time()` on every write, so a twenty-eight-
+  hour-old number was continuously relabelled as current and the staleness
+  greying never fired. The pill was wrong and looked fresh, which is worse than
+  being obviously stale.
+
+And the diagnosis was blocked by the third bug: the beacon decided it had
+succeeded by watching that same shared file change, which the orphans were doing
+constantly, so every run reported `ok: true` — including one pointed at an
+untrusted directory that spent its whole ninety seconds sitting on a folder-trust
+prompt, having rendered nothing at all. Verified both ways against a real CLI.
+
+Three lessons that generalise past this feature:
+
+- **Anything spawned `detached` belongs in `shutdown()`, and needs a reaper as
+  well.** `shutdown()` covers SIGINT and SIGTERM; it does not cover `kill -9`, a
+  crash or an OOM, and the four orphans inside thirteen minutes are evidence the
+  graceful path is not the only one taken.
+- **A success test must observe the thing it claims.** Watching shared state
+  that anyone can move is not a test, it is a coincidence detector.
+- **A timestamp on a reading must say when the reading was learned, not when it
+  was written.** Every writer stamping `now` means the oldest process on the
+  machine wins as often as the newest and is believed just as much.
