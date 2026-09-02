@@ -296,12 +296,35 @@ a:hover { text-decoration: underline; }
 .quota-menu[hidden] { display: none; }
 
 .quota-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     margin-bottom: 10px;
     font: 500 11px/1 var(--sans);
     letter-spacing: 0.04em;
     text-transform: uppercase;
     color: var(--text-4);
 }
+
+/* Sibling of .tasks-collapse, which is the same affordance in the changes
+   panel. Not uppercase like the label beside it: it is a verb, not a heading. */
+.quota-refresh {
+    margin-left: auto;
+    padding: 2px 7px;
+    border: 0;
+    border-radius: var(--r-xs);
+    background: none;
+    color: var(--text-4);
+    font: 400 11.5px/1.5 var(--sans);
+    letter-spacing: normal;
+    text-transform: none;
+    cursor: pointer;
+}
+.quota-refresh:hover:not(:disabled) { background: var(--s3); color: var(--text-2); }
+/* A run takes a few seconds, and the only honest thing to do is look busy for
+   them. `wait` rather than `not-allowed`: nothing is disallowed, it is working. */
+.quota-refresh:disabled { opacity: 0.45; cursor: default; }
+.quota-refresh.busy { cursor: wait; }
 
 .q-row { padding: 7px 0; border-top: 1px solid var(--s2); }
 .q-row:first-child { border-top: 0; padding-top: 0; }

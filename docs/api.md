@@ -1426,6 +1426,54 @@ reading stands and ages visibly. Draw the reason, do not raise anything.
 no machine, and deciding from a phone whether there is room to release a draft is
 the same case the draft routes are open for.
 
+### `POST /api/quota/refresh`
+
+Harvest a percentage **now**, rather than waiting out `beacon.everyMinutes`.
+Body is ignored. Like every non-GET under `/api/`, it needs
+`X-Claude-Sessions-Client: 1`.
+
+```
+200 { ok: boolean, quota: <the GET /api/quota payload> }
+409 { error: string, needsSetup?: true, running?: true, quota: <same> }
+```
+
+The response carries the **whole quota payload**, so one round trip both runs
+the refresh and returns what it produced — do not follow it with a `GET
+/api/quota`. `ok` is the run's own outcome, and it being false is not an error:
+read `quota.beacon.reason`, `quota.beacon.probed` and `quota.beacon.screen`
+exactly as you would after an automatic run. **A 200 with `ok: false` is the
+normal way a blocked run reports itself.**
+
+Two refusals, and neither is a failure worth an alarm:
+
+| Status | Body | Means |
+| --- | --- | --- |
+| `409` | `needsSetup: true` | No `quota.beaconDir` is configured, so there is nowhere to run. Offer the setup step; retrying will not help |
+| `409` | `running: true` | A run is already in flight — a double press, or the timer got there first. A reading is already on its way |
+
+It runs the same beacon the timer runs — being an interactive TUI for a few
+seconds is still the only way to make a status line render — so it costs one CLI
+start and one `max_tokens: 1` request, takes a few seconds, and **pushes the
+automatic interval out by a full period.** Pressing this is not followed by a
+scheduled run a minute later.
+
+Two deliberate differences from the timer. It ignores `quota.beacon`, which
+governs the *automatic* clock only: a machine that has named a trusted directory
+and left the timer off is exactly the one where a manual refresh is the point,
+so only `beaconDir` is required. And it is **not** suppressed on a development
+bridge, where `beacon.suppressed` is `"dev-bridge"` and the timer never fires —
+that gate exists to stop a worktree bridge spending quota on a clock nobody
+asked about, and a caller pressing a button has asked.
+
+**Allowed to a remote caller**, which is a decision rather than an omission. The
+GET beside it is open for deciding from a phone whether there is room to start
+something, and a stale number is the whole problem with doing that — so a phone
+that can read the percentage can ask for a current one. It is not the class of
+thing `/api/commands/run` and `/api/runs` are refused for: those run whatever a
+repository declares, and this runs one fixed operation, in a directory the user
+named and trusted, that the bridge already performs unattended on a timer. Only
+one can be in flight at a time, so it cannot be turned into a fan of processes.
+
 ## The live channel
 
 **SSE is best-effort. Polling is the guaranteed path.** Some transports buffer

@@ -2794,6 +2794,54 @@ async function api(req, res, url, pathname, who) {
         return send(res, 200, quotaPayload());
     }
 
+    // Refresh the percentage now, because the automatic clock is twenty minutes
+    // and "how much is left" is a question people ask at the moment they need
+    // the answer.
+    //
+    // It runs the beacon rather than doing anything new: the percentage lives in
+    // the status line, and being a TUI for a few seconds remains the only way to
+    // make one render. So this is the same operation the timer performs, on
+    // demand — which is why it shares runBeaconNow() and pushes the interval out
+    // just the same. Clicking Refresh should not be followed by an automatic run
+    // a minute later.
+    //
+    // Deliberately allowed on a dev bridge, unlike the timer. The dev gate is
+    // about a worktree bridge quietly spending quota to measure quota on a clock
+    // nobody asked about; a person pressing a button has asked.
+    //
+    // The response is the whole quota payload rather than an acknowledgement, so
+    // one round trip both runs the refresh and returns what it produced —
+    // including `beacon.ok` and `beacon.reason`, which is what a client draws
+    // when a run was blocked by a dialog.
+    if (pathname === '/api/quota/refresh' && req.method === 'POST') {
+        const q = quotaPrefs();
+        if (!q.beaconDir) {
+            // Not an error the user can retry past, so it says what to do. 409
+            // rather than 400: the request is fine, the machine is not set up.
+            return send(res, 409, {
+                error: 'no quota beacon directory is configured',
+                needsSetup: true,
+                quota: quotaPayload(),
+            });
+        }
+        if (beacon.busy) {
+            // Not a failure. Somebody double-clicked, or the timer is mid-run,
+            // and either way a reading is already on its way.
+            return send(res, 409, {
+                error: 'a refresh is already running',
+                running: true,
+                quota: quotaPayload(),
+            });
+        }
+
+        // `quota.beacon` being false is not checked. That preference governs the
+        // automatic clock — "do this every twenty minutes without me" — and a
+        // machine that has named a trusted directory but left the timer off is
+        // exactly the one where a manual refresh is the point.
+        const out = await runBeaconNow(q.beaconDir);
+        return send(res, 200, { ok: out.ok === true, quota: quotaPayload() });
+    }
+
     // One PR status per session, for the rail. The same question the conversation
     // header asks about one session, asked about all of them at once — and reduced
     // to a single word each, because a rail row has space for one glyph.
@@ -4556,22 +4604,27 @@ function quotaPayload() {
  * toast. The reason is kept for the panel, which is where somebody who wonders
  * why the number stopped moving will actually look.
  */
-async function tickBeacon() {
-    if (beaconSuppressed()) return;
-
-    let q;
+/** The user-level quota preferences, or {} if they cannot be read. */
+function quotaPrefs() {
     try {
         // No cwd: the user-level file only. A project's `.tgxcode/settings.json`
         // is checked into a repository, and where this app starts Claude is not
         // a repository's decision to make.
-        q = prefs.forCwd().quota || {};
-    } catch { return; }
+        return prefs.forCwd().quota || {};
+    } catch {
+        return {};
+    }
+}
 
-    if (!q.beacon || !q.beaconDir) return;
-    if (beacon.busy) return;
-
-    const everyMs = Math.max(5, q.beaconEveryMinutes || 20) * 60_000;
-    if (Date.now() - beaconLastRunAt < everyMs) return;
+/**
+ * One beacon run, plus the bookkeeping that has to go with any of them.
+ *
+ * Shared by the timer and by the Refresh button, so the two cannot drift: both
+ * push the automatic interval out, and both broadcast only when the merged view
+ * actually moved. A refresh that reconfirms 12% is not news to a client — though
+ * its fresher timestamp is, which is why `capturedAt` counts as a change.
+ */
+async function runBeaconNow(dir) {
     beaconLastRunAt = Date.now();
     // Recorded before the run, not after: a run that hangs for its full ninety
     // seconds and then fails must still push the next attempt out by the
@@ -4579,18 +4632,30 @@ async function tickBeacon() {
     usage.noteBeaconRun(Math.floor(beaconLastRunAt / 1000));
 
     const before = usage.snapshot();
-    const out = await beacon.run(q.beaconDir);
-    if (!out.ok) return;
-
-    // The harvester wrote a new file; usage.js will pick it up on its next read.
-    // Only tell the windows if the merged view actually moved — a run that
-    // confirms 12% is still 12% is not news, though its fresher timestamp is,
-    // so `capturedAt` counts as a change too.
-    const after = usage.snapshot();
-    if (JSON.stringify(after.windows) !== JSON.stringify(before.windows)
-        || after.statusLine.capturedAt !== before.statusLine.capturedAt) {
-        broadcast('quota', quotaPayload());
+    const out = await beacon.run(dir);
+    if (out.ok) {
+        // The harvester wrote a new file; usage.js will pick it up on its next
+        // read.
+        const after = usage.snapshot();
+        if (JSON.stringify(after.windows) !== JSON.stringify(before.windows)
+            || after.statusLine.capturedAt !== before.statusLine.capturedAt) {
+            broadcast('quota', quotaPayload());
+        }
     }
+    return out;
+}
+
+async function tickBeacon() {
+    if (beaconSuppressed()) return;
+
+    const q = quotaPrefs();
+    if (!q.beacon || !q.beaconDir) return;
+    if (beacon.busy) return;
+
+    const everyMs = Math.max(5, q.beaconEveryMinutes || 20) * 60_000;
+    if (Date.now() - beaconLastRunAt < everyMs) return;
+
+    await runBeaconNow(q.beaconDir);
 }
 // Every process announces what slash commands its directory has. Recorded so a
 // composer can offer them without a process of its own, and broadcast only when

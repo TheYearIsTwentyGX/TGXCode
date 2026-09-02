@@ -97,6 +97,18 @@ function check(name, got, want) {
     check('GET /api/overview', (await call('/api/overview')).status, 200);
     check('GET /api/dashboard', (await call('/api/dashboard')).status, 200);
     check('GET /api/quota', (await call('/api/quota')).status, 200);
+    // A refresh starts a `claude` and spends an API call, so it must be POST
+    // and nothing else. Browsers prefetch, service workers replay, and a link
+    // somebody pastes is a GET — any of which starting a CLI would be a real
+    // bug. 404 is the route table falling through, which is the point: there is
+    // no GET here to reach.
+    //
+    // The POST itself is deliberately *not* exercised here. It would spawn a
+    // real CLI against the user's own trusted directory and write their live
+    // quota file, which is not a thing `npm test` should do; it is a manual
+    // check, like the beacon run it performs.
+    check('GET /api/quota/refresh does not exist — a refresh is never a GET',
+        (await call('/api/quota/refresh')).status, 404);
     check('POST /api/subscribe reaches its own 404, not the gate',
         (await call('/api/subscribe', {
             method: 'POST', headers: { 'x-claude-sessions-client': '1' },

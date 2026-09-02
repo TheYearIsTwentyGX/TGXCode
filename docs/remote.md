@@ -302,8 +302,19 @@ watch, and to answer what a session is blocked on. It should not be able to reac
 past the app into the machine.
 
 **Allowed:** reading sessions and transcripts, the live board, answering
-permissions, plans and questions, sending messages, stopping a turn, and starting
-an ordinary session.
+permissions, plans and questions, sending messages, stopping a turn, starting an
+ordinary session, and refreshing the quota reading.
+
+That last one is the newest and the one worth justifying, since it is a non-GET
+that starts a process. `POST /api/quota/refresh` runs the quota beacon — a
+few-second `claude` in a directory the user has already named and trusted, which
+the bridge performs unattended on a timer anyway. It is allowed because the `GET`
+beside it is open precisely so somebody can decide from a phone whether there is
+room to start something, and a stale percentage is the whole problem with doing
+that. It is not the class of thing `/api/runs` and `/api/commands/run` are
+refused for: those execute whatever a repository declares, this executes one
+fixed operation with nowhere new to reach, and only one can be in flight at a
+time so it cannot be turned into a fan of processes.
 
 **Refused, with a 403 from the route rather than a missing button:**
 
