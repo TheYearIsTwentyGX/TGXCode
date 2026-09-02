@@ -5825,11 +5825,42 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 .diff-body .d2h-file-wrapper {
     border-radius: var(--r-sm);
     margin-bottom: 12px;
-    overflow: hidden;
+    /* Deliberately *not* `overflow: hidden`, which is what a border-radius here
+       normally wants. Hiding overflow makes this a scroll container, and the
+       sticky file header below then resolves against it rather than against
+       .diff-body — so the header scrolled away with its own block instead of
+       sticking, which for the transcript's answer is twelve headers all called
+       the same thing and none of them telling you where you are. The radius is
+       put on the header and the last row instead. */
+    /* `position: relative` is not decoration either — without it the line numbers
+       escape the dialog.
+       diff2html gives every `.d2h-code-linenumber` `position: absolute` and ships
+       no `position: relative` anywhere, which is fine on its own demo pages
+       because the containing block ends up being the page and the page is what
+       scrolls. Here the scroller is `.diff-body`, and an absolutely positioned
+       box whose containing block sits *outside* a scroller is not clipped by it —
+       so the gutter alone kept painting, measured at 7000px below the dialog and
+       straight over the composer. This puts the containing block back inside the
+       thing that clips. */
+    position: relative;
 }
-/* It scrolls inside #diff-body rather than the page, so the sticky offset is 0
-   and it needs to sit over the rows rather than under them. */
-.diff-body .d2h-file-header.d2h-sticky-header { top: 0; z-index: 2; }
+/* Sticky is set here rather than left to diff2html's own `.d2h-sticky-header`,
+   because that class is applied by Diff2HtmlUI.stickyFileHeaders() and the UI
+   wrapper is the 90KB we did not vendor — so the rule that used to be here
+   matched nothing and quietly did nothing. Offset 0 because .diff-body is the
+   scroller, and above the rows so it covers them rather than the reverse.
+   It earns its place on the transcript's answer, which is one block per edit:
+   twelve headers all naming the same file, and this is what says which edit you
+   are in. The tree's single block hides the header outright — see .one-file. */
+.diff-body .d2h-file-header { position: sticky; top: 0; z-index: 2; }
+/* The corners the wrapper can no longer clip for itself. The header carries the
+   top pair, except in the single-file case where it is hidden and the first row
+   inherits them. */
+.diff-body .d2h-file-header { border-radius: var(--r-sm) var(--r-sm) 0 0; }
+.diff-body.one-file .d2h-diff-tbody tr:first-child td:first-child { border-top-left-radius: var(--r-sm); }
+.diff-body.one-file .d2h-diff-tbody tr:first-child td:last-child { border-top-right-radius: var(--r-sm); }
+.diff-body .d2h-diff-tbody tr:last-child td:first-child { border-bottom-left-radius: var(--r-sm); }
+.diff-body .d2h-diff-tbody tr:last-child td:last-child { border-bottom-right-radius: var(--r-sm); }
 /* See paintDiff: for the tree's single block the header is the dialog title
    repeated, so it goes. */
 .diff-body.one-file .d2h-file-header { display: none; }
