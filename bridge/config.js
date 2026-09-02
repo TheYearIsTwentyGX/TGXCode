@@ -1,5 +1,6 @@
 'use strict';
 
+const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
@@ -150,8 +151,85 @@ const EXTRA_ORIGINS = (process.env.CLAUDE_SESSIONS_ORIGINS || '')
 // control-server.json when 45777 is taken; devbrowser.js prefers that file.
 const DEVBROWSER_DEFAULT_PORT = 45777;
 
-// nvm-managed node means PATH differs per shell, so callers may need to override.
-const CLAUDE_BIN = process.env.CLAUDE_SESSIONS_CLAUDE_BIN || 'claude';
+/**
+ * Where `claude` actually is, resolved here rather than left to PATH.
+ *
+ * This used to be the bare name `'claude'`, handed to spawn() and looked up in
+ * whatever PATH the bridge happened to inherit. That works from a terminal and
+ * fails under cron, which reads neither ~/.profile nor ~/.bashrc and hands a job
+ * `PATH=/usr/bin:/bin` — and `claude` lives in ~/.local/bin, which only those
+ * two files put on PATH. The nightly restart therefore produced a bridge that
+ * bound its port, indexed every session, armed its schedules, answered
+ * /api/health with `ok: true`, and could not start a single turn: every message
+ * died with ENOENT, which Node reports as a `close` code of -2. The 2 AM
+ * scheduled review and the quota beacon went the same way, silently, because
+ * bridge/beacon.js spawns this too.
+ *
+ * bridge/launch.sh has always done exactly this for node — the reason that file
+ * exists — and only ever did the node half. This is the other half, and it is
+ * here rather than only there because launch.sh is not the only way a bridge
+ * starts: `node bridge/server.js` is what a worktree does by hand, and
+ * bridge/restart.js re-launches as a child of the bridge, inheriting whatever
+ * broken PATH it already had. One resolution in the one place that decides
+ * covers all three.
+ *
+ * Synchronous and at load, because CLAUDE_BIN is destructured at require time
+ * (see bridge/runner.js). No child process, and it must never throw: a bridge
+ * that cannot find `claude` still reads transcripts perfectly well, so failing
+ * to resolve is a thing to report — see CLAUDE_BIN_RESOLVED, /api/health and
+ * classifyError in bridge/runner.js — and never a thing to exit over.
+ */
+function resolveClaudeBin() {
+    const named = process.env.CLAUDE_SESSIONS_CLAUDE_BIN;
+    // An explicit override is obeyed whether or not it exists. It is the seam
+    // test/runner.test.js drives a stub through, and pointing it at a missing
+    // path on purpose is how the degraded state gets tested.
+    if (named) return { bin: named, resolved: usable(named), from: 'env' };
+
+    // A real hit on PATH first, so a user who manages `claude` their own way
+    // keeps deciding. `path.join` on each entry rather than shelling out to
+    // `command -v`: no subprocess, and no shell quoting to get wrong.
+    for (const dir of (process.env.PATH || '').split(path.delimiter)) {
+        if (!dir) continue;
+        const candidate = path.join(dir, 'claude');
+        if (usable(candidate)) return { bin: candidate, resolved: true, from: 'path' };
+    }
+
+    // Then the places installers actually put it. `~/.claude/local/claude` is the
+    // older layout and is already recognised in bridge/devservers.js, which
+    // sniffs it to tell a `claude` process from any other node process.
+    for (const candidate of [
+        path.join(HOME, '.local', 'bin', 'claude'),
+        path.join(HOME, '.claude', 'local', 'claude'),
+        '/usr/local/bin/claude',
+        '/usr/bin/claude',
+    ]) {
+        if (usable(candidate)) return { bin: candidate, resolved: true, from: 'fallback' };
+    }
+
+    // Nothing found. Keep the bare name so the behaviour is exactly what it was
+    // before this function existed — spawn will fail the same way — rather than
+    // inventing a path that is definitely wrong.
+    return { bin: 'claude', resolved: false, from: null };
+}
+
+function usable(p) {
+    try {
+        fs.accessSync(p, fs.constants.X_OK);
+        return fs.statSync(p).isFile();
+    } catch {
+        // Not there, not executable, or a dangling symlink — all the same answer.
+        return false;
+    }
+}
+
+const claudeBin = resolveClaudeBin();
+const CLAUDE_BIN = claudeBin.bin;
+const CLAUDE_BIN_RESOLVED = claudeBin.resolved;
+// 'env' | 'path' | 'fallback' | null — which of the three routes above answered.
+// Worth reporting rather than inferring: `fallback` means PATH is thinner than
+// whoever started this bridge thinks, which is the cron bug catching itself.
+const CLAUDE_BIN_FROM = claudeBin.from;
 
 // Ports that are never a dev server worth offering a DevBrowser button for.
 const PORT_DENYLIST = new Set([
@@ -190,5 +268,6 @@ module.exports = {
     VERBS_DIR, USER_VERBS_DIR,
     ALLOW_REMOTE_BIND, TODO_TOOLS, ALLOWED_ROOTS, EXTRA_ORIGINS, withinRoots, expandHome,
     DEFAULT_PORT, DEV_PORT, IS_DEV,
-    DEVBROWSER_DEFAULT_PORT, CLAUDE_BIN, PORT_DENYLIST,
+    DEVBROWSER_DEFAULT_PORT, PORT_DENYLIST,
+    CLAUDE_BIN, CLAUDE_BIN_RESOLVED, CLAUDE_BIN_FROM,
 };

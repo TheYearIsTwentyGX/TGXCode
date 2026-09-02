@@ -72,10 +72,17 @@ done
 
 health() { curl -fsS -m 3 "http://127.0.0.1:$PORT/api/health" 2>/dev/null; }
 
-# Read one field out of the health JSON without needing jq.
+# Read one field out of the health JSON without needing jq. A dotted name walks
+# into a nested object — `claudeBin.resolved` — and a name that is not there at
+# any depth prints nothing, which is how a bridge older than a field is told from
+# one reporting a falsy value. Callers already handle the empty string.
 field() {
     python3 -c "import json,sys
-try: print(json.load(sys.stdin).get('$1',''))
+try:
+    v = json.load(sys.stdin)
+    for k in '$1'.split('.'):
+        v = v[k]
+    print(v)
 except Exception: print('')" 2>/dev/null
 }
 
@@ -281,9 +288,35 @@ REV="$(git -C "$REPO" log --oneline -1 2>/dev/null | cut -c1-60)"
 NEWPID="$(printf '%s' "$NEW" | field pid)"
 printf 'Bridge :%s up — pid %s, %s sessions, running %s\n' \
     "$PORT" "$NEWPID" "$(printf '%s' "$NEW" | field sessions)" "$REV"
+
+# Answering /api/health is not the same as being able to run a turn.
+#
+# This is the check that was missing, and its absence is why the nightly restart
+# was undiagnosable for so long: cron reads neither ~/.profile nor ~/.bashrc, so
+# it hands this script `PATH=/usr/bin:/bin`, and `claude` lives in ~/.local/bin.
+# The bridge came up, bound its port, indexed every session and answered health
+# with ok:true — and could not start a single message. This script journalled
+# `restarted` on the strength of that health ping, every night, truthfully as far
+# as it could see and uselessly to anyone reading the log.
+#
+# A separate outcome word rather than a field, so the bad nights are greppable.
+# It still contains "restarted", so `grep restarted` keeps finding both.
+OUTCOME=restarted
+if [ "$(printf '%s' "$NEW" | field claudeBin.resolved)" = "False" ]; then
+    OUTCOME=restarted-no-claude
+    # What the *bridge* reports, not what this shell has. They differ — that
+    # difference is the whole bug — and printing $PATH here would name the
+    # environment of the process that is about to exit.
+    echo "restart-bridge: the bridge is up but cannot find 'claude'." >&2
+    echo "  Sessions will not start: every message will fail to spawn." >&2
+    echo "  It looked for: $(printf '%s' "$NEW" | field claudeBin.path)" >&2
+    echo "  Install Claude Code, or put it on the PATH this bridge starts with." >&2
+    echo "  See bridge/launch.sh, which is where that PATH is decided." >&2
+fi
+
 # rev last: it is a commit subject, so it has spaces in it, and anything after it
 # on the line would be unparseable. The key=value fields go in front of it.
-journal "restarted pid=$NEWPID$DIRTY_NOTE rev=$REV"
+journal "$OUTCOME pid=$NEWPID$DIRTY_NOTE rev=$REV"
 
 # The window reconnects on its own; say so, because a blank moment looks broken.
 say 'Any open window reconnects by itself.'

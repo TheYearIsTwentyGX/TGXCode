@@ -1914,6 +1914,24 @@ async function api(req, res, url, pathname, who) {
             // client explaining rather than drawing as "no tasks". Says nothing
             // about sessions this bridge did not start.
             todoTools: cfg.TODO_TOOLS,
+            // Whether this bridge can start a session at all.
+            //
+            // The one thing here that is not merely informational. `claude` lives
+            // in ~/.local/bin, which only ~/.bashrc and ~/.profile put on PATH, so
+            // a bridge started by cron — which reads neither — used to come up
+            // reporting every field above as healthy while every message died with
+            // ENOENT. The window reads this to raise a banner and
+            // scripts/restart-bridge.sh reads it to journal `restarted-no-claude`
+            // instead of claiming a success; both exist because nothing else about
+            // a bridge in that state looks wrong.
+            //
+            // The path follows root/home above and is local-only: it is a
+            // filesystem path on this machine, and a remote caller can act on the
+            // boolean alone.
+            claudeBin: {
+                resolved: cfg.CLAUDE_BIN_RESOLVED, from: cfg.CLAUDE_BIN_FROM,
+                ...(local ? { path: cfg.CLAUDE_BIN } : {}),
+            },
             // Live SSE connections — a quick way to tell whether a UI attached.
             clients: clients.size, runners: Object.keys(pool.statuses()).length,
             terminals: terminals.live().length, runs: runs.live().length,

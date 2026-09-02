@@ -1570,6 +1570,34 @@ function sessionAllowRule(toolName) {
 function classifyError(stderr, code) {
     const text = String(stderr || '').trim();
 
+    // A negative code is `spawn` failing, not `claude` running and objecting:
+    // libuv errnos come back negative, and Node passes them straight to 'close'
+    // — -2 for ENOENT, -13 for EACCES. So this case arrives with **no stderr at
+    // all**, and every branch below reads stderr.
+    //
+    // That is why the no-claude branch two below, written for exactly this, was
+    // unreachable, and a missing binary fell through to `claude exited with code
+    // -2` — a string naming the one fact the user cannot act on while hiding the
+    // one they can. It cost a manual bridge restart every morning for weeks: the
+    // nightly cron restart produced a bridge whose PATH had no ~/.local/bin in
+    // it, and nothing anywhere said so. See bridge/config.js and bridge/launch.sh
+    // for the two halves of the fix, and prefer this branch staying dull.
+    if (typeof code === 'number' && code < 0) {
+        // Name the path when there is one to name — config.js resolves to an
+        // absolute path, and CLAUDE_SESSIONS_CLAUDE_BIN is obeyed whether or not
+        // it exists, so "nothing runnable at /nonexistent/claude" is the useful
+        // sentence there. The bare name is what is left when nothing resolved at
+        // all, and then PATH is the thing to talk about.
+        const where = CLAUDE_BIN.includes('/')
+            ? `nothing runnable at ${CLAUDE_BIN}`
+            : 'it is not on this bridge\'s PATH';
+        return {
+            kind: 'no-claude',
+            message: `Could not start \`claude\` — ${where}. `
+                + 'Check that Claude Code is installed, then restart the bridge.',
+        };
+    }
+
     if (/currently running as a background agent|add --fork-session to branch/i.test(text)) {
         return {
             kind: 'busy-elsewhere',

@@ -288,10 +288,12 @@ the accident the rest of this file is about.
 
 The suite is `auth`, `temp`, `recent`, `pulls`, `taskboard`, `ports`, `spinner`,
 `changes`, `restart`, `handoff`, `drafts`, `notifications`, `schedule`, `usage`,
-`titles`, `tasks` and `runner` on their own — no bridge needed — plus four that want a live one: `gate`,
+`titles`, `tasks`, `launch` and `runner` on their own — no bridge needed — plus four that want a live one: `gate`,
 `browser`, `refusals`, `unpaired`. Between them they cover the token, what a remote
-caller is refused, what an unpaired remote device sees before and after pairing, and
-what the nightly restart does when there is nobody to ask. If you touch
+caller is refused, what an unpaired remote device sees before and after pairing,
+what the nightly restart does when there is nobody to ask, and — in `launch` —
+what PATH a bridge starts with, which turned out to be the whole difference
+between a nightly restart that works and one that only looks like it did. If you touch
 `bridge/auth.js` or any route's local/remote rule, run it: that is the part of this
 codebase with tests around it.
 
@@ -397,7 +399,19 @@ sectioned by comment headers, so search for the section name rather than scrolli
   executable instead.
 - **A login shell has neither node nor `claude` on PATH** — nvm and `~/.local/bin`
   both come from `~/.bashrc`, which `bash -lc` never reads. `bridge/launch.sh`
-  resolves node itself; that is why it exists.
+  resolves node itself; that is why it exists. **Cron is worse than a login
+  shell**: it reads no profile at all, so the nightly restart hands the bridge
+  `PATH=/usr/bin:/bin`. For a long time launch.sh fixed only the node half, and
+  the bridge that came up every midnight could not spawn `claude` — it bound its
+  port, indexed every session and answered `/api/health` with `ok: true`, while
+  every message died with ENOENT and reached the window as "claude exited with
+  code -2". That is what a manual restart every morning was fixing. Both halves
+  are handled now: `bridge/config.js` resolves the binary against PATH and then
+  the known install directories, `launch.sh` puts `~/.local/bin` on PATH for the
+  sessions that inherit it, and `/api/health` reports `claudeBin` so neither the
+  window nor `restart-bridge.sh` can call such a bridge healthy again. **If you
+  add something the bridge shells out to, resolve it the same way** — assuming a
+  PATH is assuming an interactive shell started this.
 - **Commit messages are prose, not prefixes.** The log is uniform: an imperative
   sentence-case subject describing the change as the user meets it — "Give each
   session its own terminal pane", "Let an approval card wait as long as you do" —

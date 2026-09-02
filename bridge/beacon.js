@@ -178,7 +178,13 @@ class Beacon {
         });
 
         const argv = [
-            cfg.CLAUDE_BIN,
+            // Quoted, because this one is a *path* now: bridge/config.js resolves
+            // it rather than trusting PATH, so it is no longer the bare word
+            // `claude` that could be dropped into a shell string safely. A home
+            // directory with a space in it would otherwise split into two words
+            // here and take the beacon — and the quota pill with it — with no
+            // error worth reading.
+            shq(cfg.CLAUDE_BIN),
             '--settings', shq(settings),
             // Not our MCP servers — one of which is this app's own, so without
             // this the bridge would be starting clients of itself twice an hour.

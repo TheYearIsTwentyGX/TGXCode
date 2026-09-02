@@ -1153,18 +1153,44 @@ tail ~/.cache/claude-sessions/restart-45888.log
 ```
 
 One line per event: a `start` line, then one word for the outcome —
-`restarted`, `skipped-dirty`, `skipped-declined`, `skipped-busy`,
-`refused-worktree`, `failed-pull`, `failed-start`. So `grep skipped-dirty` is a
-real question to ask of it, and the last several nights are all still there.
-`bridge-45888.log` next to it is the running bridge's own stdout and is
-truncated on every restart, which is why it cannot answer this.
+`restarted`, `restarted-no-claude`, `skipped-dirty`, `skipped-declined`,
+`skipped-busy`, `refused-worktree`, `failed-pull`, `failed-start`. So
+`grep skipped-dirty` is a real question to ask of it, and the last several nights
+are all still there. `bridge-45888.log` next to it is the running bridge's own
+stdout and is truncated on every restart, which is why it cannot answer this.
 
-Two readings worth knowing:
+Three readings worth knowing:
 
 - **A `start` line with no outcome after it** — the script was killed part-way.
 - **No `start` line at all for that night** — cron never fired, which on this
   machine usually means WSL was not running at midnight. That is a different
   problem from a skip, and used to be indistinguishable from one.
+- **`restarted-no-claude`** — the bridge came back and cannot find `claude`, so
+  it will refuse every message. See below; this is the one that reads as a
+  success and is not. (`grep restarted` still finds it, since the word contains
+  the other.)
+
+**Why the nightly restart used to leave a bridge that could not run anything.**
+`claude` lives in `~/.local/bin`, and the only two files that put that on `PATH`
+are `~/.bashrc` and `~/.profile`. Cron runs this job non-login *and*
+non-interactive, so it reads neither, and hands it `PATH=/usr/bin:/bin`.
+`bridge/launch.sh` had always rescued node — the reason that file exists — and
+nothing rescued `claude`, so the midnight bridge bound its port, indexed every
+session, armed its schedules, answered `/api/health` with `ok: true`, and failed
+every send with ENOENT — which reached the window as "claude exited with code
+-2", naming the errno rather than the cause. The 2 AM scheduled review and the
+quota beacon failed the same way and said nothing at all. It cost a manual
+restart every morning for weeks, because a restart from a terminal inherits a
+real `PATH` and works until the next midnight.
+
+`bridge/config.js` now resolves the binary itself — `PATH`, then `~/.local/bin`,
+`~/.claude/local`, `/usr/local/bin`, `/usr/bin` — so no launcher's environment can
+take it away. `bridge/launch.sh` additionally puts `~/.local/bin` on `PATH` for
+the sessions' own sake, since they inherit the bridge's environment wholesale. And
+because "healthy" and "can start a turn" turned out to be different questions,
+`/api/health` answers the second one too, as `claudeBin`: the window raises a bar
+across the top when it is `false`, and this script journals
+`restarted-no-claude` rather than reporting a success it cannot vouch for.
 
 A dirty main checkout does **not** stop the nightly run any more, unless the
 dirty files are under `bridge/`. That is the only directory a restart actually

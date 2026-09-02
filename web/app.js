@@ -429,7 +429,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'new-when-daily-time', 'new-when-weekly-time', 'new-when-days',
     'new-when-dom', 'new-when-monthly-time',
     'notes-notable', 'notes-all', 'notes-clear',
-    'lock', 'lock-text', 'lock-fork', 'lock-anyway',
+    'lock', 'lock-text', 'lock-fork', 'lock-anyway', 'no-claude',
     'btn-live', 'live-badge', 'live', 'live-sub', 'live-body', 'live-focus', 'focus-exit',
     'live-side', 'live-side-label', 'live-side-a', 'live-side-b',
     'new-scrim', 'new-cwd', 'new-picker', 'new-prompt', 'new-model', 'new-perm',
@@ -4350,6 +4350,51 @@ async function refreshDevBrowser() {
 }
 
 /**
+ * Say so when the bridge cannot find `claude`.
+ *
+ * This is the only field on /api/health that is not merely informational: a
+ * bridge in this state binds its port, indexes every session, serves every
+ * transcript and reports `ok: true`, and cannot start a single turn. Nothing
+ * else in the window looks wrong, which is why it is worth its own bar rather
+ * than a toast — the state is true for as long as it is true, and it is not news
+ * that scrolls away.
+ *
+ * It went unnoticed for weeks. The nightly cron restart hands the bridge
+ * `PATH=/usr/bin:/bin` — cron reads neither ~/.profile nor ~/.bashrc, and those
+ * are the only two files that put ~/.local/bin on PATH — so every morning's
+ * first message came back as "claude exited with code -2", which named the errno
+ * and not the cause. bridge/config.js resolves the binary properly now; this is
+ * the belt to that braces.
+ */
+function showNoClaude(claudeBin) {
+    // A bridge older than this field tells us nothing, which is not the same as
+    // telling us it is broken. Only an explicit `false` raises the bar.
+    if (!claudeBin || claudeBin.resolved !== false) {
+        dom.noClaude.hidden = true;
+        return;
+    }
+
+    // `path` is local-only, so the specific sentence needs both a path and a
+    // reason to trust it. `from: 'env'` is the one case where the value was
+    // typed by somebody, which makes naming it the most useful thing to say;
+    // a remote caller gets neither and falls through to the general answer.
+    const where = claudeBin.from === 'env' && claudeBin.path
+        ? [' CLAUDE_SESSIONS_CLAUDE_BIN points at ', el('code', {}, claudeBin.path),
+            ', and there is nothing runnable there.']
+        : [' It is not on this bridge\'s PATH. A bridge started by cron sees a much '
+            + 'thinner PATH than your shell does — that is the usual cause.'];
+
+    dom.noClaude.replaceChildren(
+        el('strong', {}, 'This bridge cannot start sessions.'),
+        ' It could not find the ', el('code', {}, 'claude'), ' command, so every '
+            + 'message will fail to spawn.',
+        ...where,
+        ' Install Claude Code or fix the path, then restart the bridge.',
+    );
+    dom.noClaude.hidden = false;
+}
+
+/**
  * Mark the window when it is talking to a development bridge. Two identical
  * windows side by side, one with real sessions in it, is asking for trouble.
  */
@@ -4369,11 +4414,18 @@ async function markInstance() {
         // Restarting the bridge is refused to a remote caller at the route. Not
         // drawing the button is the courtesy on top of that.
         dom.btnRestart.hidden = state.remote;
+        showNoClaude(h.claudeBin);
         if (!h.dev) return;
         document.title = `Claude Sessions — dev :${h.port}`;
-        document.querySelector('.wordmark').append(
-            el('span', { class: 'dev-badge', title: `Development bridge on port ${h.port}` },
-                `dev :${h.port}`));
+        // Guarded because this no longer runs only at boot: every SSE `hello`
+        // calls it, to re-ask the claudeBin question a restart may have changed.
+        // Without this, a window left open across a few restarts would grow a
+        // row of identical dev badges.
+        if (!document.querySelector('.wordmark .dev-badge')) {
+            document.querySelector('.wordmark').append(
+                el('span', { class: 'dev-badge', title: `Development bridge on port ${h.port}` },
+                    `dev :${h.port}`));
+        }
     } catch { /* the status line already reports an unreachable bridge */ }
 }
 
@@ -8168,6 +8220,11 @@ function connect() {
         // already know, so an idle session says Ready again and a busy one is
         // left alone until its next status arrives.
         applyRunner(state.runner);
+        // And ask health again, because a reconnect usually means the bridge was
+        // replaced — so the answer to "can this one start a session?" is the one
+        // fact here that a restart is most likely to have changed, in either
+        // direction. It is what clears the no-claude bar without a reload.
+        markInstance();
     });
 
     es.addEventListener('tail', (e) => {

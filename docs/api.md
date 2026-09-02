@@ -163,12 +163,31 @@ The only unauthenticated route. Counts, a pid, and:
 { "ok": true, "version": "1.0.0", "port": 45888, "dev": false,
   "remote": false, "authRequired": true,
   "permissionModes": ["auto","acceptEdits","plan","manual","dontAsk","bypassPermissions"],
+  "claudeBin": { "resolved": true, "from": "path", "path": "/home/you/.local/bin/claude" },
   "sessions": 120, "clients": 1, "live": 4, "busy": 3 }
 ```
 
 `root` and `home` are included only for local callers. Read `permissionModes` rather
 than hardcoding the list; a remote client should drop `bypassPermissions` and
 `dontAsk` from what it offers, because the bridge will refuse them.
+
+**`claudeBin` is an object — `{resolved: bool, from: string|null, path: string}` —
+and it is the one field here that reports whether the bridge can do anything at
+all.** `resolved` is whether a runnable `claude` was found; `from` is `"env"`
+(`CLAUDE_SESSIONS_CLAUDE_BIN` was set, and is obeyed whether or not it exists),
+`"path"` (found on the bridge's `PATH`), `"fallback"` (found in `~/.local/bin`,
+`~/.claude/local`, `/usr/local/bin` or `/usr/bin` after `PATH` missed) or `null`
+(nothing found). **`path` is local-only**, like `root` and `home` — it is a
+filesystem path on that machine, and a remote caller can act on `resolved` alone.
+
+`resolved: false` means **every send will fail**, with a `send-failed` event of
+kind `no-claude`, and nothing else on this route will look wrong: the bridge still
+binds, indexes, and serves every transcript. Worth surfacing on sight rather than
+waiting for a user's message to bounce — `web/app.js` raises a bar across the top
+of the window for it. The case is not hypothetical: a bridge started from cron
+reads neither `~/.profile` nor `~/.bashrc`, so it gets `PATH=/usr/bin:/bin`, and
+that is where `claude` is not. A bridge older than this field omits it entirely,
+so treat a missing `claudeBin` as "unknown", not as broken.
 
 `todoTools` is a boolean: whether this bridge sets `CLAUDE_CODE_ENABLE_TODO_TOOLS=1`
 on the sessions it starts (`CLAUDE_SESSIONS_TODO_TOOLS=0` in front of the bridge turns

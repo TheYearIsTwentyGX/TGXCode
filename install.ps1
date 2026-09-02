@@ -77,7 +77,9 @@ if ($LASTEXITCODE -ne 0 -or -not $check) {
            "Check the path exists there and that node is installed. " +
            "Run this to see the error: wsl.exe bash -lc ""cd $BridgeDir && bash bridge/launch.sh --check""")
 }
-Say "      node found in WSL: $check" Green
+# Two lines now — node and claude — so join them rather than letting PowerShell
+# flatten an array into the message with a bare space.
+Say ("      found in WSL: " + (@($check) -join ' | ')) Green
 
 # -- stage the shell somewhere Windows-local ----------------------------------
 

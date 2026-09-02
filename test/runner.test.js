@@ -232,6 +232,63 @@ function runner() {
         assert.strictEqual(r.queue.length, 0);
         ok('Stop with no process returns the queue instead of keeping it');
     }
+    // --- a binary that is not there says so --------------------------------
+    // The nightly restart's failure, as a unit.
+    //
+    // Cron reads neither ~/.profile nor ~/.bashrc, so it starts the bridge with
+    // `PATH=/usr/bin:/bin` — and `claude` lives in ~/.local/bin. spawn then fails
+    // with ENOENT, which Node reports as a `close` code of **-2** and, because
+    // the process never existed, with no stderr at all. classifyError read only
+    // stderr, so the `no-claude` branch written for exactly this never ran and
+    // the user got "claude exited with code -2": the errno, not the cause. It
+    // cost a manual bridge restart every morning for weeks.
+    //
+    // In its own process because CLAUDE_BIN is destructured at load — the same
+    // reason the stub is installed in the environment at the top of this file —
+    // so this is the one case that cannot share the runner already required here.
+    {
+        const child = `
+            const { Runner } = require(${JSON.stringify(path.resolve(__dirname, '../bridge/runner.js'))});
+            const r = new Runner({ sessionId: ${JSON.stringify(randomUUID())},
+                                   cwd: ${JSON.stringify(root)}, isNew: true });
+            r.on('failed', (f) => {
+                console.log(JSON.stringify({ kind: f.kind, message: f.message,
+                    unsent: f.unsent, inFlight: r.inFlight.length, state: r.state }));
+                process.exit(0);
+            });
+            r.send('does not matter');
+            setTimeout(() => { console.log('{"timedout":true}'); process.exit(0); }, 9000);
+        `;
+        const out = await new Promise((resolve, reject) => {
+            require('child_process').execFile(process.execPath, ['-e', child], {
+                env: { ...process.env, CLAUDE_SESSIONS_CLAUDE_BIN: path.join(root, 'nope') },
+                timeout: 15000,
+            }, (err, stdout) => (err ? reject(err) : resolve(stdout)));
+        });
+        const got = JSON.parse(out.trim().split('\n').pop());
+
+        assert.ok(!got.timedout, 'a missing binary must fail the send, not hang it');
+        assert.strictEqual(got.kind, 'no-claude',
+            'ENOENT is a missing `claude`, and the kind a client switches on has to say so');
+        assert.doesNotMatch(got.message, /code -2/,
+            'the message must name the cause, not the errno — that string is the bug');
+        assert.match(got.message, /claude/,
+            'and it has to name what is missing');
+        ok('a missing `claude` fails as no-claude, not as "code -2"');
+
+        // The invariant this file is built around, for one more exit path: a
+        // spawn that never happened must not leave a turn wedged in flight.
+        assert.strictEqual(got.inFlight, 0,
+            'nothing must be left in flight — it is the gate on every later write');
+        assert.strictEqual(got.state, 'error');
+        ok('and leaves nothing in flight');
+
+        // The text is the user's. Losing it because the bridge was started by
+        // cron would be the worst version of this.
+        assert.deepStrictEqual(got.unsent, ['does not matter'],
+            'the message never reached a process, so it is owed back');
+        ok('and hands the unsent message back');
+    }
 })().then(() => finish(0)).catch((err) => {
     console.error(err && err.stack || err);
     finish(1);

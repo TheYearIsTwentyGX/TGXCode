@@ -19,6 +19,15 @@
 
 <div class="app">
 
+  <!-- A bridge that cannot find `claude`. Everything else about it looks fine —
+       it binds, it indexes, it serves transcripts, /api/health says ok — and
+       every message fails to spawn. That was invisible for weeks because the
+       only symptom reached the user as "claude exited with code -2" on a send
+       they had already made. Filled in by markInstance() from
+       /api/health claudeBin, and stays up: there is nothing here to dismiss,
+       only something to fix. -->
+  <div id="no-claude" class="alertbar" role="alert" hidden></div>
+
   <header class="bar">
     <span class="wordmark"><b>◆</b> Claude Sessions</span>
 

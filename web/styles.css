@@ -91,11 +91,32 @@ a:hover { text-decoration: underline; }
 
 .app {
     display: grid;
-    grid-template-rows: 52px 1fr;
+    /* `auto` rather than a height for the alert row: the element is `hidden`
+       almost always, and a hidden grid item contributes nothing, so the row
+       collapses to 0 without a second rule to keep in step with it. */
+    grid-template-rows: auto 52px 1fr;
     grid-template-columns: var(--rail) 1fr;
-    grid-template-areas: "bar bar" "rail main";
+    grid-template-areas: "alert alert" "bar bar" "rail main";
     height: 100vh;
     background: var(--bg);
+}
+
+/* Not a toast. A toast is for something that happened; this is for a state the
+   window is in, and it has to be true whenever it is on screen — a bridge that
+   cannot start a session cannot start one four seconds from now either. */
+.alertbar {
+    grid-area: alert;
+    padding: 7px 18px;
+    background: #f9dedc;
+    color: #410e0b;
+    font-size: 12.5px;
+    line-height: 1.5;
+}
+.alertbar code {
+    font: 400 12px/1.5 var(--mono);
+    background: rgba(0, 0, 0, .07);
+    padding: 1px 4px;
+    border-radius: 3px;
 }
 
 .bar {
@@ -4194,7 +4215,7 @@ body.term-resizing { user-select: none; cursor: row-resize; }
    conversation here. */
 .app[data-focus="1"] {
     grid-template-columns: 1fr;
-    grid-template-areas: "bar" "main";
+    grid-template-areas: "alert" "bar" "main";
 }
 .app[data-focus="1"] .rail,
 .app[data-focus="1"] .bar-search,
