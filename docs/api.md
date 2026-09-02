@@ -382,8 +382,12 @@ than refetching.
 
 ### `GET /api/sessions/:id/prs`
 
-`{ prs: [...], gh: {ok, error} }` — what has become of the pull requests this
-session raised, one entry per PR in `summary.prs`, same order.
+`{ prs: [...], gh: {ok, error}, checkedAt }` — what has become of the pull requests
+this session raised, one entry per PR in `summary.prs`, same order.
+
+`checkedAt` is an ISO string or null: the most recent moment any repository was
+successfully listed. Null means nothing has been listed yet — a bridge that has
+only just started, on a machine with no cache file.
 
 Each carries `number`, `url`, `repo`, `title`, `branch`, `updatedAt`, a resolved
 `status`, a `label` naming that status in words, and `detail`: extra lines the one
@@ -402,17 +406,33 @@ reports no check state at all — an empty rollup is not a pending one. And GitH
 reports mergeability as `UNKNOWN` until it has computed it, which is common on a
 freshly-pushed branch, so nothing is said about conflicts until it does.
 
-`unknown` means gh could not be reached, and `gh.error` says why in one line. The
-client is expected to keep showing the PR — it has the number and the link from the
-summary already — and simply not colour it. **This is its own route rather than a
-field on the summary on purpose**: it asks GitHub, and the session list must never
-wait on GitHub. The bridge caches one `gh pr list` per repository for a minute, and
-a merged or closed PR for the life of the process, since neither can change back.
+`unknown` means the bridge has no answer for that PR *yet*, and it covers three
+cases, only one of which is a problem: gh could not be reached, the PR's repository
+has not been listed yet, or the PR is settled and the one `gh pr view` that
+resolves it has not run. The client is expected to keep showing the PR, since it
+has the number and the link from the summary already, and simply not colour it.
+
+**`gh.ok` is what says whether GitHub is reachable — `unknown` does not.** The last
+two cases report `unknown` with `gh.ok: true`, and on a first run with no cache
+file that is every merged PR on the machine for one pass. A client that renders
+`unknown` as "GitHub could not be reached" will say so, wrongly, every time a
+bridge starts cold. Use `gh.error` for the wording and fall back to something that
+does not blame the network.
+
+**This route does not shell out.** It reads a snapshot that a background refresher
+in the bridge keeps current, so it answers in memory and never waits on GitHub. It
+stays a separate route from the summary because the two go stale on different
+clocks, not because it is slow. See *How the bridge keeps PR status fresh* under
+`GET /api/prs`.
 
 ### `GET /api/prs`
 
-`{ sessions: {...}, gh: {ok, error} }` — one *aggregate* status per session, for a
-list that wants a glyph per row and cannot afford a request per row.
+`{ sessions: {...}, gh: {ok, error}, checkedAt }` — one *aggregate* status per
+session, for a list that wants a glyph per row and cannot afford a request per row.
+
+This is also the payload of the `prs-changed` event, byte for byte. Fetch it once
+when a client starts, to have something to draw; after that the event carries the
+same shape and the fetch is not needed again.
 
 `sessions` is **an object keyed by session id, not an array**, and a session with
 no pull requests is **absent from it rather than null** — the client already knows
@@ -443,15 +463,49 @@ one merged, "all merged" is a claim that cannot be made. `ATTENTION_ORDER` and
 `aggregate` in `bridge/pulls.js` are the whole rule and `test/pulls.test.js` pins
 both orderings.
 
-Cost: every call is one cached `gh pr list` per repository, *plus*, the first time a
-given already-settled PR is asked about, one `gh pr view` for it — merged and closed
-cannot change back, so that answer is kept for the life of the process. So the first
-call after a bridge restart can take seconds on a machine with a long history, and
-every later one is fast. Fetch it **after** the session list has painted, never
-before: this is the request `/api/sessions` deliberately does not make.
+Cost: none worth planning around. It reads a snapshot in memory. It used to fan out
+one `gh pr list` per repository and one `gh pr view` per already-settled PR while
+the caller waited — which is why older versions of this document told you to fetch
+it after the session list had painted, and warned that the first call after a
+restart could take seconds. Neither is true any more.
 
-Nothing pushes PR changes — there is no `/api/events` event for them. Poll this at
-about the bridge's own minute of cache; `web/app.js` uses 60s.
+#### How the bridge keeps PR status fresh
+
+A background refresher in the bridge is the only thing that calls `gh` about a pull
+request. It runs every 30s and, on each pass, decides per *repository* whether to
+list it — the repository is the unit, because one `gh pr list --state open` answers
+every open PR on it at once, so "refresh the PRs that changed" is not a question
+that can be asked.
+
+A repository is listed when any of these holds:
+
+| Trigger | Interval |
+|---|---|
+| Never listed | immediately — bridge start, or a newly-linked PR |
+| A session whose PRs live in it has a transcript newer than the last listing, or a turn running | 60s floor |
+| Any of its open PRs has a check in flight | 2 min |
+| Otherwise | 20 min |
+| The last listing failed | 1 min, then 2, then 5, then 20 |
+
+**So a PR can be up to twenty minutes stale on a repository nobody is working in.**
+That is the deliberate trade for not calling `gh` sixty times an hour per repository
+forever. Anything a conversation *can* see — a PR raised, pushed to or merged from a
+session on this machine — is picked up within a minute of it happening, and a build
+finishing within two.
+
+A failed listing **keeps the pull requests it last read successfully** and reports
+`ok: false` alongside them. This matters to any client that acts on absence: an
+empty list from a failed call is indistinguishable from a repository with nothing
+open, and treating the two alike is how a review sweep concludes it has reviewed
+everything. Check `gh.ok` before drawing a conclusion from an empty `prs`.
+
+Settled pull requests — merged or closed — are resolved once and written to disk, so
+a restart does not pay for them again. The store lives at
+`$XDG_CACHE_HOME/claude-sessions/prs.json` and is a cache: deleting it costs one
+round of `gh` calls and loses nothing.
+
+`?refresh=1` on `GET /api/dashboard` is the only way to make the refresher run out
+of turn. There is no per-route refresh here.
 
 ### `GET /api/sessions/:id/tasks`
 
@@ -1119,10 +1173,18 @@ behind, staged, unstaged, untracked, conflicts, files, dirty, detached, sample[]
 where `sample` is up to ten `{path, status}` entries — enough to recognise the change,
 not a whole `git status`.
 
-`prs[]` are the whole `pulls.js` record plus `matched`, which is `"branch"` (the
-workspace has that branch checked out) or `"session"` (only a transcript connects
-them). The record, field by field — it was documented by reference before, which is
-the "write the type, not the field name" mistake this document is supposed to avoid:
+`prs[]` are the whole `pulls.js` record, plus `matched` — `"branch"` (the workspace
+has that branch checked out) or `"session"` (only a transcript connects them) — plus
+the resolved `status` and `label` that `GET /api/sessions/:id/prs` documents, from
+the same `resolveStatus`. Those two are the ones to draw from: this route used to
+carry the raw record alone, so a client had to invent its own reading of `draft` and
+`reviewDecision`, and `web/app.js` did — with the result that a merged PR, one
+conflicting with its base and one with a failing build all rendered identically
+while the other two surfaces showed three different glyphs. `detail` is **not**
+here; ask `GET /api/sessions/:id/prs` if you want the tooltip lines.
+
+The record, field by field — it was documented by reference before, which is the
+"write the type, not the field name" mistake this document is supposed to avoid:
 
 | Field | Type |
 |---|---|
@@ -1140,10 +1202,15 @@ the "write the type, not the field name" mistake this document is supposed to av
 | `mergeable` | string — `"MERGEABLE"`, `"CONFLICTING"`, `"UNKNOWN"`. `UNKNOWN` says nothing, deliberately |
 | **`checks`** | **object or null** — `{total, failed, pending, passed}`. **`null` means the repository has no CI**, which is not the same as zero of everything, and a client that renders it as "0 checks passed" is saying something untrue |
 | `repo` | string — `owner/name` |
+| **`status`**, **`label`** | **strings** — the resolved one-word status and its wording, exactly as `GET /api/sessions/:id/prs` defines them |
 
-**A failed `gh` is cached for its full 60s TTL**, empty list and all. So one hiccup
-looks exactly like "nothing is open" for a minute — which for a reader is a blank
-panel, and for anything deciding what to act on is a trap worth knowing about. `sessions[]` are chips — `{sessionId, title, lastTs, userMessages,
+**A failed `gh` no longer empties the list.** The store keeps the pull requests it
+last read successfully and reports the error beside them, so a hiccup no longer
+looks like "nothing is open" — which used to last a full minute, and was a blank
+panel for a reader and a trap for anything deciding what to act on. `gh.ok` is still
+the field to check before concluding anything from an empty `prs`.
+
+`sessions[]` are chips — `{sessionId, title, lastTs, userMessages,
 active}` — capped at six per workspace with `moreSessions` counting the rest, and
 carrying the same narrow four-field `runner` as `GET /api/sessions` where one is live.
 A chip carries **no `schedule`**, so a client cannot tell a scheduled run from any
@@ -1155,9 +1222,14 @@ and so is a project left with no workspaces. `gh` fails once for everything rath
 per repository, because they all fail the same way — `gh` missing, or a login that
 expired.
 
-**This route shells out to `git` and `gh`, so it is slow and it is cached** — working
-trees for 15s, GitHub for a minute. `?refresh=1` clears both caches first; do not send
-it on a poll.
+**This route shells out to `git`, so it is slow and it is cached** — working trees
+for 15s. It no longer shells out to `gh` at all: pull requests come from the store
+described under `GET /api/prs`.
+
+`?refresh=1` drops the working-tree cache *and* forces a pass of the PR refresher,
+awaiting it — so it is the slowest thing here and the only way to make the bridge
+ask GitHub out of turn. It is a button, not a poll. A client that wants to know when
+PRs move should listen for `prs-changed` instead.
 
 ### `GET /api/notifications?scope=&type=&sessionId=&limit=`
 
@@ -1537,6 +1609,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `drafts-changed` | `{at, drafts[], counts}` — the whole `GET /api/drafts` payload, so there is nothing to refetch. **Not gated by a `POST /api/subscribe` flag**, unlike `overview` and `taskboard`: a draft only changes because somebody changed it, so there is no tick to switch on and every window gets every change. Fires on create, edit, delete, and on a start (which deletes one) |
 | `schedules-changed` | `{at, schedules[], counts}` — the whole `GET /api/schedules` payload. Ungated, exactly as `drafts-changed` is. Unlike that one it fires **without anybody having done anything**: a schedule firing, skipping a slot, or having its outcome recorded when the turn ends all push it. So a client that assumed the payload only moves in response to a user action will be wrong here, and pleasantly so — this is how a card starts saying "ran 2h ago — BLOCK" while nobody is looking at it |
 | `sessions-changed` | `{at}` — a nudge to refetch the list |
+| `prs-changed` | **the whole `GET /api/prs` payload** — `{sessions, gh, checkedAt}` — so a rail has nothing to refetch. Ungated, exactly as `drafts-changed` is, and like `schedules-changed` it fires **without anybody having done anything**: it is a background refresher noticing that a review landed, a build finished, or somebody merged. Fires only when the answer actually moved, so a pass that re-lists a quiet repository and finds it unchanged pushes nothing — this is not a heartbeat and must not be treated as one. It is the *only* signal that PR status changed; there was none before, and clients polled. A client wanting per-PR detail for one session should refetch `GET /api/sessions/:id/prs` on this event, which is cheap and does not shell out |
 | `peer-message` | `{at, sessionId, from, count}` — another session messaged this one. The message itself is in the transcript, so a client tailing it has already drawn it; this is for everything that is not the open pane |
 | `handoff` | `{at, sessionId, from, count}` — another session handed this one work, and it was resumed to deal with it. Same shape and same reasoning as above; watched in the transcript rather than reported by the route, so it fires when the message *arrived* rather than when it was queued |
 | `suggestion-changed` | `{at, sessionId, toolUseId}` — a suggested follow-up was started, dismissed, or undone, possibly in another window |

@@ -680,11 +680,50 @@ a:hover { text-decoration: underline; }
 }
 .strip[aria-current="true"] .strip-meta .tag-pin { color: #cfe0ff; }
 
-/* What the session left on GitHub, at its worst. The same glyph set and the same
-   colour table as the header chip (see `.conv-sub .pr`) so that there is one PR
-   vocabulary in the app rather than two — and for the same reason as there: two of
-   these states are red and two are yellow, so the glyph and the colour have to say
-   the same thing twice.
+/* ── one PR vocabulary ──────────────────────────────────────────────────────
+   Three surfaces show what has become of a pull request — the rail glyph below,
+   the conversation header chip (`.conv-sub .pr`) and the dashboard chip
+   (`.sig.pr`) — and between them they get one colour table, here, rather than
+   three. It used to be two verbatim copies and, on the board, a fourth scheme
+   that was not about status at all: it coloured by `draft` alone, so a merged PR,
+   one conflicting with its base and one with a failing build were the same blue.
+
+   Colour and glyph say the same thing twice on purpose: two of these states are
+   red and two are yellow, so hue alone would not separate them. The word itself
+   is in the tooltip.
+
+   The layout of the three is genuinely different — an icon in a grid, an inline
+   chip, a pill with a tinted ground — so only the two tokens are shared.
+   `--pr-tint` is the hue; `--pr-fade` dims the settled states, which are kept
+   because "this landed" is worth a glance but must not compete with the rows that
+   still want something. */
+:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr) {
+    --pr-tint: var(--text-3);
+    --pr-fade: 1;
+}
+:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="open"] { --pr-tint: var(--blue); }
+:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="approved"] { --pr-tint: var(--green); }
+:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="changes"],
+:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="checks-failed"] { --pr-tint: var(--red); }
+:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="conflicting"],
+:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="checks-pending"] { --pr-tint: var(--yellow); }
+:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="draft"] { --pr-tint: var(--text-3); }
+:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="merged"] {
+    --pr-tint: var(--purple);
+    --pr-fade: 0.62;
+}
+:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="closed"] {
+    --pr-tint: var(--text-4);
+    --pr-fade: 0.62;
+}
+/* gh could not be reached. Says nothing rather than guessing. */
+:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="unknown"] { --pr-tint: var(--text-4); }
+/* Still moving, so it breathes — the same light every in-flight thing here uses. */
+:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="checks-pending"] svg {
+    animation: breathe 1.6s var(--ease) infinite;
+}
+
+/* What the session left on GitHub, at its worst.
 
    `flex: none` is load-bearing. `.strip-meta` is nowrap with overflow hidden, and
    the worktree name and the activity line are the two things meant to give way; a
@@ -694,21 +733,9 @@ a:hover { text-decoration: underline; }
     display: grid;
     place-items: center;
     flex: none;
-    color: var(--text-3);
+    color: var(--pr-tint);
+    opacity: var(--pr-fade);
 }
-.strip-meta .tag-pr[data-status="open"] { color: var(--blue); }
-.strip-meta .tag-pr[data-status="approved"] { color: var(--green); }
-.strip-meta .tag-pr[data-status="changes"],
-.strip-meta .tag-pr[data-status="checks-failed"] { color: var(--red); }
-.strip-meta .tag-pr[data-status="conflicting"],
-.strip-meta .tag-pr[data-status="checks-pending"] { color: var(--yellow); }
-.strip-meta .tag-pr[data-status="draft"] { color: var(--text-3); }
-/* Settled. Kept because "this landed" is worth a glance, dimmed because it is not
-   competing with the rows that still want something. */
-.strip-meta .tag-pr[data-status="merged"] { color: var(--purple); opacity: 0.62; }
-.strip-meta .tag-pr[data-status="closed"] { color: var(--text-4); opacity: 0.62; }
-/* gh could not be reached. Says nothing rather than guessing. */
-.strip-meta .tag-pr[data-status="unknown"] { color: var(--text-4); }
 /* The selected row recolours everything in its meta line, and this is the one
    thing on it that carries meaning in the hue — so only the greys are lifted, to
    where they can still be seen against --blue-cont. Red, yellow, green and purple
@@ -716,10 +743,6 @@ a:hover { text-decoration: underline; }
 .strip[aria-current="true"] .strip-meta .tag-pr[data-status="draft"],
 .strip[aria-current="true"] .strip-meta .tag-pr[data-status="unknown"],
 .strip[aria-current="true"] .strip-meta .tag-pr[data-status="closed"] { color: #b3c7ea; }
-/* Still moving, so it breathes — the same light every in-flight thing here uses. */
-.strip-meta .tag-pr[data-status="checks-pending"] svg {
-    animation: breathe 1.6s var(--ease) infinite;
-}
 
 .mini {
     display: grid;
@@ -1104,13 +1127,12 @@ a:hover { text-decoration: underline; }
 .conv-sub .agent-state.failed { color: var(--red); }
 .conv-sub .pulse { color: var(--yellow); }
 
-/* A pull request the session raised, and what has become of it. Colour and glyph
-   say the same thing twice on purpose — two of these are red and two are yellow,
-   so hue alone would not separate them. The word itself is in the tooltip.
+/* A pull request the session raised, and what has become of it. Colours come from
+   the shared table above.
 
    `flex: none` because .conv-sub wraps: the icon and the number are one thing and
    must not be broken across lines. The svg takes its colour from currentColor, so
-   every rule below sets it on the anchor and none of them touch the svg. */
+   this sets it on the anchor and never touches the svg. */
 .conv-sub .pr {
     display: inline-flex;
     align-items: center;
@@ -1118,29 +1140,13 @@ a:hover { text-decoration: underline; }
     flex: none;
     font: 500 12px/1 var(--sans);
     text-decoration: none;
-    color: var(--text-3);
+    color: var(--pr-tint);
+    opacity: var(--pr-fade);
     transition: color var(--t-fast) var(--ease), opacity var(--t-fast) var(--ease);
 }
-.conv-sub .pr[data-status="open"] { color: var(--blue); }
-.conv-sub .pr[data-status="approved"] { color: var(--green); }
-.conv-sub .pr[data-status="changes"],
-.conv-sub .pr[data-status="checks-failed"] { color: var(--red); }
-.conv-sub .pr[data-status="conflicting"],
-.conv-sub .pr[data-status="checks-pending"] { color: var(--yellow); }
-.conv-sub .pr[data-status="draft"] { color: var(--text-3); }
-/* Settled, and kept only as a record that the work landed — so it is here, but it
-   is not competing with the PRs that still want something. */
-.conv-sub .pr[data-status="merged"] { color: var(--purple); opacity: 0.62; }
-.conv-sub .pr[data-status="closed"] { color: var(--text-4); opacity: 0.62; }
-/* gh could not be reached. Says nothing rather than guessing. */
-.conv-sub .pr[data-status="unknown"] { color: var(--text-4); }
 /* Lifts the dimming off a settled PR without taking its colour away: the status is
    the point, and losing it on the way to clicking the link would be a poor trade. */
 .conv-sub .pr:hover { opacity: 1; text-decoration: none; }
-/* Still moving, so it breathes — the same light every in-flight thing here uses. */
-.conv-sub .pr[data-status="checks-pending"] svg {
-    animation: breathe 1.6s var(--ease) infinite;
-}
 
 /* Dev servers: a row of chips, each one a switch into DevBrowser. */
 .channels {
@@ -2989,8 +2995,7 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 @media (prefers-reduced-motion: reduce) {
     .status-line[data-state="busy"] .led,
     .status-line[data-state="ask"] .led,
-    .conv-sub .pr[data-status="checks-pending"] svg,
-    .strip-meta .tag-pr[data-status="checks-pending"] svg,
+    :is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="checks-pending"] svg,
     .tool[data-status="pending"] > summary::before,
     .strip[data-state="running"] .strip-meta::before { animation: none; }
 }
@@ -4371,10 +4376,22 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 .sig.quiet { background: var(--s3); color: var(--text-3); }
 .sig.bad { background: #3a2422; color: var(--red); }
 
-.sig.pr { background: var(--blue-tint); color: var(--blue); text-decoration: none; }
-.sig.pr:hover { background: #1e3358; text-decoration: none; }
-.sig.pr.draft { background: var(--s3); color: var(--text-2); }
-.sig.pr.draft:hover { background: var(--s4); }
+/* The hue is the shared one; the ground is mixed from it so a chip stays a pill
+   rather than becoming plain coloured text like the other two surfaces. The
+   `draft`/`approved`/`changes-requested` word-tags this used to carry are gone
+   with them: the glyph says all three, and it says the seven states they left
+   out. */
+.sig.pr {
+    background: color-mix(in srgb, var(--pr-tint) 15%, transparent);
+    color: var(--pr-tint);
+    opacity: var(--pr-fade);
+    text-decoration: none;
+}
+.sig.pr:hover {
+    background: color-mix(in srgb, var(--pr-tint) 26%, transparent);
+    opacity: 1;
+    text-decoration: none;
+}
 .sig .pr-num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .sig .pr-title {
     font-weight: 400;
@@ -4383,17 +4400,6 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     overflow: hidden;
     text-overflow: ellipsis;
 }
-.sig .pr-tag {
-    padding: 0 6px;
-    border-radius: var(--r-xs);
-    background: #0003;
-    font: 500 10px/16px var(--mono);
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: var(--text-3);
-}
-.sig .pr-tag.ok { color: var(--green); }
-.sig .pr-tag.bad { color: var(--red); }
 
 /* The files behind a count, on demand. A dashboard that lists them all is a
    `git status` you did not ask for. */

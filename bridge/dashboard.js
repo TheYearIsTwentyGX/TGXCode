@@ -15,17 +15,23 @@
 //     unit that holds uncommitted work, not a session — several sessions share
 //     one, and one session can leave work in a worktree it has since left — so
 //     rows are keyed by directory and sessions hang off them.
-//   * the open pull requests per repository, via `pulls.js`. Listing them and
-//     matching against them answers "not merged yet" in a single call per repo;
-//     asking after each PR the transcripts mention would be a call each and
-//     would still have to read the same field. The conversation header does ask
-//     per PR, because it wants merged ones too — which is why that code lives in
-//     `pulls.js` and not here, and why the cache it uses is shared.
+//   * the open pull requests per repository, from `pr-store.js`. Matching against
+//     them answers "not merged yet" without asking anybody: the store holds the
+//     last list a background timer read, so this reads memory. It used to call
+//     `pulls.openPulls` here and wait on a minute-old cache or on gh itself,
+//     which is why `?refresh=1` had to exist and why the docs warned not to send
+//     it on a poll.
 //
-// Everything here shells out, so all of it is cached — and neither cache is this
-// module's any more. Working trees live in `git.js`, which the session changes
-// panel asks the same question of and which therefore shares the answer; GitHub
-// lives in `pulls.js` along with everything else that asks it questions.
+// Working trees still shell out and are still cached in `git.js`, which the
+// session changes panel asks the same question of and which therefore shares the
+// answer. GitHub does not shell out here at all any more.
+//
+// The PR records this hands out carry a resolved `status` and `label`, the same
+// two the conversation header and the rail colour themselves by. They did not
+// used to, and the board consequently drew its own conclusions from `draft` and
+// `reviewDecision` alone — so a merged PR, a conflicting one and one with a
+// failing build were three identical blue chips here while the other two surfaces
+// showed three different glyphs.
 
 const fs = require('fs');
 const path = require('path');
@@ -33,6 +39,7 @@ const path = require('path');
 const { mapLimit } = require('./memo');
 const git = require('./git');
 const pulls = require('./pulls');
+const prStore = require('./pr-store');
 
 // Enough to see who has been in here without the row becoming a list.
 const SESSIONS_PER_WORKSPACE = 6;
@@ -40,7 +47,6 @@ const SESSIONS_PER_WORKSPACE = 6;
 const FILE_SAMPLE = 10;
 
 const GIT_CONCURRENCY = 8;
-const GH_CONCURRENCY = 4;
 
 // ---------------------------------------------------------------------------
 // Assembly
@@ -80,11 +86,16 @@ const chipTime = (c) => (c.lastTs ? Date.parse(c.lastTs) : 0);
 /**
  * Everything the dashboard shows, grouped by project.
  *
+ * `refresh` is the board's own Refresh button and nothing else. It drops the
+ * working-tree cache; asking GitHub again is the caller's to arrange, because a
+ * forced list is a pass of the refresher rather than a thing this can do on its
+ * own — see `refreshPrs` in server.js.
+ *
  * @param {import('./sessions').SessionIndex} index
  * @param {{includeTest?: boolean, refresh?: boolean}} opts
  */
 async function build(index, { includeTest = false, refresh = false } = {}) {
-    if (refresh) { git.clearCache(); pulls.clearCache(); }
+    if (refresh) git.clearCache();
 
     const sessions = index.list({ limit: 100_000, includeTest });
 
@@ -147,17 +158,27 @@ async function build(index, { includeTest = false, refresh = false } = {}) {
     for (const p of roots) if (p.repo) repos.add(p.repo);
     for (const s of sessions) for (const pr of s.prs || []) if (pr.repo) repos.add(pr.repo);
 
+    // Memory, not gh. Every one of these was a subprocess a browser waited on.
     const pullsByRepo = new Map();
     const ghErrors = new Set();
-    await mapLimit([...repos], GH_CONCURRENCY, async (repo) => {
-        const r = await pulls.openPulls(repo);
+    for (const repo of repos) {
+        const r = prStore.openPulls(repo);
         pullsByRepo.set(repo, r);
         if (!r.ok) ghErrors.add(r.error);
-    });
+    }
     await gitDone;
 
     const openPr = (repo, number) => (pullsByRepo.get(repo)?.pulls || [])
         .find(p => p.number === number) || null;
+
+    /**
+     * A PR record as the board hands it out: the whole thing, plus how it got
+     * here, plus the one word the other two surfaces colour themselves by.
+     */
+    const record = (pr, matched) => {
+        const { status, label } = pulls.resolveStatus(pr);
+        return { ...pr, matched, status, label };
+    };
 
     // -- match pull requests to what is on disk ------------------------------
     //
@@ -175,14 +196,16 @@ async function build(index, { includeTest = false, refresh = false } = {}) {
 
         for (const ws of p.workspaces.values()) {
             ws.sessions.sort((a, b) => chipTime(b) - chipTime(a));
-            const pulls = (p.repo && pullsByRepo.get(p.repo)?.pulls) || [];
+            // Not `pulls`: that is the module, and `record` below reads
+            // `pulls.resolveStatus` off it.
+            const repoPulls = (p.repo && pullsByRepo.get(p.repo)?.pulls) || [];
             const branch = ws.git && ws.git.branch;
-            const mine = branch ? pulls.filter(pr => pr.branch === branch) : [];
+            const mine = branch ? repoPulls.filter(pr => pr.branch === branch) : [];
             for (const pr of mine) claimed.add(pr.url);
 
             rows.push({
                 ...ws,
-                prs: mine.map(pr => ({ ...pr, matched: 'branch' })),
+                prs: mine.map(pr => record(pr, 'branch')),
                 sessions: ws.sessions.slice(0, SESSIONS_PER_WORKSPACE),
                 moreSessions: Math.max(0, ws.sessions.length - SESSIONS_PER_WORKSPACE),
                 lastTs: ws.sessions.length ? ws.sessions[0].lastTs : null,
@@ -211,7 +234,7 @@ async function build(index, { includeTest = false, refresh = false } = {}) {
                         kind: 'gone',
                         name: pr.branch || `PR #${pr.number}`,
                         git: { ok: false, reason: 'gone' },
-                        prs: [{ ...pr, matched: 'session' }],
+                        prs: [record(pr, 'session')],
                         sessions: [],
                         moreSessions: 0,
                         lastTs: null,

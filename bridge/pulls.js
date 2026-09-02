@@ -13,8 +13,17 @@
 // So the open list stays the primary source and the per-PR lookup is the
 // exception. A PR absent from `gh pr list --state open` is terminal: merged or
 // closed, and never going to be anything else. That is worth one `gh pr view` and
-// then worth remembering forever, which is why the TTL below is chosen per call
-// rather than fixed — see `pullState`.
+// then worth remembering forever.
+//
+// **Where an answer is kept, and for how long, is no longer this file's
+// business.** `bridge/pr-store.js` owns that now — a snapshot on disk, and a
+// timer deciding which repositories are worth asking about. What is left here is
+// the two gh verbs, the shape an answer takes, and the two orderings that turn a
+// pull request into one word. `openPulls` and `pullState` ask, every time, and it
+// is the store that decides whether to call them; `resolveBatch` no longer asks
+// at all and takes a lookup instead, which is what got gh off the path of a
+// request. The one memo that stayed is `repoOf`: a checkout's remote is a fact
+// about the disk rather than about GitHub, and nothing gains by writing it down.
 //
 // A resolved status is one word, because an icon and a colour can only carry one.
 // A PR is regularly several things at once (open, approved, and conflicting), so
@@ -39,13 +48,13 @@
 
 const { execFile } = require('child_process');
 
-const { cached, mapLimit } = require('./memo');
+const { cached } = require('./memo');
 
 const GH_TIMEOUT_MS = 20_000;
 const GIT_TIMEOUT_MS = 10_000;
 
-// GitHub is not cheap and a PR does not change much in a minute.
-const PR_TTL_MS = 60_000;
+// A checkout's origin does not change, so this is long. It is also the only TTL
+// left in this file — see the header for where the others went.
 const REPO_TTL_MS = 10 * 60_000;
 
 // `state`, `mergeable` and `statusCheckRollup` are here for the header's sake;
@@ -66,12 +75,8 @@ const PR_FIELDS = 'number,title,url,headRefName,headRefOid,baseRefName,labels,'
     + 'reviewDecision,author,state,mergeable,statusCheckRollup';
 
 const cache = {
-    /** @type {Map<string, {value?: any, pending?: Promise<any>, at: number}>} repo -> open PRs */
-    prs: new Map(),
     /** @type {Map<string, {value?: any, pending?: Promise<any>, at: number}>} checkout -> owner/name */
     repo: new Map(),
-    /** @type {Map<string, {value?: any, pending?: Promise<any>, at: number}>} repo#n -> one PR */
-    state: new Map(),
 };
 
 /**
@@ -159,9 +164,10 @@ const normalise = (p, repo) => ({
  * The open pull requests on one repository.
  *
  * Still one call per repo rather than one per PR: asking after each PR the
- * transcripts mention would be a call each and would read the same fields.
+ * transcripts mention would be a call each and would read the same fields. This
+ * asks every time it is called — `pr-store.js` is what decides how often that is.
  */
-const openPulls = (repo) => cached(cache.prs, repo, PR_TTL_MS, async () => {
+async function openPulls(repo) {
     const r = await run('gh', [
         'pr', 'list', '--repo', repo, '--state', 'open', '--limit', '100', '--json', PR_FIELDS,
     ]);
@@ -171,44 +177,38 @@ const openPulls = (repo) => cached(cache.prs, repo, PR_TTL_MS, async () => {
     } catch (err) {
         return { ok: false, error: `could not read gh output: ${err.message}`, pulls: [] };
     }
-});
+}
 
 /**
  * One pull request by number, for the PRs the open list does not mention.
  *
- * The TTL is decided from what is already cached rather than fixed, which is the
- * whole economy of this module: `MERGED` and `CLOSED` are final, so the first
- * answer is the last one needed and it is kept for the life of the bridge. Only
- * an open PR — a race against the open list's own minute of cache — is asked
- * about again.
+ * `terminal` is the answer the caller is really after: `MERGED` and `CLOSED` are
+ * final, so an answer carrying it is the last one ever needed for that PR. The
+ * store writes those down and never asks again, which is the whole economy of
+ * this pair — and, since it writes them to disk, the economy now survives a
+ * restart rather than dying with the process.
  */
-function pullState(repo, number) {
-    const key = `${repo}#${number}`;
-    const hit = cache.state.get(key);
-    const ttl = hit && hit.value && hit.value.terminal ? Infinity : PR_TTL_MS;
-
-    return cached(cache.state, key, ttl, async () => {
-        const r = await run('gh', [
-            'pr', 'view', String(number), '--repo', repo, '--json', PR_FIELDS,
-        ]);
-        if (!r.ok) return { ok: false, error: ghError(r), terminal: false, pull: null };
-        try {
-            const pull = normalise(JSON.parse(r.stdout), repo);
-            return {
-                ok: true,
-                error: null,
-                terminal: pull.state === 'MERGED' || pull.state === 'CLOSED',
-                pull,
-            };
-        } catch (err) {
-            return {
-                ok: false,
-                error: `could not read gh output: ${err.message}`,
-                terminal: false,
-                pull: null,
-            };
-        }
-    });
+async function pullState(repo, number) {
+    const r = await run('gh', [
+        'pr', 'view', String(number), '--repo', repo, '--json', PR_FIELDS,
+    ]);
+    if (!r.ok) return { ok: false, error: ghError(r), terminal: false, pull: null };
+    try {
+        const pull = normalise(JSON.parse(r.stdout), repo);
+        return {
+            ok: true,
+            error: null,
+            terminal: pull.state === 'MERGED' || pull.state === 'CLOSED',
+            pull,
+        };
+    } catch (err) {
+        return {
+            ok: false,
+            error: `could not read gh output: ${err.message}`,
+            terminal: false,
+            pull: null,
+        };
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -309,47 +309,32 @@ function resolveStatus(pr) {
 /** A PR gh could not be asked about: still a number, still a link, no claim. */
 const unknown = (base) => ({ ...base, status: 'unknown', label: null, detail: [] });
 
-// How many `gh pr view` calls to have in flight when the open lists did not
-// answer. The same figure `dashboard.js` uses, and for the same reason: these are
-// separate processes, not requests on one connection.
-const GH_CONCURRENCY = 4;
-
 /**
  * Resolve a batch of `{number, url, repo}` triples to statuses.
  *
- * The batch is the unit rather than the session because the expensive part is
- * per *repository*: one `gh pr list` answers every open PR anybody asked about,
- * and only the ones it does not mention cost a call each. A caller with fifty
- * sessions and three repositories should pay for three repositories.
+ * **Synchronous, and it asks nobody anything.** `lookup(repo, number, url)`
+ * hands back a pull request or null, and `pr-store.js` supplies one that reads
+ * its snapshot; whatever the lookup cannot answer for reports `unknown`, which is
+ * the same thing this used to report when gh would not run. That is what took
+ * GitHub off the path of a request: the three routes that call this used to fan
+ * out one `gh pr list` per repository and one `gh pr view` per settled PR while a
+ * browser waited, and now they read memory.
+ *
+ * A PR the lookup misses is not an error and is not empty — it is a PR whose
+ * state is not known yet, and a header that has lost its colour is no worse than
+ * one that never had it. The store's own `ghError` says why, separately, so that
+ * "gh is broken" and "nothing is open" stay distinguishable.
  *
  * Returns a resolved entry per input in input order, so a caller can slice its
- * own sessions back out, plus the first thing gh could not do.
+ * own sessions back out.
  */
-async function resolveBatch(list) {
-    const repos = [...new Set(list.map(p => p.repo).filter(Boolean))];
-    const open = new Map();
-    let error = null;
-
-    await Promise.all(repos.map(async (repo) => {
-        const r = await openPulls(repo);
-        if (r.ok) open.set(repo, r);
-        else error = error || r.error;
-    }));
-
-    const out = await mapLimit(list, GH_CONCURRENCY, async (p) => {
+function resolveBatch(list, lookup) {
+    return list.map((p) => {
         const repo = p.repo || null;
         const base = { number: p.number, url: p.url, repo };
 
-        const listed = repo ? open.get(repo) : null;
-        if (!listed) return unknown(base);
-
-        let pull = listed.pulls.find(q => q.url === p.url || q.number === p.number) || null;
-        if (!pull) {
-            // Not open, so it has been merged or closed. One call, then never again.
-            const r = await pullState(repo, p.number);
-            if (!r.ok) { error = error || r.error; return unknown(base); }
-            pull = r.pull;
-        }
+        const pull = repo ? lookup(repo, p.number, p.url) : null;
+        if (!pull) return unknown(base);
 
         const { status, label, detail } = resolveStatus(pull);
         return {
@@ -362,25 +347,6 @@ async function resolveBatch(list) {
             detail,
         };
     });
-
-    return { prs: out, error };
-}
-
-/**
- * Status for the PRs one session raised, in the order it raised them.
- *
- * Takes the `{number, url, repo}` triples the transcript recorded and answers
- * with a status for each. A PR gh could not be asked about reports `unknown`,
- * because a header that has lost its GitHub connection should be no worse than
- * one that never had it.
- */
-async function forSession(prs, fallbackRepo = null) {
-    const list = (prs || []).filter(p => p && p.url)
-        .map(p => ({ number: p.number, url: p.url, repo: p.repo || fallbackRepo || null }));
-    if (!list.length) return { prs: [], gh: { ok: true, error: null } };
-
-    const { prs: out, error } = await resolveBatch(list);
-    return { prs: out, gh: { ok: !error, error } };
 }
 
 // ---------------------------------------------------------------------------
@@ -444,41 +410,10 @@ function aggregate(resolved) {
     return { status: worst.status, label: worst.label || null, total: list.length, counts };
 }
 
-/**
- * One aggregate per session, for the rail.
- *
- * Sessions with no PRs are absent from the answer rather than null: the caller
- * already knows which those are from `prs` on the summary, and the map is sent to
- * a client on every poll.
- *
- * @param {Array<{sessionId: string, prs: Array, repo?: string|null}>} rows
- */
-async function forSessions(rows) {
-    const flat = [];
-    const spans = [];      // one {sessionId, from, to} per session with PRs
-
-    for (const row of rows || []) {
-        const list = (row.prs || []).filter(p => p && p.url);
-        if (!list.length) continue;
-        const from = flat.length;
-        for (const p of list) {
-            flat.push({ number: p.number, url: p.url, repo: p.repo || row.repo || null });
-        }
-        spans.push({ sessionId: row.sessionId, from, to: flat.length });
-    }
-
-    if (!flat.length) return { sessions: {}, gh: { ok: true, error: null } };
-
-    const { prs, error } = await resolveBatch(flat);
-
-    const sessions = {};
-    for (const { sessionId, from, to } of spans) {
-        const agg = aggregate(prs.slice(from, to));
-        if (agg) sessions[sessionId] = agg;
-    }
-
-    return { sessions, gh: { ok: !error, error } };
-}
+// The two callers that slice a batch back into sessions — one session's PRs for
+// the conversation header, one word per session for the rail — live in
+// `pr-store.js` now, because both of them are questions about the snapshot rather
+// than about GitHub.
 
 // ---------------------------------------------------------------------------
 // Telling GitHub
@@ -614,15 +549,8 @@ async function setVerdictLabel(repo, number, want, present = []) {
     };
 }
 
-/** Forget the cached open lists, for the board's explicit refresh. */
-function clearCache() {
-    cache.prs.clear();
-    // Remotes and settled PRs are not what a refresh is ever about: a repository
-    // does not change its origin, and a merged PR does not come back.
-}
-
 module.exports = {
     githubRepo, repoOf, openPulls, pullState, resolveStatus, checkSummary,
-    forSession, forSessions, aggregate, ATTENTION_ORDER, clearCache, PR_TTL_MS,
+    resolveBatch, aggregate, ATTENTION_ORDER,
     comment, ensureLabel, setVerdictLabel, VERDICT_LABELS,
 };
