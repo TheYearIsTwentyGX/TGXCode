@@ -399,7 +399,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'model', 'perm', 'btn-new', 'btn-new-menu', 'new-menu', 'db-status', 'db-label', 'toasts',
     'btn-bell', 'bell-menu', 'opt-desktop', 'opt-sound', 'bell-note', 'bell-try',
     'quota-wrap', 'quota-pill', 'quota-pill-body', 'quota-menu', 'quota-windows',
-    'quota-events', 'quota-note',
+    'quota-events', 'quota-note', 'quota-refresh',
     'btn-pin', 'btn-changes', 'btn-folder', 'btn-term', 'btn-archive', 'btn-delete',
     'turns', 'turn-pop',
     'find', 'find-input', 'find-count', 'find-prev', 'find-next',
@@ -7814,6 +7814,14 @@ const quota = {
     // advance without refetching and without trusting the two clocks to agree.
     at: 0,
     timer: null,
+    // A manual refresh is in flight. Held here rather than read off
+    // `snap.beacon.running` because the snapshot is only as current as the last
+    // fetch, and the button has to change the instant it is pressed.
+    refreshing: false,
+    // Why the last manual refresh could not be started at all — a 409, not a
+    // beacon that ran and failed. That one reports itself through
+    // `beacon.reason`, which the panel already draws.
+    refreshError: null,
 };
 
 /** Seconds since the snapshot was taken, on this window's clock. */
@@ -8025,7 +8033,13 @@ function renderQuotaPanel() {
     // — the pill can say a number is old, but only the beacon knows why.
     if (!bc) return;
 
-    if (!bc.enabled) {
+    // The button was pressed and could not even start. Above the rest, because
+    // it is about the thing the user just did.
+    if (quota.refreshError) {
+        note.append(el('div', { class: 'warn', text: `Refresh: ${quota.refreshError}` }));
+    }
+
+    if (!bc.dir) {
         note.append(el('div', {
             text: 'Refreshing it without a terminal open needs the quota beacon: '
                 + 'set quota.beacon and quota.beaconDir in ~/.tgxcode/settings.json. '
@@ -8035,13 +8049,26 @@ function renderQuotaPanel() {
         return;
     }
 
+    // A directory is set but the timer is off. Refresh still works — it is the
+    // timer that flag governs — so say that rather than repeating the setup
+    // instructions at somebody who has already followed them.
+    if (!bc.enabled) {
+        note.append(el('div', {
+            text: `Automatic refresh is off (quota.beacon), so the percentage only `
+                + `moves while a terminal is open — or when you press Refresh, which `
+                + `runs it once in ${bc.dir}.`,
+        }));
+        return;
+    }
+
     // On, but not on this bridge. Worth saying rather than showing a last-run
     // age that will never move: on a dev window the beacon is the everyday
     // instance's job, and the reading here is whatever that one last harvested.
     if (bc.suppressed === 'dev-bridge') {
         note.append(el('div', {
-            text: 'Beacon on, but not on a dev bridge — the everyday instance runs it. '
-                + 'The percentages here are whatever it last harvested.',
+            text: 'Automatic refresh is off on a dev bridge — the everyday instance '
+                + 'runs the clock. The percentages here are whatever it last '
+                + 'harvested, and Refresh still works if you want one now.',
         }));
         return;
     }
@@ -8077,9 +8104,65 @@ function renderQuotaPanel() {
     }
 }
 
+/**
+ * The Refresh button's label and whether it can be pressed.
+ *
+ * Enabled on `beacon.dir` alone, not on `beacon.enabled` — that flag is the
+ * *automatic* twenty-minute clock, and a machine with a trusted directory and
+ * the timer switched off is exactly the one where pressing this is the point.
+ */
+function renderQuotaRefresh() {
+    const btn = dom.quotaRefresh;
+    const bc = (quota.snap && quota.snap.beacon) || null;
+    const dir = bc && bc.dir;
+    // `running` from the server covers a run the *timer* started, which this
+    // window did not press and must still not double.
+    const busy = quota.refreshing || !!(bc && bc.running);
+
+    btn.textContent = busy ? 'Refreshing…' : 'Refresh';
+    btn.classList.toggle('busy', busy);
+    btn.disabled = busy || !dir;
+    btn.title = !dir
+        ? 'Needs a directory to run in — see below'
+        : busy
+            ? 'Reading the current percentage'
+            : `Start a few-second Claude session in ${dir} just to read the percentage`;
+}
+
 function renderQuota() {
     renderQuotaPill();
+    renderQuotaRefresh();
     if (!dom.quotaMenu.hidden) renderQuotaPanel();
+}
+
+/**
+ * Refresh the percentage now.
+ *
+ * The bridge answers with the whole quota payload rather than an
+ * acknowledgement, so one round trip both runs the beacon and returns what it
+ * produced — including the reason when a run was blocked by a dialog, which is
+ * the case worth seeing.
+ */
+async function refreshQuotaNow() {
+    if (quota.refreshing) return;
+    quota.refreshing = true;
+    quota.refreshError = null;
+    renderQuota();
+    try {
+        const out = await post('/api/quota/refresh');
+        if (out && out.quota) {
+            quota.snap = out.quota;
+            quota.at = Date.now();
+        }
+    } catch (err) {
+        // A 409: not set up, or a run already going. Both are worth a line in
+        // the panel and neither is worth a toast — the user is looking straight
+        // at the thing they just pressed.
+        quota.refreshError = err.message;
+    } finally {
+        quota.refreshing = false;
+        renderQuota();
+    }
 }
 
 function showQuota(on) {
@@ -8102,6 +8185,14 @@ async function loadQuota() {
         // not appear; there is nothing here worth a toast.
     }
 }
+
+dom.quotaRefresh.addEventListener('click', (e) => {
+    // The pill's own handler toggles the popover, and this button lives inside
+    // it — without this the popover would shut on the click that asked for a
+    // reading, hiding the result.
+    e.stopPropagation();
+    refreshQuotaNow();
+});
 
 dom.quotaPill.addEventListener('click', (e) => {
     e.stopPropagation();
