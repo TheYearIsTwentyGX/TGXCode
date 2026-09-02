@@ -413,6 +413,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'changes-refresh', 'changes-collapse', 'changes-body',
     'checklist', 'checklist-strip', 'checklist-strip-count', 'checklist-open',
     'checklist-count', 'checklist-collapse', 'checklist-body', 'btn-checklist',
+    'conv-main', 'conv-body',
     'term-pane', 'term-grip', 'term-dir', 'term-moved', 'term-body', 'term-restart', 'term-close',
     'term-tabs', 'term-stop', 'cmds',
     'tasks', 'tasks-strip', 'tasks-strip-count', 'tasks-open', 'tasks-count',
@@ -2424,6 +2425,7 @@ function showChanges(on) {
     // 34px strip: an open drawer is what the button promises.
     if (on) collapseChanges(false, { render: false });
     renderChanges();
+    syncPaneInsets({ instant: true });   // arriving or leaving, not widening
     renderHeaderActions();
     if (on) loadChangesIfStale();
 }
@@ -2434,6 +2436,7 @@ function collapseChanges(shut, { render = true } = {}) {
     localStorage.setItem('changesShut', shut ? '1' : '0');
     if (!render) return;
     renderChanges();
+    syncPaneInsets();   // this frame, so the composer starts moving with it
     // Focus follows whatever replaced the thing that was clicked.
     (shut ? dom.changesStrip : dom.changesCollapse).focus();
     if (!shut) loadChangesIfStale();
@@ -2656,6 +2659,128 @@ function plusMinus(f) {
 // Ids and classes say `checklist` while the panel says "Tasks", because `tasks`
 // in this file already means suggested follow-ups.
 
+/** The last insets written, so an unchanged recompute stays a no-op. */
+let paneInsets = ['', ''];
+
+/**
+ * Keep the composer and the ask dock over the transcript, not over the pane.
+ *
+ * The log, the ask dock and the composer are each a 1000px box centred in its
+ * container, and their containers were not the same one: the log is centred in
+ * `#scroll`, which every side column squeezes, while the two below it were
+ * centred in the whole of `.conv-main`. So opening the task list moved the
+ * transcript and left the composer where it was, and the composer read as
+ * crooked. Now both are inset by whatever the columns are actually using, and
+ * the three are one column down the middle.
+ *
+ * Each column's width is read from its own `--pane-w` rather than measured or
+ * copied. Measuring gives whatever the box is *partway through* its width
+ * transition, and the composer's padding cannot be animated from a moving
+ * target without trailing a frame behind it; a custom property is not animated,
+ * so `--pane-w` is where the column is heading and both can be given the same
+ * transition and set off together. Copying the numbers into this file instead
+ * would put 300/240/34/0 and the two media queries in a second place.
+ *
+ * Everything in the row that is not a transcript pane counts, `#turns`
+ * included, and left or right is decided by which side of the pane it sits on.
+ * That is what makes a *future* column work without touching this: give it a
+ * `--pane-w` in the row and it is counted.
+ *
+ * `instant` is for a column that arrives or leaves rather than one that widens:
+ * `display` cannot be animated, so the transcript reflows in one frame, and the
+ * composer easing into place over the next hundred would be the crooked composer
+ * again in miniature. The composer's transition is declared in CSS and suppressed
+ * for that one write, the way `setScrollTop` suppresses smooth scrolling.
+ */
+function syncPaneInsets({ instant = false } = {}) {
+    if (!dom.convBody) return;
+    const kids = [...dom.convBody.children];
+    const pane = kids.findIndex(k => k.classList.contains('scroll'));
+    if (pane === -1) return;
+
+    let left = 0;
+    let right = 0;
+    for (const [i, k] of kids.entries()) {
+        if (k.classList.contains('scroll')) {
+            // The transcript's own scrollbar. It sits inside the pane, so the
+            // log centres itself in what is left over from it while the composer
+            // knows nothing about it — a standing ~6px lean that predates the
+            // side columns and would be easy to mistake for this not working.
+            // Measured, not declared: its width is the platform's, and it is 0
+            // on a machine with overlay scrollbars.
+            if (k.offsetParent !== null) right += k.offsetWidth - k.clientWidth;
+            continue;
+        }
+        // A column that is not in the layout contributes nothing, whatever its
+        // `--pane-w` computes to. That is not belt-and-braces: `--pane-w` is set
+        // by several rules across two media queries, and the narrow-window rule
+        // that removes a panel is *less* specific than the one that sets it to
+        // 240px, so under 900px the variable still reads 240 while the box is
+        // gone. Asking the layout is the only answer that cannot be outranked.
+        if (k.offsetParent === null) continue;
+        const w = Number.parseFloat(getComputedStyle(k).getPropertyValue('--pane-w')) || 0;
+        if (i < pane) left += w; else right += w;
+    }
+
+    const next = [`${Math.round(left)}px`, `${Math.round(right)}px`];
+    // Nothing to do is the common case, and here it is also load-bearing. The
+    // observer fires on every frame of a width animation and recomputes the same
+    // target each time; writing it again would be harmless, but the `instant`
+    // dance below is not — cancelling and restoring the transition mid-flight
+    // would leave the composer where the animation had got to.
+    if (next[0] === paneInsets[0] && next[1] === paneInsets[1]) return;
+    paneInsets = next;
+
+    const moved = [dom.composer, dom.askDock].filter(Boolean);
+    if (instant) for (const n of moved) n.style.transition = 'none';
+
+    dom.convMain.style.setProperty('--pane-left', next[0]);
+    dom.convMain.style.setProperty('--pane-right', next[1]);
+
+    if (instant) {
+        void dom.composer.offsetWidth;   // land the new padding before the transition is back
+        for (const n of moved) n.style.transition = '';
+    }
+}
+
+/**
+ * Watch the columns rather than every place that opens one.
+ *
+ * Three render functions can put a column in or take it out, a window resize can
+ * cross either of the two media queries that change how wide one is, and a
+ * transcript growing past its pane can add a scrollbar — six places that would
+ * each have to remember to call `syncPaneInsets`, one of them not a user action
+ * at all. Observing the row covers all of them and a seventh nobody has written
+ * yet.
+ *
+ * The travelling-together is not this: that is the shared transition on
+ * `.composer`, driven by the target width `syncPaneInsets` reads. This only has
+ * to notice, and it is allowed to notice a frame late.
+ *
+ * The composer is not observed, only the row, and its padding cannot change
+ * anything inside the row — so this cannot feed itself.
+ */
+// `instant`, and not just because the callback's first argument is a list of
+// entries rather than an options bag. Everything this notices and the explicit
+// calls do not — a column removed because its content went away, a window
+// resize crossing a media query — changes the layout in one frame, so easing
+// after it would be the lag this whole thing is about. A width animation, which
+// is the one case that should ease, recomputes the same numbers here and stops
+// at the no-op above without touching the transition.
+const paneObserver = typeof ResizeObserver === 'function'
+    ? new ResizeObserver(() => syncPaneInsets({ instant: true })) : null;
+
+function watchPaneInsets() {
+    if (!paneObserver || !dom.convBody) return;
+    // Every child, the transcript panes included: their *content* box changes
+    // when a scrollbar appears, which is the one thing above that no side column
+    // moving would tell us about. Their border box is fixed by the row, and the
+    // composer's padding cannot reach inside the row, so watching them still
+    // cannot feed this back into itself.
+    for (const k of dom.convBody.children) paneObserver.observe(k);
+    syncPaneInsets();
+}
+
 /** `✓`, `▸` or `○`. Shared with todoView, so the transcript and the panel agree. */
 function statusMark(status) {
     return status === 'completed' ? '✓' : status === 'in_progress' ? '▸' : '○';
@@ -2669,6 +2794,8 @@ function showChecklist(on) {
     // strip — the same promise the Changed button makes.
     if (on) collapseChecklist(false, { render: false });
     renderChecklist();
+    // A column arriving or leaving is not a width animation — see syncPaneInsets.
+    syncPaneInsets({ instant: true });
     renderHeaderActions();
 }
 
@@ -2678,6 +2805,12 @@ function collapseChecklist(shut, { render = true } = {}) {
     localStorage.setItem('checklistShut', shut ? '1' : '0');
     if (!render) return;
     renderChecklist();
+    // In this frame, not the next one. This is the one direction that animates —
+    // a panel coming *back* into the layout starts at its full width and has
+    // nothing to animate — and the composer's transition has to start on the
+    // same frame as the column's or it spends the animation a frame behind. The
+    // observer would get here eventually, and eventually is what that looks like.
+    syncPaneInsets();
     // Focus follows whatever replaced the thing that was clicked.
     (shut ? dom.checklistStrip : dom.checklistCollapse).focus();
 }
@@ -2810,6 +2943,7 @@ function showTasks(on) {
     state.tasksShut = !on;
     localStorage.setItem('tasksShut', state.tasksShut ? '1' : '0');
     renderTasks();
+    syncPaneInsets();   // this frame, so the composer starts moving with it
     // Focus follows the thing that replaced what was clicked, so the keyboard
     // does not land on the body after either direction.
     (state.tasksShut ? dom.tasksStrip : dom.tasksCollapse).focus();
@@ -13687,6 +13821,7 @@ markInstance();
 renderBell();
 registerWorker();
 paintDockButton();      // the remembered arrangement, before anything is drawn
+watchPaneInsets();      // keep the composer over the transcript as columns come and go
 restoreView();          // and where we were, from the address that survived the refresh
 primeWaiting();
 refreshDevBrowser();
