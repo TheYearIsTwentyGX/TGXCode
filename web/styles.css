@@ -1757,8 +1757,10 @@ a:hover { text-decoration: underline; }
     overscroll-behavior: contain;
 }
 
-/* One file. A button where there is somewhere to go and a plain row where there
-   is not — the working tree's rows are a report, not a way in. */
+/* One file. A button where there is a diff behind it and a plain row where there
+   is not — which since the diff viewer landed is the narrow case rather than a
+   whole list: an untracked directory, which git will not diff, and a binary,
+   which has nothing to render. Both lists are a way in now. */
 .ch-row {
     display: flex;
     align-items: baseline;
@@ -5673,4 +5675,182 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 
     .dr-head { padding: 16px 16px 12px; }
     .dr-body { padding: 0 16px 20px; }
+}
+
+/* ── the right-click menu ────────────────────────────────────────────────────
+   The turn tooltip's positioning with the recent-directories menu's rows. Not
+   .turn-pop's `pointer-events: none`, which is right for a tooltip and would
+   make this unclickable.
+
+   z-index 70 is between two things: above .scrim (50) and every popover (60 —
+   .bell-menu, .new-menu, .turn-pop, .slash-menu), because this can be opened
+   over any of them; below .toasts (80), because "could not open that file" must
+   not appear behind the menu that asked for it. */
+.ctx-menu {
+    position: fixed;
+    z-index: 70;
+    min-width: 168px;
+    padding: 6px;
+    background: var(--s3);
+    border-radius: var(--r);
+    box-shadow: 0 10px 30px #000a;
+    animation: bell-in var(--t-fast) var(--ease);
+    transform-origin: top left;
+}
+.ctx-menu[hidden] { display: none; }
+.ctx-menu .picker-row { padding: 7px 10px; gap: 10px; }
+.ctx-menu .picker-row:hover:not([disabled]) { background: var(--s4); }
+.ctx-menu .picker-row[disabled] { opacity: 0.4; cursor: default; }
+.ctx-menu .picker-row.danger { color: var(--red); }
+.ctx-menu .sep { height: 1px; margin: 5px 8px; background: var(--outline-soft); }
+
+/* ── the diff viewer ─────────────────────────────────────────────────────────
+   diff2html 3.4.56, vendored in web/vendor/. Its stylesheet is loaded before
+   this one so these override without !important, which works because every dark
+   rule it ships is written `property: literal; property: var(--x)` — so
+   redefining the variables is enough, and there is no !important anywhere in it
+   to fight.
+
+   The variables are scoped to #diff-body rather than :root deliberately: they
+   are diff2html's names, and nothing else in the app should be tintable by
+   them. */
+.modal.diff-modal {
+    /* Derived rather than picked: at 12.5px var(--mono) a character is about
+       7.3px, so two 90-column panes plus their two 7.5em gutters is ~1310px.
+       Narrower than that and side by side is two unreadable columns rather than
+       a layout, which is what the media query at the foot of this block is for. */
+    width: min(1400px, 100%);
+    /* 92vh where every other dialog takes 88: a diff is the one where the
+       vertical room is the product. */
+    max-height: 92vh;
+}
+.diff-title { flex: 1; min-width: 0; display: flex; font: 400 15px/1.4 var(--mono); }
+.diff-title .fpath { flex: 1; min-width: 0; display: flex; }
+.diff-title .fdir { color: var(--text-4); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diff-title .fbase { color: var(--text); flex: none; }
+.diff-stat { display: flex; align-items: center; gap: 8px; margin: 0 12px; flex: none; }
+.diff-stat .fstat { font: 400 11px/1.4 var(--mono); }
+.diff-stat .ch-nums { font: 400 12px/1.4 var(--mono); }
+
+.diff-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex: none;
+    padding: 8px 24px 12px;
+}
+.diff-bar .spacer { flex: 1; }
+.diff-seg { display: flex; background: var(--s1); border-radius: var(--pill); padding: 2px; }
+.diff-seg-btn {
+    height: 26px;
+    padding: 0 14px;
+    border: 0;
+    border-radius: var(--pill);
+    background: none;
+    color: var(--text-3);
+    font: 500 12px/1 var(--sans);
+    cursor: pointer;
+}
+.diff-seg-btn[aria-pressed="true"] { background: var(--blue-cont); color: var(--text); }
+.diff-opt {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font: 400 12px/1 var(--sans);
+    color: var(--text-3);
+    cursor: pointer;
+}
+.diff-source {
+    height: 26px;
+    padding: 0 8px;
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-xs);
+    background: var(--s1);
+    color: var(--text-2);
+    font: 400 12px/1 var(--sans);
+}
+.diff-note { font: 400 11.5px/1.4 var(--sans); color: var(--text-4); text-align: right; }
+/* The reload button earns a tint only when there is a reason to press it. */
+.diff-bar .btn.accent { color: var(--yellow); }
+
+.diff-body {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 0 24px 20px;
+    background: var(--bg);
+
+    /* The additions and deletions are exactly .diff .dl.add / .dl.del above, so
+       a diff in this dialog and a diff on a tool card are the same colour. Kept
+       low-saturation for that block's reason: a long diff should not become a
+       wall of colour. The word-level highlights are one step up from them,
+       which is the only place a stronger tint is doing work. */
+    --d2h-dark-ins-bg-color: #14211a;
+    --d2h-dark-del-bg-color: #241819;
+    --d2h-dark-ins-highlight-bg-color: #24523a;
+    --d2h-dark-del-highlight-bg-color: #5a2f2c;
+    --d2h-dark-ins-border-color: #1f3a2a;
+    --d2h-dark-del-border-color: #3d2626;
+    --d2h-dark-change-ins-color: #14211a;
+    --d2h-dark-change-del-color: #2a2413;
+
+    --d2h-dark-bg-color: var(--bg);
+    --d2h-dark-color: var(--text-2);
+    --d2h-dark-border-color: var(--outline-soft);
+    --d2h-dark-line-border-color: var(--outline-soft);
+    --d2h-dark-dim-color: var(--text-4);
+    --d2h-dark-file-header-bg-color: var(--s2);
+    --d2h-dark-file-header-border-color: var(--outline-soft);
+    --d2h-dark-empty-placeholder-bg-color: var(--s1);
+    --d2h-dark-empty-placeholder-border-color: var(--outline-soft);
+    --d2h-dark-selected-color: var(--blue-cont);
+    --d2h-dark-info-bg-color: var(--s1);
+    --d2h-dark-info-border-color: var(--outline-soft);
+
+    /* The +N/−N labels, matching .ch-add and .ch-del in the drawer this opened from. */
+    --d2h-dark-ins-label-color: var(--green);
+    --d2h-dark-del-label-color: var(--red);
+    --d2h-dark-change-label-color: var(--yellow);
+    --d2h-dark-moved-label-color: var(--blue);
+}
+.diff-body .ch-note { margin: 16px 4px; font-size: 13px; }
+
+/* The rules diff2html does not put behind a variable. */
+.diff-body .d2h-diff-table { font: 400 12.5px/1.6 var(--mono); }
+.diff-body .d2h-file-header {
+    height: auto;
+    padding: 8px 12px;
+    font: 400 12.5px/1.4 var(--sans);
+}
+.diff-body .d2h-file-wrapper {
+    border-radius: var(--r-sm);
+    margin-bottom: 12px;
+    overflow: hidden;
+}
+/* It scrolls inside #diff-body rather than the page, so the sticky offset is 0
+   and it needs to sit over the rows rather than under them. */
+.diff-body .d2h-file-header.d2h-sticky-header { top: 0; z-index: 2; }
+/* See paintDiff: for the tree's single block the header is the dialog title
+   repeated, so it goes. */
+.diff-body.one-file .d2h-file-header { display: none; }
+.diff-body .d2h-file-side-diff { overflow-x: auto; }
+.diff-body .d2h-file-list-wrapper { margin-bottom: 14px; }
+.diff-body .d2h-file-list-title { font: 500 12.5px/1.4 var(--sans); color: var(--text-3); }
+.diff-body .d2h-file-name { font: 400 12px/1.5 var(--mono); }
+
+/* Wrap the content span, not the line box. .d2h-code-line is
+   `width: calc(100% - 16em)` against an absolutely positioned 7.5em gutter, so
+   wrapping the box itself pulls the line numbers out of alignment. */
+.diff-body.wrap .d2h-code-line-ctn,
+.diff-body.wrap .d2h-code-side-line .d2h-code-line-ctn {
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* Below the width two panes need, side by side cannot be chosen at all — better
+   than letting the remembered preference put someone into two 30-column columns
+   they then have to work out how to leave. */
+@media (max-width: 900px) {
+    .diff-seg { display: none; }
+    .diff-note { display: none; }
 }

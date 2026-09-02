@@ -49,10 +49,18 @@ const cache = {
  * `env` is undefined for every caller here, which leaves execFile inheriting
  * ours. bridge/restart.js is the one that passes it, to shut off git's terminal
  * prompt — see the comment there for why that matters.
+ *
+ * `maxBuffer` is an option rather than the constant it used to be because of
+ * `diffText`. Everything else here reads a status or a count and 8MB is more
+ * than any of them will ever produce; a diff of a generated file goes past it,
+ * and when it does execFile errors with the output it had *silently truncated*
+ * in `stdout`. A caller that took that would render a partial diff as a whole
+ * one. `err.code` is a string for that failure rather than an exit status, which
+ * is how `diffText` tells it apart.
  */
-function run(cmd, args, { cwd, timeout = GIT_TIMEOUT_MS, env } = {}) {
+function run(cmd, args, { cwd, timeout = GIT_TIMEOUT_MS, env, maxBuffer = 8 * 1024 * 1024 } = {}) {
     return new Promise((resolve) => {
-        execFile(cmd, args, { cwd, timeout, env, maxBuffer: 8 * 1024 * 1024 },
+        execFile(cmd, args, { cwd, timeout, env, maxBuffer },
             (err, stdout, stderr) => resolve({
                 ok: !err,
                 stdout: String(stdout || ''),
@@ -217,6 +225,111 @@ async function numstat(dir) {
     return out;
 }
 
+// ---------------------------------------------------------------------------
+// One file's diff
+// ---------------------------------------------------------------------------
+
+// A diff is the one thing here that can be arbitrarily large, so it gets its own
+// two numbers. The read cap is what execFile is allowed to buffer; the send cap
+// is what a client is allowed to receive. They are different because a diff that
+// is too big to *send* is still worth truncating honestly, and a diff too big to
+// *read* is a failure we have to name.
+const DIFF_READ_MAX = 24 * 1024 * 1024;
+const DIFF_BYTE_CAP = 2 * 1024 * 1024;
+const DIFF_TIMEOUT_MS = 20_000;
+
+// Config a user's ~/.gitconfig can set that would change the *shape* of the
+// output, not just its content — every one of these has been seen in the wild
+// and each breaks a unified-diff parser in its own way. `diff.noprefix` and
+// `mnemonicPrefix` rename or drop the `a/`…`b/` prefixes, so a parser keeps the
+// first path segment as part of the filename. `diff.external` replaces the diff
+// with some other program's output entirely. `core.quotePath` renders a
+// non-ASCII filename as `\303\251` escapes. Forced here rather than trusted,
+// because the person whose config it is never asked for this diff.
+const DIFF_CONFIG = [
+    '-c', 'core.quotePath=false',
+    '-c', 'diff.noprefix=false',
+    '-c', 'diff.mnemonicPrefix=false',
+    '-c', 'diff.external=',
+];
+
+/**
+ * The unified diff of one file, as text a client can render.
+ *
+ * `mode` picks which of the three questions "what changed" can mean:
+ *   worktree — everything uncommitted, staged and not, against HEAD. The default,
+ *              and what the row beside it in the changes drawer is counting.
+ *   staged   — the index against HEAD.
+ *   unstaged — the working tree against the index.
+ *
+ * An untracked file is not in `git diff` at any of those, so it is asked about
+ * with `--no-index` against /dev/null, which renders the whole file as additions.
+ *
+ * @param {string} dir repository root
+ * @param {string} rel path relative to it
+ * @param {{mode?: string, context?: number, untracked?: boolean}} opts
+ * @returns {Promise<{ok: boolean, diff?: string, bytes?: number, truncated?: number,
+ *                    reason?: string, error?: string}>}
+ */
+async function diffText(dir, rel, { mode = 'worktree', context = 3, untracked = false } = {}) {
+    // `Number(context)` and not `context || 3`: a caller asking for zero context
+    // means it, and 0 is falsy. Anything that is not a number at all — an absent
+    // query parameter arrives as `Number(null)`, which is 0, so the caller has to
+    // pass undefined rather than the parsed value — falls back to git's own 3.
+    const lines = Number.isFinite(context) ? Math.max(0, Math.min(25, Math.trunc(context))) : 3;
+    const shared = [
+        '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames',
+        `--unified=${lines}`,
+    ];
+
+    let args;
+    if (untracked) {
+        // `--no-index` works outside the index entirely, so it takes paths rather
+        // than a pathspec and wants them in that order: the empty side first, so
+        // the file reads as added rather than deleted.
+        args = ['-C', dir, ...DIFF_CONFIG, '--no-pager', 'diff', '--no-index', ...shared,
+            '--', '/dev/null', rel];
+    } else if (mode === 'unstaged') {
+        args = ['-C', dir, ...DIFF_CONFIG, '--no-pager', 'diff', ...shared, '--', rel];
+    } else if (mode === 'staged') {
+        args = ['-C', dir, ...DIFF_CONFIG, '--no-pager', 'diff', '--cached', ...shared, '--', rel];
+    } else {
+        // A repository with no commit yet has no HEAD to diff against — the same
+        // fallback `numstat` takes, and for the same reason.
+        const hasHead = (await run('git', ['-C', dir, 'rev-parse', '--verify', '-q', 'HEAD'])).ok;
+        args = ['-C', dir, ...DIFF_CONFIG, '--no-pager', 'diff',
+            ...(hasHead ? ['HEAD'] : ['--cached']), ...shared, '--', rel];
+    }
+
+    const r = await run('git', args, { timeout: DIFF_TIMEOUT_MS, maxBuffer: DIFF_READ_MAX });
+
+    // `git diff --no-index` exits 1 whenever the two files differ, which for an
+    // untracked file is *every successful run*. `run` reports that as `ok: false`
+    // because it reports any non-zero exit that way, so the exit code has to be
+    // read here rather than the flag. Getting this wrong makes every new file
+    // look like it has no diff, which is the quietest possible failure.
+    const wentWrong = !r.ok && !(r.code === 1 && r.stdout);
+    if (wentWrong) {
+        if (r.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+            return { ok: false, reason: 'diff-failed',
+                error: 'that diff is larger than the bridge will read' };
+        }
+        return { ok: false, reason: 'diff-failed', error: firstLine(r.stderr) };
+    }
+
+    const full = r.stdout;
+    const bytes = Buffer.byteLength(full);
+    if (bytes <= DIFF_BYTE_CAP) return { ok: true, diff: full, bytes, truncated: 0 };
+
+    // Cut on a line boundary. Half a line reaching a unified-diff parser is worse
+    // than a diff that admits it stops early.
+    let cut = full.slice(0, DIFF_BYTE_CAP);
+    const nl = cut.lastIndexOf('\n');
+    if (nl > 0) cut = cut.slice(0, nl + 1);
+    return { ok: true, diff: cut, bytes: Buffer.byteLength(cut),
+        truncated: bytes - Buffer.byteLength(cut) };
+}
+
 /**
  * The cached working state of a directory, with its file list capped.
  *
@@ -364,5 +477,6 @@ function clearCache(dir) {
 
 module.exports = {
     run, firstLine, samePath, afterFields,
-    parseStatus, workingState, numstat, statusOf, commitRange, clearCache,
+    parseStatus, workingState, numstat, statusOf, diffText, commitRange, clearCache,
+    DIFF_BYTE_CAP,
 };

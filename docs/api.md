@@ -124,7 +124,7 @@ the thing you are about to approve is running on a machine you are sitting at.
 **saving or starting a draft**; all
 of `/api/terminals/*`; all of `/api/runs/*`; `POST /api/commands/run`;
 `/api/shutdown`; `/api/restart` (both methods); `/api/devservers/stop`; `/api/devbrowser/*`;
-`POST /api/sessions/:id/reveal`; `POST /api/sessions/:id/handoff`; `POST /api/fs/mkdir`;
+`POST /api/sessions/:id/reveal`; `POST /api/sessions/:id/open-file`; `POST /api/sessions/:id/handoff`; `POST /api/fs/mkdir`;
 both attachment uploads — `POST /api/sessions/:id/attachments` and
 `POST /api/attachments`.
 
@@ -141,6 +141,12 @@ already start one; reading what a project declares gives away nothing that is no
 in its repository. Creating a directory, or running one of those commands, is
 reaching past the app into the machine.
 
+`GET /api/sessions/:id/diff` is the same shape of asymmetry one route further
+down: `POST /api/sessions/:id/open-file` beside it is refused and the diff is not,
+because launching a Windows program is reaching past the app into the machine and
+reading a diff is not. It is repository-scoped rather than only roots-scoped, which
+is what makes that safe to say.
+
 `GET /api/slash-commands` is readable remotely for the same reason, and is a
 different route from `GET /api/commands` despite the name — one is what the CLI
 will accept in the composer, the other is what the repository declares in
@@ -149,7 +155,9 @@ every caller.
 
 **For every caller:** a session may only start inside `CLAUDE_SESSIONS_ROOTS`
 (default `$HOME`); `/api/fs` lists and `/api/fs/mkdir` writes only inside the same
-roots; session creation is capped at 8 per minute (`429`). A leading `~` in any
+roots; `GET /api/sessions/:id/diff` and `POST /api/sessions/:id/open-file` reach
+only inside those roots **and** only inside the session's own repository root;
+session creation is capped at 8 per minute (`429`). A leading `~` in any
 path — a session's `cwd`, `/api/fs?path=`, a mkdir `parent` — means `$HOME`, as it
 would in a shell.
 
@@ -631,6 +639,103 @@ a file, so a client can explain a count that looks too small.
 otherwise, shared with `/api/dashboard`, which asks the same question of the same
 directories. Its own route rather than a field on the summary for the reason
 `/prs` gives: it shells out, and the session list must never wait on that.
+
+A client that wants the content behind one of those rows asks
+`GET /api/sessions/:id/diff`, below.
+
+### `GET /api/sessions/:id/diff?path=<p>[&mode=<m>][&context=<n>]`
+
+`{ ok, path, absPath, root, mode, status, added, deleted, binary, diff, bytes, truncated, checkedAt }`
+— the unified diff of one file, as text. This is the **tree's** answer, the same side
+of `/changes` that `git` is; the transcript's answer is the `patch` already on every
+edit tool's result over `/api/events`, which a client holding the conversation can
+assemble itself and which is the only answer left once a file has been committed.
+
+`path` is what `/changes` gave you — `git.sample[].path`, relative to the repository
+root, or an `edits[].relPath`, which is absolute for a session that ran outside a
+repository. Either form works; an absolute one must still resolve inside the
+session's own repository root. **It is re-derived rather than trusted:** joined to a
+root the bridge worked out for itself, resolved, checked against that root and
+against the allowed roots, and — when it turns out to be a symlink — checked again
+against its real path. Every git argument is then recomputed from the resolved path,
+never the string you sent.
+
+`mode` is one of:
+
+| `mode` | what it diffs |
+| --- | --- |
+| `worktree` (default) | everything uncommitted, staged and unstaged together, against `HEAD` — what the row's `+N −M` is counting |
+| `staged` | the index against `HEAD` |
+| `unstaged` | the working tree against the index |
+
+Anything else is a `400`, rather than a silent fall back to the default. An
+untracked file is in none of the three, so it is diffed against `/dev/null` and comes
+back as one whole-file addition whatever `mode` says. A repository with no commit yet
+falls back to the index, as `/changes`' line counts do.
+
+`context` is lines of surrounding code, `0`–`25`, default 3 — the one thing a
+per-file view offers that the drawer cannot. Out-of-range values are clamped.
+
+**Failures are answers, not errors.** `{ok: false}` arrives with `200` and a `reason`
+of `no-directory`, `not-a-repo`, `left-behind`, `no-such-file`, `outside-repo` or
+`diff-failed`, plus `error` where git said something. `outside-repo` in particular is
+an ordinary result a client draws, not a refusal: a `403` is reserved for a path
+outside `CLAUDE_SESSIONS_ROOTS`, and it carries `{error, path, roots}`. A missing
+`path` or an unrecognised `mode` is a `400`, **checked before the session is looked
+up**, so the difference between `400` and `404` cannot be used to enumerate session
+ids. `404` is only "session not found".
+
+`binary: true` arrives with `ok: true` and an empty `diff` — it is a fact about the
+file rather than a failure, and it is known from `git diff --numstat` before a diff is
+asked for at all.
+
+`diff` is capped at **2 MB**, cut on a line boundary so a half-line never reaches a
+parser; `truncated` is **how many bytes were left out**, not a boolean, matching
+`git.truncated` on `/changes`. `bytes` is the length of what was sent. A diff too
+large for the bridge to read at all is `{ok: false, reason: 'diff-failed'}` saying so,
+rather than a truncated diff claiming to be whole.
+
+**Not cached, deliberately.** `/changes` shares a 15s `git status` with
+`/api/dashboard` because a board asks about forty directories on a timer; a diff is
+asked for once, by a person who wants it as it is now. There is no `refresh=1` — ask
+again.
+
+**Readable remotely**, unlike its neighbours, and the omission from the refusal list
+is deliberate: it is a read, its bytes already reach a phone inside the tool results
+it renders, and it is scoped to the session's own repository so a leaked token cannot
+walk it to `~/.ssh`.
+
+### `POST /api/sessions/:id/open-file`
+
+`{path}` → `{ok, file, path}` — opens one of the session's files in whatever program
+Windows opens that kind of file with. `POST /api/sessions/:id/reveal` for the folder,
+this for the file.
+
+`path` takes the same forms as the diff route's and is re-derived exactly the same
+way. A path that leaves the tree is `403 {"error": "that file is outside this
+session's working directory"}` — and it is the **same 403 whether the file is absent
+or out of bounds**, because the difference between those two answers is an existence
+oracle for everything on the machine. An empty `path` is `400`, again before the
+session lookup.
+
+`file` in the answer is the WSL path; **`path` is the Windows one**
+(`\\wsl.localhost\…`) that was handed to `explorer.exe`. `502` with `ok: false` means
+the launch itself failed — no `explorer.exe` on `PATH`, or `wslpath` could not
+translate. A file type with **no** registered handler still reports `ok: true`:
+Windows shows its own "how do you want to open this" dialog, and that is a success.
+
+One limitation worth knowing rather than working around: Windows joins an argument
+vector into a single command line and Explorer parses its own, comma-separated. A
+filename containing a comma therefore opens the wrong thing or nothing. It cannot
+escape the tree — the path is validated before `wslpath` sees it, and `execFile` uses
+no shell — so this is a visible failure on an unusual filename, not a hole.
+
+**Local only.** A remote caller gets
+`403 {"error": "opening a file only makes sense on the machine itself"}`. The window
+it opens is on this machine's desktop, which a phone cannot look at — and pointed at
+a `.ps1` or an `.exe` in the checkout, Windows will run it. That is not a new power
+(`POST /api/commands/run` and the terminal routes are strictly larger, and are
+refused remotely too), but it is why this one is refused as well.
 
 ### `GET /api/prefs?cwd=<path>`
 

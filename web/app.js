@@ -293,6 +293,35 @@ const state = {
         shut: localStorage.getItem('changesShut') === '1',
         sessionId: null, data: null, at: 0, loading: false, error: null,
     },
+    // The file on screen in the diff viewer.
+    //
+    // Values copied off a row, never the row itself. `renderChanges` calls
+    // replaceChildren on every load, every refresh and every turn that ends, so
+    // an element or a closure this held would be an orphan within seconds of the
+    // dialog opening — and the dialog outlives several of those by design.
+    //
+    // `req` is a sequence rather than a loading flag, for the reason
+    // `loadChanges` has an `at`: an answer that arrives for a file you have since
+    // moved off is dropped rather than drawn over the one you are reading.
+    //
+    // `split`/`words`/`wrap` are remembered per window like `changesOn`, because
+    // they are a property of how you read a diff and not of any one file.
+    diff: {
+        open: false, sessionId: null, kind: null,
+        path: null, absPath: null, status: null, root: null,
+        mode: 'worktree', source: null, text: null, meta: null,
+        toolId: null, agent: null,
+        loading: false, error: null, stale: false, req: 0,
+        split: localStorage.getItem('diffSplit') === '1',
+        words: localStorage.getItem('diffWords') !== '0',
+        wrap: localStorage.getItem('diffWrap') === '1',
+        // Set on first open when nothing has been remembered, from the window
+        // width — side by side in a narrow window is two unreadable columns.
+        sized: localStorage.getItem('diffSplit') != null,
+    },
+    // The right-click menu. `dom.ctxMenu.hidden` is whether it is open, the way
+    // `dom.newMenu.hidden` is; this holds only what to give focus back to.
+    ctx: { from: null },
     // The session's own task list. `on` and `shut` are the same two window
     // properties the drawers either side of the transcript have, remembered for
     // the same reason.
@@ -443,6 +472,9 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'new-tab-recent', 'new-tab-browse', 'new-browse', 'new-roots', 'new-crumbs',
     'new-tree', 'new-mkdir', 'new-mkdir-name', 'new-mkdir-go', 'new-browse-note',
     'del-scrim', 'del-what', 'del-meta', 'del-go',
+    'diff-scrim', 'diff-title', 'diff-stat', 'diff-unified', 'diff-split',
+    'diff-words', 'diff-wrap', 'diff-source', 'diff-note', 'diff-jump',
+    'diff-reload', 'diff-copy', 'diff-body', 'ctx-menu',
     'btn-pair', 'pair-scrim', 'pair-url', 'pair-host', 'pair-hosts', 'pair-note',
     'pair-copy',
     'btn-restart', 'restart-scrim', 'restart-lede', 'restart-problems',
@@ -1259,6 +1291,7 @@ function forgetSession(sessionId) {
     saveAttach(sessionId, []);
     setTermOpen(sessionId, false);
     if (state.pendingDelete && state.pendingDelete.sessionId === sessionId) closeDelete();
+    if (state.diff.open && state.diff.sessionId === sessionId) closeDiff();
     if (state.current && state.current.sessionId === sessionId) clearCurrent();
     renderRail();
 }
@@ -1291,6 +1324,7 @@ function clearCurrent() {
     dom.agents.replaceChildren();
     dom.channels.replaceChildren();
     hideTurnPop();
+    closeContextMenu({ focus: false });
     dom.conv.hidden = true;
     // Not while a panel is up: the empty state would sit under it, and the
     // session that went away is not what you are looking at anyway.
@@ -2408,9 +2442,12 @@ async function actOnSuggestion(ev, status, startedId = null) {
 // and then put back. Reconciling them would mean choosing which of those to lie
 // about, so they are drawn as they are and the disagreement is the information.
 //
-// It lives beside the transcript rather than over it because clicking a file
-// jumps to the edit that made it, and a panel you have to close first turns that
-// into two actions and something to remember.
+// It lives beside the transcript rather than over it because a row is a way back
+// into the conversation — the jump is on the right-click menu now, and on the
+// diff dialog a click opens — and a panel you have to close first turns reaching
+// it into two actions and something to remember. Clicking a row opens the diff,
+// which is a dialog over the transcript; that is a deliberate exception rather
+// than the end of the rule, because reading a diff is a thing you stop to do.
 
 // Long enough that opening the drawer twice in a row does not shell out to git
 // twice, short enough that it is never obviously wrong. A turn ending refetches
@@ -2452,6 +2489,9 @@ function loadChangesIfStale() {
 
 /** Forget what is on screen — the conversation it was about has changed. */
 function resetChanges() {
+    // The diff belongs to a file in the session being left, and its Jump to the
+    // edit would resolve against the new session's tool map.
+    closeDiff();
     state.changes.data = null;
     state.changes.sessionId = null;
     state.changes.at = 0;
@@ -2474,6 +2514,12 @@ async function loadChanges({ refresh = false } = {}) {
         state.changes.data = d;
         state.changes.sessionId = id;
         state.changes.at = Date.now();
+        // A turn ending refetches this, and the dialog must not redraw under
+        // somebody reading it. Say the tree moved and let them decide.
+        if (state.diff.open) {
+            state.diff.stale = true;
+            paintDiff();
+        }
     } catch (err) {
         state.changes.error = err.message;
     } finally {
@@ -2483,6 +2529,11 @@ async function loadChanges({ refresh = false } = {}) {
 }
 
 function renderChanges() {
+    // replaceChildren below destroys whichever row a context menu is anchored to,
+    // and a menu left floating over a list that has moved under it is worse than
+    // one that closes.
+    closeContextMenu({ focus: false });
+
     dom.changes.hidden = !state.changes.on || !state.current;
     if (dom.changes.hidden) return;
 
@@ -2543,27 +2594,29 @@ function editsSection(d) {
 /**
  * One file, and where clicking it goes.
  *
- * Resolved at click rather than at render: the transcript fills in as it loads
- * and grows while a turn runs, so a row built a second too early would be dead
- * for the rest of its life.
+ * Clicking opens the diff, and the jump this row used to be has moved onto the
+ * right-click menu and the dialog's own button. The trade is worth naming: the
+ * jump was one click and is now two, and seeing what actually changed went from
+ * several — find the turn, unfold the tool card, scroll — to one. The more
+ * common question is now the closer one, and neither answer was lost.
+ *
+ * Everything is resolved at click rather than at render, which is unchanged and
+ * still load-bearing: the transcript fills in as it loads and grows while a turn
+ * runs, so a row built a second too early would be dead for the rest of its life.
  */
 function editRow(f) {
     const agent = f.agent;
-    const go = () => {
-        const entry = f.toolId ? state.tools.get(f.toolId) : null;
-        if (entry) return jumpToTurn(entry);
-        // Every edit was made by an agent, so there is no call in this
-        // transcript to jump to — its own pane is where the edit is.
-        if (agent) return openAgent(agent.toolUseId);
-        toast('That edit is not in the part of the conversation on screen.', 'warn');
-    };
 
     const tip = [f.path, `${f.edits} ${f.edits === 1 ? 'edit' : 'edits'}`,
         agent && `by a ${agent.agentType || 'subagent'}${agent.description ? `: ${agent.description}` : ''}`,
         f.lastTs && `last ${ago(f.lastTs)} ago`].filter(Boolean).join('\n');
 
     return el('li', {},
-        el('button', { class: 'ch-row', type: 'button', title: tip, onclick: go },
+        el('button', {
+            class: 'ch-row', type: 'button', title: tip,
+            onclick: () => openDiff(fileTarget(f, 'edit'), 'edit'),
+            oncontextmenu: (e) => openFileMenu(e, f, 'edit'),
+        },
             filePath(f.relPath),
             plusMinus(f),
             // One word, not the agent's type: the types run to `general-purpose`
@@ -2600,15 +2653,35 @@ function treeSection(g) {
     );
 }
 
+/**
+ * One working-tree file.
+ *
+ * These used to be inert — a report rather than a way in — and are not any more,
+ * because this is where the real diff lives: an edits row can only ever offer
+ * what the conversation recorded, and this one is the tree itself.
+ *
+ * Two kinds stay flat, and `flat` now means "there is nothing behind this one"
+ * rather than "this list is a report": an untracked *directory*, which git will
+ * not diff and which is not a file, and a binary, which has no diff to render.
+ */
 function treeFileRow(f) {
+    const inert = f.binary || /\/$/.test(f.path || '');
+    const body = [
+        el('span', { class: 'fstat', 'data-s': f.status }, statusWord(f.status)),
+        filePath(f.path),
+        // Untracked files are not in `git diff` and so have no counts. The
+        // status word already said "new", which is the honest answer.
+        f.added == null ? null : plusMinus(f),
+    ];
+
+    if (inert) return el('li', {}, el('div', { class: 'ch-row flat', title: f.path }, ...body));
+
     return el('li', {},
-        el('div', { class: 'ch-row flat', title: f.path },
-            el('span', { class: 'fstat', 'data-s': f.status }, statusWord(f.status)),
-            filePath(f.path),
-            // Untracked files are not in `git diff` and so have no counts. The
-            // status word already said "new", which is the honest answer.
-            f.added == null ? null : plusMinus(f),
-        ));
+        el('button', {
+            class: 'ch-row', type: 'button', title: f.path,
+            onclick: () => openDiff(fileTarget(f, 'tree'), 'tree'),
+            oncontextmenu: (e) => openFileMenu(e, f, 'tree'),
+        }, ...body));
 }
 
 function treeReason(g) {
@@ -2646,6 +2719,541 @@ function plusMinus(f) {
     // it already had. Rare, and worth not drawing as a blank column.
     if (!box.childNodes.length) box.append(el('span', { class: 'ch-meta' }, '±0'));
     return box;
+}
+
+// ── one file, in full ──────────────────────────────────────────────────────
+//
+// The drawer says which files changed; this says what changed in them. Rendered
+// by diff2html, vendored in web/vendor/ and reached as a global — see the script
+// tag in index.html for why it is not an import.
+//
+// There are two possible answers and the dialog always names the one it is
+// showing, because they disagree for the reasons the drawer itself exists for.
+// The working tree is asked first: it is cumulative, and it includes whatever a
+// `Bash sed -i` did, which the transcript cannot see. The transcript is the
+// fallback, and the only answer left once a file has been committed or its
+// directory has gone.
+
+/** Tool names whose results carry a patch worth showing. Mirrors bridge/changes.js. */
+const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+
+// Past this many characters, side by side plus word matching is tens of
+// thousands of DOM nodes and a tab that stops responding. Measured on a minified
+// bundle, which is the realistic worst case in this repo.
+const DIFF_HEAVY = 400_000;
+
+/**
+ * Open the viewer on one file.
+ *
+ * `row` is scalars copied out of a drawer row, never the row: see `state.diff`.
+ */
+function openDiff(row, kind) {
+    // A composer popover left open under a modal is debris. Same call openNew makes.
+    closeMenus(live);
+    closeContextMenu({ focus: false });
+
+    const d = state.diff;
+    d.open = true;
+    d.sessionId = state.current ? state.current.sessionId : null;
+    d.kind = kind;
+    d.path = row.path;
+    d.absPath = row.absPath || null;
+    d.status = row.status || null;
+    d.toolId = row.toolId || null;
+    d.agent = row.agent || null;
+    d.mode = 'worktree';
+    d.source = null;
+    d.text = null;
+    d.meta = { added: row.added, deleted: row.deleted, binary: row.binary };
+    d.error = null;
+    d.stale = false;
+
+    if (!d.sized) {
+        d.split = window.innerWidth >= 1100;
+        d.sized = true;
+    }
+
+    dom.diffScrim.hidden = false;
+    paintDiff();
+    dom.diffBody.focus();
+    fetchDiff();
+}
+
+function closeDiff() {
+    const d = state.diff;
+    if (!d.open) return;
+    d.open = false;
+    // Any answer still in flight is now for a dialog nobody is looking at.
+    d.req++;
+    d.text = null;
+    dom.diffScrim.hidden = true;
+    // A five-thousand-line side-by-side diff is around twenty thousand nodes.
+    // Leaving them attached to a hidden dialog costs that until the next open.
+    dom.diffBody.replaceChildren();
+    // Back to the drawer, deliberately not to the row: renderChanges may well
+    // have replaced it while this was open.
+    if (state.changes.on && !state.changes.shut) dom.changesBody.focus({ preventScroll: true });
+}
+
+async function fetchDiff() {
+    const d = state.diff;
+    const seq = ++d.req;
+    d.loading = true;
+    d.error = null;
+    paintDiff();
+
+    const q = new URLSearchParams({ path: d.path, mode: d.mode });
+    let answer = null;
+    try {
+        answer = await get(`/api/sessions/${d.sessionId}/diff?${q}`);
+    } catch (err) {
+        // Dropped rather than drawn if it is no longer the question on screen.
+        if (d.req !== seq || !d.open) return;
+        d.loading = false;
+        // The bridge could not answer, but the conversation may still be able to.
+        // This is not a fringe case: a session that ran outside a repository has
+        // absolute paths in `edits`, and asking about one earns the roots refusal
+        // — so without this the drawer offers a row whose only answer is an error
+        // message about allowed roots, for a file it is still holding the patches
+        // for. Falling back for *any* failure rather than only that one, because
+        // an answer beats a sentence about why there isn't one.
+        const fallback = transcriptDiff(d.absPath || d.path);
+        if (fallback) {
+            d.source = 'transcript';
+            d.text = fallback.text;
+            d.meta = { ...(d.meta || {}), edits: fallback.edits };
+        } else {
+            d.error = err.message;
+        }
+        return paintDiff();
+    }
+    if (d.req !== seq || !d.open) return;
+    if (!state.current || state.current.sessionId !== d.sessionId) return;
+
+    d.loading = false;
+    d.root = answer.root || null;
+    if (answer.status) d.status = answer.status;
+    d.meta = {
+        added: answer.added, deleted: answer.deleted, binary: answer.binary,
+        truncated: answer.truncated, reason: answer.reason, error: answer.error,
+    };
+
+    if (answer.ok && answer.diff) {
+        d.source = 'worktree';
+        d.text = answer.diff;
+        return paintDiff();
+    }
+
+    // Nothing in the tree — committed since, gone, or never in a repository at
+    // all. The conversation may still remember what it did.
+    const fromTalk = transcriptDiff(d.absPath || answer.absPath || d.path);
+    if (fromTalk) {
+        d.source = 'transcript';
+        d.text = fromTalk.text;
+        d.meta = { ...d.meta, edits: fromTalk.edits };
+    } else {
+        d.source = answer.ok ? 'worktree' : null;
+        d.text = '';
+    }
+    paintDiff();
+}
+
+/**
+ * The conversation's answer for one file: every edit it recorded, in order.
+ *
+ * Built here rather than sent by the bridge because the data is already on this
+ * page — `/changes` carries only the *first* tool id, and widening it would mean
+ * the bridge re-parsing a transcript the client has open.
+ *
+ * One `diff --git` block per edit rather than one concatenated block, which
+ * matters more than it looks: consecutive edits number their hunks against
+ * different versions of the file, so joining them produces line numbers that go
+ * backwards and are wrong in both directions. Separate blocks are honest, and
+ * diff2html's file list then indexes them.
+ */
+function transcriptDiff(absPath) {
+    if (!absPath) return null;
+    const rel = state.diff.root && absPath.startsWith(state.diff.root + '/')
+        ? absPath.slice(state.diff.root.length + 1)
+        : absPath;
+
+    const blocks = [];
+    for (const { ev } of state.tools.values()) {
+        if (!ev || ev.kind !== 'tool' || !EDIT_TOOLS.has(ev.name)) continue;
+        const r = ev.result || {};
+        const input = ev.input || {};
+        const target = r.filePath || input.file_path || input.notebook_path;
+        if (target !== absPath) continue;
+
+        const head = [`diff --git a/${rel} b/${rel}`];
+        if (Array.isArray(r.patch) && r.patch.length) {
+            head.push(`--- a/${rel}`, `+++ b/${rel}`);
+            for (const hunk of r.patch) {
+                head.push(`@@ -${hunk.oldStart},${hunk.oldLines} `
+                    + `+${hunk.newStart},${hunk.newLines} @@`);
+                for (const line of hunk.lines || []) head.push(line || ' ');
+            }
+            blocks.push(head.join('\n'));
+            continue;
+        }
+
+        // A Write that *created* a file records `patch: []` — there was nothing to
+        // diff it against — and puts the whole file in `input.content`. Rendering
+        // that as one addition is truthful, because the content is the file as of
+        // that call, and it is the same fallback bridge/changes.js takes to count
+        // those lines. Without it the commonest case of all, a file this session
+        // created outside a repository, has no answer anywhere.
+        //
+        // An Edit or MultiEdit with no patch gets no such treatment: its inputs are
+        // strings with no line numbers attached, and a hunk header invented for
+        // them would be a confident lie.
+        if (ev.name !== 'Write' || typeof input.content !== 'string') continue;
+        const lines = input.content.split('\n');
+        // A trailing newline splits to a final empty string that is not a line.
+        if (lines.length && lines[lines.length - 1] === '') lines.pop();
+        head.push('new file mode 100644', '--- /dev/null', `+++ b/${rel}`,
+            `@@ -0,0 +1,${lines.length} @@`, ...lines.map(l => `+${l}`));
+        blocks.push(head.join('\n'));
+    }
+    if (!blocks.length) return null;
+    return { text: `${blocks.join('\n')}\n`, edits: blocks.length };
+}
+
+function diffConfig() {
+    const d = state.diff;
+    const heavy = (d.text || '').length > DIFF_HEAVY;
+    // Matches the media query in styles.css that hides the layout control: below
+    // that width there is no room for two panes, so a remembered preference must
+    // not be able to strand somebody in two unreadable columns.
+    const roomForTwo = window.innerWidth > 900;
+    return {
+        outputFormat: d.split && !heavy && roomForTwo ? 'side-by-side' : 'line-by-line',
+        // Only once there is more than one block to index. The transcript's
+        // answer is one block per edit and they all name the same file, so for a
+        // single edit the list is the filename a third time.
+        drawFileList: d.source === 'transcript' && !!(d.meta && d.meta.edits > 1),
+        matching: d.words && !heavy ? 'words' : 'none',
+        matchWordsThreshold: 0.25,
+        diffStyle: 'word',
+        colorScheme: 'dark',
+        renderNothingWhenEmpty: true,
+        // Down from the default 10000. A minified bundle is one 400KB line, and
+        // word-matching against it locks the tab for as long as it takes.
+        maxLineLengthHighlight: 2000,
+    };
+}
+
+function paintDiff() {
+    const d = state.diff;
+    if (!d.open) return;
+
+    dom.diffTitle.replaceChildren(filePath(d.path));
+    dom.diffTitle.title = d.absPath || d.path;
+    dom.diffStat.replaceChildren(...[
+        d.status ? el('span', { class: 'fstat', 'data-s': d.status }, statusWord(d.status)) : null,
+        d.meta && (d.meta.added || d.meta.deleted || d.meta.binary) ? plusMinus(d.meta) : null,
+    ].filter(Boolean));
+
+    dom.diffUnified.setAttribute('aria-pressed', String(!d.split));
+    dom.diffSplit.setAttribute('aria-pressed', String(d.split));
+    dom.diffWords.checked = d.words;
+    dom.diffWrap.checked = d.wrap;
+    dom.diffBody.classList.toggle('wrap', d.wrap);
+    // diff2html names the file in a header above every block. For the tree's
+    // answer that is one block and the name is already in the dialog title, so
+    // the header is the same string twice. The transcript's answer is one block
+    // per edit, where the header is what separates them, so it stays.
+    dom.diffBody.classList.toggle('one-file', d.source !== 'transcript');
+
+    // Only for a file that is staged and modified, where the three answers are
+    // genuinely three. Anywhere else they are three names for one.
+    const bothSides = !!d.status && d.status[0] !== '.' && d.status[1] !== '.' && d.status !== '??';
+    dom.diffSource.hidden = !bothSides;
+    dom.diffSource.value = d.mode;
+
+    dom.diffJump.hidden = !(d.toolId || d.agent);
+    dom.diffCopy.disabled = !d.text;
+    dom.diffReload.classList.toggle('accent', d.stale);
+    dom.diffNote.textContent = diffNote();
+
+    if (d.loading) {
+        return dom.diffBody.replaceChildren(el('p', { class: 'ch-note' }, 'Asking git…'));
+    }
+    if (d.error) {
+        return dom.diffBody.replaceChildren(el('p', { class: 'ch-note bad' }, d.error));
+    }
+    if (!d.text) {
+        return dom.diffBody.replaceChildren(el('p', { class: 'ch-note' }, diffEmptyReason()));
+    }
+
+    const d2h = window.Diff2Html;
+    if (!d2h) {
+        return dom.diffBody.replaceChildren(el('p', { class: 'ch-note bad' },
+            'The diff renderer did not load.'));
+    }
+    // diff2html escapes the content it is given, the same guarantee renderMarkdown
+    // and el()'s `html` rely on. Its word-level <ins>/<del> markup is where an
+    // escaping bug would land, so it is worth knowing that is what this trusts.
+    dom.diffBody.innerHTML = d2h.html(d.text, diffConfig());
+    syncSideScroll(dom.diffBody);
+}
+
+/** The sentence under the controls: which answer this is, and what is missing from it. */
+function diffNote() {
+    const d = state.diff;
+    if (d.loading || d.error) return '';
+    const bits = [];
+    if (d.source === 'transcript') {
+        const n = d.meta && d.meta.edits;
+        bits.push(n ? `From the conversation — ${n} ${n === 1 ? 'edit' : 'edits'}, in order.`
+            : 'From the conversation.');
+    }
+    if (d.meta && d.meta.truncated) {
+        bits.push(`Showing the first ${Math.round(d.meta.truncated / 1024) > 0
+            ? '2 MB' : 'part'} of a larger diff.`);
+    }
+    if ((d.text || '').length > DIFF_HEAVY) {
+        bits.push('Large diff — shown unified, without word matching.');
+    }
+    if (d.stale) bits.push('The tree has changed since this was read.');
+    return bits.join(' ');
+}
+
+function diffEmptyReason() {
+    const d = state.diff;
+    const meta = d.meta || {};
+    if (meta.binary) return 'git calls this a binary file.';
+    if (meta.reason === 'no-such-file') return 'That file is no longer on disk.';
+    if (meta.reason === 'outside-repo') {
+        return 'That file is outside the repository this session worked in.';
+    }
+    if (meta.reason) return treeReason(meta);
+    if (d.kind === 'edit') {
+        return 'Nothing uncommitted in this file, and no edit to it in the part of '
+            + 'the conversation on screen.';
+    }
+    return 'Nothing to show for this file.';
+}
+
+/**
+ * Keep the two side-by-side panes together horizontally.
+ *
+ * diff2html gives each pane its own scroller and no synchronisation — reading a
+ * long line then means scrolling both halves by hand to compare them, which is
+ * the one thing side by side is for.
+ */
+function syncSideScroll(root) {
+    // Per file wrapper rather than across the whole body. The transcript source
+    // renders one block per edit, so a body-wide query returns six panes for
+    // three edits and pairing them globally would tie the wrong halves together.
+    for (const wrap of root.querySelectorAll('.d2h-file-wrapper')) {
+        const panes = [...wrap.querySelectorAll('.d2h-file-side-diff')];
+        if (panes.length !== 2) continue;
+        let mirroring = false;
+        for (const pane of panes) {
+            pane.addEventListener('scroll', () => {
+                if (mirroring) return;
+                mirroring = true;
+                for (const other of panes) if (other !== pane) other.scrollLeft = pane.scrollLeft;
+                // Cleared on the next frame rather than immediately: setting
+                // scrollLeft queues a scroll event of its own, and clearing the
+                // flag first would let the mirror echo back.
+                requestAnimationFrame(() => { mirroring = false; });
+            }, { passive: true });
+        }
+    }
+}
+
+/** A view option changed. Never refetches — every one of them is render-time. */
+function setDiffOpt(key, on) {
+    state.diff[key] = on;
+    localStorage.setItem(
+        { split: 'diffSplit', words: 'diffWords', wrap: 'diffWrap' }[key], on ? '1' : '0');
+    paintDiff();
+}
+
+function jumpFromDiff() {
+    const { toolId, agent } = state.diff;
+    const entry = toolId ? state.tools.get(toolId) : null;
+    closeDiff();
+    if (entry) return jumpToTurn(entry);
+    if (agent) return openAgent(agent.toolUseId);
+    toast('That edit is not in the part of the conversation on screen.', 'warn');
+}
+
+// ── the right-click menu ───────────────────────────────────────────────────
+//
+// The app's other menus (#bell-menu, #new-menu, #quota-menu) are absolutely
+// positioned inside a wrapper that anchors them to the control that opens them.
+// A menu anchored to the pointer has no such wrapper, so this is #turn-pop's
+// shape instead — one fixed element, filled per open, clamped to the viewport —
+// with #new-menu's rows and key handling inside it.
+
+/**
+ * Open a menu at the pointer.
+ *
+ * @param {MouseEvent} ev the contextmenu event, already preventDefault'd
+ * @param {Array<{label: string, onClick: Function, disabled?: string|false,
+ *                danger?: boolean, sep?: boolean}>} items
+ *   `disabled` carries the *reason* rather than a boolean, and it becomes the
+ *   row's tooltip. Greying a row and not saying why is worse than omitting it.
+ */
+function openContextMenu(ev, items) {
+    const menu = dom.ctxMenu;
+    closeContextMenu({ focus: false });
+    state.ctx.from = document.activeElement;
+
+    const rows = [];
+    menu.replaceChildren(...items.map((it) => {
+        if (it.sep) return el('div', { class: 'sep' });
+        const row = el('button', {
+            class: `picker-row${it.danger ? ' danger' : ''}`,
+            type: 'button', role: 'menuitem', tabindex: -1,
+            title: it.disabled || null,
+            onclick: () => {
+                // Closed without restoring focus: an item that scrolls the
+                // transcript or opens a dialog has somewhere better to put it.
+                closeContextMenu({ focus: false });
+                it.onClick();
+            },
+            onkeydown: (e) => onContextMenuKey(e, rows.indexOf(row)),
+        }, it.label);
+        if (it.disabled) row.disabled = true;
+        rows.push(row);
+        return row;
+    }));
+
+    menu.hidden = false;
+
+    // Measured after it is in the layout, and clamped to both axes. The flip is
+    // what matters here and does not for #turn-pop: the changes drawer is pinned
+    // to the right edge, so clamping alone would drop the menu over the row.
+    const w = menu.offsetWidth;
+    const h = menu.offsetHeight;
+    // A keyboard invocation (Shift+F10, the Menu key) reports 0,0. Fall back to
+    // the row it came from, so the feature works without a mouse.
+    let x = ev.clientX;
+    let y = ev.clientY;
+    if (!x && !y && ev.currentTarget && ev.currentTarget.getBoundingClientRect) {
+        const r = ev.currentTarget.getBoundingClientRect();
+        x = r.left;
+        y = r.bottom;
+    }
+    if (x + w > window.innerWidth - 8) x -= w;
+    menu.style.left = `${Math.min(Math.max(8, x), Math.max(8, window.innerWidth - w - 8))}px`;
+    menu.style.top = `${Math.min(Math.max(8, y), Math.max(8, window.innerHeight - h - 8))}px`;
+
+    const first = rows.find(r => !r.disabled);
+    if (first) {
+        setCtxTab(rows.indexOf(first));
+        first.focus();
+    }
+}
+
+function closeContextMenu({ focus = false } = {}) {
+    if (dom.ctxMenu.hidden) return;
+    dom.ctxMenu.hidden = true;
+    const back = state.ctx.from;
+    state.ctx.from = null;
+    if (focus && back && back.isConnected) back.focus();
+}
+
+const ctxRows = () => [...dom.ctxMenu.querySelectorAll('.picker-row:not([disabled])')];
+
+function setCtxTab(i) {
+    const all = [...dom.ctxMenu.querySelectorAll('.picker-row')];
+    all.forEach((r, n) => { r.tabIndex = n === i ? 0 : -1; });
+}
+
+function onContextMenuKey(e, _i) {
+    const rows = ctxRows();
+    if (!rows.length) return;
+    const here = rows.indexOf(document.activeElement);
+    const go = (n) => {
+        const row = rows[(n + rows.length) % rows.length];
+        setCtxTab([...dom.ctxMenu.querySelectorAll('.picker-row')].indexOf(row));
+        row.focus();
+    };
+    if (e.key === 'ArrowDown') { e.preventDefault(); return go(here + 1); }
+    if (e.key === 'ArrowUp') { e.preventDefault(); return go(here - 1); }
+    if (e.key === 'Home') { e.preventDefault(); return go(0); }
+    if (e.key === 'End') { e.preventDefault(); return go(rows.length - 1); }
+    if (e.key === 'Tab') closeContextMenu({ focus: true });
+    // Escape is deliberately absent — the central ladder closes this, the same
+    // way it closes #new-menu.
+}
+
+/**
+ * One drawer row's two lists reconciled into what a menu needs.
+ *
+ * The two kinds carry different things: an edits row has an absolute `path` and a
+ * `relPath`, and knows where in the conversation it came from; a tree row has a
+ * repo-relative path and a porcelain status, and knows nothing about who changed
+ * it. `sendPath` is what goes to the bridge, and it is never an absolute path
+ * this client computed — the bridge re-derives, and giving it a path we built
+ * would be asking it to trust our arithmetic.
+ */
+function fileTarget(f, kind) {
+    const d = state.changes.data || {};
+    const sample = (d.git && d.git.sample) || [];
+    const edits = d.edits || [];
+
+    if (kind === 'edit') {
+        const tree = sample.find(g => g.path === f.relPath) || null;
+        return {
+            kind, sendPath: f.relPath, path: f.relPath, absPath: f.path,
+            status: tree ? tree.status : null,
+            added: f.added, deleted: f.deleted, binary: tree ? tree.binary : false,
+            toolId: f.toolId, agent: f.agent,
+        };
+    }
+
+    const edit = edits.find(e => e.relPath === f.path) || null;
+    return {
+        kind, sendPath: f.path, path: f.path,
+        absPath: edit ? edit.path : (d.git && d.git.root ? `${d.git.root}/${f.path}` : null),
+        status: f.status, added: f.added, deleted: f.deleted, binary: f.binary,
+        toolId: edit ? edit.toolId : null, agent: edit ? edit.agent : null,
+    };
+}
+
+function openFileMenu(ev, f, kind) {
+    ev.preventDefault();
+    const t = fileTarget(f, kind);
+    const items = [
+        { label: 'Open', onClick: () => openOnHost(t) },
+    ];
+
+    // Present on an edits row always: `state.tools` fills in as the transcript
+    // loads, so a row built a second too early would be greyed for good — the
+    // same reason the click itself resolves late. On a tree row it is present
+    // only when the file is one this session edited: the working tree cannot
+    // know who changed a file, so there is no later state in which it would
+    // start working, and greying it would imply there was.
+    if (kind === 'edit' || t.toolId || t.agent) {
+        items.push({ label: 'Jump To', onClick: () => jumpToFile(t) });
+    }
+
+    openContextMenu(ev, items);
+}
+
+async function openOnHost(t) {
+    // Never disabled ahead of time. What this client knows about whether a file
+    // can be opened is poor — a porcelain `D.` and `.D` differ, and an edits row
+    // knows nothing at all — while the bridge answers precisely. Fire, and say
+    // what it said. The Open folder button in the header works the same way.
+    try {
+        await post(`/api/sessions/${state.current.sessionId}/open-file`, { path: t.sendPath });
+    } catch (err) {
+        toast(`Could not open that file: ${err.message}`, 'error');
+    }
+}
+
+function jumpToFile(t) {
+    const entry = t.toolId ? state.tools.get(t.toolId) : null;
+    if (entry) return jumpToTurn(entry);
+    if (t.agent) return openAgent(t.agent.toolUseId);
+    toast('That edit is not in the part of the conversation on screen.', 'warn');
 }
 
 // ── the session's own task list ────────────────────────────────────────────
@@ -13431,6 +14039,68 @@ for (const n of dom.delScrim.querySelectorAll('[data-close-del]')) {
 }
 dom.delScrim.addEventListener('click', (e) => { if (e.target === dom.delScrim) closeDelete(); });
 
+// ── the diff viewer ──────────────────────────────────────────────────────
+
+for (const n of dom.diffScrim.querySelectorAll('[data-close-diff]')) {
+    n.addEventListener('click', closeDiff);
+}
+// `e.target === scrim` and not a `closest` test, which matters more here than on
+// the other dialogs: a diff is the one people drag-select inside, and a drag that
+// happens to end on the backdrop must not be read as a click on it.
+dom.diffScrim.addEventListener('click', (e) => { if (e.target === dom.diffScrim) closeDiff(); });
+
+dom.diffUnified.addEventListener('click', () => setDiffOpt('split', false));
+dom.diffSplit.addEventListener('click', () => setDiffOpt('split', true));
+dom.diffWords.addEventListener('change', () => setDiffOpt('words', dom.diffWords.checked));
+dom.diffWrap.addEventListener('change', () => setDiffOpt('wrap', dom.diffWrap.checked));
+dom.diffSource.addEventListener('change', () => {
+    state.diff.mode = dom.diffSource.value;
+    fetchDiff();
+});
+dom.diffReload.addEventListener('click', () => {
+    state.diff.stale = false;
+    fetchDiff();
+});
+dom.diffCopy.addEventListener('click', async () => {
+    try {
+        await navigator.clipboard.writeText(state.diff.text || '');
+        toast('Diff copied.', 'ok');
+    } catch (err) {
+        toast(`Could not copy: ${err.message}`, 'error');
+    }
+});
+dom.diffJump.addEventListener('click', jumpFromDiff);
+
+// ── the right-click menu ─────────────────────────────────────────────────
+
+// `pointerdown` and not `click`, in the capture phase. A click listener would
+// fire *after* the row underneath had taken its own click, so one right-click
+// would close the menu and open the diff. The menu itself has to be excluded or
+// its rows never receive the click that runs them.
+document.addEventListener('pointerdown', (e) => {
+    if (dom.ctxMenu.hidden) return;
+    if (e.target.closest && e.target.closest('#ctx-menu')) return;
+    closeContextMenu({ focus: false });
+}, true);
+
+// A right-click anywhere that is not a file row dismisses this and gets the
+// browser's own menu, which is what right-clicking the transcript should do.
+document.addEventListener('contextmenu', (e) => {
+    if (dom.ctxMenu.hidden) return;
+    if (e.target.closest && e.target.closest('.ch-row')) return;
+    closeContextMenu({ focus: false });
+});
+
+// Capture, because scroll does not bubble and the list this is anchored inside
+// has its own scroller. #turn-pop can name its scroller; a menu opened from
+// anywhere cannot.
+document.addEventListener('scroll', () => closeContextMenu({ focus: false }),
+    { capture: true, passive: true });
+window.addEventListener('resize', () => closeContextMenu({ focus: false }));
+// Not hypothetical: Open hands focus to Windows, and a menu still on screen
+// when you come back is a menu you have forgotten you opened.
+window.addEventListener('blur', () => closeContextMenu({ focus: false }));
+
 // ── connect a phone ──────────────────────────────────────────────────────
 //
 // The bridge hands this page the token in a <meta> tag when the page was fetched
@@ -13639,11 +14309,14 @@ dom.lockAnyway.addEventListener('click', () => {
 });
 
 document.addEventListener('keydown', (e) => {
+    // The context menu is first because it can be opened over any of the rest.
+    if (e.key === 'Escape' && !dom.ctxMenu.hidden) { closeContextMenu({ focus: true }); return; }
     // The confirm sits over the new-session dialog, so it answers Escape first.
     if (e.key === 'Escape' && !dom.bellMenu.hidden) { showBell(false); dom.btnBell.focus(); return; }
     if (e.key === 'Escape' && !dom.quotaMenu.hidden) { showQuota(false); dom.quotaPill.focus(); return; }
     if (e.key === 'Escape' && !dom.newMenu.hidden) { showNewMenu(false); dom.btnNewMenu.focus(); return; }
     if (e.key === 'Escape' && !dom.delScrim.hidden) { closeDelete(); return; }
+    if (e.key === 'Escape' && !dom.diffScrim.hidden) { closeDiff(); return; }
     if (e.key === 'Escape' && !dom.pairScrim.hidden) { closePair(); dom.btnPair.focus(); return; }
     if (e.key === 'Escape' && !dom.restartScrim.hidden) { closeRestart(); dom.btnRestart.focus(); return; }
     if (e.key === 'Escape' && !dom.taskScrim.hidden) { closeTaskDialog(); return; }

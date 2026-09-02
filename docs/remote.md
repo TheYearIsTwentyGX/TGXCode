@@ -325,12 +325,15 @@ time so it cannot be turned into a fan of processes.
 | `/api/shutdown`, `/api/devservers/stop` | Acts on processes the person at the desk is using. |
 | `/api/sessions/:id/reveal`, `/api/devbrowser/*` | Drives windows on the Windows host. Pointless from a phone. |
 | `POST /api/sessions/:id/handoff` | Starts a turn in a session nobody is looking at, and wakes one that has no process at all. Reasonable for an agent on this machine that just changed something the other session depends on; not reasonable to reach in for from a phone, where a leaked token would mean every session on the machine spending tokens on words nobody typed. Note that a phone *may* still send to a session through `/send` — the difference is that a person is choosing the session and the words, one at a time. |
+| `POST /api/sessions/:id/open-file` | Opens a repository file in its default Windows program — a window on this machine's desktop, which is the row above's reason. It has a second one the others do not: pointed at a `.ps1` or an `.exe` in the checkout, Windows will run it. That is strictly less than `/api/terminals/*` already grants and is refused for the same reason. Its sibling `GET /api/sessions/:id/diff` is **not** refused — a diff is a read, its bytes already reach a phone inside the tool results it renders, and it is scoped to the session's own repository root rather than only to the allowed roots. A file extension denylist was considered and rejected: an agent that has just written an executable into the checkout has already won by other means, and a denylist would refuse opening the script you were editing. |
 | `POST /api/fs/mkdir` | Writes to the filesystem. `GET /api/fs` stays allowed, and the asymmetry is the point: reading the tree answers "where could a session start", and a phone may already start one. Creating a directory is reaching past the app into the machine. |
 
 Independent of remoteness, and applying to every caller: a session can only start
 inside `CLAUDE_SESSIONS_ROOTS` (default `$HOME`), `/api/fs` only lists and
-`/api/fs/mkdir` only creates inside the same roots, and session creation is capped
-at 8 a minute.
+`/api/fs/mkdir` only creates inside the same roots, the diff and open-file routes
+reach only inside those roots and inside the session's own repository root — the
+path a client sends is re-derived rather than trusted, and re-checked through a
+symlink — and session creation is capped at 8 a minute.
 
 ## Authentication, in one paragraph
 
