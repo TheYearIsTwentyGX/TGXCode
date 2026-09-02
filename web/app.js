@@ -266,6 +266,9 @@ const state = {
     // of a session, like the terminal pane's height — you either want these in
     // view while you work or you do not.
     tasksShut: localStorage.getItem('tasksShut') === '1',
+    // Whether an already-open aside is holding its place while the new
+    // conversation's suggestions are being fetched. See renderChecklist.
+    tasksPending: false,
     // The task the big dialog is showing, if it is open. Held by id rather than
     // by object so a decision taken inside it can find its way back to the same
     // task after the panel behind has been rebuilt.
@@ -309,6 +312,9 @@ const state = {
         on: localStorage.getItem('checklistOn') !== '0',
         shut: localStorage.getItem('checklistShut') === '1',
         sessionId: null, data: null,
+        // Whether an already-open column is holding its place while the new
+        // conversation's list is still on the wire. See resetChecklist.
+        pending: false,
     },
     // The board of unfinished work. `at` is when the bridge last answered, so
     // opening it again does not re-run git over every worktree on the machine.
@@ -1431,7 +1437,10 @@ function beginOpen(summary, { keepDash = false } = {}) {
     state.tasks.clear();        // and so do the offers themselves
     state.taskOpen.clear();
     closeTaskDialog();          // it was showing a task belonging to the old one
-    renderTasks();              // empties the aside, and hides it
+    // Empties the aside, but keeps its place in the row until loadTasks answers
+    // for the new conversation — see renderChecklist for why.
+    state.tasksPending = paneUp(dom.tasks);
+    renderTasks();
     resetChanges();             // and the files listed were the old session's
     renderChanges();            // which leaves the drawer saying it is looking
     resetChecklist();           // as was the task list — the push will refill it
@@ -1457,6 +1466,12 @@ function beginOpen(summary, { keepDash = false } = {}) {
 
     renderHeader();
     hideTurnPop();
+    // Emptied, but keeping its 30px until renderTurns says whether the new
+    // conversation has a rail — otherwise the column blinks out and back while
+    // the switch is animating, and takes the composer 30px with it both ways.
+    // Only if there is a rail to hold, so a conversation that never had one does
+    // not gain a reserved strip.
+    if (paneUp(dom.turns)) dom.turns.classList.add('holding');
     dom.turns.replaceChildren();
     dom.log.replaceChildren(skeleton());
     dom.scroll.scrollTop = 0;
@@ -2163,8 +2178,18 @@ function renderTasks() {
     // is merged in beside them.
     const tasks = [...state.tasks.values()]
         .sort((a, b) => (Date.parse(a.ts) || 0) - (Date.parse(b.ts) || 0));
-    dom.tasks.hidden = !tasks.length;
-    if (!tasks.length) return;
+    // `tasksPending` holds an already-open aside in place while the new
+    // conversation's suggestions are still being fetched, for the reason
+    // renderChecklist gives: leaving the row and coming back a moment later is
+    // what switching between two conversations used to look like.
+    const present = tasks.length > 0 || state.tasksPending;
+    slidePane(dom.tasks, present);
+    if (!tasks.length) {
+        dom.tasksList.replaceChildren();
+        dom.tasksCount.textContent = present ? '…' : '';
+        dom.tasksStripCount.textContent = present ? '…' : '';
+        return;
+    }
 
     // Only the ones still on offer are counted. A count that includes things you
     // have already dealt with is a number that never goes down, which is the
@@ -2425,7 +2450,6 @@ function showChanges(on) {
     // 34px strip: an open drawer is what the button promises.
     if (on) collapseChanges(false, { render: false });
     renderChanges();
-    syncPaneInsets({ instant: true });   // arriving or leaving, not widening
     renderHeaderActions();
     if (on) loadChangesIfStale();
 }
@@ -2483,8 +2507,12 @@ async function loadChanges({ refresh = false } = {}) {
 }
 
 function renderChanges() {
-    dom.changes.hidden = !state.changes.on || !state.current;
-    if (dom.changes.hidden) return;
+    // No pending hold here: whether this drawer is up is a window property, so
+    // it does not change when the conversation does and there is nothing to wait
+    // for. It slides for the same reason the other two do — the header button.
+    const present = !!state.changes.on && !!state.current;
+    slidePane(dom.changes, present);
+    if (!present) return;
 
     const d = state.changes.data;
     const edits = (d && d.edits) || [];
@@ -2761,12 +2789,13 @@ function syncPaneInsets({ instant = false } = {}) {
  * anything inside the row — so this cannot feed itself.
  */
 // `instant`, and not just because the callback's first argument is a list of
-// entries rather than an options bag. Everything this notices and the explicit
-// calls do not — a column removed because its content went away, a window
-// resize crossing a media query — changes the layout in one frame, so easing
-// after it would be the lag this whole thing is about. A width animation, which
-// is the one case that should ease, recomputes the same numbers here and stops
-// at the no-op above without touching the transition.
+// entries rather than an options bag. What is left for this to be the first to
+// notice — a window resize crossing a media query, a transcript growing a
+// scrollbar — changes the layout in one frame with no animation to keep step
+// with, so easing after it would be the lag this whole thing is about. A column
+// sliding in or out is not one of those: `slidePane` has already written the
+// target by the time this runs, so it recomputes the same numbers and stops at
+// the no-op above without touching the transition in flight.
 const paneObserver = typeof ResizeObserver === 'function'
     ? new ResizeObserver(() => syncPaneInsets({ instant: true })) : null;
 
@@ -2778,6 +2807,66 @@ function watchPaneInsets() {
     // composer's padding cannot reach inside the row, so watching them still
     // cannot feed this back into itself.
     for (const k of dom.convBody.children) paneObserver.observe(k);
+    syncPaneInsets();
+}
+
+/** Pending `hidden` writes, one per column, so a reversal cancels the last. */
+const paneExits = new WeakMap();
+
+/** Whether a column is in the row now — not gone, and not on its way out. */
+function paneUp(node) {
+    return !!node && !node.hidden && !node.classList.contains('gone');
+}
+
+/** How long this element says it takes to move. 0 under reduced motion. */
+function transitionMs(node) {
+    const secs = getComputedStyle(node).transitionDuration.split(',')[0];
+    return (Number.parseFloat(secs) || 0) * 1000;
+}
+
+/**
+ * Put a column in the row or take it out, as a slide rather than a jump.
+ *
+ * `display` cannot be animated, so toggling `hidden` moved the transcript and
+ * the composer the whole width of a column in one frame. Switching between two
+ * conversations did it four times: `beginOpen` emptied both asides, which took
+ * them out, and then each one's answer arriving put it back.
+ *
+ * So a column that is leaving keeps its place in the layout at zero width until
+ * the transition has run, and only then goes `hidden`; one arriving is put in at
+ * zero width and widened on the next frame. The composer follows either way,
+ * because `--pane-w` is what `syncPaneInsets` reads and `.gone` sets it to 0.
+ *
+ * The `hidden` write is deferred by however long the element says its transition
+ * takes — read from it rather than written here, so reduced motion reports 0 and
+ * this becomes the instant behaviour it used to have, and so the number cannot
+ * drift from the CSS. `transitionend` would be more precise and does not fire at
+ * all when the transition is `none`, which is the case that would then leave a
+ * column in the layout for ever.
+ */
+function slidePane(node, present) {
+    if (!node) return;
+    clearTimeout(paneExits.get(node));
+    const was = paneUp(node);
+    if (present === was) {
+        // Already where it belongs. Still worth clearing a half-finished exit:
+        // a column re-shown mid-slide has the class on and would otherwise stay
+        // at zero width with nothing left to take it off.
+        if (present) node.classList.remove('gone');
+        return;
+    }
+
+    if (present) {
+        node.hidden = false;
+        node.classList.add('gone');
+        void node.offsetWidth;      // commit the narrow state before widening
+        node.classList.remove('gone');
+    } else {
+        node.classList.add('gone');
+        const done = () => { node.hidden = true; paneExits.delete(node); };
+        const ms = transitionMs(node);
+        if (ms > 0) paneExits.set(node, setTimeout(done, ms + 30)); else done();
+    }
     syncPaneInsets();
 }
 
@@ -2793,9 +2882,7 @@ function showChecklist(on) {
     // Asking for it from the header means wanting to see it, not wanting a 34px
     // strip — the same promise the Changed button makes.
     if (on) collapseChecklist(false, { render: false });
-    renderChecklist();
-    // A column arriving or leaving is not a width animation — see syncPaneInsets.
-    syncPaneInsets({ instant: true });
+    renderChecklist();   // slidePane inside it moves the column and the composer
     renderHeaderActions();
 }
 
@@ -2819,6 +2906,13 @@ function collapseChecklist(shut, { render = true } = {}) {
 function resetChecklist() {
     state.checklist.data = null;
     state.checklist.sessionId = null;
+    // Hold the column's place while the new conversation's list is on the wire,
+    // but only if there is a column there to hold: setting this for a column
+    // that is down would slide an empty one in and straight back out. Cleared by
+    // the `task-list` handler, which the bridge sends the moment a session is
+    // followed — including for a session with no list, which is what takes the
+    // column back out.
+    state.checklist.pending = paneUp(dom.checklist);
 }
 
 /**
@@ -2897,15 +2991,25 @@ function renderChecklist() {
     // Off, no conversation, or a session that never kept a list: no box at all
     // rather than an empty one. Most sessions keep no list, and a permanently
     // empty column would be worse than no column.
-    dom.checklist.hidden = !state.checklist.on || !state.current || !items.length;
-    if (dom.checklist.hidden) {
+    //
+    // `pending` is the exception, and it is what makes switching between two
+    // conversations that both keep a list move nothing at all. The new one's
+    // list arrives a moment after the switch, and without this the column left
+    // the row and came back — so it held its place while the answer was on the
+    // wire, showing an empty box rather than the last conversation's tasks.
+    // `resetChecklist` only sets it for a column that is already up, so this
+    // never slides an empty column *in*.
+    const present = !!state.checklist.on && !!state.current
+        && (items.length > 0 || state.checklist.pending);
+    slidePane(dom.checklist, present);
+    if (!present || !items.length) {
         // Emptied rather than just hidden. The rows and the count belonged to
         // whichever session was here before, and a hidden panel holding another
         // conversation's list is the kind of thing that resurfaces later looking
         // like a bug in whatever reveals it.
         dom.checklistBody.replaceChildren();
-        dom.checklistCount.textContent = '';
-        dom.checklistStripCount.textContent = '';
+        dom.checklistCount.textContent = present ? '…' : '';
+        dom.checklistStripCount.textContent = present ? '…' : '';
         return;
     }
 
@@ -4340,11 +4444,18 @@ async function loadTasks() {
         // is reading it. The bridge wins for everything it does know about.
         for (const [tid, task] of state.tasks) if (!next.has(tid)) next.set(tid, task);
         state.tasks = next;
+        state.tasksPending = false;
         renderTasks();
     } catch {
         // The cards already showing came off the transcript tail and are still
         // true. Interrupting somebody over a panel that is merely not fresher
         // than it was would be worse than the staleness.
+        //
+        // But the aside must not be left holding its place for ever on the
+        // strength of a request that failed, so the hold ends either way and the
+        // column settles to whatever there actually is.
+        state.tasksPending = false;
+        renderTasks();
     }
 }
 
@@ -8491,6 +8602,7 @@ function connect() {
         if (!state.current || d.sessionId !== state.current.sessionId) return;
         state.checklist.sessionId = d.sessionId;
         state.checklist.data = d;
+        state.checklist.pending = false;   // answered, so the column can settle
         renderChecklist();
     });
     // The whole list, every time, and not gated on watching the panel — see the
@@ -8972,6 +9084,10 @@ function renderTurns() {
         onfocus: (e) => showTurnPop(e.currentTarget, i),
         onblur: hideTurnPop,
     })));
+    // Now it is known whether this conversation has a rail at all, so the hold
+    // from beginOpen can go: with turns the class changes nothing, and without
+    // them `.turns:empty` takes the column out and the composer widens into it.
+    dom.turns.classList.remove('holding');
     markActiveTurn();
 }
 
