@@ -1,5 +1,6 @@
 'use strict';
 
+const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
@@ -179,6 +180,98 @@ function withinRoots(dir) {
         target === root || target.startsWith(root + path.sep));
 }
 
+/**
+ * A path with every symlink on it resolved, including one that does not exist yet.
+ *
+ * `fs.realpathSync` throws ENOENT rather than answering for a path that is not
+ * there, and half of what this is asked about legitimately is not — a file
+ * deleted from the working tree still has a diff against HEAD. So the deepest
+ * ancestor that *does* exist is resolved and the rest is re-appended, which is
+ * enough: what a containment check has to defend against is a real directory on
+ * the way in being a link somewhere else, and a component that does not exist
+ * cannot be one.
+ *
+ * @returns {string|null} the resolved path, or null if it cannot be worked out
+ */
+function realResolve(file) {
+    const parts = [];
+    let head = path.resolve(file);
+    for (;;) {
+        try {
+            head = fs.realpathSync(head);
+            break;
+        } catch (err) {
+            if (err.code !== 'ENOENT' && err.code !== 'ENOTDIR') return null;
+            const parent = path.dirname(head);
+            // `/` is its own parent. Nothing on the path existed, which for an
+            // absolute path should be impossible and is not worth guessing about.
+            if (parent === head) return null;
+            parts.unshift(path.basename(head));
+            head = parent;
+        }
+    }
+    return parts.length ? path.join(head, ...parts) : head;
+}
+
+/**
+ * One of a session's own files, from a path the client sent.
+ *
+ * `attachmentPath` above takes the basename and rebuilds the directory, because
+ * an attachment's directory is never meaningful. A source file's is, so this
+ * cannot narrow the same way — and everything else it does is that function's
+ * argument applied to a wider input: the path a client sends is a hint about
+ * *which* file, and the answer is recomputed from a root the bridge worked out
+ * for itself.
+ *
+ * `cfg.expandHome` is deliberately not called. The paths this receives are ones
+ * the bridge handed the client a moment ago, in `/changes`; a leading `~/` in one
+ * is a bug in the client, not a home directory it is entitled to.
+ *
+ * **Both a lexical and a resolved containment check, and the resolved one is the
+ * one that matters.** `path.resolve` only rewrites text, so `..` is handled and a
+ * symlink is not — and the first version of this function asked
+ * `lstat(file).isSymbolicLink()`, which is the wrong question: `lstat` declines to
+ * follow the *last* component only, so a leaf inside a symlinked *directory*
+ * reports false and the check never ran. An agent with a shell can write
+ * `ln -s / escape` into the checkout it is working in, and `escape/etc/passwd` is
+ * then lexically inside the repository — which for the diff route, deliberately
+ * readable remotely, would mean any file on the machine. So the real path is
+ * always resolved and always compared against the real root.
+ *
+ * The lexical `cfg.withinRoots` stays as it was, on the unresolved path, because
+ * that function resolves nothing on purpose: its subject is a directory the
+ * *user* configured, and a home directory that is itself a link is the ordinary
+ * case rather than an attack. Checking the resolved path against the roots as
+ * well would refuse that. Containment inside the session's own repository is what
+ * carries the weight here, and a repository inside the roots is inside them
+ * however it is reached.
+ *
+ * @returns {string|null} the absolute path, or null if it is not inside `root`
+ */
+function sessionFilePath(root, given) {
+    const raw = String(given == null ? '' : given).trim();
+    if (!root || !raw) return null;
+    // A NUL truncates the path at every syscall that will see it, so a name
+    // carrying one is refused rather than silently meaning something shorter.
+    if (raw.includes('\0')) return null;
+
+    // An absolute `given` comes back from resolve unchanged, so this one line
+    // takes both the repo-relative form the tree list uses and the absolute form
+    // an edits row carries outside a repository.
+    const file = path.resolve(root, raw);
+
+    const inside = (p, base) => p === base || p.startsWith(base + path.sep);
+    if (!inside(file, path.resolve(root))) return null;
+    if (!withinRoots(file)) return null;
+
+    const realRoot = realResolve(root);
+    const real = realResolve(file);
+    if (!realRoot || !real) return null;
+    if (!inside(real, realRoot)) return null;
+
+    return file;
+}
+
 const VERSION = '1.0.0';
 
 module.exports = {
@@ -188,7 +281,7 @@ module.exports = {
     TGX_DIR, COMMANDS_FILE, COMMANDS_LOCAL_FILE, RUNS_LOG_DIR,
     SETTINGS_FILE, SETTINGS_LOCAL_FILE, USER_TGX_DIR, USER_PREFS_FILE,
     VERBS_DIR, USER_VERBS_DIR,
-    ALLOW_REMOTE_BIND, TODO_TOOLS, ALLOWED_ROOTS, EXTRA_ORIGINS, withinRoots, expandHome,
+    ALLOW_REMOTE_BIND, TODO_TOOLS, ALLOWED_ROOTS, EXTRA_ORIGINS, withinRoots, sessionFilePath, realResolve, expandHome,
     DEFAULT_PORT, DEV_PORT, IS_DEV,
     DEVBROWSER_DEFAULT_PORT, CLAUDE_BIN, PORT_DENYLIST,
 };

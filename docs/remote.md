@@ -332,8 +332,8 @@ Independent of remoteness, and applying to every caller: a session can only star
 inside `CLAUDE_SESSIONS_ROOTS` (default `$HOME`), `/api/fs` only lists and
 `/api/fs/mkdir` only creates inside the same roots, the diff and open-file routes
 reach only inside those roots and inside the session's own repository root — the
-path a client sends is re-derived rather than trusted, and re-checked through a
-symlink — and session creation is capped at 8 a minute.
+path a client sends is re-derived rather than trusted, and re-checked with every
+symlink on it resolved, so a link written into a checkout cannot lead out of one — and session creation is capped at 8 a minute.
 
 ## Authentication, in one paragraph
 

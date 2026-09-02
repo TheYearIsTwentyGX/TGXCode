@@ -511,7 +511,10 @@
                 <button id="changes-collapse" class="tasks-collapse changes-hide"
                         type="button" title="Put this to one side">Hide</button>
               </div>
-              <div id="changes-body" class="changes-body"></div>
+              <!-- tabindex so closeDiff can put focus back in here. -1 rather than 0:
+           it should be reachable programmatically, not a stop on the way
+           through the page with Tab. -->
+      <div id="changes-body" class="changes-body" tabindex="-1"></div>
             </div>
           </aside>
           <nav id="turns" class="turns" aria-label="Your messages in this session"></nav>

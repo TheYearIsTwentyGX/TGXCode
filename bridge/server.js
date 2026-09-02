@@ -3302,7 +3302,7 @@ async function api(req, res, url, pathname, who) {
             }
             const root = tree.root;
 
-            const file = sessionFilePath(root, given);
+            const file = cfg.sessionFilePath(root, given);
             if (!file) {
                 // Not a 403 with the roots in it unless the roots are what refused
                 // it: "outside this session's repository" is the ordinary case here
@@ -3768,7 +3768,7 @@ async function api(req, res, url, pathname, who) {
             const dir = workingDir(summary);
             if (!dir) return send(res, 404, { error: 'no directory for this session' });
 
-            const file = sessionFilePath(await sessionRoot(dir), given);
+            const file = cfg.sessionFilePath(await sessionRoot(dir), given);
             if (!file) {
                 // 403 rather than 404, and the same 403 whether the file is absent
                 // or out of bounds: the difference between those two is an
@@ -4311,58 +4311,6 @@ function attachmentPath(cwd, given) {
     }
     return file;
 }
-
-/**
- * One of a session's own files, from a path the client sent.
- *
- * `attachmentPath` above takes the basename and rebuilds the directory, because
- * an attachment's directory is never meaningful. A source file's is, so this
- * cannot narrow the same way — and everything else it does is that function's
- * argument applied to a wider input: the path a client sends is a hint about
- * *which* file, and the answer is recomputed from a root the bridge worked out
- * for itself.
- *
- * `cfg.expandHome` is deliberately not called. The paths this receives are ones
- * the bridge handed the client a moment ago, in `/changes`; a leading `~/` in one
- * is a bug in the client, not a home directory it is entitled to.
- *
- * The symlink re-check is the one place here that departs from
- * `cfg.withinRoots`, which resolves nothing and is right not to — its subject is
- * a directory the *user* configured, and following links there would refuse the
- * ordinary case of a home directory that is a link. This function's subject is a
- * link an *agent* may have written into a repository ten minutes ago, which is a
- * different thing to trust.
- *
- * @returns {string|null} the absolute path, or null if it is not inside `root`
- */
-function sessionFilePath(root, given) {
-    const raw = String(given == null ? '' : given).trim();
-    if (!root || !raw) return null;
-
-    // An absolute `given` comes back from resolve unchanged, so this one line
-    // takes both the repo-relative form the tree list uses and the absolute form
-    // an edits row carries outside a repository.
-    const file = path.resolve(root, raw);
-
-    const inside = (p, base) => p === base || p.startsWith(base + path.sep);
-    if (!inside(file, path.resolve(root))) return null;
-    if (!cfg.withinRoots(file)) return null;
-
-    try {
-        if (fs.lstatSync(file).isSymbolicLink()) {
-            const real = fs.realpathSync(file);
-            if (!inside(real, fs.realpathSync(root))) return null;
-            if (!cfg.withinRoots(real)) return null;
-        }
-    } catch {
-        // It does not exist, or a directory along the way does not. Not this
-        // function's question — `openFile` and `git diff` each say so precisely,
-        // and two sentences for one fact is worse than one.
-    }
-
-    return file;
-}
-
 /**
  * The repository root a session's file paths are relative to.
  *

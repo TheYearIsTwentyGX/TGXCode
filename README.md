@@ -993,7 +993,7 @@ you are away from the desk, and a phone that has dropped its connection is not.
 | Path | |
 |---|---|
 | `bridge/server.js` | HTTP + SSE, routing, static files |
-| `bridge/config.js` | Paths, ports, allowed roots — every constant with a reason attached |
+| `bridge/config.js` | Paths, ports, allowed roots — every constant with a reason attached, and the two containment checks that decide whether a path is one a caller may name |
 | `bridge/dashboard.js` | Uncommitted changes and open PRs, per project |
 | `bridge/git.js` | Every question the bridge asks git about a directory, cached once for all of them |
 | `bridge/restart.js` | Pulling this checkout and handing over to `scripts/restart-bridge.sh` — the one mutating git call |

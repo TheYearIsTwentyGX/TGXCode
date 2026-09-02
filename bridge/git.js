@@ -317,17 +317,37 @@ async function diffText(dir, rel, { mode = 'worktree', context = 3, untracked = 
         return { ok: false, reason: 'diff-failed', error: firstLine(r.stderr) };
     }
 
-    const full = r.stdout;
-    const bytes = Buffer.byteLength(full);
-    if (bytes <= DIFF_BYTE_CAP) return { ok: true, diff: full, bytes, truncated: 0 };
+    const full = Buffer.from(r.stdout, 'utf8');
+    const bytes = full.length;
+    if (bytes <= DIFF_BYTE_CAP) {
+        return { ok: true, diff: r.stdout, bytes, truncated: 0 };
+    }
 
-    // Cut on a line boundary. Half a line reaching a unified-diff parser is worse
-    // than a diff that admits it stops early.
-    let cut = full.slice(0, DIFF_BYTE_CAP);
-    const nl = cut.lastIndexOf('\n');
-    if (nl > 0) cut = cut.slice(0, nl + 1);
-    return { ok: true, diff: cut, bytes: Buffer.byteLength(cut),
-        truncated: bytes - Buffer.byteLength(cut) };
+    // Cut in the Buffer rather than the string. The cap is a promise about the
+    // bytes a client receives, and `String.prototype.slice` counts UTF-16 code
+    // units — so slicing the string would let a diff full of CJK or emoji come
+    // back at up to three times the cap.
+    let cut = full.subarray(0, DIFF_BYTE_CAP);
+
+    // Back up to a line boundary: half a line reaching a unified-diff parser is
+    // worse than a diff that admits it stops early. It also lands the cut on a
+    // UTF-8 boundary for free, because every byte of a multi-byte sequence is
+    // >= 0x80 and so 0x0A can never be inside one.
+    const nl = cut.lastIndexOf(0x0A);
+    if (nl >= 0) {
+        cut = cut.subarray(0, nl + 1);
+    } else {
+        // One line longer than the whole cap — a minified bundle. There is no
+        // boundary to find, so walk off any trailing continuation bytes by hand
+        // rather than handing back a split codepoint as U+FFFD.
+        let end = cut.length;
+        while (end > 0 && (cut[end - 1] & 0xc0) === 0x80) end--;
+        if (end > 0 && (cut[end - 1] & 0x80) !== 0) end--;   // and its lead byte
+        cut = cut.subarray(0, end);
+    }
+
+    return { ok: true, diff: cut.toString('utf8'), bytes: cut.length,
+        truncated: bytes - cut.length };
 }
 
 /**

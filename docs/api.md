@@ -656,8 +656,11 @@ root, or an `edits[].relPath`, which is absolute for a session that ran outside 
 repository. Either form works; an absolute one must still resolve inside the
 session's own repository root. **It is re-derived rather than trusted:** joined to a
 root the bridge worked out for itself, resolved, checked against that root and
-against the allowed roots, and — when it turns out to be a symlink — checked again
-against its real path. Every git argument is then recomputed from the resolved path,
+against the allowed roots, and then resolved with **every symlink on it followed**
+and checked again against the real root. That last step is not the same as asking
+whether the file is a link: a leaf inside a symlinked *directory* is not itself a
+link, and checking only the leaf leaves `escape/etc/passwd` lexically inside a
+repository that contains `escape -> /`. Every git argument is then recomputed from the resolved path,
 never the string you sent.
 
 `mode` is one of:

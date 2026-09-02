@@ -1,7 +1,8 @@
 'use strict';
 
 // What "this session changed these files" is derived from — bridge/changes.js
-// over transcript events, and bridge/git.js over git's own output.
+// over transcript events, bridge/git.js over git's own output — and the check
+// that stands between a client-supplied path and the routes serving it.
 //
 // Both are worth a test for the same reason: the inputs are shapes Claude Code
 // and git decide, the failures are quiet, and a wrong number here looks exactly
@@ -28,7 +29,13 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
+// The roots are read when config.js loads, and this repository lives in a temp
+// directory rather than under $HOME — so without this every containment case
+// below would be refused by the roots check instead of the one being tested.
+process.env.CLAUDE_SESSIONS_ROOTS = os.tmpdir();
+
 const changes = require('../bridge/changes.js');
+const cfg = require('../bridge/config.js');
 const git = require('../bridge/git.js');
 
 let pass = 0;
@@ -480,6 +487,23 @@ const write = (rel, text) => fs.writeFileSync(path.join(REPO, rel), text);
         'cut on a line boundary — half a line reaching a diff parser is worse than a short diff');
     ok('a diff past the cap is truncated on a line boundary and says by how much');
 
+    // The cap is a promise about *bytes*, and the obvious implementation breaks
+    // it: `String.prototype.slice` counts UTF-16 code units, so a diff of CJK
+    // text sliced to `DIFF_BYTE_CAP` characters comes back at up to three times
+    // the cap. This file is mostly three-byte characters for that reason.
+    const wide = `${Array.from({ length: 400_000 }, (_, i) => `行 ${i} 変更された内容`).join('\n')}\n`;
+    write('wide-utf8.txt', wide);
+    const utf8 = await git.diffText(REPO, 'wide-utf8.txt', { untracked: true });
+    assert.strictEqual(utf8.ok, true);
+    assert.ok(Buffer.byteLength(utf8.diff) <= git.DIFF_BYTE_CAP,
+        `sent ${Buffer.byteLength(utf8.diff)} bytes against a ${git.DIFF_BYTE_CAP} cap`);
+    assert.strictEqual(utf8.bytes, Buffer.byteLength(utf8.diff),
+        'the reported length is the real one');
+    assert.ok(!utf8.diff.includes('�'),
+        'and the cut did not land inside a character');
+    assert.ok(utf8.diff.endsWith('\n'));
+    ok('the byte cap counts bytes, not characters, and does not split one');
+
     // A clean file is an empty diff rather than a failure, which is what lets the
     // client fall back to the transcript's answer.
     const clean = await git.diffText(REPO, 'first.txt');
@@ -490,6 +514,62 @@ const write = (rel, text) => fs.writeFileSync(path.join(REPO, rel), text);
     assert.strictEqual(nowClean.ok, true);
     assert.strictEqual(nowClean.diff, '', 'nothing uncommitted is an empty answer, not an error');
     ok('a file with nothing uncommitted answers with an empty diff');
+
+    // ── the containment check ──────────────────────────────────────────────
+    //
+    // `cfg.sessionFilePath` is what stands between a client-supplied path and
+    // the two routes that serve this drawer's rows — the diff, which is
+    // deliberately readable by a phone, and open-file, which hands a path to
+    // explorer.exe. It is tested here rather than beside the auth tests because
+    // the repository it has to be contained by is the one already built above.
+    //
+    // The symlink cases are the reason this exists as a test at all. The first
+    // version asked `lstat(file).isSymbolicLink()`, which is the wrong question:
+    // lstat declines to follow the *last* component only, so a file inside a
+    // symlinked *directory* answers false and the check never ran. An agent with
+    // a shell can put such a link in the checkout it is working in.
+    const inRepo = (rel) => cfg.sessionFilePath(REPO, rel);
+
+    assert.strictEqual(inRepo('first.txt'), path.join(REPO, 'first.txt'));
+    assert.strictEqual(inRepo('sub/../first.txt'), path.join(REPO, 'first.txt'),
+        'a dot-dot that stays inside is fine');
+    assert.strictEqual(cfg.sessionFilePath(REPO, path.join(REPO, 'first.txt')),
+        path.join(REPO, 'first.txt'), 'an absolute path inside the repo is taken as given');
+    assert.strictEqual(inRepo('nope/never.txt'), path.join(REPO, 'nope', 'never.txt'),
+        'a path that does not exist is still answered — a deleted file has a diff');
+    ok('sessionFilePath resolves a path inside the repository');
+
+    assert.strictEqual(inRepo('../outside.txt'), null);
+    assert.strictEqual(inRepo('../../../../etc/passwd'), null);
+    assert.strictEqual(inRepo('/etc/passwd'), null);
+    assert.strictEqual(inRepo(''), null);
+    assert.strictEqual(inRepo('   '), null);
+    assert.strictEqual(inRepo(null), null);
+    assert.strictEqual(inRepo(undefined), null);
+    assert.strictEqual(inRepo('first.txt\0.png'), null, 'a NUL truncates at the syscall');
+    assert.strictEqual(cfg.sessionFilePath(null, 'first.txt'), null);
+    // The prefix check needs its separator: a sibling directory whose name starts
+    // with the repo's must not pass as being inside it.
+    assert.strictEqual(cfg.sessionFilePath(REPO, `${REPO}-evil/x.txt`), null);
+    ok('and refuses dot-dot, an absolute path outside, a NUL and a near-miss prefix');
+
+    // The leaf is the link.
+    fs.symlinkSync(path.join(TMP, 'outside.txt'), path.join(REPO, 'link-to-outside'));
+    fs.writeFileSync(path.join(TMP, 'outside.txt'), 'secret\n');
+    assert.strictEqual(inRepo('link-to-outside'), null);
+
+    // An *ancestor* is the link — the case lstat cannot see.
+    fs.symlinkSync(TMP, path.join(REPO, 'escape'));
+    assert.strictEqual(inRepo('escape/outside.txt'), null,
+        'a symlinked directory on the way in is the escape lstat misses');
+    assert.strictEqual(inRepo('escape/nope/never.txt'), null,
+        'and it is still refused when the leaf does not exist');
+
+    // A link that stays inside is not an escape and must keep working.
+    fs.symlinkSync(path.join(REPO, 'first.txt'), path.join(REPO, 'link-inside'));
+    assert.strictEqual(inRepo('link-inside'), path.join(REPO, 'link-inside'),
+        'a link pointing inside the repository is ordinary');
+    ok('and refuses a symlink out, whether it is the file or a directory above it');
 
     console.log(`\n${pass} groups passed`);
 })().then(
