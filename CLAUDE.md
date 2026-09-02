@@ -350,6 +350,85 @@ copy of `scripts/restart-bridge.sh` in a throwaway git repo, with a stub
 terminal would reach a live `Continue? [y/N]` and hang the suite. Its first
 assertion checks the detach worked, so that failure is a failure and not a hang.
 
+## You cannot add a dependency. Vendor a bundle instead
+
+**`"dependencies": {}` in `package.json` is load-bearing, and `web/` has no build
+step on purpose.** Both are easy to break with a single `npm install`, neither
+breaks loudly, and the thing that breaks is the user's everyday workflow rather
+than a test.
+
+Two separate reasons, and a proposal has to survive both:
+
+- **`web/` is served live off disk by the bridge, per request.** `install.ps1`
+  says so twice — at line 8 and again in the message it prints when it finishes:
+  *changes to `bridge/` or `web/` do not need a rebuild*. Introduce a bundler and
+  `web/app.js` becomes a build artifact, so every UI edit needs a build before a
+  refresh shows it. That is the loop this project is pleasant to work in, and it
+  is worth more than any library.
+- **`install.ps1` copies `package.json` into a Windows staging directory and runs
+  `npm install` there** (lines 100 and 117) before electron-builder. Anything in
+  `dependencies` is therefore installed on the Windows side and packaged into the
+  shell. `electron` and `electron-builder` are devDependencies for exactly that
+  reason. A runtime dependency added here does not fail — it quietly grows the
+  installer and adds a way for the build to break on a machine you are not at.
+
+`bridge/` has no dependencies either, and that is not an accident waiting to be
+corrected: every module under it requires only Node built-ins — `fs`, `path`,
+`http`, `net`, `crypto`, `child_process`, `os`, `events`, `readline`. If you find
+yourself wanting a package there, the answer is almost always a smaller amount of
+code. The one place that argument has lost is `web/vendor/`.
+
+### How to vendor one
+
+`web/vendor/` holds **prebuilt bundles, committed** — xterm, and diff2html for the
+diff viewer. Fetched with `npm pack`, which writes a tarball and leaves no
+`node_modules`, never with `npm install`:
+
+```bash
+npm pack diff2html@3.4.56 --pack-destination /tmp
+tar -xzf /tmp/diff2html-3.4.56.tgz -C /tmp
+cp /tmp/package/bundles/js/diff2html.min.js   web/vendor/diff2html.js
+cp /tmp/package/bundles/css/diff2html.min.css web/vendor/diff2html.css
+cp /tmp/package/LICENSE.md                    web/vendor/LICENSE.diff2html
+```
+
+Four rules for what lands there:
+
+- **A prebuilt browser bundle, or nothing.** A package that ships only `cjs`/`esm`
+  with bare imports needs a bundler to become one, which is the first reason
+  above. That is what ruled out `react-diff-viewer-continued`, which was the
+  preferred library on the merits and lost on this alone.
+- **Rename it to plain `.js` and `.css`,** whatever it ships as — xterm dropped
+  `.mjs`, diff2html dropped `.min.js`. `web/terminal.js:16-18` explains why: the
+  bridge's MIME table already has those two extensions, so adding a file needs no
+  bridge change, and a `web/` change should never require a restart to take
+  effect.
+- **Copy the licence next to it** as `LICENSE.<name>`, and **record the version**
+  in a comment — the CSS block that themes it, or the header of the file that
+  loads it. The next upgrade should be a diff against a known base.
+- **No CDN, ever.** The CSP at `web/index.html:12-13` is `default-src 'self'`, so
+  a remote `<script src>`, stylesheet or `@font-face` is refused outright. The only
+  sign is a console message you have to be looking at — the page loads, and the
+  feature is simply not there.
+
+### Check the bundle's footer before you decide how to load it
+
+The two files in `web/vendor/` are loaded in *different* ways, and the difference
+is not a style choice:
+
+- `xterm.js` is the **ESM build renamed** — it ends `export{Dl as Terminal}` — so
+  `web/terminal.js` imports it normally.
+- `diff2html.js` is a **UMD bundle**. Its footer is `}(this, …)` and it assigns
+  its global off the `this` it was called with. Top-level `this` in an ES module
+  is `undefined`, so `import './vendor/diff2html.js'` throws a `TypeError` before
+  `app.js` runs a line. It is loaded with a classic `<script>` before the module
+  script, and read as `window.Diff2Html` at call time.
+
+So: `head -c 200` the file and look. If it opens `!function(e,t){…}(this,` it is
+UMD and needs the script tag; if it ends in an `export`, import it. Both cases
+carry a comment saying which and why, because the UMD one reads like something to
+tidy up and tidying it up is an immediate crash on page load.
+
 ## Never rebuild without asking
 
 `install.ps1` force-closes any running ClaudeSessions and replaces the
@@ -365,6 +444,9 @@ other, since the staging directory is wiped and rebuilt.
 
 - Editing anything under `bridge/`, `web/`, `scripts/`.
 - Running `npm run dev` and restarting it as often as you like.
+- `npm pack` to look at what a package ships. It writes a tarball and installs
+  nothing. `npm install` is the one that is not safe — see *You cannot add a
+  dependency*.
 - Reading transcripts: both instances read the same `~/.claude/projects`, so a
   session you start in dev is visible in the everyday window and vice versa.
 
