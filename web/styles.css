@@ -1423,9 +1423,35 @@ a:hover { text-decoration: underline; }
     transition: width var(--t-fast) var(--ease);
 }
 .tasks.shut { --pane-w: 34px; }
-/* No `--pane-w: 0` on the rules that remove a column: `.tasks:not(.shut)` below
-   outranks a bare `.tasks`, so it would compute to 240px here and read as a lie.
-   `syncPaneInsets` skips anything not in the layout instead. */
+
+/* On its way in or out. `display` cannot be animated, so a column that simply
+   stopped being `display: none` would appear at its full width and shove the
+   transcript across in one frame — which is what switching between two
+   conversations used to look like, four times over. This is the same column at
+   zero width, still in the layout, so the width transition above has something
+   to move: `slidePane` in app.js adds the class to send it out and takes it off
+   to bring it back, and only sets `hidden` once it has finished leaving.
+
+   Selected through the row it sits in, which is where these columns always are:
+   `.tasks:not(.shut)` in the media query below is as specific as a bare
+   `.tasks.gone` and comes later, so it would hold a column open at 240px while
+   it tried to leave. One more element in the selector settles it without an
+   `!important`.
+
+   `overflow` and `min-width` are both load-bearing rather than tidiness. A flex
+   item's automatic minimum size floors it at its content's width, so `width: 0`
+   alone would leave a column as wide as its widest task; `overflow: hidden`
+   makes that minimum zero, and `min-width` says so outright. The border goes too,
+   or a column that has left keeps a 1px line down the edge of the transcript. */
+.conv-body > .tasks.gone {
+    --pane-w: 0px;
+    min-width: 0;
+    border-left-width: 0;
+    border-right-width: 0;
+    overflow: hidden;
+}
+/* Once it has left: out of the tab order and out of the a11y tree, rather than
+   a zero-width box that is still both. */
 .tasks[hidden] { display: none; }
 @media (prefers-reduced-motion: reduce) { .tasks { transition: none; } }
 
@@ -1896,6 +1922,16 @@ a:hover { text-decoration: underline; }
 }
 .turns::-webkit-scrollbar { display: none; }
 .turns:empty { display: none; }
+/* Holding its place while a conversation is being drawn.
+ *
+ * `beginOpen` empties the rail and the new transcript refills it, so for the
+ * few frames in between `:empty` above took the column out — and the composer,
+ * which counts this rail like any other column, stepped 30px sideways and back
+ * in the middle of whatever else the switch was animating. A rail is genuinely
+ * absent only for a conversation with no turns at all, which is a fact about
+ * the session rather than about how far its render has got; `renderTurns` drops
+ * the class once it knows which it is. */
+.turns.holding:empty { display: flex; }
 /* display:flex above would otherwise beat the hidden attribute. */
 .turns[hidden] { display: none; }
 
