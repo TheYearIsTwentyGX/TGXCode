@@ -21,6 +21,7 @@ const { SessionRegistry } = require('./registry');
 const { RunnerPool, PERMISSION_MODES, resolveWorkdir } = require('./runner');
 const { Flags } = require('./flags');
 const { Prefs } = require('./prefs');
+const keymap = require('./keymap');
 const { Spinner } = require('./spinner');
 const { Suggestions, STATUSES: SUGGESTION_STATUSES } = require('./suggestions');
 const { Drafts, MAX_DRAFTS } = require('./drafts');
@@ -663,6 +664,11 @@ function isKnownHost(host) {
  *     could a session start", and a phone may already start one. Creating a
  *     directory is reaching past the app into the machine, which is the line
  *     above — so the refusal is on the exact path, not on /api/fs.
+ *   - **Saving settings** is the mkdir clause with a longer reach. It writes a
+ *     file in the user's home directory, and one of the keys in it —
+ *     `quota.beaconDir` — names a directory this app then starts `claude` in.
+ *     Reading them stays allowed, because how somebody wants a transcript
+ *     folded is not a capability.
  *   - **Runs** are a terminal wearing a config file's clothes: /api/runs/:id/input
  *     writes bytes to a pty, so the terminal clause above settles it without a
  *     new argument. Starting one is refused on the exact path, the same asymmetry
@@ -703,6 +709,14 @@ function remoteRefusal(pathname, method) {
     // Exact equality, not a prefix: GET /api/fs stays readable remotely.
     if (pathname === '/api/fs/mkdir') {
         return 'folders can only be created on the machine they live on';
+    }
+    // Saving settings writes a file in the user's home directory, or inside a
+    // checkout — the mkdir clause above, with a worse blast radius, because
+    // `quota.beaconDir` names a directory this app then starts `claude` in. The
+    // GET stays open: reading how somebody wants a transcript folded is not a
+    // capability, and a phone has a use for the answer.
+    if (pathname === '/api/prefs' && method !== 'GET') {
+        return 'settings can only be saved on the machine they live on';
     }
     // A handoff starts a turn in a session the caller is not looking at, and can
     // wake one that has no process at all. That is a reasonable thing for an
@@ -2034,26 +2048,89 @@ async function api(req, res, url, pathname, who) {
     }
 
     // Settings, for a caller that wants them fresh rather than as the page was
-    // served with them — a settings page saving, or a client checking after the
-    // file was edited by hand. `?cwd=` asks what is in force for a project;
-    // without it, the user-level answer. Not local-only: reading a preference
-    // about how a transcript looks is not a capability a phone should be
-    // refused, and prefs.forCwd() runs a cwd through cfg.withinRoots anyway.
+    // served with them — the settings page after a save, or a client checking
+    // after the file was edited by hand. `?cwd=` asks what is in force for a
+    // project; without it, the user-level answer. Not local-only: reading a
+    // preference about how a transcript looks is not a capability a phone should
+    // be refused, and prefs.forCwd() runs a cwd through cfg.withinRoots anyway.
+    //
+    // `?files=1` adds what each file in the chain says on its own, which is the
+    // other half of the question and only the settings page asks it: "in force"
+    // cannot tell a value you set from one you inherited, and a control that
+    // cannot tell those apart offers to clear things that were never set and
+    // appears not to work when a stronger file has taken over.
     if (pathname === '/api/prefs' && req.method === 'GET') {
-        return send(res, 200, prefs.forCwd(url.searchParams.get('cwd') || ''));
+        const cwd = url.searchParams.get('cwd') || '';
+        const body = prefs.forCwd(cwd);
+        if (url.searchParams.get('files')) return send(res, 200, { ...body, files: prefs.raw(cwd) });
+        return send(res, 200, body);
+    }
+
+    // Save some of them. A patch of `{section: {key: value}}` rather than a
+    // whole document, so two windows editing different settings do not clobber
+    // each other, and `null` for a value removes the key so it falls back down
+    // the chain. `scope` picks which of the three files it lands in — see
+    // Prefs.targetFile. Local-only; see remoteRefusal.
+    //
+    // Refusals carry the code Prefs.save classified them with, so a client can
+    // tell "you sent a value this key does not allow" from "that file is not
+    // yours to write" without matching on prose.
+    if (pathname === '/api/prefs' && req.method === 'PUT') {
+        const body = await readJson(req);
+        let saved;
+        try {
+            saved = prefs.save({
+                scope: body.scope || 'user',
+                dir: body.cwd || '',
+                patch: body.patch,
+            });
+        } catch (err) {
+            // A bad value or an unknown key is the caller's mistake; a file it
+            // may not write, or one that does not parse, is the machine's
+            // answer about what is possible.
+            const status = (err.code === 'value' || err.code === 'section'
+                || err.code === 'scope' || err.code === 'dir') ? 400 : 403;
+            return send(res, status, { error: err.message, code: err.code || 'save' });
+        }
+        // Every window reads settings, and two of them are routinely open here —
+        // the Electron shell and a browser tab on the same bridge. Only the
+        // user-level answer is broadcast: a project's is the open session's
+        // business and arrives with the transcript.
+        broadcast('prefs', prefs.page(''));
+        return send(res, 200, { file: saved.file, prefs: saved.prefs, files: saved.files });
+    }
+
+    // What may be rebound, and the closed set of key names a combo may end in.
+    // The catalogue lives in bridge/keymap.js rather than in the page for the
+    // reason its header gives: `keyboard.bindings` is keyed by command id, and
+    // ids only the page knows are ids nobody else can discover.
+    //
+    // Not local-only — a list of command names is not a capability — and served
+    // in a `cs-keymap` <meta> tag as well, so the window's first keystroke does
+    // not race a fetch.
+    if (pathname === '/api/keymap' && req.method === 'GET') {
+        return send(res, 200, keymap.payload());
     }
 
     // Which spinner verb groups exist, so the answer to "what may I put in
-    // spinner.groups?" is reachable without listing a directory by hand. There
-    // is no settings page, so this is the discoverable half of that setting —
-    // and where a group that failed to load says why.
+    // spinner.groups?" is reachable without listing a directory by hand — and
+    // where a group that failed to load says why. This is what the settings
+    // page draws its checkboxes from; it was built when there was no settings
+    // page, and it is the reason there did not have to be a second route now.
     //
-    // Not local-only, for the same reason /api/prefs is not: it reports the
-    // names and sizes of verb groups, which is not a capability worth refusing
-    // a phone. Read-only, like prefs: the files are the interface.
+    // `?verbs=1` adds each group's verbs, sorted. Only the settings page asks:
+    // it puts them in the tooltip on a group, which is the difference between
+    // choosing a voice and guessing from a name. Off by default because it is
+    // 3,639 strings across the catalogue and a caller that wanted counts should
+    // not pay for them.
+    //
+    // Not local-only, for the same reason /api/prefs is not: the names and
+    // contents of verb groups are not a capability worth refusing a phone.
     if (pathname === '/api/spinner/groups' && req.method === 'GET') {
         const cwd = url.searchParams.get('cwd') || '';
-        const { groups, problems } = spinner.groups(cwd);
+        const withVerbs = Boolean(url.searchParams.get('verbs'));
+        const { groups: all, problems } = spinner.groups(cwd);
+        const groups = withVerbs ? all : all.map(({ verbs, ...g }) => g);
         const settings = prefs.forCwd(cwd).spinner;
         const pool = spinner.pool(cwd);
         return send(res, 200, {
@@ -4514,6 +4591,12 @@ function serveStatic(req, res, pathname, who) {
         // stay drawn the wrong way, since nothing re-renders history.
         body = Buffer.from(auth.injectMeta(body.toString('utf8'),
             'cs-prefs', JSON.stringify(prefs.page(''))), 'utf8');
+        // The shortcut catalogue, for the same reason and one more: the first
+        // key somebody presses may land before a fetch could answer, and a
+        // Ctrl+3 that does nothing because the keymap has not arrived yet is
+        // indistinguishable from a broken binding.
+        body = Buffer.from(auth.injectMeta(body.toString('utf8'),
+            'cs-keymap', JSON.stringify(keymap.payload())), 'utf8');
     }
     headers['Content-Length'] = body.length;
 

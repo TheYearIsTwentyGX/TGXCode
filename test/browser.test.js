@@ -89,11 +89,20 @@ function check(name, got, want) {
     // attribute — see auth.injectMeta.
     check('and the settings are in the page, not behind a fetch',
         /name="cs-prefs" content="%7B%22version%22/.test(page.body), true);
+    // Same argument, one step further: the first key somebody presses can land
+    // before a fetch could answer, and a Ctrl+3 that does nothing because the
+    // keymap has not arrived is indistinguishable from a broken binding.
+    check('and so is the shortcut catalogue',
+        /name="cs-keymap" content="%7B%22commands%22/.test(page.body), true);
 
     // Everything web/app.js does, now that the jar is warm. No header anywhere.
     console.log('\n--- and now every call web/ makes, unchanged ---');
     check('GET /api/sessions', (await call('/api/sessions')).status, 200);
     check('GET /api/projects', (await call('/api/projects')).status, 200);
+    check('GET /api/keymap', (await call('/api/keymap')).status, 200);
+    // What the settings panel reads: the merged answer plus what each file in
+    // the chain says on its own.
+    check('GET /api/prefs?files=1', (await call('/api/prefs?files=1')).status, 200);
     check('GET /api/overview', (await call('/api/overview')).status, 200);
     check('GET /api/dashboard', (await call('/api/dashboard')).status, 200);
     check('GET /api/quota', (await call('/api/quota')).status, 200);

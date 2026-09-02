@@ -37,7 +37,7 @@
          not archived, in a column per state. The widest of the four views, and
          so the first of them. -->
     <button id="btn-taskboard" class="bar-btn" type="button" aria-pressed="false"
-            title="Everything outstanding, by state (Ctrl+2)">
+            title="Everything outstanding, by state">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
         <rect x="3.2" y="4.2" width="5.2" height="15.6" rx="1.8"
               stroke="currentColor" stroke-width="1.7"/>
@@ -54,7 +54,7 @@
          conversation at a time by design; this is the view for the afternoon
          when five agents are working and one of them is stuck. -->
     <button id="btn-live" class="bar-btn" type="button" aria-pressed="false"
-            title="Every session running right now (Ctrl+3)">
+            title="Every session running right now">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
         <circle cx="12" cy="12" r="3.1" fill="currentColor"/>
         <path d="M6.6 17.4a7.6 7.6 0 0 1 0-10.8M17.4 6.6a7.6 7.6 0 0 1 0 10.8"
@@ -80,7 +80,7 @@
     <!-- Work that is finished with the conversation but not with you: changes
          nobody committed, pull requests nobody merged. -->
     <button id="btn-dash" class="bar-btn" type="button" aria-pressed="false"
-            title="Uncommitted changes and open pull requests, by project (Ctrl+4)">
+            title="Uncommitted changes and open pull requests, by project">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
         <rect x="3.2" y="4.2" width="7" height="7" rx="2" stroke="currentColor" stroke-width="1.7"/>
         <rect x="13.8" y="4.2" width="7" height="11.5" rx="2" stroke="currentColor" stroke-width="1.7"/>
@@ -95,7 +95,7 @@
          it was — so the bridge writes every one of these down and this is where
          you read them back. -->
     <button id="btn-notes" class="bar-btn" type="button" aria-pressed="false"
-            title="Everything that has reached out to you (Ctrl+5)">
+            title="Everything that has reached out to you">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
         <circle cx="5" cy="6.5" r="1.5" fill="currentColor"/>
         <circle cx="5" cy="12" r="1.5" fill="currentColor"/>
@@ -113,7 +113,7 @@
          ordering the rest of it follows — most demanding to least, and a draft
          demands nothing yet. -->
     <button id="btn-drafts" class="bar-btn" type="button" aria-pressed="false"
-            title="Sessions set up but not started (Ctrl+6)">
+            title="Sessions set up but not started">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
         <path d="M5.5 3.7h8.2l4.8 4.8v11.8a1.8 1.8 0 0 1-1.8 1.8H5.5a1.8 1.8 0 0 1-1.8-1.8V5.5a1.8 1.8 0 0 1 1.8-1.8Z"
               stroke="currentColor" stroke-width="1.7"/>
@@ -130,7 +130,7 @@
          for you, and a schedule is not waiting for anything. The badge counts
          what is armed, not what is stored — a paused schedule is not news. -->
     <button id="btn-sched" class="bar-btn" type="button" aria-pressed="false"
-            title="Sessions that start on a clock (Ctrl+7)">
+            title="Sessions that start on a clock">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
         <circle cx="12" cy="13" r="8.3" stroke="currentColor" stroke-width="1.7"/>
         <path d="M12 9.1V13l2.8 1.8" stroke="currentColor" stroke-width="1.7"
@@ -140,6 +140,18 @@
       </svg>
       <span>Schedules</span>
       <span id="sched-badge" class="bar-badge" hidden></span>
+    </button>
+
+    <!-- How you want the app to behave. Icon-only and last on the ladder for the
+         same reason: it is the one view that is not about work at all, so it
+         earns a place to go and not a word of the bar. -->
+    <button id="btn-settings" class="bar-btn icon-only" type="button" aria-pressed="false"
+            title="Settings">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="12" cy="12" r="3.1" stroke="currentColor" stroke-width="1.7"/>
+        <path d="M12 2.9l1.5 2.2 2.6-.6.6 2.6 2.2 1.5-1.2 2.4 1.2 2.4-2.2 1.5-.6 2.6-2.6-.6L12 21.1l-1.5-2.2-2.6.6-.6-2.6-2.2-1.5 1.2-2.4-1.2-2.4 2.2-1.5.6-2.6 2.6.6L12 2.9Z"
+              stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+      </svg>
     </button>
 
     <!-- The same sessions, on a phone. Icon-only: it is a setup step you do once
@@ -637,7 +649,11 @@ checks, and merge it once they pass.">LGTM</button>
                 <option value="dontAsk">dontAsk</option>
                 <option value="bypassPermissions">bypassPermissions</option>
               </select>
-              <span class="hint">Enter to send · Shift+Enter for a newline</span>
+              <!-- Rendered from keyboard.composerSend, not written down here: the
+                   two modes swap what Enter and Shift+Enter do, and a hint that
+                   named one of them while the other was in force would be worse
+                   than no hint. See paintComposerHint. -->
+              <span id="composer-hint" class="hint"></span>
             </div>
           </div>
         </div>
@@ -795,6 +811,63 @@ checks, and merge it once they pass.">LGTM</button>
         <button id="sched-new" class="dash-btn" type="button">New schedule</button>
       </header>
       <div id="sched-body" class="sched-body"></div>
+    </section>
+
+    <!-- How you want the app to behave. Every control here is one key in
+         `~/.tgxcode/settings.json` — the file is still the interface, and this
+         is a better way in rather than a replacement for it, which is why the
+         head names the file it is about to write. Scope picks which of the three
+         files that is; see Prefs.targetFile in bridge/prefs.js. -->
+    <section id="settings" class="settings" hidden aria-label="Settings">
+      <!-- One scroll container holding one centred column: the title, the scope
+           it is editing, and the groups. The head used to be a full-width bar
+           with the title at the far left and the scope pickers at the far right,
+           which read as two unrelated pieces of chrome rather than as one
+           statement about what you are editing. -->
+      <div id="set-shell" class="settings-shell">
+        <div class="settings-col">
+          <header class="settings-head">
+            <h1 class="settings-title">Settings</h1>
+            <p class="settings-sub">How you want this app to behave. Every one
+               of these is a key in a JSON file, and hand-editing it still
+               works.</p>
+            <!-- Under the title rather than opposite it. These say *what you
+                 are editing*, so they belong with the sentence that says what
+                 this screen is — across the far corner of a wide bar they read
+                 as unrelated chrome. -->
+            <div class="settings-picks">
+              <label class="settings-pick">
+                <span>Scope</span>
+                <select id="set-scope">
+                  <option value="user">User</option>
+                  <option value="project">Project — shared</option>
+                  <option value="project-local">Project — local</option>
+                </select>
+              </label>
+              <label class="settings-pick" id="set-project-wrap">
+                <span>Project</span>
+                <select id="set-project"></select>
+              </label>
+            </div>
+          </header>
+          <div id="set-file" class="settings-file"></div>
+          <div id="set-problems" class="settings-problems" hidden></div>
+          <!-- Contents to the left, sticky, because the panel is long enough
+               that finding a group means scrolling past three others.
+
+               It hangs *outside* the centred column rather than sharing it, so
+               it takes no part in the centring: the list is centred on the pane
+               and the aside sits in the space that leaves. The inner div is
+               what sticks — the nav itself has to span the full height for a
+               sticky child to have anywhere to travel. -->
+          <div class="settings-cols">
+            <nav class="settings-toc" aria-label="Settings sections">
+              <div id="set-toc" class="settings-toc-list"></div>
+            </nav>
+            <div id="set-body" class="settings-body"></div>
+          </div>
+        </div>
+      </div>
     </section>
 
     <div id="placeholder" class="empty">

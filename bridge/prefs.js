@@ -24,11 +24,18 @@
 // you want to see is a preference about the app, not about the machine you
 // happened to open it on.
 //
+// `keyboard` is the fourth, and it is the one section that is not about a view
+// at all: which chord reaches which command, what Enter does in the composer,
+// and whether Ctrl+C in the terminal copies a selection or interrupts. The
+// bindings themselves are validated against bridge/keymap.js, which owns the
+// catalogue of what may be bound — see the header there for why the list is not
+// in `web/`.
+//
 // **Where the file lives is the deliberate part.** `~/.tgxcode/settings.json`,
 // not STATE_DIR. Everything under STATE_DIR is state the app owns and nobody is
 // expected to open — a token, a set of archived ids. This is a file a person
-// edits by hand today and a settings page will write tomorrow, and it is the
-// start of a directory meant to hold more than this app's share of it. A
+// edits by hand and the settings page writes, and it is the start of a
+// directory meant to hold more than this app's share of it. A
 // project may override any key from `<workspace>/.tgxcode/settings.json`, which
 // is the same directory a project already declares its commands in — see
 // bridge/commands.js, whose precedence this mirrors so the two cannot disagree
@@ -36,12 +43,16 @@
 //
 // Unlike Flags, the defaults are written out on first read. A settings file
 // with no UI in front of it has to be discoverable to be editable at all, and
-// an empty `~/.tgxcode/` teaches nobody what may go in it.
+// an empty `~/.tgxcode/` teaches nobody what may go in it. There is a settings
+// page now — see `save()` at the foot of this file — and the defaults still get
+// written, because the file being readable by hand is the thing that made the
+// page possible to build rather than a step on the way to it.
 
 const fs = require('fs');
 const path = require('path');
 
 const cfg = require('./config');
+const keymap = require('./keymap');
 const { projectRootOf } = require('./transcript');
 
 const VERSION = 1;
@@ -124,7 +135,44 @@ const DEFAULTS = {
         // what that call is. 0 pins it for the whole turn.
         rerollMs: 8000,
     },
+    keyboard: {
+        // Ctrl+C in the terminal copies when there is a selection and
+        // interrupts when there is not, and Ctrl+V then pastes without the
+        // Shift a terminal usually asks for. Off, because the alternative is
+        // changing what Ctrl+C does to somebody who did not ask: a selection
+        // left in the scrollback would turn an interrupt into a copy, and the
+        // process you were trying to stop keeps running.
+        //
+        // **User file only.** Which keys your hands use is not a repository's
+        // business — the same argument as `quota` below it, and see USER_ONLY.
+        contextualTerminalCopy: false,
+        // What Enter does in a composer. 'enter' is what this app has always
+        // done — Enter sends, Shift+Enter is a newline. 'ctrl-enter' swaps
+        // them, for anyone who writes several paragraphs before sending one.
+        // Ctrl+Enter sends either way, which it already did.
+        composerSend: 'enter',
+        // Command id -> combo, or null to leave a command unbound. Absent means
+        // the default in bridge/keymap.js, so this holds only what you changed
+        // and a command added later arrives already bound.
+        bindings: {},
+    },
 };
+
+// Sections a project may not set, however the precedence would otherwise fall.
+//
+// `quota` because the beacon starts a `claude` in a directory of its own
+// choosing, and a checked-in file deciding that for everyone who clones the
+// repository is not a preference — it is a repository reaching outside itself.
+// `keyboard` for the same reason one step further in: a repository that can
+// rebind your keys can make the window unusable, and the way back would be
+// hand-editing the file the page exists to save you from.
+//
+// Both were already meant to work this way. `quota` said so in prose and was
+// enforced only by its call sites passing no `cwd` (see bridge/server.js,
+// quotaPrefs) — which held, but left `GET /api/prefs?cwd=…` echoing a project's
+// value back as though it counted. That was harmless while nothing read the
+// answer and is not once a settings page prints which file wins for each key.
+const USER_ONLY = new Set(['quota', 'keyboard']);
 
 // What each key is allowed to be. A file is a thing people edit, so a bad value
 // is dropped and the default kept rather than taken at face value — a
@@ -159,6 +207,63 @@ const SHAPE = {
         // read it is worse than one that never changes. 0 is off.
         rerollMs: (v) => v === 0 || (Number.isInteger(v) && v >= 1000 && v <= 600_000),
     },
+    keyboard: {
+        contextualTerminalCopy: (v) => typeof v === 'boolean',
+        composerSend: (v) => v === 'enter' || v === 'ctrl-enter',
+        // The last gate rather than the only one: cleanBindings() below has
+        // already thrown out the entries that fail, one problem each, so
+        // anything reaching here is a map of known command ids to `null` or a
+        // canonical combo.
+        bindings: (v) => {
+            if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
+            const ids = Object.keys(v);
+            if (ids.length > keymap.MAX_BINDINGS) return false;
+            return ids.every(id => keymap.COMMAND_IDS.has(id)
+                && (v[id] === null || keymap.normalize(v[id]) === v[id]));
+        },
+    },
+};
+
+/**
+ * `keyboard.bindings`, entry by entry.
+ *
+ * Every other setting is one value, so SHAPE's all-or-nothing rule reads as
+ * "that number was wrong, the default stands". A map is different: one typo'd
+ * command id would throw away every binding beside it, which is a lot of
+ * silence for one mistake in a file people edit by hand. So each entry stands
+ * or falls on its own and says which it was, and what survives is spelled the
+ * way bridge/keymap.js spells it — `cmd+k` in the file becomes `Ctrl+K`, so
+ * nothing downstream has to know the aliases.
+ *
+ * @param {*} value whatever the file had
+ * @param {(msg: string) => void} note where a rejected entry gets reported
+ * @returns {object|undefined} the cleaned map, or undefined to leave the
+ *   default alone — which is what a value that is not a map at all gets.
+ */
+function cleanBindings(value, note) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    const out = {};
+    for (const [id, raw] of Object.entries(value)) {
+        if (!keymap.COMMAND_IDS.has(id)) {
+            note(`${JSON.stringify(id)} is not a command`);
+            continue;
+        }
+        if (raw === null) { out[id] = null; continue; }
+        const combo = keymap.normalize(raw);
+        if (!combo) {
+            note(`${JSON.stringify(raw)} is not a usable combo for ${id}`);
+            continue;
+        }
+        out[id] = combo;
+    }
+    return out;
+}
+
+// Section keys whose value is a map and so gets the treatment above, before
+// SHAPE sees it. One entry today; the table exists so the next one does not
+// have to special-case merge().
+const SANITIZE = {
+    keyboard: { bindings: cleanBindings },
 };
 
 /**
@@ -200,8 +305,13 @@ function readFile(file) {
     return { data, stamp, problem: null };
 }
 
-/** Fold one file's keys over an accumulating result, dropping what fails SHAPE. */
-function merge(into, data, file, problems) {
+/**
+ * Fold one file's keys over an accumulating result, dropping what fails SHAPE.
+ *
+ * @param {boolean} isUser whether `file` is the user's own settings, which is
+ *   what decides whether a USER_ONLY section counts or is reported and skipped.
+ */
+function merge(into, data, file, problems, isUser) {
     for (const [section, checks] of Object.entries(SHAPE)) {
         const block = data[section];
         if (block === undefined) continue;
@@ -209,14 +319,28 @@ function merge(into, data, file, problems) {
             problems.push({ file, message: `"${section}" is not an object — ignored` });
             continue;
         }
+        if (USER_ONLY.has(section) && !isUser) {
+            problems.push({ file,
+                message: `"${section}" may only be set in ${cfg.USER_PREFS_FILE} — ignored` });
+            continue;
+        }
         for (const [key, ok] of Object.entries(checks)) {
             if (block[key] === undefined) continue;
-            if (!ok(block[key])) {
+            const sanitize = SANITIZE[section] && SANITIZE[section][key];
+            const value = sanitize
+                ? sanitize(block[key], (message) => problems.push({ file, message: `${section}.${key}: ${message} — ignored` }))
+                : block[key];
+            if (value === undefined) {
                 problems.push({ file,
                     message: `${section}.${key}: ${JSON.stringify(block[key])} is not a valid value — ignored` });
                 continue;
             }
-            into[section][key] = block[key];
+            if (!ok(value)) {
+                problems.push({ file,
+                    message: `${section}.${key}: ${JSON.stringify(block[key])} is not a valid value — ignored` });
+                continue;
+            }
+            into[section][key] = value;
         }
     }
 }
@@ -259,20 +383,45 @@ class Prefs {
      *  - the gitignored local file from the main checkout, so your own
      *    overrides follow you into every worktree of it;
      *  - ...unless somebody deliberately put one in the worktree.
+     *
+     * `scope` is the settings page's name for a file — `user`, `project` or
+     * `project-local`. Two of the four are `project-local`, because the main
+     * checkout's local file and a worktree's own are both that: which is why
+     * the page's save target comes from targetFile() and never from a row here.
      */
     files(dir) {
-        const out = [{ file: cfg.USER_PREFS_FILE }];
+        const out = [{ file: cfg.USER_PREFS_FILE, scope: 'user' }];
         if (!dir || !cfg.withinRoots(dir)) return out;
 
         const workspace = path.resolve(cfg.expandHome(dir));
         const project = projectRootOf(workspace);
         out.push(
-            { file: path.join(workspace, cfg.TGX_DIR, cfg.SETTINGS_FILE),
+            { file: path.join(workspace, cfg.TGX_DIR, cfg.SETTINGS_FILE), scope: 'project',
                 fallback: path.join(project, cfg.TGX_DIR, cfg.SETTINGS_FILE) },
-            { file: path.join(project, cfg.TGX_DIR, cfg.SETTINGS_LOCAL_FILE) },
-            { file: path.join(workspace, cfg.TGX_DIR, cfg.SETTINGS_LOCAL_FILE) },
+            { file: path.join(project, cfg.TGX_DIR, cfg.SETTINGS_LOCAL_FILE), scope: 'project-local' },
+            { file: path.join(workspace, cfg.TGX_DIR, cfg.SETTINGS_LOCAL_FILE), scope: 'project-local' },
         );
         return out;
+    }
+
+    /**
+     * The one file a given scope writes, for a given directory.
+     *
+     * Derived rather than picked out of files(): the page offers three scopes
+     * and the chain has four entries, and the entry that is not offered — the
+     * main checkout's local file seen from a worktree — is exactly the one a
+     * caller would pick by accident.
+     *
+     * @returns {string|null} null if the scope needs a directory and has none,
+     *   or the directory is not one this bridge will read.
+     */
+    targetFile(scope, dir) {
+        if (scope === 'user') return cfg.USER_PREFS_FILE;
+        if (scope !== 'project' && scope !== 'project-local') return null;
+        if (!dir || !cfg.withinRoots(dir)) return null;
+        const workspace = path.resolve(cfg.expandHome(dir));
+        return path.join(workspace, cfg.TGX_DIR,
+            scope === 'project' ? cfg.SETTINGS_FILE : cfg.SETTINGS_LOCAL_FILE);
     }
 
     /**
@@ -281,7 +430,8 @@ class Prefs {
      * @param {string} [dir] a workspace — a session's cwd. Omitted gives the
      *   user-level answer, which is what the page is served before it knows
      *   which conversation it is about to show.
-     * @returns {{version, transcript, live, spinner, sources: string[], problems: object[]}}
+     * @returns {{version, transcript, live, quota, spinner, keyboard,
+     *   sources: string[], problems: object[]}}
      */
     forCwd(dir) {
         const key = dir || '';
@@ -295,7 +445,7 @@ class Prefs {
                 file = spec.fallback;
                 read = readFile(file);
             }
-            reads.push({ file, read });
+            reads.push({ file, read, scope: spec.scope });
         }
 
         const stamp = reads.map(r => `${r.file}@${r.read.stamp || '-'}`).join('|');
@@ -308,18 +458,19 @@ class Prefs {
             live: { ...DEFAULTS.live },
             quota: { ...DEFAULTS.quota },
             spinner: { ...DEFAULTS.spinner },
+            keyboard: { ...DEFAULTS.keyboard, bindings: { ...DEFAULTS.keyboard.bindings } },
             sources: [],
             problems: [],
         };
         // In the main checkout the project and workspace local files are the
         // same path; reading it twice would double every problem it reports.
         const seen = new Set();
-        for (const { file, read } of reads) {
+        for (const { file, read, scope } of reads) {
             if (seen.has(file)) continue;
             seen.add(file);
             if (read.problem) value.problems.push(read.problem);
             if (!read.data) continue;
-            merge(value, read.data, file, value.problems);
+            merge(value, read.data, file, value.problems, scope === 'user');
             value.sources.push(file);
         }
 
@@ -337,6 +488,203 @@ class Prefs {
         const { sources, problems, ...settings } = this.forCwd(dir);
         return settings;
     }
+
+    /**
+     * What each file in the chain *says*, as opposed to what the chain adds up
+     * to.
+     *
+     * forCwd() answers "what is in force", which is the only thing the app
+     * itself needs. A settings page needs the other question as well: a
+     * checkbox has to know whether this scope set the value or inherited it,
+     * because clearing an inherited one is meaningless and clearing a set one
+     * is the whole point — and when a stronger file has taken over, the page
+     * has to be able to name it rather than show a control that appears not to
+     * work.
+     *
+     * Weakest first, the same order as sources. Rows are informational: what a
+     * save would write comes from targetFile().
+     *
+     * @returns {Array<{file, scope, target, exists, parsed, writable, values,
+     *   problems: string[]}>} — `parsed` false means the file was dropped
+     *   whole, so what it says is unknown and a save to it will be refused.
+     */
+    raw(dir) {
+        const seen = new Set();
+        const out = [];
+        for (const spec of this.files(dir)) {
+            let read = readFile(spec.file);
+            let file = spec.file;
+            if (!read.data && !read.problem && spec.fallback && spec.fallback !== spec.file) {
+                file = spec.fallback;
+                read = readFile(file);
+            }
+            if (seen.has(file)) continue;
+            seen.add(file);
+
+            // Only the keys this bridge knows, and only the ones that pass —
+            // the page draws controls from this, and a key it has no control
+            // for would be invisible while still counting.
+            const values = {};
+            const problems = [];
+            if (read.data) {
+                const holder = {};
+                for (const section of Object.keys(SHAPE)) holder[section] = {};
+                merge(holder, read.data, file, problems, spec.scope === 'user');
+                for (const [section, block] of Object.entries(holder)) {
+                    if (Object.keys(block).length) values[section] = block;
+                }
+            }
+            out.push({
+                file,
+                scope: spec.scope,
+                target: file === this.targetFile(spec.scope, dir),
+                exists: read.stamp !== null,
+                parsed: !read.problem,
+                writable: writable(file),
+                values,
+                problems: (read.problem ? [read.problem.message] : []).concat(problems.map(p => p.message)),
+            });
+        }
+        return out;
+    }
+
+    /**
+     * Write settings to one file in the chain.
+     *
+     * A patch of sections rather than a whole document, because the page edits
+     * one control at a time and a whole-document write would have two windows
+     * clobbering each other's unrelated keys. A `null` leaf **removes** the key
+     * so the value falls back down the chain — which is not the same as writing
+     * the default, and is the only way to say "I do not care about this one"
+     * once you have said otherwise.
+     *
+     * A patch is per *key*, not deeper: `keyboard.bindings` is one key whose
+     * value happens to be a map, so sending it replaces the whole map. That is
+     * on purpose — inside the map `null` already means "unbound on purpose",
+     * so there is no spare way to spell "drop this one entry back to its
+     * default", and a caller that holds the resolved map (which the page does)
+     * can say exactly what it wants by sending all of it.
+     *
+     * Everything is validated before anything is written, and the first failure
+     * refuses the whole call. That is the opposite of what a *file* gets, where
+     * a bad value is dropped and the default stands — deliberately: the file is
+     * hand-edited and half of it working beats none of it, whereas a page
+     * sending a value the bridge will not keep is a bug in the page, and
+     * silently dropping it would leave a control showing something that is not
+     * true.
+     *
+     * @param {{scope: string, dir?: string, patch: object}} req
+     * @returns {{file, prefs, files}} the target and the answer that now holds
+     * @throws {Error} with `.code` — `scope`, `section`, `value`, `dir`,
+     *   `readonly`, `unparseable` or `write` — so a route can turn it into the
+     *   right status without matching on prose.
+     */
+    save({ scope, dir, patch }) {
+        if (scope !== 'user' && scope !== 'project' && scope !== 'project-local') {
+            throw refuse('scope', `${JSON.stringify(scope)} is not a settings scope`);
+        }
+        if (scope !== 'user' && !dir) throw refuse('dir', `scope ${scope} needs a directory`);
+        if (scope !== 'user' && !cfg.withinRoots(dir)) {
+            throw refuse('dir', `${dir} is not a directory this bridge will read`);
+        }
+        const file = this.targetFile(scope, dir);
+        if (!file) throw refuse('scope', `no settings file for scope ${JSON.stringify(scope)}`);
+        if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+            throw refuse('section', 'patch is not an object');
+        }
+
+        // Validate the whole patch first. `null` skips SHAPE because it is a
+        // removal rather than a value, and the sanitizers run here too so what
+        // lands on disk is spelled canonically.
+        const clean = {};
+        for (const [section, block] of Object.entries(patch)) {
+            if (!SHAPE[section]) throw refuse('section', `"${section}" is not a settings section`);
+            if (!block || typeof block !== 'object' || Array.isArray(block)) {
+                throw refuse('section', `"${section}" is not an object`);
+            }
+            if (USER_ONLY.has(section) && scope !== 'user') {
+                throw refuse('readonly', `"${section}" may only be set in ${cfg.USER_PREFS_FILE}`);
+            }
+            clean[section] = {};
+            for (const [key, value] of Object.entries(block)) {
+                if (!SHAPE[section][key]) throw refuse('section', `${section}.${key} is not a setting`);
+                if (value === null) { clean[section][key] = null; continue; }
+                const sanitize = SANITIZE[section] && SANITIZE[section][key];
+                const rejected = [];
+                const next = sanitize ? sanitize(value, (m) => rejected.push(m)) : value;
+                if (rejected.length) throw refuse('value', `${section}.${key}: ${rejected[0]}`);
+                if (next === undefined || !SHAPE[section][key](next)) {
+                    throw refuse('value', `${section}.${key}: ${JSON.stringify(value)} is not a valid value`);
+                }
+                clean[section][key] = next;
+            }
+        }
+
+        // Read what is there before touching it. A file that does not parse is
+        // refused rather than replaced: whatever is in it is somebody's work,
+        // and a settings page is not a good enough reason to throw it away.
+        const before = readFile(file);
+        if (before.problem) throw refuse('unparseable', `${file}: ${before.problem.message}`);
+        const doc = before.data ? { ...before.data } : {};
+        doc.version = VERSION;
+        for (const [section, block] of Object.entries(clean)) {
+            const existing = (doc[section] && typeof doc[section] === 'object' && !Array.isArray(doc[section]))
+                ? { ...doc[section] } : {};
+            for (const [key, value] of Object.entries(block)) {
+                if (value === null) delete existing[key];
+                else existing[key] = value;
+            }
+            // An empty section is noise in a file people read, so it goes
+            // rather than sitting there as `{}`.
+            if (Object.keys(existing).length) doc[section] = existing;
+            else delete doc[section];
+        }
+
+        try {
+            fs.mkdirSync(path.dirname(file), { recursive: true });
+            const tmp = `${file}.tmp`;
+            fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`);
+            fs.renameSync(tmp, file);
+        } catch (err) {
+            throw refuse('write', `${file}: ${err.message}`);
+        }
+
+        // The cache is keyed by workspace and stamped on mtime, but CACHE_MS is
+        // two seconds of clock as well — long enough that a save followed
+        // straight away by a read could answer with the old value.
+        this.cache.clear();
+        return { file, prefs: this.forCwd(dir), files: this.raw(dir) };
+    }
 }
 
-module.exports = { Prefs, DEFAULTS, SHAPE, VERSION };
+/** Can this path be written, creating it and its directory if need be? */
+function writable(file) {
+    try {
+        fs.accessSync(file, fs.constants.W_OK);
+        return true;
+    } catch { /* missing, or not writable — the directory decides */ }
+    // Walk up to the nearest directory that exists: `.tgxcode/` is created on
+    // demand, so its absence is not an answer.
+    let dir = path.dirname(file);
+    for (;;) {
+        try {
+            fs.accessSync(dir, fs.constants.W_OK);
+            return true;
+        } catch {
+            if (!fs.existsSync(dir)) {
+                const up = path.dirname(dir);
+                if (up !== dir) { dir = up; continue; }
+            }
+            return false;
+        }
+    }
+}
+
+/** An Error a route can classify without reading the sentence. */
+function refuse(code, message) {
+    const err = new Error(message);
+    err.code = code;
+    return err;
+}
+
+module.exports = { Prefs, DEFAULTS, SHAPE, SANITIZE, USER_ONLY, VERSION };
