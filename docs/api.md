@@ -125,6 +125,7 @@ the thing you are about to approve is running on a machine you are sitting at.
 of `/api/terminals/*`; all of `/api/runs/*`; `POST /api/commands/run`;
 `/api/shutdown`; `/api/restart` (both methods); `/api/devservers/stop`; `/api/devbrowser/*`;
 `POST /api/sessions/:id/reveal`; `POST /api/sessions/:id/handoff`; `POST /api/fs/mkdir`;
+`PUT /api/prefs`;
 both attachment uploads — `POST /api/sessions/:id/attachments` and
 `POST /api/attachments`.
 
@@ -133,6 +134,12 @@ work up at the desk and releasing it from a phone when quota frees up is the cas
 feature exists for. What a phone cannot do is *widen* a mode — the check runs when the
 draft is written and again when it is started, so a `bypassPermissions` draft saved
 locally still refuses to start remotely.
+
+`/api/prefs` has the same shape of asymmetry, and it is on the method rather
+than the path: reading how somebody wants a transcript folded is not a
+capability, and a phone has a use for the answer. *Saving* is the `mkdir` clause
+with a longer reach — it writes a file in the user's home directory, and one of
+the keys in it names a directory this app then starts `claude` in.
 
 Note the asymmetry around `/api/fs` and `/api/commands`: `GET /api/fs` and
 `GET /api/commands` stay readable remotely, so those refusals are on the exact path
@@ -632,12 +639,34 @@ otherwise, shared with `/api/dashboard`, which asks the same question of the sam
 directories. Its own route rather than a field on the summary for the reason
 `/prs` gives: it shells out, and the session list must never wait on that.
 
-### `GET /api/prefs?cwd=<path>`
+### `GET /api/prefs?cwd=<path>&files=1`
 
-`{ version, transcript: {…}, live: {…}, spinner: {…}, sources: [string], problems: [{file, message}] }`
-— how the person using the app wants it to behave. `sources` is file paths, weakest
-first; each `problems` entry is an **object**, `{file, message}`, naming the file that
-carried a value the key does not allow and what was wrong with it.
+`{ version, transcript: {…}, live: {…}, quota: {…}, spinner: {…}, keyboard: {…},
+sources: [string], problems: [{file, message}] }` — how the person using the app
+wants it to behave. `sources` is file paths, weakest first; each `problems` entry
+is an **object**, `{file, message}`, naming the file that carried a value the key
+does not allow and what was wrong with it.
+
+`?files=1` adds `files`, which is the *other* question — not "what is in force"
+but "what does each file in the chain say on its own". One entry per file, weakest
+first:
+
+| Field | Type | |
+|---|---|---|
+| `file` | string | absolute path |
+| `scope` | string | `"user"`, `"project"` or `"project-local"` |
+| `target` | bool | whether `PUT` with that `scope` and this `cwd` writes *this* file |
+| `exists` | bool | |
+| `parsed` | bool | false means the file was dropped whole, so what it says is unknown and a `PUT` to it is refused |
+| `writable` | bool | the file, or the nearest directory that would have to be created |
+| `values` | object | only the keys this bridge knows and that passed validation, nested `{section: {key: value}}` |
+| `problems` | [string] | messages for this file alone, without the `{file, message}` wrapper |
+
+Two of the four chain entries have `scope: "project-local"` — the main
+checkout's local file and the workspace's own — which is why `target` exists and
+why a client must never derive the save target from a row. Only the settings
+page asks for this; a client that just wants the settings in force does not need
+it, and "in force" cannot distinguish a value you set from one you inherited.
 
 `~/.tgxcode/settings.json` is the user's own, written out with the defaults on
 first run so it can be found and edited. A project overrides any key from
@@ -650,6 +679,14 @@ A value that is not what the key allows is dropped and reported in `problems`
 rather than taken at face value; the default stands. Without `?cwd=` you get the
 user-level answer, which is also what every page is served in a `cs-prefs`
 `<meta>` tag (minus `sources` and `problems`).
+
+**Two sections may only be set in the user's own file**: `quota` and `keyboard`.
+A project file that carries one is ignored and says so in `problems`. What
+directory this app starts `claude` in, and which keys your hands use, are not a
+repository's business — and a repository that could rebind your keys could make
+the window unusable with hand-editing the file as the only way back. `quota` was
+documented this way before it was enforced this way; it is enforced now, so
+`?cwd=` no longer echoes a project's value back as though it counted.
 
 `transcript` today: `groupToolCalls` (fold a run of tool calls into one row once
 a message closes it), `groupMinCalls` (how long a run has to be — at least 2),
@@ -676,12 +713,67 @@ groups from `~/.tgxcode/verbs/` are in play, named by their `Category` — at mo
 for the whole turn, else 1000–600000). The verbs themselves are not here — they
 are a directory, and `GET /api/spinner/groups` lists it.
 
-### `GET /api/spinner/groups?cwd=<path>`
+`quota` is about the background refresh that keeps the percentages current with
+no terminal open: `beacon` (bool), `beaconDir` (**string or null** — where the
+short-lived `claude` runs; nothing happens until it names somewhere you have
+already trusted), `beaconEveryMinutes` (int, 5–1440). See `GET /api/quota` for
+what the refresh itself reports. User file only.
+
+`keyboard` is about keys, and is three keys of its own:
+
+| Key | Type | |
+|---|---|---|
+| `contextualTerminalCopy` | bool, default `false` | in the integrated terminal, `Ctrl+C` copies the selection and clears it when there is one and interrupts when there is not, and plain `Ctrl+V` pastes instead of `Ctrl+Shift+V`. Only while the terminal has the focus. |
+| `composerSend` | `"enter"` (default) or `"ctrl-enter"` | what Enter does in a composer. `"enter"`: Enter sends, Shift+Enter is a newline. `"ctrl-enter"`: the reverse. `Ctrl+Enter` sends under both. |
+| `bindings` | **object**, `{[commandId]: string \| null}` | which chord reaches which command. A missing id means the default; `null` means deliberately unbound. Keys must be ids `GET /api/keymap` lists, and values must be canonical combos it would accept — anything else is one entry dropped with one `problems` line, not the whole map. At most 100 entries. |
+
+User file only, and `bindings` is a **map**, so a `PUT` naming it replaces the
+whole thing rather than merging into it — inside the map `null` already means
+"unbound on purpose", so there is no spare spelling for "drop this one entry
+back to its default". Send all of it.
+
+### `GET /api/keymap`
+
+`{ commands: [{id, group, label, default}], keys: [string] }` — the shortcuts the
+web UI answers to and may be rebound, and the closed set of key names a combo
+may end in.
+
+`default` is a canonical combo, `group` is a heading the settings page groups by,
+and `label` is what to call the command to a person. `keys` is every name the
+last segment of a combo may be: `A`–`Z`, `0`–`9`, `F1`–`F12`, `Up`, `Down`,
+`Left`, `Right`, `Enter`, `Escape`, `Tab`, `Space`, `Backspace`, `Delete`,
+`Insert`, `Home`, `End`, `PageUp`, `PageDown`, and the punctuation keys under
+their `KeyboardEvent.code` names (`Minus`, `Equal`, `Slash`, `Comma`, …).
+
+**A combo names physical keys, not characters.** `Ctrl+Shift+3` means
+`code === "Digit3"` with Ctrl and Shift, because `Shift+3` arrives as `#` on a US
+layout and `£` on a UK one and a binding written against the character works on
+one keyboard and silently fails on the next. **Ctrl and Cmd are one modifier**,
+spelled `Ctrl`; `Cmd+`, `Meta+`, `Command+` and `Super+` are accepted when
+reading a file and never written back. Modifiers are written in the order
+`Ctrl+Alt+Shift+`.
+
+**A binding has to carry Ctrl or Alt, or be a function key.** These fire while
+the composer — a `<textarea>` — has the focus, so binding a bare letter would
+make that letter untypeable with hand-editing the settings file as the only way
+back. `Shift+F3` is legal; `Shift+K` is not.
+
+The same catalogue is in a `cs-keymap` `<meta>` tag on every page, percent-encoded
+like `cs-prefs`, because the first key somebody presses can land before a fetch
+could answer.
+
+### `GET /api/spinner/groups?cwd=<path>&verbs=1`
 
 `{ randomize (bool), rerollMs (number), enabled: [string], pool (number),
 groups: [{name, file, count, source}], problems: [{file, message}] }` — which spinner
 verb groups exist and which are in force. `enabled` is group names; `problems` entries
 are **objects**, as on `/api/prefs`.
+
+`?verbs=1` adds `verbs: [string]` to every group entry, sorted. Off by default
+because it is 3,639 strings across the bundled catalogue and a caller that
+wanted counts should not pay for them; the settings page asks for it to put a
+group's contents in its tooltip, which is the difference between choosing a
+voice and guessing from a name.
 
 `groups` is one entry per group available to `cwd` — `{name, file, count,
 source}`, where `name` is the `Category` inside the file and `source` is the
@@ -694,11 +786,12 @@ actually amounts to — the two disagree when a name matches no file, which is
 what `problems` then says. A group whose filename and `Category` differ still
 works, and is reported here rather than left a mystery.
 
-This is the discoverable half of `spinner.groups`: there is no settings page, so
-without it the only answer to "what may I put in that list?" is to go and read a
-directory. Read-only, like `/api/prefs` — the files are the interface. Not
-local-only either: the names and sizes of verb groups are not a capability worth
-refusing a phone.
+This is the discoverable half of `spinner.groups`, and it was built when there
+was no settings page and the only answer to "what may I put in that list?" was
+to go and read a directory. There is one now, and this is what its checkboxes
+are drawn from — which is why the panel needed no route of its own. Read-only.
+Not local-only either: the names and contents of verb groups are not a
+capability worth refusing a phone.
 
 ### `GET /api/sessions/:id/devservers`
 
@@ -1614,6 +1707,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `handoff` | `{at, sessionId, from, count}` — another session handed this one work, and it was resumed to deal with it. Same shape and same reasoning as above; watched in the transcript rather than reported by the route, so it fires when the message *arrived* rather than when it was queued |
 | `suggestion-changed` | `{at, sessionId, toolUseId}` — a suggested follow-up was started, dismissed, or undone, possibly in another window |
 | `session-deleted` | `{sessionId, title}` |
+| `prefs` | the **user-level** settings, in the same shape as the `cs-prefs` `<meta>` tag: `{version, transcript, live, quota, spinner, keyboard}`, with no `sources` or `problems`. Fired on every `PUT /api/prefs` including your own, so a second window does not sit on a stale copy — two are routinely open here. A project's answer is deliberately not sent: it is the open session's business and arrives with `GET /api/sessions/:id` |
 | `notification` | a whole notification row, just filed — the same shape `GET /api/notifications` returns, `read` included — plus `unread`, the badge count after this row. So an open history view need not refetch, and need not guess whether the new row counts |
 | `notification-resolved` | `{id, outcome, outcomeAt}` — patch the row with that `id`; fired alongside `permission-resolved` |
 | `notification-read` | `{sessionId: string\|null, at: number, unread: number}` — a watermark moved, here or in another window. `sessionId` is `null` when the whole log was marked. Fold `at` into your copy of `read` and repaint |
@@ -1934,6 +2028,64 @@ next scheduled run re-review the same commits.
 create limit, `400` for a directory or ref that no longer resolves, `404` for an
 unknown id. Every failure is also recorded on the schedule as `lastSkipReason`, so the
 card says what happened even if the response was lost.
+
+### `PUT /api/prefs`
+
+`{scope, cwd?, patch}` → `200 {file, prefs, files}`. **Local callers only**, and
+the client header like every other write. Saves some of the settings
+`GET /api/prefs` reports.
+
+```json
+{
+  "scope": "user",
+  "cwd": "/home/you/proj",
+  "patch": { "transcript": { "groupMinCalls": 5 } }
+}
+```
+
+`scope` is `"user"`, `"project"` or `"project-local"`, and with `cwd` it picks
+exactly one file:
+
+| `scope` | file |
+|---|---|
+| `user` | `~/.tgxcode/settings.json` — `cwd` ignored |
+| `project` | `<cwd>/.tgxcode/settings.json`, which git tracks |
+| `project-local` | `<cwd>/.tgxcode/settings.local.json`, which is meant to be ignored — **check the repository actually ignores it**; this one does, since the Settings panel landed, but that is a line in a `.gitignore` and not something the bridge can promise |
+
+`patch` is `{section: {key: value}}` and only the keys it names are touched, so
+two clients editing different settings do not clobber each other. **A `null`
+value removes the key** so the value falls back down the chain, which is not the
+same as writing the default — it is the only way to say "I do not care about this
+one" once you have said otherwise. A section left with no keys is removed too,
+rather than left as `{}` in a file people read. Unknown keys already in the file
+are preserved, and `version` is stamped.
+
+The response is the answer that now holds: `file` is what was written, `prefs` is
+`GET /api/prefs?cwd=` for the same directory, and `files` is its `files=1` half.
+Take those rather than assuming the write landed where it matters — a save into a
+file a stronger one already overrides changes nothing about what is in force, and
+that is the case a client which assumed success draws wrongly.
+
+**Everything is validated before anything is written, and the first failure
+refuses the whole call** — including the valid keys beside it. That is the
+opposite of what a *file* gets, where a bad value is dropped and the default
+stands, and the difference is deliberate: a file is hand-edited and half of it
+working beats none of it, whereas a client sending a value the bridge will not
+keep is a bug in the client, and dropping it silently would leave a control
+showing something untrue.
+
+Refusals carry a `code` beside the message, so they can be told apart without
+matching on prose:
+
+| Status | `code` | |
+|---|---|---|
+| 400 | `scope` | not one of the three |
+| 400 | `dir` | a project scope with no `cwd`, or one outside the allowed roots |
+| 400 | `section` | no `patch`, or a section or key this bridge does not have |
+| 400 | `value` | a value the key does not allow, or a binding that is not a usable combo |
+| 403 | `readonly` | `quota` or `keyboard` at a project scope |
+| 403 | `unparseable` | the target file does not currently parse. Refused rather than replaced: whatever is in it is somebody's work |
+| 403 | `write` | the file or its directory could not be written |
 
 ### `POST /api/restart`
 
@@ -2319,6 +2471,26 @@ will show a permanently spinning tool. See §*A tool call resolves in one of two
 
 **`runner` on a session summary is not the `runner-status` payload.** Four fields, and
 `pendingPermission` is not among them. See §`GET /api/sessions`.
+
+**`keyboard.bindings` is one key, and `PUT` replaces it whole.** A patch is per
+key, and this key's value happens to be a map — so sending
+`{"keyboard": {"bindings": {"view.live": "Alt+L"}}}` leaves that as the *only*
+binding, not as one added to the rest. Send the whole map. Inside it, `null`
+already means "unbound on purpose", which is why there is no per-entry spelling
+for "back to the default": leave the id out instead. See §`PUT /api/prefs`.
+
+**`files=1` has two `project-local` rows, and neither is necessarily the one you
+would write.** The precedence chain is four files and the settings scopes are
+three, because the main checkout's local file and the workspace's own are both
+"project-local". Read `target` to find the file a `PUT` with a given `scope` and
+`cwd` lands in; deriving it from the scope alone picks the wrong one from a
+worktree. See §`GET /api/prefs`.
+
+**A save into a file something stronger overrides changes nothing in force.**
+`PUT /api/prefs` answers `200` with the settings that now hold, and they can be
+identical to the ones before it — the write happened, and a project-local file
+is still winning. Take `prefs` and `files` from the response rather than
+assuming your value is now the answer.
 
 **A restart has no completion event.** The process that would send one is the process
 being replaced. After a `200` from `POST /api/restart`, poll `GET /api/health` until

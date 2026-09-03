@@ -120,8 +120,15 @@ create one in `%APPDATA%\claude-sessions\`:
 | **Suggested** | The panel beside the transcript. An agent that notices work outside what it was asked to do files it there, with the prompt already written. Each one folds to its title, and the ⤢ on a row opens it at full width to read; *Start* runs it, *Edit first* opens it in the Start dialog, *Dismiss* puts it away. *Hide* collapses the whole panel to a strip. |
 | **Mentions** | `@` in the composer lists the other sessions running on this machine and inserts the one you pick as `@[name]` — the name an agent addresses it by. |
 
-Shortcuts: `Ctrl+Enter` send, `Ctrl+K` filter, `Ctrl+N` new session, `Esc` leave
-a subagent, `Ctrl+R` reload, `Ctrl+±` zoom, `F12` devtools.
+Shortcuts: `Enter` send (or `Ctrl+Enter`, and *Settings → Keyboard* swaps the
+two), `Ctrl+1`–`Ctrl+8` the eight things the main pane can show, `Ctrl+F` find
+in the conversation with `F3`/`Shift+F3` for the next and previous match,
+`Ctrl+K` filter, `Ctrl+N` new session, `Esc` leave a subagent or close whatever
+is on top, `Ctrl+R` reload, `Ctrl+±` zoom, `F12` devtools.
+
+Every one of those but the last three can be remapped — see *Settings*. The last
+three belong to the Electron shell rather than the page, which is why they
+cannot.
 
 In the send queue, `Shift+Tab` from the composer reaches the message you wrote
 last, and from there: `↑`/`↓` pick, `Alt+↑`/`Alt+↓` move it, `Space` show it in
@@ -480,7 +487,11 @@ same directory it declares its commands in and with the same precedence — see
 `docs/api.md` under `GET /api/prefs`. A value that is not what the key allows is
 ignored and the default stands, rather than being taken at face value.
 
-There is no settings page yet; the file is the interface.
+There is a settings page — **Settings** in the bar, or `Ctrl+8` — and the file is
+still the interface. The page names the exact file it is about to write, saves
+one key at a time, and says for each control whether this scope set the value or
+inherited it, and which file has taken it over when a stronger one has. See
+*Settings* below.
 
 ### Cutting the live board down
 
@@ -520,8 +531,9 @@ conversation happens to be open decide how the rest are drawn is a setting that
 appears to change on its own.
 
 An existing `~/.tgxcode/settings.json` will not have grown the block: the
-defaults are only written out when there is no file at all. Add it by hand, and
-until you do, both are `false`. Neither is picked up until the page reloads.
+defaults are only written out when there is no file at all. Add it by hand, or
+tick the two boxes under *Settings → Live board*, which writes them for you and
+repaints the board without a reload. A file edited by hand still needs one.
 
 ### What a turn in progress calls itself
 
@@ -599,8 +611,9 @@ A verb is only worn by work. A question waiting on you, an API retry, starting
 up and going idle say what they are and nothing else.
 
 `GET /api/spinner/groups?cwd=` lists what you have, with a count each and the
-reason any group failed to load — the discoverable half of a setting with no
-page in front of it.
+reason any group failed to load. It was built as the discoverable half of a
+setting with no page in front of it; now it is what the Settings panel draws its
+checkboxes from, and hovering one lists the verbs inside it.
 
 Two things worth knowing. The session rail has room for about twenty characters,
 which is not enough for both halves, so it shows the one that carries
@@ -610,6 +623,85 @@ twenty-three of the groups are full sentences rather than words, which truncate
 in the rail for the same reason — the groups enabled by default are all short.
 
 [verbs]: https://github.com/wynandw87/claude-code-spinner-verbs
+
+### Settings
+
+**Settings** in the bar, or `Ctrl+8`. Every key in `~/.tgxcode/settings.json`
+with a control in front of it — the reading settings above, the live board, the
+spinner, the quota beacon, and the keyboard.
+
+The file stayed the only interface for a long time and that was defensible while
+there were three keys in it. At twelve, across five blocks, with a precedence
+chain of four files and validators that silently drop what they do not like,
+"go and read `bridge/prefs.js`" had become the answer to too many questions —
+and the one thing the file cannot tell you is which of the four files a value
+came from.
+
+So the panel answers both questions at once. A **scope** selector picks which
+file you are editing — *User*, *Project — shared* (checked in, for everyone who
+clones the repo) or *Project — local* (gitignored, yours) — beside a **project**
+selector that does not depend on what the rail happens to be showing. Under
+them it names the exact path it is about to write. Each control says whether
+this scope set the value or inherited it, offers *Clear* to remove a key so it
+falls back rather than pinning a default, and names the file that has taken over
+when a stronger one has.
+
+Nothing here is a draft: every control saves on change, one key at a time. A
+settings page with a Save button has a state where what you see and what is in
+force disagree, and the failure mode of that is a preference you believe you
+set. It also means two windows editing different settings do not clobber each
+other, and a save reaches the other window over the live channel rather than
+waiting for a reload.
+
+**Two sections are yours alone** — the quota beacon and the keyboard — and a
+project file that sets one is ignored and says so. What directory this app
+starts `claude` in is not a repository's business, and a repository that could
+rebind your keys could make the window unusable with hand-editing a file as the
+only way back.
+
+#### Keys
+
+The *Keyboard* group holds two settings that each swap a pair of keys, and then
+the shortcut table.
+
+**Contextual Ctrl+C in the terminal.** Off by default. On, `Ctrl+C` copies the
+selection and clears it when the terminal has one, and interrupts as always when
+it does not — so a second `Ctrl+C` still interrupts, which is the whole reason
+it clears. Plain `Ctrl+V` then pastes, instead of `Ctrl+Shift+V`. Only while the
+terminal has the focus; `Ctrl+Shift+C` and `Ctrl+Shift+V` keep working either
+way. Off by default because the alternative is changing what `Ctrl+C` does to
+somebody who did not ask: a selection left in the scrollback would turn an
+interrupt into a copy, and the process you were trying to stop keeps running.
+
+**Composer send.** `Enter` sends and `Shift+Enter` is a newline, which is what
+this app has always done — or the reverse, for when a message is three
+paragraphs and `Enter` sending it halfway through is a real cost.
+`Ctrl+Enter` sends under both.
+
+**The shortcut table** covers the eight views, the two rail shortcuts and the
+three find shortcuts. *Change* listens for a chord and swallows it, so binding
+`Ctrl+4` does not open the dashboard on the way past; *Unbind* leaves a command
+with no shortcut, which is a thing you can ask for and is not the same as
+resetting it; *Reset* puts it back to the default by removing the override
+rather than by writing the default down, so a default that changes later is not
+pinned to today's.
+
+A chord has to carry `Ctrl` or `Alt`, or be a function key. These fire while the
+composer has the focus, and the composer is a text box — bind a bare letter and
+that letter stops being typeable, with hand-editing the settings file as the
+only way back. A chord another command already holds is refused with the name of
+that command rather than saved into a conflict.
+
+Bindings name **physical** keys: `Ctrl+Shift+3` is the 3 key, whatever your
+layout puts there, because `Shift+3` arrives as `#` on a US keyboard and `£` on
+a UK one and a binding written against the character works on one and silently
+fails on the next. `Ctrl` and `Cmd` are one modifier.
+
+What the table does *not* cover: arrow keys in a menu, `Enter` in a text field,
+`Escape`, the `Y`/`A`/`N` letters on a card that already has the focus. Those
+are widget semantics rather than shortcuts, and remapping them means breaking
+keyboard navigation. Nor the Electron shell's `Ctrl+R`, `F12` and zoom, which
+live in the packaged executable rather than the page.
 
 ### Test sessions
 
@@ -1038,7 +1130,8 @@ you are away from the desk, and a phone that has dropped its connection is not.
 | `bridge/explorer.js` | Opens a WSL directory in File Explorer |
 | `bridge/notifications.js` | The notification log, what is worth raising, and what you have already read |
 | `bridge/flags.js` | Pinned, archived and test state |
-| `bridge/prefs.js` | Settings from `~/.tgxcode/` and from the project |
+| `bridge/prefs.js` | Settings from `~/.tgxcode/` and from the project — which file each one came from, and which one a save goes to |
+| `bridge/keymap.js` | The shortcuts that may be rebound, and the grammar for writing one down |
 | `bridge/spinner.js` | What a turn in progress calls itself, out of `~/.tgxcode/verbs/` |
 | `bridge/spinner-verbs.json` | The verb catalogue, and the seed for that directory |
 | `bridge/suggestions.js` | What you did about a suggested follow-up |
@@ -1057,6 +1150,7 @@ you are away from the desk, and a phone that has dropped its connection is not.
 | `scripts/install-quota-statusline.js` | Points `~/.claude/settings.json` at that script, and refuses to clobber one you already have |
 | `web/` | The UI. No build step, no dependencies |
 | `web/terminal.js` | The terminal pane — a shell, or a run's output |
+| `web/keys.js` | Which chord means which command, and the one function that decides it |
 | `app/main.js` | The Electron shell |
 | `app/make-icon.js` | Generates `app/icon.ico`, the packaged shell's icon |
 | `docs/api.md` | The bridge API, as a contract for other clients |

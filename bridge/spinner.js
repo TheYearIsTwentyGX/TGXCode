@@ -340,7 +340,10 @@ class Spinner {
             if (got.category && slugFor(got.category) !== stem) {
                 problems.push({ file, message: `Category "${got.category}" does not match the filename — both work` });
             }
-            groups.push({ name, file, count: got.verbs.length });
+            // The verbs come along because _read has them open anyway — the
+            // listing route hands them out only when asked (`?verbs=1`), since
+            // 3,639 strings is a lot to send to a caller that wanted counts.
+            groups.push({ name, file, count: got.verbs.length, verbs: got.verbs });
         }
 
         const value = { groups, problems, stamp, at: Date.now() };
@@ -351,7 +354,13 @@ class Spinner {
     /**
      * Every group available to a workspace, nearest directory winning.
      *
-     * @returns {{groups: Array<{name, file, count, source}>, problems: object[]}}
+     * `verbs` is on every entry — sorted, because the one caller that reads it
+     * is a tooltip listing what is in a group and a file's own order is
+     * whatever somebody typed. A route that does not want them drops the field;
+     * see `GET /api/spinner/groups`.
+     *
+     * @returns {{groups: Array<{name, file, count, source, verbs: string[]}>,
+     *   problems: object[]}}
      */
     groups(cwd) {
         const byName = new Map();
@@ -362,7 +371,10 @@ class Spinner {
             for (const g of listing.groups) {
                 const key = norm(g.name);
                 if (!key || byName.has(key)) continue;   // nearer directory already answered
-                byName.set(key, { ...g, source: dir });
+                byName.set(key, {
+                    ...g, source: dir,
+                    verbs: [...g.verbs].sort((a, b) => a.localeCompare(b)),
+                });
             }
         }
         const groups = [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));

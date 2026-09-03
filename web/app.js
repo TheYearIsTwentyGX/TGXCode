@@ -7,6 +7,7 @@
 import { renderMarkdown, inline } from './markdown.js';
 import { highlight, escapeHtml } from './highlight.js';
 import { TerminalPane } from './terminal.js';
+import * as keys from './keys.js';
 
 // ── api ──────────────────────────────────────────────────────────────────
 
@@ -65,6 +66,21 @@ async function patch(path, body) {
     return data;
 }
 
+/**
+ * A whole value, replaced. One route: `PUT /api/prefs`.
+ *
+ * Not `patch`, even though the body is a patch of sections, because what it
+ * replaces is each *key* it names — including `keyboard.bindings`, which is one
+ * key whose value is a map and so goes over wholesale. PATCH would promise a
+ * merge one level deeper than the bridge does.
+ */
+async function put(path, body) {
+    const r = await fetch(path, { method: 'PUT', headers: HEADERS, body: JSON.stringify(body || {}) });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    return data;
+}
+
 async function del(path) {
     const r = await fetch(path, { method: 'DELETE', headers: HEADERS });
     const data = await r.json().catch(() => ({}));
@@ -87,22 +103,41 @@ const DEFAULT_PERM = 'auto';
 // drawn before an answer arrived would stay drawn the wrong way, since nothing
 // re-renders history. A project may override any of it, and that answer travels
 // with the transcript instead — see openSession.
+// Every block gets a fallback, not just the two the transcript needs. The
+// settings page draws controls straight off this, and a missing or malformed tag
+// used to leave `BOOT_PREFS.spinner` undefined — which was invisible while
+// nothing read it and is a thrown error the moment something does.
+const PREFS_FALLBACK = {
+    version: 1,
+    transcript: { groupToolCalls: true, groupMinCalls: 3, groupIncludesThinking: true },
+    live: { compact: false, hideElsewhere: false },
+    quota: { beacon: false, beaconDir: null, beaconEveryMinutes: 20 },
+    spinner: { randomize: true, groups: [], rerollMs: 8000 },
+    keyboard: { contextualTerminalCopy: false, composerSend: 'enter', bindings: {} },
+};
+
+/** One block of settings folded over its fallback, with the shape guaranteed. */
+const mergePrefs = (d) => {
+    const out = { ...PREFS_FALLBACK, ...(d || {}) };
+    for (const section of Object.keys(PREFS_FALLBACK)) {
+        if (section === 'version') continue;
+        out[section] = { ...PREFS_FALLBACK[section], ...((d && d[section]) || {}) };
+    }
+    return out;
+};
+
 const BOOT_PREFS = (() => {
-    const fallback = {
-        transcript: { groupToolCalls: true, groupMinCalls: 3, groupIncludesThinking: true },
-        live: { compact: false, hideElsewhere: false },
-    };
     try {
         const m = document.querySelector('meta[name="cs-prefs"]');
-        if (!m) return fallback;
-        const d = JSON.parse(decodeURIComponent(m.content));
-        return {
-            ...fallback, ...d,
-            transcript: { ...fallback.transcript, ...(d.transcript || {}) },
-            live: { ...fallback.live, ...(d.live || {}) },
-        };
-    } catch { return fallback; }
+        if (!m) return mergePrefs(null);
+        return mergePrefs(JSON.parse(decodeURIComponent(m.content)));
+    } catch { return mergePrefs(null); }
 })();
+
+// The shortcuts, before anything can be pressed. `keyboard` is user-level only
+// (see USER_ONLY in bridge/prefs.js), so BOOT_PREFS is the whole answer and no
+// project can move a binding under you mid-session.
+keys.apply(BOOT_PREFS.keyboard);
 
 /** The transcript settings in force — the open session's, or the user's own. */
 const grouping = () => (state.prefs || BOOT_PREFS).transcript;
@@ -379,6 +414,19 @@ const state = {
     // push, held as sent. `editing` is the id the dialog has open, which is also
     // what puts the dialog into schedule mode at all: see openNew().
     sched: { open: false, rows: [], at: 0, loading: false, error: null, editing: null },
+    // The settings panel. `data` is a `?files=1` answer — what is in force plus
+    // what each file in the chain says on its own, which is what lets a control
+    // tell a value you set from one you inherited.
+    //
+    // `scope` and `project` are which file it is editing; they are the panel's
+    // own state and not persisted, because a scope left selected from last week
+    // is the kind of thing that gets a preference written to the wrong file.
+    // `recording` is the command whose next keystroke becomes its binding.
+    settings: {
+        open: false, scope: 'user', project: '', projects: [],
+        data: null, spinner: null, loading: false, error: null,
+        saving: false, recording: null,
+    },
     // Sessions blocked on an answer, kept whether or not the board is open, so
     // the badge on a shut board still says how many people are waiting.
     waiting: new Set(),
@@ -434,6 +482,8 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'btn-taskboard', 'tb-badge', 'taskboard', 'tb-sub', 'tb-body', 'tb-refresh',
     'btn-drafts', 'dr-badge', 'drafts', 'dr-sub', 'dr-body', 'dr-new',
     'btn-sched', 'sched-badge', 'sched', 'sched-sub', 'sched-body', 'sched-new',
+    'btn-settings', 'settings', 'set-scope', 'set-project', 'set-project-wrap',
+    'set-file', 'set-problems', 'set-body', 'set-shell', 'set-toc', 'composer-hint',
     'new-cron', 'new-cron-row', 'new-cron-note', 'new-gate-ref', 'new-gate-row',
     'new-gate-kind', 'new-gate-note', 'new-gate-ref-row', 'new-pr-row',
     'new-pr-drafts', 'new-pr-post', 'new-sched-save',
@@ -510,6 +560,22 @@ function dur(ms) {
 }
 
 const fileName = (p) => (p ? String(p).split('/').pop() : '');
+
+// A path with the home directory folded back to `~`. The settings panel names
+// files, and every one of them starts with the same 18 characters — which is
+// the part a reader already knows and the part that pushes the rest out of a
+// narrow column. `HOME` is read off a path the bridge already sends rather than
+// asked for: `~/.tgxcode/settings.json` is always the weakest file in the
+// chain, so the prefix is derivable and needs no route.
+let homeDir = '';
+const noteHome = (userPrefsFile) => {
+    const m = /^(.*)\/\.tgxcode\/settings\.json$/.exec(userPrefsFile || '');
+    if (m) homeDir = m[1];
+};
+const shortPath = (p) => {
+    const s = String(p || '');
+    return homeDir && s.startsWith(`${homeDir}/`) ? `~${s.slice(homeDir.length)}` : s;
+};
 const shortModel = (m) => (m ? String(m).replace(/^claude-/, '').replace(/-\d{8}$/, '') : '');
 
 function clip(s, n) {
@@ -5020,6 +5086,9 @@ function rememberView() {
     } else if (state.sched.open) {
         q.set('view', 'schedules');
         if (state.live.open) q.set('live', '1');
+    } else if (state.settings.open) {
+        q.set('view', 'settings');
+        if (state.live.open) q.set('live', '1');
     } else if (state.live.open) {
         q.set('view', 'live');
     }
@@ -5121,9 +5190,9 @@ function paintLiveBadge() {
     dom.liveBadge.hidden = !waiting;
     dom.liveBadge.textContent = String(waiting);
     dom.liveBadge.classList.toggle('urgent', waiting > 0);
-    dom.btnLive.title = waiting
-        ? `${waiting} session${waiting === 1 ? ' is' : 's are'} waiting for you (Ctrl+3)`
-        : 'Every session running right now (Ctrl+3)';
+    dom.btnLive.title = keys.hint(waiting
+        ? `${waiting} session${waiting === 1 ? ' is' : 's are'} waiting for you`
+        : 'Every session running right now', 'view.live');
 }
 
 /** Prime the badge at boot, for asks that were already outstanding. */
@@ -5555,9 +5624,11 @@ function cardComposer(s, busy, away) {
         state.live.drafts.set(s.sessionId, box.value);
         grow(box, 30, 84);
     });
+    // The same rule as the main composer, from the same setting: a card's box is
+    // a composer with less room, and having Enter mean two different things
+    // depending on which box you are in would be worse than either mode.
     box.addEventListener('keydown', (e) => {
-        if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
-        if (e.shiftKey || e.altKey) return;
+        if (!enterSends(e)) return;
         e.preventDefault();
         sendFromCard(s, box);
     });
@@ -5775,6 +5846,23 @@ async function stopFromCard(sessionId, btn) {
 // bridge caches underneath this, so a re-ask is usually free anyway.
 const DASH_STALE_MS = 45_000;
 
+// The whole-screen panels, named by the state slice each one lives in, in the
+// order the bar and the Ctrl ladder read them. The live board is not one of
+// them: it docks under the conversation and is *covered* by these rather than
+// exclusive with them, which is why it is absent here and handled on its own
+// below.
+//
+// One at a time, so every show…() has to close the rest. That used to be four
+// assignments repeated inside five functions, which is exactly the shape that
+// goes wrong when a sixth arrives: adding Settings would have meant editing
+// five other functions, none of which would have complained about being missed.
+const PANELS = ['taskboard', 'dash', 'notes', 'drafts', 'sched', 'settings'];
+
+/** Shut every whole-screen panel but this one. */
+function closeOtherPanels(keep) {
+    for (const p of PANELS) if (p !== keep) state[p].open = false;
+}
+
 /**
  * Which of the things `main` can hold is on screen.
  *
@@ -5798,17 +5886,11 @@ function paintPanels() {
     const docked = state.live.open && Boolean(state.current) && !state.focus;
     const full = state.live.open && !docked;
 
-    // Five whole-screen panels, and showDash/showNotes/showTaskboard/showDrafts/
-    // showSched keep them exclusive, so "one of them is up" is the only thing
-    // anything below has to ask.
-    const covered = state.dash.open || state.notes.open || state.taskboard.open
-        || state.drafts.open || state.sched.open;
+    // Six whole-screen panels, kept exclusive by closeOtherPanels, so "one of
+    // them is up" is the only thing anything below has to ask.
+    const covered = PANELS.some(p => state[p].open);
 
-    dom.dash.hidden = !state.dash.open;
-    dom.notes.hidden = !state.notes.open;
-    dom.taskboard.hidden = !state.taskboard.open;
-    dom.drafts.hidden = !state.drafts.open;
-    dom.sched.hidden = !state.sched.open;
+    for (const p of PANELS) dom[p].hidden = !state[p].open;
     dom.live.hidden = !state.live.open || covered;
     dom.live.dataset.mode = docked ? 'dock' : 'full';
     // The orientation lives on both: `main` has to change its flex direction,
@@ -5825,7 +5907,8 @@ function paintPanels() {
 
     for (const [btn, on] of [[dom.btnDash, state.dash.open], [dom.btnLive, state.live.open],
         [dom.btnNotes, state.notes.open], [dom.btnTaskboard, state.taskboard.open],
-        [dom.btnDrafts, state.drafts.open], [dom.btnSched, state.sched.open]]) {
+        [dom.btnDrafts, state.drafts.open], [dom.btnSched, state.sched.open],
+        [dom.btnSettings, state.settings.open]]) {
         btn.classList.toggle('on', on);
         btn.setAttribute('aria-pressed', String(on));
     }
@@ -5836,11 +5919,7 @@ function paintPanels() {
 
 function showDash(on) {
     state.dash.open = on;
-    // Four whole screens; one at a time.
-    if (on) {
-        state.notes.open = false; state.taskboard.open = false;
-        state.drafts.open = false; state.sched.open = false;
-    }
+    if (on) closeOtherPanels('dash');
     // The live board is not closed by this, only covered. It is a strip you
     // leave up; the work-in-flight board is a whole screen you go and read and
     // then come back from, and coming back should find things as you left them.
@@ -5892,9 +5971,9 @@ function paintDashBadge() {
     const rows = d ? d.projects.reduce((n, p) => n + p.workspaces.length, 0) : 0;
     dom.dashBadge.hidden = !rows;
     dom.dashBadge.textContent = String(rows);
-    dom.btnDash.title = rows
+    dom.btnDash.title = keys.hint(rows
         ? `${rows} ${rows === 1 ? 'place has' : 'places have'} uncommitted changes or an open pull request`
-        : 'Uncommitted changes and open pull requests, by project';
+        : 'Uncommitted changes and open pull requests, by project', 'view.dashboard');
 }
 
 function renderDash() {
@@ -6126,12 +6205,8 @@ let pendingJump = null;
 
 function showNotes(on) {
     state.notes.open = on;
-    if (on) {
-        state.dash.open = false; state.taskboard.open = false;
-        state.drafts.open = false; state.sched.open = false;
-    } else {
-        state.notes.mark = null;
-    }
+    if (on) closeOtherPanels('notes');
+    else state.notes.mark = null;
     paintPanels();
     syncBoardWatch();
     syncTaskboardWatch();
@@ -6234,9 +6309,9 @@ function paintNotesBadge() {
         : state.notes.rows.filter(r => r.loud && noteUnread(r)).length;
     dom.notesBadge.hidden = !n;
     dom.notesBadge.textContent = String(n);
-    dom.btnNotes.title = n
+    dom.btnNotes.title = keys.hint(n
         ? `${n} ${n === 1 ? 'notification' : 'notifications'} you have not dealt with`
-        : 'Everything that has reached out to you (Ctrl+5)';
+        : 'Everything that has reached out to you', 'view.history');
 }
 
 /**
@@ -6439,11 +6514,7 @@ function syncTaskboardWatch() {
 
 function showTaskboard(on) {
     state.taskboard.open = on;
-    // Four whole screens; one at a time.
-    if (on) {
-        state.dash.open = false; state.notes.open = false;
-        state.drafts.open = false; state.sched.open = false;
-    }
+    if (on) closeOtherPanels('taskboard');
     paintPanels();
     syncBoardWatch();
     syncTaskboardWatch();
@@ -6533,9 +6604,9 @@ function paintTaskboardBadge() {
     dom.tbBadge.textContent = String(n);
     // The same red the live board's badge uses: it is the same news.
     dom.tbBadge.classList.toggle('urgent', n > 0);
-    dom.btnTaskboard.title = n
-        ? `${n} session${n === 1 ? ' is' : 's are'} waiting for you (Ctrl+2)`
-        : 'Everything outstanding, by state (Ctrl+2)';
+    dom.btnTaskboard.title = keys.hint(n
+        ? `${n} session${n === 1 ? ' is' : 's are'} waiting for you`
+        : 'Everything outstanding, by state', 'view.tasks');
 }
 
 // ── holding the order ────────────────────────────────────────────────────
@@ -7005,11 +7076,7 @@ function tbArchive(s) {
 
 function showDrafts(on) {
     state.drafts.open = on;
-    // Five whole screens; one at a time.
-    if (on) {
-        state.dash.open = false; state.notes.open = false;
-        state.taskboard.open = false; state.sched.open = false;
-    }
+    if (on) closeOtherPanels('drafts');
     paintPanels();
     syncBoardWatch();
     // This panel has no watch of its own — the push is unconditional — but it
@@ -7083,9 +7150,9 @@ function paintDraftsBadge() {
     const n = state.drafts.rows.length;
     dom.drBadge.hidden = !n;
     dom.drBadge.textContent = String(n);
-    dom.btnDrafts.title = n
-        ? `${n} draft${n === 1 ? '' : 's'} waiting to be started (Ctrl+6)`
-        : 'Sessions set up but not started (Ctrl+6)';
+    dom.btnDrafts.title = keys.hint(n
+        ? `${n} draft${n === 1 ? '' : 's'} waiting to be started`
+        : 'Sessions set up but not started', 'view.drafts');
 }
 
 // ── drawing it ───────────────────────────────────────────────────────────
@@ -7285,11 +7352,7 @@ async function drDelete(d) {
 
 function showSched(on) {
     state.sched.open = on;
-    // Five whole screens; one at a time.
-    if (on) {
-        state.dash.open = false; state.notes.open = false;
-        state.taskboard.open = false; state.drafts.open = false;
-    }
+    if (on) closeOtherPanels('sched');
     paintPanels();
     syncBoardWatch();
     // As in showDrafts: this panel has no watch of its own, but it closes the
@@ -7344,9 +7407,9 @@ function paintSchedBadge() {
     const n = state.sched.rows.filter(s => s.enabled).length;
     dom.schedBadge.hidden = !n;
     dom.schedBadge.textContent = String(n);
-    dom.btnSched.title = n
-        ? `${n} schedule${n === 1 ? '' : 's'} armed (Ctrl+7)`
-        : 'Sessions that start on a clock (Ctrl+7)';
+    dom.btnSched.title = keys.hint(n
+        ? `${n} schedule${n === 1 ? '' : 's'} armed`
+        : 'Sessions that start on a clock', 'view.schedules');
 }
 
 // ── drawing it ───────────────────────────────────────────────────────────
@@ -7610,6 +7673,748 @@ async function schedDelete(s) {
     } catch (err) {
         toast(`Could not delete the schedule: ${err.message}`, 'error');
     }
+}
+
+// ── settings ─────────────────────────────────────────────────────────────
+//
+// Every key in `~/.tgxcode/settings.json`, with a control in front of it.
+//
+// The file stayed the only interface for a long time and that was defensible
+// while there were three keys in it. At twelve, across four blocks, with a
+// precedence chain of four files and validators that silently drop what they do
+// not like, "go and read bridge/prefs.js" had become the answer to too many
+// questions — and the one thing the file cannot tell you is which of the four
+// files a value came from.
+//
+// So this panel answers both questions at once: what is in force, and where it
+// was set. `GET /api/prefs?files=1` returns the merged answer *and* what each
+// file says on its own, which is what lets a control distinguish a value you
+// set from one you inherited — and name the file that has taken over when a
+// stronger one has.
+//
+// **The file is still the interface.** The head names the exact path it is
+// about to write and lets you copy it, and nothing here is stored anywhere a
+// text editor cannot reach. This is a better way in, not a replacement.
+//
+// **Nothing here is a draft.** Every control saves on change, one key at a
+// time, because a settings page with a Save button has a state where what you
+// see and what is in force disagree — and the failure mode of that is a
+// preference you believe you set. One key per request also means two windows
+// editing different settings do not clobber each other.
+
+// The controls, in the order they are drawn. A key in bridge/prefs.js is one
+// row here and nothing else — no per-setting function, no switch — which is the
+// only way a settings page stays true as the file grows.
+//
+// `userOnly` mirrors USER_ONLY in bridge/prefs.js. It is drawn rather than
+// hidden at a project scope, because a section that vanishes reads as a bug and
+// a section that says why it is disabled teaches the rule.
+const SETTINGS = [
+    {
+        title: 'Reading', section: 'transcript',
+        note: 'How a transcript folds the work between one message and the next.',
+        rows: [
+            { key: 'groupToolCalls', type: 'bool',
+                label: 'Fold finished runs of tool calls',
+                note: 'Once a message closes a run, it becomes one row you can open.' },
+            { key: 'groupMinCalls', type: 'int', min: 2, max: 1000,
+                label: 'Shortest run worth folding',
+                note: 'One or two rows collapsed into a summary loses more than it saves.' },
+            { key: 'groupIncludesThinking', type: 'bool',
+                label: 'A thinking block is part of the run',
+                note: 'Off breaks the run there instead, which fragments a turn that '
+                    + 'thinks between every call.' },
+        ],
+    },
+    {
+        title: 'Live board', section: 'live',
+        note: 'The board behind Live — every session running right now.',
+        rows: [
+            { key: 'compact', type: 'bool',
+                label: 'Compact cards',
+                note: 'Stop every card at its tool-count line: no preview, no message '
+                    + 'box, no Open or Stop, no approval row. Many sessions at a glance '
+                    + 'rather than any one of them actionable in place.' },
+            { key: 'hideElsewhere', type: 'bool',
+                label: 'Leave out sessions running elsewhere',
+                note: 'Sessions under a terminal or another window — the cards this '
+                    + 'board cannot drive. It says how many it left out.' },
+        ],
+    },
+    {
+        title: 'Spinner', section: 'spinner',
+        note: 'What a turn in progress calls itself while it works.',
+        rows: [
+            { key: 'randomize', type: 'bool',
+                label: 'A themed verb in front of the work',
+                note: 'Off gives back the literal “Thinking…”.' },
+            { key: 'rerollMs', type: 'int', min: 0, max: 600000, step: 1000,
+                label: 'Milliseconds a verb stands for',
+                note: '0 pins one for the whole turn. Otherwise 1000 to 600000.' },
+            { key: 'groups', type: 'groups', wide: true,
+                label: 'Verb groups in play',
+                note: 'From ~/.tgxcode/verbs/, and a project’s own. Enabling all of '
+                    + 'them is a soup; the point of the groups is to choose a voice. '
+                    + 'Hover a group to read what is in it.' },
+        ],
+    },
+    {
+        title: 'Quota', section: 'quota', userOnly: true,
+        note: 'Keeping the percentages current with no terminal open, by starting a '
+            + '`claude` for a few seconds and killing it.',
+        rows: [
+            { key: 'beacon', type: 'bool',
+                label: 'Refresh quota in the background',
+                note: 'Does nothing until a directory is named below.' },
+            { key: 'beaconDir', type: 'path',
+                label: 'Directory it runs in',
+                note: 'Open Claude Code there yourself at least once first — the beacon '
+                    + 'never answers the trust prompt, so an untrusted directory just '
+                    + 'makes every run time out.' },
+            { key: 'beaconEveryMinutes', type: 'int', min: 5, max: 1440,
+                label: 'How often, in minutes',
+                note: 'Each run is a CLI start and one tiny API call. Floor of five.' },
+        ],
+    },
+    {
+        title: 'Keyboard', section: 'keyboard', userOnly: true, keymap: true,
+        note: 'Two keys that switch in pairs, and then every shortcut this window '
+            + 'answers to.',
+        rows: [
+            { key: 'contextualTerminalCopy', type: 'bool',
+                label: 'Contextual Ctrl+C in the terminal',
+                note: 'With a selection, Ctrl+C copies it and clears it — so a second '
+                    + 'Ctrl+C still interrupts. With no selection it interrupts as '
+                    + 'always. Turning this on also makes plain Ctrl+V paste, instead '
+                    + 'of Ctrl+Shift+V. Only while the terminal has the focus.' },
+            { key: 'composerSend', type: 'choice',
+                label: 'Composer send',
+                options: [
+                    ['enter', 'Enter sends · Shift+Enter for a newline'],
+                    ['ctrl-enter', 'Enter for a newline · Ctrl+Enter sends'],
+                ],
+                note: 'Ctrl+Enter sends either way.' },
+        ],
+    },
+];
+
+/** Human names for the three scopes, for the sentences below. */
+const SCOPE_NAMES = {
+    user: 'User', project: 'Project — shared', 'project-local': 'Project — local',
+};
+
+function showSettings(on) {
+    state.settings.open = on;
+    if (on) closeOtherPanels('settings');
+    paintPanels();
+    syncBoardWatch();
+    syncTaskboardWatch();
+
+    if (on) {
+        // Always re-asked on open rather than cached like the dashboard is. The
+        // file can be edited by hand between two visits, and a settings page
+        // showing a stale value is the one thing it must never do.
+        loadSettings();
+    } else if (state.live.open) {
+        renderLive();
+        if (state.current) termPane.refit();
+    } else if (state.current) {
+        termPane.refit();
+    }
+    rememberView();
+}
+
+/**
+ * Which directory the project scopes are about.
+ *
+ * Defaults to the open session's project, because that is usually the answer —
+ * but it is a selector and not a reading of `state.current`, because Settings is
+ * a whole screen you go to with nothing open at least as often as you reach it
+ * mid-conversation, and a scope that silently means "wherever the rail happens
+ * to be" would write a preference into a repository you were not thinking about.
+ *
+ * With nothing open it falls back to the newest project the bridge knows,
+ * because "no project" is not a state the two project scopes can be read in —
+ * they would have no file to name and every control would be disabled with
+ * nothing saying why.
+ */
+function settingsProject() {
+    const s = state.settings;
+    if (s.project) return s.project;
+    const cur = state.current;
+    if (cur && (cur.projectCwd || cur.cwd)) return cur.projectCwd || cur.cwd;
+    return (s.projects[0] && s.projects[0].cwd) || '';
+}
+
+async function loadSettings() {
+    const s = state.settings;
+    if (s.loading) return;
+    s.loading = true;
+    s.error = null;
+    renderSettings();
+
+    // The project list first, because settingsProject() falls back to it — and
+    // asked for once, since it is a directory listing rather than something
+    // that moves while you read a settings page.
+    if (!s.projects.length) {
+        try { s.projects = (await get('/api/projects')).projects || []; }
+        catch { /* the selector falls back to the open session's project alone */ }
+    }
+    try {
+        // The whole chain every time, whatever scope is selected: the answer
+        // carries all four files, so switching scope is a redraw rather than a
+        // fetch, and the User scope can still say which project file overrides
+        // it.
+        const dir = settingsProject();
+        s.data = await get(`/api/prefs?files=1${dir ? `&cwd=${encodeURIComponent(dir)}` : ''}`);
+        // The weakest file in the chain is always the user's own, which is what
+        // tells shortPath where home is.
+        if (s.data.files && s.data.files.length) noteHome(s.data.files[0].file);
+        // Loading the spinner catalogue alongside, because the groups control is
+        // a list of checkboxes and the names can only come from the directory.
+        // `verbs=1` because a group's name is not enough to choose it by — the
+        // tooltip on each one lists what is actually in it.
+        try { s.spinner = await get(`/api/spinner/groups?verbs=1${dir ? `&cwd=${encodeURIComponent(dir)}` : ''}`); }
+        catch { s.spinner = null; }
+    } catch (err) {
+        s.error = err.message;
+    }
+    s.loading = false;
+    renderSettings();
+}
+
+/**
+ * Save one key, and take the answer as the truth.
+ *
+ * The response carries the merged settings and the per-file breakdown, so
+ * nothing here has to guess at what the write did — including the case where
+ * the value lands in a file a stronger one is already overriding, which is the
+ * one a client that assumed success would draw wrongly.
+ */
+async function saveSetting(section, key, value) {
+    const s = state.settings;
+    if (s.saving) return;
+    s.saving = true;
+    renderSettings();
+    try {
+        const dir = settingsProject();
+        const answer = await put('/api/prefs', {
+            scope: s.scope,
+            cwd: dir,
+            patch: { [section]: { [key]: value } },
+        });
+        s.data = { ...answer.prefs, files: answer.files };
+        applyPrefsLive(answer.prefs, section);
+    } catch (err) {
+        toast(`Could not save that setting: ${err.message}`, 'error');
+    }
+    s.saving = false;
+    renderSettings();
+}
+
+/**
+ * Make a saved setting true of the window it was saved in.
+ *
+ * The page reads its settings from a `<meta>` tag baked at serve time, and
+ * `liveCompact()`/`liveHideElsewhere()` read it directly — so before this, the
+ * live-board settings did not take effect until a reload, which README said out
+ * loud. Folding the new values into that object closes the gap for everything
+ * except history, which is not re-rendered by anything: a change under
+ * `transcript` re-opens the session, because the folding decisions were made
+ * while the rows were built.
+ *
+ * Only the user-level answer is applied, which is what BOOT_PREFS is. A project
+ * scope's save shows up in this panel and travels with the next transcript.
+ */
+function applyPrefsLive(prefs, section) {
+    if (state.settings.scope !== 'user') return;
+    for (const block of Object.keys(PREFS_FALLBACK)) {
+        if (block === 'version' || !prefs[block]) continue;
+        Object.assign(BOOT_PREFS[block], prefs[block]);
+    }
+    keys.apply(BOOT_PREFS.keyboard);
+    paintShortcutHints();
+    if (state.live.open) renderLive();
+    if (section === 'keyboard') paintComposerHint();
+    if (section === 'transcript' && state.current) {
+        // Re-read the conversation so the new folding rule applies to what is
+        // already on screen. keepDash so going and looking does not close this.
+        openSession(state.current.sessionId, { keepDash: true, quiet: true });
+    }
+}
+
+/**
+ * Which file a section.key is actually coming from, and which scope set it.
+ *
+ * Walks the chain weakest-first, so the last file to mention a key is the one
+ * that wins — the same order bridge/prefs.js merges in, and the reason this is
+ * derived here rather than asked for: the two must agree, and there is only one
+ * rule to agree about.
+ */
+function settingOrigin(section, key) {
+    const files = (state.settings.data && state.settings.data.files) || [];
+    let winner = null;
+    for (const f of files) {
+        if (f.values && f.values[section] && f.values[section][key] !== undefined) winner = f;
+    }
+    return winner;
+}
+
+/** The file this scope would write, out of the chain we were handed. */
+function settingsTargetRow() {
+    const files = (state.settings.data && state.settings.data.files) || [];
+    return files.find(f => f.scope === state.settings.scope && f.target) || null;
+}
+
+function renderSettings() {
+    if (!state.settings.open) return;
+    const s = state.settings;
+
+    // The project selector only means anything for the two project scopes, and
+    // a disabled one beside "User" is a control that appears broken.
+    dom.setProjectWrap.hidden = s.scope === 'user';
+    dom.setScope.value = s.scope;
+    paintSettingsProjects();
+    paintSettingsFile();
+    paintSettingsProblems();
+
+    dom.setBody.replaceChildren();
+    if (s.error) {
+        dom.setToc.replaceChildren();
+        dom.setBody.append(el('div', { class: 'settings-error' },
+            `Could not read the settings: ${s.error}`));
+        return;
+    }
+    if (!s.data) {
+        dom.setToc.replaceChildren();
+        dom.setBody.append(el('div', { class: 'settings-empty', text: 'Reading settings…' }));
+        return;
+    }
+
+    for (const group of SETTINGS) {
+        const locked = group.userOnly && s.scope !== 'user';
+        const card = el('section', {
+            class: 'settings-group', id: `set-g-${group.section}`,
+            'data-locked': locked || null,
+        },
+            el('h2', { class: 'settings-group-title', text: group.title }),
+            group.note ? el('p', { class: 'settings-group-note', text: group.note }) : null,
+            locked ? el('p', { class: 'settings-locked' },
+                'Set for you alone, in ', el('code', { text: '~/.tgxcode/settings.json' }),
+                ' — a checked-in file cannot change these. ',
+                el('button', {
+                    class: 'linkish', type: 'button',
+                    onclick: () => { s.scope = 'user'; renderSettings(); },
+                }, 'Switch to User')) : null);
+
+        for (const row of group.rows) card.append(settingRow(group, row, locked));
+        if (group.keymap) card.append(renderKeymap(locked));
+        dom.setBody.append(card);
+    }
+    renderSettingsToc();
+}
+
+/**
+ * Contents down the left, one entry per group.
+ *
+ * Worth the space because the panel is five groups and about forty controls,
+ * and the thing you came for is rarely the one on screen. Sticky rather than
+ * scrolling with the body, for the same reason.
+ */
+function renderSettingsToc() {
+    dom.setToc.replaceChildren(...SETTINGS.map(group => el('button', {
+        class: 'settings-toc-link', type: 'button', 'data-for': group.section,
+        onclick: () => {
+            const card = document.getElementById(`set-g-${group.section}`);
+            if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        },
+    }, group.title)));
+    markSettingsToc();
+}
+
+/**
+ * Which group the reader is in.
+ *
+ * The topmost card whose head has not yet scrolled past the top of the
+ * container wins, which is the reading that matches what a person would say
+ * they are looking at — the alternative, "whichever card covers the most
+ * pixels", flickers between two of them on a long group.
+ */
+function markSettingsToc() {
+    if (!state.settings.open) return;
+    const top = dom.setShell.getBoundingClientRect().top;
+    let active = SETTINGS[0] && SETTINGS[0].section;
+    for (const group of SETTINGS) {
+        const card = document.getElementById(`set-g-${group.section}`);
+        if (card && card.getBoundingClientRect().top - top <= 24) active = group.section;
+    }
+    for (const link of dom.setToc.children) {
+        link.classList.toggle('on', link.dataset.for === active);
+    }
+}
+
+function paintSettingsProjects() {
+    const s = state.settings;
+    const here = settingsProject();
+    // The open session's project first even when it is not in the list yet —
+    // /api/projects only knows directories a session has run in, and a brand
+    // new one has not been indexed.
+    const dirs = [...new Set([here, ...s.projects.map(p => p.cwd)].filter(Boolean))];
+    dom.setProject.replaceChildren(...dirs.map(d => el('option', {
+        value: d, selected: d === here || null,
+    }, shortPath(d))));
+    if (!dirs.length) {
+        dom.setProject.replaceChildren(el('option', { value: '', text: 'No projects yet' }));
+    }
+}
+
+function paintSettingsFile() {
+    const s = state.settings;
+    const row = settingsTargetRow();
+    const file = row ? row.file : '';
+    dom.setFile.replaceChildren();
+    if (!file) {
+        dom.setFile.append(el('span', { class: 'settings-file-none' },
+            'No settings file for that scope — pick a project above.'));
+        return;
+    }
+    // Filtered, because `append` stringifies a null into the literal word
+    // rather than skipping it the way el()'s children do.
+    dom.setFile.append(...[
+        el('span', { class: 'settings-file-lede', text: 'Writing to' }),
+        el('button', {
+            class: 'settings-file-path', type: 'button', title: 'Copy this path',
+            onclick: () => navigator.clipboard.writeText(file)
+                .then(() => toast('Path copied.'))
+                .catch(() => toast('Could not copy that path.', 'error')),
+        }, file),
+        !row.exists && el('span', { class: 'settings-file-tag', text: 'will be created' }),
+        row.exists && !row.parsed
+            && el('span', { class: 'settings-file-tag bad', text: 'does not parse — saving is refused' }),
+        !row.writable && el('span', { class: 'settings-file-tag bad', text: 'not writable' }),
+        s.saving && el('span', { class: 'settings-file-tag', text: 'saving…' }),
+    ].filter(Boolean));
+}
+
+function paintSettingsProblems() {
+    const files = (state.settings.data && state.settings.data.files) || [];
+    const rows = [];
+    for (const f of files) for (const m of f.problems || []) rows.push({ file: f.file, message: m });
+    dom.setProblems.hidden = !rows.length;
+    dom.setProblems.replaceChildren(...rows.map(r => el('div', { class: 'settings-problem' },
+        el('code', { text: shortPath(r.file) }), ' ', r.message)));
+}
+
+/**
+ * One control, with the two sentences that make it honest: whether this scope
+ * set the value, and whether something stronger has taken it over.
+ *
+ * The label reads down the left and the control sits at the right edge, with
+ * the "Clear" or "default" line under it — so the controls form one column the
+ * eye can run down, and the column does not move with the length of a label.
+ *
+ * A row marked `wide` breaks that shape on purpose: the spinner groups are a
+ * hundred-odd checkboxes and no right-hand column is the right width for them,
+ * so the text and the Clear go across the top and the control gets the full
+ * width underneath.
+ */
+function settingRow(group, row, locked) {
+    const s = state.settings;
+    const section = group.section;
+    const target = settingsTargetRow();
+    const explicit = !!(target && target.values && target.values[section]
+        && target.values[section][row.key] !== undefined);
+    const effective = s.data[section] ? s.data[section][row.key] : undefined;
+    const value = explicit ? target.values[section][row.key] : effective;
+
+    const origin = settingOrigin(section, row.key);
+    // "Stronger" means later in the chain, and the chain is the array order.
+    const files = s.data.files || [];
+    const overridden = !!(origin && target && origin.file !== target.file
+        && files.indexOf(origin) > files.indexOf(target));
+
+    const disabled = locked || !target || (target.exists && !target.parsed) || !target.writable;
+    const save = (v) => saveSetting(section, row.key, v);
+
+    const text = el('div', { class: 'settings-row-text' },
+        el('div', { class: 'settings-row-label', text: row.label }),
+        row.note ? el('div', { class: 'settings-row-note', text: row.note }) : null,
+        overridden ? el('div', { class: 'settings-row-warn' },
+            `Overridden by ${SCOPE_NAMES[origin.scope]} — `,
+            el('code', { text: shortPath(origin.file) }),
+            ' wins, so this has no effect here.') : null);
+
+    const side = el('div', { class: 'settings-row-side' },
+        explicit
+            ? el('button', {
+                class: 'linkish', type: 'button', disabled: disabled || null,
+                title: 'Remove this key so the value falls back',
+                onclick: () => save(null),
+            }, 'Clear')
+            : el('span', { class: 'settings-row-from', text: origin ? `from ${SCOPE_NAMES[origin.scope]}` : 'default' }));
+
+    const control = settingControl(row, value, disabled, save);
+
+    if (row.wide) {
+        return el('div', { class: 'settings-row is-wide' },
+            el('div', { class: 'settings-row-head' }, text, side),
+            el('div', { class: 'settings-row-wide' }, control));
+    }
+    return el('div', { class: 'settings-row' },
+        text,
+        el('div', { class: 'settings-row-ctl' }, control, side));
+}
+
+/** The input itself, by type. Each one saves on change; none of them is a draft. */
+function settingControl(row, value, disabled, save) {
+    if (row.type === 'bool') {
+        return el('label', { class: 'settings-check' },
+            el('input', {
+                type: 'checkbox', checked: value === true || null, disabled: disabled || null,
+                onchange: (e) => save(e.target.checked),
+            }),
+            el('span', { class: 'settings-box' }));
+    }
+    if (row.type === 'int') {
+        return el('input', {
+            class: 'settings-num', type: 'number', value: value ?? '',
+            min: row.min, max: row.max, step: row.step || 1, disabled: disabled || null,
+            onchange: (e) => {
+                const n = Number(e.target.value);
+                if (!Number.isInteger(n)) { renderSettings(); return; }
+                save(n);
+            },
+        });
+    }
+    if (row.type === 'path') {
+        return el('input', {
+            class: 'settings-text', type: 'text', spellcheck: 'false',
+            value: value || '', disabled: disabled || null,
+            placeholder: 'not set',
+            // A path is the one field somebody types rather than picks, so it
+            // commits on blur or Enter instead of per keystroke.
+            onchange: (e) => save(e.target.value.trim() || null),
+        });
+    }
+    if (row.type === 'choice') {
+        return el('select', {
+            class: 'settings-select', disabled: disabled || null,
+            onchange: (e) => save(e.target.value),
+        }, row.options.map(([v, text]) => el('option', {
+            value: v, selected: v === value || null,
+        }, text)));
+    }
+    if (row.type === 'groups') return settingGroups(value, disabled, save);
+    return el('span', { text: String(value) });
+}
+
+/**
+ * Everything in a verb group, as a tooltip.
+ *
+ * A group name is a theme and not a description — "Absurd / Nonsense" and
+ * "Kaomoji" tell you nothing about what a turn will actually call itself — so
+ * the whole list goes in, alphabetised by the bridge. Wrapped to a readable
+ * width because a native tooltip does not wrap on its own, and 185 verbs on one
+ * line is a tooltip wider than the screen.
+ */
+function verbTooltip(group) {
+    const verbs = Array.isArray(group.verbs) ? group.verbs : [];
+    if (!verbs.length) return group.name;
+    const lines = [];
+    let line = '';
+    for (const verb of verbs) {
+        const next = line ? `${line} · ${verb}` : verb;
+        if (next.length > 72) { lines.push(line); line = verb; } else { line = next; }
+    }
+    if (line) lines.push(line);
+    return `${group.name} — ${verbs.length} verb${verbs.length === 1 ? '' : 's'}\n${lines.join('\n')}`;
+}
+
+/**
+ * The spinner groups, as checkboxes over what the directory actually holds.
+ *
+ * `GET /api/spinner/groups` exists because there was no settings page and the
+ * only other answer to "what may I put in that list?" was to go and read a
+ * directory. Now that there is one, this is where that route pays for itself.
+ */
+function settingGroups(value, disabled, save) {
+    const cat = state.settings.spinner;
+    const enabled = new Set(Array.isArray(value) ? value : []);
+    if (!cat || !cat.groups || !cat.groups.length) {
+        return el('div', { class: 'settings-groups-none' },
+            'No verb groups found for this directory.');
+    }
+    const toggle = (name, on) => {
+        const next = new Set(enabled);
+        if (on) next.add(name); else next.delete(name);
+        save([...next]);
+    };
+    return el('div', { class: 'settings-groups' },
+        cat.groups.map(g => el('label', {
+            class: 'settings-group-pick', title: verbTooltip(g),
+        },
+            el('input', {
+                type: 'checkbox', checked: enabled.has(g.name) || null, disabled: disabled || null,
+                onchange: (e) => toggle(g.name, e.target.checked),
+            }),
+            el('span', { class: 'settings-box' }),
+            el('span', { class: 'settings-group-name', text: g.name }),
+            el('span', { class: 'settings-group-count', text: `${g.count}` }))),
+        // What the spinner will actually draw from, which is not the same as
+        // what is enabled when a name matches no file.
+        el('div', { class: 'settings-groups-foot' },
+            `${cat.pool} verb${cat.pool === 1 ? '' : 's'} in the pool.`));
+}
+
+// ── remapping a shortcut ─────────────────────────────────────────────────
+//
+// One row per command in bridge/keymap.js. Recording rather than typing: a
+// binding is a chord, and asking somebody to spell `Ctrl+Shift+3` into a text
+// field is asking them to know how this app spells things.
+//
+// The recorder swallows the keystroke it is listening for, which is why it is a
+// capture-phase listener on the document and not a keydown on the button: the
+// global handler below would otherwise act on the very chord being recorded, and
+// pressing Ctrl+4 to bind something would open the dashboard on the way past.
+
+function renderKeymap(locked) {
+    const s = state.settings;
+    const clashes = keys.clashes();
+    const clashed = new Set(clashes.map(c => c.combo));
+
+    const groups = [];
+    for (const c of keys.COMMANDS) {
+        if (!groups.length || groups[groups.length - 1].name !== c.group) {
+            groups.push({ name: c.group, rows: [] });
+        }
+        groups[groups.length - 1].rows.push(c);
+    }
+
+    return el('div', { class: 'settings-keys' },
+        el('div', { class: 'settings-keys-head' },
+            el('span', { text: 'Shortcuts' }),
+            el('span', { class: 'settings-keys-note' },
+                'Every one needs Ctrl or Alt, or a function key — the composer is a '
+                + 'text box and these have to work while you are typing in it.')),
+        // Only reachable from a hand-edited file — the recorder refuses a chord
+        // that is already taken — so it says which and leaves the fixing to you.
+        clashes.length ? el('div', { class: 'settings-row-warn' },
+            clashes.map(c => `${c.combo} is asked for by both ${c.labels.join(' and ')}; `
+                + `${c.labels[0]} wins.`).join(' ')) : null,
+        groups.map(g => el('div', { class: 'settings-keys-group' },
+            el('div', { class: 'settings-keys-group-name', text: g.name }),
+            g.rows.map(c => keymapRow(c, locked, s.recording === c.id,
+                clashed.has(keys.binding(c.id)))))),
+    );
+}
+
+function keymapRow(cmd, locked, recording, clashed) {
+    const combo = keys.binding(cmd.id);
+    const isDefault = keys.isDefault(cmd.id);
+    return el('div', {
+        class: 'settings-key-row', 'data-recording': recording || null,
+        'data-clash': clashed || null,
+    },
+        el('span', { class: 'settings-key-label', text: cmd.label }),
+        recording
+            ? el('span', { class: 'settings-key-recording', text: 'Press a chord — Esc to cancel' })
+            : el('kbd', { class: 'settings-key-combo', text: combo || 'unbound' }),
+        el('div', { class: 'settings-key-acts' },
+            el('button', {
+                class: 'linkish', type: 'button', disabled: locked || null,
+                onclick: () => startRecording(recording ? null : cmd.id),
+            }, recording ? 'Cancel' : 'Change'),
+            combo ? el('button', {
+                class: 'linkish', type: 'button', disabled: locked || null,
+                title: 'Leave this command with no shortcut',
+                onclick: () => saveBinding(cmd.id, null),
+            }, 'Unbind') : null,
+            isDefault ? null : el('button', {
+                class: 'linkish', type: 'button',
+                disabled: locked || null,
+                title: `Back to ${cmd.default}`,
+                onclick: () => saveBinding(cmd.id, undefined),
+            }, 'Reset')),
+    );
+}
+
+function startRecording(id) {
+    state.settings.recording = id;
+    renderSettings();
+}
+
+/**
+ * Write one binding.
+ *
+ * `undefined` means "back to the default", which is spelled by *removing* the
+ * id from the map rather than by writing the default into it — otherwise a
+ * command whose default changes later would be pinned to the old one by a Reset
+ * somebody clicked once. `null` means deliberately unbound, which is a value.
+ *
+ * The whole map goes over, because `keyboard.bindings` is one key as far as the
+ * bridge is concerned; see the note on `put`.
+ */
+function saveBinding(id, combo) {
+    const current = { ...(BOOT_PREFS.keyboard.bindings || {}) };
+    if (combo === undefined) delete current[id];
+    else current[id] = combo;
+    state.settings.recording = null;
+    // An empty map means every command is at its default, which is what absent
+    // means too — so send the removal and leave no `"bindings": {}` behind in a
+    // file somebody reads. Not a rule the bridge could apply to every map:
+    // `spinner.groups: []` is a real answer, and dropping it would fall back to
+    // the four groups the defaults name.
+    saveSetting('keyboard', 'bindings', Object.keys(current).length ? current : null);
+}
+
+// Capture phase, and before the global handler: the chord being recorded must
+// not also do what it is currently bound to.
+document.addEventListener('keydown', (e) => {
+    const id = state.settings.recording;
+    if (!id) return;
+    if (e.key === 'Escape') {
+        e.preventDefault(); e.stopPropagation();
+        startRecording(null);
+        return;
+    }
+    const combo = keys.comboFromEvent(e);
+    // A modifier held on its own is not a chord yet; keep listening rather than
+    // treating the first frame of Ctrl+3 as a binding of its own.
+    if (!combo) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (!keys.allowed(combo)) {
+        toast(`${combo} needs Ctrl or Alt, or has to be a function key.`, 'warn');
+        return;
+    }
+    // Refused rather than saved-and-flagged. A conflict makes one of the two
+    // commands unreachable, and the recorder is the one moment where saying so
+    // costs nothing: it stays armed, so the answer is to press something else.
+    const taken = keys.takenBy(combo);
+    if (taken && taken !== id) {
+        toast(`${combo} is already ${keys.labelOf(taken)}. Unbind that first, or pick another.`, 'warn');
+        return;
+    }
+    saveBinding(id, combo);
+}, true);
+
+/**
+ * Put the current binding into every bit of chrome that names one.
+ *
+ * The bar buttons and their dynamic titles all used to have "(Ctrl+3)" written
+ * into them, which a remap would have left lying. They go through keys.hint
+ * instead, and this is what re-runs after a save.
+ */
+function paintShortcutHints() {
+    // Each of these builds its button's title from a count, so the shortcut has
+    // to be re-inserted by the same function that writes the sentence.
+    paintDashBadge();
+    paintNotesBadge();
+    paintTaskboardBadge();
+    paintDraftsBadge();
+    paintSchedBadge();
+    paintLiveBadge();
+    dom.btnSettings.title = keys.hint('Settings', 'view.settings');
 }
 
 // ── notifications ────────────────────────────────────────────────────────
@@ -8628,6 +9433,28 @@ function connect() {
         applyRailPrs(JSON.parse(e.data));
         if (state.current) loadPrStatus();
         if (state.dash.open) loadDash();
+    });
+
+    // Settings were saved — possibly in another window, possibly this one. Two
+    // are routinely open here (the Electron shell and a browser tab on the same
+    // bridge), and a window sitting on a stale copy would keep drawing cards the
+    // old way and answering the old shortcuts, with nothing to say why.
+    //
+    // The user-level answer only, which is what BOOT_PREFS holds. A project's
+    // travels with the transcript, and re-reading it is openSession's job.
+    es.addEventListener('prefs', (e) => {
+        const p = JSON.parse(e.data);
+        for (const block of Object.keys(PREFS_FALLBACK)) {
+            if (block === 'version' || !p[block]) continue;
+            Object.assign(BOOT_PREFS[block], p[block]);
+        }
+        keys.apply(BOOT_PREFS.keyboard);
+        paintShortcutHints();
+        paintComposerHint();
+        if (state.live.open) renderLive();
+        // The panel that did the saving already has the answer; one that is open
+        // in *this* window while another saved does not.
+        if (state.settings.open && !state.settings.saving) loadSettings();
     });
 
     // Someone deleted a session — possibly in another window, possibly this one.
@@ -11059,6 +11886,10 @@ const termPane = new TerminalPane({
     mount: dom.termBody,
     onOpen: (info) => paintTermHead(info),
     onError: (msg) => toast(`Terminal: ${msg}`, 'error'),
+    // A function rather than a value, so toggling the setting reaches a shell
+    // that is already open. `keyboard` is user-level only, which is why this
+    // reads BOOT_PREFS and not the open session's answer.
+    contextualCopy: () => BOOT_PREFS.keyboard.contextualTerminalCopy,
 });
 
 function termHeight() {
@@ -12535,17 +13366,40 @@ dom.input.addEventListener('input', debounce(() => {
 window.addEventListener('beforeunload', () => {
     if (state.current) saveDraft(state.current.sessionId, dom.input.value);
 });
-// Enter sends, Shift+Enter breaks the line — chat convention, and what the hand
-// reaches for. Ctrl/Cmd+Enter stays wired up because it used to be the only way
-// and fingers remember. `isComposing` keeps an IME's Enter for the IME: it is
-// picking a candidate, not finishing a message.
+/**
+ * Does this Enter send, or break the line?
+ *
+ * `keyboard.composerSend` picks between two shapes. `'enter'` is the chat
+ * convention and what this app has always done: Enter sends, Shift+Enter is a
+ * newline. `'ctrl-enter'` swaps them, which is what you want when a message is
+ * three paragraphs and Enter sending it halfway through is a real cost.
+ *
+ * Ctrl/Cmd+Enter sends in both. It used to be the only way and fingers
+ * remember, and it is unambiguous under either mode.
+ *
+ * Alt+Enter is a newline throughout, and `isComposing` keeps an IME's Enter for
+ * the IME — it is picking a candidate, not finishing a message.
+ */
+function enterSends(e) {
+    if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return false;
+    if (e.altKey) return false;
+    if (e.ctrlKey || e.metaKey) return true;
+    if (e.shiftKey) return false;
+    return BOOT_PREFS.keyboard.composerSend !== 'ctrl-enter';
+}
+
 dom.input.addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
-    if (e.altKey) return;
-    if (e.shiftKey && !(e.ctrlKey || e.metaKey)) return;
+    if (!enterSends(e)) return;
     e.preventDefault();
     sendMessage();
 });
+
+/** The strip under the composer, which says whichever mode is in force. */
+function paintComposerHint() {
+    dom.composerHint.textContent = BOOT_PREFS.keyboard.composerSend === 'ctrl-enter'
+        ? 'Ctrl+Enter to send · Enter for a newline'
+        : 'Enter to send · Shift+Enter for a newline';
+}
 
 // ── slash-command completion ─────────────────────────────────────────────
 //
@@ -13716,6 +14570,28 @@ dom.btnDrafts.addEventListener('click', () => showDrafts(!state.drafts.open));
 // already on it rather than on whatever was behind the board.
 dom.drNew.addEventListener('click', () => openNew());
 
+dom.btnSettings.addEventListener('click', () => showSettings(!state.settings.open));
+// Which group you are in, on a frame rather than on every scroll event: this
+// reads a bounding box per group and a settings page can be scrolled fast.
+let tocFrame = 0;
+dom.setShell.addEventListener('scroll', () => {
+    if (tocFrame) return;
+    tocFrame = requestAnimationFrame(() => { tocFrame = 0; markSettingsToc(); });
+}, { passive: true });
+// Changing scope redraws off the answer already in hand — the chain came back
+// whole, so there is nothing to fetch. Changing project does need a fetch,
+// because it is a different chain.
+dom.setScope.addEventListener('change', () => {
+    state.settings.scope = dom.setScope.value;
+    state.settings.recording = null;
+    renderSettings();
+});
+dom.setProject.addEventListener('change', () => {
+    state.settings.project = dom.setProject.value;
+    state.settings.recording = null;
+    loadSettings();
+});
+
 dom.btnSched.addEventListener('click', () => showSched(!state.sched.open));
 // `schedule: true` rather than a row: a new one, so Save posts instead of
 // patching. The panel stays open underneath for the reason drNew's does.
@@ -13768,6 +14644,11 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && state.dash.open) { showDash(false); return; }
     if (e.key === 'Escape' && state.notes.open) { showNotes(false); return; }
     if (e.key === 'Escape' && state.drafts.open) { showDrafts(false); return; }
+    // Schedules was missing from this ladder — Escape closed the other four
+    // whole-screen panels and left that one up, which reads as the key not
+    // working rather than as a panel that is special.
+    if (e.key === 'Escape' && state.sched.open) { showSched(false); return; }
+    if (e.key === 'Escape' && state.settings.open) { showSettings(false); return; }
     // Focus mode is a way of showing the board rather than a panel of its own, so
     // Escape leaves it without also taking the board away. Closing the board is
     // the Live button's alone — it is somewhere you go and stay, not something
@@ -13781,56 +14662,64 @@ document.addEventListener('keydown', (e) => {
     // and searching it while the board runs beside you is the point.
     if (e.key === 'Escape' && state.find.open) { closeFind({ focus: true }); return; }
     if (e.key === 'Escape' && state.agent) { closeAgent(); return; }
-    // Ctrl+F, and F3 for the repeat — both of which the terminal gets first when
-    // it has the focus. xterm passes every key but Ctrl+Shift+C straight through
-    // and it bubbles here as well, so this is the only thing stopping a shell
-    // from receiving a Ctrl+F it was meant to keep. Not gated on isTyping: find
-    // has to work from the composer, which is the same reason the view shortcuts
-    // below are Ctrl-prefixed. Ctrl+Shift+F is left alone for search across
-    // sessions.
+    // Everything below is a *bound* shortcut, and web/keys.js decides which one
+    // a keystroke is — so this reads as a list of commands rather than a list of
+    // chords, and remapping one is a settings change instead of an edit here.
+    //
+    // Ctrl (or Alt) is on all of them because the composer is a textarea and
+    // these have to work while it has the focus; bridge/keymap.js enforces that
+    // rather than trusting it, so a binding that arrives here is safe to act on.
+    // Not gated on isTyping for the same reason.
+    //
+    // The terminal gets its keys first when it has the focus: xterm passes
+    // everything but its own copy chord straight through and it bubbles here as
+    // well, so `inTerm` is the only thing stopping a shell from losing a Ctrl+F
+    // it was meant to keep. Only the two find commands yield — a view shortcut
+    // is not something a shell wants, and having Ctrl+3 stop working because the
+    // cursor is in a terminal would be worse than the collision it avoids.
+    const command = keys.match(e);
+    if (!command) return;
     const inTerm = dom.termBody && dom.termBody.contains(e.target);
-    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key === 'f'
-        && state.current && !inTerm) {
+
+    // The eight things `main` can show, ordered by how wide a question each one
+    // answers: the conversation in front of you, then everything outstanding,
+    // then what is running this second, then what is unfinished in the working
+    // trees, then what already reached you, then what has not begun, then what
+    // starts on a clock, and last the settings — which are about the app rather
+    // than about any work at all. The task board arriving is what made that an
+    // ordering rather than the sequence they happened to be built in: Live and
+    // Dashboard each moved along by one, which is a real cost and worth paying
+    // once, not again. Settings going on the end rather than anywhere tidier is
+    // the same reasoning still holding.
+    const views = {
+        'view.tasks': showTaskboard,
+        'view.live': showLive,
+        'view.dashboard': showDash,
+        'view.history': showNotes,
+        'view.drafts': showDrafts,
+        'view.schedules': showSched,
+        'view.settings': showSettings,
+    };
+
+    if (command === 'view.conversation') {
+        e.preventDefault();
+        for (const show of Object.values(views)) show(false);
+        return;
+    }
+    if (views[command]) { e.preventDefault(); views[command](true); return; }
+
+    if (command === 'find.open' && state.current && !inTerm) {
         e.preventDefault();
         openFind();
         return;
     }
-    if (e.key === 'F3' && !e.ctrlKey && !e.metaKey && !e.altKey && state.current && !inTerm) {
+    if ((command === 'find.next' || command === 'find.prev') && state.current && !inTerm) {
         e.preventDefault();
-        stepFind(e.shiftKey ? -1 : 1);
+        stepFind(command === 'find.prev' ? -1 : 1);
         return;
     }
-    if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); dom.search.focus(); }
-    if ((e.ctrlKey || e.metaKey) && e.key === 'n') { e.preventDefault(); openNew(); }
-
-    // The six things `main` can show, ordered by how wide a question each one
-    // answers: the conversation in front of you, then everything outstanding,
-    // then what is running this second, then what is unfinished in the working
-    // trees, then what already reached you, then what has not begun. The task
-    // board arriving is what made that an ordering rather than the sequence they
-    // happened to be built in — Live and Dashboard each moved along by one, which
-    // is a real cost and worth it once, not worth paying again.
-    //
-    // Which is why Drafts is 6 rather than slotted in beside the task board:
-    // renumbering three shortcuts a second time would cost more than the tidier
-    // adjacency is worth. It also happens to belong at the end on the rule above
-    // — a draft is the one thing here demanding nothing of you yet — so the bar
-    // button sits last too and the two agree.
-    //
-    // Ctrl rather than a bare digit because the composer is a textarea and these
-    // have to work while it has the focus.
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && '1234567'.includes(e.key)) {
-        e.preventDefault();
-        if (e.key === '1') {
-            showLive(false); showDash(false); showNotes(false);
-            showTaskboard(false); showDrafts(false); showSched(false);
-        } else if (e.key === '2') showTaskboard(true);
-        else if (e.key === '3') showLive(true);
-        else if (e.key === '4') showDash(true);
-        else if (e.key === '5') showNotes(true);
-        else if (e.key === '6') showDrafts(true);
-        else showSched(true);
-    }
+    if (command === 'rail.filter') { e.preventDefault(); dom.search.focus(); return; }
+    if (command === 'session.new') { e.preventDefault(); openNew(); }
 });
 
 // Copy buttons inside rendered markdown are delegated: the blocks are innerHTML.
@@ -13884,11 +14773,13 @@ function restoreView() {
     const tb = q.get('view') === 'taskboard';
     const dr = q.get('view') === 'drafts';
     const sc = q.get('view') === 'schedules';
+    const st = q.get('view') === 'settings';
     if (q.get('view') === 'live' || q.get('live') === '1' || q.get('focus') === '1') showLive(true);
     if (dash) showDash(true);
     if (tb) showTaskboard(true);
     if (dr) showDrafts(true);
     if (sc) showSched(true);
+    if (st) showSettings(true);
     if (q.get('focus') === '1') setFocus(true);
 
     // The panels are up and the address they came from is untouched, so from
@@ -13938,6 +14829,11 @@ renderBell();
 registerWorker();
 paintDockButton();      // the remembered arrangement, before anything is drawn
 watchPaneInsets();      // keep the composer over the transcript as columns come and go
+// The chrome that names a shortcut, before anything can read it — the bar
+// buttons' titles are built from a count, so their static markup carries no
+// combo at all and this is what puts one there.
+paintShortcutHints();
+paintComposerHint();
 restoreView();          // and where we were, from the address that survived the refresh
 primeWaiting();
 refreshDevBrowser();

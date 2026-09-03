@@ -3709,7 +3709,7 @@ body.term-resizing { user-select: none; cursor: row-resize; }
    the eye can run down the right edge for "what needs doing" and down the left
    for "where". */
 
-.dash, .live, .notes, .taskboard, .drafts, .sched {
+.dash, .live, .notes, .taskboard, .drafts, .sched, .settings {
     display: flex;
     flex-direction: column;
     flex: 1;
@@ -3717,7 +3717,7 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 }
 /* Not optional: `display: flex` above beats the `hidden` attribute on its own. */
 .dash[hidden], .live[hidden], .notes[hidden], .taskboard[hidden],
-.drafts[hidden], .sched[hidden] { display: none; }
+.drafts[hidden], .sched[hidden], .settings[hidden] { display: none; }
 
 /* ── the live board ──────────────────────────────────────────────────────
    A card per running session. The grid decides its own column count so that a
@@ -5686,6 +5686,365 @@ body.term-resizing { user-select: none; cursor: row-resize; }
    from the bridge's own parser error, so it says something specific. */
 #new-cron-note.bad { color: var(--red); }
 
+/* ── settings ────────────────────────────────────────── */
+/* A column of grouped rows rather than a board, because this is the one panel
+   read top to bottom instead of scanned: you arrive knowing which setting you
+   came for, and the group titles are how you find it.
+
+   The control goes on the *left* of its label, which is the opposite of the
+   rest of this app and deliberate: every row here is a control, so the left
+   edge is a column of them and the eye runs down it. Putting them on the right
+   would leave a ragged column that moves with the length of each label. */
+
+/* One scroll container, one centred column. The panel is read rather than
+   scanned, so it gets a measure — the head, the file it writes and the groups
+   all line up inside the same one, instead of the title sitting at the far left
+   of the window with the scope pickers at the far right.
+
+   **The contents list takes no part in the centring.** It hangs outside the
+   column (see `.settings-toc`), so the settings are centred on the pane and the
+   aside occupies the space that leaves — rather than the *pair* being centred,
+   which puts the thing you are reading right of centre.
+
+   Which means the column has to leave room for it on both sides, because equal
+   gutters is what centred means. `--set-aside` is that room, and the `min()` is
+   what spends it: the column takes its measure when the pane is wide enough and
+   gives width back when it is not, so the aside stays put instead of vanishing
+   at some particular window size. Below the narrow breakpoint the aside becomes
+   a strip above and `--set-aside` goes to zero, which hands the width back. */
+.settings-shell { flex: 1; min-height: 0; overflow-y: auto; --set-aside: 152px; }
+.settings-col {
+    width: min(880px, calc(100% - 2 * var(--set-aside)));
+    margin: 0 auto;
+    padding: 0 28px;
+}
+
+.settings-head { padding: 22px 0 14px; }
+.settings-title { margin: 0; font: 400 21px/1.3 var(--sans); color: var(--text); }
+.settings-sub { margin: 5px 0 0; max-width: 560px; font-size: 13px; line-height: 1.6; color: var(--text-3); }
+
+/* Contents beside the groups, and deliberately out of flow: `right: 100%` puts
+   it entirely to the left of the centred column, so its width cannot shift what
+   it is a contents list *of*.
+
+   Full height rather than hugging its links, because the sticky thing is the
+   list inside it and a sticky element only travels within its parent's box. */
+.settings-cols { position: relative; }
+.settings-toc {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 100%;
+    width: calc(var(--set-aside) - 20px);
+    margin-right: 20px;
+}
+.settings-toc-list { position: sticky; top: 8px; display: flex; flex-direction: column; gap: 1px; }
+.settings-toc-link {
+    position: relative;
+    background: none;
+    border: 0;
+    border-radius: var(--r-sm);
+    padding: 7px 11px;
+    font: 400 13px var(--sans);
+    color: var(--text-3);
+    text-align: left;
+    cursor: pointer;
+}
+.settings-toc-link:hover { background: var(--s2); color: var(--text); }
+/* A square bar, not an inset shadow: on a rounded button the shadow follows the
+   corner radius and comes out as a curved sliver that reads as a stray glyph. */
+.settings-toc-link::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 5px;
+    bottom: 5px;
+    width: 2px;
+    border-radius: 1px;
+    background: transparent;
+}
+.settings-toc-link.on { color: var(--text); }
+.settings-toc-link.on::before { background: var(--blue); }
+
+.settings-picks { display: flex; gap: 10px; margin-top: 14px; }
+.settings-pick { display: flex; flex-direction: column; gap: 4px; }
+.settings-pick > span { font-size: 11px; letter-spacing: 0.02em; color: var(--text-4); }
+.settings-pick select {
+    appearance: none;
+    background: var(--s3);
+    color: var(--text);
+    border: 0;
+    border-radius: var(--pill);
+    padding: 7px 14px;
+    font: 400 13px var(--sans);
+    max-width: 260px;
+    cursor: pointer;
+}
+.settings-pick select:hover { background: var(--s4); }
+
+/* The file being written, named out loud. The panel is a better way into a file
+   that is still the interface, so it says which one — and clicking copies it,
+   which is the whole of what a "reveal" button would have been for. */
+.settings-file {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 0 0 14px;
+    font-size: 12px;
+    color: var(--text-4);
+}
+.settings-file-lede { color: var(--text-4); }
+.settings-file-path {
+    background: none;
+    border: 0;
+    padding: 0;
+    font: 400 12px var(--mono);
+    color: var(--text-2);
+    cursor: pointer;
+    text-align: left;
+}
+.settings-file-path:hover { color: var(--blue); text-decoration: underline; }
+.settings-file-none { font-style: italic; }
+.settings-file-tag {
+    background: var(--s3);
+    border-radius: var(--pill);
+    padding: 2px 9px;
+    font-size: 11px;
+    color: var(--text-3);
+}
+.settings-file-tag.bad { background: var(--s2); color: var(--red); }
+
+/* Values a file carried that a key does not allow. Above the controls rather
+   than beside them, because the file is what has the problem and the control
+   showing the default is behaving correctly. */
+.settings-problems {
+    margin: 0 0 14px;
+    padding: 10px 14px;
+    background: var(--s2);
+    border-radius: var(--r);
+    box-shadow: inset 3px 0 0 var(--yellow);
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-3);
+    max-width: 860px;
+}
+.settings-problem + .settings-problem { margin-top: 4px; }
+.settings-problems code { font: 400 11px var(--mono); color: var(--text-4); }
+
+.settings-body {
+    min-width: 0;
+    padding: 0 0 40px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+.settings-empty, .settings-error { padding: 8px 0; font-size: 13px; color: var(--text-3); }
+.settings-error { color: var(--red); }
+
+.settings-group { background: var(--s1); border-radius: var(--r-lg); padding: 18px 20px 8px; }
+.settings-group[data-locked] .settings-row { opacity: 0.5; }
+.settings-group-title { margin: 0; font: 400 15px/1.3 var(--sans); color: var(--text); }
+.settings-group-note {
+    margin: 5px 0 0;
+    max-width: 620px;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-4);
+}
+.settings-locked {
+    margin: 10px 0 0;
+    padding: 9px 12px;
+    background: var(--s2);
+    border-radius: var(--r-sm);
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-3);
+}
+.settings-locked code { font: 400 11px var(--mono); color: var(--text-2); }
+
+/* Label down the left, control at the right edge, and the "Clear" or "default"
+   line under the control. The controls then form one column the eye can run
+   down — which they cannot when each one starts where its own label ended. */
+.settings-row { display: flex; align-items: flex-start; gap: 24px; padding: 14px 0; }
+.settings-row + .settings-row { border-top: 1px solid var(--outline-soft); }
+.settings-row-text { flex: 1; min-width: 0; }
+.settings-row-label { font-size: 13px; color: var(--text); }
+.settings-row-note { margin-top: 3px; font-size: 12px; line-height: 1.6; color: var(--text-4); }
+.settings-row-warn { margin-top: 6px; font-size: 12px; line-height: 1.6; color: var(--yellow); }
+.settings-row-warn code { font: 400 11px var(--mono); }
+.settings-row-ctl {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 5px;
+    padding-top: 1px;
+}
+.settings-row-side { font-size: 12px; text-align: right; }
+.settings-row-from { color: var(--text-4); }
+
+/* The exception: a control no right-hand column is the right width for. The
+   text and the Clear go across the top and the control gets the whole measure
+   underneath — which for the verb groups is the difference between four pills
+   per line and a list you scroll. */
+.settings-row.is-wide { flex-direction: column; gap: 0; }
+.settings-row-head { display: flex; align-items: flex-start; gap: 24px; width: 100%; }
+.settings-row-head .settings-row-side { flex: none; padding-top: 1px; }
+.settings-row-wide { width: 100%; margin-top: 12px; }
+
+/* No stripe on a row this scope has set, though there was one. At User scope
+   almost every row is set, so the bar ran the whole length of every group and
+   read as a border somebody had drawn badly rather than as a fact about a row.
+   The right-hand column already says it in a word — "Clear" against
+   "default" — and that word is beside the control it belongs to. */
+
+.settings-check { flex: none; position: relative; display: inline-flex; cursor: pointer; }
+.settings-check input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.settings-check input:disabled { cursor: default; }
+.settings-box {
+    position: relative;
+    width: 17px;
+    height: 17px;
+    border-radius: 5px;
+    border: 2px solid var(--outline);
+    transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+}
+/* The tick is drawn rather than shipped: an inline SVG per checkbox is a lot of
+   nodes for one glyph, and two borders of a rotated box are the same picture.
+   It has to be a tick and not a filled square — a filled square reads the same
+   whether it means "on" or "this control is busy", and the first version of
+   this was an inset ring that read as neither. */
+.settings-box::after {
+    content: "";
+    position: absolute;
+    left: 4px;
+    top: 0;
+    width: 4px;
+    height: 8px;
+    border: solid var(--bg);
+    border-width: 0 2px 2px 0;
+    transform: rotate(40deg) scale(0.4);
+    opacity: 0;
+    transition: transform var(--t-fast) var(--ease), opacity var(--t-fast) var(--ease);
+}
+.settings-check input:checked + .settings-box,
+.settings-group-pick input:checked + .settings-box {
+    background: var(--blue);
+    border-color: var(--blue);
+}
+.settings-check input:checked + .settings-box::after,
+.settings-group-pick input:checked + .settings-box::after {
+    transform: rotate(40deg) scale(1);
+    opacity: 1;
+}
+.settings-check input:focus-visible + .settings-box,
+.settings-group-pick input:focus-visible + .settings-box { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+.settings-num, .settings-text, .settings-select {
+    flex: none;
+    background: var(--s3);
+    color: var(--text);
+    border: 0;
+    border-radius: var(--r-sm);
+    padding: 6px 10px;
+    font: 400 13px var(--sans);
+}
+.settings-num { width: 88px; text-align: right; font-family: var(--mono); }
+/* A width, not a max-width: an <input type=text> defaults to about twenty
+   characters, and the one field here is a filesystem path — so it came out
+   clipped at exactly the point where reading it matters. */
+.settings-text { width: 340px; max-width: 100%; font-family: var(--mono); font-size: 12px; }
+.settings-select { max-width: 320px; cursor: pointer; }
+.settings-num:disabled, .settings-text:disabled, .settings-select:disabled { color: var(--text-4); cursor: default; }
+
+/* The spinner groups. A wrapping row of pills across the full measure, because
+   there are over a hundred of them: down one column they are a page and a half
+   to scroll.
+
+   Wrapping flex rather than a grid, which was tried first and is worse here.
+   A grid gives every pill one width, so the column has to be as wide as
+   "Theater / Stage Manager Phrases" or that name gets clipped — and at a width
+   that fits it, "Pirate" is mostly empty space. Letting each pill be its own
+   size packs more per line *and* clips nothing, which is the rare case where
+   the denser layout is also the more readable one. */
+.settings-groups { display: flex; flex-wrap: wrap; gap: 4px 6px; }
+.settings-groups-none, .settings-groups-foot { font-size: 12px; color: var(--text-4); }
+.settings-groups-foot { flex-basis: 100%; margin-top: 6px; }
+.settings-group-pick {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    background: var(--s2);
+    border-radius: var(--pill);
+    padding: 4px 11px 4px 8px;
+    cursor: pointer;
+}
+/* Never wrapped mid-name: a pill is one label, and the line breaks between
+   pills instead. Nothing is clipped, because each pill is as wide as its name. */
+.settings-group-name { white-space: nowrap; }
+.settings-group-pick:hover { background: var(--s3); }
+.settings-group-pick input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.settings-group-pick .settings-box { width: 14px; height: 14px; border-radius: 4px; }
+.settings-group-name { font-size: 12px; color: var(--text-2); }
+.settings-group-count { font: 400 11px var(--mono); color: var(--text-4); }
+
+/* ── the shortcut table ───────────────────────────────── */
+/* Rows rather than cards: thirteen of them, all the same shape, read by looking
+   for one name. The chord sits in a fixed column so the whole set can be
+   scanned for a collision without reading a single label. */
+
+.settings-keys { padding: 14px 0 6px; border-top: 1px solid var(--outline-soft); }
+.settings-keys-head { display: flex; flex-direction: column; gap: 4px; padding-bottom: 8px; }
+.settings-keys-head > span:first-child { font-size: 13px; color: var(--text); }
+.settings-keys-note { max-width: 620px; font-size: 12px; line-height: 1.6; color: var(--text-4); }
+.settings-keys-group { padding-top: 6px; }
+.settings-keys-group-name {
+    padding: 6px 0 2px;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-4);
+}
+
+.settings-key-row { display: flex; align-items: center; gap: 12px; padding: 5px 0; }
+.settings-key-label { flex: 1; min-width: 0; font-size: 13px; color: var(--text-2); }
+.settings-key-combo {
+    flex: none;
+    width: 150px;
+    background: var(--s3);
+    border-radius: var(--r-xs);
+    padding: 4px 9px;
+    font: 400 12px var(--mono);
+    color: var(--text);
+    text-align: center;
+}
+.settings-key-row[data-clash] .settings-key-combo { background: var(--s2); color: var(--yellow); }
+.settings-key-recording {
+    flex: none;
+    width: 150px;
+    padding: 4px 9px;
+    font-size: 11px;
+    color: var(--blue);
+    text-align: center;
+}
+.settings-key-row[data-recording] { background: var(--blue-tint); border-radius: var(--r-xs); }
+.settings-key-acts { flex: none; display: flex; gap: 10px; min-width: 150px; justify-content: flex-end; }
+
+/* A text-only button, for the actions inside a row where a pill would be three
+   times the weight of the word in it. */
+.linkish {
+    background: none;
+    border: 0;
+    padding: 0;
+    font: 400 12px var(--sans);
+    color: var(--blue);
+    cursor: pointer;
+}
+.linkish:hover { text-decoration: underline; }
+.linkish:disabled { color: var(--text-4); cursor: default; text-decoration: none; }
+
 /* ── narrow windows ──────────────────────────────────────────────────── */
 
 @media (max-width: 980px) {
@@ -5709,4 +6068,35 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 
     .dr-head { padding: 16px 16px 12px; }
     .dr-body { padding: 0 16px 20px; }
+
+    /* The two selectors drop under the title rather than squeezing beside it;
+       the contents go above the groups instead of beside them, as a row that
+       scrolls sideways; and the shortcut table loses its fixed columns — at
+       this width the chord and its actions cannot both keep a lane. */
+    /* No room for an aside, so the contents come back into flow above the
+       groups as a row that scrolls sideways — and the width it was reserving
+       goes back to the column. */
+    .settings-shell { --set-aside: 0px; }
+    .settings-col { padding: 0 16px; }
+    .settings-head { flex-direction: column; gap: 12px; padding: 16px 0 12px; }
+    .settings-picks { margin-left: 0; }
+    .settings-toc {
+        position: static;
+        width: auto;
+        margin: 0 0 12px;
+    }
+    .settings-toc-list {
+        position: static;
+        flex-direction: row;
+        gap: 4px;
+        overflow-x: auto;
+        padding-bottom: 4px;
+    }
+    .settings-toc-link { flex: none; background: var(--s2); }
+    .settings-toc-link.on { background: var(--blue-cont); }
+    .settings-toc-link::before { display: none; }
+    .settings-key-row { flex-wrap: wrap; }
+    .settings-key-label { flex-basis: 100%; }
+    .settings-key-combo, .settings-key-recording { width: auto; min-width: 110px; }
+    .settings-key-acts { min-width: 0; margin-left: auto; }
 }

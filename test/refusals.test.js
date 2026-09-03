@@ -105,6 +105,24 @@ const HOME = os.homedir();
     check('mkdir', (await call('POST', '/api/fs/mkdir', {
         headers: PHONE, body: { parent: HOME, name: 'x' },
     })).status, 403);
+    // Saving settings is the mkdir clause with a longer reach: it writes a file
+    // in the user's home directory, and one of the keys in it names a directory
+    // this app then starts `claude` in. The *read* stays open, two lines down —
+    // how somebody wants a transcript folded is not a capability, and pinning
+    // both here is what stops a future prefix rule taking the GET with it.
+    check('saving settings', (await call('PUT', '/api/prefs', {
+        headers: PHONE, body: { scope: 'user', patch: {} },
+    })).status, 403);
+    check('but reading them is fine', (await call('GET', '/api/prefs', { headers: PHONE })).status, 200);
+    check('and so is the shortcut catalogue',
+        (await call('GET', '/api/keymap', { headers: PHONE })).status, 200);
+    // The header every non-GET under /api/ has needed since the CSRF guard
+    // landed, and the first thing a new client 403s on. Pinned here on the
+    // newest write route because that document says so and this suite is where
+    // a write surface gets exercised.
+    check('a local save without the client header', (await call('PUT', '/api/prefs', {
+        headers: { authorization: `Bearer ${TOKEN}` }, body: { scope: 'user', patch: {} },
+    })).status, 403);
     // Same argument as mkdir: attaching a file writes it into a checkout. Refused
     // before the name or the session id is looked at, so this holds for any of them.
     check('attaching a file', (await upload('/api/sessions/abc/attachments?name=x.png', {
