@@ -154,50 +154,6 @@
       </svg>
     </button>
 
-    <!-- The same sessions, on a phone. Icon-only: it is a setup step you do once
-         per device, not something to give a word of the bar to forever. -->
-    <button id="btn-pair" class="bar-btn icon-only" type="button"
-            title="Connect a phone to this bridge">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <rect x="7" y="2.5" width="10" height="19" rx="2.6"
-              stroke="currentColor" stroke-width="1.7"/>
-        <path d="M11 18.6h2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
-      </svg>
-    </button>
-
-    <!-- What reaches you when the window is not the thing you are looking at.
-         The rules it obeys are in announceTurn(); the note inside says them out
-         loud, because a notification you cannot predict is one you switch off. -->
-    <div class="bell-wrap">
-      <button id="btn-bell" class="bell" type="button" data-on="false"
-              aria-haspopup="dialog" aria-expanded="false" aria-controls="bell-menu"
-              title="Notifications">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M6.6 10a5.4 5.4 0 0 1 10.8 0c0 3.9 1.6 5.4 1.6 5.4H5s1.6-1.5 1.6-5.4Z"
-                stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
-          <path d="M10 18.3a2.2 2.2 0 0 0 4 0" stroke="currentColor" stroke-width="1.7"
-                stroke-linecap="round"/>
-          <path class="slash" d="M4.6 4.6 19.4 19.4" stroke="currentColor"
-                stroke-width="1.7" stroke-linecap="round"/>
-        </svg>
-      </button>
-
-      <div id="bell-menu" class="bell-menu" role="dialog"
-           aria-label="Notification settings" hidden>
-        <div class="bell-head">When something wants you</div>
-        <label class="check">
-          <input id="opt-desktop" type="checkbox">
-          <span>Show a desktop notification</span>
-        </label>
-        <label class="check">
-          <input id="opt-sound" type="checkbox">
-          <span>Play a sound</span>
-        </label>
-        <div id="bell-note" class="bell-note"></div>
-        <button id="bell-try" class="bell-try" type="button">Try it</button>
-      </div>
-    </div>
-
     <!-- How much of the 5-hour window and the week are gone. Beside DevBrowser
          because it is the same kind of thing: the state of the machine rather
          than a place to go.
@@ -828,8 +784,10 @@ checks, and merge it once they pass.">LGTM</button>
         <div class="settings-col">
           <header class="settings-head">
             <h1 class="settings-title">Settings</h1>
-            <p class="settings-sub">How you want this app to behave. Every one
-               of these is a key in a JSON file, and hand-editing it still
+            <!-- "Most" rather than "every": the last two groups are not in that
+                 file, and each says so where it sits. -->
+            <p class="settings-sub">How you want this app to behave. Most of
+               these are a key in a JSON file, and hand-editing it still
                works.</p>
             <!-- Under the title rather than opposite it. These say *what you
                  are editing*, so they belong with the sentence that says what
@@ -864,7 +822,120 @@ checks, and merge it once they pass.">LGTM</button>
             <nav class="settings-toc" aria-label="Settings sections">
               <div id="set-toc" class="settings-toc-list"></div>
             </nav>
-            <div id="set-body" class="settings-body"></div>
+            <div id="set-body" class="settings-body">
+              <!-- The two groups below are written out here rather than built by
+                   renderSettings, because neither is backed by the settings
+                   file: their controls are wired once at load and have to keep
+                   their listeners. renderSettings moves them into place in the
+                   order SETTINGS lists them, so they are not rebuilt and not
+                   pinned to the end either. -->
+
+              <!-- What reaches you when the window is not the thing you are
+                   looking at. The rules it obeys are in announceTurn(); the note
+                   says them out loud, because a notification you cannot predict
+                   is one you switch off.
+
+                   Per-browser, and the group says so: a permission granted in
+                   one browser tells you nothing about another, and the sound
+                   needs an AudioContext this page had to be touched to start. -->
+              <section id="set-g-notify" class="settings-group">
+                <h2 class="settings-group-title">Notifications</h2>
+                <p class="settings-group-note">What reaches you when this window is
+                   not the thing you are looking at. <strong>This browser only</strong>
+                   — unlike everything above, these live in its own storage rather
+                   than in the settings file, because whether a notification can
+                   fire at all is something each browser decides for itself.</p>
+
+                <div class="settings-row">
+                  <div class="settings-row-text">
+                    <div class="settings-row-label">Show a desktop notification</div>
+                    <div class="settings-row-note">Ticking this is what asks the
+                      browser for permission — nothing else does, because a prompt
+                      no gesture invited is the one people press Block on.</div>
+                  </div>
+                  <div class="settings-row-ctl">
+                    <label class="settings-check">
+                      <input id="opt-desktop" type="checkbox">
+                      <span class="settings-box"></span>
+                    </label>
+                  </div>
+                </div>
+
+                <div class="settings-row">
+                  <div class="settings-row-text">
+                    <div class="settings-row-label">Play a sound</div>
+                    <div class="settings-row-note">A short chime, synthesised in the
+                      page rather than fetched.</div>
+                  </div>
+                  <div class="settings-row-ctl">
+                    <label class="settings-check">
+                      <input id="opt-sound" type="checkbox">
+                      <span class="settings-box"></span>
+                    </label>
+                  </div>
+                </div>
+
+                <div class="settings-row">
+                  <div class="settings-row-text">
+                    <div class="settings-row-label">When one fires</div>
+                    <div id="notify-note" class="settings-row-note"></div>
+                  </div>
+                  <div class="settings-row-ctl">
+                    <!-- Worth having: Focus Assist and Do Not Disturb drop
+                         notifications without a word, so "did that work" is
+                         otherwise unanswerable until a turn ends. -->
+                    <button id="notify-try" class="btn" type="button">Try it</button>
+                  </div>
+                </div>
+              </section>
+
+              <!-- The same sessions, on a phone. A setup step you do once per
+                   device, which is why it stopped being a button in the bar. -->
+              <section id="set-g-pair" class="settings-group">
+                <h2 class="settings-group-title">Connect a phone</h2>
+                <p class="settings-group-note">Paste the link into the Android app,
+                   which keeps the token and sends it as a header. Opening it in a
+                   phone browser also works and signs that browser in for a year;
+                   either way the token is not in a URL after that.</p>
+
+                <div class="settings-row is-wide">
+                  <div class="settings-row-head">
+                    <div class="settings-row-text">
+                      <div class="settings-row-label">Reachable at</div>
+                      <div class="settings-row-note">This page is served on
+                        127.0.0.1, which is the one address useless to a phone, and
+                        the bridge cannot know what name a proxy in front of it
+                        answers to. So this is a guess you can edit.</div>
+                    </div>
+                  </div>
+                  <div class="settings-row-wide">
+                    <input id="pair-host" class="settings-text is-long" type="text"
+                           spellcheck="false" aria-label="Reachable at"
+                           placeholder="https://machine.tailnet.ts.net" list="pair-hosts">
+                    <datalist id="pair-hosts"></datalist>
+                    <div id="pair-note" class="settings-row-note"></div>
+                  </div>
+                </div>
+
+                <div class="settings-row is-wide">
+                  <div class="settings-row-head">
+                    <div class="settings-row-text">
+                      <div class="settings-row-label">Pairing link</div>
+                      <div class="settings-row-note">43 characters of token, so the
+                        useful thing to do with it is copy it rather than read it
+                        out.</div>
+                    </div>
+                    <div class="settings-row-side">
+                      <button id="pair-copy" class="linkish" type="button">Copy link</button>
+                    </div>
+                  </div>
+                  <div class="settings-row-wide">
+                    <input id="pair-url" class="settings-text is-long" type="text"
+                           spellcheck="false" aria-label="Pairing link" readonly>
+                  </div>
+                </div>
+              </section>
+            </div>
           </div>
         </div>
       </div>
@@ -1252,39 +1323,6 @@ checks, and merge it once they pass.">LGTM</button>
       <button id="task-dlg-copy" class="btn" type="button">Copy prompt</button>
       <span class="spacer"></span>
       <div id="task-dlg-acts" class="task-dlg-acts"></div>
-    </div>
-  </div>
-</div>
-
-<!-- Connect a phone. The token is 43 characters, so the useful thing this dialog
-     does is let you copy the whole pairing URL rather than read it out. -->
-<div id="pair-scrim" class="scrim" hidden>
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pair-title">
-    <div class="modal-head">
-      <span id="pair-title">Connect a phone</span>
-      <button class="modal-close" data-close-pair type="button" aria-label="Close">✕</button>
-    </div>
-    <div class="modal-body">
-      <p class="note">Paste this into the Android app, which keeps the token and
-        sends it as a header. Opening it in a phone browser also works and signs
-        that browser in for a year; either way the token is not in a URL after
-        that.</p>
-      <div class="field">
-        <label for="pair-url">Pairing link</label>
-        <input id="pair-url" type="text" spellcheck="false" readonly>
-      </div>
-      <div class="field">
-        <label for="pair-host">Reachable at</label>
-        <input id="pair-host" type="text" spellcheck="false"
-               placeholder="https://machine.tailnet.ts.net" list="pair-hosts">
-        <datalist id="pair-hosts"></datalist>
-        <div class="note" id="pair-note"></div>
-      </div>
-    </div>
-    <div class="modal-foot">
-      <span class="spacer"></span>
-      <button class="btn" data-close-pair type="button">Close</button>
-      <button id="pair-copy" class="btn primary" type="button">Copy link</button>
     </div>
   </div>
 </div>

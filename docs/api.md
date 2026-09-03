@@ -96,7 +96,7 @@ name). This is what keeps the token out of URLs and history after the first open
 
 A native client does not need the handshake — it should store the token and send the
 header. **It does still depend on this URL's shape**, because pasting the link the
-desktop's *Connect a phone* dialog builds (`<origin>/pair?token=<token>`) is how the
+desktop's *Settings → Connect a phone* builds (`<origin>/pair?token=<token>`) is how the
 token gets onto a device at all. Parse the token out of the query and never fetch the
 route. The `303` target is the desktop page and means nothing to a native client; it
 was `/m` until the phone web view was removed, so do not key on it.
