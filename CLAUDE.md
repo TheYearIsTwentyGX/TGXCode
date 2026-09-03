@@ -122,8 +122,8 @@ the page cannot creep back by accident.
 
 What did *not* go with it, because none of it was mobile-web machinery:
 `web/sw.js` (the desktop registers it for notification action buttons), the
-`/pair` handshake and the **Connect a phone** dialog (the Android app is pointed at
-a bridge by pasting the link they produce), and every `@media` block in
+`/pair` handshake and the **Connect a phone** group in Settings (the Android app is
+pointed at a bridge by pasting the link they produce), and every `@media` block in
 `web/styles.css` — those are narrow-*desktop*-window and `prefers-reduced-motion`,
 so do not mistake them for phone CSS and delete them.
 

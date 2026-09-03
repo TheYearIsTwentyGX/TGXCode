@@ -628,7 +628,9 @@ in the rail for the same reason — the groups enabled by default are all short.
 
 **Settings** in the bar, or `Ctrl+8`. Every key in `~/.tgxcode/settings.json`
 with a control in front of it — the reading settings above, the live board, the
-spinner, the quota beacon, and the keyboard.
+spinner, the quota beacon, and the keyboard — plus two groups that are not in
+that file: **Notifications**, which is per-browser, and **Connect a phone**,
+which is a task rather than a setting. Both used to be buttons in the top bar.
 
 The file stayed the only interface for a long time and that was defensible while
 there were three keys in it. At twelve, across five blocks, with a precedence
@@ -702,6 +704,25 @@ What the table does *not* cover: arrow keys in a menu, `Enter` in a text field,
 are widget semantics rather than shortcuts, and remapping them means breaking
 keyboard navigation. Nor the Electron shell's `Ctrl+R`, `F12` and zoom, which
 live in the packaged executable rather than the page.
+
+#### The two groups that are not settings-file settings
+
+The last two groups came out of the top bar, which had collected a button each
+for them.
+
+**Notifications** is the bell's old popover, and is per-browser — see
+*Notifications* above for what it decides and why it is not shared.
+
+**Connect a phone** was a dialog. It builds the pairing link: a host, because
+this page is served on 127.0.0.1 and that is the one address useless to a phone,
+and the link itself with a Copy beside it. The note under the host says what is
+still missing for *that* address rather than how tunnelling works in general —
+reaching a `.ts.net` name does nothing until `tailscale serve` points at this
+port, and that is the step people forget. See *Reaching it from a phone*.
+
+Both are written into `web/index.html` rather than built from the settings
+table, because their controls are wired once at load; the panel moves them into
+place so they still take their turn in the order the table lists.
 
 ### Test sessions
 
@@ -852,9 +873,20 @@ draw". For these two it is exactly the dialog it can draw.
 
 ### Notifications
 
-The bell in the top bar decides what reaches you about a session you are not
-watching — a desktop notification, a short chime, or both. Clicking one opens
-that session.
+*Settings* → **Notifications** decides what reaches you about a session you are
+not watching — a desktop notification, a short chime, or both. Clicking one
+opens that session.
+
+These two switches are the one part of the settings page that is **per-browser**,
+kept in its own storage rather than in `~/.tgxcode/settings.json`: whether a
+notification can fire at all is something each browser decides, so a permission
+granted in one says nothing about another, and a shared preference would show
+ticked on one surface while being silently overruled on the next.
+
+There was a bell in the top bar, which was a switch and a status light at once.
+The switch moved here with every other switch. What went with the bell is the
+at-a-glance reading of whether anything would fire — so if the app has gone
+quiet, this is now the place that says why.
 
 Two different things get announced, and they are not held to the same standard.
 
@@ -901,7 +933,7 @@ number that can quietly change meaning.
 Two limits worth knowing. **The page is what listens**, not the Windows shell, so
 a window that is closed hears nothing — the tray and a shell-side subscriber are
 in `docs/plans/02-notifications-and-shell.md`. And Windows **Focus Assist** drops
-notifications without a word; **Try it** in the bell menu is there so you can
+notifications without a word; **Try it**, in that group, is there so you can
 tell that apart from the app being wrong.
 
 In a browser, the first tick of *Show a desktop notification* is what asks

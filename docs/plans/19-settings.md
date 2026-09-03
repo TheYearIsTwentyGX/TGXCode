@@ -236,6 +236,59 @@ pass is the one to keep:
   drawn border. The right-hand column says it in a word, beside the control it
   belongs to.
 
+## What came out of the top bar afterwards
+
+The bar had accumulated a button each for two things that were settings in all
+but location: a bell with a notification popover under it, and a phone icon
+opening a pairing dialog. Both moved into the page.
+
+**The bell was removed rather than kept as a way in.** It was two things at
+once — a switch and a status light, struck through while nothing would fire —
+and only the switch had somewhere better to be. Keeping it as an indicator that
+navigated to Settings was the alternative and was rejected: a button whose only
+job is to point at another screen is a button that has to justify a slot in the
+bar every time you look at it. The cost is real and worth naming: whether
+notifications are on is now only visible by opening Settings, and "the app went
+quiet" is exactly the question a status light answered at a glance. The group's
+note and `Try it` are what is left to answer it.
+
+**Pairing was inlined rather than kept as a dialog behind a settings row.** A
+dialog would have been less work — its focus handling and select-on-open already
+worked — but a modal over a settings page to do a settings-page thing is a step
+that exists only because of where the code was. The one thing lost with the
+modal is the caret: `openPair` focused the host field and selected the built
+URL, which a section of a page you have scrolled to should not do.
+
+**Notifications stayed per-browser.** They are the one part of the page not
+backed by `~/.tgxcode/settings.json`, and the group says so out loud. Moving
+them into a `notify` block was considered: it would give one answer on every
+surface, like `live` and `keyboard`. It was rejected because whether a
+notification *can* fire is a property of the browser — a permission granted in
+Chrome says nothing about the Electron shell — so a shared preference would show
+ticked on one surface and be silently overruled on the next, which is worse than
+two honest answers.
+
+**Both groups are static markup that the renderer moves.** `renderSettings`
+rebuilds `#set-body` from the settings table on every draw, which would strip
+the listeners these two wired at load. So each carries a `node` in the table and
+is appended rather than constructed — detaching and re-appending keeps
+listeners, and the table still decides the order and the contents list. The
+alternative, appending them after the loop, would have pinned them to the end
+and given the contents list a second source of truth.
+
+Three things fell out of the removal that are worth knowing about:
+
+- `@keyframes bell-in` was the shared open of *four* popovers, not just the
+  bell's. It survived the deletion under a new name — and the rename went to
+  `menu-in`, not `pop-in`, because `pop-in` is already taken further down by
+  `.turn-pop` and moves on a different axis. Renaming into it would have quietly
+  changed the quota panel, the recent-directories menu and the slash menu.
+- `showQuota` and `showNewMenu` each closed the bell to keep two popovers from
+  sitting open together. There were three; now there are two, and they close
+  each other — which the new-menu branch was not previously doing.
+- The Escape ladder lost two rows and `openFind`'s "not while a dialog is up"
+  list lost one.
+
 ## Tests
 
 `test/prefs.test.js`, twenty-five checks and no bridge needed. It sets `HOME`

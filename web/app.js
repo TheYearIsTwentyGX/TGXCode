@@ -456,7 +456,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'new-attach', 'new-attach-input', 'new-attach-btn', 'new-attach-row',
     'queue', 'queue-list', 'queue-count', 'queue-clear',
     'model', 'perm', 'btn-new', 'btn-new-menu', 'new-menu', 'db-status', 'db-label', 'toasts',
-    'btn-bell', 'bell-menu', 'opt-desktop', 'opt-sound', 'bell-note', 'bell-try',
+    'opt-desktop', 'opt-sound', 'notify-note', 'notify-try',
     'quota-wrap', 'quota-pill', 'quota-pill-body', 'quota-menu', 'quota-windows',
     'quota-events', 'quota-note', 'quota-refresh',
     'btn-pin', 'btn-changes', 'btn-folder', 'btn-term', 'btn-archive', 'btn-delete',
@@ -484,6 +484,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'btn-sched', 'sched-badge', 'sched', 'sched-sub', 'sched-body', 'sched-new',
     'btn-settings', 'settings', 'set-scope', 'set-project', 'set-project-wrap',
     'set-file', 'set-problems', 'set-body', 'set-shell', 'set-toc', 'composer-hint',
+    'set-g-notify', 'set-g-pair',
     'new-cron', 'new-cron-row', 'new-cron-note', 'new-gate-ref', 'new-gate-row',
     'new-gate-kind', 'new-gate-note', 'new-gate-ref-row', 'new-pr-row',
     'new-pr-drafts', 'new-pr-post', 'new-sched-save',
@@ -499,8 +500,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'new-tab-recent', 'new-tab-browse', 'new-browse', 'new-roots', 'new-crumbs',
     'new-tree', 'new-mkdir', 'new-mkdir-name', 'new-mkdir-go', 'new-browse-note',
     'del-scrim', 'del-what', 'del-meta', 'del-go',
-    'btn-pair', 'pair-scrim', 'pair-url', 'pair-host', 'pair-hosts', 'pair-note',
-    'pair-copy',
+    'pair-url', 'pair-host', 'pair-hosts', 'pair-note', 'pair-copy',
     'btn-restart', 'restart-scrim', 'restart-lede', 'restart-problems',
     'restart-fix', 'restart-go']) {
     dom[id.replace(/-(\w)/g, (_, c) => c.toUpperCase())] = $(id);
@@ -7796,6 +7796,20 @@ const SETTINGS = [
                 note: 'Ctrl+Enter sends either way.' },
         ],
     },
+    // The last two are written out in web/index.html rather than built from
+    // rows, because neither is backed by the settings file — one is per-browser
+    // storage and the other is a task rather than a setting. `node` names the
+    // element renderSettings moves into place, which is what lets them take
+    // their turn in this order instead of being stuck wherever the markup put
+    // them.
+    {
+        title: 'Notifications', section: 'notify', node: 'setGNotify',
+        after: () => paintNotifyRows(),
+    },
+    {
+        title: 'Connect a phone', section: 'pair', node: 'setGPair',
+        after: () => refreshPairUrl(),
+    },
 ];
 
 /** Human names for the three scopes, for the sentences below. */
@@ -7876,6 +7890,11 @@ async function loadSettings() {
         // tooltip on each one lists what is actually in it.
         try { s.spinner = await get(`/api/spinner/groups?verbs=1${dir ? `&cwd=${encodeURIComponent(dir)}` : ''}`); }
         catch { s.spinner = null; }
+        // What this machine is reachable as, for the pairing group. Not awaited
+        // into the render: it shells out to `tailscale.exe` on the Windows host,
+        // which is slow enough that holding the whole panel for it would be
+        // felt, and the group draws fine from the remembered host meanwhile.
+        loadPairing();
     } catch (err) {
         s.error = err.message;
     }
@@ -7992,6 +8011,14 @@ function renderSettings() {
     }
 
     for (const group of SETTINGS) {
+        // A group whose markup already exists is moved rather than rebuilt: its
+        // controls were wired at load and would lose their listeners to a
+        // replaceChildren. Detaching and re-appending keeps them.
+        if (group.node) {
+            dom.setBody.append(dom[group.node]);
+            if (group.after) group.after();
+            continue;
+        }
         const locked = group.userOnly && s.scope !== 'user';
         const card = el('section', {
             class: 'settings-group', id: `set-g-${group.section}`,
@@ -8792,7 +8819,20 @@ function openFromHash() {
     return true;
 }
 
-// ── the bell ─────────────────────────────────────────────────────────────
+// ── notification settings ────────────────────────────────────────────────
+//
+// These were a popover under a bell in the bar. The bell is gone: it was two
+// things at once — a switch and a status light — and the switch belongs with
+// every other switch. What went with it is the at-a-glance reading of whether
+// anything would fire at all, which is now only visible here; the note below
+// still says what the rules are, and `Try it` still answers "did that work".
+//
+// Per-browser, and deliberately not moved into `~/.tgxcode/settings.json` with
+// the rest of the settings page. Whether a notification *can* fire is something
+// each browser decides — a permission granted in Chrome says nothing about the
+// Electron shell — so a shared preference would show ticked on one surface and
+// be silently overruled on another. The group says "this browser only" out loud
+// rather than leaving that to be discovered.
 
 const NOTE = {
     unsupported: 'This browser has no desktop notifications, so the sound is all '
@@ -8804,13 +8844,9 @@ const NOTE = {
         + '30 seconds. Never for the session already in front of you.',
 };
 
-function renderBell() {
+function paintNotifyRows() {
     const perm = notifyPermission();
     const desktopOn = notify.desktop && perm === 'granted';
-    // Struck through only when nothing at all would fire.
-    dom.btnBell.dataset.on = String(desktopOn || notify.sound);
-    dom.btnBell.title = desktopOn || notify.sound
-        ? 'Notifications on' : 'Notifications off';
 
     // The checkbox shows what will actually happen, not what was asked for: a
     // ticked box that the browser is quietly overruling is worse than an
@@ -8820,23 +8856,9 @@ function renderBell() {
     dom.optSound.checked = notify.sound;
 
     const stuck = perm === 'denied' ? NOTE.denied : perm === 'unsupported' ? NOTE.unsupported : '';
-    dom.bellNote.textContent = stuck || NOTE.rules;
-    dom.bellNote.className = 'bell-note' + (stuck ? ' warn' : '');
+    dom.notifyNote.textContent = stuck || NOTE.rules;
+    dom.notifyNote.className = 'settings-row-note' + (stuck ? ' is-warn' : '');
 }
-
-function showBell(on) {
-    dom.bellMenu.hidden = !on;
-    dom.btnBell.setAttribute('aria-expanded', String(on));
-    // Both triggers stop the click from reaching the document, so neither
-    // popover's outside-click listener sees the other one being opened. Without
-    // this the two sit on screen together.
-    if (on) { renderBell(); showNewMenu(false); showQuota(false); }
-}
-
-dom.btnBell.addEventListener('click', (e) => {
-    e.stopPropagation();
-    showBell(dom.bellMenu.hidden);
-});
 
 dom.optDesktop.addEventListener('change', async () => {
     notify.desktop = dom.optDesktop.checked;
@@ -8847,7 +8869,7 @@ dom.optDesktop.addEventListener('change', async () => {
     if (notify.desktop && notifyPermission() === 'default') {
         try { await Notification.requestPermission(); } catch { /* renders as denied */ }
     }
-    renderBell();
+    paintNotifyRows();
 });
 
 dom.optSound.addEventListener('change', () => {
@@ -8856,12 +8878,12 @@ dom.optSound.addEventListener('change', () => {
     // This click is a gesture, which is what an AudioContext has been waiting
     // for if the page has not been touched yet.
     if (notify.sound) { wakeAudio(); chime('done'); }
-    renderBell();
+    paintNotifyRows();
 });
 
 // Worth having: Focus Assist and Do Not Disturb drop notifications without a
 // word, so "did that work" is otherwise unanswerable until a turn ends.
-dom.bellTry.addEventListener('click', () => {
+dom.notifyTry.addEventListener('click', () => {
     announce('Claude Sessions', 'This is what a finished turn will look like.', 'done', null);
     if (!notify.sound && (!notify.desktop || notifyPermission() !== 'granted')) {
         toast('Both switches are off, so nothing would fire.', 'warn');
@@ -8869,7 +8891,6 @@ dom.bellTry.addEventListener('click', () => {
 });
 
 document.addEventListener('click', (e) => {
-    if (!dom.bellMenu.hidden && !e.target.closest('.bell-wrap')) showBell(false);
 });
 
 // ── quota ────────────────────────────────────────────────────────────────
@@ -9252,10 +9273,10 @@ async function refreshQuotaNow() {
 function showQuota(on) {
     dom.quotaMenu.hidden = !on;
     dom.quotaPill.setAttribute('aria-expanded', String(on));
-    // Same reason the bell does this: the two popovers must not sit open
-    // together, and each one's outside-click listener is stopped by the other's
-    // trigger.
-    if (on) { renderQuotaPanel(); showBell(false); showNewMenu(false); }
+    // The two popovers must not sit open together, and each one's outside-click
+    // listener is stopped by the other's trigger. There were three of these
+    // until the bell's went into the settings page.
+    if (on) { renderQuotaPanel(); showNewMenu(false); }
 }
 
 async function loadQuota() {
@@ -10534,7 +10555,7 @@ function openFind() {
     // an invisible bar that had claimed Escape would take it from the panel.
     if (dom.conv.hidden) return;
     if (!dom.newScrim.hidden || !dom.delScrim.hidden
-        || !dom.taskScrim.hidden || !dom.pairScrim.hidden) return;
+        || !dom.taskScrim.hidden) return;
 
     f.open = true;
     dom.find.hidden = false;
@@ -12285,7 +12306,7 @@ let newMenuSeq = 0;
 function showNewMenu(on, { focusFirst = false } = {}) {
     dom.newMenu.hidden = !on;
     dom.btnNewMenu.setAttribute('aria-expanded', String(on));
-    if (on) { showBell(false); fillNewMenu({ focusFirst }); }
+    if (on) { showQuota(false); fillNewMenu({ focusFirst }); }
 }
 
 /**
@@ -13499,9 +13520,9 @@ const live = makeComposer({
     ctx: () => (state.current
         ? { cwd: state.current.cwd, sessionId: state.current.sessionId }
         : null),
-    // Both are main-window furniture that would otherwise sit over the popover.
-    // A composer inside a modal has neither, and passes nothing.
-    closeOthers: () => { showBell(false); showNewMenu(false); },
+    // Main-window furniture that would otherwise sit over the popover. A
+    // composer inside a modal has none of it, and passes nothing.
+    closeOthers: () => { showQuota(false); showNewMenu(false); },
 
     // Attachments. The strip is above the input row and the drop zone is the whole
     // composer, so a file can be let go anywhere near the box rather than exactly on
@@ -14403,6 +14424,10 @@ dom.delScrim.addEventListener('click', (e) => { if (e.target === dom.delScrim) c
 
 // ── connect a phone ──────────────────────────────────────────────────────
 //
+// A group in the settings page, and a dialog off a bar button before that. The
+// move is why `loadPairing` exists where `openPair` used to: nothing opens now,
+// so the fetch hangs off the panel loading instead.
+//
 // The bridge hands this page the token in a <meta> tag when the page was fetched
 // over loopback (bridge/auth.js injectToken), which is the only reason a link can
 // be built here at all — the cookie that actually authenticates is HttpOnly and
@@ -14481,21 +14506,26 @@ function pairNote(base) {
         + 'is confidential in transit — anything on the path can read the token.';
 }
 
-async function openPair() {
-    dom.pairScrim.hidden = false;
-
-    // Only ever real values here. An earlier version offered
-    // `https://<machine>.<tailnet>.ts.net` as a datalist entry meaning "type your
-    // name over this", and picking it from the dropdown produced a URL with
-    // literal angle brackets in it. A suggestion you must correct is worse than
-    // none — so the bridge is asked what this machine is actually called, and the
-    // list is empty when it cannot say.
+/**
+ * What this machine is reachable as, asked once per settings visit.
+ *
+ * Only ever real values in the list. An earlier version offered
+ * `https://<machine>.<tailnet>.ts.net` as a datalist entry meaning "type your
+ * name over this", and picking it from the dropdown produced a URL with literal
+ * angle brackets in it. A suggestion you must correct is worse than none — so
+ * the bridge is asked what this machine is actually called, and the list is
+ * empty when it cannot say.
+ *
+ * Called from loadSettings rather than on a dialog opening, which is the only
+ * thing that changed when this stopped being a dialog. Nothing focuses or
+ * selects a field any more: a section of a page you scrolled to is not asking
+ * for the caret the way a modal that just appeared was.
+ */
+async function loadPairing() {
     if (!dom.pairHost.value) {
         dom.pairHost.value = localStorage.getItem(PAIR_HOST_KEY) || '';
     }
     refreshPairUrl();
-    dom.pairHost.focus();
-
     try {
         const info = await get('/api/pairing');
         dom.pairHosts.replaceChildren(
@@ -14507,13 +14537,9 @@ async function openPair() {
         }
         state.pairInfo = info;
         refreshPairUrl();
-        if (dom.pairHost.value) { dom.pairUrl.focus(); dom.pairUrl.select(); }
     } catch { /* leave the field to be filled in by hand */ }
 }
 
-function closePair() { dom.pairScrim.hidden = true; }
-
-dom.btnPair.addEventListener('click', openPair);
 dom.pairHost.addEventListener('input', refreshPairUrl);
 dom.pairCopy.addEventListener('click', async () => {
     if (!dom.pairUrl.value) { dom.pairHost.focus(); return; }
@@ -14530,11 +14556,6 @@ dom.pairCopy.addEventListener('click', async () => {
         toast('Could not copy — the link is selected, press Ctrl+C');
     }
 });
-for (const n of dom.pairScrim.querySelectorAll('[data-close-pair]')) {
-    n.addEventListener('click', closePair);
-}
-dom.pairScrim.addEventListener('click', (e) => { if (e.target === dom.pairScrim) closePair(); });
-
 for (const n of dom.restartScrim.querySelectorAll('[data-close-restart]')) {
     n.addEventListener('click', closeRestart);
 }
@@ -14632,11 +14653,9 @@ dom.lockAnyway.addEventListener('click', () => {
 
 document.addEventListener('keydown', (e) => {
     // The confirm sits over the new-session dialog, so it answers Escape first.
-    if (e.key === 'Escape' && !dom.bellMenu.hidden) { showBell(false); dom.btnBell.focus(); return; }
     if (e.key === 'Escape' && !dom.quotaMenu.hidden) { showQuota(false); dom.quotaPill.focus(); return; }
     if (e.key === 'Escape' && !dom.newMenu.hidden) { showNewMenu(false); dom.btnNewMenu.focus(); return; }
     if (e.key === 'Escape' && !dom.delScrim.hidden) { closeDelete(); return; }
-    if (e.key === 'Escape' && !dom.pairScrim.hidden) { closePair(); dom.btnPair.focus(); return; }
     if (e.key === 'Escape' && !dom.restartScrim.hidden) { closeRestart(); dom.btnRestart.focus(); return; }
     if (e.key === 'Escape' && !dom.taskScrim.hidden) { closeTaskDialog(); return; }
     if (e.key === 'Escape' && !dom.newScrim.hidden) { closeNew(); return; }
@@ -14825,7 +14844,6 @@ function restoreView() {
 connect();
 loadSessions();
 markInstance();
-renderBell();
 registerWorker();
 paintDockButton();      // the remembered arrangement, before anything is drawn
 watchPaneInsets();      // keep the composer over the transcript as columns come and go

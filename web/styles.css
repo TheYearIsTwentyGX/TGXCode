@@ -174,13 +174,6 @@ a:hover { text-decoration: underline; }
    spends a word of the bar on itself forever. */
 .bar-btn.icon-only { padding: 0; width: 34px; justify-content: center; gap: 0; }
 
-/* The pairing link is the whole point of that dialog, so it gets the monospace
-   treatment and does not wrap into something unreadable. */
-#pair-url {
-    font-family: var(--mono);
-    font-size: 12px;
-    text-overflow: ellipsis;
-}
 
 /* A count, not an alert: unfinished work is the normal state of this machine. */
 .bar-badge {
@@ -280,6 +273,21 @@ a:hover { text-decoration: underline; }
 }
 .q-reset svg { flex: none; }
 
+/* The shared open of every popover in this window — the quota panel, the
+   recent-directories menu and the slash/mention menus. It was `bell-in` while
+   the notification bell was the first thing to use it; the bell has since moved
+   into the settings page and the name was the only thing left of it.
+
+   Not `pop-in`, which is already taken further down by `.turn-pop` and moves on
+   a different axis — renaming into that would have quietly changed all three of
+   these. */
+@keyframes menu-in {
+    from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .quota-menu, .new-menu, .slash-menu { animation: none; }
+}
+
 .quota-menu {
     position: absolute;
     top: calc(100% + 8px);
@@ -290,7 +298,7 @@ a:hover { text-decoration: underline; }
     background: var(--s3);
     border-radius: var(--r);
     box-shadow: 0 10px 30px #000a;
-    animation: bell-in var(--t-fast) var(--ease);
+    animation: menu-in var(--t-fast) var(--ease);
     transform-origin: top right;
 }
 .quota-menu[hidden] { display: none; }
@@ -383,91 +391,6 @@ a:hover { text-decoration: underline; }
 
 @media (prefers-reduced-motion: reduce) { .quota-menu { animation: none; } }
 
-/* ── notifications ───────────────────────────────────────────────────── */
-
-.bell-wrap { position: relative; }
-
-.bell {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 34px;
-    height: 34px;
-    color: var(--text-4);
-    background: var(--s2);
-    border-radius: 50%;
-    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
-}
-.bell:hover { background: var(--s3); color: var(--text-2); }
-.bell[data-on="true"] { color: var(--text-2); }
-.bell[data-on="true"]:hover { color: var(--text); }
-/* The bell is struck through only while nothing at all would fire — the state
-   worth spotting from across the room is the silent one. */
-.bell .slash { display: none; }
-.bell[data-on="false"] .slash { display: inline; }
-.bell[aria-expanded="true"] { background: var(--s3); color: var(--text); }
-
-.bell-menu {
-    position: absolute;
-    top: calc(100% + 8px);
-    right: 0;
-    z-index: 60;
-    width: 286px;
-    padding: 13px 15px 12px;
-    background: var(--s3);
-    border-radius: var(--r);
-    box-shadow: 0 10px 30px #000a;
-    animation: bell-in var(--t-fast) var(--ease);
-    transform-origin: top right;
-}
-.bell-menu[hidden] { display: none; }
-
-@keyframes bell-in {
-    from { opacity: 0; transform: translateY(-5px); }
-    to { opacity: 1; transform: none; }
-}
-
-.bell-head {
-    margin-bottom: 10px;
-    font: 500 11px/1 var(--sans);
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: var(--text-4);
-}
-
-.bell-menu .check {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 5px 0;
-    font: 400 13px/1.4 var(--sans);
-    color: var(--text-2);
-    cursor: pointer;
-}
-.bell-menu .check input { accent-color: var(--blue); width: 16px; height: 16px; flex: none; }
-.bell-menu .check:hover { color: var(--text); }
-.bell-menu .check:has(input:disabled) { color: var(--text-4); cursor: default; }
-
-.bell-note {
-    margin-top: 9px;
-    font: 400 11.5px/1.55 var(--sans);
-    color: var(--text-4);
-}
-.bell-note:empty { display: none; }
-.bell-note.warn { color: var(--yellow); }
-
-.bell-try {
-    margin-top: 11px;
-    padding: 5px 12px;
-    font: 500 12px/1 var(--sans);
-    color: var(--text-3);
-    background: var(--s2);
-    border-radius: var(--pill);
-    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
-}
-.bell-try:hover { background: var(--bg); color: var(--text); }
-
-@media (prefers-reduced-motion: reduce) { .bell-menu { animation: none; } }
 
 /* ── rail ────────────────────────────────────────────────────────────── */
 
@@ -541,7 +464,7 @@ a:hover { text-decoration: underline; }
     background: var(--s3);
     border-radius: var(--r);
     box-shadow: 0 10px 30px #000a;
-    animation: bell-in var(--t-fast) var(--ease);
+    animation: menu-in var(--t-fast) var(--ease);
     transform-origin: top left;
 }
 .new-menu[hidden] { display: none; }
@@ -3497,7 +3420,7 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     background: var(--s3);
     border-radius: var(--r);
     box-shadow: 0 10px 30px #000a;
-    animation: bell-in var(--t-fast) var(--ease);
+    animation: menu-in var(--t-fast) var(--ease);
     transform-origin: bottom left;
 }
 .slash-menu[hidden] { display: none; }
@@ -5712,7 +5635,7 @@ body.term-resizing { user-select: none; cursor: row-resize; }
    gives width back when it is not, so the aside stays put instead of vanishing
    at some particular window size. Below the narrow breakpoint the aside becomes
    a strip above and `--set-aside` goes to zero, which hands the width back. */
-.settings-shell { flex: 1; min-height: 0; overflow-y: auto; --set-aside: 152px; }
+.settings-shell { flex: 1; min-height: 0; overflow-y: auto; --set-aside: 172px; }
 .settings-col {
     width: min(880px, calc(100% - 2 * var(--set-aside)));
     margin: 0 auto;
@@ -5739,6 +5662,8 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     margin-right: 20px;
 }
 .settings-toc-list { position: sticky; top: 8px; display: flex; flex-direction: column; gap: 1px; }
+/* Wide enough for the longest entry on one line — "Connect a phone" wrapping
+   into two was the whole reason `--set-aside` is 172px rather than 152px. */
 .settings-toc-link {
     position: relative;
     background: none;
@@ -5955,6 +5880,14 @@ body.term-resizing { user-select: none; cursor: row-resize; }
    characters, and the one field here is a filesystem path — so it came out
    clipped at exactly the point where reading it matters. */
 .settings-text { width: 340px; max-width: 100%; font-family: var(--mono); font-size: 12px; }
+/* The pairing link is 43 characters of token on top of a hostname, and the
+   remembered host is a URL — both belong in a field the width of the row rather
+   than one you scroll sideways through. */
+.settings-text.is-long { width: 100%; }
+
+/* The notification rules, and the sentence that replaces them when the browser
+   is refusing. Same slot, so the group does not change height. */
+.settings-row-note.is-warn { color: var(--yellow); }
 .settings-select { max-width: 320px; cursor: pointer; }
 .settings-num:disabled, .settings-text:disabled, .settings-select:disabled { color: var(--text-4); cursor: default; }
 
