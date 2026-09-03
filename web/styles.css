@@ -919,6 +919,22 @@ a:hover { text-decoration: underline; }
     flex-direction: column;
     flex: 1;
     min-height: 0;
+
+    /* How much of this box the side columns are using, so the composer and the
+       ask dock can sit over the transcript rather than over the whole pane.
+       Written by `syncPaneInsets` in app.js, which sums each column's own
+       `--pane-w`; these are the values for a conversation with none of them
+       open, so the layout is right before that has run and right if it never
+       does.
+
+       The transcript, the ask dock and the composer are all a 1000px box centred
+       in their container, and until this existed they had *different*
+       containers: the log is centred in `#scroll`, which the side panels squeeze,
+       while the two below it were centred in the whole of `.conv-main`. Opening
+       the task list therefore moved the transcript 300px and left the composer
+       where it was, which read as the composer being crooked. */
+    --pane-left: 0px;
+    --pane-right: var(--turns);
 }
 
 .conv-title-row {
@@ -1388,9 +1404,16 @@ a:hover { text-decoration: underline; }
    Collapses to a strip so a session with six offers is not permanently narrower
    than one with none. */
 
+/* `--pane-w` is the width, and `width` only reads it, so a state that changes
+   how wide this column is has one number rather than two that can disagree.
+   `syncPaneInsets` in app.js sums it across the row to inset the composer.
+   Reading the variable rather than measuring the box is what makes that exact
+   during the transition below: a custom property is not animated, so it is the
+   width this column is heading for while `width` is still on its way there. */
 .tasks {
+    --pane-w: 300px;
     flex: none;
-    width: 300px;
+    width: var(--pane-w);
     display: flex;
     flex-direction: column;
     min-height: 0;
@@ -1399,13 +1422,42 @@ a:hover { text-decoration: underline; }
        reflow twice as the text inside re-wraps mid-transition. */
     transition: width var(--t-fast) var(--ease);
 }
-.tasks.shut { width: 34px; }
+.tasks.shut { --pane-w: 34px; }
+
+/* On its way in or out. `display` cannot be animated, so a column that simply
+   stopped being `display: none` would appear at its full width and shove the
+   transcript across in one frame — which is what switching between two
+   conversations used to look like, four times over. This is the same column at
+   zero width, still in the layout, so the width transition above has something
+   to move: `slidePane` in app.js adds the class to send it out and takes it off
+   to bring it back, and only sets `hidden` once it has finished leaving.
+
+   Selected through the row it sits in, which is where these columns always are:
+   `.tasks:not(.shut)` in the media query below is as specific as a bare
+   `.tasks.gone` and comes later, so it would hold a column open at 240px while
+   it tried to leave. One more element in the selector settles it without an
+   `!important`.
+
+   `overflow` and `min-width` are both load-bearing rather than tidiness. A flex
+   item's automatic minimum size floors it at its content's width, so `width: 0`
+   alone would leave a column as wide as its widest task; `overflow: hidden`
+   makes that minimum zero, and `min-width` says so outright. The border goes too,
+   or a column that has left keeps a 1px line down the edge of the transcript. */
+.conv-body > .tasks.gone {
+    --pane-w: 0px;
+    min-width: 0;
+    border-left-width: 0;
+    border-right-width: 0;
+    overflow: hidden;
+}
+/* Once it has left: out of the tab order and out of the a11y tree, rather than
+   a zero-width box that is still both. */
 .tasks[hidden] { display: none; }
 @media (prefers-reduced-motion: reduce) { .tasks { transition: none; } }
 
 /* Narrow windows have no room for a third column, and the transcript is the
    one that matters. The panel is still reachable — it becomes the strip. */
-@media (max-width: 1100px) { .tasks:not(.shut) { width: 240px; } }
+@media (max-width: 1100px) { .tasks:not(.shut) { --pane-w: 240px; } }
 @media (max-width: 900px) { .tasks { display: none; } }
 
 .tasks-open { display: flex; flex-direction: column; min-height: 0; flex: 1; }
@@ -1856,7 +1908,13 @@ a:hover { text-decoration: underline; }
     flex-direction: column;
     align-items: center;
     gap: 2px;
-    width: var(--turns);
+    /* A column in the row like the panels are, so it declares its width the same
+       way and the composer is inset by it for the same reason. It used to be the
+       one column the composer knew about, by hardcoding `--turns` into its
+       padding — which then stayed subtracted on a session with no turns at all,
+       where this rail is not there. */
+    --pane-w: var(--turns);
+    width: var(--pane-w);
     padding: 8px 0 26px;
     overflow-y: auto;
     overscroll-behavior: contain;
@@ -1864,6 +1922,16 @@ a:hover { text-decoration: underline; }
 }
 .turns::-webkit-scrollbar { display: none; }
 .turns:empty { display: none; }
+/* Holding its place while a conversation is being drawn.
+ *
+ * `beginOpen` empties the rail and the new transcript refills it, so for the
+ * few frames in between `:empty` above took the column out — and the composer,
+ * which counts this rail like any other column, stepped 30px sideways and back
+ * in the middle of whatever else the switch was animating. A rail is genuinely
+ * absent only for a conversation with no turns at all, which is a fact about
+ * the session rather than about how far its render has got; `renderTurns` drops
+ * the class once it knows which it is. */
+.turns.holding:empty { display: flex; }
 /* display:flex above would otherwise beat the hidden attribute. */
 .turns[hidden] { display: none; }
 
@@ -2323,18 +2391,21 @@ a:hover { text-decoration: underline; }
  * the pointer is over them is a wall you have to sweep. */
 
 /* Aligned with the composer below it — same margins, same 1000px inner — so
-   the two read as one column rather than two stacked boxes. */
+   the two read as one column rather than two stacked boxes. Which now means the
+   same pane insets too: all three of the log, this and the composer are one
+   column down the middle of the pane. */
 .ask-dock {
     flex: none;
-    margin: 0 calc(28px + var(--turns)) 6px 28px;
+    margin: 0 calc(28px + var(--pane-right)) 6px calc(28px + var(--pane-left));
     background: var(--s2);
     border: 1px solid var(--yellow);
     border-radius: var(--r);
     animation: perm-in var(--t-med) var(--ease);
+    transition: margin var(--t-fast) var(--ease);
 }
 .ask-dock[hidden] { display: none; }
 .ask-dock[data-pending] { opacity: 0.55; }
-@media (prefers-reduced-motion: reduce) { .ask-dock { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .ask-dock { animation: none; transition: none; } }
 
 .ask-dock-inner {
     max-width: 1000px;
@@ -2962,7 +3033,21 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 
 /* The extra right padding is the turn rail's width: it keeps the composer on
    the same centre line as the transcript, which the rail narrows. */
-.composer { flex: none; padding: 4px calc(28px + var(--turns)) 18px 28px; }
+/* Inset by whatever the side columns are using, so the 1000px inner below is
+   centred over the transcript and not over the whole pane — see `--pane-left`
+   on .conv-main. */
+/* The same duration and easing the columns use, started by the same click, so
+   the composer and the transcript travel together instead of one arriving first.
+   `syncPaneInsets` writes the insets once, to where the column is *going* —
+   driving them frame by frame from a ResizeObserver instead left the composer
+   one frame behind for the length of the animation, which is a rubber-band on
+   exactly the interaction this is meant to fix. */
+.composer {
+    flex: none;
+    padding: 4px calc(28px + var(--pane-right)) 18px calc(28px + var(--pane-left));
+    transition: padding var(--t-fast) var(--ease);
+}
+@media (prefers-reduced-motion: reduce) { .composer { transition: none; } }
 .composer-inner { max-width: 1000px; margin: 0 auto; }
 
 .status-line {

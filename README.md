@@ -1032,6 +1032,26 @@ It arrives on the same follow the transcript does, pushed when the list actually
 moves, because a task list moves *during* a turn and watching step 3 of 7 become
 step 4 is the whole point. Nothing polls it.
 
+### The columns slide, and hold their place
+
+All three columns beside the transcript — this one, **Suggested** and **Changed**
+— are the same width, and none of them jumps. A column arriving or leaving slides,
+and the transcript and the composer slide with it rather than being shoved across
+in a single frame.
+
+The part that matters more is what *doesn't* move. Going from one conversation to
+another used to tear both asides down and rebuild them, so two conversations that
+both kept a task list still made the whole pane jump out and back — four times
+over, once the turn rail was counted. A column now holds its place while the new
+conversation's answer is on the wire, showing an empty box rather than the last
+conversation's contents, and only leaves if the new conversation turns out not to
+need it. Switching between two conversations with the same columns open moves
+nothing at all.
+
+Under `prefers-reduced-motion` none of it animates: the slide duration is read
+from the stylesheet, so it reports zero and the columns appear and disappear the
+way they used to.
+
 **Claude Code stopped offering the task tools by default.** Opus 4.8, Sonnet 5 and
 newer models are not given `TaskCreate`/`TaskUpdate` or `TodoWrite` unless
 `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` is set — so this panel, and the progress bars on

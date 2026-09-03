@@ -301,6 +301,9 @@ const state = {
     // of a session, like the terminal pane's height — you either want these in
     // view while you work or you do not.
     tasksShut: localStorage.getItem('tasksShut') === '1',
+    // Whether an already-open aside is holding its place while the new
+    // conversation's suggestions are being fetched. See renderChecklist.
+    tasksPending: false,
     // The task the big dialog is showing, if it is open. Held by id rather than
     // by object so a decision taken inside it can find its way back to the same
     // task after the panel behind has been rebuilt.
@@ -344,6 +347,9 @@ const state = {
         on: localStorage.getItem('checklistOn') !== '0',
         shut: localStorage.getItem('checklistShut') === '1',
         sessionId: null, data: null,
+        // Whether an already-open column is holding its place while the new
+        // conversation's list is still on the wire. See resetChecklist.
+        pending: false,
     },
     // The board of unfinished work. `at` is when the bridge last answered, so
     // opening it again does not re-run git over every worktree on the machine.
@@ -461,6 +467,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'changes-refresh', 'changes-collapse', 'changes-body',
     'checklist', 'checklist-strip', 'checklist-strip-count', 'checklist-open',
     'checklist-count', 'checklist-collapse', 'checklist-body', 'btn-checklist',
+    'conv-main', 'conv-body',
     'term-pane', 'term-grip', 'term-dir', 'term-moved', 'term-body', 'term-restart', 'term-close',
     'term-tabs', 'term-stop', 'cmds',
     'tasks', 'tasks-strip', 'tasks-strip-count', 'tasks-open', 'tasks-count',
@@ -1496,7 +1503,10 @@ function beginOpen(summary, { keepDash = false } = {}) {
     state.tasks.clear();        // and so do the offers themselves
     state.taskOpen.clear();
     closeTaskDialog();          // it was showing a task belonging to the old one
-    renderTasks();              // empties the aside, and hides it
+    // Empties the aside, but keeps its place in the row until loadTasks answers
+    // for the new conversation — see renderChecklist for why.
+    state.tasksPending = paneUp(dom.tasks);
+    renderTasks();
     resetChanges();             // and the files listed were the old session's
     renderChanges();            // which leaves the drawer saying it is looking
     resetChecklist();           // as was the task list — the push will refill it
@@ -1522,6 +1532,12 @@ function beginOpen(summary, { keepDash = false } = {}) {
 
     renderHeader();
     hideTurnPop();
+    // Emptied, but keeping its 30px until renderTurns says whether the new
+    // conversation has a rail — otherwise the column blinks out and back while
+    // the switch is animating, and takes the composer 30px with it both ways.
+    // Only if there is a rail to hold, so a conversation that never had one does
+    // not gain a reserved strip.
+    if (paneUp(dom.turns)) dom.turns.classList.add('holding');
     dom.turns.replaceChildren();
     dom.log.replaceChildren(skeleton());
     dom.scroll.scrollTop = 0;
@@ -2228,8 +2244,18 @@ function renderTasks() {
     // is merged in beside them.
     const tasks = [...state.tasks.values()]
         .sort((a, b) => (Date.parse(a.ts) || 0) - (Date.parse(b.ts) || 0));
-    dom.tasks.hidden = !tasks.length;
-    if (!tasks.length) return;
+    // `tasksPending` holds an already-open aside in place while the new
+    // conversation's suggestions are still being fetched, for the reason
+    // renderChecklist gives: leaving the row and coming back a moment later is
+    // what switching between two conversations used to look like.
+    const present = tasks.length > 0 || state.tasksPending;
+    slidePane(dom.tasks, present);
+    if (!tasks.length) {
+        dom.tasksList.replaceChildren();
+        dom.tasksCount.textContent = present ? '…' : '';
+        dom.tasksStripCount.textContent = present ? '…' : '';
+        return;
+    }
 
     // Only the ones still on offer are counted. A count that includes things you
     // have already dealt with is a number that never goes down, which is the
@@ -2500,6 +2526,7 @@ function collapseChanges(shut, { render = true } = {}) {
     localStorage.setItem('changesShut', shut ? '1' : '0');
     if (!render) return;
     renderChanges();
+    syncPaneInsets();   // this frame, so the composer starts moving with it
     // Focus follows whatever replaced the thing that was clicked.
     (shut ? dom.changesStrip : dom.changesCollapse).focus();
     if (!shut) loadChangesIfStale();
@@ -2546,8 +2573,12 @@ async function loadChanges({ refresh = false } = {}) {
 }
 
 function renderChanges() {
-    dom.changes.hidden = !state.changes.on || !state.current;
-    if (dom.changes.hidden) return;
+    // No pending hold here: whether this drawer is up is a window property, so
+    // it does not change when the conversation does and there is nothing to wait
+    // for. It slides for the same reason the other two do — the header button.
+    const present = !!state.changes.on && !!state.current;
+    slidePane(dom.changes, present);
+    if (!present) return;
 
     const d = state.changes.data;
     const edits = (d && d.edits) || [];
@@ -2722,6 +2753,189 @@ function plusMinus(f) {
 // Ids and classes say `checklist` while the panel says "Tasks", because `tasks`
 // in this file already means suggested follow-ups.
 
+/** The last insets written, so an unchanged recompute stays a no-op. */
+let paneInsets = ['', ''];
+
+/**
+ * Keep the composer and the ask dock over the transcript, not over the pane.
+ *
+ * The log, the ask dock and the composer are each a 1000px box centred in its
+ * container, and their containers were not the same one: the log is centred in
+ * `#scroll`, which every side column squeezes, while the two below it were
+ * centred in the whole of `.conv-main`. So opening the task list moved the
+ * transcript and left the composer where it was, and the composer read as
+ * crooked. Now both are inset by whatever the columns are actually using, and
+ * the three are one column down the middle.
+ *
+ * Each column's width is read from its own `--pane-w` rather than measured or
+ * copied. Measuring gives whatever the box is *partway through* its width
+ * transition, and the composer's padding cannot be animated from a moving
+ * target without trailing a frame behind it; a custom property is not animated,
+ * so `--pane-w` is where the column is heading and both can be given the same
+ * transition and set off together. Copying the numbers into this file instead
+ * would put 300/240/34/0 and the two media queries in a second place.
+ *
+ * Everything in the row that is not a transcript pane counts, `#turns`
+ * included, and left or right is decided by which side of the pane it sits on.
+ * That is what makes a *future* column work without touching this: give it a
+ * `--pane-w` in the row and it is counted.
+ *
+ * `instant` is for a column that arrives or leaves rather than one that widens:
+ * `display` cannot be animated, so the transcript reflows in one frame, and the
+ * composer easing into place over the next hundred would be the crooked composer
+ * again in miniature. The composer's transition is declared in CSS and suppressed
+ * for that one write, the way `setScrollTop` suppresses smooth scrolling.
+ */
+function syncPaneInsets({ instant = false } = {}) {
+    if (!dom.convBody) return;
+    const kids = [...dom.convBody.children];
+    const pane = kids.findIndex(k => k.classList.contains('scroll'));
+    if (pane === -1) return;
+
+    let left = 0;
+    let right = 0;
+    for (const [i, k] of kids.entries()) {
+        if (k.classList.contains('scroll')) {
+            // The transcript's own scrollbar. It sits inside the pane, so the
+            // log centres itself in what is left over from it while the composer
+            // knows nothing about it — a standing ~6px lean that predates the
+            // side columns and would be easy to mistake for this not working.
+            // Measured, not declared: its width is the platform's, and it is 0
+            // on a machine with overlay scrollbars.
+            if (k.offsetParent !== null) right += k.offsetWidth - k.clientWidth;
+            continue;
+        }
+        // A column that is not in the layout contributes nothing, whatever its
+        // `--pane-w` computes to. That is not belt-and-braces: `--pane-w` is set
+        // by several rules across two media queries, and the narrow-window rule
+        // that removes a panel is *less* specific than the one that sets it to
+        // 240px, so under 900px the variable still reads 240 while the box is
+        // gone. Asking the layout is the only answer that cannot be outranked.
+        if (k.offsetParent === null) continue;
+        const w = Number.parseFloat(getComputedStyle(k).getPropertyValue('--pane-w')) || 0;
+        if (i < pane) left += w; else right += w;
+    }
+
+    const next = [`${Math.round(left)}px`, `${Math.round(right)}px`];
+    // Nothing to do is the common case, and here it is also load-bearing. The
+    // observer fires on every frame of a width animation and recomputes the same
+    // target each time; writing it again would be harmless, but the `instant`
+    // dance below is not — cancelling and restoring the transition mid-flight
+    // would leave the composer where the animation had got to.
+    if (next[0] === paneInsets[0] && next[1] === paneInsets[1]) return;
+    paneInsets = next;
+
+    const moved = [dom.composer, dom.askDock].filter(Boolean);
+    if (instant) for (const n of moved) n.style.transition = 'none';
+
+    dom.convMain.style.setProperty('--pane-left', next[0]);
+    dom.convMain.style.setProperty('--pane-right', next[1]);
+
+    if (instant) {
+        void dom.composer.offsetWidth;   // land the new padding before the transition is back
+        for (const n of moved) n.style.transition = '';
+    }
+}
+
+/**
+ * Watch the columns rather than every place that opens one.
+ *
+ * Three render functions can put a column in or take it out, a window resize can
+ * cross either of the two media queries that change how wide one is, and a
+ * transcript growing past its pane can add a scrollbar — six places that would
+ * each have to remember to call `syncPaneInsets`, one of them not a user action
+ * at all. Observing the row covers all of them and a seventh nobody has written
+ * yet.
+ *
+ * The travelling-together is not this: that is the shared transition on
+ * `.composer`, driven by the target width `syncPaneInsets` reads. This only has
+ * to notice, and it is allowed to notice a frame late.
+ *
+ * The composer is not observed, only the row, and its padding cannot change
+ * anything inside the row — so this cannot feed itself.
+ */
+// `instant`, and not just because the callback's first argument is a list of
+// entries rather than an options bag. What is left for this to be the first to
+// notice — a window resize crossing a media query, a transcript growing a
+// scrollbar — changes the layout in one frame with no animation to keep step
+// with, so easing after it would be the lag this whole thing is about. A column
+// sliding in or out is not one of those: `slidePane` has already written the
+// target by the time this runs, so it recomputes the same numbers and stops at
+// the no-op above without touching the transition in flight.
+const paneObserver = typeof ResizeObserver === 'function'
+    ? new ResizeObserver(() => syncPaneInsets({ instant: true })) : null;
+
+function watchPaneInsets() {
+    if (!paneObserver || !dom.convBody) return;
+    // Every child, the transcript panes included: their *content* box changes
+    // when a scrollbar appears, which is the one thing above that no side column
+    // moving would tell us about. Their border box is fixed by the row, and the
+    // composer's padding cannot reach inside the row, so watching them still
+    // cannot feed this back into itself.
+    for (const k of dom.convBody.children) paneObserver.observe(k);
+    syncPaneInsets();
+}
+
+/** Pending `hidden` writes, one per column, so a reversal cancels the last. */
+const paneExits = new WeakMap();
+
+/** Whether a column is in the row now — not gone, and not on its way out. */
+function paneUp(node) {
+    return !!node && !node.hidden && !node.classList.contains('gone');
+}
+
+/** How long this element says it takes to move. 0 under reduced motion. */
+function transitionMs(node) {
+    const secs = getComputedStyle(node).transitionDuration.split(',')[0];
+    return (Number.parseFloat(secs) || 0) * 1000;
+}
+
+/**
+ * Put a column in the row or take it out, as a slide rather than a jump.
+ *
+ * `display` cannot be animated, so toggling `hidden` moved the transcript and
+ * the composer the whole width of a column in one frame. Switching between two
+ * conversations did it four times: `beginOpen` emptied both asides, which took
+ * them out, and then each one's answer arriving put it back.
+ *
+ * So a column that is leaving keeps its place in the layout at zero width until
+ * the transition has run, and only then goes `hidden`; one arriving is put in at
+ * zero width and widened on the next frame. The composer follows either way,
+ * because `--pane-w` is what `syncPaneInsets` reads and `.gone` sets it to 0.
+ *
+ * The `hidden` write is deferred by however long the element says its transition
+ * takes — read from it rather than written here, so reduced motion reports 0 and
+ * this becomes the instant behaviour it used to have, and so the number cannot
+ * drift from the CSS. `transitionend` would be more precise and does not fire at
+ * all when the transition is `none`, which is the case that would then leave a
+ * column in the layout for ever.
+ */
+function slidePane(node, present) {
+    if (!node) return;
+    clearTimeout(paneExits.get(node));
+    const was = paneUp(node);
+    if (present === was) {
+        // Already where it belongs. Still worth clearing a half-finished exit:
+        // a column re-shown mid-slide has the class on and would otherwise stay
+        // at zero width with nothing left to take it off.
+        if (present) node.classList.remove('gone');
+        return;
+    }
+
+    if (present) {
+        node.hidden = false;
+        node.classList.add('gone');
+        void node.offsetWidth;      // commit the narrow state before widening
+        node.classList.remove('gone');
+    } else {
+        node.classList.add('gone');
+        const done = () => { node.hidden = true; paneExits.delete(node); };
+        const ms = transitionMs(node);
+        if (ms > 0) paneExits.set(node, setTimeout(done, ms + 30)); else done();
+    }
+    syncPaneInsets();
+}
+
 /** `✓`, `▸` or `○`. Shared with todoView, so the transcript and the panel agree. */
 function statusMark(status) {
     return status === 'completed' ? '✓' : status === 'in_progress' ? '▸' : '○';
@@ -2734,7 +2948,7 @@ function showChecklist(on) {
     // Asking for it from the header means wanting to see it, not wanting a 34px
     // strip — the same promise the Changed button makes.
     if (on) collapseChecklist(false, { render: false });
-    renderChecklist();
+    renderChecklist();   // slidePane inside it moves the column and the composer
     renderHeaderActions();
 }
 
@@ -2744,6 +2958,12 @@ function collapseChecklist(shut, { render = true } = {}) {
     localStorage.setItem('checklistShut', shut ? '1' : '0');
     if (!render) return;
     renderChecklist();
+    // In this frame, not the next one. This is the one direction that animates —
+    // a panel coming *back* into the layout starts at its full width and has
+    // nothing to animate — and the composer's transition has to start on the
+    // same frame as the column's or it spends the animation a frame behind. The
+    // observer would get here eventually, and eventually is what that looks like.
+    syncPaneInsets();
     // Focus follows whatever replaced the thing that was clicked.
     (shut ? dom.checklistStrip : dom.checklistCollapse).focus();
 }
@@ -2752,6 +2972,13 @@ function collapseChecklist(shut, { render = true } = {}) {
 function resetChecklist() {
     state.checklist.data = null;
     state.checklist.sessionId = null;
+    // Hold the column's place while the new conversation's list is on the wire,
+    // but only if there is a column there to hold: setting this for a column
+    // that is down would slide an empty one in and straight back out. Cleared by
+    // the `task-list` handler, which the bridge sends the moment a session is
+    // followed — including for a session with no list, which is what takes the
+    // column back out.
+    state.checklist.pending = paneUp(dom.checklist);
 }
 
 /**
@@ -2830,15 +3057,25 @@ function renderChecklist() {
     // Off, no conversation, or a session that never kept a list: no box at all
     // rather than an empty one. Most sessions keep no list, and a permanently
     // empty column would be worse than no column.
-    dom.checklist.hidden = !state.checklist.on || !state.current || !items.length;
-    if (dom.checklist.hidden) {
+    //
+    // `pending` is the exception, and it is what makes switching between two
+    // conversations that both keep a list move nothing at all. The new one's
+    // list arrives a moment after the switch, and without this the column left
+    // the row and came back — so it held its place while the answer was on the
+    // wire, showing an empty box rather than the last conversation's tasks.
+    // `resetChecklist` only sets it for a column that is already up, so this
+    // never slides an empty column *in*.
+    const present = !!state.checklist.on && !!state.current
+        && (items.length > 0 || state.checklist.pending);
+    slidePane(dom.checklist, present);
+    if (!present || !items.length) {
         // Emptied rather than just hidden. The rows and the count belonged to
         // whichever session was here before, and a hidden panel holding another
         // conversation's list is the kind of thing that resurfaces later looking
         // like a bug in whatever reveals it.
         dom.checklistBody.replaceChildren();
-        dom.checklistCount.textContent = '';
-        dom.checklistStripCount.textContent = '';
+        dom.checklistCount.textContent = present ? '…' : '';
+        dom.checklistStripCount.textContent = present ? '…' : '';
         return;
     }
 
@@ -2876,6 +3113,7 @@ function showTasks(on) {
     state.tasksShut = !on;
     localStorage.setItem('tasksShut', state.tasksShut ? '1' : '0');
     renderTasks();
+    syncPaneInsets();   // this frame, so the composer starts moving with it
     // Focus follows the thing that replaced what was clicked, so the keyboard
     // does not land on the body after either direction.
     (state.tasksShut ? dom.tasksStrip : dom.tasksCollapse).focus();
@@ -4272,11 +4510,18 @@ async function loadTasks() {
         // is reading it. The bridge wins for everything it does know about.
         for (const [tid, task] of state.tasks) if (!next.has(tid)) next.set(tid, task);
         state.tasks = next;
+        state.tasksPending = false;
         renderTasks();
     } catch {
         // The cards already showing came off the transcript tail and are still
         // true. Interrupting somebody over a panel that is merely not fresher
         // than it was would be worse than the staleness.
+        //
+        // But the aside must not be left holding its place for ever on the
+        // strength of a request that failed, so the hold ends either way and the
+        // column settles to whatever there actually is.
+        state.tasksPending = false;
+        renderTasks();
     }
 }
 
@@ -9162,6 +9407,7 @@ function connect() {
         if (!state.current || d.sessionId !== state.current.sessionId) return;
         state.checklist.sessionId = d.sessionId;
         state.checklist.data = d;
+        state.checklist.pending = false;   // answered, so the column can settle
         renderChecklist();
     });
     // The whole list, every time, and not gated on watching the panel — see the
@@ -9665,6 +9911,10 @@ function renderTurns() {
         onfocus: (e) => showTurnPop(e.currentTarget, i),
         onblur: hideTurnPop,
     })));
+    // Now it is known whether this conversation has a rail at all, so the hold
+    // from beginOpen can go: with turns the class changes nothing, and without
+    // them `.turns:empty` takes the column out and the composer widens into it.
+    dom.turns.classList.remove('holding');
     markActiveTurn();
 }
 
@@ -14578,6 +14828,7 @@ markInstance();
 renderBell();
 registerWorker();
 paintDockButton();      // the remembered arrangement, before anything is drawn
+watchPaneInsets();      // keep the composer over the transcript as columns come and go
 // The chrome that names a shortcut, before anything can read it — the bar
 // buttons' titles are built from a count, so their static markup carries no
 // combo at all and this is what puts one there.
