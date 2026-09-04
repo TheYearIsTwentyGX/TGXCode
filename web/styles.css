@@ -5978,6 +5978,245 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 .linkish:hover { text-decoration: underline; }
 .linkish:disabled { color: var(--text-4); cursor: default; text-decoration: none; }
 
+/* ── Claude Code's own settings ───────────────────────────────────────────
+   One group in the panel, several cards deep, because it stands for four files
+   and nine sections rather than one block of keys. The sub-cards sit inside the
+   group's own column with a slightly darker ground, so "everything under this
+   heading is about somebody else's settings" reads at a glance rather than
+   needing the heading to be re-read. */
+
+.cfg-sub { background: var(--s2); padding: 16px 18px 6px; }
+.cfg-sub .settings-group-title { font-size: 14px; color: var(--text-2); }
+.cfg-sub .settings-row + .settings-row { border-top-color: var(--outline); }
+
+/* Which of the four files, and which of the two ways of looking at it. One row,
+   with the view toggle pushed to the far end: the left half picks a *file* and
+   the right half picks a *lens*, and a gap says so better than a label would. */
+.cfg-tabs { display: flex; align-items: center; gap: 4px; margin: 14px 0 0; flex-wrap: wrap; }
+.cfg-tabs-spacer { flex: 1; min-width: 12px; }
+.cfg-tab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--s3);
+    color: var(--text-3);
+    border: 0;
+    border-radius: var(--pill);
+    padding: 5px 12px;
+    font: 400 12px var(--sans);
+    cursor: pointer;
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.cfg-tab:hover { background: var(--s4); color: var(--text-2); }
+.cfg-tab.on { background: var(--blue-cont); color: var(--text); }
+.cfg-tab-tag {
+    font: 400 10px var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-4);
+}
+.cfg-tab.on .cfg-tab-tag { color: var(--text-3); }
+
+/* The sentence that answers "I changed it and nothing happened" before it is
+   asked. Yellow-tinted rather than plain, because it is a caveat about every
+   control below it and not a note about one. */
+.cfg-reach {
+    margin: 12px 0 0;
+    padding: 9px 12px;
+    background: var(--s2);
+    border-left: 2px solid var(--yellow);
+    border-radius: 0 var(--r-sm) var(--r-sm) 0;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-3);
+}
+.cfg-sub .cfg-reach { background: var(--s3); }
+.cfg-reach strong { color: var(--text-2); font-weight: 400; }
+.cfg-reach-more { color: var(--text-4); }
+
+/* A conflict. Red-edged and on the page rather than in a toast: it is the one
+   message here that says a write did *not* happen, and it has to survive being
+   looked away from. */
+.cfg-stale {
+    margin: 12px 0 0;
+    padding: 11px 13px;
+    background: var(--s2);
+    border-left: 2px solid var(--red);
+    border-radius: 0 var(--r-sm) var(--r-sm) 0;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-3);
+}
+.cfg-stale-head { color: var(--text); }
+.cfg-stale p { margin: 5px 0 0; color: var(--text-4); }
+.cfg-stale summary { margin-top: 7px; cursor: pointer; color: var(--text-3); }
+.cfg-stale-text {
+    margin: 7px 0 0;
+    max-height: 220px;
+    overflow: auto;
+    padding: 9px 11px;
+    background: var(--bg);
+    border-radius: var(--r-sm);
+    font: 400 11px/1.6 var(--mono);
+    color: var(--text-3);
+    white-space: pre-wrap;
+}
+
+/* The key's real name beside its label. Everything on this page maps to a line
+   in a file somebody may have to open, and a label alone does not say which. */
+.cfg-path {
+    margin-left: 8px;
+    font: 400 11px var(--mono);
+    color: var(--text-4);
+}
+.cfg-merged { color: var(--text-3); }
+.cfg-raw-value {
+    font: 400 11px var(--mono);
+    color: var(--text-3);
+    overflow-wrap: anywhere;
+}
+
+/* A list of opaque strings — permission rules, directories, model names. One
+   row per entry rather than a textarea of lines: a textarea makes
+   twenty-eight rules into one draft where a single bad paste replaces the lot,
+   and per row a delete is one write and a mistake loses one rule. Each row is
+   a textarea because an entry is not always short. */
+.cfg-list { display: flex; flex-direction: column; gap: 4px; width: 100%; }
+.cfg-list-row { display: flex; align-items: flex-start; gap: 6px; }
+.cfg-list-value {
+    flex: 1;
+    min-width: 0;
+    resize: none;
+    overflow: hidden;
+    background: var(--bg);
+    color: var(--text-2);
+    border: 0;
+    border-radius: var(--r-xs);
+    padding: 5px 9px;
+    font: 400 12px/1.5 var(--mono);
+}
+.cfg-list-value:focus { outline: 0; box-shadow: inset 0 0 0 2px var(--blue); }
+.cfg-list-value:disabled { color: var(--text-4); }
+.cfg-list-x {
+    flex: none;
+    width: 26px;
+    height: 26px;
+    background: transparent;
+    color: var(--text-4);
+    border: 0;
+    border-radius: var(--r-xs);
+    font: 400 15px/1 var(--sans);
+    cursor: pointer;
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.cfg-list-x:hover { background: var(--s4); color: var(--red); }
+.cfg-list-x:disabled { color: var(--s5); cursor: default; background: transparent; }
+.cfg-list-none { padding: 6px 0; font-size: 12px; color: var(--text-4); }
+.cfg-list-add { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+/* Same trap as .cfg-kv-newvalue below: `is-long` means 100% of the row, which
+   in a flex row is 100% *and* whatever it sits next to. */
+.cfg-list-add > .settings-text.is-long { width: auto; flex: 1 1 200px; min-width: 0; }
+
+/* What the other files in the chain contribute. Indented and dimmed rather
+   than mixed in with the editable rows, because these lists add up across
+   files and an entry another file owns is not one this scope can remove —
+   showing it as an editable row with no × would be a worse lie than not
+   showing it at all. */
+.cfg-inherit { margin-top: 10px; padding-left: 10px; border-left: 1px solid var(--outline); }
+.cfg-inherit-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: 11px;
+    color: var(--text-4);
+}
+.cfg-inherit-head code { font: 400 10px var(--mono); color: var(--text-4); }
+.cfg-inherit-row {
+    margin-top: 3px;
+    font: 400 11px/1.6 var(--mono);
+    color: var(--text-4);
+    overflow-wrap: anywhere;
+}
+
+/* Name and value rows — `env`, and anything shaped like it. */
+.cfg-kv { display: flex; flex-direction: column; gap: 4px; width: 100%; }
+.cfg-kv-row { display: flex; align-items: center; gap: 8px; }
+.cfg-kv-name {
+    flex: none;
+    width: 180px;
+    font: 400 12px var(--mono);
+    color: var(--text-2);
+    overflow-wrap: anywhere;
+}
+.cfg-kv-add { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+.cfg-kv-newname { width: 180px; flex: none; }
+/* `is-long` is `width: 100%`, which inside a flex row means "as wide as the row"
+   *plus* whatever sits beside it — so the name field and the Add button pushed
+   the row past the column and gave the whole panel a horizontal scrollbar.
+   Flexing into what is left is what that class means here. */
+.cfg-kv-newvalue { width: auto; flex: 1 1 160px; min-width: 0; }
+
+/* Every hook, and whether the script it names is still there — the one
+   question a text editor cannot answer, which is why this table exists in
+   place of a form. */
+.cfg-hooks { width: 100%; overflow-x: auto; }
+.cfg-hooks-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.cfg-hooks-table th {
+    text-align: left;
+    padding: 0 12px 6px 0;
+    font: 400 11px var(--sans);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-4);
+}
+.cfg-hooks-table td {
+    padding: 6px 12px 6px 0;
+    border-top: 1px solid var(--outline-soft);
+    vertical-align: top;
+}
+.cfg-hooks-table code { font: 400 11px var(--mono); color: var(--text-2); }
+.cfg-hook-cmd { overflow-wrap: anywhere; }
+.cfg-any { color: var(--text-4); }
+.cfg-script { font-size: 11px; color: var(--green); white-space: nowrap; }
+.cfg-script.bad { color: var(--red); }
+
+.cfg-statusline { width: 100%; }
+.cfg-statusline .settings-row-note { max-width: 620px; }
+.cfg-statusline code { font: 400 11px var(--mono); }
+
+/* The file itself. A textarea, deliberately — see claudeRawCard() for why a
+   vendored editor was the wrong trade. */
+.cfg-json {
+    width: 100%;
+    min-height: 260px;
+    max-height: 70vh;
+    resize: vertical;
+    margin-top: 12px;
+    background: var(--bg);
+    color: var(--text-2);
+    border: 0;
+    border-radius: var(--r-sm);
+    padding: 12px 14px;
+    font: 400 12px/1.7 var(--mono);
+    tab-size: 2;
+}
+.cfg-json:focus { outline: 0; box-shadow: inset 0 0 0 2px var(--blue); }
+.cfg-json:disabled { color: var(--text-4); }
+.cfg-json-foot {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 0 12px;
+}
+.cfg-json-note { flex: 1; min-width: 0; font-size: 12px; line-height: 1.5; color: var(--text-4); }
+.cfg-json-note.bad { color: var(--red); font-family: var(--mono); font-size: 11px; }
+.cfg-json-acts { display: flex; align-items: center; gap: 12px; flex: none; }
+
+@media (prefers-reduced-motion: reduce) {
+    .cfg-tab, .cfg-list-x { transition: none; }
+}
+
 /* ── narrow windows ──────────────────────────────────────────────────── */
 
 @media (max-width: 980px) {
@@ -6032,4 +6271,18 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     .settings-key-label { flex-basis: 100%; }
     .settings-key-combo, .settings-key-recording { width: auto; min-width: 110px; }
     .settings-key-acts { min-width: 0; margin-left: auto; }
+
+    /* The Claude Code group's own controls. The four file tabs plus the two
+       view tabs do not fit on one line here, so the row wraps and the spacer
+       that pushed the lens toggle to the far end has to stop reserving width —
+       otherwise it pushes the toggle onto a line of its own. `env` and the
+       hooks table both lose their fixed left columns for the same reason the
+       shortcut table above does: at this width a name and its value cannot
+       both keep a lane. */
+    .cfg-tabs-spacer { flex-basis: 100%; min-width: 0; }
+    .cfg-sub { padding: 14px 14px 4px; }
+    .cfg-kv-row { flex-wrap: wrap; }
+    .cfg-kv-name, .cfg-kv-newname { width: auto; flex: 1 1 100%; }
+    .cfg-hooks-table { font-size: 11px; }
+    .cfg-json { min-height: 200px; }
 }

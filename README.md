@@ -705,6 +705,56 @@ are widget semantics rather than shortcuts, and remapping them means breaking
 keyboard navigation. Nor the Electron shell's `Ctrl+R`, `F12` and zoom, which
 live in the packaged executable rather than the page.
 
+#### Claude Code's own settings
+
+The group below the app's own edits a different owner's files:
+`~/.claude/settings.json`, a project's `.claude/settings.json` and
+`.claude/settings.local.json`, and — read-only, and reported even when it is
+absent — an administrator's `/etc/claude-code/managed-settings.json`. Permission
+rules, hooks, the model, the environment, plugins, worktree defaults. It has its
+own scope tabs, because that chain is four files where the app's own is three,
+and its own **JSON** tab.
+
+Three things about it are deliberately unlike every other group on the page,
+and all three come from not owning the format:
+
+**Nothing is hidden.** Claude Code ships no schema anyone can read — it is one
+bundled binary — so the list of keys with a control in front of them is
+hand-written and always a little behind. So an *Also in these files* card carries
+everything the list does not: a key holding a bool, a number or a string gets a
+plain control chosen by what it already is, and anything larger gets a line of
+JSON and a way through to the JSON tab. A value the page does not recognise is
+shown as it is rather than corrected — `askUserQuestionTimeout` is the string
+`never` on this machine, and a page that assumed a number would have offered to
+replace it with zero.
+
+**Permission lists add up rather than override.** `allow`, `deny` and `ask`
+combine across every file, so the twenty-eight rules in your own file and the
+twenty-five in a project's are all in force. Each row therefore edits *this
+file's* entries and lists the others read-only, attributed to the file they came
+from. It is also the answer to a question that used to need two editors open.
+
+**A save reaches the next session, not the ones running.** Claude Code reads
+these files when a session starts. The group says so, with a count of how many
+sessions are live, because "I changed it and nothing happened" is otherwise the
+next thing that happens. And because `claude` writes these files itself — a
+theme from `/config`, a permission you approved mid-turn — a write that would
+replace a whole key carries the stamp of the file it was read from and is
+**refused** rather than allowed to clobber. Nothing is merged: a conflict says
+what is on disk now and leaves the decision to you.
+
+The JSON tab is not a fallback bolted on. It is what makes the rest honest —
+with it there, no key in those files is beyond reach, and it is the only thing
+in the app that can repair a settings file that no longer parses. It is also the
+one control on this page with a **Save** button: a document being typed into is
+a draft by nature, and the no-drafts rule exists to stop a *control* disagreeing
+with what is in force.
+
+Two things stay out. `~/.claude.json` is sixty-six kilobytes whose largest key
+is a feature-flag cache — app state, not a settings file. And a project's
+`.mcp.json` is not ignored by default and commonly carries tokens, so it wants
+its own decision rather than a row here.
+
 #### The two groups that are not settings-file settings
 
 The last two groups came out of the top bar, which had collected a button each
@@ -1163,6 +1213,9 @@ you are away from the desk, and a phone that has dropped its connection is not.
 | `bridge/notifications.js` | The notification log, what is worth raising, and what you have already read |
 | `bridge/flags.js` | Pinned, archived and test state |
 | `bridge/prefs.js` | Settings from `~/.tgxcode/` and from the project — which file each one came from, and which one a save goes to |
+| `bridge/claude-config.js` | Claude Code's *own* settings files — the chain, what each one says, and the preconditions on writing somebody else's format |
+| `bridge/claude-schema.js` | Which of Claude Code's keys this app has a control for, and what happens to the ones it does not |
+| `bridge/jsonfile.js` | Reading and writing one small JSON file: the size cap, the BOM, the atomic write, the stamp |
 | `bridge/keymap.js` | The shortcuts that may be rebound, and the grammar for writing one down |
 | `bridge/spinner.js` | What a turn in progress calls itself, out of `~/.tgxcode/verbs/` |
 | `bridge/spinner-verbs.json` | The verb catalogue, and the seed for that directory |

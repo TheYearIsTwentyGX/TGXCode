@@ -116,6 +116,21 @@ const HOME = os.homedir();
     check('but reading them is fine', (await call('GET', '/api/prefs', { headers: PHONE })).status, 200);
     check('and so is the shortcut catalogue',
         (await call('GET', '/api/keymap', { headers: PHONE })).status, 200);
+    // Claude Code's own settings are the other way round, and this is the pair
+    // of checks that pins the asymmetry so a later tidy-up cannot quietly
+    // align them. Those files name hook commands, permission rules and the
+    // *values* of environment variables, and no client off this machine
+    // configures the CLI — so unlike /api/prefs there is nothing to weigh
+    // against caution and the read is refused too.
+    check('saving Claude Code’s settings', (await call('PUT', '/api/claude-config', {
+        headers: PHONE, body: { scope: 'user', patch: {} },
+    })).status, 403);
+    check('and reading them is refused as well — unlike /api/prefs',
+        (await call('GET', '/api/claude-config', { headers: PHONE })).status, 403);
+    // The refusal is a prefix with no method test, so anything added under it
+    // later is refused by default rather than by being remembered.
+    check('as is anything under that prefix',
+        (await call('GET', '/api/claude-config/anything', { headers: PHONE })).status, 403);
     // The header every non-GET under /api/ has needed since the CSRF guard
     // landed, and the first thing a new client 403s on. Pinned here on the
     // newest write route because that document says so and this suite is where

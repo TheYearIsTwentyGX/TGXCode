@@ -103,6 +103,25 @@ function check(name, got, want) {
     // What the settings panel reads: the merged answer plus what each file in
     // the chain says on its own.
     check('GET /api/prefs?files=1', (await call('/api/prefs?files=1')).status, 200);
+    // And what the Claude Code group reads: somebody else's four files, the
+    // merged reading of them, and everything in them this app has no control
+    // for. Only the read is exercised — every write on that route replaces or
+    // removes a key in the user's live `~/.claude/settings.json`, which decides
+    // what every session on this machine may do, and `npm test` has no business
+    // touching it. The refusals suite next door sends bodies the bridge throws
+    // out before it opens a file; the write path itself is covered against a
+    // temporary HOME in test/claude-config.test.js.
+    {
+        const r = await call('/api/claude-config');
+        check('GET /api/claude-config', r.status, 200);
+        const body = JSON.parse(r.body || '{}');
+        check('  …carries the chain', Array.isArray(body.files), true);
+        check('  …carries the catalogue', Array.isArray(body.catalogue), true);
+        // The field that makes the group honest about drift. An empty array is
+        // a legitimate answer; a missing one means the page draws nothing where
+        // the uncatalogued keys should be.
+        check('  …and the keys it has no control for', Array.isArray(body.unknown), true);
+    }
     check('GET /api/overview', (await call('/api/overview')).status, 200);
     check('GET /api/dashboard', (await call('/api/dashboard')).status, 200);
     check('GET /api/quota', (await call('/api/quota')).status, 200);

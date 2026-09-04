@@ -51,6 +51,34 @@ const SETTINGS_LOCAL_FILE = 'settings.local.json';
 const USER_TGX_DIR = path.join(HOME, TGX_DIR);
 const USER_PREFS_FILE = path.join(USER_TGX_DIR, SETTINGS_FILE);
 
+// Claude Code's own configuration, as opposed to this app's. Everything above
+// under `.tgxcode` is ours to define; these four are somebody else's file
+// format that we read and, from the Settings page, write — see
+// bridge/claude-config.js for the rules that come with that.
+//
+// `CLAUDE_DIR` is the same `.claude` the transcripts live in, and the project
+// name is the same string at both levels, which is why they are constants
+// rather than literals in three modules.
+const CLAUDE_DIR = '.claude';
+const CLAUDE_SETTINGS_FILE = 'settings.json';
+const CLAUDE_SETTINGS_LOCAL_FILE = 'settings.local.json';
+const USER_CLAUDE_DIR = path.join(HOME, CLAUDE_DIR);
+const USER_CLAUDE_SETTINGS = path.join(USER_CLAUDE_DIR, CLAUDE_SETTINGS_FILE);
+
+// Settings an administrator sets, which override every file a user can write.
+// Overridable by environment for one reason only: without it the read-only
+// scope is untestable, and a scope nobody can test is a scope that is wrong the
+// first time somebody actually has one. Same pattern as PROJECTS_DIR above.
+const MANAGED_CLAUDE_SETTINGS = process.env.CLAUDE_SESSIONS_MANAGED_SETTINGS
+    || '/etc/claude-code/managed-settings.json';
+
+// Two files Claude Code is given rather than ones anybody edits: what the
+// server has pushed, and what an organisation's policy allows. Read for
+// context — "why is this not what I set?" has an answer in here sometimes —
+// and never written.
+const CLAUDE_REMOTE_SETTINGS = path.join(USER_CLAUDE_DIR, 'remote-settings.json');
+const CLAUDE_POLICY_LIMITS = path.join(USER_CLAUDE_DIR, 'policy-limits.json');
+
 // The words the spinner uses while a turn runs — see bridge/spinner.js. A
 // directory rather than a key in the settings file: there are thousands of them
 // across a hundred-odd themed groups, and one file per group is what makes
@@ -187,6 +215,9 @@ module.exports = {
     STATE_DIR, TOKEN_FILE,
     TGX_DIR, COMMANDS_FILE, COMMANDS_LOCAL_FILE, RUNS_LOG_DIR,
     SETTINGS_FILE, SETTINGS_LOCAL_FILE, USER_TGX_DIR, USER_PREFS_FILE,
+    CLAUDE_DIR, CLAUDE_SETTINGS_FILE, CLAUDE_SETTINGS_LOCAL_FILE,
+    USER_CLAUDE_DIR, USER_CLAUDE_SETTINGS, MANAGED_CLAUDE_SETTINGS,
+    CLAUDE_REMOTE_SETTINGS, CLAUDE_POLICY_LIMITS,
     VERBS_DIR, USER_VERBS_DIR,
     ALLOW_REMOTE_BIND, TODO_TOOLS, ALLOWED_ROOTS, EXTRA_ORIGINS, withinRoots, expandHome,
     DEFAULT_PORT, DEV_PORT, IS_DEV,
