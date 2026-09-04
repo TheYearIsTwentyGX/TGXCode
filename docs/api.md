@@ -1126,6 +1126,20 @@ name is **left in the text verbatim** rather than blanked — a prompt is prose,
 is not reserved punctuation in it. With no usable marker `{{range}}` narrows to
 `<head>~1..<head>`, never to the whole history and never to an empty string.
 
+**The prompt a scheduled session receives is not the stored `prompt`.** On top of the
+placeholder substitution above, the bridge **appends a note telling the agent it is
+running unattended** — that a schedule started the session rather than a person, that
+no question it asks will be answered before it finishes, and that its findings belong
+in the transcript. It is appended and never prepended, so the head of the stored
+prompt is still the head of what was sent.
+
+This applies to every scheduled run: the tick, the pull-request drain, and
+`POST /api/schedules/:id/run`. "Run now" is included on purpose — that button exists
+to produce a session identical to the one the clock produces.
+
+A client showing "what will run" is therefore showing the stored text, which is the
+right thing to show and edit; it is just not byte-for-byte what the session is sent.
+
 | Field | Type |
 |---|---|
 | `id` | string, a UUID |
@@ -1939,7 +1953,7 @@ same bucket `POST /api/sessions` draws on, because both spawn a process.
 ### `POST /api/schedules`
 
 `{cwd, prompt, cron, once?, gate?, title?, model?, permissionMode?, test?, enabled?,
-seed?}` → `{schedule}`, the row as `GET /api/schedules` returns it.
+seed?, fromDraft?}` → `{schedule}`, the row as `GET /api/schedules` returns it.
 
 Validated exactly as `POST /api/drafts` is — `cwd` resolved and checked against the
 allowed roots, `permissionMode` normalised — plus the two of its own:
@@ -1981,6 +1995,21 @@ that instead, which is how you say "review everything I have open right now". A
 `cwd` with no GitHub origin, or a repository `gh` cannot list, is a `400` rather
 than an empty seed: a schedule that cannot see the repository is one that reports
 "nothing new" every night and never says why.
+
+**`fromDraft` is a draft id to consume** — the id of a `GET /api/drafts` row, for a
+client turning a draft into a schedule. The draft is deleted **after** the schedule
+row is written and only if it was: the draft is the copy of that work which still
+exists if the save fails, so a refused create leaves it exactly where it was. A
+`drafts-changed` push follows the deletion, before the response.
+
+An id naming no draft is **not** an error. The schedule saved, which is what was
+asked for, and the two reasons an id goes missing — it was already deleted, or it
+belongs to a bridge with a different state directory — are both cases where the
+right outcome is the schedule you asked for and no complaint.
+
+It is not stored on the schedule and does not appear on the row; nothing after the
+create has a use for it. `PATCH` does not accept it, because converting a draft
+happens once.
 
 `409` at 50 schedules. `400` if the directory does not resolve.
 

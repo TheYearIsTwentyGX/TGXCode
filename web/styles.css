@@ -3590,6 +3590,12 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     margin-top: 8px;
 }
 .compose-foot .note { margin-top: 0; flex: 1 1 12ch; }
+/* `display: flex` above beats the browser's own `[hidden] { display: none }`, so
+   without this the row that openNew() hides for a draft or a schedule stayed on
+   screen — offering an Attach files button in the two modes whose stores do not
+   carry attachments, where the files would have been dropped on save with
+   nothing said. The same `.x[hidden]` pattern the rest of this file uses. */
+.compose-foot[hidden] { display: none; }
 /* Same treatment the live composer gets, so a drop reads as a drop in both. */
 .composer-field.drop-target { outline: 2px dashed var(--blue); outline-offset: 4px; }
 
@@ -4640,6 +4646,10 @@ body.term-resizing { user-select: none; cursor: row-resize; }
    own — and it scrolls rather than growing without limit once it hits the cap. */
 .field textarea.grow { min-height: 0; resize: none; overflow-y: auto; }
 .field input[type="text"] { font-family: var(--mono); font-size: 12.5px; }
+/* The one text input in this dialog that is not a path. A name is prose you
+   read, so it gets the prose face rather than the monospace the directory box
+   wants for lining up slashes. */
+#new-name { font-family: var(--sans); font-size: 13px; }
 .field textarea:focus, .field input:focus {
     outline: none;
     box-shadow: inset 0 0 0 2px var(--blue);
@@ -5384,11 +5394,19 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 .tb-new .tb-btn { flex: none; }
 
 /* ── drafts ──────────────────────────────────────────────────────────────
-   Work set up but not started. One column rather than the task board's five,
-   because there is only one state a draft can be in — so the width goes to the
-   message instead, which is the part you came here to read before releasing it.
-   The card is the task board's card: same class, same meta line, same buttons,
-   because it is the same object at a different moment. */
+   Work set up but not started. Two layouts over one list, and which one you get
+   is how many projects have a draft in them.
+
+   With one, a single column: there is only one state a draft can be in, so a
+   column per state would say nothing, and the width goes to the message instead
+   — the part you came here to read before releasing it.
+
+   With two or more, the task board's shape, a column per project. That is a
+   different meaning for a column than the board gives it — a place rather than
+   a state — which is why nothing here borrows the board's per-column colour.
+
+   The card is the task board's card either way: same class, same meta line, same
+   buttons, because it is the same object at a different moment. */
 
 .dr-head {
     flex: none;
@@ -5422,11 +5440,41 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     max-width: 860px;
 }
 
+/* Two projects or more and the panel becomes the task board's shape. Auto-flow
+   rather than a fixed template because the number of columns *is* the data —
+   `.tb-body` can hardcode `repeat(4, …)` because its four columns are four
+   states, and this one has however many projects you are working in.
+
+   The 300px floor is what makes a crowded week scroll sideways instead of
+   squeezing eight cards into eight strips; `1fr` above it means two projects
+   still use the whole panel. Vertical scrolling moves down into each
+   `.tb-col-body`, which already does it, so the body itself must stop. */
+.dr-body.cols {
+    max-width: none;
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(300px, 1fr);
+    gap: 12px;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+/* A project name can be long and a column is narrow, so it gives way rather
+   than pushing its count off the end. The `title` on the heading is what says
+   the whole of it. */
+.dr-col .tb-col-head h2 {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 /* `.tb-card` colours its left edge by which column it is in — yellow for needs
-   you, green for working, blue for a suggested task. There are no columns here,
-   so a draft takes the quietest edge in the set rather than borrowing a meaning
-   from one of those three. It is the one thing in this app not asking for
-   anything, and the stripe should say so. */
+   you, green for working, blue for a suggested task. The columns here mean a
+   project rather than a state, so there is nothing for that edge to say, and a
+   draft takes the quietest one in the set rather than borrowing a meaning from
+   one of those three. It is the one thing in this app not asking for anything,
+   and the stripe should say so. */
 .dr-card { box-shadow: inset 3px 0 0 var(--s5); }
 
 /* The message itself, which is the point of the card. Several lines of it, then
@@ -5591,8 +5639,13 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 
 /* ── the schedules panel ─────────────────────────────────────────────────
    Drafts' layout, reused rather than restated: same head, same single scrolling
-   column at the same width, same card vocabulary. The two panels are the same
-   shape and the only reason they are separate rules at all is the class name.
+   column at the same width, same card vocabulary.
+
+   Drafts has since grown a second layout — a column per project, once there are
+   two — and this panel deliberately did not follow. A schedule is not read by
+   project; it is read to find out whether the thing you set up months ago is
+   still firing, and that is one question over the whole list. Splitting it by
+   directory would put two dead schedules in two different columns.
 
    What is genuinely different is the *status line*. A draft's card is read to
    decide whether to release it, so the message is the point. A schedule has
@@ -6067,6 +6120,15 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 
     .dr-head { padding: 16px 16px 12px; }
     .dr-body { padding: 0 16px 20px; }
+    /* The board opposite folds to two rows of two because it always has exactly
+       four columns. This one cannot: the count is however many projects you are
+       working in, and folding would put a project below the fold with nothing
+       saying it was there. So the row keeps scrolling sideways and the floor
+       comes down instead — narrow enough for two columns at 980px, which is what
+       makes the sideways scroll a gesture rather than the only way to see
+       anything. */
+    .dr-body.cols { grid-auto-columns: minmax(260px, 1fr); }
+    .dr-col { max-height: none; }
 
     /* The two selectors drop under the title rather than squeezing beside it;
        the contents go above the groups instead of beside them, as a row that
