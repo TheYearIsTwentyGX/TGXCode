@@ -6213,6 +6213,81 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 .cfg-json-note.bad { color: var(--red); font-family: var(--mono); font-size: 11px; }
 .cfg-json-acts { display: flex; align-items: center; gap: 12px; flex: none; }
 
+/* ── Claude Code's memory files ───────────────────────────────────────────
+   The same group furniture as the settings above it — tabs, file line, stale
+   banner, foot — so only the box, the rendered view and the full-height dialog
+   are new. */
+
+/* Prose, not JSON: `pre-wrap` because a paragraph in a CLAUDE.md is one long
+   line and horizontal scrolling to read a sentence is not editing. Otherwise
+   the same box as .cfg-json, and shorter, because the panel's own scroll has to
+   stay usable with a 23KB file in here — Expand is where the height is. */
+.cfg-md {
+    width: 100%;
+    min-height: 220px;
+    max-height: 60vh;
+    resize: vertical;
+    margin-top: 12px;
+    background: var(--bg);
+    color: var(--text-2);
+    border: 0;
+    border-radius: var(--r-sm);
+    padding: 12px 14px;
+    font: 400 12px/1.7 var(--mono);
+    white-space: pre-wrap;
+    tab-size: 2;
+}
+.cfg-md:focus { outline: 0; box-shadow: inset 0 0 0 2px var(--blue); }
+.cfg-md:disabled { color: var(--text-4); }
+
+/* The rendered view, in place of the box rather than beside it: the panel is a
+   column and two of these side by side would be two keyholes. Capped and
+   scrolling on its own, because .prose sets no height of its own. */
+.cfg-md-preview {
+    margin-top: 12px;
+    max-height: 60vh;
+    overflow: auto;
+    padding: 4px 14px 12px;
+    background: var(--bg);
+    border-radius: var(--r-sm);
+}
+.cfg-md-preview > :first-child { margin-top: 12px; }
+
+/* The other file, which also applies. Quieter than the yellow reach note above
+   it — it is orientation rather than a warning. */
+.cfg-md-both code { font: 400 11px var(--mono); color: var(--text-3); }
+
+.cfg-md-count { flex: none; font: 400 11px var(--mono); color: var(--text-4); }
+
+/* The full-height editor. `.tall` is the modal shape this needs and nothing
+   else does: as wide as the window sensibly allows and as tall, because the
+   whole reason to open it is that 60vh in a column was not enough. */
+.modal.tall {
+    width: min(1000px, 100%);
+    max-height: 94vh;
+    height: 94vh;
+}
+/* `flex: 1` and `min-height: 0` together are what make the box fill the
+   dialog: .modal is already a column, but .modal-body does not grow on its
+   own, and without min-height a flex child refuses to shrink below its
+   content — which for a 23KB file is the whole point. */
+.modal.tall .modal-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    overflow: hidden;
+    padding-bottom: 12px;
+}
+.memo-title { font: 400 14px/1.4 var(--mono); color: var(--text-2); }
+.cfg-md.big {
+    flex: 1;
+    min-height: 0;
+    max-height: none;
+    resize: none;
+    margin-top: 0;
+    font-size: 13px;
+}
+
 @media (prefers-reduced-motion: reduce) {
     .cfg-tab, .cfg-list-x { transition: none; }
 }
@@ -6285,4 +6360,8 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     .cfg-kv-name, .cfg-kv-newname { width: auto; flex: 1 1 100%; }
     .cfg-hooks-table { font-size: 11px; }
     .cfg-json { min-height: 200px; }
+    .cfg-md { min-height: 180px; }
+    /* The dialog is the whole window at this width, so the wrapper's padding
+       is the only thing left holding it off the edges. */
+    .modal.tall { height: 100%; max-height: 100%; }
 }

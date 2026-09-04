@@ -122,6 +122,25 @@ function check(name, got, want) {
         // the uncatalogued keys should be.
         check('  …and the keys it has no control for', Array.isArray(body.unknown), true);
     }
+    // And what the Memory group reads: one row per CLAUDE.md. The read alone,
+    // for the same reason as the block above and rather more so — a write on
+    // that route replaces the whole of the user's own instructions to Claude,
+    // and `npm test` has no business touching those. The refusals suite next
+    // door covers what a remote caller is told; the write path is covered
+    // against a temporary HOME in test/claude-docs.test.js.
+    {
+        const r = await call('/api/claude-docs');
+        check('GET /api/claude-docs', r.status, 200);
+        const body = JSON.parse(r.body || '{}');
+        check('  …carries a row per file', Array.isArray(body.docs), true);
+        // With no `cwd` there is exactly one row, the user's, and a client that
+        // drew two would be drawing a file for a project nobody named.
+        check('  …just the user one with no cwd',
+            (body.docs || []).map(d => d.scope).join(','), 'user');
+        // The cap, so a page can label its byte counter with the real number
+        // instead of hardcoding one that later drifts.
+        check('  …and the size cap', typeof body.maxBytes, 'number');
+    }
     check('GET /api/overview', (await call('/api/overview')).status, 200);
     check('GET /api/dashboard', (await call('/api/dashboard')).status, 200);
     check('GET /api/quota', (await call('/api/quota')).status, 200);

@@ -131,6 +131,18 @@ const HOME = os.homedir();
     // later is refused by default rather than by being remembered.
     check('as is anything under that prefix',
         (await call('GET', '/api/claude-config/anything', { headers: PHONE })).status, 403);
+    // Claude Code's memory files, refused the same way — the same three checks,
+    // because the same three things could go wrong. A project's CLAUDE.md is
+    // repository source and a user's describes the machine; neither is
+    // something a client off this machine has a use for, and a leaked token
+    // should not be able to rewrite what every session here is told.
+    check('saving Claude Code’s memory', (await call('PUT', '/api/claude-docs', {
+        headers: PHONE, body: { scope: 'user', stamp: null, text: '' },
+    })).status, 403);
+    check('and reading it is refused as well',
+        (await call('GET', '/api/claude-docs', { headers: PHONE })).status, 403);
+    check('as is anything under that prefix too',
+        (await call('GET', '/api/claude-docs/anything', { headers: PHONE })).status, 403);
     // The header every non-GET under /api/ has needed since the CSRF guard
     // landed, and the first thing a new client 403s on. Pinned here on the
     // newest write route because that document says so and this suite is where

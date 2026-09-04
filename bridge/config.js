@@ -79,6 +79,14 @@ const MANAGED_CLAUDE_SETTINGS = process.env.CLAUDE_SESSIONS_MANAGED_SETTINGS
 const CLAUDE_REMOTE_SETTINGS = path.join(USER_CLAUDE_DIR, 'remote-settings.json');
 const CLAUDE_POLICY_LIMITS = path.join(USER_CLAUDE_DIR, 'policy-limits.json');
 
+// And the instructions, as opposed to the settings — see bridge/claude-docs.js.
+// The project one sits at the root of the workspace rather than inside
+// `.claude/`, which is the one place this family does not mirror the settings
+// files above and is why the symlink check has a different containing
+// directory for each scope.
+const CLAUDE_MEMORY_FILE = 'CLAUDE.md';
+const USER_CLAUDE_MEMORY = path.join(USER_CLAUDE_DIR, CLAUDE_MEMORY_FILE);
+
 // The words the spinner uses while a turn runs — see bridge/spinner.js. A
 // directory rather than a key in the settings file: there are thousands of them
 // across a hundred-odd themed groups, and one file per group is what makes
@@ -218,6 +226,7 @@ module.exports = {
     CLAUDE_DIR, CLAUDE_SETTINGS_FILE, CLAUDE_SETTINGS_LOCAL_FILE,
     USER_CLAUDE_DIR, USER_CLAUDE_SETTINGS, MANAGED_CLAUDE_SETTINGS,
     CLAUDE_REMOTE_SETTINGS, CLAUDE_POLICY_LIMITS,
+    CLAUDE_MEMORY_FILE, USER_CLAUDE_MEMORY,
     VERBS_DIR, USER_VERBS_DIR,
     ALLOW_REMOTE_BIND, TODO_TOOLS, ALLOWED_ROOTS, EXTRA_ORIGINS, withinRoots, expandHome,
     DEFAULT_PORT, DEV_PORT, IS_DEV,

@@ -127,6 +127,7 @@ of `/api/terminals/*`; all of `/api/runs/*`; `POST /api/commands/run`;
 `POST /api/sessions/:id/reveal`; `POST /api/sessions/:id/handoff`; `POST /api/fs/mkdir`;
 `PUT /api/prefs`;
 **every method of `/api/claude-config` and anything under it, the GET included**;
+**every method of `/api/claude-docs` likewise**;
 both attachment uploads — `POST /api/sessions/:id/attachments` and
 `POST /api/attachments`.
 
@@ -151,6 +152,13 @@ token should not be able to read them. The refusal is on the **prefix with no
 method test**, so anything added under it later is refused by default rather
 than by somebody remembering to. If a phone ever needs one of these reads, the
 answer is a narrower route, not a deleted refusal.
+
+`/api/claude-docs` is refused on the same terms, and the argument only gets
+stronger: a project's `CLAUDE.md` is repository source, and a user's describes
+the machine — what is installed, which ports are in use, which instance not to
+touch. Being able to *write* one is the ability to change what every session on
+this machine is told before its first message, which is a larger capability
+than any single setting on the route above.
 
 Note the asymmetry around `/api/fs` and `/api/commands`: `GET /api/fs` and
 `GET /api/commands` stay readable remotely, so those refusals are on the exact path
@@ -1720,6 +1728,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `session-deleted` | `{sessionId, title}` |
 | `prefs` | the **user-level** settings, in the same shape as the `cs-prefs` `<meta>` tag: `{version, transcript, live, quota, spinner, keyboard}`, with no `sources` or `problems`. Fired on every `PUT /api/prefs` including your own, so a second window does not sit on a stale copy — two are routinely open here. A project's answer is deliberately not sent: it is the open session's business and arrives with `GET /api/sessions/:id` |
 | `claude-config` | `{at, scope, file}` — the *fact* that one of Claude Code's settings files was written, and deliberately **not** its content. Unlike `prefs` there is no `<meta>` copy for a page to keep in sync and nothing in this app behaves differently because of those files, so the event is a nudge to re-read; pushing the contents of a file whose route is local-only down every open channel would be a poor trade for saving a fetch. Fired on every successful `PUT /api/claude-config`, including your own |
+| `claude-docs` | `{at, scope, file}` — the same trade for a `CLAUDE.md`: the fact one was written, never its contents. `scope` is `"user"` or `"project"`. Fired on every successful `PUT /api/claude-docs`, including your own. **A client holding an unsaved draft must not reload on this** — show a conflict and keep what the person typed; the whole draft here is somebody's prose rather than one key |
 | `notification` | a whole notification row, just filed — the same shape `GET /api/notifications` returns, `read` included — plus `unread`, the badge count after this row. So an open history view need not refetch, and need not guess whether the new row counts |
 | `notification-resolved` | `{id, outcome, outcomeAt}` — patch the row with that `id`; fired alongside `permission-resolved` |
 | `notification-read` | `{sessionId: string\|null, at: number, unread: number}` — a watermark moved, here or in another window. `sessionId` is `null` when the whole log was marked. Fold `at` into your copy of `read` and repaint |
@@ -2298,6 +2307,142 @@ person looks at it.
 it is not folded into `400` or `403`: the request was well formed and would have
 been accepted a moment earlier.
 
+### `GET /api/claude-docs?cwd=<path>`
+
+**Local callers only — the read as well as the write.** See §*Refused for remote
+callers*.
+
+Claude Code's `CLAUDE.md` files: the instructions a session is given before your
+first message, as opposed to the settings that decide what it may do. This is
+the only route in the bridge that reads or writes a whole file's *contents* —
+`/api/fs` lists directories and `/api/fs/mkdir` creates one, and that is the
+rest of the filesystem surface.
+
+```
+{
+  docs: [{
+    id,         string   "claude-md:<scope>" — stable, for a client's own keys
+    kind,       string   "claude-md" — the only kind so far
+    scope,      string   "user" | "project"
+    file,       string   absolute
+    exists,     bool
+    writable,   bool     the file, or the nearest directory that would be created
+    symlink,    bool     true → every write here is refused
+    size,       int      bytes, not characters
+    stamp,      string or null   opaque; echo it on a write, never parse it
+    text,       string or null   the file verbatim, or null when absent or over the cap
+    truncated   bool     true → the file is past the cap and `text` is null
+  }],
+  maxBytes:     int      the cap, in bytes, on both the read and the write
+}
+```
+
+**Two scopes, and they are not a chain.** `user` is `~/.claude/CLAUDE.md` and
+`project` is `<cwd>/CLAUDE.md`. Claude Code reads **both** and concatenates
+them: neither overrides the other, there is no `effective` reading to compute,
+and a client that draws an "overridden by … — this has no effect here" label
+over either one — the shape `/api/prefs` and `/api/claude-config` really do
+have — is telling the user a file does nothing when it is in force. Say that
+both apply.
+
+Note where the project file *is*: at the root of the workspace, **not** inside
+`.claude/`. That is the one place this family does not mirror the settings files
+on the route above, and it is also why the symlink check is against a different
+containing directory per scope.
+
+`cwd` is the **workspace itself** and never falls back to its main checkout:
+Claude Code reads the `CLAUDE.md` of the directory it runs in, so a worktree's
+own file is the one in force.
+
+**A row is absent rather than empty when there is nothing to name.** With no
+`cwd`, or a `cwd` outside `CLAUDE_SESSIONS_ROOTS`, the answer is the `user` row
+alone — not a `project` row pointing at a path no write would accept. So the
+array is one or two entries and a client should find its scope in it rather than
+index into it. This is deliberately *not* a `403`: a directory the bridge will
+not read is no reason to refuse a perfectly good user file.
+
+`truncated` is how a file too large to open is reported, and `text` is `null`
+rather than clipped. A client must not offer an editor over a truncated row: it
+would be seeded with nothing and a save would replace the whole file with it.
+`size` and `stamp` are still filled in, so the row can say how big the file is
+and why it is not open.
+
+`maxBytes` is the same cap in both directions — a file that can be read here can
+be written here. Label a byte counter with this rather than hardcoding a number
+that later drifts.
+
+### `PUT /api/claude-docs`
+
+`{scope, cwd?, stamp, text}` → `200 {file, stamp, docs, maxBytes}`. **Local
+callers only**, and the client header like every other write. `docs` and
+`maxBytes` are the `GET` payload as it now stands, so a client can take the
+answer wholesale rather than patching its own copy, and `stamp` is the written
+file's new one — which the *next* write has to send.
+
+| `scope` | file |
+|---|---|
+| `user` | `~/.claude/CLAUDE.md` — `cwd` ignored |
+| `project` | `<cwd>/CLAUDE.md`, which git tracks |
+
+`"project-local"` and `"managed"` are `400 {code: "scope"}`: those are scopes of
+`/api/claude-config`, and there is no `CLAUDE.local.md` or administrator's
+memory file here.
+
+**`text` is written byte for byte.** No re-indenting, no trailing newline added,
+no BOM stripped, no CRLF normalised. `PUT /api/claude-config` re-serialises its
+document because it owns a format with a house style; this is somebody's prose,
+and reformatting a file it was asked to save would corrupt a diff nobody asked
+for. An empty string is a legitimate document — a file that says nothing is not
+the same as no file — and there is no way to *delete* one through this route.
+
+#### `stamp` — the precondition, and it is never optional
+
+`stamp` is the opaque token from the `GET`. Sending none at all is
+`400 {code: "stamp"}`.
+
+That is stricter than `PUT /api/claude-config`, which lets a single scalar patch
+do without one, and the difference is not an oversight. There is no partial
+write here: every request replaces the whole document, which is exactly the case
+that route *requires* a stamp for. And the window is much wider — a scalar patch
+is a control being clicked, where a prose file is a draft by nature and the read
+that filled the box was minutes ago.
+
+Send `stamp: null` for a file that should not exist yet; absent and `null` mean
+different things and both are meaningful.
+
+| the write | `stamp` |
+|---|---|
+| any write to a file that exists | **required** — the one from the `GET` that filled the editor |
+| creating a file | `null` |
+| absent | refused |
+
+**Nothing is merged on conflict**, and there is nothing sensible to merge:
+`CLAUDE.md` is prose, so a union of two versions is not a document. A conflict
+is refused and a person looks at it.
+
+#### Refusals
+
+| Status | `code` | |
+|---|---|---|
+| 400 | `scope` | not `"user"` or `"project"` |
+| 400 | `dir` | a project scope with no `cwd`, or one outside the allowed roots |
+| 400 | `body` | `text` is absent, not a string, or contains a **NUL byte** |
+| 400 | `stamp` | no `stamp` was sent |
+| 403 | `readonly` | the target is a symlink. Checked with `lstat` on the link, so it is never followed |
+| 403 | `write` | the file or its directory could not be written |
+| 409 | `stale` | `stamp` no longer matches. The body carries `stamp` and `text` — the file as it is now |
+| 409 | `exists` | `stamp: null` but the file is there. The body carries `stamp` |
+| 413 | `size` | over `maxBytes`. The boundary is inclusive: exactly the cap is accepted |
+
+A NUL byte is `body` rather than a code of its own — it means something that is
+not text arrived, most likely a file picked by mistake, and it groups with "that
+is not a string". `claude` reads these files as UTF-8 and what it would make of
+a NUL is undefined, so it is refused rather than written.
+
+`409` is neither the caller's mistake nor a file it may not write, which is why
+it is not folded into `400` or `403`: the request was well formed and would have
+been accepted a moment earlier.
+
 ### `POST /api/restart`
 
 `{force?, pull?}` → `200 {ok, restarting, pid, port, force, pulled, reach, warnings,
@@ -2728,6 +2873,29 @@ and writes it back, which copies every inherited rule into whichever file it is
 writing. That is not hypothetical; it is what the first version of this app's own
 page did. Edit `files[].values` for the scope you are writing, not `effective`.
 Look for `merged: true`. See §`GET /api/claude-config`.
+
+**The two `CLAUDE.md` files both apply, and neither wins.** `/api/claude-docs`
+returns two rows and they look exactly like the scope rows on the routes above,
+which are a precedence chain. These are not. Claude Code reads the user file and
+the project file and concatenates them, so the reflex — draw the tabs, label the
+weaker one "overridden" — reports that a file has no effect when every line in
+it is in force. There is no `effective` field on that route for the same reason:
+there is nothing to compute. See §`GET /api/claude-docs`.
+
+**A `CLAUDE.md` edit does not reach a session that is already running — ever.**
+This is worse than the settings case above, not merely the same. Claude Code
+reads these files at startup and puts them *in the context*, so a running
+session is not waiting to notice the change; it is holding the old text and will
+hold it until it ends. "Saved" therefore means "the next session you start", and
+a client that says only "saved" has told the user something they will read as
+"in effect". See §`GET /api/claude-docs`.
+
+**A truncated row has no text, and must not get an editor.** A `CLAUDE.md` past
+`maxBytes` comes back with `truncated: true` and `text: null` rather than the
+first 256KB — unlike `GET /api/sessions/:id/output`, which does clip, because
+that feeds a viewer. Seed a text box from a truncated row and the box is empty;
+save it and the file is empty. `size` and `stamp` are still there so the row can
+explain itself. See §`GET /api/claude-docs`.
 
 **A restart has no completion event.** The process that would send one is the process
 being replaced. After a `200` from `POST /api/restart`, poll `GET /api/health` until

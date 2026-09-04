@@ -19,7 +19,8 @@ const UNIT = ['auth.test.js', 'temp.test.js', 'recent.test.js', 'pulls.test.js',
     'taskboard.test.js', 'ports.test.js', 'spinner.test.js', 'changes.test.js',
     'restart.test.js', 'handoff.test.js', 'drafts.test.js', 'notifications.test.js',
     'schedule.test.js', 'usage.test.js', 'harvester.test.js', 'runner.test.js',
-    'titles.test.js', 'tasks.test.js', 'prefs.test.js', 'claude-config.test.js'];
+    'titles.test.js', 'tasks.test.js', 'prefs.test.js', 'claude-config.test.js',
+    'claude-docs.test.js'];
 const LIVE = ['gate.test.js', 'browser.test.js', 'refusals.test.js', 'unpaired.test.js'];
 
 const given = Number(process.argv[2]);

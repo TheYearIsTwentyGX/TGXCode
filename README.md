@@ -655,6 +655,16 @@ set. It also means two windows editing different settings do not clobber each
 other, and a save reaches the other window over the live channel rather than
 waiting for a reload.
 
+**Two things on this page do have a Save button**, and they are the same
+exception rather than two: the JSON tab in *Claude Code*, and the text box in
+*Claude Code · Memory*. The rule above is about a **control** — a checkbox that
+reads "on" for a setting that is off is what it prevents. A document somebody is
+typing into is a draft by nature; there is no keystroke at which a paragraph is
+finished, and saving per keystroke would write broken JSON forty times a minute
+and half-sentences into a file every session reads. Both keep the rule's intent
+the other way round, by saying at all times whether what you are looking at is
+what is on disk.
+
 **Two sections are yours alone** — the quota beacon and the keyboard — and a
 project file that sets one is ignored and says so. What directory this app
 starts `claude` in is not a repository's business, and a repository that could
@@ -754,6 +764,47 @@ Two things stay out. `~/.claude.json` is sixty-six kilobytes whose largest key
 is a feature-flag cache — app state, not a settings file. And a project's
 `.mcp.json` is not ignored by default and commonly carries tokens, so it wants
 its own decision rather than a row here.
+
+#### Claude Code's memory
+
+The group below that one edits the same owner's *instructions* rather than their
+settings: `~/.claude/CLAUDE.md` and the open project's own. It is the file people
+edit most often, and until now the one thing on this page you had to leave the
+app for — from the window you sit in to watch those sessions run.
+
+A text box in a monospace font, a **Preview** that renders it, a byte count
+against the limit, and **Expand** for a full-height editor, because twenty-three
+kilobytes of markdown in a settings column is a keyhole. Not a vendored code
+editor: a few hundred kilobytes of one, with no build step to prune it, to edit
+a markdown file is a poor trade, and the one thing it would have earned — seeing
+the headings as headings — is the Preview toggle.
+
+**The two files add up.** This is the one way the group is unlike every other
+scope selector on the page, and the reason it is a separate group rather than a
+tab inside the one above. Those files are a chain, where the strongest one to
+mention a key wins; Claude Code reads *both* of these and joins them, so nothing
+here is ever overridden. Each tab therefore says that the other file applies as
+well, with its size, instead of the "overridden by … — this has no effect here"
+sentence that would be a flat lie.
+
+**An edit reaches the next session and never the ones running** — which is a
+stronger claim than the settings group makes. Those files are read when a
+session starts; these are read when a session starts *and put in its context*,
+so a session already going is not waiting to notice the change, it is holding
+the old text until it ends.
+
+The rest is the same discipline as the JSON tab, for the same reasons: a save
+carries the stamp of the file it was read from and is **refused** rather than
+allowed to clobber something written since, and a refusal keeps what you typed
+and shows you what is on disk beside it. Nothing is merged — prose has no
+sensible union — so a conflict is yours to look at. A symlink is reported and
+never written through, and a file past 256KB is named and its size given rather
+than opened, because a box seeded with the first 256KB of a larger file would
+delete the rest on the first save.
+
+`CLAUDE.local.md` and a project's `.claude/CLAUDE.md` are not here. Neither
+exists on this machine, and the route is shaped to take another scope when one
+does.
 
 #### The two groups that are not settings-file settings
 
@@ -1215,6 +1266,7 @@ you are away from the desk, and a phone that has dropped its connection is not.
 | `bridge/prefs.js` | Settings from `~/.tgxcode/` and from the project — which file each one came from, and which one a save goes to |
 | `bridge/claude-config.js` | Claude Code's *own* settings files — the chain, what each one says, and the preconditions on writing somebody else's format |
 | `bridge/claude-schema.js` | Which of Claude Code's keys this app has a control for, and what happens to the ones it does not |
+| `bridge/claude-docs.js` | Claude Code's memory files — which `CLAUDE.md` a scope means, and reading and writing one whole |
 | `bridge/jsonfile.js` | Reading and writing one small JSON file: the size cap, the BOM, the atomic write, the stamp |
 | `bridge/keymap.js` | The shortcuts that may be rebound, and the grammar for writing one down |
 | `bridge/spinner.js` | What a turn in progress calls itself, out of `~/.tgxcode/verbs/` |

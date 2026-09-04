@@ -22,6 +22,7 @@ const { RunnerPool, PERMISSION_MODES, resolveWorkdir } = require('./runner');
 const { Flags } = require('./flags');
 const { Prefs } = require('./prefs');
 const { ClaudeConfig } = require('./claude-config');
+const { ClaudeDocs, MAX_DOC_BYTES } = require('./claude-docs');
 const keymap = require('./keymap');
 const { Spinner } = require('./spinner');
 const { Suggestions, STATUSES: SUGGESTION_STATUSES } = require('./suggestions');
@@ -117,6 +118,27 @@ function claudeConfigStatus(code) {
     if (code === 'size') return 413;
     return 403;   // readonly, unparseable, write
 }
+
+// Claude Code's memory files, as opposed to its settings — see the header of
+// bridge/claude-docs.js for why a whole text file is a different module from a
+// key inside a JSON one.
+const claudeDocs = new ClaudeDocs();
+
+/**
+ * Which status a claude-docs refusal is.
+ *
+ * The same split claudeConfigStatus draws, over a smaller set of codes: there
+ * is no `patch` here and nothing to parse, so `path`, `value`, `json` and
+ * `unparseable` have no way to happen and are deliberately absent rather than
+ * carried across for symmetry.
+ */
+function claudeDocsStatus(code) {
+    if (['scope', 'dir', 'body', 'stamp'].includes(code)) return 400;
+    if (['stale', 'exists'].includes(code)) return 409;
+    if (code === 'size') return 413;
+    return 403;   // readonly, write
+}
+
 // The words a turn in progress calls itself, out of the groups those settings
 // enable. Shares the Prefs instance rather than making its own, so the two
 // cannot read different settings out of the same file.
@@ -786,6 +808,18 @@ function remoteRefusal(pathname, method) {
     // remembered.
     if (pathname === '/api/claude-config' || pathname.startsWith('/api/claude-config/')) {
         return 'Claude Code’s own settings can only be read and written on the machine they live on';
+    }
+    // Claude Code's memory files, refused the same way and for the same reason,
+    // with one addition: a project's CLAUDE.md is repository source and a user's
+    // describes the machine — what is installed, which ports are in use, which
+    // instance not to touch. Neither is something a client off this machine has
+    // a use for, and both are worth rather more than a theme.
+    //
+    // A prefix with no method test, like the clause above, so anything added
+    // under /api/claude-docs later is refused by default rather than by being
+    // remembered.
+    if (pathname === '/api/claude-docs' || pathname.startsWith('/api/claude-docs/')) {
+        return 'Claude Code’s memory files can only be read and written on the machine they live on';
     }
     // A handoff starts a turn in a session the caller is not looking at, and can
     // wake one that has no process at all. That is a reasonable thing for an
@@ -2240,6 +2274,71 @@ async function api(req, res, url, pathname, who) {
             stamp: saved.stamp,
             config: await claudeConfigPayload(body.cwd || ''),
         });
+    }
+
+    // ── Claude Code's memory files ─────────────────────────────────────
+    //
+    // The first route in this bridge that reads or writes a whole file's
+    // contents. Everything else here reads a file the app owns, or a directory
+    // listing, or a JSON key; /api/fs lists and /api/fs/mkdir creates, and that
+    // was the entire filesystem surface before this.
+    //
+    // So the conservative parts are load-bearing rather than ceremony: the
+    // request names a `scope` and the bridge builds the path, so there is
+    // nothing to traverse with; the read and the write share one size cap; a
+    // symlink is refused rather than followed; and every write carries the
+    // stamp of the file it was read from. Local callers only, both methods, for
+    // the reason remoteRefusal() gives.
+    //
+    // `cwd` is passed through rather than validated here, exactly as
+    // /api/claude-config does it: cfg.withinRoots inside the module drops the
+    // project row, so a directory this bridge will not read degrades to the
+    // user file alone rather than 403-ing a group that has a perfectly good
+    // user scope to show. The write refuses it outright, which is where it
+    // matters.
+    //
+    // `maxBytes` rides along so a page can label its byte counter with the real
+    // cap instead of hardcoding one. A client that hardcoded it would go on
+    // saying "of 256 KB" after the constant moved, which is the sort of drift
+    // that is only ever found by somebody hitting the limit.
+    if (pathname === '/api/claude-docs' && req.method === 'GET') {
+        const read = claudeDocs.read(url.searchParams.get('cwd') || '');
+        return send(res, 200, { ...read, maxBytes: MAX_DOC_BYTES });
+    }
+
+    // One body, unlike the route above: there is no partial write of a prose
+    // file, so `text` is the only shape and `stamp` is never optional.
+    if (pathname === '/api/claude-docs' && req.method === 'PUT') {
+        const body = await readJson(req);
+        let saved;
+        try {
+            saved = claudeDocs.save({
+                scope: body.scope || 'user',
+                dir: body.cwd || '',
+                // Absent and null mean different things — "I forgot the
+                // precondition" and "this file should not exist yet" — so the
+                // distinction has to survive the JSON.
+                stamp: Object.prototype.hasOwnProperty.call(body, 'stamp') ? body.stamp : undefined,
+                text: body.text,
+            });
+        } catch (err) {
+            return send(res, claudeDocsStatus(err.code), {
+                error: err.message,
+                code: err.code || 'save',
+                // A conflict carries the file as it is now, so the page can show
+                // what it would have overwritten instead of only that it did not.
+                ...(err.detail || {}),
+            });
+        }
+        // The fact of a change, not its content — the same trade the
+        // claude-config event makes, and for the same two reasons: nothing in
+        // this app behaves differently because of these files, and pushing the
+        // contents of a file this route classifies as local-only down every open
+        // channel would be a poor way to save a fetch.
+        broadcast('claude-docs', {
+            at: Date.now(), scope: body.scope || 'user', file: saved.file,
+        });
+        return send(res, 200, { ...saved, maxBytes: MAX_DOC_BYTES });
     }
 
     // What may be rebound, and the closed set of key names a combo may end in.
