@@ -1327,6 +1327,28 @@ checks, and merge it once they pass.">LGTM</button>
   </div>
 </div>
 
+<!-- One CLAUDE.md, with the height of the window. The same draft as the box in
+     the settings panel — see the "same file, full height" section of app.js. -->
+<div id="memo-scrim" class="scrim" hidden>
+  <div class="modal tall" role="dialog" aria-modal="true" aria-labelledby="memo-title">
+    <div class="modal-head">
+      <span id="memo-title" class="memo-title">CLAUDE.md</span>
+      <button class="modal-close" data-close-memo type="button" aria-label="Close">&#10005;</button>
+    </div>
+    <div class="modal-body">
+      <textarea id="memo-big" class="cfg-md big" spellcheck="false"
+                autocapitalize="off" autocorrect="off"
+                aria-labelledby="memo-title"></textarea>
+    </div>
+    <div class="modal-foot">
+      <div id="memo-note" class="cfg-json-note"></div>
+      <span id="memo-count" class="cfg-md-count"></span>
+      <button id="memo-close" class="btn" type="button">Close</button>
+      <button id="memo-save" class="dash-btn" type="button">Save the file</button>
+    </div>
+  </div>
+</div>
+
 <div id="turn-pop" class="turn-pop" role="tooltip" hidden></div>
 
 <div id="toasts" class="toasts" aria-live="polite"></div>
