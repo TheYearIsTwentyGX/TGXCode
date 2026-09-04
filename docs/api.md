@@ -126,6 +126,7 @@ of `/api/terminals/*`; all of `/api/runs/*`; `POST /api/commands/run`;
 `/api/shutdown`; `/api/restart` (both methods); `/api/devservers/stop`; `/api/devbrowser/*`;
 `POST /api/sessions/:id/reveal`; `POST /api/sessions/:id/handoff`; `POST /api/fs/mkdir`;
 `PUT /api/prefs`;
+**every method of `/api/claude-config` and anything under it, the GET included**;
 both attachment uploads — `POST /api/sessions/:id/attachments` and
 `POST /api/attachments`.
 
@@ -140,6 +141,16 @@ than the path: reading how somebody wants a transcript folded is not a
 capability, and a phone has a use for the answer. *Saving* is the `mkdir` clause
 with a longer reach — it writes a file in the user's home directory, and one of
 the keys in it names a directory this app then starts `claude` in.
+
+**`/api/claude-config` is the one route family where the read is refused too**,
+and the contrast with `/api/prefs` is deliberate rather than an oversight. Those
+files are Claude Code's own: they name hook commands, permission rules and the
+*values* of environment variables, and no client that is not on this machine
+configures the CLI — so there is nothing to weigh against caution, and a leaked
+token should not be able to read them. The refusal is on the **prefix with no
+method test**, so anything added under it later is refused by default rather
+than by somebody remembering to. If a phone ever needs one of these reads, the
+answer is a narrower route, not a deleted refusal.
 
 Note the asymmetry around `/api/fs` and `/api/commands`: `GET /api/fs` and
 `GET /api/commands` stay readable remotely, so those refusals are on the exact path
@@ -1708,6 +1719,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `suggestion-changed` | `{at, sessionId, toolUseId}` — a suggested follow-up was started, dismissed, or undone, possibly in another window |
 | `session-deleted` | `{sessionId, title}` |
 | `prefs` | the **user-level** settings, in the same shape as the `cs-prefs` `<meta>` tag: `{version, transcript, live, quota, spinner, keyboard}`, with no `sources` or `problems`. Fired on every `PUT /api/prefs` including your own, so a second window does not sit on a stale copy — two are routinely open here. A project's answer is deliberately not sent: it is the open session's business and arrives with `GET /api/sessions/:id` |
+| `claude-config` | `{at, scope, file}` — the *fact* that one of Claude Code's settings files was written, and deliberately **not** its content. Unlike `prefs` there is no `<meta>` copy for a page to keep in sync and nothing in this app behaves differently because of those files, so the event is a nudge to re-read; pushing the contents of a file whose route is local-only down every open channel would be a poor trade for saving a fetch. Fired on every successful `PUT /api/claude-config`, including your own |
 | `notification` | a whole notification row, just filed — the same shape `GET /api/notifications` returns, `read` included — plus `unread`, the badge count after this row. So an open history view need not refetch, and need not guess whether the new row counts |
 | `notification-resolved` | `{id, outcome, outcomeAt}` — patch the row with that `id`; fired alongside `permission-resolved` |
 | `notification-read` | `{sessionId: string\|null, at: number, unread: number}` — a watermark moved, here or in another window. `sessionId` is `null` when the whole log was marked. Fold `at` into your copy of `read` and repaint |
@@ -2086,6 +2098,205 @@ matching on prose:
 | 403 | `readonly` | `quota` or `keyboard` at a project scope |
 | 403 | `unparseable` | the target file does not currently parse. Refused rather than replaced: whatever is in it is somebody's work |
 | 403 | `write` | the file or its directory could not be written |
+
+### `GET /api/claude-config?cwd=<path>`
+
+**Local callers only — the read as well as the write.** See §*Refused for remote
+callers*.
+
+Claude Code's own settings, as opposed to this app's. `/api/prefs` is
+`~/.tgxcode/settings.json`, a format this app defines; this is
+`~/.claude/settings.json` and its project siblings, a format it does not.
+
+```
+{
+  files: [{
+    file,       string   absolute
+    scope,      string   "user" | "project" | "project-local" | "managed"
+    target,     bool     whether a PUT with that scope and this cwd writes this file
+    readonly,   bool     true only for "managed"
+    exists,     bool
+    parsed,     bool     false → `values` is {} and a `patch` write is refused
+    writable,   bool     the file, or the nearest directory that would be created
+    symlink,    bool     true → every write here is refused
+    size,       int      bytes
+    stamp,      string or null   opaque; echo it on a write, never parse it
+    text,       string or null   the file verbatim, or null when absent or over the cap
+    values,     object   {dottedPath: value} — this file alone, unfiltered
+    problems,   [string]
+    ignored,    bool     project-local only, from `check-ignore`; absent on other rows
+    ignoredBy   string or null   "<file>:<line>" of the rule that matched
+  }],
+  effective:   {dottedPath: {value, scope, file} | {value, merged: true, from: […]}},
+  unknown:     [{path, kind, type, preview, scope, file}],
+  hooks:       [{event, matcher, type, command, script}],
+  statusLine:  {value, scope, file, ours, command} or null,
+  installedPlugins: [string],
+  catalogue:   [{title, key, note, rows: […]}],
+  catalogueAgainst: string,
+  scopes:      [string],
+  running:     int,
+  problems:    [{file, message}]
+}
+```
+
+The chain is **four rows for three writable scopes**, weakest first: `user`,
+`project`, `project-local`, then `managed` —
+`/etc/claude-code/managed-settings.json`, which overrides all three and which no
+caller may write. It is reported even when it does not exist, which is almost
+everywhere: a client that drew three rows would be wrong in exactly the case
+where the answer matters.
+
+`values` is keyed by **dotted path** and holds what that one file says, with
+nothing filtered out. A path is a leaf when the catalogue models it — so `env`,
+`enabledPlugins` and `hooks` arrive whole rather than exploded — and otherwise
+when it is a scalar or an array; plain objects are walked to three levels.
+
+**`effective` is this bridge's reading of Claude Code's precedence, not
+something Claude Code told us.** The CLI cannot be asked what it concluded, so a
+client that treats this as authoritative is trusting a guess. It is meant to be
+*displayed* beside the files it came from.
+
+**`permissions.allow`, `deny` and `ask` add up across files rather than
+overriding.** Those three come back as `{value, merged: true, from}`, where
+`value` is the union weakest-first with duplicates collapsed and `from` is
+`[{scope, file, count, values}]` — one entry per file that contributes, carrying
+that file's own entries. Every other path comes back as `{value, scope, file}`,
+last-file-wins. A client that draws an "overridden, so this has no effect"
+sentence over a `merged` path is telling the user a rule does nothing when it is
+one of the rules actually in force.
+
+`unknown` is every key in the files that the catalogue does not model, and it is
+the field that keeps this route honest — Claude Code ships no schema anyone can
+read, so the catalogue is hand-written and always behind. `kind` is `"scalar"`
+when the value is a bool, number, string or null, and otherwise the JSON type
+(`"array"`, `"object"`). A `scalar` may be written through `patch`; anything
+else has to go through `text`. `preview` is one clipped line of JSON.
+`catalogueAgainst` is the Claude Code version the catalogue was read against, so
+"there is no control for that" and "this app is out of date" can be told apart.
+
+`hooks` is a flattened summary of the strongest `hooks` block, one entry per
+hook: `event`, `matcher` (string or `null`, meaning every tool), `type`,
+`command` with `$HOME` folded back, and `script` — `{file, exists}` when a path
+could be picked out of the command, `null` otherwise. `exists: false` is the
+useful part: a hook whose script has been deleted fails silently and nothing in
+Claude Code says so.
+
+`statusLine.ours` is true when the command names `quota-statusline.py`, i.e.
+when `scripts/install-quota-statusline.js` is what put it there.
+
+`installedPlugins` is every plugin id this machine has installed, from
+`~/.claude/plugins/installed_plugins.json`, so a client can offer a checkbox for
+a plugin the settings file has never mentioned.
+
+`running` is how many sessions have a live process — scoped to `cwd` when one is
+given, otherwise every session. It is there for one sentence: a change to these
+files reaches the *next* session and not the ones already going.
+
+### `PUT /api/claude-config`
+
+`{scope, cwd?, stamp?, patch}` **or** `{scope, cwd?, stamp, text}` →
+`200 {file, stamp, config}`. Exactly one of `patch` and `text`; sending both, or
+neither, is `400 {code: "body"}`. **Local callers only**, and the client header
+like every other write. `config` is the whole `GET` payload as it now stands, and
+`stamp` is the written file's new stamp — which the *next* write has to send.
+
+`scope` is `"user"`, `"project"` or `"project-local"`, and with `cwd` picks one
+file:
+
+| `scope` | file |
+|---|---|
+| `user` | `~/.claude/settings.json` — `cwd` ignored |
+| `project` | `<cwd>/.claude/settings.json`, which git tracks |
+| `project-local` | `<cwd>/.claude/settings.local.json` — check `ignored` on that row rather than assuming; on the machine this was written it is ignored by a **global** excludes file, which a clone elsewhere does not inherit |
+
+`"managed"` is `403 {code: "readonly"}`.
+
+Unlike `PUT /api/prefs`, `cwd` is the **workspace itself** and never falls back
+to its main checkout: Claude Code reads the `.claude` of the directory it runs
+in, so a worktree's own file is the one in force.
+
+#### `patch` — one or more dotted paths
+
+`{"permissions.defaultMode": "plan", "theme": null}`. Only the paths named are
+touched, `null` removes a key so it falls back down the chain, and a section
+left with no keys is removed rather than written out as `{}`. Existing key order
+is preserved and a new key is appended, so a one-key change is one line of diff.
+
+A path is accepted when the catalogue models it, **or** when it already holds a
+scalar somewhere in the chain and the new value is the same JSON type — which is
+what lets a client edit a key this bridge has never heard of without being able
+to turn `switchModelsOnFlag: false` into the string `"false"`. A path nothing in
+the chain has is refused: the bridge will keep a key it does not understand, but
+it will not invent one.
+
+At most four segments. A segment of `__proto__`, `constructor` or `prototype` is
+refused by name — this is a client-supplied path being assigned into an object,
+so the refusal is explicit rather than a filter that would silently change which
+key got written.
+
+**`version` is never written.** `PUT /api/prefs` stamps its own document, which
+is right for a format this app defines; doing it here would put a key Claude
+Code does not define into the user's file.
+
+#### `text` — the whole document
+
+Replaces the file. Must parse and must be a JSON **object** — not an array, not
+a scalar. Re-serialised to two spaces and a trailing newline, so a
+hand-formatted file comes back formatted the way Claude Code writes one; keys
+keep their order.
+
+This is the only way to reach a key `patch` refuses, and **the only thing that
+can repair a file that no longer parses** — which is why an unparseable target
+refuses a `patch` and accepts a `text`. That is narrower than `PUT /api/prefs`,
+which refuses both outright, and the difference is deliberate rather than a
+typo: refusing here would leave the app declining to fix the one problem only it
+can see.
+
+#### `stamp` — the precondition, and when it is required
+
+`stamp` is the opaque token from the `GET`. It exists because **this app is not
+the only writer**: `claude` changes `theme`, `editorMode`, `effortLevel` and
+`enabledPlugins` from inside a session, and appends to
+`.claude/settings.local.json` every time somebody approves a permission
+mid-turn.
+
+| the write | `stamp` |
+|---|---|
+| one scalar path | not needed — the file is read immediately before it is written, so setting one key cannot revert another |
+| a whole array or object, or removing a key that holds one | **required** — `permissions.allow` is one key holding twenty-eight rules, and writing the array a page loaded ten minutes ago would silently drop the rule approved since |
+| `text` | **required** — it replaces keys the caller may never have looked at |
+| a file that should not exist yet | send `stamp: null` |
+
+Omitting it where it is required is `400 {code: "stamp"}`, which is a distinct
+answer from sending a wrong one.
+
+**Nothing is merged on conflict.** This bridge does not own the schema, so it
+cannot merge safely — `hooks` is an array where order matters, and a naive union
+produces a hook that fires twice per tool call. A conflict is refused and a
+person looks at it.
+
+#### Refusals
+
+| Status | `code` | |
+|---|---|---|
+| 400 | `scope` | not one of the three writable scopes |
+| 400 | `dir` | a project scope with no `cwd`, or one outside the allowed roots |
+| 400 | `body` | both `patch` and `text`, or neither, or an empty patch |
+| 400 | `path` | not catalogued and not an existing scalar; more than four segments; an empty or reserved segment; an uncatalogued path holding a collection |
+| 400 | `value` | a value the catalogue refuses, or a type change on a generic scalar |
+| 400 | `json` | `text` does not parse, or is not a JSON object. The message is the parser's |
+| 400 | `stamp` | a whole-collection or whole-document write with no `stamp` |
+| 403 | `readonly` | the `managed` scope, or a symlinked target |
+| 403 | `unparseable` | the file does not parse **and** the write is a `patch` |
+| 403 | `write` | the file or its directory could not be written |
+| 409 | `stale` | `stamp` no longer matches. The body carries `stamp` and `text` — the file as it is now |
+| 409 | `exists` | `stamp: null` but the file is there. The body carries `stamp` |
+| 413 | `size` | larger than a settings file should be |
+
+`409` is neither the caller's mistake nor a file it may not write, which is why
+it is not folded into `400` or `403`: the request was well formed and would have
+been accepted a moment earlier.
 
 ### `POST /api/restart`
 
@@ -2491,6 +2702,32 @@ worktree. See §`GET /api/prefs`.
 identical to the ones before it — the write happened, and a project-local file
 is still winning. Take `prefs` and `files` from the response rather than
 assuming your value is now the answer.
+
+**A saved Claude Code setting reaches the next session, not the ones running.**
+Claude Code reads those files when a session starts. `PUT /api/claude-config`
+returning `200` means the file was written, and a turn already in flight goes on
+using what it read at startup — so a client that says "saved" and nothing else
+has told the user something they will read as "in effect". `running` on
+`GET /api/claude-config` is there to be said out loud. See §`GET /api/claude-config`.
+
+**A `409` from `/api/claude-config` is not an error to retry.** It means the file
+changed since the `stamp` you were given — most often because `claude` itself
+appended a permission somebody approved mid-turn. The body carries the current
+`stamp` and `text`; the fix is to show what is there now and let a person decide,
+never to re-send with the fresh stamp, which would do the clobber the
+precondition just prevented. There is no merge, deliberately: this bridge does
+not own the schema, and `hooks` is an array where order matters. See
+§`PUT /api/claude-config`.
+
+**`permissions.allow` is a union, not an override.** Three paths — `allow`, `deny`
+and `ask` — add up across every file in the chain, so the reflex borrowed from
+`/api/prefs` ("the strongest file that mentions a key wins") produces two wrong
+behaviours at once: an "overridden, so this has no effect" label over a rule that
+is in force, and — worse — a client that seeds an editor from `effective.value`
+and writes it back, which copies every inherited rule into whichever file it is
+writing. That is not hypothetical; it is what the first version of this app's own
+page did. Edit `files[].values` for the scope you are writing, not `effective`.
+Look for `merged: true`. See §`GET /api/claude-config`.
 
 **A restart has no completion event.** The process that would send one is the process
 being replaced. After a `200` from `POST /api/restart`, poll `GET /api/health` until

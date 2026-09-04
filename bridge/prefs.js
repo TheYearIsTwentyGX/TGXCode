@@ -53,14 +53,15 @@ const path = require('path');
 
 const cfg = require('./config');
 const keymap = require('./keymap');
+const { readJson, serialize, writeAtomic, writable, refuse } = require('./jsonfile');
 const { projectRootOf } = require('./transcript');
 
 const VERSION = 1;
 
-// A settings file is a handful of keys. Anything approaching this is either a
-// mistake or an attempt to make the bridge do unbounded work parsing it — the
-// same reasoning, and the same number, as commands.js.
-const MAX_FILE_BYTES = 64 * 1024;
+// The size cap, the stat-before-read, the BOM and the atomic write all live in
+// bridge/jsonfile.js now — three callers needed them and two of them had
+// already drifted. What stays here is the one rule that is this file's own: a
+// `version` that is not ours drops the file whole.
 
 // Re-stat rather than watch, as commands.js does: one inotify watcher for a
 // file that changes monthly is a poor trade, and this is read once per session
@@ -269,40 +270,26 @@ const SANITIZE = {
 /**
  * Read one settings file.
  *
- * Stat before read, in the shape of readConfig() in commands.js: a file of
- * unknown size never goes into memory whole.
+ * bridge/jsonfile.js does the stat-before-read, the size cap, the BOM and the
+ * parse. What is left here is the version rule, which is ours alone: a file
+ * stamped with a version this bridge does not know is dropped whole rather than
+ * half-read, because an old key that has changed meaning is worse than a
+ * missing one.
  *
  * @returns {{data: object|null, stamp: string|null, problem: object|null}}
  */
 function readFile(file) {
-    let st;
-    try { st = fs.statSync(file); } catch { return { data: null, stamp: null, problem: null }; }
-    if (!st.isFile()) return { data: null, stamp: null, problem: null };
-    const stamp = `${st.mtimeMs}:${st.size}`;
-    if (st.size > MAX_FILE_BYTES) {
-        return { data: null, stamp,
-            problem: { file, message: `larger than ${MAX_FILE_BYTES / 1024}KB — ignored` } };
-    }
-
-    let raw;
-    try { raw = fs.readFileSync(file, 'utf8'); }
-    catch (err) { return { data: null, stamp, problem: { file, message: err.message } }; }
-
-    let data;
-    // Tolerate a BOM the same way flags.js and commands.js do.
-    try { data = JSON.parse(raw.replace(/^﻿/, '')); }
-    catch (err) { return { data: null, stamp, problem: { file, message: err.message } }; }
-
-    if (!data || typeof data !== 'object' || Array.isArray(data)) {
-        return { data: null, stamp, problem: { file, message: 'not a JSON object' } };
+    const read = readJson(file);
+    if (read.problem || !read.data) {
+        return { data: read.data, stamp: read.stamp, problem: read.problem };
     }
     // Absent is fine: a project file that only sets one key has no reason to
     // restate the version. A *wrong* version is not.
-    if (data.version !== undefined && data.version !== VERSION) {
-        return { data: null, stamp,
-            problem: { file, message: `unknown version ${JSON.stringify(data.version)} — expected ${VERSION}` } };
+    if (read.data.version !== undefined && read.data.version !== VERSION) {
+        return { data: null, stamp: read.stamp,
+            problem: { file, message: `unknown version ${JSON.stringify(read.data.version)} — expected ${VERSION}` } };
     }
-    return { data, stamp, problem: null };
+    return { data: read.data, stamp: read.stamp, problem: null };
 }
 
 /**
@@ -361,10 +348,7 @@ class Prefs {
     ensureUserFile() {
         try {
             if (fs.existsSync(cfg.USER_PREFS_FILE)) return;
-            fs.mkdirSync(path.dirname(cfg.USER_PREFS_FILE), { recursive: true });
-            const tmp = cfg.USER_PREFS_FILE + '.tmp';
-            fs.writeFileSync(tmp, JSON.stringify(DEFAULTS, null, 2) + '\n');
-            fs.renameSync(tmp, cfg.USER_PREFS_FILE);
+            writeAtomic(cfg.USER_PREFS_FILE, serialize(DEFAULTS));
         } catch (err) {
             console.error(`[claude-sessions] could not create ${cfg.USER_PREFS_FILE}: ${err.message}`);
         }
@@ -641,10 +625,7 @@ class Prefs {
         }
 
         try {
-            fs.mkdirSync(path.dirname(file), { recursive: true });
-            const tmp = `${file}.tmp`;
-            fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`);
-            fs.renameSync(tmp, file);
+            writeAtomic(file, serialize(doc));
         } catch (err) {
             throw refuse('write', `${file}: ${err.message}`);
         }
@@ -655,36 +636,6 @@ class Prefs {
         this.cache.clear();
         return { file, prefs: this.forCwd(dir), files: this.raw(dir) };
     }
-}
-
-/** Can this path be written, creating it and its directory if need be? */
-function writable(file) {
-    try {
-        fs.accessSync(file, fs.constants.W_OK);
-        return true;
-    } catch { /* missing, or not writable — the directory decides */ }
-    // Walk up to the nearest directory that exists: `.tgxcode/` is created on
-    // demand, so its absence is not an answer.
-    let dir = path.dirname(file);
-    for (;;) {
-        try {
-            fs.accessSync(dir, fs.constants.W_OK);
-            return true;
-        } catch {
-            if (!fs.existsSync(dir)) {
-                const up = path.dirname(dir);
-                if (up !== dir) { dir = up; continue; }
-            }
-            return false;
-        }
-    }
-}
-
-/** An Error a route can classify without reading the sentence. */
-function refuse(code, message) {
-    const err = new Error(message);
-    err.code = code;
-    return err;
 }
 
 module.exports = { Prefs, DEFAULTS, SHAPE, SANITIZE, USER_ONLY, VERSION };

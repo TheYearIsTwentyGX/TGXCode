@@ -21,6 +21,7 @@ const { SessionRegistry } = require('./registry');
 const { RunnerPool, PERMISSION_MODES, resolveWorkdir } = require('./runner');
 const { Flags } = require('./flags');
 const { Prefs } = require('./prefs');
+const { ClaudeConfig } = require('./claude-config');
 const keymap = require('./keymap');
 const { Spinner } = require('./spinner');
 const { Suggestions, STATUSES: SUGGESTION_STATUSES } = require('./suggestions');
@@ -64,6 +65,58 @@ const flags = new Flags();
 // How the person using the app wants it to behave, from their own file and from
 // whatever the project they are looking at overrides — see bridge/prefs.js.
 const prefs = new Prefs();
+
+// Claude Code's own settings, as opposed to this app's. A separate instance of
+// a separate module on purpose — see the header of bridge/claude-config.js for
+// the three things that stopped it being a mode of Prefs.
+const claudeConfig = new ClaudeConfig();
+
+/**
+ * Which status a claude-config refusal is.
+ *
+ * The split is the same one PUT /api/prefs draws — the caller's mistake against
+ * the machine's answer about what is possible — with one addition: a conflict
+ * is neither. `409` says the request was well formed and would have been
+ * accepted a moment ago, which is exactly the case a client has to handle
+ * differently from both a bad value and a file it may not write.
+ */
+/**
+ * The claude-config read, plus the two things the module cannot answer alone.
+ *
+ * `running` is how many sessions are live, because a change to these files
+ * reaches the next session and not the ones already going — and "I changed it
+ * and nothing happened" is the question that count exists to answer before it
+ * is asked. Taken from the registry rather than from the runner pool on
+ * purpose: a session under a terminal will not see the change either, and
+ * leaving it out of the count would make the sentence wrong in the reassuring
+ * direction.
+ *
+ * `ignored` is asked of git rather than of a `.gitignore`, because the answer
+ * on this machine comes from a *global* excludes file — see git.ignored().
+ * Only the local row is asked: the shared one is meant to be committed.
+ */
+async function claudeConfigPayload(cwd) {
+    const base = claudeConfig.read(cwd);
+    const here = cwd ? path.resolve(cfg.expandHome(cwd)) : null;
+    const live = registry.running();
+    const running = here
+        ? live.filter(e => e.cwd && (e.cwd === here || e.cwd.startsWith(`${here}${path.sep}`))).length
+        : live.length;
+
+    const files = await Promise.all(base.files.map(async (f) => {
+        if (f.scope !== 'project-local' || !here) return f;
+        const answer = await git.ignored(here, `${cfg.CLAUDE_DIR}/${cfg.CLAUDE_SETTINGS_LOCAL_FILE}`);
+        return { ...f, ignored: answer.ignored, ignoredBy: answer.source };
+    }));
+    return { ...base, files, running };
+}
+
+function claudeConfigStatus(code) {
+    if (['scope', 'dir', 'body', 'path', 'value', 'json', 'stamp'].includes(code)) return 400;
+    if (['stale', 'exists'].includes(code)) return 409;
+    if (code === 'size') return 413;
+    return 403;   // readonly, unparseable, write
+}
 // The words a turn in progress calls itself, out of the groups those settings
 // enable. Shares the Prefs instance rather than making its own, so the two
 // cannot read different settings out of the same file.
@@ -717,6 +770,22 @@ function remoteRefusal(pathname, method) {
     // capability, and a phone has a use for the answer.
     if (pathname === '/api/prefs' && method !== 'GET') {
         return 'settings can only be saved on the machine they live on';
+    }
+    // Claude Code's own settings, and unlike the clause above this one has **no
+    // method test**: the GET is refused too.
+    //
+    // The asymmetry is deliberate and is the reverse of the reasoning for
+    // /api/prefs. There the GET stays open because how somebody wants a
+    // transcript folded is not a capability and a phone has a use for the
+    // answer. These files are the opposite on both counts — they name hook
+    // commands, permission rules and the values of environment variables, and
+    // no client off this machine configures the CLI — so there is nothing to
+    // weigh against caution, and a leaked token should not be able to read
+    // them. A prefix rather than an exact path, so anything added under
+    // /api/claude-config later is refused by default rather than by being
+    // remembered.
+    if (pathname === '/api/claude-config' || pathname.startsWith('/api/claude-config/')) {
+        return 'Claude Code’s own settings can only be read and written on the machine they live on';
     }
     // A handoff starts a turn in a session the caller is not looking at, and can
     // wake one that has no process at all. That is a reasonable thing for an
@@ -2098,6 +2167,79 @@ async function api(req, res, url, pathname, who) {
         // business and arrives with the transcript.
         broadcast('prefs', prefs.page(''));
         return send(res, 200, { file: saved.file, prefs: saved.prefs, files: saved.files });
+    }
+
+    // ── Claude Code's own settings ──────────────────────────────────────────
+    //
+    // The chain, the merged reading of it, and everything in the files that
+    // this app has no control for — see bridge/claude-config.js for why that
+    // last part is the whole point rather than a nicety.
+    //
+    // Local callers only, **including the GET**, which is the opposite of
+    // /api/prefs. There the argument for an open GET was that a phone has a use
+    // for how somebody wants a transcript folded. These files name hook
+    // commands, permission rules and the *values* of environment variables, and
+    // no client that is not on this machine has any use for them — so there is
+    // nothing to weigh against caution. See docs/remote.md.
+    if (pathname === '/api/claude-config' && req.method === 'GET') {
+        const cwd = url.searchParams.get('cwd') || '';
+        return send(res, 200, await claudeConfigPayload(cwd));
+    }
+
+    // Two bodies, one route. `patch` is `{dotted.path: value|null}` and touches
+    // only the paths it names; `text` replaces the document and is the only
+    // thing that can repair a file which no longer parses. Exactly one of them.
+    //
+    // `stamp` is the precondition that makes this safe to offer at all: these
+    // files are written by `claude` itself, so "the file I read" is a claim
+    // worth checking rather than an assumption. It is required for a whole
+    // collection and for a whole document, and deliberately not for one scalar.
+    if (pathname === '/api/claude-config' && req.method === 'PUT') {
+        const body = await readJson(req);
+        const hasPatch = body.patch !== undefined;
+        const hasText = body.text !== undefined;
+        if (hasPatch === hasText) {
+            return send(res, 400, {
+                error: 'send exactly one of patch or text', code: 'body',
+            });
+        }
+        let saved;
+        try {
+            const req_ = {
+                scope: body.scope || 'user',
+                dir: body.cwd || '',
+                // Absent and null mean different things — "I am only setting a
+                // scalar" and "this file should not exist" — so the distinction
+                // has to survive the JSON.
+                stamp: Object.prototype.hasOwnProperty.call(body, 'stamp') ? body.stamp : undefined,
+            };
+            saved = hasPatch
+                ? claudeConfig.save({ ...req_, patch: body.patch })
+                : claudeConfig.saveText({ ...req_, text: body.text });
+        } catch (err) {
+            return send(res, claudeConfigStatus(err.code), {
+                error: err.message,
+                code: err.code || 'save',
+                // A conflict carries the file as it is now, so the page can say
+                // what changed instead of only that something did.
+                ...(err.detail || {}),
+            });
+        }
+        // The fact of a change, not its content: nothing in this app behaves
+        // differently because of these files, so a listening window only needs
+        // to know it should re-read. Broadcasting the content would also push a
+        // file this route classifies as local-only down every open channel.
+        broadcast('claude-config', {
+            at: Date.now(), scope: body.scope || 'user', file: saved.file,
+        });
+        // The same shape the GET returns, so a client can take the answer
+        // wholesale rather than patching its own copy — and so the `ignored`
+        // and `running` fields do not vanish from a page's state on a save.
+        return send(res, 200, {
+            file: saved.file,
+            stamp: saved.stamp,
+            config: await claudeConfigPayload(body.cwd || ''),
+        });
     }
 
     // What may be rebound, and the closed set of key names a combo may end in.
