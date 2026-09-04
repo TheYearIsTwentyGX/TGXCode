@@ -1941,9 +1941,29 @@ a:hover { text-decoration: underline; }
     0%, 55% { background: var(--blue-tint); }
     100% { background: transparent; }
 }
+/* A settings row whose value moved while the panel was open — Claude Code
+ * writing its own settings file. Deliberately the transcript's flash rather
+ * than a second idea about what "this just changed" looks like; both fade to
+ * transparent, which is what a row with no resting background of its own
+ * needs. See claudeFlash() in web/app.js. */
+.settings-row.flash {
+    border-radius: var(--r-sm);
+    animation: flash-settings-row 1.3s var(--ease);
+}
+/* The transcript's `flash-row` timing exactly — hold, then fade — but the
+ * highlight is carried out past the row by a spread `box-shadow` as well as
+ * filling it. A settings row has `padding: 14px 0`, so background alone stops
+ * dead at the text on both sides and reads as a clipped rectangle rather than
+ * as this row. A shadow does it without taking part in layout, which a margin
+ * would. */
+@keyframes flash-settings-row {
+    0%, 55% { background: var(--blue-tint); box-shadow: 0 0 0 8px var(--blue-tint); }
+    100% { background: transparent; box-shadow: 0 0 0 8px transparent; }
+}
 @media (prefers-reduced-motion: reduce) {
     .ev-user.flash .ev-body,
-    .ev:not(.ev-user).flash .ev-body { animation: none; }
+    .ev:not(.ev-user).flash .ev-body,
+    .settings-row.flash { animation: none; }
 }
 
 /* ── find in conversation ────────────────────────────────────────────── */

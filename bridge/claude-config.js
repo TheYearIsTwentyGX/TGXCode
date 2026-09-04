@@ -33,6 +33,21 @@
 //      Claude Code does not define into the user's own file. This is the reason
 //      the two cannot share `save()`, more than any of the above.
 //
+// Because another program is the writer, this module also *watches* — the one
+// place it departs from bridge/prefs.js on liveness rather than on schema.
+// prefs.js re-stats behind a 2s cache and says why: "one inotify watcher for a
+// file that changes monthly is a poor trade". That holds for its file, which
+// only this app writes and which is read once per session open. It does not
+// transfer. The settings page holds a view of these files open across minutes
+// while `claude` writes them, and there is nothing to re-stat *against*,
+// because no request is in flight while a panel simply sits there. So a change
+// underneath is broadcast rather than waited for. See start() and _report().
+//
+// The watch is liveness and only liveness. The `stamp` precondition above is
+// what makes a save correct, and it is unchanged by any of this: a watch that
+// never fires — fs.watch throws on some filesystems and silently does nothing
+// on others — costs a stale panel and not a lost permission rule.
+//
 // What this module will not do: merge on conflict. We do not own the schema, so
 // we cannot merge safely — `hooks` is an array where order matters and a naive
 // union produces a hook that fires twice per tool call. A conflict is refused
@@ -71,6 +86,27 @@ const WALK_DEPTH = 3;
 // A settings file people also hand-edit; the cache is short because the whole
 // point of the page is that it never shows a stale value.
 const CACHE_MS = 1000;
+
+// The debounce on the watch. A `tmp` + `rename` fires more than once on its
+// own, and a program that writes two of these files in a turn fires again on
+// top. registry.js settles for 500ms over a directory of many files; this one
+// has four, and 200ms is short enough that a panel repaints while the person
+// who typed `/config` is still looking at it.
+const SETTLE_MS = 200;
+
+// Project directories watched at once. There are ~100 checkouts under
+// ~/.claude/projects on this machine and the panel is usually closed, so a
+// watcher per checkout is the wrong shape — the ones somebody actually asked
+// about are kept and the rest are dropped.
+const MAX_PROJECT_DIRS = 8;
+
+// A project directory nobody has read for this long stops being watched. Ten
+// minutes outlives a panel left open across a couple of turns.
+const WATCH_IDLE_MS = 10 * 60_000;
+
+// How often the idle sweep looks. Nothing depends on its promptness: a watcher
+// held a minute too long costs one inotify slot.
+const SWEEP_MS = 60_000;
 
 /**
  * Every file that decides what `claude` does in a directory, weakest first.
@@ -263,9 +299,198 @@ const ourStatusLine = (line) => !!line && typeof line === 'object'
     && typeof line.command === 'string' && line.command.includes('quota-statusline.py');
 
 class ClaudeConfig {
-    constructor() {
+    /**
+     * @param {{onChange?: (e: {at: number, scope: string, file: string}) => void}} [opts]
+     *   `onChange` is called when a file in the chain moves underneath us — the
+     *   same `{at, scope, file}` the PUT route broadcasts, because a listener
+     *   has no use for the difference. Omitted, nothing is watched to no
+     *   purpose: every read still re-stats behind CACHE_MS.
+     */
+    constructor({ onChange = null } = {}) {
         /** @type {Map<string, {at: number, value: any}>} workspace ('' for user only) -> payload */
         this.cache = new Map();
+        this.onChange = onChange;
+        /**
+         * Live watches, keyed by the *directory* watched rather than the file.
+         * @type {Map<string, {watcher: fs.FSWatcher, files: Array<{file: string,
+         *   scope: string}>, at: number, pinned: boolean}>}
+         */
+        this.watches = new Map();
+        /**
+         * The stamp each file had when it was last reported — or last written by
+         * us. Comparing against this is what makes a change a change.
+         * @type {Map<string, string|null>}
+         */
+        this.seen = new Map();
+        this.watching = false;
+        this._timer = null;
+        this._sweep = null;
+    }
+
+    // -- watching ----------------------------------------------------------
+
+    /**
+     * Begin watching. Idempotent, and safe on a filesystem with no watches.
+     *
+     * The user's file is watched from here rather than lazily: there is one of
+     * it, it is the one `/config` writes, and a panel that has not been opened
+     * yet is exactly when somebody is off typing `/config`.
+     */
+    start() {
+        if (this.watching) return;
+        this.watching = true;
+        this._watchChain('');
+        this._sweep = setInterval(() => this._sweepIdle(), SWEEP_MS);
+        this._sweep.unref();
+    }
+
+    stop() {
+        this.watching = false;
+        for (const key of [...this.watches.keys()]) this._drop(key);
+        if (this._timer) { clearTimeout(this._timer); this._timer = null; }
+        if (this._sweep) { clearInterval(this._sweep); this._sweep = null; }
+    }
+
+    /**
+     * Arm a watch on every directory the chain for `dir` reads from.
+     *
+     * Called from read(), so asking about a project is what starts watching it
+     * and a watch that could not be armed — a checkout with no `.claude` yet —
+     * is retried the next time somebody asks rather than being written off.
+     */
+    _watchChain(dir) {
+        if (!this.watching || !this.onChange) return;
+        /** @type {Map<string, {files: Array<object>, pinned: boolean}>} */
+        const byDir = new Map();
+        for (const spec of chainFor(dir)) {
+            const key = path.resolve(path.dirname(spec.file));
+            if (!byDir.has(key)) byDir.set(key, { files: [], pinned: false });
+            const group = byDir.get(key);
+            group.files.push({ file: spec.file, scope: spec.scope });
+            // The user's file and an administrator's are watched for as long as
+            // the bridge is up; a project's only while somebody asks about it.
+            // Grouping by directory first is also what keeps the two straight
+            // when they turn out to be the same directory.
+            if (spec.scope === 'user' || spec.scope === 'managed') group.pinned = true;
+        }
+        for (const [key, group] of byDir) this._arm(key, group.files, group.pinned);
+    }
+
+    /** One directory. `files` are the ones in it this module answers for. */
+    _arm(dir, files, pinned) {
+        const have = this.watches.get(dir);
+        if (have) {
+            have.at = Date.now();
+            have.pinned = have.pinned || pinned;
+            for (const f of files) {
+                if (!have.files.some(x => x.file === f.file)) have.files.push(f);
+            }
+            this._seed(have.files);
+            return;
+        }
+        if (!pinned) this._evict();
+        // **The directory, not the file.** Both this app's writeAtomic and
+        // Claude Code's own writes are `tmp` + `rename`, which replaces the
+        // inode — so a watch on the path fires once and then watches a file
+        // nothing will ever write again. This is the mistake that makes the
+        // whole feature stop working after a single edit.
+        let watcher;
+        try {
+            watcher = fs.watch(dir, { persistent: false }, () => this._schedule());
+            watcher.on('error', () => { /* directory gone; nothing left in it to report */ });
+        } catch {
+            // Unwatchable filesystem, or no `.claude` here yet. Liveness only:
+            // the 409 still refuses a write against a file that moved.
+            return;
+        }
+        this._seed(files);
+        this.watches.set(dir, { watcher, files: [...files], at: Date.now(), pinned });
+    }
+
+    /**
+     * Record what each file looks like now, so the first event is judged
+     * against what the page was told rather than against nothing.
+     */
+    _seed(files) {
+        for (const f of files) {
+            if (!this.seen.has(f.file)) this.seen.set(f.file, stampNow(f.file));
+        }
+    }
+
+    _drop(dir) {
+        const entry = this.watches.get(dir);
+        if (!entry) return;
+        try { entry.watcher.close(); } catch { /* already gone */ }
+        // The remembered stamps go with the watch, so `seen` cannot grow one
+        // entry per project this bridge has ever been asked about — and so a
+        // directory that comes back is judged against what it looks like then
+        // rather than against what it looked like before it was dropped, which
+        // would report a change the read that re-armed it has already returned.
+        for (const f of entry.files) this.seen.delete(f.file);
+        this.watches.delete(dir);
+    }
+
+    /** Make room for one more, oldest read first. Pinned rows are never taken. */
+    _evict() {
+        const spare = [...this.watches.entries()].filter(([, e]) => !e.pinned);
+        if (spare.length < MAX_PROJECT_DIRS) return;
+        spare.sort((a, b) => a[1].at - b[1].at);
+        for (const [key] of spare.slice(0, spare.length - MAX_PROJECT_DIRS + 1)) this._drop(key);
+    }
+
+    _sweepIdle() {
+        const cutoff = Date.now() - WATCH_IDLE_MS;
+        for (const [key, entry] of [...this.watches]) {
+            if (!entry.pinned && entry.at < cutoff) this._drop(key);
+        }
+    }
+
+    _schedule() {
+        if (this._timer) return;
+        this._timer = setTimeout(() => {
+            this._timer = null;
+            this._report();
+        }, SETTLE_MS);
+    }
+
+    /**
+     * What actually moved — decided by stamp, not by the event.
+     *
+     * The event is not evidence on its own, for three separate reasons, and
+     * one stat per watched file answers all of them. `~/.claude` is a busy
+     * directory: `history.jsonl`, `daemon.log` and a handful of lock files are
+     * direct children of it and churn constantly, so most events here are
+     * about nothing. `filename` would filter those, but it is `null` on some
+     * platforms and this cannot be the thing that decides. And a `rename`
+     * fires more than once for one write, so the second event has to come to
+     * nothing rather than to a duplicate broadcast.
+     *
+     * It also does the echo suppression for free: _write() records its own
+     * stamp, so a write this bridge made is already "unchanged" here. Without
+     * that, every save would be followed by a second `claude-config` the page
+     * cannot tell from somebody else's change — and would draw a conflict
+     * banner over, in the worst case, the user's own edit.
+     */
+    _report() {
+        const changed = [];
+        for (const entry of this.watches.values()) {
+            for (const f of entry.files) {
+                const now = stampNow(f.file);
+                if (now === this.seen.get(f.file)) continue;
+                this.seen.set(f.file, now);
+                changed.push(f);
+            }
+        }
+        if (!changed.length) return;
+        // The page re-reads on this event, and CACHE_MS is a second of clock:
+        // long enough that the read it makes could be served the answer from
+        // before the write that triggered it.
+        this.cache.clear();
+        for (const f of changed) {
+            try {
+                this.onChange({ at: Date.now(), scope: f.scope, file: f.file });
+            } catch { /* a listener that throws is not this module's business */ }
+        }
     }
 
     /**
@@ -295,6 +520,10 @@ class ClaudeConfig {
      */
     read(dir) {
         const key = dir || '';
+        // Before the cache check, so a cached answer still counts as somebody
+        // asking about this directory. This is what arms a project's watch —
+        // see _watchChain() for why a project's is not armed until then.
+        this._watchChain(key);
         const hit = this.cache.get(key);
         if (hit && Date.now() - hit.at < CACHE_MS) return hit.value;
 
@@ -513,6 +742,10 @@ class ClaudeConfig {
         } catch (err) {
             throw refuse('write', `${file}: ${err.message}`);
         }
+        // Our own write, so the watch has nothing to report. Recording it here
+        // rather than ignoring events for a window is what makes the
+        // suppression exact — see _report().
+        this.seen.set(file, stampNow(file));
         this.cache.clear();
     }
 

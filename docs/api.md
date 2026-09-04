@@ -1719,7 +1719,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `suggestion-changed` | `{at, sessionId, toolUseId}` — a suggested follow-up was started, dismissed, or undone, possibly in another window |
 | `session-deleted` | `{sessionId, title}` |
 | `prefs` | the **user-level** settings, in the same shape as the `cs-prefs` `<meta>` tag: `{version, transcript, live, quota, spinner, keyboard}`, with no `sources` or `problems`. Fired on every `PUT /api/prefs` including your own, so a second window does not sit on a stale copy — two are routinely open here. A project's answer is deliberately not sent: it is the open session's business and arrives with `GET /api/sessions/:id` |
-| `claude-config` | `{at, scope, file}` — the *fact* that one of Claude Code's settings files was written, and deliberately **not** its content. Unlike `prefs` there is no `<meta>` copy for a page to keep in sync and nothing in this app behaves differently because of those files, so the event is a nudge to re-read; pushing the contents of a file whose route is local-only down every open channel would be a poor trade for saving a fetch. Fired on every successful `PUT /api/claude-config`, including your own |
+| `claude-config` | `{at: number, scope: 'user'\|'project'\|'project-local'\|'managed', file: string}` — the *fact* that one of Claude Code's settings files changed, and deliberately **not** its content. Unlike `prefs` there is no `<meta>` copy for a page to keep in sync and nothing in this app behaves differently because of those files, so the event is a nudge to re-read; pushing the contents of a file whose route is local-only down every open channel would be a poor trade for saving a fetch. Fired on every successful `PUT /api/claude-config`, including your own — **and on a change this bridge did not make**: `claude` writes these files itself, so `theme` or `editorMode` from `/config`, `enabledPlugins` from a plugin toggle, and a rule appended to `settings.local.json` when somebody approves a permission mid-turn all arrive here too. `scope` may then be `managed`, which no `PUT` can produce. **Two caveats a client has to hold.** It is best-effort: the bridge watches directories with `fs.watch`, which throws on some filesystems and silently does nothing on others, so a change can go unannounced — keep treating `409 {code:'stale'}` from `PUT /api/claude-config` as the guarantee, and this only as the convenience that usually saves you from meeting it. And a project's two files are watched only once `GET /api/claude-config?cwd=<dir>` has been called for that directory, only for a small number of directories at a time (least-recently-read dropped first), and not after ten minutes without another read of it; the user file and the managed file are watched throughout. So poll or re-`GET` if you need certainty about a directory you have not asked about |
 | `notification` | a whole notification row, just filed — the same shape `GET /api/notifications` returns, `read` included — plus `unread`, the badge count after this row. So an open history view need not refetch, and need not guess whether the new row counts |
 | `notification-resolved` | `{id, outcome, outcomeAt}` — patch the row with that `id`; fired alongside `permission-resolved` |
 | `notification-read` | `{sessionId: string\|null, at: number, unread: number}` — a watermark moved, here or in another window. `sessionId` is `null` when the whole log was marked. Fold `at` into your copy of `read` and repaint |
@@ -2192,6 +2192,17 @@ a plugin the settings file has never mentioned.
 `running` is how many sessions have a live process — scoped to `cwd` when one is
 given, otherwise every session. It is there for one sentence: a change to these
 files reaches the *next* session and not the ones already going.
+
+**This call has a side effect: it starts watching the directory you named.**
+From then on a change to that project's two files raises the `claude-config`
+event on `/api/events`, so a client showing these settings need not poll. The
+user and managed files are watched from startup regardless. It is dropped again
+after ten minutes without another read of that directory, or sooner if reads of
+other directories push it past the small cap the bridge keeps — so a long-lived
+view should re-`GET` rather than assume the watch outlives it. See the
+`claude-config` row in §*Server-sent events* for the caveats, of which the
+important one is that the watch is best-effort and `409 {code: "stale"}` below
+remains the actual guarantee.
 
 ### `PUT /api/claude-config`
 
@@ -2718,6 +2729,15 @@ never to re-send with the fresh stamp, which would do the clobber the
 precondition just prevented. There is no merge, deliberately: this bridge does
 not own the schema, and `hooks` is an array where order matters. See
 §`PUT /api/claude-config`.
+
+**The `claude-config` event is a convenience; the `409` is the contract.** The
+bridge watches these files and broadcasts when one moves underneath it, so a
+view left open can repaint instead of finding out on its next save. But
+`fs.watch` throws on some filesystems and silently does nothing on others, and a
+project is only watched after it has been read — so a client that treats a
+missing event as proof nothing changed will eventually clobber a permission rule.
+Send the `stamp` and handle the `409`; the event only makes meeting it rare. See
+the `claude-config` row in §*Server-sent events*.
 
 **`permissions.allow` is a union, not an override.** Three paths — `allow`, `deny`
 and `ask` — add up across every file in the chain, so the reflex borrowed from
