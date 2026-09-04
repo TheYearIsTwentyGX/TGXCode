@@ -27,7 +27,8 @@ const { Suggestions, STATUSES: SUGGESTION_STATUSES } = require('./suggestions');
 const { Drafts, MAX_DRAFTS } = require('./drafts');
 const {
     Schedules, MAX_SCHEDULES, CATCHUP_MS,
-    parseCron, nextSlot, dueSlot, describeCron, cronForm, fillPrompt, verdictOf,
+    parseCron, nextSlot, dueSlot, describeCron, cronForm, fillPrompt, unattended,
+    verdictOf,
     reviewKey, unreviewedPulls, scheduleTitle,
 } = require('./schedule');
 const { SlashCommandCache } = require('./slash-commands');
@@ -1204,7 +1205,13 @@ async function runSchedule(row, { force = false, who = LOCAL_CALLER, target = nu
             error: `more than ${CREATE_LIMIT.max} sessions started in a minute` };
     }
 
-    const prompt = fillPrompt(row.prompt, facts);
+    // Placeholders filled, then the note that nobody is watching — see
+    // `unattended` in bridge/schedule.js for why it is appended rather than put
+    // in front. This is the only expression that produces what a scheduled
+    // session is actually sent, so putting it here is what makes the tick, the
+    // pull-request drain and Run now agree; and Run now getting it too is the
+    // point of the docstring above, not an oversight.
+    const prompt = unattended(fillPrompt(row.prompt, facts));
     let out;
     try {
         out = pool.create({ cwd: row.cwd, prompt, model: row.model, permissionMode: mode });
@@ -2747,6 +2754,28 @@ async function api(req, res, url, pathname, who) {
                         + 'some before adding another',
                 });
             }
+
+            // **The draft this schedule was converted from, consumed here rather
+            // than by the client.**
+            //
+            // `POST /api/drafts/:id/start` makes the argument and this is the same
+            // shape of it: a client doing this as two calls has to decide for
+            // itself what happens when the second one fails, and there are three
+            // clients to decide it three ways. Done here, the order is the answer
+            // — the draft is the copy of this work that still exists if the save
+            // above throws, so it goes last and only on success.
+            //
+            // Deliberately *not* stored on the row. `clean()` in schedule.js is a
+            // whitelist another bridge would strip the field back out of within a
+            // tick (docs/plans/15-scheduling.md), and nothing after this moment
+            // has a use for it: the draft is gone.
+            //
+            // An id that names nothing is not an error. The schedule saved, which
+            // is what was asked for; the draft was already deleted, or belonged to
+            // a bridge with a different store.
+            const from = typeof body.fromDraft === 'string' ? body.fromDraft : null;
+            if (from && drafts.remove(from)) broadcast('drafts-changed', draftsPayload());
+
             broadcast('schedules-changed', schedulesPayload());
             return send(res, 200, { schedule: scheduleOut(row) });
         }

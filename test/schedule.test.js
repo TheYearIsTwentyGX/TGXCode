@@ -28,6 +28,7 @@ process.env.XDG_DATA_HOME = home;
 const {
     Schedules, STATE_FILE, RUNS_FILE, MAX_SCHEDULES, CATCHUP_MS,
     parseCron, matches, nextSlot, dueSlot, describeCron, cronForm, fillPrompt,
+    unattended, UNATTENDED_NOTE,
     verdictOf, reviewKey, unreviewedPulls, pruneReviews, capReviews, MAX_REVIEWED,
     scheduleTitle, promptPrefix,
 } = require('../bridge/schedule');
@@ -436,6 +437,40 @@ const show = (ms) => (ms == null ? 'null' : new Date(ms).toString().slice(0, 21)
         fillPrompt('/adversarial-reviewer --diff {{range}}', { head, since }),
         `/adversarial-reviewer --diff ${'b'.repeat(12)}..${'a'.repeat(12)}`);
     ok('prompt placeholders, the no-marker fallback, and unknown ones left intact');
+}
+
+// --- running unattended -------------------------------------------------
+
+{
+    const prompt = '/adversarial-reviewer --diff {{range}}\nBe thorough.';
+    const said = unattended(prompt);
+
+    // The message somebody wrote is still there, intact and exactly once.
+    assert.ok(said.includes(prompt), 'the original prompt survives verbatim');
+    assert.strictEqual(said.split(UNATTENDED_NOTE).length - 1, 1,
+        'the note is added once, not once per line');
+
+    // **The assertion this group exists for.** `forSession` ties a session back
+    // to the schedule that started it by testing that the session's first prompt
+    // *starts with* `promptPrefix(row.prompt)`. So the note has to go on the end:
+    // a preamble would break that match for every scheduled run, and break it
+    // silently — the runs would still happen and simply stop being attributed.
+    assert.ok(said.startsWith(promptPrefix(prompt)),
+        'the prompt head is untouched, so forSession can still match on it');
+
+    // A prompt that is only a placeholder has no head to preserve, and the note
+    // must not fill the gap with one.
+    assert.ok(unattended('{{range}}').startsWith('{{range}}'));
+
+    // Trailing blank lines in the stored prompt do not stack up in front of the
+    // rule, which would leave a run of empty lines mid-message.
+    assert.strictEqual(unattended('do the thing\n\n\n'), unattended('do the thing'));
+
+    // It says the two things a session with nobody in front of it has to know:
+    // that no answer is coming, and where to leave what it found.
+    assert.ok(/unattended/i.test(said));
+    assert.ok(/transcript/i.test(said));
+    ok('the unattended note is appended, said once, and leaves the prompt head alone');
 }
 
 // --- the verdict --------------------------------------------------------

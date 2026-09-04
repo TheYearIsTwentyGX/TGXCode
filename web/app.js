@@ -427,7 +427,14 @@ const state = {
     // Schedules, on exactly the same terms as drafts above — an unconditional
     // push, held as sent. `editing` is the id the dialog has open, which is also
     // what puts the dialog into schedule mode at all: see openNew().
-    sched: { open: false, rows: [], at: 0, loading: false, error: null, editing: null },
+    // `fromDraft` is the draft a Schedule press converted, held from the moment
+    // the dialog reopens in schedule mode until the save that consumes it. It is
+    // not `editing` — the schedule does not exist yet — and it is deliberately
+    // not stored on the schedule either; see drToSchedule().
+    sched: {
+        open: false, rows: [], at: 0, loading: false, error: null,
+        editing: null, fromDraft: null,
+    },
     // The settings panel. `data` is a `?files=1` answer — what is in force plus
     // what each file in the chain says on its own, which is what lets a control
     // tell a value you set from one you inherited.
@@ -501,7 +508,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'set-g-notify', 'set-g-pair',
     'new-cron', 'new-cron-row', 'new-cron-note', 'new-gate-ref', 'new-gate-row',
     'new-gate-kind', 'new-gate-note', 'new-gate-ref-row', 'new-pr-row',
-    'new-pr-drafts', 'new-pr-post', 'new-sched-save',
+    'new-pr-drafts', 'new-pr-post', 'new-sched-save', 'new-sched',
     'new-when-date', 'new-when-once-time', 'new-when-count', 'new-when-unit',
     'new-when-daily-time', 'new-when-weekly-time', 'new-when-days',
     'new-when-dom', 'new-when-monthly-time',
@@ -510,7 +517,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'btn-live', 'live-badge', 'live', 'live-sub', 'live-body', 'live-focus', 'focus-exit',
     'live-side', 'live-side-label', 'live-side-a', 'live-side-b',
     'new-scrim', 'new-cwd', 'new-picker', 'new-prompt', 'new-model', 'new-perm',
-    'new-test', 'new-test-row', 'new-go', 'new-save', 'new-title',
+    'new-test', 'new-test-row', 'new-go', 'new-save', 'new-title', 'new-name',
     'new-tab-recent', 'new-tab-browse', 'new-browse', 'new-roots', 'new-crumbs',
     'new-tree', 'new-mkdir', 'new-mkdir-name', 'new-mkdir-go', 'new-browse-note',
     'del-scrim', 'del-what', 'del-meta', 'del-go',
@@ -7221,13 +7228,21 @@ function tbArchive(s) {
 // `POST /api/sessions` takes, validated the same way when it is saved, so
 // pressing Start cannot fail for any reason you could have been told about
 // earlier. That is also why there is no second form — the Start-a-session dialog
-// already collects exactly these fields, so it grew a second button instead.
+// already collects exactly these fields, so it grew a third and a fourth: Save as
+// draft, and Schedule.
 //
 // **Nothing here moves on its own**, so none of the two boards' machinery is
 // needed: no watcher-gated tick to subscribe to, and no `tbRememberOrder` ranks
 // to stop a card sliding out from under the cursor. The bridge pushes the whole
 // list on `drafts-changed` whenever somebody changes something, and this draws it
 // in the order it arrived — newest-edited first.
+//
+// **The board is a column per project once there are two**, which is the task
+// board's shape borrowed for a different question. Over there a column is a
+// state; here it is a place, and the order of the columns is which project you
+// touched last. It costs no sort — see `draftGroups` — and below two projects it
+// stays the single readable column it has always been, because a column with
+// nothing to be told apart from is just a narrower list.
 
 function showDrafts(on) {
     state.drafts.open = on;
@@ -7314,22 +7329,28 @@ function paintDraftsBadge() {
 
 function renderDrafts() {
     const rows = state.drafts.rows;
+    const groups = draftGroups(rows);
+    // One project is one column, which is a column that says nothing — the same
+    // threshold the sub-headings used to use, now deciding the whole layout.
+    // Below it the panel stays the readable single column it has always been; at
+    // two it becomes the task board's shape.
+    const cols = groups.size >= 2;
 
-    dom.drSub.textContent = rows.length
-        ? `${rows.length} ${rows.length === 1 ? 'draft' : 'drafts'}, newest edit first.`
-        : 'Sessions you have set up but not started.';
+    dom.drSub.textContent = !rows.length
+        ? 'Sessions you have set up but not started.'
+        : cols
+            ? `${rows.length} drafts across ${groups.size} projects, newest edit first.`
+            : `${rows.length} ${rows.length === 1 ? 'draft' : 'drafts'}, newest edit first.`;
 
     if (state.drafts.error) {
+        dom.drBody.classList.remove('cols');
         dom.drBody.replaceChildren(el('div', { class: 'dr-note' },
             el('p', {}, `Could not read the drafts. ${state.drafts.error}`)));
         return;
     }
 
-    // The panel scrolls as one column, and a push would otherwise throw the
-    // scroll position away mid-read every time anything changed.
-    const scroll = dom.drBody.scrollTop;
-
     if (!rows.length) {
+        dom.drBody.classList.remove('cols');
         dom.drBody.replaceChildren(el('div', { class: 'dr-note' },
             el('p', {}, 'Nothing set up yet.'),
             el('p', { class: 'dim' }, 'A draft is a session with its directory, first '
@@ -7342,34 +7363,88 @@ function renderDrafts() {
         return;
     }
 
-    dom.drBody.replaceChildren(...draftCards(rows));
-    dom.drBody.scrollTop = scroll;
+    if (!cols) {
+        // The panel scrolls as one column, and a push would otherwise throw the
+        // scroll position away mid-read every time anything changed.
+        dom.drBody.classList.remove('cols');
+        const scroll = dom.drBody.scrollTop;
+        dom.drBody.replaceChildren(...rows.map(draftCard));
+        dom.drBody.scrollTop = scroll;
+        return;
+    }
+
+    // Each column scrolls on its own and the row of them scrolls sideways, so a
+    // rebuild throws away as many positions as there are projects unless every
+    // one of them is carried across — renderTaskboard's problem, and its answer.
+    // Keyed by project rather than by position: a column that has just moved
+    // left, because somebody edited a draft in it, should keep its own place in
+    // its own list rather than inherit the neighbour's.
+    const scrolls = new Map();
+    for (const c of dom.drBody.querySelectorAll('.tb-col-body')) {
+        scrolls.set(c.dataset.project, c.scrollTop);
+    }
+    const across = dom.drBody.scrollLeft;
+
+    dom.drBody.classList.add('cols');
+    dom.drBody.replaceChildren(
+        ...[...groups].map(([name, list]) => draftColumn(name, list)));
+
+    for (const c of dom.drBody.querySelectorAll('.tb-col-body')) {
+        if (scrolls.has(c.dataset.project)) c.scrollTop = scrolls.get(c.dataset.project);
+    }
+    dom.drBody.scrollLeft = across;
 }
 
 /**
- * Grouped by project, the way the task board groups suggested tasks.
+ * The drafts, by project.
  *
- * And with the same rule: a heading over the whole column says nothing, so
- * grouping only earns its keep once there is more than one group to tell apart.
+ * **The order of the keys is the order of the columns, and it needs no sort.**
+ * The bridge hands the rows over newest-`updatedAt` first, and `updatedAt` moves
+ * on a create as well as on an edit — so the first row of a project is its most
+ * recently touched draft, and a Map keeps the order its keys were first seen in.
+ * Walking the rows once therefore lands the projects in exactly the order the
+ * board wants them: most recently added-or-edited first. Quietly load-bearing,
+ * which is why it is written down here rather than left to be rediscovered — an
+ * object keyed by name would not hold it, and neither would a second pass that
+ * sorted the groups by anything else.
+ *
  * `projectName` comes off the payload rather than being derived here, so every
  * client agrees about which project a directory belongs to.
  */
-function draftCards(rows) {
+function draftGroups(rows) {
     const groups = new Map();
     for (const d of rows) {
         const name = d.projectName || 'unknown';
         if (!groups.has(name)) groups.set(name, []);
         groups.get(name).push(d);
     }
-    if (groups.size < 2) return rows.map(draftCard);
+    return groups;
+}
 
-    const out = [];
-    for (const [name, list] of groups) {
-        out.push(el('h3', { class: 'tb-sub-head' }, name,
-            el('span', {}, String(list.length))));
-        out.push(...list.map(draftCard));
-    }
-    return out;
+/**
+ * One project, as a column.
+ *
+ * The task board's own chrome — `tb-col`, `tb-col-head`, `tb-count`,
+ * `tb-col-body` — rather than a second set of styles for a shape that already
+ * exists, which is the borrowing `draftCard` below already does with `tb-card`.
+ *
+ * What differs is what a column *means*. Over there it is a state, and the
+ * colour says which one; here it is a project, and there is nothing for a colour
+ * to say. So the head carries none — `.tb-col[data-col="needs"]` is keyed on an
+ * attribute this section deliberately does not have — and the cards keep
+ * `.dr-card`'s quiet stripe, which is still the right one: a draft is the thing
+ * in this app that is explicitly not asking for anything.
+ */
+function draftColumn(name, list) {
+    return el('section', { class: 'tb-col dr-col', 'data-project': name },
+        el('header', { class: 'tb-col-head' },
+            el('h2', { title: name }, name),
+            el('span', { class: 'tb-count' }, String(list.length)),
+        ),
+        el('div', { class: 'tb-col-body', 'data-project': name },
+            ...list.map(draftCard),
+        ),
+    );
 }
 
 /**
@@ -12307,7 +12382,8 @@ async function loadProjects() {
 /**
  * The Start-a-session dialog, which is also the edit-a-draft dialog.
  *
- * @param {{cwd?: string, tab?: 'recent'|'browse', prompt?: string, draft?: object}} [opts]
+ * @param {{cwd?: string, tab?: 'recent'|'browse', prompt?: string, draft?: object,
+ *   schedule?: object|boolean, seed?: object}} [opts]
  *   `cwd` is a caller that has already answered "where" — the split menu passes
  *   the row you clicked. Without one the dialog opens where it always has: the
  *   session on screen, else the most recent project. `prompt` fills the first
@@ -12321,6 +12397,15 @@ async function loadProjects() {
  *   this one already collects — a second form would be the same six controls
  *   with a different chance of drifting.
  *
+ *   `schedule` is the same trick again: `true` for a new one, a row to edit that
+ *   one. It shows the two rows only a schedule has, and swaps the footer.
+ *
+ *   `seed` is prefill for a schedule that has no row yet — what the Schedule
+ *   button hands over when it converts what is on screen. It reads like a row
+ *   here, so the prefills below take it as one; the difference is that it leaves
+ *   `state.sched.editing` null, so the save is a POST rather than a PATCH. Its
+ *   one extra key is `fromDraft`, the draft the save will consume.
+ *
  * **Model and permission mode are written on every open, in both directions.**
  * They used to be left alone, which was harmless while the dialog only ever
  * started things: the selects kept your last choice, which was usually what you
@@ -12329,7 +12414,7 @@ async function loadProjects() {
  * brand-new session, having been asked for once, about something else.
  */
 async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
-    schedule = null } = {}) {
+    schedule = null, seed = null } = {}) {
     // `schedule: true` means "a new one"; a row means "edit that one". The two
     // have to be told apart because only the second has fields to prefill, and
     // both have to put the dialog in schedule mode.
@@ -12337,11 +12422,16 @@ async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     const schedMode = Boolean(schedule);
     // A draft and a schedule are the same fields with a different owner, so one
     // local stands in for whichever is being edited and the prefill below reads
-    // from it once instead of branching on every line.
-    const src = sched || draft;
+    // from it once instead of branching on every line. A `seed` joins them as a
+    // third: the same fields again, from something that is not a stored row.
+    const src = sched || seed || draft;
 
     state.drafts.editing = draft ? draft.id : null;
+    // A seed is prefill, not an edit — the schedule it describes does not exist
+    // yet — so `editing` stays null and schedSave still POSTs. What it does carry
+    // is which draft it came from, if any.
     state.sched.editing = sched ? sched.id : null;
+    state.sched.fromDraft = seed ? (seed.fromDraft || null) : null;
 
     // Ctrl+N over a live composer with `/rev` half-typed in it is reachable, and
     // a popover anchored to a box that is now behind a modal is nothing but
@@ -12351,6 +12441,10 @@ async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     dom.newScrim.hidden = false;
     dom.newPrompt.value = src ? src.prompt : prompt;
     growPrompt();
+    // Written on every open in both directions, the rule this docstring states:
+    // a name left behind from the last draft you looked at would be attached to
+    // the next thing you saved.
+    dom.newName.value = src ? (src.title || '') : '';
     dom.newTest.checked = src ? !!src.test : false;
     dom.newModel.value = src ? (src.model || '') : '';
     // The dialog's own default, and deliberately not the composer's: the first
@@ -12376,8 +12470,12 @@ async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     // reading of one: `cronForm` is what says which row an existing schedule
     // belongs on. A new schedule opens on Weekly, Tue–Sat at 02:00 — the same
     // suggestion the cron box used to open with, spelled as controls.
+    // A seeded schedule opens on One time. It is the shape the conversion is
+    // for — a draft is a thing you meant to do once, and the clock is only
+    // standing in for the Start you would have pressed — and it is a choice you
+    // can still change before saving, like every other preset here.
     setWhen(sched ? sched.cronForm : null, sched ? sched.cron : '',
-        sched ? !!sched.once : false);
+        sched ? !!sched.once : false, { newRow: seed ? 'once' : 'weekly' });
     const gate = sched ? sched.gate : null;
     dom.newGateKind.value = gate ? gate.kind : '';
     dom.newGateRef.value = gate && gate.kind === 'git-commits' ? gate.ref : '';
@@ -12393,6 +12491,10 @@ async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     // this" are the same press.
     dom.newGo.hidden = schedMode;
     dom.newSave.hidden = schedMode;
+    // Offered from Start-a-session as well as from a draft: the fields it needs
+    // are the fields this dialog always collects, and refusing to schedule
+    // something you had not saved first would be an extra step for no reason.
+    dom.newSched.hidden = schedMode;
     dom.newSchedSave.hidden = !schedMode;
     dom.newSchedSave.textContent = sched ? 'Save changes' : 'Save schedule';
 
@@ -12404,7 +12506,8 @@ async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     clearAttach(newC);
 
     dom.newTitle.textContent = schedMode
-        ? (sched ? 'Edit schedule' : 'Schedule a session')
+        ? (sched ? 'Edit schedule'
+            : (state.sched.fromDraft ? 'Schedule this draft' : 'Schedule a session'))
         : (draft ? 'Edit draft' : 'Start a session');
     dom.newSave.textContent = draft ? 'Save changes' : 'Save as draft';
     cancelMkdir();
@@ -12448,6 +12551,9 @@ function closeNew() {
     // is no longer showing. openNew sets it on the way in either way.
     state.drafts.editing = null;
     state.sched.editing = null;
+    // Otherwise a schedule saved later in this window would consume a draft that
+    // an earlier, abandoned conversion had named.
+    state.sched.fromDraft = null;
 }
 
 // ── the recent-directories menu ──────────────────────────────────────────
@@ -12884,6 +12990,21 @@ function newDialogValues() {
     return body;
 }
 
+/**
+ * The name box, as the `title` field the two stores take.
+ *
+ * **Deliberately not part of `newDialogValues`.** That body is also the body of
+ * `POST /api/sessions`, which takes no title — and the docstring above says why a
+ * key a route ignores must not ride along on it. So the two callers that store a
+ * title ask for it, and Start does not.
+ *
+ * `null` rather than `''`: a PATCH reads `null` as *clear this* and absence as
+ * *leave it alone*, so emptying the box has to send something.
+ */
+function newDialogName() {
+    return dom.newName.value.trim() || null;
+}
+
 // ── the trigger picker ──────────────────────────────────────────────────────
 //
 // One direction only: **the picker composes cron and never parses it.** Reading
@@ -13023,7 +13144,7 @@ function whenValues({ quiet = false } = {}) {
  * them to the next schedule you opened, and Weekly is exactly the row where you
  * would not notice.
  */
-function setWhen(form, cron, once) {
+function setWhen(form, cron, once, { newRow = 'weekly' } = {}) {
     const f = form || {};
     // `null` is "a schedule that does not exist yet", which is *not* the same as
     // `{kind: 'custom'}` — an existing schedule whose expression no row can draw.
@@ -13033,7 +13154,12 @@ function setWhen(form, cron, once) {
 
     // A dated expression is the One time row only when the row said so. Without
     // the flag it is an annual schedule, which no row draws — so it is Custom.
-    const row = kind === 'new' ? 'weekly'
+    //
+    // `newRow` is which suggestion a *new* schedule opens on, and it is an
+    // argument rather than a caller-supplied `cronForm` on purpose: a synthetic
+    // `{kind: 'date'}` would reach the date maths below with no month and no day
+    // and put `NaN-NaN-NaN` in the box.
+    const row = kind === 'new' ? newRow
         : kind === 'date' ? (once ? 'once' : 'custom')
             : (kind === 'minutes' || kind === 'hours' ? 'every' : kind);
 
@@ -13045,7 +13171,10 @@ function setWhen(form, cron, once) {
     dom.newWhenDailyTime.value = clock;
     dom.newWhenWeeklyTime.value = clock;
     dom.newWhenMonthlyTime.value = clock;
-    dom.newWhenOnceTime.value = row === 'once' ? clock : '09:00';
+    // The One time row's two controls are written together in the block below,
+    // which has to decide a date and a time as one moment. This only leaves the
+    // row something sane for the case where it is not the one selected.
+    dom.newWhenOnceTime.value = '09:00';
     dom.newWhenDom.value = String(kind === 'monthly' ? f.day : 1);
 
     // Tue–Sat is the default week, which is what the cron box used to open on:
@@ -13053,10 +13182,27 @@ function setWhen(form, cron, once) {
     const days = new Set(kind === 'weekly' ? f.days : [2, 3, 4, 5, 6]);
     for (const box of whenDayBoxes()) box.checked = days.has(Number(box.value));
 
-    // A dated expression carries no year, so an existing one-time schedule can
-    // only be shown on the next date it matches — which is the date it will
-    // actually run, and so the honest thing to put in the box.
-    if (row === 'once') {
+    if (row === 'once' && kind === 'new') {
+        // A suggestion, the way Weekly opens on Tue–Sat at 02:00, because the one
+        // row that needs a *date* is the one row that says nothing at all until
+        // it has one — a blank box means the preview underneath reads "fill in
+        // the row you picked" and the first press of Save is a refusal.
+        //
+        // The next 09:00 still to come: this morning if it has not gone, else
+        // tomorrow. Which also clears whenValues' one local check — a moment
+        // already past is refused there, and offering one would be offering a
+        // form that cannot be saved as it stands.
+        const soon = new Date();
+        soon.setHours(9, 0, 0, 0);
+        if (soon.getTime() <= Date.now()) soon.setDate(soon.getDate() + 1);
+        dom.newWhenOnceTime.value = `${pad(soon.getHours())}:${pad(soon.getMinutes())}`;
+        dom.newWhenDate.value =
+            `${soon.getFullYear()}-${pad(soon.getMonth() + 1)}-${pad(soon.getDate())}`;
+    } else if (row === 'once') {
+        // A dated expression carries no year, so an existing one-time schedule
+        // can only be shown on the next date it matches — which is the date it
+        // will actually run, and so the honest thing to put in the box.
+        dom.newWhenOnceTime.value = clock;
         const now = new Date();
         const soon = new Date(now.getFullYear(), f.month - 1, f.day, f.hour, f.minute, 0, 0);
         if (soon.getTime() <= Date.now()) soon.setFullYear(now.getFullYear() + 1);
@@ -13124,9 +13270,17 @@ function whenBuild() {
  */
 function paintNewAttach() {
     const held = newC.attach.length;
+    // Both of the buttons that would keep this call rather than run it, because
+    // neither store carries attachments — see docs/api.md. Saying so on the
+    // button is the whole point: the files are bytes in this page and would
+    // simply not be there afterwards, with nothing to say they had gone.
     dom.newSave.disabled = held > 0;
+    dom.newSched.disabled = held > 0;
     dom.newSave.title = held
         ? 'A draft cannot carry attachments. Start the session, or remove the files.'
+        : '';
+    dom.newSched.title = held
+        ? 'A schedule cannot carry attachments. Start the session, or remove the files.'
         : '';
 }
 
@@ -13165,6 +13319,7 @@ function paintGateFields() {
 function schedDialogValues() {
     const body = newDialogValues();
     if (!body) return null;
+    body.title = newDialogName();
 
     const when = whenValues();
     if (!when) return null;
@@ -13244,6 +13399,14 @@ async function schedSave() {
     if (!body) return;
 
     const editing = state.sched.editing;
+    // The bridge is what consumes the draft, in one call, after the row is
+    // written — see POST /api/schedules. Doing it here as a second call would
+    // mean this window deciding what happens when the delete fails and the
+    // Android client deciding it again, which is the argument
+    // POST /api/drafts/:id/start already settled. Only on a create: converting a
+    // draft happens once, so an edit never carries it.
+    if (!editing && state.sched.fromDraft) body.fromDraft = state.sched.fromDraft;
+
     const label = dom.newSchedSave.textContent;
     dom.newSchedSave.disabled = true;
     dom.newSchedSave.textContent = 'Saving';
@@ -13265,6 +13428,51 @@ async function schedSave() {
 }
 
 /**
+ * Hand what is in the dialog to the clock instead.
+ *
+ * Not a fourth form. A schedule is the same create call a draft is, plus a
+ * trigger — so this reopens *this* dialog in schedule mode with the fields
+ * carried across, and the two extra rows appear underneath. `openNew` is asked
+ * for it rather than the dialog being half-rewritten in place, so there is one
+ * path in and no second state for it to drift into.
+ *
+ * It reads the boxes rather than the stored draft, so edits you have not saved
+ * come across too — which is the behaviour you want from a button sitting beside
+ * Save changes.
+ *
+ * **Three presets, and they are presets rather than inheritance.** One time,
+ * because a draft is a thing you meant to do once and the clock is only standing
+ * in for the Start you would have pressed. `dontAsk`, because a session that
+ * stops at the first question at 2 AM has wasted the night — this overrides
+ * whatever the draft had, deliberately, since the draft's mode was chosen for a
+ * run you would be watching. And 09:00 tomorrow, so the row is answerable rather
+ * than blank. All three are still controls; none of them is a decision taken
+ * away from you.
+ */
+function drToSchedule() {
+    // The same validation Start and Save-as-draft get, and for the same reason:
+    // a schedule you cannot run is worse than a refused save, because nobody is
+    // there to read the failure.
+    const body = newDialogValues();
+    if (!body) return;
+
+    openNew({
+        schedule: true,
+        seed: {
+            cwd: body.cwd,
+            prompt: body.prompt,
+            title: newDialogName(),
+            model: body.model,
+            test: body.test,
+            permissionMode: 'dontAsk',
+            // Null from a plain Start-a-session dialog, where there is nothing to
+            // consume. The save is what acts on it; see schedSave.
+            fromDraft: state.drafts.editing,
+        },
+    });
+}
+
+/**
  * Keep it instead of running it.
  *
  * The same body Start would have sent, to the drafts route rather than the
@@ -13279,6 +13487,7 @@ async function schedSave() {
 async function drSave() {
     const body = newDialogValues();
     if (!body) return;
+    body.title = newDialogName();
 
     const editing = state.drafts.editing;
     const label = dom.newSave.textContent;
@@ -13502,6 +13711,7 @@ dom.termGrip.addEventListener('keydown', (e) => {
 
 dom.newGo.addEventListener('click', startNew);
 dom.newSave.addEventListener('click', drSave);
+dom.newSched.addEventListener('click', drToSchedule);
 dom.dbStatus.addEventListener('click', refreshDevBrowser);
 dom.btnRestart.addEventListener('click', () => pullAndRestart());
 dom.btnBack.addEventListener('click', closeAgent);

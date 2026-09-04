@@ -988,6 +988,20 @@ checks, and merge it once they pass.">LGTM</button>
           </div>
         </div>
       </div>
+      <!-- What a draft or a schedule is called on its card. Shown in every mode,
+           including plain Start-a-session, because Save-as-draft is in this same
+           footer — hiding it there would mean a draft could only be named after
+           it had been saved once. Start itself ignores it, which is what the
+           placeholder is for: `POST /api/sessions` takes no title, and a session
+           is named from its conversation.
+
+           `#new-name`, not `#new-title`: that id is already the dialog's own
+           heading. The label says Name and the wire says `title`. -->
+      <div class="field">
+        <label for="new-name">Name</label>
+        <input id="new-name" type="text" spellcheck="false" autocomplete="off"
+               placeholder="Optional — names the draft or schedule card">
+      </div>
       <div class="field">
         <label for="new-prompt">First message</label>
         <!-- The same two popovers the live composer has, on the box you write a
@@ -1232,6 +1246,12 @@ checks, and merge it once they pass.">LGTM</button>
              form — only a second button, and a title that says which of the two
              you are doing. See openNew() and drSave() in app.js. -->
         <button id="new-save" class="btn tonal" type="button">Save as draft</button>
+        <!-- The third thing you can do with a written-out create call: hand it to
+             the clock. It reopens this same dialog in schedule mode with what is
+             in front of you carried across — see drToSchedule() in app.js — so it
+             is a conversion rather than a fourth form. Hidden in schedule mode,
+             where you are already there. -->
+        <button id="new-sched" class="btn tonal" type="button">Schedule</button>
         <button id="new-go" class="btn primary" type="button">Start</button>
         <!-- Schedule mode replaces Start rather than joining it: "save this" and
              "run this now" are the same button's job here, since a schedule you
