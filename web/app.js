@@ -832,6 +832,17 @@ const ICON = {
         + '16.3 19l1.1-12.2" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>'
         + '<path d="M9.6 6.8V4.6a1 1 0 0 1 1-1h2.8a1 1 0 0 1 1 1v2.2" stroke="currentColor" '
         + 'stroke-width="1.8" stroke-linejoin="round"/>',
+    // Two sheets. The back one is only the edges of a sheet rather than a second
+    // whole rectangle: at 14px two nested outlines 5px apart read as a smudge.
+    copy: '<rect x="9" y="9" width="11.5" height="11.5" rx="2.4" stroke="currentColor" '
+        + 'stroke-width="1.8"/><path d="M6.2 15.5H5.8A2.3 2.3 0 0 1 3.5 13.2V5.8A2.3 2.3 '
+        + '0 0 1 5.8 3.5h7.4a2.3 2.3 0 0 1 2.3 2.3v.4" stroke="currentColor" '
+        + 'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+    // The tick that says a copy landed. A glyph rather than the character, for the
+    // reason .ev-copy gives: text in a row is text the find walker indexes and a
+    // drag-selection of the message picks up.
+    tick: '<path d="m5 12.8 4.4 4.4L19 6.6" stroke="currentColor" stroke-width="2" '
+        + 'stroke-linecap="round" stroke-linejoin="round"/>',
 };
 
 // Which glyph says each PR status. `unknown` is gh being unreachable rather than a
@@ -2068,6 +2079,136 @@ function paintRunSummary(det) {
     );
 }
 
+// ── copying a message ────────────────────────────────────────────────────
+// Selecting rendered prose and pressing Ctrl+C hands over flattened text: the
+// list numbers gone, the emphasis gone, the fences gone. That is exactly wrong
+// for what a message gets pasted into — another prompt, an issue, a commit
+// message — so the row offers the source it was rendered from instead.
+
+/**
+ * The markdown a message was written in.
+ *
+ * Not read back off the DOM, and not `searchableText` either. `.prose` is the
+ * rendered result, and a selection over it is precisely what drops the numbering
+ * and the asterisks this exists to keep; `searchableText` is a haystack — it
+ * folds in file names and a tool's arguments, none of which you meant to paste.
+ * A `/command` turn never had markdown of its own, so it gets the line the row
+ * shows; an image-only turn has neither and returns empty, which is what
+ * suppresses the button.
+ */
+function messageMarkdown(ev) {
+    if (ev.command) return turnText(ev);
+    return (ev.text || '').trim();
+}
+
+/**
+ * The header line of a message: who said it, and the button that copies it.
+ *
+ * In the flow rather than floating over the body. The label line is the one line
+ * in a row whose right side is reliably empty, so a control there cannot land on
+ * the first word of a long turn — and it sits in the same place whether the
+ * message is two lines or two hundred.
+ *
+ * Only user and assistant rows call this. The other labelled kinds keep their
+ * bare `.ev-label`: a tool call and a thinking block are folds whose whole row
+ * is one `<summary>`, where a button would have to cancel the summary's own
+ * click, and they are also the only two kinds `closeRun` lifts into a `.trun` —
+ * so leaving them out is what guarantees no copy button is ever inside a fold.
+ */
+function evHead(ev, label) {
+    return el('div', { class: 'ev-head' },
+        el('div', { class: 'ev-label' }, label),
+        copyButton(ev));
+}
+
+/**
+ * `onclick`, not the delegated `.copy-btn` handler at the foot of this file.
+ *
+ * That one is delegated because the markdown renderer emits its buttons as
+ * innerHTML and they cannot be handed a listener — which is why the fence source
+ * has to ride on a `data-code` attribute. This button is built here, beside the
+ * event, so a closure is both shorter and exact: no second copy of every message
+ * in the DOM, and no id to look up. Both of those matter — the row
+ * `showPendingSend` draws has no `ev.id` and is not in `state.nodes` at all, and
+ * the subagent pane keeps its own map. It survives the two things that happen to
+ * a rendered row for free: `patchTool` and `redrawEvent` replace the node, so the
+ * closure is rebuilt with it, and `foldRun` moves the node, so the listener goes
+ * along with it.
+ */
+function copyButton(ev) {
+    const md = messageMarkdown(ev);
+    if (!md) return null;              // an image-only turn has nothing to take
+    const btn = el('button', {
+        class: 'ev-copy', type: 'button',
+        title: 'Copy message', 'aria-label': 'Copy message',
+        // No stopPropagation, unlike the rail's mini buttons: an `.ev` row is
+        // not itself clickable.
+        onclick: () => copyMessage(btn, md),
+    }, icon('copy', 14));
+    return btn;
+}
+
+/**
+ * Put a message on the clipboard twice over: as the markdown it was written in,
+ * and as the HTML that markdown renders to.
+ *
+ * Both, because the two destinations want opposite things. A prompt, an issue or
+ * a commit message wants the asterisks and the list numbers as characters; Word
+ * and Gmail want them applied. `write` with two blobs is the only call that can
+ * say that, and it is also the one most likely to be missing — so a failure
+ * there falls back to the text alone rather than to nothing.
+ */
+async function copyMessage(btn, md) {
+    try {
+        // `navigator.clipboard` is undefined outside a secure context, which the
+        // plain-http LAN bind in docs/remote.md is. Reading `.write` off it would
+        // throw here rather than reject, so the whole thing sits in the try.
+        const clip = navigator.clipboard;
+        if (!clip) throw new Error('no clipboard');
+        if (clip.write && window.ClipboardItem) {
+            try {
+                await clip.write([new ClipboardItem({
+                    'text/plain': new Blob([md], { type: 'text/plain' }),
+                    'text/html': new Blob([clipboardHtml(md)], { type: 'text/html' }),
+                })]);
+            } catch { await clip.writeText(md); }
+        } else {
+            await clip.writeText(md);
+        }
+    } catch {
+        toast('Could not reach the clipboard.', 'error');
+        return;
+    }
+    // A tick where the button was, not a toast: the row you copied is the row you
+    // are already looking at, and a toast is this app's channel for things that
+    // happened somewhere else. `.done` is also what holds the button visible once
+    // the pointer leaves — which the always-on Copy on a code block never had to
+    // arrange for itself.
+    btn.classList.add('done');
+    btn.replaceChildren(icon('tick', 14));
+    clearTimeout(btn._copyTimer);
+    btn._copyTimer = setTimeout(() => {
+        btn.classList.remove('done');
+        btn.replaceChildren(icon('copy', 14));
+    }, 1400);
+}
+
+/**
+ * The rendered half of the clipboard — the same `renderMarkdown` the row itself
+ * uses, with this app's own furniture taken back out.
+ *
+ * A fence renders with a head bar carrying a Copy button, and handing that over
+ * verbatim puts the word "Copy" above every code block in the document you
+ * pasted into. `data-code` goes with it: that is the fence's source over again,
+ * url-encoded, and nothing on the far side of a paste reads it.
+ */
+function clipboardHtml(md) {
+    const holder = el('div', { html: renderMarkdown(md) });
+    for (const head of holder.querySelectorAll('.code-head')) head.remove();
+    for (const b of holder.querySelectorAll('.code-block')) b.removeAttribute('data-code');
+    return holder.innerHTML;
+}
+
 function row(ev, kind, ...body) {
     return el('div', { class: `ev ev-${kind}`, 'data-error': ev.isError ? 'true' : null },
         el('div', { class: 'ev-time' }, clockOf(ev.ts)),
@@ -2092,7 +2233,7 @@ function renderEvent(ev) {
 
 function renderUser(ev) {
     const body = [];
-    body.push(el('div', { class: 'ev-label' }, 'You'));
+    body.push(evHead(ev, 'You'));
     if (ev.command) {
         body.push(el('div', { class: 'prose', html:
             `<p><code>/${escapeHtml(ev.command.name)}</code>`
@@ -2144,7 +2285,7 @@ function attachCards(ev) {
 
 function renderAssistant(ev) {
     return row(ev, 'assistant',
-        el('div', { class: 'ev-label' }, 'Claude'),
+        evHead(ev, 'Claude'),
         el('div', { class: 'prose', html: renderMarkdown(ev.text) }),
     );
 }
@@ -14742,11 +14883,17 @@ document.addEventListener('keydown', (e) => {
 });
 
 // Copy buttons inside rendered markdown are delegated: the blocks are innerHTML.
+// Everywhere else, a copy button carries its own click — see copyButton.
 document.addEventListener('click', (e) => {
     const btn = e.target.closest('.copy-btn');
     if (!btn) return;
     const block = btn.closest('.code-block');
     const code = decodeURIComponent(block.dataset.code || '');
+    // Guarded rather than left to the `catch` below, which never ran: outside a
+    // secure context — the plain-http LAN bind in docs/remote.md — the property
+    // is undefined, so the call threw before there was a promise to reject and
+    // the button was dead with nothing said about it.
+    if (!navigator.clipboard) return toast('Could not copy to the clipboard.', 'error');
     navigator.clipboard.writeText(code).then(() => {
         btn.textContent = 'Copied';
         btn.classList.add('done');
