@@ -139,6 +139,48 @@ assert.deepStrictEqual(got.keyboard.bindings, {});
 assert.ok(got.problems.some(p => /keyboard\.bindings/.test(p.message)));
 ok('bindings that are not a map are dropped and reported');
 
+// --- spinner weights are cleaned the same way -----------------------------
+// The second map-valued setting, so it gets the same treatment for the same
+// reason: one number somebody fat-fingered must not throw away the weights
+// beside it.
+write(userFile, {
+    version: VERSION,
+    spinner: {
+        weights: {
+            'Monty Python': 4,
+            'Absurd / Nonsense': 0,       // muted on purpose, not a mistake
+            'Tech / Programming': '3',    // a string is not a weight
+            'Whimsical': -1,              // nor is a negative one
+            'Kaomoji': 2000,              // nor one past the cap
+        },
+    },
+});
+prefs.cache.clear();
+got = prefs.forCwd();
+assert.deepStrictEqual(got.spinner.weights, { 'Monty Python': 4, 'Absurd / Nonsense': 0 });
+assert.strictEqual(got.problems.length, 3, `expected three problems, got ${got.problems.length}`);
+assert.ok(got.problems.every(p => /spinner\.weights/.test(p.message)));
+assert.ok(got.problems.some(p => /"3".*Tech \/ Programming/.test(p.message)));
+ok('one bad weight costs that entry and says so, and the rest survive');
+
+write(userFile, { version: VERSION, spinner: { weights: [4] } });
+prefs.cache.clear();
+got = prefs.forCwd();
+assert.deepStrictEqual(got.spinner.weights, {});
+assert.ok(got.problems.some(p => /spinner\.weights/.test(p.message)));
+ok('weights that are not a map are dropped and reported');
+
+// A project may set the spinner — `spinner` is not user-only, because which
+// voice a repo's sessions speak in is a reasonable thing for the repo to say.
+write(userFile, { version: VERSION, spinner: { weights: { 'Monty Python': 4 } } });
+write(projFile, { version: VERSION, spinner: { weights: { Whimsical: 9 } } });
+prefs.cache.clear();
+got = prefs.forCwd(project);
+assert.deepStrictEqual(got.spinner.weights, { Whimsical: 9 },
+    'a map-valued key is answered by the strongest file, not folded together');
+ok('a project may weigh its own groups, and does so wholesale');
+fs.unlinkSync(projFile);
+
 // --- user-only sections --------------------------------------------------
 // Documented for `quota` long before anything enforced it, which held only
 // because the call sites passed no cwd. A page that prints which file wins for
@@ -249,6 +291,10 @@ assert.deepStrictEqual(read(userFile).keyboard.bindings, { 'view.live': 'Alt+L' 
 prefs.save({ scope: 'user', patch: { keyboard: { bindings: { 'view.tasks': 'Alt+T' } } } });
 assert.deepStrictEqual(read(userFile).keyboard.bindings, { 'view.tasks': 'Alt+T' },
     'a map-valued key is replaced, not merged into');
+prefs.save({ scope: 'user', patch: { spinner: { weights: { 'Monty Python': 4 } } } });
+prefs.save({ scope: 'user', patch: { spinner: { weights: { Whimsical: 2 } } } });
+assert.deepStrictEqual(read(userFile).spinner.weights, { Whimsical: 2 },
+    'spinner.weights is the other map, and goes over the same way');
 ok('a map-valued setting is replaced whole');
 
 // Aliases are canonicalised on the way to disk, so nothing downstream has to

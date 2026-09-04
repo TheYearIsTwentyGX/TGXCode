@@ -588,13 +588,15 @@ it is missing altogether, never file by file, because the alternative is your
 edits undoing themselves on the next run. A project can ship its own groups in
 `<checkout>/.tgxcode/verbs/`, and they win over the ones in your home directory.
 
-Which groups are *in play* is a setting, in the same file as the rest:
+Which groups are *in play*, and how often each of them speaks, is a setting in
+the same file as the rest:
 
 ```json
 {
   "spinner": {
     "randomize": true,
     "groups": ["Claude Code Defaults", "Monty Python", "Absurd / Nonsense", "Tech / Programming"],
+    "weights": { "Monty Python": 4, "Claude Code Defaults": 0 },
     "rerollMs": 8000
   }
 }
@@ -603,6 +605,24 @@ Which groups are *in play* is a setting, in the same file as the rest:
 Only the groups named there are ever opened, so the size of the directory costs
 nothing. `randomize: false` gives back `Thinking…` and nothing else changes.
 
+**A draw is two steps: a group by its weight, then a verb inside it.** A group
+nobody weighed is `1`, so `weights: {}` is every enabled group equally likely,
+and `4` against `1` is drawn four times as often — whatever the two groups'
+sizes. `0` mutes a group without unchecking it, which is the difference between
+"not now" and "forget this"; unchecking one leaves its number alone for when you
+want it back. Names are matched the way they are everywhere else here, so
+`"Tech / Programming"`, `"Tech_Programming"` and `"tech-programming"` all weigh
+the same group.
+
+That second step had to exist. For its first life this drew from one flat pool,
+which made a group's share of the labels its *verb count* over the total — and
+the counts are an artefact of how long each list happened to be upstream, not a
+statement about how often you want to hear from it. Fifteen groups enabled here
+gave `Claude Code Defaults` 32% of every label on the strength of having 185
+entries, while `Monty Python` got 1.9% and a group added by hand was drowned six
+to one by the defaults nobody chose. Choosing a voice is what the groups are
+for, so the shares are now the setting and the counts are just counts.
+
 `rerollMs` is how long a verb stands before the next is drawn, and it is the
 only thing that moves it — the half after it changes on its own as the work
 does. `0` pins one verb for the whole turn.
@@ -610,10 +630,14 @@ does. `0` pins one verb for the whole turn.
 A verb is only worn by work. A question waiting on you, an API retry, starting
 up and going idle say what they are and nothing else.
 
-`GET /api/spinner/groups?cwd=` lists what you have, with a count each and the
-reason any group failed to load. It was built as the discoverable half of a
-setting with no page in front of it; now it is what the Settings panel draws its
-checkboxes from, and hovering one lists the verbs inside it.
+`GET /api/spinner/groups?cwd=` lists what you have, with a count each, the share
+of the draws each one is getting, and the reason any group failed to load. It was
+built as the discoverable half of a setting with no page in front of it; now it
+is what the Settings panel draws its checkboxes from, and hovering one lists the
+verbs inside it. A group you have chosen also carries a box for its weight and
+the percentage that weight works out to — the number is meaningless on its own,
+and the point of showing the share is that you can see what a change did before
+you go looking for it in a label.
 
 Two things worth knowing. The session rail has room for about twenty characters,
 which is not enough for both halves, so it shows the one that carries
