@@ -1279,6 +1279,58 @@ a:hover { text-decoration: underline; }
     letter-spacing: 0.01em;
 }
 
+/* A message's header line: who said it, and the button that copies it.
+
+   Copy sits in the flow here rather than floating over the message. The label
+   line is the one part of a row that is reliably empty, so a control in it
+   cannot land on top of the first word of a long turn — and it is in the same
+   place whether the message is two lines or two hundred.
+
+   Not in the time gutter, which would have suited a grey control among grey
+   furniture: under 980px the gutter collapses to 0 and .ev-time goes to
+   display:none, so the button would have nowhere left to sit. */
+.ev-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 4px;
+}
+/* The gap under the label belongs to the line now. Every other kind of row still
+   takes it from .ev-label itself, which is why that rule is left alone. */
+.ev-head .ev-label { margin-bottom: 0; }
+
+.ev-copy {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 22px;
+    height: 22px;
+    /* Taller than the 12px label beside it, pulled back so the header line keeps
+       the height it had before there was a button on it. */
+    margin: -5px 0;
+    border-radius: var(--r-xs);
+    color: var(--text-4);
+    /* The glyph is an svg and never a '✓' character: rangesIn walks every text
+       node under a row, so a text tick would be indexed by find, and a
+       drag-selection of the message would pick it up and paste it. */
+    user-select: none;
+    /* Only transparent, never `display: none` — a hidden button is still a button
+       and has to stay in the tab order. See .strip-actions for the same call. */
+    opacity: 0;
+    transition: opacity var(--t-fast) var(--ease),
+        background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.ev:hover .ev-copy,
+.ev:focus-within .ev-copy { opacity: 1; }
+.ev-copy:hover { background: var(--s4); color: var(--text); }
+/* A third way to be visible, because the tick has to outlive the pointer leaving
+   the row. The always-on Copy on a code block never had to arrange that. */
+.ev-copy.done { opacity: 1; color: var(--green); }
+/* Your own turn sits in a container that is already --s3, and --s4 on top of it
+   is one tonal step at 22px, which reads as nothing. Same lift .rail-group.nested
+   gives a strip sitting on a card. */
+.ev-user .ev-copy:hover { background: var(--s5); }
+
 /* human turn — a tonal container, the way Google renders the person's side */
 .ev-user .ev-body {
     background: var(--s3);
