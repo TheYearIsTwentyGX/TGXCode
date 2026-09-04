@@ -629,6 +629,27 @@ function toast(text, kind = 'info', opts = {}) {
     return t;
 }
 
+/**
+ * Is one of the four modal dialogs up? They are `hidden`-toggled divs rather
+ * than a native `<dialog>`, so asking the DOM is the only way.
+ *
+ * **A modal is closed by its own ✕ or Cancel and by nothing else.** It used to
+ * go on Escape and on a click landing on the scrim, and both were losing work
+ * that only exists in the page: Start-a-session holds a written prompt, a
+ * directory and attachments that were never uploaded, and closing it discards
+ * all three. Escape reaches this app while a dictation tool is cancelling a
+ * phrase — Wispr Flow binds it — and the scrim click was never really a click
+ * outside: drag-selecting text in the box and releasing past its edge fires one
+ * whose target is the common ancestor, which is the scrim.
+ *
+ * Comparing the mousedown target to the mouseup target would have saved the
+ * drag alone and left Escape as it was, so both paths went instead.
+ */
+function modalUp() {
+    return !dom.newScrim.hidden || !dom.delScrim.hidden
+        || !dom.restartScrim.hidden || !dom.taskScrim.hidden;
+}
+
 // ── drafts ───────────────────────────────────────────────────────────────
 // What is typed but not yet sent, and what was sent but never made it into a
 // transcript. Neither should be lost to a reload or a failed turn.
@@ -11195,8 +11216,8 @@ function onChipKey(e, entry, i, toggleOpen) {
         return;
     }
     if (e.key === 'Escape') {
-        // Escape closes the new-session dialog and leaves a subagent; while a
-        // chip has the focus it belongs to the chip.
+        // Escape leaves a subagent and closes the find bar; while a chip has the
+        // focus it belongs to the chip.
         e.preventDefault();
         e.stopPropagation();
         dropQueued(entry, { fromKeyboard: true, index: i });
@@ -13620,12 +13641,10 @@ dom.checklistStrip.addEventListener('click', () => collapseChecklist(false));
 // because you clicked here. See git.clearCache.
 dom.changesRefresh.addEventListener('click', () => loadChanges({ refresh: true }));
 
+// ✕ and Cancel are the whole close surface — see modalUp().
 for (const n of dom.taskScrim.querySelectorAll('[data-close-task]')) {
     n.addEventListener('click', closeTaskDialog);
 }
-dom.taskScrim.addEventListener('click', (e) => {
-    if (e.target === dom.taskScrim) closeTaskDialog();
-});
 // The prompt is the thing worth having elsewhere — pasted into a terminal, into
 // another tool, into a message to somebody. The rendered markdown is not it, so
 // the source is what goes on the clipboard.
@@ -14273,8 +14292,10 @@ document.addEventListener('keydown', (e) => {
     // something even when there is nothing to choose: a note is still something
     // on screen, and something on screen is what Escape dismisses. Left below
     // that check, an Escape during "Loading commands…" fell through to the
-    // central ladder — which over the Start-a-session dialog is closeNew(), and
-    // a first message you had written. Leaves the text exactly as typed.
+    // central ladder, which used to close the whole Start-a-session dialog and
+    // the first message you had written; the ladder swallows the key over a
+    // modal now, but this is still the handler that makes it mean "never mind
+    // the list". Leaves the text exactly as typed.
     if (e.key === 'Escape') {
         e.preventDefault();
         e.stopPropagation();
@@ -14737,10 +14758,10 @@ wireAttachments(newC);
 dom.newScrim.querySelector('.modal-body')
     .addEventListener('scroll', repositionFloatingMenus);
 
+// ✕ and Cancel are the whole close surface — see modalUp().
 for (const n of dom.newScrim.querySelectorAll('[data-close]')) {
     n.addEventListener('click', closeNew);
 }
-dom.newScrim.addEventListener('click', (e) => { if (e.target === dom.newScrim) closeNew(); });
 
 dom.newTabRecent.addEventListener('click', () => setPickerTab('recent'));
 dom.newTabBrowse.addEventListener('click', () => setPickerTab('browse', { load: true }));
@@ -14760,8 +14781,10 @@ dom.newMkdir.addEventListener('click', startMkdir);
 dom.newMkdirGo.addEventListener('click', submitMkdir);
 dom.newMkdirName.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); submitMkdir(); return; }
-    // Without stopPropagation the central Escape ladder closes the whole dialog,
-    // when all this key meant was "never mind the folder".
+    // The central ladder swallows Escape over a modal, so nothing further down
+    // it is at risk — but this handler is what gives the key an answer at all,
+    // and stopPropagation keeps that answer "never mind the folder" rather than
+    // whatever the ladder grows next.
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancelMkdir(); dom.newMkdir.focus(); }
 });
 
@@ -14782,10 +14805,10 @@ dom.newCwd.addEventListener('input', () => {
     if (menuOpen(newC.slash)) updateSlashMenu(newC);
 });
 
+// ✕ and Cancel are the whole close surface — see modalUp().
 for (const n of dom.delScrim.querySelectorAll('[data-close-del]')) {
     n.addEventListener('click', closeDelete);
 }
-dom.delScrim.addEventListener('click', (e) => { if (e.target === dom.delScrim) closeDelete(); });
 
 // ── connect a phone ──────────────────────────────────────────────────────
 //
@@ -14921,12 +14944,10 @@ dom.pairCopy.addEventListener('click', async () => {
         toast('Could not copy — the link is selected, press Ctrl+C');
     }
 });
+// ✕ and Cancel are the whole close surface — see modalUp().
 for (const n of dom.restartScrim.querySelectorAll('[data-close-restart]')) {
     n.addEventListener('click', closeRestart);
 }
-dom.restartScrim.addEventListener('click', (e) => {
-    if (e.target === dom.restartScrim) closeRestart();
-});
 dom.restartFix.addEventListener('click', startFixSession);
 dom.restartGo.addEventListener('click', () => {
     // Skip the pull only if one was attempted and failed — watching it fail
@@ -15017,13 +15038,16 @@ dom.lockAnyway.addEventListener('click', () => {
 });
 
 document.addEventListener('keydown', (e) => {
-    // The confirm sits over the new-session dialog, so it answers Escape first.
+    // A popover can sit over a modal dialog, so it answers Escape first.
     if (e.key === 'Escape' && !dom.quotaMenu.hidden) { showQuota(false); dom.quotaPill.focus(); return; }
     if (e.key === 'Escape' && !dom.newMenu.hidden) { showNewMenu(false); dom.btnNewMenu.focus(); return; }
-    if (e.key === 'Escape' && !dom.delScrim.hidden) { closeDelete(); return; }
-    if (e.key === 'Escape' && !dom.restartScrim.hidden) { closeRestart(); dom.btnRestart.focus(); return; }
-    if (e.key === 'Escape' && !dom.taskScrim.hidden) { closeTaskDialog(); return; }
-    if (e.key === 'Escape' && !dom.newScrim.hidden) { closeNew(); return; }
+    // Below them, a modal dialog swallows Escape rather than closing on it —
+    // see modalUp(). Swallowed rather than left out of this ladder: without a
+    // rung the key falls through to the panel *behind* the dialog, so a stray
+    // Escape over Start-a-session would quietly close Settings or the Taskboard
+    // instead. This listener is the last of the three registered on the
+    // document, so returning here really is the end of the road for the key.
+    if (e.key === 'Escape' && modalUp()) return;
     if (e.key === 'Escape' && state.taskboard.open) { showTaskboard(false); return; }
     if (e.key === 'Escape' && state.dash.open) { showDash(false); return; }
     if (e.key === 'Escape' && state.notes.open) { showNotes(false); return; }
