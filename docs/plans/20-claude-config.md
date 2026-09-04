@@ -196,9 +196,45 @@ remembered.
 - **MCP server configuration** — `~/.claude.json`, `.mcp.json`. A different file
   family, credentials-adjacent, and it needs a threat model this change does not
   have.
-- **A diff view on a conflict.** The banner shows what is on disk; a real diff
-  is a component, and the conflict is rare enough to earn one only if it turns
-  out not to be.
-- **Watching the files.** A `/config` change from a live session does not appear
-  until the panel is re-opened. The `409` is the safety net meanwhile, which is
-  the right order: correctness before liveness.
+- **A diff view on a conflict** — still deferred, and the banner having become
+  more common rather than less has not changed the argument. The banner shows
+  what is on disk; a real diff is a component.
+
+## Watching the files, which came second on purpose
+
+Deferred in the first pass and built in the next. The bullet said why the order
+was right — "the `409` is the safety net meanwhile: correctness before
+liveness" — and that is still the shape of it. The watch does not touch the
+precondition; it only means a panel usually finds out before it tries to save,
+rather than only when the save is refused.
+
+Three things about it are decisions rather than mechanics.
+
+**The directory, not the file.** Both this app's `writeAtomic` and Claude Code's
+own writes are `tmp` + `rename`, which replaces the inode — so a watch on the
+path fires once and then watches a file nothing will write again. That failure
+is silent and looks exactly like the feature working, which is why
+`test/claude-config.test.js` writes by `rename` twice and asserts on the second.
+
+**The stamp decides, not the event.** `~/.claude` holds `history.jsonl`,
+`daemon.log` and a handful of lock files as direct children, all of them
+churning, so most events there are about nothing. One `stat` per watched file
+filters that without relying on `fs.watch`'s `filename` (`null` on some
+platforms), collapses the repeat events a `rename` produces, and — because
+`_write()` records its own stamp — suppresses the echo of our own save for free.
+That last one is not tidiness: the page cannot tell that echo from somebody
+else's change, and `dirty` survives a tab switch, so it could put a conflict
+banner over the user's own edit.
+
+**A project is not watched until somebody asks.** There are ~100 directories
+under `~/.claude/projects` and the panel is usually closed, so watching every
+checkout for a view nobody has open is the wrong shape. A `GET` with a `cwd`
+arms one; a small cap and a ten-minute idle sweep give them back. The
+user's file is watched throughout, because it is the one `/config` writes and
+there is one of it.
+
+The reason `bridge/prefs.js` re-stats instead — "one inotify watcher for a file
+that changes monthly is a poor trade" — is sound and does not transfer. Its file
+is written only by this app and read once per session open. Here another program
+is the writer, the view is held open across minutes, and there is nothing to
+re-stat against because no request is in flight while a panel simply sits there.

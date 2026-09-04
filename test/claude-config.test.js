@@ -459,7 +459,142 @@ write(userFile, { permissions: { allow: ['Bash(one)'] } });
     ok('setPath creates, replaces, removes and prunes');
 }
 
-// ── clean up ───────────────────────────────────────────────────────────────
+// ── the watch ──────────────────────────────────────────────────────────────
+//
+// The one part of this file that needs real time to pass, so it goes last and
+// takes the cleanup with it. Everything above is synchronous.
 
-fs.rmSync(home, { recursive: true, force: true });
-console.log(`\n${passed} claude-config checks passed`);
+/** Resolve as soon as `fn()` is truthy, or throw at the deadline. */
+async function deadline(fn, what, ms = 3000) {
+    const until = Date.now() + ms;
+    for (;;) {
+        const got = fn();
+        if (got) return got;
+        if (Date.now() > until) throw new Error(`timed out after ${ms}ms waiting for ${what}`);
+        await new Promise(r => setTimeout(r, 25));
+    }
+}
+
+/** Long enough for an event that was going to arrive to have arrived. */
+const quiet = () => new Promise(r => setTimeout(r, 600));
+
+/**
+ * Write the way both this app and Claude Code write these files.
+ *
+ * `tmp` + `rename`, which replaces the inode — so a watch on the *path* sees
+ * the first of these and nothing after it. Every case below writes this way on
+ * purpose: a naive implementation passes a plain `writeFileSync` test and then
+ * stops working in front of the user after one edit.
+ */
+const rename = (file, doc) => {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, typeof doc === 'string' ? doc : `${JSON.stringify(doc, null, 2)}\n`);
+    fs.renameSync(tmp, file);
+};
+
+(async () => {
+    reset();
+    write(userFile, { theme: 'dark' });
+
+    const seen = [];
+    const watcher = new ClaudeConfig({ onChange: (e) => seen.push(e) });
+    watcher.start();
+
+    // ── a rename is noticed, and noticed again ─────────────────────────────
+
+    rename(userFile, { theme: 'light' });
+    const first = await deadline(() => seen.find(e => e.file === userFile),
+        'the user file to be reported');
+    assert.strictEqual(first.scope, 'user');
+    assert.ok(typeof first.at === 'number' && first.at > 0, 'the event carries a time');
+    ok('a tmp + rename write under the user file is reported');
+
+    seen.length = 0;
+    rename(userFile, { theme: 'dark' });
+    await deadline(() => seen.length, 'the second write to be reported');
+    ok('a second rename is reported too — the watch is on the directory, not the path');
+
+    // ── what must not be reported ──────────────────────────────────────────
+
+    seen.length = 0;
+    // The busy neighbours. `history.jsonl` is written every time somebody
+    // sends a prompt, and it lives in the same directory as the settings file
+    // — so an implementation that broadcasts on the event rather than on the
+    // file's stamp reloads the panel every few seconds all day.
+    fs.writeFileSync(path.join(path.dirname(userFile), 'history.jsonl'), 'noise\n');
+    fs.writeFileSync(path.join(path.dirname(userFile), 'daemon.log'), 'noise\n');
+    await quiet();
+    assert.deepStrictEqual(seen, [], 'a write to another file in the directory is not a change');
+    ok('churn beside the settings file is not reported');
+
+    seen.length = 0;
+    watcher.save({ scope: 'user', patch: { theme: 'light' } });
+    await quiet();
+    assert.deepStrictEqual(seen, [], 'our own write is already known about');
+    // Not tidiness: the page cannot tell this event from somebody else's, and
+    // `dirty` survives a form/raw tab switch — so the echo of a save can put a
+    // conflict banner over the user's own edit.
+    ok('a write this bridge made is not reported back to it');
+
+    assert.strictEqual(read(userFile).theme, 'light', 'the save still happened');
+
+    // ── a project is watched once somebody asks about it ───────────────────
+
+    seen.length = 0;
+    rename(localFile, { permissions: { allow: ['Bash(before)'] } });
+    await quiet();
+    assert.deepStrictEqual(seen, [],
+        'a project nobody has asked about is not watched — there are ~100 of them');
+    ok('a project’s files are not watched until somebody asks about that project');
+
+    watcher.read(project);
+    seen.length = 0;
+    rename(localFile, { permissions: { allow: ['Bash(before)', 'Bash(approved-mid-turn)'] } });
+    const local = await deadline(() => seen.find(e => e.file === localFile),
+        'the project-local file to be reported');
+    assert.strictEqual(local.scope, 'project-local');
+    ok('reading a project arms its watch, and the rule approved mid-turn is reported');
+
+    // ── the cap, and the sweep ─────────────────────────────────────────────
+
+    const pinned = [...watcher.watches.values()].filter(e => e.pinned).length;
+    for (let i = 0; i < 12; i += 1) {
+        const dir = path.join(home, `proj-${i}`);
+        fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+        watcher.read(dir);
+    }
+    const spare = [...watcher.watches.values()].filter(e => !e.pinned).length;
+    assert.ok(spare <= 8, `${spare} project watchers is over the cap`);
+    assert.strictEqual([...watcher.watches.values()].filter(e => e.pinned).length, pinned,
+        'the user file’s watch is never the one evicted');
+    ok('project watchers are capped, and the pinned ones survive it');
+
+    // ── failure costs liveness and nothing else ────────────────────────────
+
+    const missing = path.join(home, 'not-a-checkout');
+    fs.mkdirSync(missing, { recursive: true });      // …but no `.claude` in it
+    watcher.read(missing);                            // must not throw
+    assert.ok(watcher.read(missing).files.length >= 1, 'the read still answers');
+    ok('a directory with nothing to watch is read anyway');
+
+    // ── stop ───────────────────────────────────────────────────────────────
+
+    watcher.stop();
+    seen.length = 0;
+    rename(userFile, { theme: 'dark' });
+    await quiet();
+    assert.deepStrictEqual(seen, [], 'a stopped watcher reports nothing');
+    ok('stop() closes the watches');
+
+    // ── clean up ───────────────────────────────────────────────────────────
+
+    fs.rmSync(home, { recursive: true, force: true });
+    console.log(`\n${passed} claude-config checks passed`);
+})().catch((err) => {
+    // An async failure is a failure. Without this a rejection is a warning and
+    // the file still exits 0, which test/run.js would read as a pass.
+    console.error(err);
+    fs.rmSync(home, { recursive: true, force: true });
+    process.exit(1);
+});

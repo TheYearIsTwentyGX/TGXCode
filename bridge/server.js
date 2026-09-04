@@ -69,7 +69,14 @@ const prefs = new Prefs();
 // Claude Code's own settings, as opposed to this app's. A separate instance of
 // a separate module on purpose — see the header of bridge/claude-config.js for
 // the three things that stopped it being a mode of Prefs.
-const claudeConfig = new ClaudeConfig();
+// `onChange` is the watch: `claude` writes these files too, and until it
+// existed a panel left open only found out on its next save, when the write was
+// refused with a 409. Same event as the PUT below emits, because a listener has
+// no use for the difference — and see the header there for why the watch is
+// liveness while the 409 remains the correctness guarantee.
+const claudeConfig = new ClaudeConfig({
+    onChange: (e) => broadcast('claude-config', e),
+});
 
 /**
  * Which status a claude-config refusal is.
@@ -5317,6 +5324,7 @@ function shutdown(code = 0) {
     try { schedules.flush(); } catch { /* nothing to save */ }
     try { index.stop(); } catch { /* nothing to clean */ }
     try { registry.stop(); } catch { /* nothing to clean */ }
+    try { claudeConfig.stop(); } catch { /* nothing to clean */ }
     try { server.close(); } catch { /* already closed */ }
     setTimeout(() => process.exit(code), 200).unref();
 }
@@ -5386,6 +5394,7 @@ server.listen(cfg.PORT, cfg.HOST, async () => {
     // Before the index, so the very first summaries it hands out already say
     // what is running rather than guessing at it for one scan.
     registry.start();
+    claudeConfig.start();
     console.log(`[claude-sessions] registry: ${registry.liveCount} of ${registry.size} `
         + 'session(s) still have a process');
 

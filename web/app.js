@@ -8379,9 +8379,61 @@ function claudeDir() {
     return settingsProject();
 }
 
-async function loadClaudeConfig() {
+/**
+ * What the panel is currently showing, as `{dottedPath: json}`.
+ *
+ * Both halves of what a row draws, because either can move without the other:
+ * `effective` is the value in force, which changes when a *stronger* file does,
+ * and the target file's own `values` are what a control writes, which is what
+ * changes when this scope's file does. A row that shows "set here, but
+ * overridden" reads differently after either one.
+ */
+function claudeSnapshot(data) {
+    if (!data) return null;
+    const s = claudeState();
+    const out = {};
+    // The whole entry rather than its `value`: a `rules` key carries a per-file
+    // breakdown the row draws, and a rule added to a second file that the first
+    // already had moves the breakdown without moving the union.
+    for (const [path_, eff] of Object.entries(data.effective || {})) {
+        out[path_] = JSON.stringify(eff);
+    }
+    const target = (data.files || []).find(f => f.scope === s.scope);
+    for (const [path_, value] of Object.entries((target && target.values) || {})) {
+        out[path_] = `${out[path_] || ''}|own:${JSON.stringify(value)}`;
+    }
+    return out;
+}
+
+/**
+ * Point at what moved.
+ *
+ * A reload that arrives because somebody else wrote the file replaces controls
+ * silently, and a checkbox that is suddenly the other way round reads as a
+ * misremembering rather than as news. So the rows whose value actually changed
+ * are flashed — the same affordance a jump into the transcript uses, and for
+ * the same reason.
+ */
+function claudeFlash(before, after) {
+    if (!before || !after) return;
+    for (const path_ of new Set([...Object.keys(before), ...Object.keys(after)])) {
+        if (before[path_] === after[path_]) continue;
+        const row = dom.setBody
+            && dom.setBody.querySelector(`.settings-row[data-path="${CSS.escape(path_)}"]`);
+        if (row) flashNode(row);
+    }
+}
+
+/**
+ * @param {{flash?: boolean}} [opts] `flash` points at the rows that changed,
+ *   which only makes sense when the reload was somebody else's doing: a save
+ *   from this window has its own toast, and opening the panel has nothing to
+ *   have changed *from*.
+ */
+async function loadClaudeConfig({ flash = false } = {}) {
     const s = claudeState();
     if (s.loading) return;
+    const before = flash ? claudeSnapshot(s.data) : null;
     s.loading = true;
     s.error = null;
     renderSettings();
@@ -8398,6 +8450,7 @@ async function loadClaudeConfig() {
     }
     s.loading = false;
     renderSettings();
+    if (flash) claudeFlash(before, claudeSnapshot(s.data));
 }
 
 /** The file the current scope writes, out of what the bridge reported. */
@@ -8774,12 +8827,15 @@ function claudeRow(row) {
     // should write one key rather than twenty.
     const merged_ = eff ? eff.value : undefined;
     const control = claudeControl(row, value, disabled, save, explicit, inherited, merged_);
+    // `data-path` is the only handle a row has: renderSettings() replaces the
+    // whole body, so a value that moved underneath cannot be pointed at unless
+    // the row it landed in can be found again. See claudeFlash().
     if (row.wide) {
-        return el('div', { class: 'settings-row is-wide' },
+        return el('div', { class: 'settings-row is-wide', 'data-path': row.path },
             el('div', { class: 'settings-row-head' }, text, side),
             el('div', { class: 'settings-row-wide' }, control));
     }
-    return el('div', { class: 'settings-row' },
+    return el('div', { class: 'settings-row', 'data-path': row.path },
         text,
         el('div', { class: 'settings-row-ctl' }, control, side));
 }
@@ -9170,7 +9226,7 @@ function claudeUnknownCard() {
             control = claudeJsonLink(item.path, 'Edit as JSON');
         }
 
-        card.append(el('div', { class: 'settings-row' },
+        card.append(el('div', { class: 'settings-row', 'data-path': item.path },
             text,
             el('div', { class: 'settings-row-ctl' },
                 control,
@@ -9253,7 +9309,15 @@ function claudeRawCard() {
 
     const readonly = !!row.readonly || !row.writable || row.symlink;
     const onDisk = row.text === null ? '' : row.text;
-    if (s.draft === null) s.draft = onDisk;
+    // A clean box is a *view* of the file, not a draft of it, so it re-seeds
+    // whenever the file moves. Keying that off `draft === null` instead was
+    // wrong in both directions once these files started changing underneath:
+    // loadClaudeConfig() renders twice, and the first of those — still holding
+    // the old answer — put the old text back before the new one arrived, so a
+    // clean JSON tab went on showing the previous contents under the note
+    // "Matches the file on disk." `dirty` is the thing that actually means
+    // "somebody typed here", and it is the only thing that should stop this.
+    if (s.draft === null || !s.dirty) s.draft = onDisk;
 
     const note = el('div', { class: `cfg-json-note${s.jsonError ? ' bad' : ''}` },
         s.jsonError || (s.dirty ? 'Edited — not saved.' : 'Matches the file on disk.'));
@@ -10522,17 +10586,32 @@ function connect() {
     // in sync, and pushing the contents of a file that route classifies as
     // local-only down every open channel would be a poor trade for saving a
     // fetch.
-    es.addEventListener('claude-config', () => {
+    es.addEventListener('claude-config', async () => {
         const s = state.claudeCfg;
         if (!state.settings.open || s.saving) return;
         // A draft in the JSON tab is never destroyed to show somebody what
         // somebody else typed. It gets a banner and keeps what it has.
         if (s.dirty) {
-            s.stale = { text: null };
+            // The data is reloaded around the draft even so — the same
+            // keep-and-restore saveClaudeText() does on a 409 — because the
+            // banner promises "what is below is the file as it is now" and
+            // without this it would be showing the file as it was. That
+            // promise is the whole content of the banner: the draft survives,
+            // and `What is on disk` becomes something the reader can compare
+            // against rather than an absent block.
+            const keep = s.draft;
+            await loadClaudeConfig();
+            s.draft = keep;
+            s.dirty = true;
+            const row = claudeTargetRow();
+            s.stale = { text: (row && row.text) || null };
             renderSettings();
             return;
         }
-        loadClaudeConfig();
+        // Nothing typed, so there is nothing to protect: reload, and point at
+        // whatever moved. The JSON tab re-seeds itself from the new file
+        // because it is clean — see claudeRawCard().
+        loadClaudeConfig({ flash: true });
     });
 
     // Someone deleted a session — possibly in another window, possibly this one.
