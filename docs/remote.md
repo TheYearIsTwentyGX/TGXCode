@@ -323,7 +323,7 @@ time so it cannot be turned into a fan of processes.
 | `bypassPermissions`, `dontAsk` | Runs everything unasked. A deliberate choice at the desk, not one tap away on a device that might be in someone else's hand. Refused on send too, so a session cannot be escalated after the fact. |
 | `/api/terminals/*` | A raw pty. Everything else is mediated by the app; this is a shell, and a leaked token that reaches it has the machine. |
 | `/api/shutdown`, `/api/devservers/stop` | Acts on processes the person at the desk is using. |
-| `/api/sessions/:id/reveal`, `/api/devbrowser/*` | Drives windows on the Windows host. Pointless from a phone. |
+| `/api/sessions/:id/reveal`, `POST /api/fs/open`, `/api/devbrowser/*` | Drives windows on the Windows host. Pointless from a phone — and `/api/fs/open` hands that host a path out of a transcript to launch, which is a thing to do while sitting in front of it or not at all. It is also the reason a remote page is served no `cs-host` meta tag: with nowhere for a path to point, the transcript draws it as text rather than as a link whose click would 403. |
 | `POST /api/sessions/:id/handoff` | Starts a turn in a session nobody is looking at, and wakes one that has no process at all. Reasonable for an agent on this machine that just changed something the other session depends on; not reasonable to reach in for from a phone, where a leaked token would mean every session on the machine spending tokens on words nobody typed. Note that a phone *may* still send to a session through `/send` — the difference is that a person is choosing the session and the words, one at a time. |
 | `POST /api/fs/mkdir` | Writes to the filesystem. `GET /api/fs` stays allowed, and the asymmetry is the point: reading the tree answers "where could a session start", and a phone may already start one. Creating a directory is reaching past the app into the machine. |
 | `PUT /api/prefs` | The mkdir clause with a longer reach: it writes a file in the user's home directory, and one of the keys in it — `quota.beaconDir` — names a directory this app then starts `claude` in. `GET /api/prefs` stays allowed, so the asymmetry is on the method rather than the path: how somebody wants a transcript folded is not a capability, and a phone has a use for the answer. |
@@ -331,7 +331,11 @@ time so it cannot be turned into a fan of processes.
 Independent of remoteness, and applying to every caller: a session can only start
 inside `CLAUDE_SESSIONS_ROOTS` (default `$HOME`), `/api/fs` only lists and
 `/api/fs/mkdir` only creates inside the same roots, and session creation is capped
-at 8 a minute.
+at 8 a minute. `POST /api/fs/open` is the one path-taking route those roots
+do **not** bound, deliberately: it opens rather than writes, opening `/tmp/…` and
+`/mnt/c/…` is the common case, and anything a caller could be induced to open it
+could have written inside `$HOME` first. What bounds it instead is this table and a
+refusal to launch the file types Windows would execute.
 
 ## Authentication, in one paragraph
 

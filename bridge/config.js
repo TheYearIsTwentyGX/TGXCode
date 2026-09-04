@@ -107,6 +107,17 @@ const HOST = process.env.CLAUDE_SESSIONS_HOST || '127.0.0.1';
 // able to publish the bridge to the building.
 const ALLOW_REMOTE_BIND = process.env.CLAUDE_SESSIONS_ALLOW_REMOTE_BIND === '1';
 
+// The distribution this bridge is running in, for the \\wsl.localhost\<distro>\...
+// form of a path. Cosmetic and only that: it reaches the page in a `cs-host` meta
+// tag so a transcript can draw a file link with a Windows path in its href and
+// its tooltip. The translation that is acted on is `wslpath -w` in
+// bridge/explorer.js, which is the one that knows about automount.root and about
+// a path that is really a Windows drive.
+//
+// Empty outside WSL, and empty means the UI leaves paths as plain text rather
+// than guessing a share name.
+const WSL_DISTRO = process.env.WSL_DISTRO_NAME || '';
+
 // Whether a session this app starts gets the task tools back.
 //
 // Claude Code stopped offering them — TaskCreate/Get/Update/List and TodoWrite —
@@ -189,6 +200,7 @@ module.exports = {
     SETTINGS_FILE, SETTINGS_LOCAL_FILE, USER_TGX_DIR, USER_PREFS_FILE,
     VERBS_DIR, USER_VERBS_DIR,
     ALLOW_REMOTE_BIND, TODO_TOOLS, ALLOWED_ROOTS, EXTRA_ORIGINS, withinRoots, expandHome,
+    WSL_DISTRO,
     DEFAULT_PORT, DEV_PORT, IS_DEV,
     DEVBROWSER_DEFAULT_PORT, CLAUDE_BIN, PORT_DENYLIST,
 };

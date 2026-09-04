@@ -105,6 +105,15 @@ const HOME = os.homedir();
     check('mkdir', (await call('POST', '/api/fs/mkdir', {
         headers: PHONE, body: { parent: HOME, name: 'x' },
     })).status, 403);
+    // Opening a path is the mkdir clause with a window on the end of it, and the
+    // path comes out of a transcript rather than out of the app.
+    check('opening a path', (await call('POST', '/api/fs/open', {
+        headers: PHONE, body: { path: `${HOME}/x.md` },
+    })).status, 403);
+    // The client-side half of the same rule: with no cs-host tag the page cannot
+    // draw the link whose click that route would refuse.
+    check('and a phone is not told where the filesystem is',
+        /name="cs-host"/.test((await call('GET', '/', { headers: PHONE })).text), false);
     // Saving settings is the mkdir clause with a longer reach: it writes a file
     // in the user's home directory, and one of the keys in it names a directory
     // this app then starts `claude` in. The *read* stays open, two lines down —
@@ -172,6 +181,15 @@ const HOME = os.homedir();
     // terms, which is the distinction being tested.
     check('a run locally reaches its own not-found',
         (await call('GET', '/api/runs/nope', { headers: LOCAL })).status, 404);
+    // Opening a path locally, as far as it can be taken without popping a window
+    // on the user's desktop: the two answers that are refusals of its own rather
+    // than the gate's.
+    check('opening nothing is a 400', (await call('POST', '/api/fs/open', {
+        headers: LOCAL, body: {},
+    })).status, 400);
+    check('opening a path that is not there is a 404', (await call('POST', '/api/fs/open', {
+        headers: LOCAL, body: { path: `${HOME}/not-here-${Date.now()}.md` },
+    })).status, 404);
 
     console.log('\n--- handing work to a session ---');
     // From the desk the gate lets it through, and it then fails on its own terms.

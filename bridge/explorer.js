@@ -12,6 +12,32 @@ const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
 
+/**
+ * Extensions Windows *runs* rather than opens.
+ *
+ * `explorer.exe` given one of these launches the default handler, and for these
+ * the default handler is the file itself. That is fine for the two callers that
+ * name a path this app computed, and not fine for POST /api/fs/open, whose path
+ * is text a model wrote into a transcript: a helpful-looking link would be one
+ * click from arbitrary code holding the user's Windows token. `.lnk` and `.url`
+ * are on the list although they are not code - they are a pointer to some, and
+ * one nothing on this side can see the far end of.
+ *
+ * Deliberately absent: `.js`, `.ts`, `.py`, `.sh`, `.md`. A `.js` associated with
+ * Windows Script Host would run, and that is the residual risk this rule does not
+ * close - but `.js` is what this repository is made of, and a rule that refuses
+ * to open the files the feature exists for is a rule nobody keeps. What keeps the
+ * risk small is that the link text is the path: you see what you are opening.
+ */
+const LAUNCHABLE = new Set(['.exe', '.com', '.bat', '.cmd', '.ps1', '.psm1', '.msi',
+    '.msp', '.lnk', '.url', '.scr', '.pif', '.vbs', '.vbe', '.wsf', '.wsh', '.hta',
+    '.reg', '.jar', '.cpl', '.msc', '.scf', '.appref-ms']);
+
+/** Would Windows run this rather than open it? Exported so it tests without a shell. */
+function isLaunchable(file) {
+    return LAUNCHABLE.has(path.extname(String(file || '')).toLowerCase());
+}
+
 function toWindowsPath(dir) {
     return new Promise((resolve) => {
         execFile('wslpath', ['-w', dir], { timeout: 5000 },
@@ -90,4 +116,4 @@ async function openFile(file) {
     });
 }
 
-module.exports = { openInExplorer, openFile, toWindowsPath };
+module.exports = { openInExplorer, openFile, toWindowsPath, isLaunchable };
