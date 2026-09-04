@@ -94,6 +94,14 @@ function check(name, got, want) {
     // keymap has not arrived is indistinguishable from a broken binding.
     check('and so is the shortcut catalogue',
         /name="cs-keymap" content="%7B%22commands%22/.test(page.body), true);
+    // And where the filesystem is, so a path in a transcript can be drawn as a
+    // link to the Windows form of it before anything has been fetched. Guarded
+    // rather than asserted flat: outside WSL there is no share to name, and a
+    // bridge withholding the tag there is correct rather than broken.
+    if (process.env.WSL_DISTRO_NAME) {
+        check('and where the filesystem is, for the paths in a transcript',
+            /name="cs-host" content="%7B%22distro%22/.test(page.body), true);
+    }
 
     // Everything web/app.js does, now that the jar is warm. No header anywhere.
     console.log('\n--- and now every call web/ makes, unchanged ---');
@@ -118,6 +126,13 @@ function check(name, got, want) {
     // check, like the beacon run it performs.
     check('GET /api/quota/refresh does not exist — a refresh is never a GET',
         (await call('/api/quota/refresh')).status, 404);
+    // Opening a path is the same shape of judgement twice over. It must be POST
+    // — a prefetch or a pasted link that popped a window on the desktop would be
+    // a real bug — and the successful call is deliberately not exercised
+    // anywhere, for the reason above. Its refusals live in test/refusals.test.js
+    // and what it will not launch in test/paths.test.js.
+    check('GET /api/fs/open does not exist — opening is never a GET',
+        (await call('/api/fs/open')).status, 404);
     check('POST /api/subscribe reaches its own 404, not the gate',
         (await call('/api/subscribe', {
             method: 'POST', headers: { 'x-claude-sessions-client': '1' },

@@ -107,6 +107,20 @@ A page fetched over loopback with no `Origin` is served with the cookie set and 
 token injected as `<meta name="cs-token" content="…">`. That is why nothing in
 `web/` sends an explicit credential.
 
+A local page is also served `<meta name="cs-host" content="…">`: URI-encoded JSON
+`{distro: string, home: string}` — the name of the WSL distribution the bridge runs
+in, and its home directory. It is there so a client can build the
+`\\wsl.localhost\<distro>\home\…` form of a Linux path for a link's `href` and hover
+text, and it is for **display only**.
+
+The tag is **omitted entirely for a remote caller**, and omitted when the bridge is
+not running under WSL. The reasoning is `/api/health`'s for `root` and `home`: a path
+on this machine is not something an off-machine client can act on, and
+`POST /api/fs/open` refuses it anyway. A client that does not find the tag should
+render paths as plain text rather than guess a distribution name.
+
+The translation that is *acted* on is never this one — see `POST /api/fs/open`.
+
 ## Local vs remote
 
 Every request is classified. `remote` is true if **any** of: the socket is not
@@ -125,6 +139,7 @@ the thing you are about to approve is running on a machine you are sitting at.
 of `/api/terminals/*`; all of `/api/runs/*`; `POST /api/commands/run`;
 `/api/shutdown`; `/api/restart` (both methods); `/api/devservers/stop`; `/api/devbrowser/*`;
 `POST /api/sessions/:id/reveal`; `POST /api/sessions/:id/handoff`; `POST /api/fs/mkdir`;
+`POST /api/fs/open`;
 `PUT /api/prefs`;
 both attachment uploads — `POST /api/sessions/:id/attachments` and
 `POST /api/attachments`.
@@ -2260,6 +2275,48 @@ kind of file with. Only the basename is taken from the caller; the directory is
 recomputed, so `404` means "not one of this session's attachments" rather than
 "missing". Local callers only.
 
+### `POST /api/fs/open`
+
+`{path: string, reveal?: boolean}` →
+`{ok: true, how: "open" | "reveal", path: string, winPath: string | null, why?: "directory" | "executable"}`.
+
+Opens a path on the Windows host: the file, in whatever Windows opens that kind of
+file with, or — with `reveal: true` — the folder holding it, in File Explorer.
+`path` is a Linux path on the machine the bridge runs on and a leading `~` means
+`$HOME`, as everywhere else. `path` in the answer is the resolved Linux path, not the
+one you sent. Local callers only.
+
+Session-free on purpose: this is about the machine rather than a conversation, so a
+client with nothing in focus can still open a path a transcript mentioned. Unlike
+`POST /api/sessions/:id/attachments/open`, which recomputes the directory and can
+therefore only reach files it put there, this route takes the path as given — which
+is why the next two paragraphs exist.
+
+**`how` is what happened, not what was asked for, and a client should read it.** Two
+kinds of path are revealed even when you asked to open them, and come back
+`how: "reveal"` with `why` naming which:
+
+- `why: "directory"` — the path is a folder.
+- `why: "executable"` — the extension is one Windows would *run* rather than open:
+  `.exe .com .bat .cmd .ps1 .psm1 .msi .msp .lnk .url .scr .pif .vbs .vbe .wsf .wsh
+  .hta .reg .jar .cpl .msc .scf .appref-ms`. That is a degrade rather than a refusal:
+  the folder is the same information with none of the execution. Note what is
+  deliberately **not** on that list — `.js`, `.ts`, `.py`, `.sh`, `.md` all open
+  normally.
+
+There is **no roots check**: unlike `GET /api/fs` and `POST /api/fs/mkdir`, this route
+is not bounded by `CLAUDE_SESSIONS_ROOTS`. Opening `/tmp/…` and `/mnt/c/…` is the
+common case, and a fence at `$HOME` would refuse those while buying little — anything
+a caller could be induced to open, it could have written inside `$HOME` first. The
+route being local-only, and the launchable list above, are what carry the weight.
+
+`winPath` is the `\\wsl.localhost\…` or `C:\…` form `wslpath -w` produced. It is the
+authoritative translation; the `cs-host` meta tag exists only so a client can
+*display* an approximation of it before asking.
+
+`400` for a missing `path`. `404` when nothing is at that path. `502` when `wslpath`
+or `explorer.exe` could not be run.
+
 ### `POST /api/sessions/:id/permission`
 
 The one route that answers all three kinds of ask.
@@ -2471,6 +2528,13 @@ will show a permanently spinning tool. See §*A tool call resolves in one of two
 
 **`runner` on a session summary is not the `runner-status` payload.** Four fields, and
 `pendingPermission` is not among them. See §`GET /api/sessions`.
+
+**A `200` from `/api/fs/open` means Windows was handed the path, not that a window
+appeared.** `explorer.exe` reports exit code 1 even when it works perfectly, so its
+status says nothing and only a spawn failure is treated as an error. A file type with
+no registered handler comes back `ok` and Windows shows its own *how do you want to
+open this* dialog — which is the right outcome to report as success. Read `how`
+rather than `ok` to find out what the user will actually see.
 
 **`keyboard.bindings` is one key, and `PUT` replaces it whole.** A patch is per
 key, and this key's value happens to be a map — so sending

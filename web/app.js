@@ -4,7 +4,7 @@
 // arrives from one place only (the file tail, pushed over SSE), so a session
 // running in somebody's terminal renders identically to one started here.
 
-import { renderMarkdown, inline } from './markdown.js';
+import { renderMarkdown, inline, configurePaths } from './markdown.js';
 import { highlight, escapeHtml } from './highlight.js';
 import { TerminalPane } from './terminal.js';
 import * as keys from './keys.js';
@@ -133,6 +133,20 @@ const BOOT_PREFS = (() => {
         return mergePrefs(JSON.parse(decodeURIComponent(m.content)));
     } catch { return mergePrefs(null); }
 })();
+
+// Where the bridge's filesystem is, so an absolute path in a transcript can be
+// drawn as a link to the Windows form of it. In the page for the same reason
+// BOOT_PREFS is, and absent for two reasons that need no distinguishing here: a
+// remote page is not served the tag, and neither is a bridge outside WSL.
+// Absent means markdown.js leaves paths as plain text — see configurePaths.
+const BOOT_HOST = (() => {
+    try {
+        const m = document.querySelector('meta[name="cs-host"]');
+        return m ? JSON.parse(decodeURIComponent(m.content)) : null;
+    } catch { return null; }
+})();
+
+configurePaths(BOOT_HOST);
 
 // The shortcuts, before anything can be pressed. `keyboard` is user-level only
 // (see USER_ONLY in bridge/prefs.js), so BOOT_PREFS is the whole answer and no
@@ -14753,6 +14767,48 @@ document.addEventListener('click', (e) => {
         setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('done'); }, 1400);
     }).catch(() => toast('Could not copy to the clipboard.', 'error'));
 });
+
+// Paths in rendered markdown are delegated for the same reason, and intercepted
+// for a different one: Chrome refuses an http: page a file: navigation and does
+// it silently, so the href on the anchor would never fire. The href is still
+// worth carrying — copy-link-address gives a UNC path somebody can paste into
+// Explorer, and the title says what the Windows form is — but the click is ours.
+document.addEventListener('click', (e) => {
+    const a = e.target.closest('a.fs-path');
+    if (!a) return;
+    e.preventDefault();
+    // Ctrl or Shift asks for the folder instead of the file. The other two ways a
+    // click ends at a folder — the path is a directory, or Windows would run it —
+    // are the bridge's to decide, being the only side that can see the disk.
+    openPath(a.dataset.path, { reveal: e.ctrlKey || e.metaKey || e.shiftKey });
+});
+
+// Middle-click would open a tab on a file: URL Chrome refuses, i.e. a blank one.
+document.addEventListener('auxclick', (e) => {
+    if (e.button === 1 && e.target.closest('a.fs-path')) e.preventDefault();
+});
+
+/**
+ * Open a path a transcript mentioned, on the Windows host.
+ *
+ * No session id: the route is about the machine rather than a conversation,
+ * which is what lets a path on the board work with nothing in focus.
+ */
+async function openPath(p, { reveal = false } = {}) {
+    try {
+        const out = await post('/api/fs/open', { path: p, reveal });
+        // The bridge answers what it actually did. A silent reveal when the click
+        // asked for the file would look like the click had missed.
+        if (!reveal && out.how === 'reveal') {
+            toast(out.why === 'directory'
+                ? `${p} is a folder — opened it in Explorer.`
+                : `${p} is a program — showed it in Explorer rather than running it.`,
+            'warn');
+        }
+    } catch (err) {
+        toast(`Could not open ${p}: ${err.message}`, 'warn');
+    }
+}
 
 function debounce(fn, ms) {
     let t;

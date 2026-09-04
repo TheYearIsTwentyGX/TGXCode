@@ -47,7 +47,7 @@ const { mapLimit } = require('./memo');
 const overview = require('./overview');
 const taskboard = require('./taskboard');
 const tasks = require('./tasks');
-const { openInExplorer, openFile } = require('./explorer');
+const { openInExplorer, openFile, isLaunchable } = require('./explorer');
 const attachments = require('./attachments');
 const { TerminalPool } = require('./terminal');
 const commands = require('./commands');
@@ -657,8 +657,10 @@ function isKnownHost(host) {
  *     person at the desk is using, and are trivially a denial of service from
  *     anywhere else. Restarting is the worst of the three to hand out: it ends every
  *     turn in flight and comes back running whatever is on disk.
- *   - **Reveal** and **DevBrowser** drive windows on the Windows host. Opening
- *     Explorer on a desktop nobody is sitting at is at best pointless.
+ *   - **Reveal**, **opening a path** and **DevBrowser** drive windows on the
+ *     Windows host. Opening Explorer on a desktop nobody is sitting at is at best
+ *     pointless — and opening a path is the one of the three that also hands that
+ *     desktop something to launch, from text a transcript happened to contain.
  *   - **Making a folder** writes to the filesystem. Note the asymmetry with the
  *     listing beside it, which stays allowed: reading the tree answers "where
  *     could a session start", and a phone may already start one. Creating a
@@ -709,6 +711,12 @@ function remoteRefusal(pathname, method) {
     // Exact equality, not a prefix: GET /api/fs stays readable remotely.
     if (pathname === '/api/fs/mkdir') {
         return 'folders can only be created on the machine they live on';
+    }
+    // Exact equality again, and for a second reason on top of the first: the
+    // window this opens is on a desk somebody is not at, and the thing it opens
+    // came out of a transcript.
+    if (pathname === '/api/fs/open') {
+        return 'a file can only be opened on the machine it lives on';
     }
     // Saving settings writes a file in the user's home directory, or inside a
     // checkout — the mkdir clause above, with a worse blast radius, because
@@ -4085,6 +4093,65 @@ async function api(req, res, url, pathname, who) {
         }
     }
 
+    // Open a path on the Windows host: the file itself, or the folder holding it.
+    //
+    // The one route here whose argument comes out of a transcript rather than out
+    // of the app. Everywhere else that reaches explorer.js names a path this
+    // bridge computed — a session's working directory, or a file re-derived
+    // against that session's own attachments directory. Here the client is
+    // repeating text a model wrote, and `explorer.exe` handed a file does not show
+    // it, it launches it. So what Windows would do with the path is asked before
+    // the path is handed over.
+    //
+    // No roots check, deliberately, and that is the refusal on this route that was
+    // considered and dropped rather than the one that was forgotten.
+    // cfg.ALLOWED_ROOTS defaults to $HOME, which would 403 every /tmp/claude-… and
+    // /mnt/c/… link a transcript contains while buying nothing: an agent that
+    // wanted a click on something malicious could write the file inside $HOME and
+    // be inside the fence. What does the work instead is that this is local-only,
+    // that the link text is the path itself so you see what you are opening, and
+    // that isLaunchable is not negotiable.
+    //
+    // Session-free on purpose: this is about the machine, not about a
+    // conversation, which is also what lets a path work on the second-monitor
+    // board with nothing in focus.
+    if (pathname === '/api/fs/open' && req.method === 'POST') {
+        const body = await readJson(req);
+        const given = cfg.expandHome(String(body.path == null ? '' : body.path).trim());
+        if (!given) return send(res, 400, { error: 'path is required' });
+        const target = path.resolve(given);
+
+        // Asked here rather than left to explorer.js so a path that is simply gone
+        // — a plan file from a worktree that has since been landed — is a 404 and
+        // not a 502 about a program that could not be run.
+        let st;
+        try { st = fs.statSync(target); } catch {
+            return send(res, 404, { error: `${target} does not exist` });
+        }
+
+        const answer = (out, how, why) => send(res, out.ok ? 200 : 502, {
+            ok: out.ok,
+            how,
+            path: target,
+            winPath: out.path || null,
+            ...(why ? { why } : {}),
+            ...(out.error ? { error: out.error } : {}),
+        });
+
+        // A directory belongs to Explorer, and a file Windows would execute is not
+        // something a click on a sentence should do. Both degrade to the reveal
+        // instead of refusing: the folder is the same information with none of the
+        // execution. `how` is what happened rather than what was asked for, so a
+        // client can say why the file it clicked did not open.
+        const why = st.isDirectory() ? 'directory'
+            : isLaunchable(target) ? 'executable'
+                : null;
+        if (why || body.reveal) {
+            return answer(await openInExplorer(target), 'reveal', why);
+        }
+        return answer(await openFile(target), 'open');
+    }
+
     return send(res, 404, { error: 'no such endpoint', pathname });
 }
 
@@ -4597,6 +4664,17 @@ function serveStatic(req, res, pathname, who) {
         // indistinguishable from a broken binding.
         body = Buffer.from(auth.injectMeta(body.toString('utf8'),
             'cs-keymap', JSON.stringify(keymap.payload())), 'utf8');
+        // Where this bridge's filesystem is, so a path in a transcript can be
+        // drawn as a link to the Windows form of it. Local callers only, on the
+        // same reasoning as `root` and `home` on /api/health: a path on this
+        // machine is not something a browser off it can act on, and the route
+        // that opens one refuses it anyway. A page without the tag renders paths
+        // as plain text, which is the right remote answer rather than a degraded
+        // one — and the same answer outside WSL, where there is no share to name.
+        if (!who.remote && cfg.WSL_DISTRO) {
+            body = Buffer.from(auth.injectMeta(body.toString('utf8'), 'cs-host',
+                JSON.stringify({ distro: cfg.WSL_DISTRO, home: cfg.HOME })), 'utf8');
+        }
     }
     headers['Content-Length'] = body.length;
 

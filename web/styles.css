@@ -2748,6 +2748,20 @@ a:hover { text-decoration: underline; }
 .prose em { color: var(--text-2); }
 .prose del { color: var(--text-4); }
 
+/* A path in prose opens the file on the Windows host. A dotted rule rather than
+   the link blue: half of these sit inside a code span, where blue would fight the
+   peach that says "this is code" — and a URL and a path visibly going to
+   different places is worth more than both of them being loud. `color: inherit`
+   is what makes the nested case need no second rule. */
+.prose a.fs-path {
+    color: inherit;
+    text-decoration: underline dotted var(--text-4);
+    text-underline-offset: 2px;
+    text-decoration-thickness: 1px;
+    cursor: pointer;
+}
+.prose a.fs-path:hover { text-decoration: underline solid currentColor; }
+
 .prose code {
     font: 400 0.87em/1.5 var(--mono);
     background: var(--s3);
