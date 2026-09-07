@@ -3711,6 +3711,12 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     align-items: start;
 }
 .snip-menu.up { transform-origin: bottom right; }
+/* An author `display` beats the UA rule for the `hidden` attribute, so every class
+   in this file that sets one carries its own guard — .quota-menu, .new-menu,
+   .scrim, .tasks. Without it closeSnips() empties the popover and leaves the box:
+   padding, background and the width positionSnips left on the inline style, with
+   nothing in it. */
+.snip-menu[hidden] { display: none; }
 @media (prefers-reduced-motion: reduce) { .snip-menu { animation: none; } }
 
 .snip-card {
@@ -6374,6 +6380,30 @@ body.term-resizing { user-select: none; cursor: row-resize; }
    that sets one carries its own — see .quota-menu[hidden] and its neighbours. */
 .snip-sub[hidden] { display: none; }
 .snip-sub label { font: 400 12.5px/1 var(--sans); color: var(--text-3); }
+
+/* The three plain pickers in this dialog — Group, Where it goes, Permissions.
+   Styled for the same reason every other select in this file is, which is not
+   only appearance: the reset at the top sets `background: none`, and Chromium
+   draws the popup list from the element's own background, so a select left
+   transparent gets a white popup with unreadable options inside a dark dialog.
+   The closed control looks right anyway — transparent over a dark modal, with
+   `color: inherit` — which is what makes this easy to miss until somebody opens
+   one. `.opts select`, `.when-args select` and `.settings-select` all carry a
+   background for the same reason.
+
+   The child combinator is load-bearing: it keeps this off the type pickers in
+   the parameter rows, which sit deeper and have their own rule below. Without it
+   this selector's id would out-specify that one and repaint them. */
+#snip-edit-scrim .field > select,
+#snip-edit-scrim .snip-sub select {
+    background: var(--bg);
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-sm);
+    padding: 8px 10px;
+    color: var(--text);
+    font: 400 13px/1.2 var(--sans);
+    cursor: pointer;
+}
 
 .snip-params { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
 .snip-param { display: flex; align-items: center; gap: 6px; }
