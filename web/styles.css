@@ -3731,6 +3731,12 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     /* Without this a grid child refuses to shrink below its content, and every
        ellipsis below stops working. */
     min-width: 0;
+    /* And this is the backstop behind that: whatever a row inside gets up to, it
+       cannot paint outside its own card and onto the one beside it. The row's own
+       track should make it unnecessary — it is here because the failure it catches
+       is silent, and lands on the neighbouring column where it is somebody else's
+       text that looks broken. */
+    overflow: hidden;
 }
 /* Loose snippets are not a group, so they must not look like one. */
 .snip-card.is-loose { background: none; box-shadow: none; }
@@ -3742,9 +3748,19 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     color: color-mix(in srgb, var(--snip-accent) 70%, var(--text));
 }
 
+/* A one-column grid rather than a flex column, and the track is `minmax(0, 1fr)`
+   rather than `1fr` — which is the whole reason this is a grid.
+
+   A flex column stretches its items to the container's width, but only once that
+   width is definite, and this row is a <button>: an element with enough intrinsic
+   sizing of its own that `width: 100%` on it is not the guarantee it looks like.
+   Where that resolved to max-content instead, the preview line grew to the length
+   of the text, `text-overflow` had nothing to clip against, and a long body ran
+   out of its card and across the one beside it. A `minmax(0, 1fr)` track cannot
+   be grown by its contents, so the ellipsis always has a width to land at. */
 .snip-row {
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 1px;
     width: 100%;
     min-width: 0;
@@ -3755,7 +3771,18 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     padding: 6px 8px;
     cursor: pointer;
 }
-.snip-row:hover, .snip-row[aria-selected="true"] { background: var(--s4); }
+.snip-row:hover { background: var(--s4); }
+/* Where the keyboard is, which is *not* `[aria-selected]`. That attribute is set
+   on the first row the moment the popover opens, so styling it painted a row that
+   looked permanently hovered under the pointer. `:focus-visible` is the browser's
+   own answer to "is this person navigating by keyboard", so the marker appears for
+   Ctrl+/ and the arrows and stays away for a mouse. The attribute is still there
+   for the listbox semantics; it just no longer decides how this looks. */
+.snip-row:focus-visible {
+    outline: none;
+    background: var(--s4);
+    box-shadow: inset 0 0 0 2px var(--blue);
+}
 .snip-row-title {
     font: 400 13px/1.35 var(--sans);
     color: var(--text);
