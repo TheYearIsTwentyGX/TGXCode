@@ -724,9 +724,29 @@ own cards has no reason to read `live` at all — the Android app does not.
 `spinner`: `randomize` (whether a turn in progress wears a themed verb in front
 of what it is doing, or says only what it is doing as before), `groups` (which
 groups from `~/.tgxcode/verbs/` are in play, named by their `Category` — at most
-200), `rerollMs` (how long a verb stands before the next is drawn; `0` pins one
+200), `weights` (**object**, `{[group]: number}` — how often each group gets to
+speak), `rerollMs` (how long a verb stands before the next is drawn; `0` pins one
 for the whole turn, else 1000–600000). The verbs themselves are not here — they
 are a directory, and `GET /api/spinner/groups` lists it.
+
+**`weights` is a share of the draws, not a multiplier on a group's size.** A
+verb is picked in two steps — a group by its weight, then a verb uniformly
+inside that group — so weight `4` against weight `1` is drawn four times as
+often whatever the two groups' counts are. A group the map does not name weighs
+`1`, making `{}` an even split; `0` means never drawn, and its verbs leave the
+pool. A number must be finite and 0–1000, keys are group names of 1–80
+characters matched the same forgiving way `groups` entries are
+(`"Tech / Programming"` = `"Tech_Programming"` = `"tech-programming"`), and at
+most 200 entries are kept — a bad entry is dropped with one `problems` line
+rather than costing the map. Weights naming a group that is not enabled are kept
+and ignored, so unchecking a group does not forget its number; a weight naming a
+group in no directory at all is one `problems` line from
+`GET /api/spinner/groups`.
+
+Like `keyboard.bindings`, `weights` is a **map**, so a `PUT` naming it replaces
+the whole thing rather than merging into it — there is no spelling for "drop
+this one entry back to its default", since removing the key *is* that. Send all
+of it.
 
 `quota` is about the background refresh that keeps the percentages current with
 no terminal open: `beacon` (bool), `beaconDir` (**string or null** — where the
@@ -779,10 +799,12 @@ could answer.
 
 ### `GET /api/spinner/groups?cwd=<path>&verbs=1`
 
-`{ randomize (bool), rerollMs (number), enabled: [string], pool (number),
-groups: [{name, file, count, source}], problems: [{file, message}] }` — which spinner
-verb groups exist and which are in force. `enabled` is group names; `problems` entries
-are **objects**, as on `/api/prefs`.
+`{ randomize (bool), rerollMs (number), enabled: [string],
+weights: {[group]: number}, pool (number),
+groups: [{name, file, count, source, weight, share}], problems: [{file, message}] }`
+— which spinner verb groups exist and which are in force. `enabled` is group
+names, `weights` is the map in force from `spinner.weights`, and `problems`
+entries are **objects**, as on `/api/prefs`.
 
 `?verbs=1` adds `verbs: [string]` to every group entry, sorted. Off by default
 because it is 3,639 strings across the bundled catalogue and a caller that
@@ -791,14 +813,24 @@ group's contents in its tooltip, which is the difference between choosing a
 voice and guessing from a name.
 
 `groups` is one entry per group available to `cwd` — `{name, file, count,
-source}`, where `name` is the `Category` inside the file and `source` is the
-directory it came from. A project's `<workspace>/.tgxcode/verbs/` wins over the
-user's `~/.tgxcode/verbs/`, so a repo can ship its own group without anybody
-editing their home directory.
+source, weight, share}`, where `name` is the `Category` inside the file and
+`source` is the directory it came from. A project's `<workspace>/.tgxcode/verbs/`
+wins over the user's `~/.tgxcode/verbs/`, so a repo can ship its own group
+without anybody editing their home directory.
+
+`weight` and `share` are **`null` for a group that is not enabled** — it has no
+share of anything, which is a different statement from a share of zero. For an
+enabled group, `weight` is what `spinner.weights` says (`1` when it says
+nothing, `0` for a muted one) and `share` is that weight over the total, `0` to
+`1`. Both come from the bridge rather than being left to the caller because the
+bridge is where the draw happens: a client recomputing a share would be a second
+implementation of the algorithm, and the two would disagree the first time this
+one changed.
 
 `enabled` is what settings ask for and `pool` is how many distinct verbs that
 actually amounts to — the two disagree when a name matches no file, which is
-what `problems` then says. A group whose filename and `Category` differ still
+what `problems` then says, and when a group is enabled but weighed `0`, which is
+deliberate and says nothing. A group whose filename and `Category` differ still
 works, and is reported here rather than left a mystery.
 
 This is the discoverable half of `spinner.groups`, and it was built when there

@@ -22,7 +22,7 @@ const { RunnerPool, PERMISSION_MODES, resolveWorkdir } = require('./runner');
 const { Flags } = require('./flags');
 const { Prefs } = require('./prefs');
 const keymap = require('./keymap');
-const { Spinner } = require('./spinner');
+const { Spinner, norm: spinnerNorm } = require('./spinner');
 const { Suggestions, STATUSES: SUGGESTION_STATUSES } = require('./suggestions');
 const { Drafts, MAX_DRAFTS } = require('./drafts');
 const {
@@ -2145,15 +2145,38 @@ async function api(req, res, url, pathname, who) {
         const cwd = url.searchParams.get('cwd') || '';
         const withVerbs = Boolean(url.searchParams.get('verbs'));
         const { groups: all, problems } = spinner.groups(cwd);
-        const groups = withVerbs ? all : all.map(({ verbs, ...g }) => g);
         const settings = prefs.forCwd(cwd).spinner;
         const pool = spinner.pool(cwd);
+        // A weight and a share on every group, because the bridge is where the
+        // draw is decided — a page that recomputed a share from the weights
+        // would be a second implementation of the algorithm, and the two would
+        // disagree the first time this one changed. `null` for a group that is
+        // not in play: it has no share of anything, which is a different
+        // statement from a share of zero.
+        // Keyed by the normalised name, not the written one: a bucket is named
+        // however the settings file spelled it, and `Tech_Programming` and
+        // `Tech / Programming` are the same group.
+        const shares = new Map(pool.buckets.map(b => [spinnerNorm(b.name), b]));
+        const enabledNames = new Set(settings.groups.map(spinnerNorm));
+        const groups = all.map(({ verbs, ...g }) => {
+            const bucket = shares.get(spinnerNorm(g.name));
+            const enabled = enabledNames.has(spinnerNorm(g.name));
+            const weight = !enabled ? null : bucket ? bucket.weight : 0;
+            return {
+                ...g,
+                weight,
+                share: weight && pool.weight ? weight / pool.weight : enabled ? 0 : null,
+                ...(withVerbs ? { verbs } : {}),
+            };
+        });
         return send(res, 200, {
             randomize: settings.randomize,
             rerollMs: settings.rerollMs,
             enabled: settings.groups,
+            weights: settings.weights,
             // What the spinner will actually draw from, which is not the same
-            // as `enabled` when a name in settings matches no file.
+            // as `enabled` when a name in settings matches no file — or when a
+            // group is enabled and weighed 0.
             pool: pool.verbs.length,
             groups,
             problems: [...problems, ...pool.problems],

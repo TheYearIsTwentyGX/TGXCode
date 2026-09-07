@@ -128,6 +128,13 @@ const DEFAULTS = {
         // globbed: enabling all 114 at once is a soup, and the point of the
         // groups is to choose a voice.
         groups: ['Claude Code Defaults', 'Monty Python', 'Absurd / Nonsense', 'Tech / Programming'],
+        // How often each of those groups gets to speak, as a share of the
+        // draws: weight 4 against weight 1 is drawn four times as often,
+        // whatever the two groups' sizes. A group nobody weighed is 1, so `{}`
+        // is every enabled group equally likely — and `0` mutes one without
+        // unchecking it, which is the difference between "not now" and
+        // "forget this". See bridge/spinner.js.
+        weights: {},
         // How long a verb stands before another is drawn. This is the only
         // thing that moves it: the verb is a prefix, and what follows it — a
         // tool's name, `Writing…` — changes on its own as reality does. So the
@@ -203,6 +210,9 @@ const SHAPE = {
         // either a mistake or an attempt to make the bridge do unbounded work.
         groups: (v) => Array.isArray(v) && v.length <= 200
             && v.every(s => typeof s === 'string' && s.length > 0 && s.length <= 80),
+        // The last gate rather than the only one, exactly as `bindings` is:
+        // cleanWeights() above has already dropped the entries that fail.
+        weights: (v) => !!v && typeof v === 'object' && !Array.isArray(v),
         // A floor of a second, because a label changing faster than you can
         // read it is worse than one that never changes. 0 is off.
         rerollMs: (v) => v === 0 || (Number.isInteger(v) && v >= 1000 && v <= 600_000),
@@ -259,11 +269,55 @@ function cleanBindings(value, note) {
     return out;
 }
 
+/**
+ * `spinner.weights`, entry by entry.
+ *
+ * The same shape as cleanBindings() above and for the same reason: one number
+ * somebody fat-fingered must not throw away the weights beside it. What a
+ * weight *means* is a group's share of the draws — see bridge/spinner.js — and
+ * which group it names is resolved there too, forgivingly, so a key is only
+ * checked for being a plausible group name here rather than for matching one.
+ * A file may legitimately weigh a group it has not enabled, or one that lives
+ * in a directory this workspace cannot see.
+ *
+ * @param {*} value whatever the file had
+ * @param {(msg: string) => void} note where a rejected entry gets reported
+ * @returns {object|undefined} the cleaned map, or undefined to leave the
+ *   default alone — which is what a value that is not a map at all gets.
+ */
+function cleanWeights(value, note) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    const out = {};
+    let n = 0;
+    for (const [name, raw] of Object.entries(value)) {
+        // The same bound the `groups` list puts on one of its entries: it is
+        // the same kind of name, written in the same file.
+        if (!name || name.length > 80) {
+            note(`${JSON.stringify(name)} is not a group name`);
+            continue;
+        }
+        if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0 || raw > 1000) {
+            note(`${JSON.stringify(raw)} is not a weight for ${JSON.stringify(name)}`);
+            continue;
+        }
+        // Bounded like `groups`, and for the same reason: a file naming ten
+        // thousand weights is a mistake rather than a preference.
+        if (n >= 200) {
+            note('more than 200 weights — the rest dropped');
+            break;
+        }
+        n++;
+        out[name] = raw;
+    }
+    return out;
+}
+
 // Section keys whose value is a map and so gets the treatment above, before
-// SHAPE sees it. One entry today; the table exists so the next one does not
-// have to special-case merge().
+// SHAPE sees it. Two entries; the table exists so the next one does not have to
+// special-case merge().
 const SANITIZE = {
     keyboard: { bindings: cleanBindings },
+    spinner: { weights: cleanWeights },
 };
 
 /**
@@ -457,7 +511,7 @@ class Prefs {
             transcript: { ...DEFAULTS.transcript },
             live: { ...DEFAULTS.live },
             quota: { ...DEFAULTS.quota },
-            spinner: { ...DEFAULTS.spinner },
+            spinner: { ...DEFAULTS.spinner, weights: { ...DEFAULTS.spinner.weights } },
             keyboard: { ...DEFAULTS.keyboard, bindings: { ...DEFAULTS.keyboard.bindings } },
             sources: [],
             problems: [],

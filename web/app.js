@@ -112,7 +112,7 @@ const PREFS_FALLBACK = {
     transcript: { groupToolCalls: true, groupMinCalls: 3, groupIncludesThinking: true },
     live: { compact: false, hideElsewhere: false },
     quota: { beacon: false, beaconDir: null, beaconEveryMinutes: 20 },
-    spinner: { randomize: true, groups: [], rerollMs: 8000 },
+    spinner: { randomize: true, groups: [], weights: {}, rerollMs: 8000 },
     keyboard: { contextualTerminalCopy: false, composerSend: 'enter', bindings: {} },
 };
 
@@ -447,6 +447,9 @@ const state = {
         open: false, scope: 'user', project: '', projects: [],
         data: null, spinner: null, loading: false, error: null,
         saving: false, recording: null,
+        // The order the verb groups are drawn in, fixed on the way in. See
+        // settingGroups().
+        groupOrder: null,
     },
     // Sessions blocked on an answer, kept whether or not the board is open, so
     // the badge on a shut board still says how many people are waiting.
@@ -8006,7 +8009,10 @@ const SETTINGS = [
                 label: 'Verb groups in play',
                 note: 'From ~/.tgxcode/verbs/, and a project’s own. Enabling all of '
                     + 'them is a soup; the point of the groups is to choose a voice. '
-                    + 'Hover a group to read what is in it.' },
+                    + 'Hover a group to read what is in it. The number on a group '
+                    + 'chosen is how often it gets to speak against the others — '
+                    + 'leave it at 1 for an even split, or 0 to mute it without '
+                    + 'giving it up.' },
         ],
     },
     {
@@ -8111,11 +8117,34 @@ function settingsProject() {
     return (s.projects[0] && s.projects[0].cwd) || '';
 }
 
+/**
+ * The verb catalogue, and what the spinner is currently doing with it.
+ *
+ * Its own function because it has to be asked again after a save, not only when
+ * the panel opens: this answer carries the pool size, each group's weight and
+ * each group's share, so ticking a group or changing a number moves numbers
+ * that are drawn from *here* rather than from the prefs the save returns. Left
+ * as one fetch on open, the shares sat still while the file underneath them
+ * changed — which is worse than not showing them.
+ *
+ * `verbs=1` because a group's name is not enough to choose it by — the tooltip
+ * on each one lists what is actually in it.
+ */
+async function loadSpinnerGroups(dir) {
+    const s = state.settings;
+    try { s.spinner = await get(`/api/spinner/groups?verbs=1${dir ? `&cwd=${encodeURIComponent(dir)}` : ''}`); }
+    catch { s.spinner = null; }
+}
+
 async function loadSettings() {
     const s = state.settings;
     if (s.loading) return;
     s.loading = true;
     s.error = null;
+    // A fresh look at the panel gets a fresh order for the verb groups, chosen
+    // ones first. Only here and on a scope change — never on the refetch after
+    // a save, which is the whole point of pinning it.
+    s.groupOrder = null;
     renderSettings();
 
     // The project list first, because settingsProject() falls back to it — and
@@ -8137,10 +8166,7 @@ async function loadSettings() {
         if (s.data.files && s.data.files.length) noteHome(s.data.files[0].file);
         // Loading the spinner catalogue alongside, because the groups control is
         // a list of checkboxes and the names can only come from the directory.
-        // `verbs=1` because a group's name is not enough to choose it by — the
-        // tooltip on each one lists what is actually in it.
-        try { s.spinner = await get(`/api/spinner/groups?verbs=1${dir ? `&cwd=${encodeURIComponent(dir)}` : ''}`); }
-        catch { s.spinner = null; }
+        await loadSpinnerGroups(dir);
         // What this machine is reachable as, for the pairing group. Not awaited
         // into the render: it shells out to `tailscale.exe` on the Windows host,
         // which is slow enough that holding the whole panel for it would be
@@ -8175,6 +8201,10 @@ async function saveSetting(section, key, value) {
         });
         s.data = { ...answer.prefs, files: answer.files };
         applyPrefsLive(answer.prefs, section);
+        // The spinner panel draws its counts and shares from the catalogue
+        // route rather than from the prefs, so a spinner save has to ask it
+        // again or the numbers beside the controls stay on the old answer.
+        if (section === 'spinner') await loadSpinnerGroups(dir);
     } catch (err) {
         toast(`Could not save that setting: ${err.message}`, 'error');
     }
@@ -8413,6 +8443,11 @@ function settingRow(group, row, locked) {
 
     const disabled = locked || !target || (target.exists && !target.parsed) || !target.writable;
     const save = (v) => saveSetting(section, row.key, v);
+    // One control writes two keys: the spinner groups carry a weight each, and
+    // `spinner.weights` is a key of its own rather than something folded into
+    // the list. Nothing else needs this, which is why it is an extra argument
+    // and not a change to what `save` means.
+    const saveKey = (key, v) => saveSetting(section, key, v);
 
     const text = el('div', { class: 'settings-row-text' },
         el('div', { class: 'settings-row-label', text: row.label }),
@@ -8431,7 +8466,7 @@ function settingRow(group, row, locked) {
             }, 'Clear')
             : el('span', { class: 'settings-row-from', text: origin ? `from ${SCOPE_NAMES[origin.scope]}` : 'default' }));
 
-    const control = settingControl(row, value, disabled, save);
+    const control = settingControl(row, value, disabled, save, saveKey);
 
     if (row.wide) {
         return el('div', { class: 'settings-row is-wide' },
@@ -8444,7 +8479,7 @@ function settingRow(group, row, locked) {
 }
 
 /** The input itself, by type. Each one saves on change; none of them is a draft. */
-function settingControl(row, value, disabled, save) {
+function settingControl(row, value, disabled, save, saveKey) {
     if (row.type === 'bool') {
         return el('label', { class: 'settings-check' },
             el('input', {
@@ -8482,7 +8517,7 @@ function settingControl(row, value, disabled, save) {
             value: v, selected: v === value || null,
         }, text)));
     }
-    if (row.type === 'groups') return settingGroups(value, disabled, save);
+    if (row.type === 'groups') return settingGroups(value, disabled, save, saveKey);
     return el('span', { text: String(value) });
 }
 
@@ -8509,39 +8544,125 @@ function verbTooltip(group) {
 }
 
 /**
- * The spinner groups, as checkboxes over what the directory actually holds.
+ * A group's share of the draws, as something short enough for a pill.
+ *
+ * The bridge sends the number because the bridge is where the draw happens —
+ * see the note on `GET /api/spinner/groups`. Rounding rather than a decimal:
+ * this is next to a name in a wrapped pill, and the question it answers is
+ * "which of these am I actually going to hear from", not "to what precision".
+ */
+function shareLabel(share) {
+    if (share === null || share === undefined) return '';
+    if (share === 0) return 'muted';
+    const pct = Math.round(share * 100);
+    return pct < 1 ? '<1%' : `${pct}%`;
+}
+
+/**
+ * The spinner groups, as checkboxes over what the directory actually holds,
+ * each chosen one carrying how often it gets to speak.
  *
  * `GET /api/spinner/groups` exists because there was no settings page and the
  * only other answer to "what may I put in that list?" was to go and read a
  * directory. Now that there is one, this is where that route pays for itself.
+ *
+ * **Only a chosen group gets a weight box.** There are a hundred-odd pills here
+ * and a number on every one of them would be a wall; a weight also means
+ * nothing until the group is in play. So the unchecked pills are exactly what
+ * they were, and the dozen you picked grow a box and a percentage — which is
+ * the number worth showing, since a weight on its own says nothing without the
+ * others to read it against.
+ *
+ * **The chosen ones come first, and then the order stops moving.** Alphabetical
+ * over a hundred and fifteen pills buries the dozen that are actually in play
+ * somewhere in the middle of the wall, and those are the ones you came here to
+ * read. But sorting on every render would make the list move under the cursor:
+ * tick a group and it leaps to the top, drawing your next click onto whatever
+ * slid into its place. So the order is settled once — on opening the panel, on
+ * changing project or scope — and held in `state.settings.groupOrder` for as
+ * long as you are working in it. A group ticked now goes to the top the next
+ * time you come in, which is soon enough.
  */
-function settingGroups(value, disabled, save) {
+function settingGroups(value, disabled, save, saveKey) {
     const cat = state.settings.spinner;
     const enabled = new Set(Array.isArray(value) ? value : []);
     if (!cat || !cat.groups || !cat.groups.length) {
         return el('div', { class: 'settings-groups-none' },
             'No verb groups found for this directory.');
     }
+    const weights = (cat && cat.weights) || {};
+    const st = state.settings;
+    if (!st.groupOrder) {
+        // A stable partition: the route hands these over alphabetically, so
+        // each half keeps that order and only the split is new.
+        st.groupOrder = [
+            ...cat.groups.filter(g => enabled.has(g.name)),
+            ...cat.groups.filter(g => !enabled.has(g.name)),
+        ].map(g => g.name);
+    }
+    // Drawn in the pinned order, with anything the order has not heard of on
+    // the end — a group that appeared in the directory since it was fixed.
+    const rank = new Map(st.groupOrder.map((name, i) => [name, i]));
+    const ordered = [...cat.groups].sort((a, b) =>
+        (rank.has(a.name) ? rank.get(a.name) : rank.size) - (rank.has(b.name) ? rank.get(b.name) : rank.size));
     const toggle = (name, on) => {
         const next = new Set(enabled);
         if (on) next.add(name); else next.delete(name);
         save([...next]);
     };
+    // A map goes over whole — `spinner.weights` is replaced by a save, not
+    // merged into, the same as `keyboard.bindings`. Unchecking a group leaves
+    // its number alone on purpose: the checkbox is how a group is turned off,
+    // and losing what you had set would make it destructive.
+    const weigh = (name, raw) => {
+        const next = { ...weights };
+        const n = Number(raw);
+        if (raw === '' || !Number.isFinite(n) || n === 1) delete next[name];
+        else next[name] = Math.min(1000, Math.max(0, n));
+        // An empty map is the same answer as no key, and no key is the tidier
+        // file — the same reason a save drops an emptied section.
+        saveKey('weights', Object.keys(next).length ? next : null);
+    };
+    const weighed = cat.groups.some(g => enabled.has(g.name) && g.weight !== 1 && g.weight !== null);
     return el('div', { class: 'settings-groups' },
-        cat.groups.map(g => el('label', {
-            class: 'settings-group-pick', title: verbTooltip(g),
-        },
-            el('input', {
-                type: 'checkbox', checked: enabled.has(g.name) || null, disabled: disabled || null,
-                onchange: (e) => toggle(g.name, e.target.checked),
-            }),
-            el('span', { class: 'settings-box' }),
-            el('span', { class: 'settings-group-name', text: g.name }),
-            el('span', { class: 'settings-group-count', text: `${g.count}` }))),
+        ordered.map(g => {
+            const on = enabled.has(g.name);
+            return el('div', { class: 'settings-group-pick', title: verbTooltip(g) },
+                el('label', { class: 'settings-group-toggle' },
+                    el('input', {
+                        type: 'checkbox', checked: on || null, disabled: disabled || null,
+                        onchange: (e) => toggle(g.name, e.target.checked),
+                    }),
+                    el('span', { class: 'settings-box' }),
+                    el('span', { class: 'settings-group-name', text: g.name }),
+                    el('span', { class: 'settings-group-count', text: `${g.count}` })),
+                // Committed on blur or Enter rather than per keystroke, like the
+                // path field: typing "12" through "1" would otherwise save a
+                // weight of 1 on the way past and re-render under your hands.
+                on ? el('input', {
+                    class: 'settings-group-weight', type: 'number', min: 0, max: 1000, step: 'any',
+                    value: g.weight === null || g.weight === undefined ? '' : `${g.weight}`,
+                    disabled: disabled || null, title: 'How often this group speaks, against the others',
+                    onchange: (e) => weigh(g.name, e.target.value.trim()),
+                }) : null,
+                on ? el('span', {
+                    class: `settings-group-share${g.share ? '' : ' is-muted'}`,
+                    text: shareLabel(g.share),
+                }) : null);
+        }),
         // What the spinner will actually draw from, which is not the same as
-        // what is enabled when a name matches no file.
+        // what is enabled when a name matches no file — or when a group is
+        // enabled and weighed 0.
         el('div', { class: 'settings-groups-foot' },
-            `${cat.pool} verb${cat.pool === 1 ? '' : 's'} in the pool.`));
+            `${cat.pool} verb${cat.pool === 1 ? '' : 's'} in the pool.`,
+            // The row's own Clear covers `groups`; without this there is no way
+            // to put every weight back to 1 from the page.
+            weighed ? ' ' : null,
+            weighed ? el('button', {
+                class: 'linkish', type: 'button', disabled: disabled || null,
+                title: 'Put every group back to an even share',
+                onclick: () => saveKey('weights', null),
+            }, 'Even them out') : null));
 }
 
 // ── remapping a shortcut ─────────────────────────────────────────────────
@@ -14991,6 +15112,9 @@ dom.setShell.addEventListener('scroll', () => {
 dom.setScope.addEventListener('change', () => {
     state.settings.scope = dom.setScope.value;
     state.settings.recording = null;
+    // Which groups read as chosen depends on the scope, so this is a fresh look
+    // at the list rather than the same one redrawn.
+    state.settings.groupOrder = null;
     renderSettings();
 });
 dom.setProject.addEventListener('change', () => {

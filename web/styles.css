@@ -6024,23 +6024,48 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 .settings-groups-none, .settings-groups-foot { font-size: 12px; color: var(--text-4); }
 .settings-groups-foot { flex-basis: 100%; margin-top: 6px; }
 .settings-group-pick {
-    position: relative;
     display: inline-flex;
     align-items: center;
     gap: 7px;
     background: var(--s2);
     border-radius: var(--pill);
     padding: 4px 11px 4px 8px;
+}
+/* The pill stopped being one `<label>` when the chosen ones grew a number box.
+   The checkbox is an invisible overlay filling its label, which is what makes
+   the whole pill clickable — so anything the overlay covers cannot be reached,
+   and the weight box has to sit outside the label rather than inside it. */
+.settings-group-toggle {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
     cursor: pointer;
 }
 /* Never wrapped mid-name: a pill is one label, and the line breaks between
    pills instead. Nothing is clipped, because each pill is as wide as its name. */
 .settings-group-name { white-space: nowrap; }
 .settings-group-pick:hover { background: var(--s3); }
-.settings-group-pick input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.settings-group-toggle input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 .settings-group-pick .settings-box { width: 14px; height: 14px; border-radius: 4px; }
 .settings-group-name { font-size: 12px; color: var(--text-2); }
 .settings-group-count { font: 400 11px var(--mono); color: var(--text-4); }
+/* Wide enough for three digits and no wider: it holds 0 to 1000, and every
+   pill on the line is competing for the same row. */
+.settings-group-weight {
+    flex: none;
+    width: 38px;
+    padding: 1px 5px;
+    text-align: right;
+    font: 400 11px var(--mono);
+    color: var(--text);
+    background: var(--s4);
+    border: 0;
+    border-radius: var(--r-sm);
+}
+.settings-group-weight:disabled { color: var(--text-4); }
+.settings-group-share { font: 400 11px var(--mono); color: var(--text-3); min-width: 24px; }
+.settings-group-share.is-muted { color: var(--text-4); }
 
 /* ── the shortcut table ───────────────────────────────── */
 /* Rows rather than cards: thirteen of them, all the same shape, read by looking
