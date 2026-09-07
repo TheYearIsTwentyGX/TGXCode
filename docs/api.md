@@ -107,6 +107,20 @@ A page fetched over loopback with no `Origin` is served with the cookie set and 
 token injected as `<meta name="cs-token" content="…">`. That is why nothing in
 `web/` sends an explicit credential.
 
+A local page is also served `<meta name="cs-host" content="…">`: URI-encoded JSON
+`{distro: string, home: string}` — the name of the WSL distribution the bridge runs
+in, and its home directory. It is there so a client can build the
+`\\wsl.localhost\<distro>\home\…` form of a Linux path for a link's `href` and hover
+text, and it is for **display only**.
+
+The tag is **omitted entirely for a remote caller**, and omitted when the bridge is
+not running under WSL. The reasoning is `/api/health`'s for `root` and `home`: a path
+on this machine is not something an off-machine client can act on, and
+`POST /api/fs/open` refuses it anyway. A client that does not find the tag should
+render paths as plain text rather than guess a distribution name.
+
+The translation that is *acted* on is never this one — see `POST /api/fs/open`.
+
 ## Local vs remote
 
 Every request is classified. `remote` is true if **any** of: the socket is not
@@ -120,11 +134,12 @@ for this by name, and a client should honour it: you should never be unsure whet
 the thing you are about to approve is running on a machine you are sitting at.
 
 **Refused for remote callers** (403, with `{"error": …, "remote": true}`):
-`permissionMode` of `bypassPermissions` or `dontAsk` on create, on send, and on
-**saving or starting a draft**; all
+`permissionMode` of `bypassPermissions` or `dontAsk` on create, on send, on
+**saving or starting a draft**, and on **saving a snippet**; all
 of `/api/terminals/*`; all of `/api/runs/*`; `POST /api/commands/run`;
 `/api/shutdown`; `/api/restart` (both methods); `/api/devservers/stop`; `/api/devbrowser/*`;
 `POST /api/sessions/:id/reveal`; `POST /api/sessions/:id/handoff`; `POST /api/fs/mkdir`;
+`POST /api/fs/open`;
 `PUT /api/prefs`;
 **every method of `/api/claude-config` and anything under it, the GET included**;
 both attachment uploads — `POST /api/sessions/:id/attachments` and
@@ -135,6 +150,21 @@ work up at the desk and releasing it from a phone when quota frees up is the cas
 feature exists for. What a phone cannot do is *widen* a mode — the check runs when the
 draft is written and again when it is started, so a `bypassPermissions` draft saved
 locally still refuses to start remotely.
+
+The snippet routes are open on the same reasoning and with the same one exception,
+and the exception matters more here. A snippet may carry `autoSubmit: true` together
+with a `permissionMode`, and those two together are a single pinned toolbar button
+that sets the mode and sends — which is exactly the "one tap away on a phone that
+might be in someone else's hand" the refusal exists for. So a phone may write, edit,
+reorder and delete snippets freely, and may not save one naming either of the two
+modes. It is refused twice over: here, so the snippet cannot be stashed, and again by
+`POST /api/sessions/:id/send` when it is used.
+
+Note that `PUT /api/prefs` above is local-only and the snippet routes are not, which
+looks inconsistent and is not. That route is refused because it writes a file in the
+user's home directory or inside a checkout, and one of its keys names a directory the
+app then starts `claude` in. Snippets are written to the state directory, execute
+nothing, and their `projects` list is a display filter.
 
 `/api/prefs` has the same shape of asymmetry, and it is on the method rather
 than the path: reading how somebody wants a transcript folded is not a
@@ -720,9 +750,29 @@ own cards has no reason to read `live` at all — the Android app does not.
 `spinner`: `randomize` (whether a turn in progress wears a themed verb in front
 of what it is doing, or says only what it is doing as before), `groups` (which
 groups from `~/.tgxcode/verbs/` are in play, named by their `Category` — at most
-200), `rerollMs` (how long a verb stands before the next is drawn; `0` pins one
+200), `weights` (**object**, `{[group]: number}` — how often each group gets to
+speak), `rerollMs` (how long a verb stands before the next is drawn; `0` pins one
 for the whole turn, else 1000–600000). The verbs themselves are not here — they
 are a directory, and `GET /api/spinner/groups` lists it.
+
+**`weights` is a share of the draws, not a multiplier on a group's size.** A
+verb is picked in two steps — a group by its weight, then a verb uniformly
+inside that group — so weight `4` against weight `1` is drawn four times as
+often whatever the two groups' counts are. A group the map does not name weighs
+`1`, making `{}` an even split; `0` means never drawn, and its verbs leave the
+pool. A number must be finite and 0–1000, keys are group names of 1–80
+characters matched the same forgiving way `groups` entries are
+(`"Tech / Programming"` = `"Tech_Programming"` = `"tech-programming"`), and at
+most 200 entries are kept — a bad entry is dropped with one `problems` line
+rather than costing the map. Weights naming a group that is not enabled are kept
+and ignored, so unchecking a group does not forget its number; a weight naming a
+group in no directory at all is one `problems` line from
+`GET /api/spinner/groups`.
+
+Like `keyboard.bindings`, `weights` is a **map**, so a `PUT` naming it replaces
+the whole thing rather than merging into it — there is no spelling for "drop
+this one entry back to its default", since removing the key *is* that. Send all
+of it.
 
 `quota` is about the background refresh that keeps the percentages current with
 no terminal open: `beacon` (bool), `beaconDir` (**string or null** — where the
@@ -775,10 +825,12 @@ could answer.
 
 ### `GET /api/spinner/groups?cwd=<path>&verbs=1`
 
-`{ randomize (bool), rerollMs (number), enabled: [string], pool (number),
-groups: [{name, file, count, source}], problems: [{file, message}] }` — which spinner
-verb groups exist and which are in force. `enabled` is group names; `problems` entries
-are **objects**, as on `/api/prefs`.
+`{ randomize (bool), rerollMs (number), enabled: [string],
+weights: {[group]: number}, pool (number),
+groups: [{name, file, count, source, weight, share}], problems: [{file, message}] }`
+— which spinner verb groups exist and which are in force. `enabled` is group
+names, `weights` is the map in force from `spinner.weights`, and `problems`
+entries are **objects**, as on `/api/prefs`.
 
 `?verbs=1` adds `verbs: [string]` to every group entry, sorted. Off by default
 because it is 3,639 strings across the bundled catalogue and a caller that
@@ -787,14 +839,24 @@ group's contents in its tooltip, which is the difference between choosing a
 voice and guessing from a name.
 
 `groups` is one entry per group available to `cwd` — `{name, file, count,
-source}`, where `name` is the `Category` inside the file and `source` is the
-directory it came from. A project's `<workspace>/.tgxcode/verbs/` wins over the
-user's `~/.tgxcode/verbs/`, so a repo can ship its own group without anybody
-editing their home directory.
+source, weight, share}`, where `name` is the `Category` inside the file and
+`source` is the directory it came from. A project's `<workspace>/.tgxcode/verbs/`
+wins over the user's `~/.tgxcode/verbs/`, so a repo can ship its own group
+without anybody editing their home directory.
+
+`weight` and `share` are **`null` for a group that is not enabled** — it has no
+share of anything, which is a different statement from a share of zero. For an
+enabled group, `weight` is what `spinner.weights` says (`1` when it says
+nothing, `0` for a muted one) and `share` is that weight over the total, `0` to
+`1`. Both come from the bridge rather than being left to the caller because the
+bridge is where the draw happens: a client recomputing a share would be a second
+implementation of the algorithm, and the two would disagree the first time this
+one changed.
 
 `enabled` is what settings ask for and `pool` is how many distinct verbs that
 actually amounts to — the two disagree when a name matches no file, which is
-what `problems` then says. A group whose filename and `Category` differ still
+what `problems` then says, and when a group is enabled but weighed `0`, which is
+deliberate and says nothing. A group whose filename and `Category` differ still
 works, and is reported here rather than left a mystery.
 
 This is the discoverable half of `spinner.groups`, and it was built when there
@@ -1072,6 +1134,126 @@ had ticked would mean losing it. The flag only decides what the session becomes.
 Also pushed as the `drafts-changed` SSE event, which is how the UI reads it. That event
 carries this same payload, so a client never has to come back here after the first load.
 
+### `GET /api/snippets?cwd=<path>`
+
+Canned messages, and the groups they are drawn in. What replaced the one hard-coded
+LGTM button on the composer.
+
+```json
+{
+  "at": 1787328400656,
+  "snippets": [
+    { "id": "seed-lgtm",
+      "title": "LGTM",
+      "body": "LGTM — take it from here and land it.\n\n- If this work is not on a pull request yet…",
+      "hint": "open a PR for this work if there is not one, run the checks, and merge it once they pass",
+      "groupId": null,
+      "params": [],
+      "insert": "overwrite", "autoSubmit": true, "permissionMode": null,
+      "pinned": true, "order": 0, "projects": [],
+      "undeclared": [], "unused": [],
+      "createdAt": 1787328400891, "updatedAt": 1787328400891 },
+    { "id": "6b1f0e2c-6b8a-4f0e-9a1d-2c4b7e5a0f31",
+      "title": "Review a branch",
+      "body": "Review {{branch}} against main, and cap it at {{count}} findings.",
+      "hint": null,
+      "groupId": "d4c0a1b2-77e3-4a55-8c19-0f2b6d3e91aa",
+      "params": [
+        { "name": "branch", "label": "Branch", "type": "text",
+          "required": true, "default": null },
+        { "name": "count", "label": "How many at most", "type": "integer",
+          "required": false, "default": "5" }
+      ],
+      "insert": "cursor", "autoSubmit": false, "permissionMode": "plan",
+      "pinned": false, "order": null,
+      "projects": ["/home/dylan_hays/Other"],
+      "undeclared": [], "unused": [],
+      "createdAt": 1787328401276, "updatedAt": 1787328401276 }
+  ],
+  "groups": [
+    { "id": "d4c0a1b2-77e3-4a55-8c19-0f2b6d3e91aa", "name": "Review",
+      "accent": "#d0bcff", "order": 0,
+      "createdAt": 1787328400891, "updatedAt": 1787328400891 }
+  ],
+  "counts": { "snippets": 2, "groups": 1, "pinned": 1 }
+}
+```
+
+| Field | Type |
+|---|---|
+| `id` | string, a UUID — except for the shipped ones, whose ids are stable strings like `seed-lgtm` |
+| `title` | string, non-empty, trimmed. What the row and the pinned button say |
+| `body` | string, non-empty — **and not trimmed**, unlike a draft's `prompt`. An `insert` of `append` or `cursor` makes leading and trailing whitespace part of what the snippet means |
+| `hint` | string or null — the sentence a pinned button shows on hover. Null means *use the first line of the body*, which is a guess; a hint is a decision |
+| `groupId` | string or null. Null is ungrouped, which is a place in the popover rather than a group with no name. **May name a group that is not in `groups`** — draw it ungrouped and leave the field alone; another bridge may be about to write that group, and it heals itself |
+| `params` | array of `{name, label, type, required, default}`, possibly empty — see below |
+| `insert` | `overwrite`, `append` or `cursor` — where the body lands in the compose box |
+| `autoSubmit` | boolean. True sends it; false leaves it in the box |
+| **`permissionMode`** | **string or null.** One of the six in `POST /api/sessions/:id/send`, or `null` for **inherit** — leave the mode selector exactly where the user left it. `null` is not `auto`: `auto` is a choice to *move* the selector. Only meaningful when `autoSubmit` is true, and kept regardless, so turning `autoSubmit` off and on again does not lose the mode |
+| `pinned` | boolean — gets a button of its own in the composer toolbar, beside the snippets icon |
+| **`order`** | **integer or null.** Null means *sort me alphabetically*, and sorts **after** everything carrying a number. Nulls are never interleaved with numbers: an explicit order is a decision and null is the absence of one |
+| `projects` | array of absolute paths, already expanded, possibly empty. Empty is everywhere — see the matching rule below |
+| **`undeclared`, `unused`** | **arrays of strings, derived rather than stored.** `undeclared` names the `{{placeholders}}` in `body` that no param declares; `unused` names the params nothing references. **Neither is an error** and no route refuses on either — they are here so an editor can say so quietly, computed on the bridge so three clients cannot disagree about what counts |
+| `createdAt`, `updatedAt` | numbers, epoch ms. `createdAt` never moves |
+
+A **param** is `{name, label, type, required, default}`.
+
+| Field | Type |
+|---|---|
+| `name` | string matching `[A-Za-z_]\w*`, unique within the snippet. This is its identity: `{{name}}` in the body is what refers to it |
+| `label` | string or null. Null means *use the name*, so a parameter is never an unlabelled box |
+| `type` | `text`, `integer`, `decimal`, `date`, `time` or `datetime`. **The list is meant to grow**, so treat an unrecognised type as `text` rather than failing — that is what this bridge does with one, so a snippet written on a newer build stays editable on an older one |
+| `required` | boolean — may not be left empty when the dialog is confirmed. A `default` only pre-fills, so the two do not cancel out: a required param with a default is one you can clear and must then refill |
+| `default` | string or null, **untrimmed**. Always a string whatever the `type`, because the substitution is textual — an `integer` default is `"5"` |
+
+A **group** is `{id, name, accent, order, createdAt, updatedAt}`. `accent` is a
+`#rgb` or `#rrggbb` colour, or null. Strict, because of where it ends up: the client
+sets it as a CSS custom property on the group's card, so anything looser would be a
+declaration in the page's stylesheet rather than a colour.
+
+**Placeholders are declared, not discovered.** `{{x}}` becomes a question only because
+a param is named `x`; anything else is **left in the message verbatim**. That is
+`fillPrompt`'s rule for schedules, down to the expression — `\{\{\s*(\w+)\s*\}\}` — and
+it is there for the same reason: `{{` is not reserved punctuation in prose, and blanking
+what nothing declares would quietly delete part of a message somebody wrote. A typo'd
+`{{brnach}}` arriving in the session as itself is a bug you can see. An unanswered param
+falls back to its `default` and then to the placeholder — **never to the empty string**.
+
+**`projects` is a prefix match at a path boundary.** A snippet applies when the
+composer's working directory *is* one of the listed paths or lies *underneath* one:
+`/home/me/proj` matches `/home/me/proj/web` and does **not** match `/home/me/proj-old`,
+which is a different repository sharing fourteen characters. Empty means everywhere.
+Case-sensitive. Prefix rather than "the same project" deliberately: a project's root is
+derived from git, and a filter built on that would change what the popover contains when
+a directory stops being a repository. The cost is worktrees, which are siblings rather
+than descendants and need their own entry.
+
+`?cwd=` applies that filter here, for a client that would rather not implement it — but
+`counts` is deliberately left whole, so a popover can say how many are hidden rather
+than shortening its list in silence. **The `snippets-changed` event is never filtered**,
+so a client that narrows its first load must narrow the event too, or its list widens
+the moment anybody edits anything.
+
+Ordered the way it should be drawn, and the bridge decides that so the popover, the
+pinned strip and the editor cannot come to three answers: explicit `order` ascending,
+then everything unnumbered alphabetically by title, then by id so a tie never depends on
+where a row sat in the array. Two rows genuinely can share an `order` — the file is
+hand-editable, and two bridges number independently.
+
+**On first run the store seeds itself with `LGTM`**, the button this feature replaced,
+pinned and set to send itself. Seeded **once ever**: the file records which shipped
+snippets it has been offered, so deleting it is permanent and a later release adding a
+second shipped snippet will not bring it back. Deleting
+`~/.local/share/claude-sessions/snippets.json` outright is how to get the shipped ones
+again.
+
+Global — not per-session and not per-project. `projects` is the only scoping and it
+hides rather than partitions.
+
+Also pushed as the `snippets-changed` SSE event, which is how the UI reads it. That
+event carries this same payload, so a client never has to come back here after the
+first load.
+
 ### `GET /api/schedules`
 
 Sessions that start on a clock — everything `POST /api/sessions` takes, plus a cron
@@ -1121,6 +1303,20 @@ the commits that have landed since the previous run. Also `{{head}}`, `{{since}}
 name is **left in the text verbatim** rather than blanked — a prompt is prose, and `{{`
 is not reserved punctuation in it. With no usable marker `{{range}}` narrows to
 `<head>~1..<head>`, never to the whole history and never to an empty string.
+
+**The prompt a scheduled session receives is not the stored `prompt`.** On top of the
+placeholder substitution above, the bridge **appends a note telling the agent it is
+running unattended** — that a schedule started the session rather than a person, that
+no question it asks will be answered before it finishes, and that its findings belong
+in the transcript. It is appended and never prepended, so the head of the stored
+prompt is still the head of what was sent.
+
+This applies to every scheduled run: the tick, the pull-request drain, and
+`POST /api/schedules/:id/run`. "Run now" is included on purpose — that button exists
+to produce a session identical to the one the clock produces.
+
+A client showing "what will run" is therefore showing the stored text, which is the
+right thing to show and edit; it is just not byte-for-byte what the session is sent.
 
 | Field | Type |
 |---|---|
@@ -1711,6 +1907,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `overview` | the board; sent only when it has actually changed |
 | `taskboard` | the task board; every ~3s while watched, and only when it has actually changed. Never carries `?idle=all` |
 | `drafts-changed` | `{at, drafts[], counts}` — the whole `GET /api/drafts` payload, so there is nothing to refetch. **Not gated by a `POST /api/subscribe` flag**, unlike `overview` and `taskboard`: a draft only changes because somebody changed it, so there is no tick to switch on and every window gets every change. Fires on create, edit, delete, and on a start (which deletes one) |
+| `snippets-changed` | `{at, snippets[], groups[], counts}` — the whole `GET /api/snippets` payload, so there is nothing to refetch. Ungated, exactly as `drafts-changed` is, and like it, it never fires without somebody having done something: a snippet or group created, edited or deleted, and a reorder **that actually moved a row** — a drag that lands where it started pushes nothing. Both arrays every time, because deleting a group re-homes its snippets and sending half the answer would leave a client drawing a card that no longer exists. **Always unfiltered by `cwd`**, so a client that fetched with `?cwd=` must apply the filter itself here or watch its list silently widen |
 | `schedules-changed` | `{at, schedules[], counts}` — the whole `GET /api/schedules` payload. Ungated, exactly as `drafts-changed` is. Unlike that one it fires **without anybody having done anything**: a schedule firing, skipping a slot, or having its outcome recorded when the turn ends all push it. So a client that assumed the payload only moves in response to a user action will be wrong here, and pleasantly so — this is how a card starts saying "ran 2h ago — BLOCK" while nobody is looking at it |
 | `sessions-changed` | `{at}` — a nudge to refetch the list |
 | `prs-changed` | **the whole `GET /api/prs` payload** — `{sessions, gh, checkedAt}` — so a rail has nothing to refetch. Ungated, exactly as `drafts-changed` is, and like `schedules-changed` it fires **without anybody having done anything**: it is a background refresher noticing that a review landed, a build finished, or somebody merged. Fires only when the answer actually moved, so a pass that re-lists a quiet repository and finds it unchanged pushes nothing — this is not a heartbeat and must not be treated as one. It is the *only* signal that PR status changed; there was none before, and clients polled. A client wanting per-PR detail for one session should refetch `GET /api/sessions/:id/prs` on this event, which is cheap and does not shell out |
@@ -1933,10 +2130,129 @@ saved at the machine must not become a way for a phone to start `bypassPermissio
 if the directory no longer resolves; `429` past 8 sessions started in a minute — the
 same bucket `POST /api/sessions` draws on, because both spawn a process.
 
+### `POST /api/snippets`
+
+`{title, body, hint?, groupId?, params?, insert?, autoSubmit?, permissionMode?, pinned?,
+order?, projects?}` → `{snippet}`, the row as `GET /api/snippets` describes it,
+`undeclared` and `unused` included.
+
+`400` for a missing `title` or `body`; a `title` over **200** characters or a `body` over
+**20000**; an `insert` that is not one of the three; an `order` that is not an integer or
+null; a `groupId` naming a group that does not exist; more than **20** params or **20**
+`projects`; and a param whose `name` is not `[A-Za-z_]\w*` or repeats an earlier one — a
+param's name is its identity, so a duplicate is not a thing that can be stored.
+
+`403` for a `permissionMode` of `bypassPermissions` or `dontAsk` from a remote caller.
+
+`409` past **200 snippets** — a ceiling and not a lifetime budget, so deleting one makes
+room.
+
+**Two fields normalise rather than refuse, and two do not, and the split is deliberate.**
+An unrecognised param `type` reads as `text` and an unrecognised group `accent` reads as
+no accent, because both are open sets whose worst case is a field that still holds the
+right value. An unrecognised `insert` is a `400`, because its three values decide what
+happens to text the user has *already typed* and one of them replaces it — there is no
+fallback that is both the natural default and harmless. An unrecognised `permissionMode`
+becomes `null` (inherit) rather than `auto`, because `auto` would be a silent decision to
+move the user's mode selector and `null` is the only value that does nothing.
+
+`body` is stored **exactly as sent**, not trimmed. It must be non-empty *once* trimmed,
+which is a different test.
+
+### `PATCH /api/snippets/:id`
+
+Any subset of `{title, body, hint, groupId, params, insert, autoSubmit, permissionMode,
+pinned, order, projects}` → `{snippet}`.
+
+**A genuine partial**, drafts' rule: a field left out is left alone. `null` is a value and
+absence is not — `{"groupId": null}` ungroups a snippet, `{}` changes nothing but the
+timestamp.
+
+**`params` is the exception, and it replaces rather than merges.** Send the whole array
+or do not send the key. A param has no id — its name is its identity, and that name is
+also what the body references — so there is nothing to address a partial update to, and
+renaming a param while fixing the `{{…}}` that refers to it has to be one save or it can
+half-fail.
+
+Every field is validated as it is on create, so the refusals are the same, plus `404` for
+an unknown id. **The body is checked before the id is looked up**, so a refused mode is a
+`403` whether or not the snippet exists — the same order `PATCH /api/drafts/:id` uses and
+for the same reason.
+
+### `DELETE /api/snippets/:id`
+
+→ `{ok: true, id}`; `404` if there is no such snippet.
+
+A hard delete. **Deleting a shipped snippet is permanent** — the store records that it has
+offered `seed-lgtm` once and never offers it again, so emptying the list and restarting
+does not bring the button back. That is the point: a default that reappears does not read
+as a policy, it reads as the delete having failed.
+
+### `POST /api/snippets/reorder`
+
+`{snippets?: [id, …], groups?: [id, …]}` → the whole `GET /api/snippets` payload.
+
+Each array is the new order of the rows it names: they get `order` 0, 1, 2 … in the order
+given. **Ids that are not there are ignored**, because a row somebody deleted in another
+window mid-drag must not fail the save — and ignored all the way down, so a stranger does
+not consume an index either and the numbering stays dense. **A row the body does not
+mention keeps the `order` it had**, `null` included, so reordering one group is that
+group's ids and touches nothing else and a client holding a stale list cannot renumber
+snippets it has never seen.
+
+A snippet's `order` is a global index rather than one within its group, which is not a
+compromise: a client buckets by group and sorts inside each, so any sequence putting a
+group's snippets in the right relative order is a right answer.
+
+Idempotent. `updatedAt` moves only on rows whose `order` actually changed, and **nothing
+is broadcast when nothing moved**. That is not cosmetic: bumping stamps on rows that did
+not move would let a client re-sending its current order win the merge against another
+bridge's later edit to those same rows.
+
+This is also the right call for an up/down button rather than two `PATCH`es — a swap is
+two rows, and doing it as two writes has an instant in the middle where both hold the same
+number and two events go out.
+
+`400` if a key that is present is not an array of strings.
+
+### `POST /api/snippet-groups`
+
+`{name, accent?, order?}` → `{group}`.
+
+A sibling path rather than `/api/snippets/groups`, so that `reorder` is the only reserved
+word under that prefix and `groups` can never be mistaken for a snippet id.
+
+`accent` is `#rgb` or `#rrggbb`, and **normalises to null** if it is anything else —
+strictly, because the client sets it as a CSS custom property, so `red`, `var(--x)` and
+`#fff;}` would each be a declaration in the page's stylesheet rather than a colour.
+
+`400` for a missing `name`, a `name` over **200** characters, or an `order` that is not an
+integer or null; `409` past **40 groups**.
+
+There is no `GET`: a group is only ever read as part of `GET /api/snippets`, and a route
+returning half the popover's data would be one more thing for a client to keep in step.
+
+### `PATCH /api/snippet-groups/:id`
+
+Any subset of `{name, accent, order}` → `{group}`. A genuine partial; `404` for an unknown
+id.
+
+### `DELETE /api/snippet-groups/:id`
+
+→ `{ok: true, id, orphaned: 3}`; `404` if there is no such group.
+
+**Its snippets are not deleted, and they keep their `groupId`.** Deleting a container must
+not delete its contents: the group is a name and a colour, and the snippets under it are
+paragraphs somebody wrote. They draw ungrouped, and recreating a group with the same id
+puts them straight back — which is also why the field is left alone rather than nulled, so
+one bridge is not rewriting rows on the strength of a deletion another has not seen.
+`orphaned` is how many came loose, so a client can say so rather than leaving somebody to
+notice.
+
 ### `POST /api/schedules`
 
 `{cwd, prompt, cron, once?, gate?, title?, model?, permissionMode?, test?, enabled?,
-seed?}` → `{schedule}`, the row as `GET /api/schedules` returns it.
+seed?, fromDraft?}` → `{schedule}`, the row as `GET /api/schedules` returns it.
 
 Validated exactly as `POST /api/drafts` is — `cwd` resolved and checked against the
 allowed roots, `permissionMode` normalised — plus the two of its own:
@@ -1978,6 +2294,21 @@ that instead, which is how you say "review everything I have open right now". A
 `cwd` with no GitHub origin, or a repository `gh` cannot list, is a `400` rather
 than an empty seed: a schedule that cannot see the repository is one that reports
 "nothing new" every night and never says why.
+
+**`fromDraft` is a draft id to consume** — the id of a `GET /api/drafts` row, for a
+client turning a draft into a schedule. The draft is deleted **after** the schedule
+row is written and only if it was: the draft is the copy of that work which still
+exists if the save fails, so a refused create leaves it exactly where it was. A
+`drafts-changed` push follows the deletion, before the response.
+
+An id naming no draft is **not** an error. The schedule saved, which is what was
+asked for, and the two reasons an id goes missing — it was already deleted, or it
+belongs to a bridge with a different state directory — are both cases where the
+right outcome is the schedule you asked for and no complaint.
+
+It is not stored on the schedule and does not appear on the row; nothing after the
+create has a use for it. `PATCH` does not accept it, because converting a draft
+happens once.
 
 `409` at 50 schedules. `400` if the directory does not resolve.
 
@@ -2471,6 +2802,48 @@ kind of file with. Only the basename is taken from the caller; the directory is
 recomputed, so `404` means "not one of this session's attachments" rather than
 "missing". Local callers only.
 
+### `POST /api/fs/open`
+
+`{path: string, reveal?: boolean}` →
+`{ok: true, how: "open" | "reveal", path: string, winPath: string | null, why?: "directory" | "executable"}`.
+
+Opens a path on the Windows host: the file, in whatever Windows opens that kind of
+file with, or — with `reveal: true` — the folder holding it, in File Explorer.
+`path` is a Linux path on the machine the bridge runs on and a leading `~` means
+`$HOME`, as everywhere else. `path` in the answer is the resolved Linux path, not the
+one you sent. Local callers only.
+
+Session-free on purpose: this is about the machine rather than a conversation, so a
+client with nothing in focus can still open a path a transcript mentioned. Unlike
+`POST /api/sessions/:id/attachments/open`, which recomputes the directory and can
+therefore only reach files it put there, this route takes the path as given — which
+is why the next two paragraphs exist.
+
+**`how` is what happened, not what was asked for, and a client should read it.** Two
+kinds of path are revealed even when you asked to open them, and come back
+`how: "reveal"` with `why` naming which:
+
+- `why: "directory"` — the path is a folder.
+- `why: "executable"` — the extension is one Windows would *run* rather than open:
+  `.exe .com .bat .cmd .ps1 .psm1 .msi .msp .lnk .url .scr .pif .vbs .vbe .wsf .wsh
+  .hta .reg .jar .cpl .msc .scf .appref-ms`. That is a degrade rather than a refusal:
+  the folder is the same information with none of the execution. Note what is
+  deliberately **not** on that list — `.js`, `.ts`, `.py`, `.sh`, `.md` all open
+  normally.
+
+There is **no roots check**: unlike `GET /api/fs` and `POST /api/fs/mkdir`, this route
+is not bounded by `CLAUDE_SESSIONS_ROOTS`. Opening `/tmp/…` and `/mnt/c/…` is the
+common case, and a fence at `$HOME` would refuse those while buying little — anything
+a caller could be induced to open, it could have written inside `$HOME` first. The
+route being local-only, and the launchable list above, are what carry the weight.
+
+`winPath` is the `\\wsl.localhost\…` or `C:\…` form `wslpath -w` produced. It is the
+authoritative translation; the `cs-host` meta tag exists only so a client can
+*display* an approximation of it before asking.
+
+`400` for a missing `path`. `404` when nothing is at that path. `502` when `wslpath`
+or `explorer.exe` could not be run.
+
 ### `POST /api/sessions/:id/permission`
 
 The one route that answers all three kinds of ask.
@@ -2682,6 +3055,13 @@ will show a permanently spinning tool. See §*A tool call resolves in one of two
 
 **`runner` on a session summary is not the `runner-status` payload.** Four fields, and
 `pendingPermission` is not among them. See §`GET /api/sessions`.
+
+**A `200` from `/api/fs/open` means Windows was handed the path, not that a window
+appeared.** `explorer.exe` reports exit code 1 even when it works perfectly, so its
+status says nothing and only a spawn failure is treated as an error. A file type with
+no registered handler comes back `ok` and Windows shows its own *how do you want to
+open this* dialog — which is the right outcome to report as success. Read `how`
+rather than `ok` to find out what the user will actually see.
 
 **`keyboard.bindings` is one key, and `PUT` replaces it whole.** A patch is per
 key, and this key's value happens to be a map — so sending

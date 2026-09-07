@@ -49,6 +49,19 @@
 // `spinner.groups` in prefs.js. Only the groups named there are ever opened, so
 // the size of the directory costs nothing.
 //
+// **How often each of them speaks is a setting too**, and it had to become one.
+// For its first life this drew from one flat pool, so a group's share of the
+// verbs you saw was its verb count over the total and nothing else — and the
+// counts are an artefact of how long each list upstream happened to be, not a
+// statement about how often you want to hear from it. Fifteen groups enabled
+// here gave `Claude Code Defaults` 32% of every label, on the strength of
+// having 185 entries, while `Monty Python` got 1.9% and a group added by hand
+// was drowned six to one by the defaults nobody chose. So a draw is two steps
+// now: a *group* by `spinner.weights`, then a verb uniformly inside it. An
+// unweighed group is 1, which makes every enabled group equally likely — the
+// distribution the flat pool was getting wrong — and `0` mutes one without
+// unchecking it.
+//
 // The file-reading conventions here — stat before read, a size cap, BOM
 // tolerance, an `mtimeMs:size` stamp as the cache key, a 2s TTL, and no
 // `fs.watch` — are lifted from bridge/prefs.js and bridge/commands.js on
@@ -175,6 +188,24 @@ function readGroup(file) {
     }
 
     return { category, verbs, stamp, problems };
+}
+
+/**
+ * One bucket, with a chance proportional to its weight.
+ *
+ * A cumulative walk rather than anything cleverer: `buckets` is as long as the
+ * groups somebody enabled — fifteen here, a hundred at the outside — and a
+ * prebuilt table would have to be invalidated every time a weight changed for
+ * no measurable gain. The last bucket is the fallback so that floating-point
+ * drift near the total cannot fall off the end and answer `undefined`.
+ */
+function drawGroup(buckets, total) {
+    let r = Math.random() * total;
+    for (const b of buckets) {
+        r -= b.weight;
+        if (r < 0) return b;
+    }
+    return buckets[buckets.length - 1];
 }
 
 class Spinner {
@@ -416,26 +447,63 @@ class Spinner {
     }
 
     /**
-     * The verbs in play for a workspace, from the groups its settings name.
+     * The weights in force for a workspace, by normalised name.
      *
-     * @returns {{verbs: string[], problems: object[]}}
+     * The keys come out of a settings file, so they are matched the way every
+     * other group name here is matched — `"Tech / Programming"`,
+     * `"Tech_Programming"` and `"tech-programming"` weigh the same group. Two
+     * keys that normalise the same is somebody's typo rather than a case worth
+     * a rule: the later one wins, which is what an object literal would have
+     * done had they spelled it the same way twice. The spelling as written is
+     * kept so that a key nothing matches can be named back at whoever wrote it.
+     *
+     * @returns {Map<string, {name: string, weight: number}>}
+     */
+    _weights(cwd) {
+        const out = new Map();
+        const given = this.prefs.forCwd(cwd).spinner.weights || {};
+        for (const [name, weight] of Object.entries(given)) {
+            const key = norm(name);
+            if (key) out.set(key, { name, weight });
+        }
+        return out;
+    }
+
+    /**
+     * The verbs in play for a workspace, from the groups its settings name,
+     * **kept in their groups** — because a draw picks a group first.
+     *
+     * `verbs` is still the flat list, and still what "how many verbs is that"
+     * means: `buckets` is the same verbs, partitioned. A group is absent from
+     * `buckets` when it weighs nothing or when dedup left it with nothing to
+     * give, since either way it can never supply a word and weight it cannot
+     * spend would distort every other group's share.
+     *
+     * @returns {{verbs: string[], buckets: Array<{name, weight, verbs: string[]}>,
+     *   weight: number, problems: object[]}}
      */
     pool(cwd) {
-        const wanted = this.prefs.forCwd(cwd).spinner.groups;
+        const settings = this.prefs.forCwd(cwd).spinner;
+        const wanted = settings.groups;
+        const weights = this._weights(cwd);
 
         // The stamp is the resolved files and their own stamps, so editing a
         // group, deleting one, or changing which groups are enabled all
         // invalidate — and an untouched setup costs a stat per enabled group.
+        // The weights ride along because changing a number changes the answer
+        // without touching a file the stamp can see.
         const resolved = wanted.map(name => ({ name, file: this.resolve(cwd, name) }));
         const stamp = resolved
             .map(r => `${r.name}=${r.file || '-'}@${r.file ? (this.files.get(r.file) || {}).stamp || '-' : '-'}`)
-            .join('|');
+            .join('|')
+            + `#${[...weights].map(([k, w]) => `${k}:${w.weight}`).sort().join(',')}`;
 
         const key = cwd || '';
         const hit = this.pools.get(key);
         if (hit && hit.stamp === stamp && Date.now() - hit.at < CACHE_MS) return hit;
 
         const verbs = [];
+        const buckets = [];
         const seen = new Set();
         const problems = [];
         let capped = false;
@@ -444,19 +512,48 @@ class Spinner {
                 problems.push({ file: this.userDir, message: `no group named "${name}" — ignored` });
                 continue;
             }
+            const given = weights.get(norm(name));
+            const weight = given ? given.weight : 1;
             const got = this._read(file);
             problems.push(...got.problems);
+            // Muted, and skipped **before** the dedup pass: a group that can
+            // never be drawn must not be the one that claims a verb a live
+            // group also has, or muting a group would silently take a word
+            // away from the group you left on.
+            if (!weight) continue;
+            const mine = [];
             for (const v of got.verbs) {
                 if (seen.has(v)) continue;              // the same verb in two groups is one verb
                 if (verbs.length >= MAX_POOL) { capped = true; break; }
                 seen.add(v);
                 verbs.push(v);
+                mine.push(v);
             }
+            if (mine.length) buckets.push({ name, weight, verbs: mine });
             if (capped) break;
         }
         if (capped) problems.push({ file: this.userDir, message: `more than ${MAX_POOL} verbs — the rest ignored` });
 
-        const value = { verbs, problems, stamp, at: Date.now() };
+        // A weight on a group that is merely unchecked is kept quiet on
+        // purpose — unchecking is how you turn a group off, and the number is
+        // remembered for when you turn it back on. A weight on a name that is
+        // in no directory at all is a typo, and says so.
+        //
+        // Only the keys that are not already accounted for are looked up, and
+        // through resolve() rather than groups(): a full listing here would
+        // undo the point of opening only what is enabled, and pick() comes
+        // through this method on every re-roll.
+        const named = new Set(resolved.map(r => norm(r.name)));
+        for (const [key2, given] of weights) {
+            if (named.has(key2)) continue;
+            if (!this.resolve(cwd, given.name)) {
+                problems.push({ file: this.userDir,
+                    message: `no group named "${given.name}" to weigh — ignored` });
+            }
+        }
+
+        const weight = buckets.reduce((n, b) => n + b.weight, 0);
+        const value = { verbs, buckets, weight, problems, stamp, at: Date.now() };
         this.pools.set(key, value);
         return value;
     }
@@ -473,18 +570,36 @@ class Spinner {
      * `last` is the verb already on screen, and is avoided when there is
      * anything else to say: a re-roll that lands on the same word looks like a
      * stuck label rather than a coincidence.
+     *
+     * **Two draws, not one.** A group by its weight, then a verb uniformly
+     * inside that group — which is what makes a weight mean a share of the
+     * labels rather than a nudge scaled by however long the group's list is.
      */
     pick(cwd, last) {
         const settings = this.prefs.forCwd(cwd).spinner;
         if (!settings.randomize) return null;
 
-        const { verbs } = this.pool(cwd);
-        if (!verbs.length) return null;
-        if (verbs.length === 1) return verbs[0];
+        const { buckets, weight } = this.pool(cwd);
+        if (!weight) return null;
 
-        let i = Math.floor(Math.random() * verbs.length);
-        if (verbs[i] === last) i = (i + 1) % verbs.length;
-        return verbs[i];
+        const group = drawGroup(buckets, weight);
+        const verbs = group.verbs;
+        if (verbs.length > 1) {
+            let i = Math.floor(Math.random() * verbs.length);
+            if (verbs[i] === last) i = (i + 1) % verbs.length;
+            return verbs[i];
+        }
+        // A one-verb group that holds the word already on screen. Draw again
+        // without it rather than shrug: this is the only way the two-step draw
+        // can repeat itself, and `last` is avoided whenever there is anything
+        // else to say. When there is not, `last` comes back — which is exactly
+        // what a one-verb pool did before any of this.
+        if (verbs[0] !== last) return verbs[0];
+        const rest = buckets.filter(b => b !== group);
+        const total = rest.reduce((n, b) => n + b.weight, 0);
+        if (!total) return verbs[0];
+        const other = drawGroup(rest, total);
+        return other.verbs[Math.floor(Math.random() * other.verbs.length)];
     }
 
     /** How long a verb stands before another is drawn; 0 for not on its own. */
@@ -495,4 +610,4 @@ class Spinner {
     }
 }
 
-module.exports = { Spinner, slugFor, norm, readGroup, MAX_FILE_BYTES };
+module.exports = { Spinner, slugFor, norm, readGroup, drawGroup, MAX_FILE_BYTES };

@@ -115,7 +115,7 @@ create one in `%APPDATA%\claude-sessions\`:
 | **Dashboard** | The button in the top bar, with a count of how many places are unfinished. It lists, per project, every directory holding uncommitted changes and every pull request still open, with the sessions that worked there as links back into the conversation. |
 | **Open folder** | The folder button by the title shows the session's working directory in Windows File Explorer, through the `\\wsl.localhost` share. |
 | **Composer** | Sends to the session, resuming it in place — the same transcript a terminal would append to. |
-| **LGTM** | Beside *Send*, for when you have read the work and it is done: it sends a written instruction to put the change on a pull request if it is not on one already, run the project's checks, merge once they pass, and file anything it noticed along the way as a suggested task — and to stop and say so if something blocks it. One click, no confirmation over the top; the session still asks for what its permission mode makes it ask for. |
+| **Snippets** | Messages you send often, behind the icon beside *Send* — and on the Start-a-session box too. Each one says where it lands (replace the box, add to the end, insert at the cursor), whether it sends itself, and which permission mode it sends under; `{{placeholders}}` in the text become a small form to fill in first. They sit in coloured groups, in an order you set by dragging or with the arrows, and any of them can be **pinned** to a button of its own. **LGTM** ships pinned: it sends a written instruction to put the change on a pull request if it is not on one already, run the project's checks, merge once they pass, and file anything it noticed along the way as a suggested task — and to stop and say so if something blocks it. One click, no confirmation over the top; the session still asks for what its permission mode makes it ask for, and a half-typed message in the box survives the press. Edit them under *Snippets* in Settings. |
 | **Send queue** | Write while an agent is working and the message waits, listed above the composer in send order. Each one can be expanded, reordered, pulled back for editing, or dropped, right up until its turn starts. `Shift+Tab` out of the composer to work through them without the mouse. |
 | **Suggested** | The panel beside the transcript. An agent that notices work outside what it was asked to do files it there, with the prompt already written. Each one folds to its title, and the ⤢ on a row opens it at full width to read; *Start* runs it, *Edit first* opens it in the Start dialog, *Dismiss* puts it away. *Hide* collapses the whole panel to a strip. |
 | **Mentions** | `@` in the composer lists the other sessions running on this machine and inserts the one you pick as `@[name]` — the name an agent addresses it by. |
@@ -588,13 +588,15 @@ it is missing altogether, never file by file, because the alternative is your
 edits undoing themselves on the next run. A project can ship its own groups in
 `<checkout>/.tgxcode/verbs/`, and they win over the ones in your home directory.
 
-Which groups are *in play* is a setting, in the same file as the rest:
+Which groups are *in play*, and how often each of them speaks, is a setting in
+the same file as the rest:
 
 ```json
 {
   "spinner": {
     "randomize": true,
     "groups": ["Claude Code Defaults", "Monty Python", "Absurd / Nonsense", "Tech / Programming"],
+    "weights": { "Monty Python": 4, "Claude Code Defaults": 0 },
     "rerollMs": 8000
   }
 }
@@ -603,6 +605,24 @@ Which groups are *in play* is a setting, in the same file as the rest:
 Only the groups named there are ever opened, so the size of the directory costs
 nothing. `randomize: false` gives back `Thinking…` and nothing else changes.
 
+**A draw is two steps: a group by its weight, then a verb inside it.** A group
+nobody weighed is `1`, so `weights: {}` is every enabled group equally likely,
+and `4` against `1` is drawn four times as often — whatever the two groups'
+sizes. `0` mutes a group without unchecking it, which is the difference between
+"not now" and "forget this"; unchecking one leaves its number alone for when you
+want it back. Names are matched the way they are everywhere else here, so
+`"Tech / Programming"`, `"Tech_Programming"` and `"tech-programming"` all weigh
+the same group.
+
+That second step had to exist. For its first life this drew from one flat pool,
+which made a group's share of the labels its *verb count* over the total — and
+the counts are an artefact of how long each list happened to be upstream, not a
+statement about how often you want to hear from it. Fifteen groups enabled here
+gave `Claude Code Defaults` 32% of every label on the strength of having 185
+entries, while `Monty Python` got 1.9% and a group added by hand was drowned six
+to one by the defaults nobody chose. Choosing a voice is what the groups are
+for, so the shares are now the setting and the counts are just counts.
+
 `rerollMs` is how long a verb stands before the next is drawn, and it is the
 only thing that moves it — the half after it changes on its own as the work
 does. `0` pins one verb for the whole turn.
@@ -610,10 +630,22 @@ does. `0` pins one verb for the whole turn.
 A verb is only worn by work. A question waiting on you, an API retry, starting
 up and going idle say what they are and nothing else.
 
-`GET /api/spinner/groups?cwd=` lists what you have, with a count each and the
-reason any group failed to load. It was built as the discoverable half of a
-setting with no page in front of it; now it is what the Settings panel draws its
-checkboxes from, and hovering one lists the verbs inside it.
+`GET /api/spinner/groups?cwd=` lists what you have, with a count each, the share
+of the draws each one is getting, and the reason any group failed to load. It was
+built as the discoverable half of a setting with no page in front of it; now it
+is what the Settings panel draws its checkboxes from, and hovering one lists the
+verbs inside it. A group you have chosen also carries a box for its weight and
+the percentage that weight works out to — the number is meaningless on its own,
+and the point of showing the share is that you can see what a change did before
+you go looking for it in a label.
+
+The chosen groups are drawn first, and then the order stops moving. Alphabetical
+over a hundred and fifteen pills buries the dozen actually in play somewhere in
+the wall, and those are the ones you opened the panel to read; but re-sorting as
+you tick would make the list jump under the cursor and put your next click on
+whatever slid into the gap. So the split is settled on the way in — opening the
+panel, changing project or scope — and a group you tick now goes to the top the
+next time you come in.
 
 Two things worth knowing. The session rail has room for about twenty characters,
 which is not enough for both halves, so it shows the one that carries
@@ -1209,7 +1241,7 @@ you are away from the desk, and a phone that has dropped its connection is not.
 | `bridge/ports.js` | Finding a port that is free *and* unclaimed, holding it, and remembering it |
 | `bridge/devservers.js` | Port detection, ranking, and stopping a server |
 | `bridge/devbrowser.js` | DevBrowser control client |
-| `bridge/explorer.js` | Opens a WSL directory in File Explorer |
+| `bridge/explorer.js` | Opens a WSL directory in File Explorer, a file in whatever Windows opens it with, and knows what it will not launch |
 | `bridge/notifications.js` | The notification log, what is worth raising, and what you have already read |
 | `bridge/flags.js` | Pinned, archived and test state |
 | `bridge/prefs.js` | Settings from `~/.tgxcode/` and from the project — which file each one came from, and which one a save goes to |
@@ -1221,6 +1253,7 @@ you are away from the desk, and a phone that has dropped its connection is not.
 | `bridge/spinner-verbs.json` | The verb catalogue, and the seed for that directory |
 | `bridge/suggestions.js` | What you did about a suggested follow-up |
 | `bridge/drafts.js` | Sessions set up but not started — a create call, held back |
+| `bridge/snippets.js` | Canned messages and the groups they sit in — what replaced the one hard-coded LGTM button |
 | `bridge/usage.js` | How much of the 5-hour window and the week are gone, merged from turn events and the status line |
 | `bridge/beacon.js` | A `claude` started for four seconds and killed, so the quota percentages refresh with no terminal open |
 | `bridge/schedule.js` | Sessions that start on a clock — the store, the cron, and what counts as new since last time (a branch's commits, or a pull request nobody has reviewed) |
