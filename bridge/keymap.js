@@ -87,6 +87,7 @@ const COMMANDS = [
     { id: 'view.settings', group: 'Views', label: 'Settings', default: 'Ctrl+8' },
     { id: 'session.new', group: 'Sessions', label: 'Start a session', default: 'Ctrl+N' },
     { id: 'rail.filter', group: 'Sessions', label: 'Filter sessions', default: 'Ctrl+K' },
+    { id: 'composer.snippets', group: 'Composer', label: 'Snippets', default: 'Ctrl+Slash' },
     { id: 'find.open', group: 'Find', label: 'Find in conversation', default: 'Ctrl+F' },
     { id: 'find.next', group: 'Find', label: 'Next match', default: 'F3' },
     { id: 'find.prev', group: 'Find', label: 'Previous match', default: 'Shift+F3' },

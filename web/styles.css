@@ -1279,6 +1279,58 @@ a:hover { text-decoration: underline; }
     letter-spacing: 0.01em;
 }
 
+/* A message's header line: who said it, and the button that copies it.
+
+   Copy sits in the flow here rather than floating over the message. The label
+   line is the one part of a row that is reliably empty, so a control in it
+   cannot land on top of the first word of a long turn — and it is in the same
+   place whether the message is two lines or two hundred.
+
+   Not in the time gutter, which would have suited a grey control among grey
+   furniture: under 980px the gutter collapses to 0 and .ev-time goes to
+   display:none, so the button would have nowhere left to sit. */
+.ev-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 4px;
+}
+/* The gap under the label belongs to the line now. Every other kind of row still
+   takes it from .ev-label itself, which is why that rule is left alone. */
+.ev-head .ev-label { margin-bottom: 0; }
+
+.ev-copy {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 22px;
+    height: 22px;
+    /* Taller than the 12px label beside it, pulled back so the header line keeps
+       the height it had before there was a button on it. */
+    margin: -5px 0;
+    border-radius: var(--r-xs);
+    color: var(--text-4);
+    /* The glyph is an svg and never a '✓' character: rangesIn walks every text
+       node under a row, so a text tick would be indexed by find, and a
+       drag-selection of the message would pick it up and paste it. */
+    user-select: none;
+    /* Only transparent, never `display: none` — a hidden button is still a button
+       and has to stay in the tab order. See .strip-actions for the same call. */
+    opacity: 0;
+    transition: opacity var(--t-fast) var(--ease),
+        background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.ev:hover .ev-copy,
+.ev:focus-within .ev-copy { opacity: 1; }
+.ev-copy:hover { background: var(--s4); color: var(--text); }
+/* A third way to be visible, because the tick has to outlive the pointer leaving
+   the row. The always-on Copy on a code block never had to arrange that. */
+.ev-copy.done { opacity: 1; color: var(--green); }
+/* Your own turn sits in a container that is already --s3, and --s4 on top of it
+   is one tonal step at 22px, which reads as nothing. Same lift .rail-group.nested
+   gives a strip sitting on a card. */
+.ev-user .ev-copy:hover { background: var(--s5); }
+
 /* human turn — a tonal container, the way Google renders the person's side */
 .ev-user .ev-body {
     background: var(--s3);
@@ -2768,6 +2820,20 @@ a:hover { text-decoration: underline; }
 .prose em { color: var(--text-2); }
 .prose del { color: var(--text-4); }
 
+/* A path in prose opens the file on the Windows host. A dotted rule rather than
+   the link blue: half of these sit inside a code span, where blue would fight the
+   peach that says "this is code" — and a URL and a path visibly going to
+   different places is worth more than both of them being loud. `color: inherit`
+   is what makes the nested case need no second rule. */
+.prose a.fs-path {
+    color: inherit;
+    text-decoration: underline dotted var(--text-4);
+    text-underline-offset: 2px;
+    text-decoration-thickness: 1px;
+    cursor: pointer;
+}
+.prose a.fs-path:hover { text-decoration: underline solid currentColor; }
+
 .prose code {
     font: 400 0.87em/1.5 var(--mono);
     background: var(--s3);
@@ -3278,7 +3344,8 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     background: var(--blue-tint);
 }
 
-/* The paperclip. Quieter than Send and LGTM on either side of it — pasting and
+/* The paperclip. Quieter than Send and the snippet buttons on either side of it —
+   pasting and
    dropping are the gestures this feature is really for, and this is the fallback
    for when there is nothing to drag from. */
 .btn-attach {
@@ -3544,6 +3611,12 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     margin-top: 8px;
 }
 .compose-foot .note { margin-top: 0; flex: 1 1 12ch; }
+/* `display: flex` above beats the browser's own `[hidden] { display: none }`, so
+   without this the row that openNew() hides for a draft or a schedule stayed on
+   screen — offering an Attach files button in the two modes whose stores do not
+   carry attachments, where the files would have been dropped on save with
+   nothing said. The same `.x[hidden]` pattern the rest of this file uses. */
+.compose-foot[hidden] { display: none; }
 /* Same treatment the live composer gets, so a drop reads as a drop in both. */
 .composer-field.drop-target { outline: 2px dashed var(--blue); outline-offset: 4px; }
 
@@ -3578,22 +3651,182 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 .input-row textarea::placeholder { color: var(--text-3); }
 .input-row textarea:disabled { opacity: 0.5; }
 
-/* Quieter than Send, and next to it rather than anywhere else: it is a way of
-   sending, and the thing it sends is not something to hit by accident. */
-.btn-lgtm {
+/* ── snippets ──────────────────────────────────────────────────────────────
+   The pinned buttons and the popover behind them. Quieter than Send and beside
+   it rather than anywhere else: each is a way of sending, and the thing it sends
+   is not something to hit by accident.
+
+   `--snip-accent` carries a group's colour down from the row that sets it, and
+   everything below is mixed from that one value — `.sig.pr`'s idiom, which is
+   already how this stylesheet turns one hue into a ground and an edge. Defaulted
+   here so an ungrouped snippet is a colourless version of the same button rather
+   than an unstyled one. */
+.pins { display: contents; }
+
+.btn-pin-snip {
+    --snip-accent: var(--text-2);
     flex: none;
     height: 38px;
     padding: 0 14px;
-    color: var(--green);
+    color: var(--snip-accent);
     background: transparent;
-    border: 1px solid #344a3b;
+    border: 1px solid color-mix(in srgb, var(--snip-accent) 32%, transparent);
     font: 500 12.5px/1 var(--sans);
     letter-spacing: 0.04em;
     border-radius: var(--pill);
+    white-space: nowrap;
     transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
 }
-.btn-lgtm:hover:not(:disabled) { background: #1f2b22; border-color: var(--green); }
-.btn-lgtm:disabled { color: var(--text-4); border-color: var(--s4); cursor: default; }
+.btn-pin-snip:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--snip-accent) 12%, transparent);
+    border-color: var(--snip-accent);
+}
+.btn-pin-snip:disabled { color: var(--text-4); border-color: var(--s4); cursor: default; }
+
+/* Holds nothing but the popover's anchor: the popover itself is fixed, so this
+   exists to keep the button and its menu together for the click-outside rule. */
+.snip-wrap { position: relative; flex: none; }
+
+.btn-snippets {
+    display: grid;
+    place-items: center;
+    width: 38px;
+    height: 38px;
+    color: var(--text-3);
+    background: transparent;
+    border-radius: var(--pill);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.btn-snippets:hover:not(:disabled),
+.btn-snippets[aria-expanded="true"] { background: var(--s4); color: var(--text); }
+.btn-snippets:disabled { color: var(--text-4); cursor: default; }
+
+/* The row the dialog's button sits in. Its own row rather than a place in the
+   attach row, which is hidden in draft and schedule mode. */
+.snip-foot { margin-top: 8px; }
+
+.snip-menu {
+    /* Fixed for both composers, positioned from script — see positionSnips. The
+       dialog's copy has to be, because .modal is `overflow: hidden`; this way the
+       arithmetic lives in one place instead of two. */
+    position: fixed;
+    z-index: 60;
+    max-height: var(--snip-max, 460px);
+    overflow: auto;
+    padding: 10px;
+    background: var(--s3);
+    border-radius: var(--r);
+    box-shadow: 0 10px 30px #000a;
+    animation: menu-in var(--t-fast) var(--ease);
+    transform-origin: top right;
+    /* Groups beside each other, in columns as wide as they need. Auto-flow rather
+       than a fixed template because the number of groups *is* the data, and
+       columns rather than a wrapping grid because a wrapped fourth card lands
+       below the fold of a popover this tall — which is the one thing putting them
+       side by side was for. It scrolls sideways instead. */
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(210px, 1fr);
+    gap: 10px;
+    align-items: start;
+}
+.snip-menu.up { transform-origin: bottom right; }
+/* An author `display` beats the UA rule for the `hidden` attribute, so every class
+   in this file that sets one carries its own guard — .quota-menu, .new-menu,
+   .scrim, .tasks. Without it closeSnips() empties the popover and leaves the box:
+   padding, background and the width positionSnips left on the inline style, with
+   nothing in it. */
+.snip-menu[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) { .snip-menu { animation: none; } }
+
+.snip-card {
+    --snip-accent: var(--text-3);
+    /* Mixed into this popover's own surface rather than into transparent: a card
+       that mixed to transparent would take the ground behind it and read as no
+       card at all wherever the accent is close to grey. */
+    background: color-mix(in srgb, var(--snip-accent) 10%, var(--s2));
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--snip-accent) 45%, transparent);
+    border-radius: var(--r);
+    padding: 8px;
+    /* Without this a grid child refuses to shrink below its content, and every
+       ellipsis below stops working. */
+    min-width: 0;
+    /* And this is the backstop behind that: whatever a row inside gets up to, it
+       cannot paint outside its own card and onto the one beside it. The row's own
+       track should make it unnecessary — it is here because the failure it catches
+       is silent, and lands on the neighbouring column where it is somebody else's
+       text that looks broken. */
+    overflow: hidden;
+}
+/* Loose snippets are not a group, so they must not look like one. */
+.snip-card.is-loose { background: none; box-shadow: none; }
+
+.snip-card-name {
+    margin: 2px 4px 6px;
+    font: 600 13.5px/1.2 var(--sans);
+    letter-spacing: 0.01em;
+    color: color-mix(in srgb, var(--snip-accent) 70%, var(--text));
+}
+
+/* A one-column grid rather than a flex column, and the track is `minmax(0, 1fr)`
+   rather than `1fr` — which is the whole reason this is a grid.
+
+   A flex column stretches its items to the container's width, but only once that
+   width is definite, and this row is a <button>: an element with enough intrinsic
+   sizing of its own that `width: 100%` on it is not the guarantee it looks like.
+   Where that resolved to max-content instead, the preview line grew to the length
+   of the text, `text-overflow` had nothing to clip against, and a long body ran
+   out of its card and across the one beside it. A `minmax(0, 1fr)` track cannot
+   be grown by its contents, so the ellipsis always has a width to land at. */
+.snip-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1px;
+    width: 100%;
+    min-width: 0;
+    text-align: left;
+    background: none;
+    border: 0;
+    border-radius: var(--r-sm);
+    padding: 6px 8px;
+    cursor: pointer;
+}
+.snip-row:hover { background: var(--s4); }
+/* Where the keyboard is, which is *not* `[aria-selected]`. That attribute is set
+   on the first row the moment the popover opens, so styling it painted a row that
+   looked permanently hovered under the pointer. `:focus-visible` is the browser's
+   own answer to "is this person navigating by keyboard", so the marker appears for
+   Ctrl+/ and the arrows and stays away for a mouse. The attribute is still there
+   for the listbox semantics; it just no longer decides how this looks. */
+.snip-row:focus-visible {
+    outline: none;
+    background: var(--s4);
+    box-shadow: inset 0 0 0 2px var(--blue);
+}
+.snip-row-title {
+    font: 400 13px/1.35 var(--sans);
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* One line of what it says, and only one: the body is cut to 120 characters in
+   script so a long single-line snippet never reaches the DOM, and clipped here so
+   the ellipsis lands at the real width. */
+.snip-row-preview {
+    font: 400 11.5px/1.4 var(--sans);
+    color: var(--text-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.snip-empty {
+    padding: 10px 8px;
+    font: 400 12.5px/1.5 var(--sans);
+    color: var(--text-3);
+    max-width: 320px;
+}
 
 .btn-send {
     flex: none;
@@ -4512,6 +4745,11 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     box-shadow: 0 24px 64px #000a;
     overflow: hidden;
 }
+/* The snippet editor. A parameters table beside a body textarea does not fit in
+   640px, and shrinking either to make it would be the wrong trade — the body is
+   the thing you are actually writing. */
+.modal.wide { width: min(880px, 100%); }
+
 .modal-head {
     display: flex;
     align-items: center;
@@ -4594,6 +4832,10 @@ body.term-resizing { user-select: none; cursor: row-resize; }
    own — and it scrolls rather than growing without limit once it hits the cap. */
 .field textarea.grow { min-height: 0; resize: none; overflow-y: auto; }
 .field input[type="text"] { font-family: var(--mono); font-size: 12.5px; }
+/* The one text input in this dialog that is not a path. A name is prose you
+   read, so it gets the prose face rather than the monospace the directory box
+   wants for lining up slashes. */
+#new-name { font-family: var(--sans); font-size: 13px; }
 .field textarea:focus, .field input:focus {
     outline: none;
     box-shadow: inset 0 0 0 2px var(--blue);
@@ -5338,11 +5580,19 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 .tb-new .tb-btn { flex: none; }
 
 /* ── drafts ──────────────────────────────────────────────────────────────
-   Work set up but not started. One column rather than the task board's five,
-   because there is only one state a draft can be in — so the width goes to the
-   message instead, which is the part you came here to read before releasing it.
-   The card is the task board's card: same class, same meta line, same buttons,
-   because it is the same object at a different moment. */
+   Work set up but not started. Two layouts over one list, and which one you get
+   is how many projects have a draft in them.
+
+   With one, a single column: there is only one state a draft can be in, so a
+   column per state would say nothing, and the width goes to the message instead
+   — the part you came here to read before releasing it.
+
+   With two or more, the task board's shape, a column per project. That is a
+   different meaning for a column than the board gives it — a place rather than
+   a state — which is why nothing here borrows the board's per-column colour.
+
+   The card is the task board's card either way: same class, same meta line, same
+   buttons, because it is the same object at a different moment. */
 
 .dr-head {
     flex: none;
@@ -5376,11 +5626,41 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     max-width: 860px;
 }
 
+/* Two projects or more and the panel becomes the task board's shape. Auto-flow
+   rather than a fixed template because the number of columns *is* the data —
+   `.tb-body` can hardcode `repeat(4, …)` because its four columns are four
+   states, and this one has however many projects you are working in.
+
+   The 300px floor is what makes a crowded week scroll sideways instead of
+   squeezing eight cards into eight strips; `1fr` above it means two projects
+   still use the whole panel. Vertical scrolling moves down into each
+   `.tb-col-body`, which already does it, so the body itself must stop. */
+.dr-body.cols {
+    max-width: none;
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(300px, 1fr);
+    gap: 12px;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+/* A project name can be long and a column is narrow, so it gives way rather
+   than pushing its count off the end. The `title` on the heading is what says
+   the whole of it. */
+.dr-col .tb-col-head h2 {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 /* `.tb-card` colours its left edge by which column it is in — yellow for needs
-   you, green for working, blue for a suggested task. There are no columns here,
-   so a draft takes the quietest edge in the set rather than borrowing a meaning
-   from one of those three. It is the one thing in this app not asking for
-   anything, and the stripe should say so. */
+   you, green for working, blue for a suggested task. The columns here mean a
+   project rather than a state, so there is nothing for that edge to say, and a
+   draft takes the quietest one in the set rather than borrowing a meaning from
+   one of those three. It is the one thing in this app not asking for anything,
+   and the stripe should say so. */
 .dr-card { box-shadow: inset 3px 0 0 var(--s5); }
 
 /* The message itself, which is the point of the card. Several lines of it, then
@@ -5545,8 +5825,13 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 
 /* ── the schedules panel ─────────────────────────────────────────────────
    Drafts' layout, reused rather than restated: same head, same single scrolling
-   column at the same width, same card vocabulary. The two panels are the same
-   shape and the only reason they are separate rules at all is the class name.
+   column at the same width, same card vocabulary.
+
+   Drafts has since grown a second layout — a column per project, once there are
+   two — and this panel deliberately did not follow. A schedule is not read by
+   project; it is read to find out whether the thing you set up months ago is
+   still firing, and that is one question over the whole list. Splitting it by
+   directory would put two dead schedules in two different columns.
 
    What is genuinely different is the *status line*. A draft's card is read to
    decide whether to release it, so the message is the point. A schedule has
@@ -5925,23 +6210,48 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 .settings-groups-none, .settings-groups-foot { font-size: 12px; color: var(--text-4); }
 .settings-groups-foot { flex-basis: 100%; margin-top: 6px; }
 .settings-group-pick {
-    position: relative;
     display: inline-flex;
     align-items: center;
     gap: 7px;
     background: var(--s2);
     border-radius: var(--pill);
     padding: 4px 11px 4px 8px;
+}
+/* The pill stopped being one `<label>` when the chosen ones grew a number box.
+   The checkbox is an invisible overlay filling its label, which is what makes
+   the whole pill clickable — so anything the overlay covers cannot be reached,
+   and the weight box has to sit outside the label rather than inside it. */
+.settings-group-toggle {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
     cursor: pointer;
 }
 /* Never wrapped mid-name: a pill is one label, and the line breaks between
    pills instead. Nothing is clipped, because each pill is as wide as its name. */
 .settings-group-name { white-space: nowrap; }
 .settings-group-pick:hover { background: var(--s3); }
-.settings-group-pick input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.settings-group-toggle input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 .settings-group-pick .settings-box { width: 14px; height: 14px; border-radius: 4px; }
 .settings-group-name { font-size: 12px; color: var(--text-2); }
 .settings-group-count { font: 400 11px var(--mono); color: var(--text-4); }
+/* Wide enough for three digits and no wider: it holds 0 to 1000, and every
+   pill on the line is competing for the same row. */
+.settings-group-weight {
+    flex: none;
+    width: 38px;
+    padding: 1px 5px;
+    text-align: right;
+    font: 400 11px var(--mono);
+    color: var(--text);
+    background: var(--s4);
+    border: 0;
+    border-radius: var(--r-sm);
+}
+.settings-group-weight:disabled { color: var(--text-4); }
+.settings-group-share { font: 400 11px var(--mono); color: var(--text-3); min-width: 24px; }
+.settings-group-share.is-muted { color: var(--text-4); }
 
 /* ── the shortcut table ───────────────────────────────── */
 /* Rows rather than cards: thirteen of them, all the same shape, read by looking
@@ -6233,8 +6543,293 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 .cfg-json-note.bad { color: var(--red); font-family: var(--mono); font-size: 11px; }
 .cfg-json-acts { display: flex; align-items: center; gap: 12px; flex: none; }
 
+/* ── Claude Code's memory files ───────────────────────────────────────────
+   The same group furniture as the settings above it — tabs, file line, stale
+   banner, foot — so only the box, the rendered view and the full-height dialog
+   are new. */
+
+/* Prose, not JSON: `pre-wrap` because a paragraph in a CLAUDE.md is one long
+   line and horizontal scrolling to read a sentence is not editing. Otherwise
+   the same box as .cfg-json, and shorter, because the panel's own scroll has to
+   stay usable with a 23KB file in here — Expand is where the height is. */
+.cfg-md {
+    width: 100%;
+    min-height: 220px;
+    max-height: 60vh;
+    resize: vertical;
+    margin-top: 12px;
+    background: var(--bg);
+    color: var(--text-2);
+    border: 0;
+    border-radius: var(--r-sm);
+    padding: 12px 14px;
+    font: 400 12px/1.7 var(--mono);
+    white-space: pre-wrap;
+    tab-size: 2;
+}
+.cfg-md:focus { outline: 0; box-shadow: inset 0 0 0 2px var(--blue); }
+.cfg-md:disabled { color: var(--text-4); }
+
+/* The rendered view, in place of the box rather than beside it: the panel is a
+   column and two of these side by side would be two keyholes. Capped and
+   scrolling on its own, because .prose sets no height of its own. */
+.cfg-md-preview {
+    margin-top: 12px;
+    max-height: 60vh;
+    overflow: auto;
+    padding: 4px 14px 12px;
+    background: var(--bg);
+    border-radius: var(--r-sm);
+}
+.cfg-md-preview > :first-child { margin-top: 12px; }
+
+/* The other file, which also applies. Quieter than the yellow reach note above
+   it — it is orientation rather than a warning. */
+.cfg-md-both code { font: 400 11px var(--mono); color: var(--text-3); }
+
+.cfg-md-count { flex: none; font: 400 11px var(--mono); color: var(--text-4); }
+
+/* The full-height editor. `.tall` is the modal shape this needs and nothing
+   else does: as wide as the window sensibly allows and as tall, because the
+   whole reason to open it is that 60vh in a column was not enough. */
+.modal.tall {
+    width: min(1000px, 100%);
+    max-height: 94vh;
+    height: 94vh;
+}
+/* `flex: 1` and `min-height: 0` together are what make the box fill the
+   dialog: .modal is already a column, but .modal-body does not grow on its
+   own, and without min-height a flex child refuses to shrink below its
+   content — which for a 23KB file is the whole point. */
+.modal.tall .modal-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    overflow: hidden;
+    padding-bottom: 12px;
+}
+.memo-title { font: 400 14px/1.4 var(--mono); color: var(--text-2); }
+.cfg-md.big {
+    flex: 1;
+    min-height: 0;
+    max-height: none;
+    resize: none;
+    margin-top: 0;
+    font-size: 13px;
+}
+
 @media (prefers-reduced-motion: reduce) {
     .cfg-tab, .cfg-list-x { transition: none; }
+}
+
+/* ── the snippet editor, in Settings ───────────────────────────────────── */
+
+.snip-settings-acts { display: flex; gap: 8px; margin: 4px 0 14px; }
+
+.snip-set-group {
+    --snip-accent: var(--text-3);
+    background: color-mix(in srgb, var(--snip-accent) 8%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--snip-accent) 38%, transparent);
+    border-radius: var(--r);
+    padding: 8px 10px 4px;
+    margin-bottom: 10px;
+}
+/* Ungrouped is not a group, and must not look like one — but it keeps the
+   padding, because it is still a place a drag has to be able to land. */
+.snip-set-group.is-loose { background: none; box-shadow: none; padding-left: 0; padding-right: 0; }
+
+.snip-set-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.snip-set-name {
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--r-sm);
+    padding: 4px 6px;
+    color: color-mix(in srgb, var(--snip-accent) 70%, var(--text));
+    font: 600 13.5px/1.2 var(--sans);
+}
+.snip-set-name:hover { border-color: var(--outline-soft); }
+.snip-set-name:focus { border-color: var(--outline); background: var(--s1); }
+.snip-set-accent {
+    flex: none;
+    width: 28px;
+    height: 24px;
+    padding: 0;
+    background: none;
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-xs);
+    cursor: pointer;
+}
+.snip-set-loose {
+    flex: 1;
+    font: 600 12px/1.2 var(--sans);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-4);
+}
+
+/* A minimum height so an empty group is still somewhere a drag can be dropped. */
+.snip-set-list { min-height: 12px; }
+
+.snip-set-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 4px;
+    border-radius: var(--r-sm);
+}
+.snip-set-row:hover { background: var(--s2); }
+.snip-set-text { flex: 1; min-width: 0; }
+.snip-set-title {
+    font: 400 13px/1.35 var(--sans);
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.snip-set-preview {
+    font: 400 11.5px/1.4 var(--sans);
+    color: var(--text-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.snip-set-badges { display: flex; gap: 4px; flex: none; }
+.snip-badge {
+    font: 500 10.5px/1.6 var(--sans);
+    letter-spacing: 0.03em;
+    color: var(--text-3);
+    background: var(--s3);
+    border-radius: var(--pill);
+    padding: 0 7px;
+    white-space: nowrap;
+}
+.snip-set-foot { padding: 2px 4px 6px; }
+
+.snip-grip { flex: none; color: var(--text-4); cursor: grab; display: grid; place-items: center; }
+.snip-set-row[draggable="true"]:active .snip-grip { cursor: grabbing; }
+
+.snip-move {
+    flex: none;
+    width: 22px;
+    height: 22px;
+    color: var(--text-3);
+    background: transparent;
+    border-radius: var(--r-xs);
+    font-size: 12px;
+    line-height: 1;
+}
+.snip-move:hover { background: var(--s4); color: var(--text); }
+
+.snip-del {
+    flex: none;
+    display: grid;
+    place-items: center;
+    min-width: 24px;
+    height: 24px;
+    padding: 0 6px;
+    color: var(--text-3);
+    background: transparent;
+    border-radius: var(--r-xs);
+    font: 500 11px/1 var(--sans);
+}
+.snip-del:hover { background: var(--s4); color: var(--red); }
+/* Armed, which is the confirmation — see snipDeleteButton. */
+.snip-del.armed { color: var(--red); background: color-mix(in srgb, var(--red) 16%, transparent); }
+
+/* ── the snippet dialogs ───────────────────────────────────────────────── */
+
+.snip-fill-form .field:last-child { margin-bottom: 6px; }
+
+.snip-check { position: relative; display: flex; align-items: center; gap: 8px; cursor: pointer; }
+/* `.field > label` sets `display: block` at a higher specificity than a bare
+   class, so a checkbox label inside a field has to out-specify it rather than
+   merely come after it — and take its own type back, since that rule also styles
+   these as the small grey caption above a control rather than a line to read. */
+.field > label.snip-check {
+    display: flex;
+    margin-bottom: 0;
+    font: 400 13.5px/1.4 var(--sans);
+    color: var(--text);
+}
+.snip-check input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+/* The box is a flex child here, unlike in the settings rows where it is not, and
+   without this it is squeezed to a sliver by the label beside it. */
+.snip-check .settings-box { flex: none; }
+.snip-check input:checked + .settings-box { background: var(--blue); border-color: var(--blue); }
+.snip-check input:checked + .settings-box::after { transform: rotate(40deg) scale(1); opacity: 1; }
+.snip-check input:focus-visible + .settings-box { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+.snip-sub { margin: 10px 0 0 26px; display: flex; align-items: center; gap: 10px; }
+/* An author `display` beats the UA rule for `hidden`, so every class in this file
+   that sets one carries its own — see .quota-menu[hidden] and its neighbours. */
+.snip-sub[hidden] { display: none; }
+.snip-sub label { font: 400 12.5px/1 var(--sans); color: var(--text-3); }
+
+/* The three plain pickers in this dialog — Group, Where it goes, Permissions.
+   Styled for the same reason every other select in this file is, which is not
+   only appearance: the reset at the top sets `background: none`, and Chromium
+   draws the popup list from the element's own background, so a select left
+   transparent gets a white popup with unreadable options inside a dark dialog.
+   The closed control looks right anyway — transparent over a dark modal, with
+   `color: inherit` — which is what makes this easy to miss until somebody opens
+   one. `.opts select`, `.when-args select` and `.settings-select` all carry a
+   background for the same reason.
+
+   The child combinator is load-bearing: it keeps this off the type pickers in
+   the parameter rows, which sit deeper and have their own rule below. Without it
+   this selector's id would out-specify that one and repaint them. */
+#snip-edit-scrim .field > select,
+#snip-edit-scrim .snip-sub select {
+    background: var(--bg);
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-sm);
+    padding: 8px 10px;
+    color: var(--text);
+    font: 400 13px/1.2 var(--sans);
+    cursor: pointer;
+}
+
+.snip-params { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.snip-param { display: flex; align-items: center; gap: 6px; }
+.snip-param input[type="text"], .snip-param select {
+    background: var(--s1);
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-sm);
+    padding: 6px 8px;
+    color: var(--text);
+    font: 400 12.5px/1.2 var(--sans);
+    min-width: 0;
+}
+.snip-param-name { flex: 0 1 130px; font-family: var(--mono) !important; }
+.snip-param-label { flex: 1 1 130px; }
+.snip-param-type { flex: 0 1 110px; }
+.snip-param-default { flex: 1 1 110px; }
+.snip-param-req { font: 400 11.5px/1 var(--sans); color: var(--text-3); }
+
+.snip-projects { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.snip-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--s3);
+    border-radius: var(--pill);
+    padding: 3px 6px 3px 10px;
+    font: 400 12px/1.4 var(--mono);
+    color: var(--text-2);
+}
+.snip-chip-x { color: var(--text-4); background: none; font-size: 11px; padding: 0 3px; }
+.snip-chip-x:hover { color: var(--red); }
+.snip-project-add { display: flex; gap: 6px; }
+.snip-project-add input {
+    flex: 1;
+    background: var(--s1);
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-sm);
+    padding: 7px 9px;
+    color: var(--text);
+    font: 400 12.5px/1.2 var(--mono);
 }
 
 /* ── narrow windows ──────────────────────────────────────────────────── */
@@ -6260,6 +6855,15 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 
     .dr-head { padding: 16px 16px 12px; }
     .dr-body { padding: 0 16px 20px; }
+    /* The board opposite folds to two rows of two because it always has exactly
+       four columns. This one cannot: the count is however many projects you are
+       working in, and folding would put a project below the fold with nothing
+       saying it was there. So the row keeps scrolling sideways and the floor
+       comes down instead — narrow enough for two columns at 980px, which is what
+       makes the sideways scroll a gesture rather than the only way to see
+       anything. */
+    .dr-body.cols { grid-auto-columns: minmax(260px, 1fr); }
+    .dr-col { max-height: none; }
 
     /* The two selectors drop under the title rather than squeezing beside it;
        the contents go above the groups instead of beside them, as a row that
@@ -6305,4 +6909,8 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     .cfg-kv-name, .cfg-kv-newname { width: auto; flex: 1 1 100%; }
     .cfg-hooks-table { font-size: 11px; }
     .cfg-json { min-height: 200px; }
+    .cfg-md { min-height: 180px; }
+    /* The dialog is the whole window at this width, so the wrapper's padding
+       is the only thing left holding it off the edges. */
+    .modal.tall { height: 100%; max-height: 100%; }
 }

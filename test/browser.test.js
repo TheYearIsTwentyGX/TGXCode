@@ -94,6 +94,14 @@ function check(name, got, want) {
     // keymap has not arrived is indistinguishable from a broken binding.
     check('and so is the shortcut catalogue',
         /name="cs-keymap" content="%7B%22commands%22/.test(page.body), true);
+    // And where the filesystem is, so a path in a transcript can be drawn as a
+    // link to the Windows form of it before anything has been fetched. Guarded
+    // rather than asserted flat: outside WSL there is no share to name, and a
+    // bridge withholding the tag there is correct rather than broken.
+    if (process.env.WSL_DISTRO_NAME) {
+        check('and where the filesystem is, for the paths in a transcript',
+            /name="cs-host" content="%7B%22distro%22/.test(page.body), true);
+    }
 
     // Everything web/app.js does, now that the jar is warm. No header anywhere.
     console.log('\n--- and now every call web/ makes, unchanged ---');
@@ -103,6 +111,9 @@ function check(name, got, want) {
     // What the settings panel reads: the merged answer plus what each file in
     // the chain says on its own.
     check('GET /api/prefs?files=1', (await call('/api/prefs?files=1')).status, 200);
+    // Read on every load rather than when a panel opens: the pinned buttons in
+    // the composer are drawn from it.
+    check('GET /api/snippets', (await call('/api/snippets')).status, 200);
     // And what the Claude Code group reads: somebody else's four files, the
     // merged reading of them, and everything in them this app has no control
     // for. Only the read is exercised — every write on that route replaces or
@@ -122,6 +133,25 @@ function check(name, got, want) {
         // the uncatalogued keys should be.
         check('  …and the keys it has no control for', Array.isArray(body.unknown), true);
     }
+    // And what the Memory group reads: one row per CLAUDE.md. The read alone,
+    // for the same reason as the block above and rather more so — a write on
+    // that route replaces the whole of the user's own instructions to Claude,
+    // and `npm test` has no business touching those. The refusals suite next
+    // door covers what a remote caller is told; the write path is covered
+    // against a temporary HOME in test/claude-docs.test.js.
+    {
+        const r = await call('/api/claude-docs');
+        check('GET /api/claude-docs', r.status, 200);
+        const body = JSON.parse(r.body || '{}');
+        check('  …carries a row per file', Array.isArray(body.docs), true);
+        // With no `cwd` there is exactly one row, the user's, and a client that
+        // drew two would be drawing a file for a project nobody named.
+        check('  …just the user one with no cwd',
+            (body.docs || []).map(d => d.scope).join(','), 'user');
+        // The cap, so a page can label its byte counter with the real number
+        // instead of hardcoding one that later drifts.
+        check('  …and the size cap', typeof body.maxBytes, 'number');
+    }
     check('GET /api/overview', (await call('/api/overview')).status, 200);
     check('GET /api/dashboard', (await call('/api/dashboard')).status, 200);
     check('GET /api/quota', (await call('/api/quota')).status, 200);
@@ -137,6 +167,13 @@ function check(name, got, want) {
     // check, like the beacon run it performs.
     check('GET /api/quota/refresh does not exist — a refresh is never a GET',
         (await call('/api/quota/refresh')).status, 404);
+    // Opening a path is the same shape of judgement twice over. It must be POST
+    // — a prefetch or a pasted link that popped a window on the desktop would be
+    // a real bug — and the successful call is deliberately not exercised
+    // anywhere, for the reason above. Its refusals live in test/refusals.test.js
+    // and what it will not launch in test/paths.test.js.
+    check('GET /api/fs/open does not exist — opening is never a GET',
+        (await call('/api/fs/open')).status, 404);
     check('POST /api/subscribe reaches its own 404, not the gate',
         (await call('/api/subscribe', {
             method: 'POST', headers: { 'x-claude-sessions-client': '1' },
