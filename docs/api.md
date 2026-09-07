@@ -134,8 +134,8 @@ for this by name, and a client should honour it: you should never be unsure whet
 the thing you are about to approve is running on a machine you are sitting at.
 
 **Refused for remote callers** (403, with `{"error": …, "remote": true}`):
-`permissionMode` of `bypassPermissions` or `dontAsk` on create, on send, and on
-**saving or starting a draft**; all
+`permissionMode` of `bypassPermissions` or `dontAsk` on create, on send, on
+**saving or starting a draft**, and on **saving a snippet**; all
 of `/api/terminals/*`; all of `/api/runs/*`; `POST /api/commands/run`;
 `/api/shutdown`; `/api/restart` (both methods); `/api/devservers/stop`; `/api/devbrowser/*`;
 `POST /api/sessions/:id/reveal`; `POST /api/sessions/:id/handoff`; `POST /api/fs/mkdir`;
@@ -149,6 +149,21 @@ work up at the desk and releasing it from a phone when quota frees up is the cas
 feature exists for. What a phone cannot do is *widen* a mode — the check runs when the
 draft is written and again when it is started, so a `bypassPermissions` draft saved
 locally still refuses to start remotely.
+
+The snippet routes are open on the same reasoning and with the same one exception,
+and the exception matters more here. A snippet may carry `autoSubmit: true` together
+with a `permissionMode`, and those two together are a single pinned toolbar button
+that sets the mode and sends — which is exactly the "one tap away on a phone that
+might be in someone else's hand" the refusal exists for. So a phone may write, edit,
+reorder and delete snippets freely, and may not save one naming either of the two
+modes. It is refused twice over: here, so the snippet cannot be stashed, and again by
+`POST /api/sessions/:id/send` when it is used.
+
+Note that `PUT /api/prefs` above is local-only and the snippet routes are not, which
+looks inconsistent and is not. That route is refused because it writes a file in the
+user's home directory or inside a checkout, and one of its keys names a directory the
+app then starts `claude` in. Snippets are written to the state directory, execute
+nothing, and their `projects` list is a display filter.
 
 `/api/prefs` has the same shape of asymmetry, and it is on the method rather
 than the path: reading how somebody wants a transcript folded is not a
@@ -1108,6 +1123,126 @@ had ticked would mean losing it. The flag only decides what the session becomes.
 Also pushed as the `drafts-changed` SSE event, which is how the UI reads it. That event
 carries this same payload, so a client never has to come back here after the first load.
 
+### `GET /api/snippets?cwd=<path>`
+
+Canned messages, and the groups they are drawn in. What replaced the one hard-coded
+LGTM button on the composer.
+
+```json
+{
+  "at": 1787328400656,
+  "snippets": [
+    { "id": "seed-lgtm",
+      "title": "LGTM",
+      "body": "LGTM — take it from here and land it.\n\n- If this work is not on a pull request yet…",
+      "hint": "open a PR for this work if there is not one, run the checks, and merge it once they pass",
+      "groupId": null,
+      "params": [],
+      "insert": "overwrite", "autoSubmit": true, "permissionMode": null,
+      "pinned": true, "order": 0, "projects": [],
+      "undeclared": [], "unused": [],
+      "createdAt": 1787328400891, "updatedAt": 1787328400891 },
+    { "id": "6b1f0e2c-6b8a-4f0e-9a1d-2c4b7e5a0f31",
+      "title": "Review a branch",
+      "body": "Review {{branch}} against main, and cap it at {{count}} findings.",
+      "hint": null,
+      "groupId": "d4c0a1b2-77e3-4a55-8c19-0f2b6d3e91aa",
+      "params": [
+        { "name": "branch", "label": "Branch", "type": "text",
+          "required": true, "default": null },
+        { "name": "count", "label": "How many at most", "type": "integer",
+          "required": false, "default": "5" }
+      ],
+      "insert": "cursor", "autoSubmit": false, "permissionMode": "plan",
+      "pinned": false, "order": null,
+      "projects": ["/home/dylan_hays/Other"],
+      "undeclared": [], "unused": [],
+      "createdAt": 1787328401276, "updatedAt": 1787328401276 }
+  ],
+  "groups": [
+    { "id": "d4c0a1b2-77e3-4a55-8c19-0f2b6d3e91aa", "name": "Review",
+      "accent": "#d0bcff", "order": 0,
+      "createdAt": 1787328400891, "updatedAt": 1787328400891 }
+  ],
+  "counts": { "snippets": 2, "groups": 1, "pinned": 1 }
+}
+```
+
+| Field | Type |
+|---|---|
+| `id` | string, a UUID — except for the shipped ones, whose ids are stable strings like `seed-lgtm` |
+| `title` | string, non-empty, trimmed. What the row and the pinned button say |
+| `body` | string, non-empty — **and not trimmed**, unlike a draft's `prompt`. An `insert` of `append` or `cursor` makes leading and trailing whitespace part of what the snippet means |
+| `hint` | string or null — the sentence a pinned button shows on hover. Null means *use the first line of the body*, which is a guess; a hint is a decision |
+| `groupId` | string or null. Null is ungrouped, which is a place in the popover rather than a group with no name. **May name a group that is not in `groups`** — draw it ungrouped and leave the field alone; another bridge may be about to write that group, and it heals itself |
+| `params` | array of `{name, label, type, required, default}`, possibly empty — see below |
+| `insert` | `overwrite`, `append` or `cursor` — where the body lands in the compose box |
+| `autoSubmit` | boolean. True sends it; false leaves it in the box |
+| **`permissionMode`** | **string or null.** One of the six in `POST /api/sessions/:id/send`, or `null` for **inherit** — leave the mode selector exactly where the user left it. `null` is not `auto`: `auto` is a choice to *move* the selector. Only meaningful when `autoSubmit` is true, and kept regardless, so turning `autoSubmit` off and on again does not lose the mode |
+| `pinned` | boolean — gets a button of its own in the composer toolbar, beside the snippets icon |
+| **`order`** | **integer or null.** Null means *sort me alphabetically*, and sorts **after** everything carrying a number. Nulls are never interleaved with numbers: an explicit order is a decision and null is the absence of one |
+| `projects` | array of absolute paths, already expanded, possibly empty. Empty is everywhere — see the matching rule below |
+| **`undeclared`, `unused`** | **arrays of strings, derived rather than stored.** `undeclared` names the `{{placeholders}}` in `body` that no param declares; `unused` names the params nothing references. **Neither is an error** and no route refuses on either — they are here so an editor can say so quietly, computed on the bridge so three clients cannot disagree about what counts |
+| `createdAt`, `updatedAt` | numbers, epoch ms. `createdAt` never moves |
+
+A **param** is `{name, label, type, required, default}`.
+
+| Field | Type |
+|---|---|
+| `name` | string matching `[A-Za-z_]\w*`, unique within the snippet. This is its identity: `{{name}}` in the body is what refers to it |
+| `label` | string or null. Null means *use the name*, so a parameter is never an unlabelled box |
+| `type` | `text`, `integer`, `decimal`, `date`, `time` or `datetime`. **The list is meant to grow**, so treat an unrecognised type as `text` rather than failing — that is what this bridge does with one, so a snippet written on a newer build stays editable on an older one |
+| `required` | boolean — may not be left empty when the dialog is confirmed. A `default` only pre-fills, so the two do not cancel out: a required param with a default is one you can clear and must then refill |
+| `default` | string or null, **untrimmed**. Always a string whatever the `type`, because the substitution is textual — an `integer` default is `"5"` |
+
+A **group** is `{id, name, accent, order, createdAt, updatedAt}`. `accent` is a
+`#rgb` or `#rrggbb` colour, or null. Strict, because of where it ends up: the client
+sets it as a CSS custom property on the group's card, so anything looser would be a
+declaration in the page's stylesheet rather than a colour.
+
+**Placeholders are declared, not discovered.** `{{x}}` becomes a question only because
+a param is named `x`; anything else is **left in the message verbatim**. That is
+`fillPrompt`'s rule for schedules, down to the expression — `\{\{\s*(\w+)\s*\}\}` — and
+it is there for the same reason: `{{` is not reserved punctuation in prose, and blanking
+what nothing declares would quietly delete part of a message somebody wrote. A typo'd
+`{{brnach}}` arriving in the session as itself is a bug you can see. An unanswered param
+falls back to its `default` and then to the placeholder — **never to the empty string**.
+
+**`projects` is a prefix match at a path boundary.** A snippet applies when the
+composer's working directory *is* one of the listed paths or lies *underneath* one:
+`/home/me/proj` matches `/home/me/proj/web` and does **not** match `/home/me/proj-old`,
+which is a different repository sharing fourteen characters. Empty means everywhere.
+Case-sensitive. Prefix rather than "the same project" deliberately: a project's root is
+derived from git, and a filter built on that would change what the popover contains when
+a directory stops being a repository. The cost is worktrees, which are siblings rather
+than descendants and need their own entry.
+
+`?cwd=` applies that filter here, for a client that would rather not implement it — but
+`counts` is deliberately left whole, so a popover can say how many are hidden rather
+than shortening its list in silence. **The `snippets-changed` event is never filtered**,
+so a client that narrows its first load must narrow the event too, or its list widens
+the moment anybody edits anything.
+
+Ordered the way it should be drawn, and the bridge decides that so the popover, the
+pinned strip and the editor cannot come to three answers: explicit `order` ascending,
+then everything unnumbered alphabetically by title, then by id so a tie never depends on
+where a row sat in the array. Two rows genuinely can share an `order` — the file is
+hand-editable, and two bridges number independently.
+
+**On first run the store seeds itself with `LGTM`**, the button this feature replaced,
+pinned and set to send itself. Seeded **once ever**: the file records which shipped
+snippets it has been offered, so deleting it is permanent and a later release adding a
+second shipped snippet will not bring it back. Deleting
+`~/.local/share/claude-sessions/snippets.json` outright is how to get the shipped ones
+again.
+
+Global — not per-session and not per-project. `projects` is the only scoping and it
+hides rather than partitions.
+
+Also pushed as the `snippets-changed` SSE event, which is how the UI reads it. That
+event carries this same payload, so a client never has to come back here after the
+first load.
+
 ### `GET /api/schedules`
 
 Sessions that start on a clock — everything `POST /api/sessions` takes, plus a cron
@@ -1761,6 +1896,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `overview` | the board; sent only when it has actually changed |
 | `taskboard` | the task board; every ~3s while watched, and only when it has actually changed. Never carries `?idle=all` |
 | `drafts-changed` | `{at, drafts[], counts}` — the whole `GET /api/drafts` payload, so there is nothing to refetch. **Not gated by a `POST /api/subscribe` flag**, unlike `overview` and `taskboard`: a draft only changes because somebody changed it, so there is no tick to switch on and every window gets every change. Fires on create, edit, delete, and on a start (which deletes one) |
+| `snippets-changed` | `{at, snippets[], groups[], counts}` — the whole `GET /api/snippets` payload, so there is nothing to refetch. Ungated, exactly as `drafts-changed` is, and like it, it never fires without somebody having done something: a snippet or group created, edited or deleted, and a reorder **that actually moved a row** — a drag that lands where it started pushes nothing. Both arrays every time, because deleting a group re-homes its snippets and sending half the answer would leave a client drawing a card that no longer exists. **Always unfiltered by `cwd`**, so a client that fetched with `?cwd=` must apply the filter itself here or watch its list silently widen |
 | `schedules-changed` | `{at, schedules[], counts}` — the whole `GET /api/schedules` payload. Ungated, exactly as `drafts-changed` is. Unlike that one it fires **without anybody having done anything**: a schedule firing, skipping a slot, or having its outcome recorded when the turn ends all push it. So a client that assumed the payload only moves in response to a user action will be wrong here, and pleasantly so — this is how a card starts saying "ran 2h ago — BLOCK" while nobody is looking at it |
 | `sessions-changed` | `{at}` — a nudge to refetch the list |
 | `prs-changed` | **the whole `GET /api/prs` payload** — `{sessions, gh, checkedAt}` — so a rail has nothing to refetch. Ungated, exactly as `drafts-changed` is, and like `schedules-changed` it fires **without anybody having done anything**: it is a background refresher noticing that a review landed, a build finished, or somebody merged. Fires only when the answer actually moved, so a pass that re-lists a quiet repository and finds it unchanged pushes nothing — this is not a heartbeat and must not be treated as one. It is the *only* signal that PR status changed; there was none before, and clients polled. A client wanting per-PR detail for one session should refetch `GET /api/sessions/:id/prs` on this event, which is cheap and does not shell out |
@@ -1981,6 +2117,125 @@ saved at the machine must not become a way for a phone to start `bypassPermissio
 `404` for an unknown id; `403` for a `permissionMode` this caller may not start; `400`
 if the directory no longer resolves; `429` past 8 sessions started in a minute — the
 same bucket `POST /api/sessions` draws on, because both spawn a process.
+
+### `POST /api/snippets`
+
+`{title, body, hint?, groupId?, params?, insert?, autoSubmit?, permissionMode?, pinned?,
+order?, projects?}` → `{snippet}`, the row as `GET /api/snippets` describes it,
+`undeclared` and `unused` included.
+
+`400` for a missing `title` or `body`; a `title` over **200** characters or a `body` over
+**20000**; an `insert` that is not one of the three; an `order` that is not an integer or
+null; a `groupId` naming a group that does not exist; more than **20** params or **20**
+`projects`; and a param whose `name` is not `[A-Za-z_]\w*` or repeats an earlier one — a
+param's name is its identity, so a duplicate is not a thing that can be stored.
+
+`403` for a `permissionMode` of `bypassPermissions` or `dontAsk` from a remote caller.
+
+`409` past **200 snippets** — a ceiling and not a lifetime budget, so deleting one makes
+room.
+
+**Two fields normalise rather than refuse, and two do not, and the split is deliberate.**
+An unrecognised param `type` reads as `text` and an unrecognised group `accent` reads as
+no accent, because both are open sets whose worst case is a field that still holds the
+right value. An unrecognised `insert` is a `400`, because its three values decide what
+happens to text the user has *already typed* and one of them replaces it — there is no
+fallback that is both the natural default and harmless. An unrecognised `permissionMode`
+becomes `null` (inherit) rather than `auto`, because `auto` would be a silent decision to
+move the user's mode selector and `null` is the only value that does nothing.
+
+`body` is stored **exactly as sent**, not trimmed. It must be non-empty *once* trimmed,
+which is a different test.
+
+### `PATCH /api/snippets/:id`
+
+Any subset of `{title, body, hint, groupId, params, insert, autoSubmit, permissionMode,
+pinned, order, projects}` → `{snippet}`.
+
+**A genuine partial**, drafts' rule: a field left out is left alone. `null` is a value and
+absence is not — `{"groupId": null}` ungroups a snippet, `{}` changes nothing but the
+timestamp.
+
+**`params` is the exception, and it replaces rather than merges.** Send the whole array
+or do not send the key. A param has no id — its name is its identity, and that name is
+also what the body references — so there is nothing to address a partial update to, and
+renaming a param while fixing the `{{…}}` that refers to it has to be one save or it can
+half-fail.
+
+Every field is validated as it is on create, so the refusals are the same, plus `404` for
+an unknown id. **The body is checked before the id is looked up**, so a refused mode is a
+`403` whether or not the snippet exists — the same order `PATCH /api/drafts/:id` uses and
+for the same reason.
+
+### `DELETE /api/snippets/:id`
+
+→ `{ok: true, id}`; `404` if there is no such snippet.
+
+A hard delete. **Deleting a shipped snippet is permanent** — the store records that it has
+offered `seed-lgtm` once and never offers it again, so emptying the list and restarting
+does not bring the button back. That is the point: a default that reappears does not read
+as a policy, it reads as the delete having failed.
+
+### `POST /api/snippets/reorder`
+
+`{snippets?: [id, …], groups?: [id, …]}` → the whole `GET /api/snippets` payload.
+
+Each array is the new order of the rows it names: they get `order` 0, 1, 2 … in the order
+given. **Ids that are not there are ignored**, because a row somebody deleted in another
+window mid-drag must not fail the save — and ignored all the way down, so a stranger does
+not consume an index either and the numbering stays dense. **A row the body does not
+mention keeps the `order` it had**, `null` included, so reordering one group is that
+group's ids and touches nothing else and a client holding a stale list cannot renumber
+snippets it has never seen.
+
+A snippet's `order` is a global index rather than one within its group, which is not a
+compromise: a client buckets by group and sorts inside each, so any sequence putting a
+group's snippets in the right relative order is a right answer.
+
+Idempotent. `updatedAt` moves only on rows whose `order` actually changed, and **nothing
+is broadcast when nothing moved**. That is not cosmetic: bumping stamps on rows that did
+not move would let a client re-sending its current order win the merge against another
+bridge's later edit to those same rows.
+
+This is also the right call for an up/down button rather than two `PATCH`es — a swap is
+two rows, and doing it as two writes has an instant in the middle where both hold the same
+number and two events go out.
+
+`400` if a key that is present is not an array of strings.
+
+### `POST /api/snippet-groups`
+
+`{name, accent?, order?}` → `{group}`.
+
+A sibling path rather than `/api/snippets/groups`, so that `reorder` is the only reserved
+word under that prefix and `groups` can never be mistaken for a snippet id.
+
+`accent` is `#rgb` or `#rrggbb`, and **normalises to null** if it is anything else —
+strictly, because the client sets it as a CSS custom property, so `red`, `var(--x)` and
+`#fff;}` would each be a declaration in the page's stylesheet rather than a colour.
+
+`400` for a missing `name`, a `name` over **200** characters, or an `order` that is not an
+integer or null; `409` past **40 groups**.
+
+There is no `GET`: a group is only ever read as part of `GET /api/snippets`, and a route
+returning half the popover's data would be one more thing for a client to keep in step.
+
+### `PATCH /api/snippet-groups/:id`
+
+Any subset of `{name, accent, order}` → `{group}`. A genuine partial; `404` for an unknown
+id.
+
+### `DELETE /api/snippet-groups/:id`
+
+→ `{ok: true, id, orphaned: 3}`; `404` if there is no such group.
+
+**Its snippets are not deleted, and they keep their `groupId`.** Deleting a container must
+not delete its contents: the group is a name and a colour, and the snippets under it are
+paragraphs somebody wrote. They draw ungrouped, and recreating a group with the same id
+puts them straight back — which is also why the field is left alone rather than nulled, so
+one bridge is not rewriting rows on the strength of a deletion another has not seen.
+`orphaned` is how many came loose, so a client can say so rather than leaving somebody to
+notice.
 
 ### `POST /api/schedules`
 
