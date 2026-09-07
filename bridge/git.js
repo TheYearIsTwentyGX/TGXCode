@@ -35,7 +35,15 @@ const GIT_TIMEOUT_MS = 10_000;
 const cache = {
     /** @type {Map<string, {value?: any, pending?: Promise<any>, at: number}>} dir -> working state */
     status: new Map(),
+    /** @type {Map<string, {value?: any, pending?: Promise<any>, at: number}>} "dir\0path" -> ignore answer */
+    ignored: new Map(),
 };
+
+// Whether a path is ignored changes when somebody edits an ignore file, which
+// is not something that happens while a settings page is open. A minute is long
+// enough to make the answer free on a page that redraws per keystroke, and
+// short enough that adding the missing line shows up without a restart.
+const IGNORE_TTL_MS = 60_000;
 
 // ---------------------------------------------------------------------------
 // Plumbing
@@ -351,6 +359,47 @@ async function commitRange(dir, ref, sinceSha, { fetch = false } = {}) {
 }
 
 /**
+ * Is this path ignored, and by which rule?
+ *
+ * `check-ignore` is the only honest way to ask. Reading the repository's own
+ * ignore file is not: on this machine `.claude/settings.local.json` is ignored
+ * by `~/.config/git/ignore`, a global excludes file no amount of looking inside
+ * the repository would reveal — so a check that grepped the checked-in file
+ * would report "not ignored" about a file that is, and the sentence built on
+ * that answer would be wrong in the reassuring direction.
+ *
+ * `source` is what makes the answer useful rather than merely true: a file
+ * ignored by a *global* rule is a file a colleague who clones the repository
+ * has no protection for at all.
+ *
+ * **A directory that is not a checkout answers `false`, not `true`.** This is a
+ * claim about whether something stays private, so the safe direction to guess
+ * in is the one that warns.
+ *
+ * @param {string} cwd a directory inside the repository
+ * @param {string} relPath repository-relative, forward slashes
+ * @returns {Promise<{ignored: boolean, source: string|null}>} `source` is
+ *   `<file>:<line>` naming the rule that matched, or null
+ */
+function ignored(cwd, relPath) {
+    return cached(cache.ignored, `${cwd}\0${relPath}`, IGNORE_TTL_MS, async () => {
+        // `-v` names the rule. `--no-index` so a file somebody has already
+        // committed by accident still reports the pattern that was meant to
+        // keep it out, which is the honest answer to "is this meant to be
+        // private?". `--` because a path may begin with a dash.
+        const r = await run('git', ['check-ignore', '-v', '--no-index', '--', relPath], { cwd });
+        // 0 means ignored, 1 means not, anything else means it could not answer
+        // — not a checkout, no binary on PATH, a timeout.
+        if (r.code !== 0) return { ignored: false, source: null };
+        // `<file>:<line>:<pattern>\t<path>`, and both a file name and a path may
+        // contain a colon, so take two fields from the left rather than
+        // splitting the whole line.
+        const m = /^(.*?):(\d+):/.exec(firstLine(r.stdout));
+        return { ignored: true, source: m ? `${m[1]}:${m[2]}` : null };
+    });
+}
+
+/**
  * Forget cached working trees — what a Refresh button means.
  *
  * With a directory, only that one. The panel's Refresh is about the checkout in
@@ -358,11 +407,18 @@ async function commitRange(dir, ref, sinceSha, { fetch = false } = {}) {
  * worktrees; the board's Refresh is about all of them and passes nothing.
  */
 function clearCache(dir) {
-    if (dir) cache.status.delete(dir);
-    else cache.status.clear();
+    if (dir) {
+        cache.status.delete(dir);
+        for (const key of cache.ignored.keys()) {
+            if (key.startsWith(`${dir}\0`)) cache.ignored.delete(key);
+        }
+    } else {
+        cache.status.clear();
+        cache.ignored.clear();
+    }
 }
 
 module.exports = {
     run, firstLine, samePath, afterFields,
-    parseStatus, workingState, numstat, statusOf, commitRange, clearCache,
+    parseStatus, workingState, numstat, statusOf, commitRange, ignored, clearCache,
 };
