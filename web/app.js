@@ -447,6 +447,9 @@ const state = {
         open: false, scope: 'user', project: '', projects: [],
         data: null, spinner: null, loading: false, error: null,
         saving: false, recording: null,
+        // The order the verb groups are drawn in, fixed on the way in. See
+        // settingGroups().
+        groupOrder: null,
     },
     // Sessions blocked on an answer, kept whether or not the board is open, so
     // the badge on a shut board still says how many people are waiting.
@@ -8138,6 +8141,10 @@ async function loadSettings() {
     if (s.loading) return;
     s.loading = true;
     s.error = null;
+    // A fresh look at the panel gets a fresh order for the verb groups, chosen
+    // ones first. Only here and on a scope change — never on the refetch after
+    // a save, which is the whole point of pinning it.
+    s.groupOrder = null;
     renderSettings();
 
     // The project list first, because settingsProject() falls back to it — and
@@ -8565,6 +8572,16 @@ function shareLabel(share) {
  * they were, and the dozen you picked grow a box and a percentage — which is
  * the number worth showing, since a weight on its own says nothing without the
  * others to read it against.
+ *
+ * **The chosen ones come first, and then the order stops moving.** Alphabetical
+ * over a hundred and fifteen pills buries the dozen that are actually in play
+ * somewhere in the middle of the wall, and those are the ones you came here to
+ * read. But sorting on every render would make the list move under the cursor:
+ * tick a group and it leaps to the top, drawing your next click onto whatever
+ * slid into its place. So the order is settled once — on opening the panel, on
+ * changing project or scope — and held in `state.settings.groupOrder` for as
+ * long as you are working in it. A group ticked now goes to the top the next
+ * time you come in, which is soon enough.
  */
 function settingGroups(value, disabled, save, saveKey) {
     const cat = state.settings.spinner;
@@ -8574,6 +8591,20 @@ function settingGroups(value, disabled, save, saveKey) {
             'No verb groups found for this directory.');
     }
     const weights = (cat && cat.weights) || {};
+    const st = state.settings;
+    if (!st.groupOrder) {
+        // A stable partition: the route hands these over alphabetically, so
+        // each half keeps that order and only the split is new.
+        st.groupOrder = [
+            ...cat.groups.filter(g => enabled.has(g.name)),
+            ...cat.groups.filter(g => !enabled.has(g.name)),
+        ].map(g => g.name);
+    }
+    // Drawn in the pinned order, with anything the order has not heard of on
+    // the end — a group that appeared in the directory since it was fixed.
+    const rank = new Map(st.groupOrder.map((name, i) => [name, i]));
+    const ordered = [...cat.groups].sort((a, b) =>
+        (rank.has(a.name) ? rank.get(a.name) : rank.size) - (rank.has(b.name) ? rank.get(b.name) : rank.size));
     const toggle = (name, on) => {
         const next = new Set(enabled);
         if (on) next.add(name); else next.delete(name);
@@ -8594,7 +8625,7 @@ function settingGroups(value, disabled, save, saveKey) {
     };
     const weighed = cat.groups.some(g => enabled.has(g.name) && g.weight !== 1 && g.weight !== null);
     return el('div', { class: 'settings-groups' },
-        cat.groups.map(g => {
+        ordered.map(g => {
             const on = enabled.has(g.name);
             return el('div', { class: 'settings-group-pick', title: verbTooltip(g) },
                 el('label', { class: 'settings-group-toggle' },
@@ -15081,6 +15112,9 @@ dom.setShell.addEventListener('scroll', () => {
 dom.setScope.addEventListener('change', () => {
     state.settings.scope = dom.setScope.value;
     state.settings.recording = null;
+    // Which groups read as chosen depends on the scope, so this is a fresh look
+    // at the list rather than the same one redrawn.
+    state.settings.groupOrder = null;
     renderSettings();
 });
 dom.setProject.addEventListener('change', () => {

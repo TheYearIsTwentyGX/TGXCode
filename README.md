@@ -639,6 +639,14 @@ the percentage that weight works out to — the number is meaningless on its own
 and the point of showing the share is that you can see what a change did before
 you go looking for it in a label.
 
+The chosen groups are drawn first, and then the order stops moving. Alphabetical
+over a hundred and fifteen pills buries the dozen actually in play somewhere in
+the wall, and those are the ones you opened the panel to read; but re-sorting as
+you tick would make the list jump under the cursor and put your next click on
+whatever slid into the gap. So the split is settled on the way in — opening the
+panel, changing project or scope — and a group you tick now goes to the top the
+next time you come in.
+
 Two things worth knowing. The session rail has room for about twenty characters,
 which is not enough for both halves, so it shows the one that carries
 information: the tool's name while a tool runs, and the verb whenever nothing
