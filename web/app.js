@@ -54,10 +54,10 @@ async function postFile(path, file) {
 }
 
 /**
- * A partial update. The one route that takes one is `PATCH /api/drafts/:id`,
- * where the verb is load-bearing: a field left out of the body is left alone,
- * which is how the dialog can save a change to the message without restating the
- * model and the permission mode it did not touch.
+ * A partial update — `PATCH /api/drafts/:id`, `/api/snippets/:id` and their
+ * neighbours — where the verb is load-bearing: a field left out of the body is
+ * left alone, which is how a dialog can save a change to the message without
+ * restating the model and the permission mode it did not touch.
  */
 async function patch(path, body) {
     const r = await fetch(path, { method: 'PATCH', headers: HEADERS, body: JSON.stringify(body || {}) });
@@ -424,6 +424,21 @@ const state = {
     // `editing` is the id the dialog is currently editing, or null when it is
     // about to make a new one. It is what tells Save which verb to use.
     drafts: { open: false, rows: [], at: 0, loading: false, error: null, editing: null },
+    // Canned messages, and the groups they are drawn in. Drafts' terms for the
+    // push — the whole list, unconditional, held as sent — with one difference
+    // that matters: **this list is read while its panel is shut.** The pinned
+    // buttons on the composer are drawn from it, so it is loaded at boot rather
+    // than when the settings panel opens, and kept current whether or not anybody
+    // is looking at the editor.
+    //
+    // `editing` is the snippet the editor dialog has open, or null for a new one.
+    // `fill` is what the parameter dialog is asking about, held from the click
+    // that opened it until the insert that consumes it — it carries the composer
+    // and the caret, because by then the focus has moved twice.
+    snippets: {
+        rows: [], groups: [], at: 0, loading: false, error: null,
+        editing: null, fill: null, drag: null,
+    },
     // Schedules, on exactly the same terms as drafts above — an unconditional
     // push, held as sent. `editing` is the id the dialog has open, which is also
     // what puts the dialog into schedule mode at all: see openNew().
@@ -472,7 +487,14 @@ const $ = (id) => document.getElementById(id);
 const dom = {};
 for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-sub',
     'channels', 'scroll', 'log', 'status-line', 'status-text', 'btn-stop', 'input',
-    'btn-send', 'btn-lgtm', 'btn-attach', 'attach', 'attach-input', 'composer',
+    'btn-send', 'btn-attach', 'attach', 'attach-input', 'composer',
+    'pins', 'btn-snippets', 'snip-menu', 'new-btn-snippets', 'new-snip-menu',
+    'snip-fill-scrim', 'snip-fill-title', 'snip-fill-form', 'snip-fill-go',
+    'snip-edit-scrim', 'snip-edit-title', 'snip-title', 'snip-group', 'snip-body',
+    'snip-placeholders', 'snip-params', 'snip-param-add', 'snip-insert',
+    'snip-auto', 'snip-perm-row', 'snip-perm', 'snip-pinned', 'snip-projects',
+    'snip-project', 'snip-project-list', 'snip-project-go', 'snip-save',
+    'set-g-snippets', 'snip-new', 'snip-group-new', 'snip-settings-body',
     'slash-menu', 'mention-menu', 'new-slash-menu', 'new-mention-menu',
     'new-attach', 'new-attach-input', 'new-attach-btn', 'new-attach-row',
     'queue', 'queue-list', 'queue-count', 'queue-clear',
@@ -630,7 +652,7 @@ function toast(text, kind = 'info', opts = {}) {
 }
 
 /**
- * Is one of the four modal dialogs up? They are `hidden`-toggled divs rather
+ * Is one of the six modal dialogs up? They are `hidden`-toggled divs rather
  * than a native `<dialog>`, so asking the DOM is the only way.
  *
  * **A modal is closed by its own ✕ or Cancel and by nothing else.** It used to
@@ -647,7 +669,13 @@ function toast(text, kind = 'info', opts = {}) {
  */
 function modalUp() {
     return !dom.newScrim.hidden || !dom.delScrim.hidden
-        || !dom.restartScrim.hidden || !dom.taskScrim.hidden;
+        || !dom.restartScrim.hidden || !dom.taskScrim.hidden
+        // Both snippet dialogs hold work that only exists in the page — typed
+        // parameter values, and a whole snippet body — so the rule above covers
+        // them for the reason it covers Start-a-session. The parameter one can
+        // also be up *over* Start-a-session, which is why it is a second term
+        // rather than a case: Escape must be swallowed either way.
+        || !dom.snipFillScrim.hidden || !dom.snipEditScrim.hidden;
 }
 
 // ── drafts ───────────────────────────────────────────────────────────────
@@ -885,6 +913,16 @@ const ICON = {
     // drag-selection of the message picks up.
     tick: '<path d="m5 12.8 4.4 4.4L19 6.6" stroke="currentColor" stroke-width="2" '
         + 'stroke-linecap="round" stroke-linejoin="round"/>',
+    // A card with two lines written on it, which is what a snippet is and what a
+    // row in the popover shows. Deliberately not a lightning bolt or a pair of
+    // scissors: every glyph in this map is the thing rather than a metaphor for it.
+    snippets: '<rect x="3.6" y="4.6" width="16.8" height="14.8" rx="2.6" '
+        + 'stroke="currentColor" stroke-width="1.8"/><path d="M7.6 9.6h8.8M7.6 13.4h5.8" '
+        + 'stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+    // Six dots, the shape every drag handle in every list is. Used in the settings
+    // editor, where a row can be dragged as well as walked with the arrow buttons.
+    grip: '<path d="M9 6.5h.01M15 6.5h.01M9 12h.01M15 12h.01M9 17.5h.01M15 17.5h.01" '
+        + 'stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>',
 };
 
 // Which glyph says each PR status. `unknown` is gh being unreachable rather than a
@@ -1560,6 +1598,10 @@ function beginOpen(summary, { keepDash = false } = {}) {
     // for the new conversation — see renderChecklist for why.
     state.tasksPending = paneUp(dom.tasks);
     renderTasks();
+    // A snippet scoped to a project appears and disappears as you move between
+    // conversations, so the strip is rebuilt against the new directory rather than
+    // only when the list itself changes.
+    renderPins();
     resetChanges();             // and the files listed were the old session's
     renderChanges();            // which leaves the drawer saying it is looking
     resetChecklist();           // as was the task list — the push will refill it
@@ -7582,6 +7624,1021 @@ async function drDelete(d) {
     }
 }
 
+// ── snippets ─────────────────────────────────────────────────────────────
+//
+// Canned messages, and the buttons that send them.
+//
+// Drafts' machinery for the list itself — an unconditional `snippets-changed`
+// push carrying the whole payload, held as sent, no watcher to gate — with one
+// difference that shapes everything below: **this list is read while its editor
+// is shut.** The pinned buttons live on the composer, so it loads at boot rather
+// than when a panel opens, and every push repaints three places rather than one.
+//
+// **The bridge decides the order**, which is why nothing here sorts. `order` is a
+// stored decision and `null` means alphabetical, and having the store settle that
+// is what keeps the popover, the pinned strip and the editor from each arriving at
+// a slightly different answer.
+//
+// The three questions this section has to get right, none of which is obvious:
+//
+// **Where the text goes when the snippet also sends itself.** `overwrite` plus
+// `autoSubmit` is the shape the LGTM button had, and that button never touched the
+// compose box — press it with a half-written message in there and the message is
+// still there afterwards. Taking `overwrite` literally first and sending second
+// would destroy it. So that one combination, on the live composer, goes straight
+// to `sendMessage` with the text as an override and never writes to the box at
+// all; `append` and `cursor` must go through it, because what is already in the
+// box is part of what gets sent.
+//
+// **Where the caret was.** `insert: 'cursor'` needs the selection as it stood when
+// you reached for the snippet, not as it stands when the text arrives — by then
+// the popover has taken focus and the parameter dialog may have taken it again.
+// It is recorded at the gesture, and a pinned button has to record it itself
+// because it opens no popover on the way past.
+//
+// **What auto-submit means in a dialog with no Send.** See startFromSnippet.
+
+/** What a parameter of each type is asked for with. */
+const SNIP_INPUT = {
+    text: { type: 'text' },
+    integer: { type: 'number', step: '1', inputmode: 'numeric' },
+    decimal: { type: 'number', step: 'any' },
+    date: { type: 'date' },
+    time: { type: 'time' },
+    datetime: { type: 'datetime-local' },
+};
+
+/** The same expression the bridge substitutes with. Two would be one too many. */
+const SNIP_PLACEHOLDER = /\{\{\s*(\w+)\s*\}\}/g;
+
+const snipById = (id) => state.snippets.rows.find(s => s.id === id) || null;
+
+/**
+ * Take the whole payload as the truth, and repaint everything drawn from it.
+ *
+ * Three places rather than drafts' one, because two of them are visible when the
+ * editor is not: the pinned buttons on the composer, and a popover that may be
+ * open over it while another window saves an edit.
+ */
+function applySnippets(data) {
+    state.snippets.rows = data.snippets || [];
+    state.snippets.groups = data.groups || [];
+    state.snippets.at = data.at || Date.now();
+    state.snippets.error = null;
+    renderPins();
+    for (const c of composers) if (!c.snips.node.hidden) drawSnips(c);
+    if (state.settings.open) renderSnipSettings();
+}
+
+async function loadSnippets() {
+    if (state.snippets.loading) return;
+    state.snippets.loading = true;
+    try {
+        // Never with `?cwd=`, even though the route offers it. The event is not
+        // filtered — one payload goes to every window — so a narrowed first load
+        // would silently widen the moment anybody edited anything. The filter is
+        // applied here instead, per composer, which is where the directory is
+        // actually known.
+        applySnippets(await get('/api/snippets'));
+    } catch (err) {
+        state.snippets.error = err.message;
+    }
+    state.snippets.loading = false;
+}
+
+/**
+ * Does this snippet belong in a composer pointed at this directory?
+ *
+ * The bridge's `matchesCwd`, in the client because `web/` has no build step and
+ * shares no code with `bridge/`. A prefix at a path boundary: `/a/b` covers
+ * `/a/b/c` and not `/a/bc`, which is a different repository sharing five
+ * characters.
+ *
+ * **Fails open when the directory is unknown.** A composer with no session in it
+ * should show every snippet rather than none, and `state.current.cwd` is a cache
+ * key rather than the authority — the bridge is what resolves a session to a
+ * directory, through worktrees that have since been landed and removed.
+ */
+function snipVisible(s, cwd) {
+    if (!s.projects || !s.projects.length) return true;
+    if (!cwd) return true;
+    const here = String(cwd).replace(/[/\\]+$/, '');
+    return s.projects.some(p => here === p
+        || here.startsWith(p + '/') || here.startsWith(p + '\\'));
+}
+
+/** The working directory a composer is pointed at, or null. */
+function snipCwd(c) {
+    if (c === live) return (state.current && state.current.cwd) || null;
+    return dom.newCwd.value.trim() || null;
+}
+
+/** One line of what it says, for the row under the title. */
+const snipPreview = (s) => clip(s.body, 120);
+
+/** A stored accent, re-checked here because it is about to become a CSS rule. */
+const snipAccent = (g) => (g && /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(g.accent || '')
+    ? g.accent : '');
+
+/**
+ * The popover's contents: a card per group, then whatever is ungrouped.
+ *
+ * Ungrouped last rather than first. A group is drawn as a tinted card and the
+ * loose ones are a plain list, so putting the plain list first would open the
+ * popover on the part that looks like nothing.
+ */
+function snipCards(cwd) {
+    const rows = state.snippets.rows.filter(s => snipVisible(s, cwd));
+    const cards = state.snippets.groups
+        .map(g => ({ group: g, rows: rows.filter(s => s.groupId === g.id) }))
+        .filter(card => card.rows.length);
+    const known = new Set(state.snippets.groups.map(g => g.id));
+    // A snippet whose group this window cannot see draws loose rather than
+    // vanishing — the bridge keeps that `groupId` on purpose, and a row nobody can
+    // reach would be worse than one in the wrong place.
+    const loose = rows.filter(s => !s.groupId || !known.has(s.groupId));
+    if (loose.length) cards.push({ group: null, rows: loose });
+    return cards;
+}
+
+/**
+ * Fill a body from the answers, and leave alone what it cannot answer.
+ *
+ * The bridge's `fillBody`, and the rule it enforces is worth restating where it is
+ * duplicated: a placeholder with no answer falls back to its default and then to
+ * itself, **never to the empty string**. `{{` is not reserved punctuation in
+ * prose, and blanking what this does not recognise would quietly delete part of a
+ * message somebody wrote.
+ */
+function fillSnipBody(body, params, answers) {
+    const known = new Map((params || []).map(p => [p.name, p.default]));
+    return String(body).replace(SNIP_PLACEHOLDER, (whole, key) => {
+        if (!known.has(key)) return whole;
+        const given = answers[key];
+        if (given !== undefined && given !== null && given !== '') return String(given);
+        const fallback = known.get(key);
+        return fallback === null || fallback === undefined ? whole : fallback;
+    });
+}
+
+// ── the popover ──────────────────────────────────────────────────────────
+
+const snipRows = (c) => [...c.snips.node.querySelectorAll('.snip-row')];
+
+/**
+ * Place it, in fixed coordinates, against the button rather than the box.
+ *
+ * `positionMenu` cannot be reused as it stands: it anchors to `c.input` and gives
+ * the popover the box's width, and this one hangs off a button and is deliberately
+ * *wider* than its anchor, because the groups sit side by side. That is where the
+ * clamp comes from — right-aligned to the button, then held inside the viewport,
+ * which an anchored popover never had to express.
+ *
+ * Fixed for both composers rather than only the dialog's. The dialog's has to be,
+ * since `.modal` is `overflow: hidden`; doing the same for the live one costs
+ * nothing and means the arithmetic above lives in one place instead of two.
+ */
+function positionSnips(c) {
+    const m = c.snips;
+    const r = m.btn.getBoundingClientRect();
+    const gap = 6;
+    const below = window.innerHeight - r.bottom - gap * 2;
+    const above = r.top - gap * 2;
+    const up = below < 260 && above > below;
+
+    const width = Math.min(720, window.innerWidth - 24);
+    m.node.classList.toggle('up', up);
+    m.node.style.setProperty('--snip-max',
+        `${Math.max(180, Math.min(460, up ? above : below))}px`);
+    m.node.style.width = `${width}px`;
+    m.node.style.left = `${Math.max(12, Math.min(r.right - width,
+        window.innerWidth - width - 12))}px`;
+    if (up) {
+        m.node.style.top = 'auto';
+        m.node.style.bottom = `${window.innerHeight - r.top + gap}px`;
+    } else {
+        m.node.style.bottom = 'auto';
+        m.node.style.top = `${r.bottom + gap}px`;
+    }
+}
+
+function drawSnips(c) {
+    const m = c.snips;
+    const cards = snipCards(snipCwd(c));
+    m.node.replaceChildren();
+
+    if (!state.snippets.rows.length) {
+        m.node.append(el('div', { class: 'snip-empty' },
+            'No snippets yet. Add some in Settings.'));
+    } else if (!cards.length) {
+        // Told rather than shown as an empty list: a snippet hidden because you
+        // are in the wrong directory is otherwise indistinguishable from one you
+        // deleted, and that is a bad ten minutes.
+        m.node.append(el('div', { class: 'snip-empty' },
+            `None of your ${state.snippets.rows.length} snippets apply in this `
+            + 'directory. Their project list is in Settings.'));
+    }
+
+    let i = 0;
+    for (const card of cards) {
+        const accent = snipAccent(card.group);
+        const node = el('section', {
+            class: card.group ? 'snip-card' : 'snip-card is-loose',
+            style: accent ? `--snip-accent: ${accent}` : null,
+        });
+        if (card.group) {
+            node.append(el('h3', { class: 'snip-card-name', text: card.group.name }));
+        }
+        for (const s of card.rows) {
+            const at = i++;
+            node.append(el('button', {
+                class: 'snip-row', type: 'button', role: 'option',
+                'data-i': at, tabindex: at === 0 ? 0 : -1,
+                title: snipTitleFor(s, isBusy() && !state.agent, c),
+                onclick: () => chooseSnippet(c, s),
+            },
+            el('span', { class: 'snip-row-title', text: s.title }),
+            el('span', { class: 'snip-row-preview', text: snipPreview(s) })));
+        }
+        m.node.append(node);
+    }
+    paintSnipSel(c);
+}
+
+/**
+ * The highlight, and which row Tab would land on.
+ *
+ * A roving `tabindex` rather than the `aria-activedescendant` the slash and
+ * mention menus use, and the difference is not cosmetic: those keep the caret in
+ * the textarea because the list filters as you type, and this one is opened by a
+ * button with nothing being typed, so it takes focus like any other menu.
+ */
+function paintSnipSel(c) {
+    const rows = snipRows(c);
+    rows.forEach((r, i) => {
+        r.setAttribute('aria-selected', String(i === c.snips.index));
+        r.tabIndex = i === c.snips.index ? 0 : -1;
+    });
+}
+
+function focusSnipAt(c, i) {
+    const rows = snipRows(c);
+    if (!rows.length) return;
+    c.snips.index = Math.max(0, Math.min(i, rows.length - 1));
+    paintSnipSel(c);
+    rows[c.snips.index].focus();
+}
+
+function showSnips(c, on) {
+    if (!on) { closeSnips(c); return; }
+    const m = c.snips;
+    // Taken before anything moves the focus. A textarea keeps its selection across
+    // a blur, but only until something writes to `.value`, and "mostly" is not a
+    // contract to build `insert: 'cursor'` on.
+    m.caret = { start: c.input.selectionStart, end: c.input.selectionEnd };
+    // Only ever one popover up, per composer and across them.
+    closeMenus(c);
+    c.closeOthers();
+    for (const other of composers) if (other !== c) closeSnips(other);
+
+    m.index = 0;
+    m.node.hidden = false;
+    m.btn.setAttribute('aria-expanded', 'true');
+    drawSnips(c);
+    positionSnips(c);
+    focusSnipAt(c, 0);
+}
+
+function closeSnips(c, { focus = false } = {}) {
+    const m = c.snips;
+    if (m.node.hidden) return;
+    m.node.hidden = true;
+    m.node.replaceChildren();
+    m.btn.setAttribute('aria-expanded', 'false');
+    if (focus) m.btn.focus();
+}
+
+/**
+ * Arrows walk the rows, and Left and Right step between the cards.
+ *
+ * Up and Down alone would be a poor map for a popover whose whole point is that
+ * groups sit beside each other: they run down one card and then jump to the top of
+ * the next, so reaching the third group means walking through the first two.
+ */
+function onSnipsKey(e, c) {
+    const rows = snipRows(c);
+    if (!rows.length) return;
+    const at = c.snips.index;
+
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const step = e.key === 'ArrowDown' ? 1 : -1;
+        focusSnipAt(c, (at + step + rows.length) % rows.length);
+        return;
+    }
+    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+        e.preventDefault();
+        const cards = [...c.snips.node.querySelectorAll('.snip-card')];
+        const mine = cards.findIndex(card => card.contains(rows[at]));
+        const next = cards[mine + (e.key === 'ArrowRight' ? 1 : -1)];
+        if (!next) return;
+        // The same depth in the next card where there is one, so walking sideways
+        // through a row of groups stays on that row.
+        const inMine = [...cards[mine].querySelectorAll('.snip-row')].indexOf(rows[at]);
+        const there = [...next.querySelectorAll('.snip-row')];
+        focusSnipAt(c, rows.indexOf(there[Math.min(inMine, there.length - 1)]));
+        return;
+    }
+    if (e.key === 'Home' || e.key === 'End') {
+        e.preventDefault();
+        focusSnipAt(c, e.key === 'Home' ? 0 : rows.length - 1);
+        return;
+    }
+    // Tab closes and lets the focus go on, which is the recent-menu's rule.
+    // Escape is handled by the central ladder, deliberately not here.
+    if (e.key === 'Tab') closeSnips(c);
+}
+
+// ── choosing one ─────────────────────────────────────────────────────────
+
+/**
+ * The one way in: a row, a pinned button, or Enter on a row.
+ *
+ * The caret is captured here as well as in `showSnips` because a pinned button
+ * opens no popover — it is the case that would otherwise silently insert at the
+ * end of the box instead of where you were.
+ */
+function chooseSnippet(c, s) {
+    if (c.snips.node.hidden) {
+        c.snips.caret = { start: c.input.selectionStart, end: c.input.selectionEnd };
+    }
+    closeSnips(c);
+    if (s.params && s.params.length) openSnipFill(c, s);
+    else applySnippet(c, s, {});
+}
+
+function openSnipFill(c, s) {
+    state.snippets.fill = { snippet: s, composer: c };
+    dom.snipFillTitle.textContent = s.title;
+    dom.snipFillForm.replaceChildren(...s.params.map((p, i) => el('div', { class: 'field' },
+        el('label', { for: `snip-p-${i}` }, p.label || p.name),
+        el('input', {
+            id: `snip-p-${i}`, 'data-name': p.name, autocomplete: 'off',
+            required: p.required || null, value: p.default || '',
+            ...(SNIP_INPUT[p.type] || SNIP_INPUT.text),
+        }))));
+    dom.snipFillScrim.hidden = false;
+    const first = dom.snipFillForm.querySelector('input');
+    if (first) { first.focus(); first.select(); }
+}
+
+/**
+ * @returns {object|null} the answers, or null having said which box is empty.
+ *   A `default` pre-fills and nothing more, so a required parameter with one is
+ *   still a box you can clear and must then refill.
+ */
+function snipFillValues() {
+    const out = {};
+    for (const input of dom.snipFillForm.querySelectorAll('input')) {
+        const v = input.value.trim();
+        if (!v && input.required) {
+            toast(`${input.previousElementSibling.textContent} is needed.`, 'warn');
+            input.focus();
+            return null;
+        }
+        out[input.dataset.name] = v;
+    }
+    return out;
+}
+
+function confirmSnipFill() {
+    const held = state.snippets.fill;
+    if (!held) return;
+    const values = snipFillValues();
+    if (!values) return;
+    closeSnipFill();
+    applySnippet(held.composer, held.snippet, values);
+}
+
+function closeSnipFill() {
+    dom.snipFillScrim.hidden = true;
+    dom.snipFillForm.replaceChildren();
+    state.snippets.fill = null;
+}
+
+/**
+ * Put the resolved text where the snippet says, and send it if it says to.
+ *
+ * The `straight` case is the one worth reading twice. An overwriting snippet that
+ * sends itself, on the live composer, never writes to the box: the text goes to
+ * `sendMessage` as an override, which is exactly what the LGTM button did and why
+ * pressing it has never cost anybody a half-typed message. `overwrite` there
+ * describes what would have happened had you not also asked for a send.
+ *
+ * The dialog is excluded from it because `startNew()` reads `#new-prompt` — there
+ * is no override path into it — so everything there goes through the box.
+ */
+function applySnippet(c, s, values) {
+    const text = fillSnipBody(s.body, s.params, values);
+    const straight = s.autoSubmit && s.insert === 'overwrite' && c === live;
+    if (!straight) insertSnippet(c, text, s.insert);
+    if (s.autoSubmit) submitSnippet(c, s, text, straight);
+}
+
+function insertSnippet(c, text, how) {
+    const v = c.input.value;
+    if (how === 'overwrite') { insertAt(c, 0, v.length, text); return; }
+    if (how === 'append') {
+        // A blank line between, unless the box already ends in a break. Two
+        // paragraphs run together read as one, and this is a message.
+        const lead = !v ? '' : (v.endsWith('\n') ? '' : '\n\n');
+        insertAt(c, v.length, v.length, lead + text);
+        return;
+    }
+    const at = c.snips.caret || {};
+    const from = Math.min(at.start == null ? v.length : at.start, v.length);
+    const to = Math.min(Math.max(at.end == null ? from : at.end, from), v.length);
+    insertAt(c, from, to, text);
+}
+
+function submitSnippet(c, s, text, straight) {
+    if (c !== live) { startFromSnippet(s); return; }
+    if (s.permissionMode) setPermMode(s.permissionMode);
+    // `canned` is not what leaves the box alone — `override` is. It says only that
+    // the text is not worth holding on a failure, which is true exactly when it
+    // never came out of the box. Once it did, what would be dropped is something
+    // somebody typed.
+    if (straight) { sendMessage({ text, canned: true }); return; }
+    // The insert may have opened the slash menu over a box that is about to empty.
+    closeMenus(c);
+    sendMessage();
+}
+
+/**
+ * Move the permission selector, and hold it there.
+ *
+ * Writing `permChoice` is not optional bookkeeping. `paintPerm()` runs inside
+ * `applyRunner`, which fires on the `runner-status` the send provokes moments
+ * later — so without this the selector would visibly snap back to its computed
+ * answer a beat after a snippet moved it. It is the same thing the `#perm` change
+ * listener does, for the same reason: a mode is chosen for the conversation in
+ * front of you, so it is remembered against that session.
+ */
+function setPermMode(mode) {
+    if (![...dom.perm.options].some(o => o.value === mode)) return;
+    dom.perm.value = mode;
+    if (state.current) state.permChoice.set(state.current.sessionId, mode);
+}
+
+/**
+ * Auto-submit, in the dialog that has no Send.
+ *
+ * It presses Start. A snippet that says `autoSubmit` means "I do not want to look
+ * at this again", and honouring that in one of the two places a snippet can be
+ * used and not the other is the kind of difference nobody discovers until it has
+ * cost them something.
+ *
+ * It is safe to be that literal because it refuses exactly where the Start button
+ * refuses: `newDialogValues()` already toasts for a missing directory and an empty
+ * message, so the only way to reach a process is from a dialog that was one click
+ * from starting one anyway.
+ *
+ * The mode is written whether or not the start happens — "this prompt runs in plan
+ * mode" is a fact about the snippet, worth seeing even when you are going to press
+ * Start yourself. There is no `permChoice` here: `#new-perm` is the whole of that
+ * control's state, and `openNew` rewrites it on every open.
+ */
+function startFromSnippet(s) {
+    if (s.permissionMode
+        && [...dom.newPerm.options].some(o => o.value === s.permissionMode)) {
+        dom.newPerm.value = s.permissionMode;
+    }
+    if (!newDialogValues()) return;
+    startNew();
+}
+
+// ── the pinned buttons ───────────────────────────────────────────────────
+
+/**
+ * What a button will actually do, said before the click rather than after.
+ *
+ * The two prefixes are what `LGTM_TITLE` and `LGTM_TITLE_BUSY` used to be, now
+ * that the sentence after them comes from the snippet instead of from this file.
+ * `hint` is that sentence where a snippet has one, because the first line of a
+ * body is a guess and LGTM's wording was not.
+ */
+function snipTitleFor(s, busy, c = live) {
+    const what = s.hint || snipPreview(s);
+    if (!s.autoSubmit) return `Put this in the message box: ${what}`;
+    if (c !== live) return `Fill the message in and press Start: ${what}`;
+    return busy ? `Queue behind the running turn: ${what}` : `Send: ${what}`;
+}
+
+/**
+ * A button per pinned snippet, beside the snippets icon.
+ *
+ * Rebuilt whole rather than diffed: it is a handful of buttons, and it only
+ * changes when somebody edits a snippet or the open session moves to a different
+ * directory. That second one is why this is called from `openSession` as well —
+ * a snippet scoped to a project appears and disappears as you switch conversations.
+ *
+ * Disabled from `dom.btnSend` rather than from state, so there is one answer to
+ * "can this session be sent to" and a repaint cannot briefly draw a live button
+ * into a window with no session in it.
+ */
+function renderPins() {
+    const cwd = state.current && state.current.cwd;
+    const busy = isBusy() && !state.agent;
+    // Already in display order: the bridge decides it, so the strip, the popover
+    // and the editor cannot disagree.
+    const rows = state.snippets.rows.filter(s => s.pinned && snipVisible(s, cwd));
+    const group = new Map(state.snippets.groups.map(g => [g.id, g]));
+    dom.pins.replaceChildren(...rows.map((s) => {
+        const accent = snipAccent(group.get(s.groupId));
+        return el('button', {
+            class: 'btn-pin-snip', type: 'button', 'data-snip': s.id,
+            style: accent ? `--snip-accent: ${accent}` : null,
+            disabled: dom.btnSend.disabled || null,
+            title: snipTitleFor(s, busy),
+            onclick: () => chooseSnippet(live, s),
+        }, s.title);
+    }));
+}
+
+/** Re-say it when the runner state changes, without rebuilding the strip. */
+function paintPinTitles(busy) {
+    for (const b of dom.pins.children) {
+        const s = snipById(b.dataset.snip);
+        if (s) b.title = snipTitleFor(s, busy);
+    }
+}
+
+// ── the editor, in Settings ──────────────────────────────────────────────
+//
+// A group in the settings panel rather than a panel of its own, using the `node`
+// hatch `SETTINGS` already has for the two groups that are not backed by the
+// settings file. This is a third such group, and the note in the markup says so
+// out loud the way the Notifications one does: the scope picker at the top of the
+// panel means nothing here.
+//
+// **`after` fires on every unrelated save**, twice — `renderSettings` runs before
+// and after each `saveSetting` — so everything here has to be cheap and nothing
+// may eat a half-typed value. That is why the inline name box commits on `change`
+// rather than per keystroke, which is the rule `settingControl`'s `path` row
+// already follows for its own reason.
+
+/** How long a delete button offers to be sure. armForce's window and its idea. */
+const SNIP_ARM_MS = 4000;
+
+function renderSnipSettings() {
+    if (!dom.snipSettingsBody) return;
+    const rows = state.snippets.rows;
+    const groups = state.snippets.groups;
+    const known = new Set(groups.map(g => g.id));
+    dom.snipSettingsBody.replaceChildren();
+
+    for (const g of groups) {
+        dom.snipSettingsBody.append(
+            snipSettingsGroup(g, rows.filter(s => s.groupId === g.id)));
+    }
+    const loose = rows.filter(s => !s.groupId || !known.has(s.groupId));
+    // The ungrouped block is drawn even when it is empty, because it is where a
+    // drag has to be able to drop a snippet to take it out of a group.
+    dom.snipSettingsBody.append(snipSettingsGroup(null, loose));
+
+    if (!rows.length && !groups.length) {
+        dom.snipSettingsBody.append(el('p', { class: 'settings-group-note' },
+            'Nothing yet. A snippet is a message you send often — the text, what to '
+            + 'ask for before sending it, and whether it sends itself.'));
+    }
+}
+
+function snipSettingsGroup(g, rows) {
+    const accent = snipAccent(g);
+    const head = el('div', { class: 'snip-set-head' });
+
+    if (g) {
+        head.append(
+            el('span', { class: 'snip-grip', title: 'Drag to reorder' }, icon('grip', 14)),
+            el('input', {
+                class: 'snip-set-name', type: 'text', value: g.name,
+                'aria-label': 'Group name',
+                // On change, not on input: this is redrawn by every unrelated
+                // settings save, and a per-keystroke commit would race that.
+                onchange: (e) => saveSnipGroup(g.id, { name: e.target.value.trim() || g.name }),
+            }),
+            el('input', {
+                class: 'snip-set-accent', type: 'color', value: accent || '#9aa0a6',
+                'aria-label': 'Group colour', title: 'Group colour',
+                onchange: (e) => saveSnipGroup(g.id, { accent: e.target.value }),
+            }),
+            ...snipMoveButtons('group', g.id),
+            snipDeleteButton('Delete this group', () => deleteSnipGroup(g)));
+    } else {
+        head.append(el('span', { class: 'snip-set-loose', text: 'Ungrouped' }));
+    }
+
+    const list = el('div', {
+        class: 'snip-set-list', 'data-group': g ? g.id : '',
+        ondragover: (e) => onSnipDragOver(e, list),
+        ondrop: (e) => e.preventDefault(),
+    }, rows.map(s => snipSettingsRow(s)));
+
+    return el('section', {
+        class: g ? 'snip-set-group' : 'snip-set-group is-loose',
+        style: accent ? `--snip-accent: ${accent}` : null,
+    },
+    head,
+    list,
+    el('div', { class: 'snip-set-foot' },
+        el('button', {
+            class: 'linkish', type: 'button',
+            onclick: () => openSnipEditor(null, g ? g.id : null),
+        }, 'Add a snippet here')));
+}
+
+function snipSettingsRow(s) {
+    const badges = [];
+    if (s.pinned) badges.push('pinned');
+    if (s.autoSubmit) badges.push(s.permissionMode ? `sends · ${s.permissionMode}` : 'sends');
+    if (s.insert !== 'overwrite') badges.push(s.insert);
+    if (s.params.length) badges.push(`${s.params.length} to fill in`);
+    if (s.projects.length) badges.push(`${s.projects.length} project${s.projects.length > 1 ? 's' : ''}`);
+    // Reported rather than refused, in both directions — see the bridge's
+    // scanPlaceholders. The editor is where it is explained; this is the hint that
+    // sends you there.
+    if (s.undeclared.length) badges.push(`${s.undeclared.length} unasked`);
+
+    const row = el('div', {
+        class: 'snip-set-row', draggable: 'true', 'data-snip': s.id,
+        ondragstart: (e) => onSnipDragStart(e, s.id),
+        ondragend: () => commitSnipOrder(),
+    },
+    el('span', { class: 'snip-grip', title: 'Drag to reorder' }, icon('grip', 14)),
+    el('div', { class: 'snip-set-text' },
+        el('div', { class: 'snip-set-title', text: s.title }),
+        el('div', { class: 'snip-set-preview', text: snipPreview(s) })),
+    el('div', { class: 'snip-set-badges' },
+        ...badges.map(b => el('span', { class: 'snip-badge', text: b }))),
+    ...snipMoveButtons('snippet', s.id),
+    el('button', { class: 'btn small', type: 'button', onclick: () => openSnipEditor(s) }, 'Edit'),
+    snipDeleteButton('Delete this snippet', () => deleteSnippet(s)));
+    return row;
+}
+
+/**
+ * The arrows, which do what the drag does and are the whole of it for a keyboard.
+ *
+ * They move the row in the DOM and then commit the arrangement the same way a
+ * drop does, so there is one path to the bridge rather than two. Focus is put back
+ * on the button after the redraw, so holding one keeps walking the same row rather
+ * than pressing whatever landed underneath.
+ */
+function snipMoveButtons(kind, id) {
+    return [-1, 1].map(step => el('button', {
+        class: 'snip-move', type: 'button',
+        'aria-label': step < 0 ? 'Move up' : 'Move down',
+        title: step < 0 ? 'Move up' : 'Move down',
+        onclick: () => moveSnipRow(kind, id, step),
+    }, step < 0 ? '↑' : '↓'));
+}
+
+function moveSnipRow(kind, id, step) {
+    const sel = kind === 'group' ? '.snip-set-group' : '.snip-set-row';
+    const attr = kind === 'group' ? 'data-group' : 'data-snip';
+    const node = kind === 'group'
+        ? dom.snipSettingsBody.querySelector(`.snip-set-list[data-group="${CSS.escape(id)}"]`)
+            .closest('.snip-set-group')
+        : dom.snipSettingsBody.querySelector(`[${attr}="${CSS.escape(id)}"]`);
+    if (!node) return;
+
+    const siblings = [...node.parentElement.querySelectorAll(`:scope > ${sel}`)]
+        // The ungrouped block is not a group anybody ordered, and it is always last.
+        .filter(n => !n.classList.contains('is-loose') || kind !== 'group');
+    const at = siblings.indexOf(node);
+    const to = at + step;
+    if (at < 0 || to < 0 || to >= siblings.length) return;
+
+    if (step < 0) node.parentElement.insertBefore(node, siblings[to]);
+    else node.parentElement.insertBefore(siblings[to], node);
+    commitSnipOrder();
+}
+
+function onSnipDragStart(e, id) {
+    state.snippets.drag = id;
+    e.dataTransfer.effectAllowed = 'move';
+    // Firefox will not start a drag without something on the transfer.
+    e.dataTransfer.setData('text/plain', id);
+}
+
+/**
+ * Move the row under the cursor as the drag goes, rather than only on the drop.
+ *
+ * The queue's idiom, and its reason: the list you are looking at is the answer, so
+ * you should be able to see it before you let go. Dropping into another group's
+ * list is a move between groups as well as a reorder, which `commitSnipOrder`
+ * picks up from where the row ends rather than from the drag itself.
+ */
+function onSnipDragOver(e, list) {
+    const id = state.snippets.drag;
+    if (!id) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const moving = dom.snipSettingsBody.querySelector(`.snip-set-row[data-snip="${CSS.escape(id)}"]`);
+    if (!moving) return;
+
+    const after = [...list.querySelectorAll('.snip-set-row')]
+        .filter(n => n !== moving)
+        .find((n) => {
+            const box = n.getBoundingClientRect();
+            return e.clientY < box.top + box.height / 2;
+        });
+    if (after) list.insertBefore(moving, after);
+    else list.append(moving);
+}
+
+/**
+ * Tell the bridge what the DOM now says, and let the push redraw it.
+ *
+ * Read out of the DOM rather than tracked in state, which is `commitQueueOrder`'s
+ * bargain: the thing on screen is what was arranged, so reading it back cannot
+ * disagree with what somebody saw. A snippet that ended up in a different list is
+ * patched first — its `groupId` is part of where it is, and reordering it into a
+ * group it does not belong to would put it back on the next redraw.
+ */
+async function commitSnipOrder() {
+    state.snippets.drag = null;
+    const moves = [];
+    const ids = [];
+    for (const list of dom.snipSettingsBody.querySelectorAll('.snip-set-list')) {
+        const groupId = list.dataset.group || null;
+        for (const row of list.querySelectorAll('.snip-set-row')) {
+            const s = snipById(row.dataset.snip);
+            ids.push(row.dataset.snip);
+            if (s && (s.groupId || null) !== groupId) moves.push({ id: s.id, groupId });
+        }
+    }
+    const groups = [...dom.snipSettingsBody.querySelectorAll('.snip-set-group:not(.is-loose)')]
+        .map(n => n.querySelector('.snip-set-list').dataset.group);
+
+    try {
+        for (const m of moves) await patch(`/api/snippets/${m.id}`, { groupId: m.groupId });
+        await post('/api/snippets/reorder', { snippets: ids, groups });
+    } catch (err) {
+        toast(`Could not save the order: ${err.message}`, 'error');
+        // Back to what the bridge has, rather than leaving the screen claiming an
+        // arrangement that was refused.
+        renderSnipSettings();
+    }
+}
+
+/**
+ * A delete that asks once, in the button, rather than behind a third dialog.
+ *
+ * `armForce`'s idea: the second press within a few seconds is the confirmation.
+ * A scrim for this would be heavier than what is being deleted — a snippet is a
+ * paragraph you can write again, which is drafts' argument for having no dialog at
+ * all, and this is one step more careful than that because a snippet is one you
+ * tuned rather than one you just wrote.
+ */
+function snipDeleteButton(label, go) {
+    let armed = 0;
+    const b = el('button', {
+        class: 'snip-del', type: 'button', 'aria-label': label, title: label,
+        onclick: () => {
+            if (Date.now() - armed < SNIP_ARM_MS) { go(); return; }
+            armed = Date.now();
+            b.textContent = 'Really?';
+            b.classList.add('armed');
+            setTimeout(() => {
+                if (Date.now() - armed < SNIP_ARM_MS) return;
+                b.replaceChildren(icon('trash', 13));
+                b.classList.remove('armed');
+            }, SNIP_ARM_MS + 50);
+        },
+    }, icon('trash', 13));
+    return b;
+}
+
+async function deleteSnippet(s) {
+    try { await del(`/api/snippets/${s.id}`); }
+    catch (err) { toast(`Could not delete the snippet: ${err.message}`, 'error'); }
+}
+
+async function deleteSnipGroup(g) {
+    try {
+        const r = await del(`/api/snippet-groups/${g.id}`);
+        // Said rather than left to be noticed: deleting a heading does not delete
+        // what was under it, and a block of snippets moving to Ungrouped is a big
+        // enough change to announce.
+        if (r.orphaned) {
+            toast(`${r.orphaned} snippet${r.orphaned > 1 ? 's' : ''} moved to Ungrouped.`);
+        }
+    } catch (err) {
+        toast(`Could not delete the group: ${err.message}`, 'error');
+    }
+}
+
+async function newSnipGroup() {
+    try { await post('/api/snippet-groups', { name: 'New group', accent: '#a8c7fa' }); }
+    catch (err) { toast(`Could not make the group: ${err.message}`, 'error'); }
+}
+
+async function saveSnipGroup(id, fields) {
+    try { await patch(`/api/snippet-groups/${id}`, fields); }
+    catch (err) { toast(`Could not save the group: ${err.message}`, 'error'); }
+}
+
+// ── one snippet, in the editor dialog ────────────────────────────────────
+
+/** The parameter rows as they are being edited, before anything is saved. */
+let snipDraftParams = [];
+/** The project paths likewise. Held here so a redraw of the rows keeps them. */
+let snipDraftProjects = [];
+
+function openSnipEditor(s, groupId = null) {
+    state.snippets.editing = s ? s.id : null;
+    dom.snipEditTitle.textContent = s ? 'Edit snippet' : 'New snippet';
+    dom.snipTitle.value = s ? s.title : '';
+    dom.snipBody.value = s ? s.body : '';
+    dom.snipInsert.value = s ? s.insert : 'overwrite';
+    dom.snipAuto.checked = s ? s.autoSubmit : false;
+    dom.snipPerm.value = s ? (s.permissionMode || '') : '';
+    dom.snipPinned.checked = s ? s.pinned : false;
+    snipDraftParams = s ? s.params.map(p => ({ ...p })) : [];
+    snipDraftProjects = s ? [...s.projects] : [];
+
+    dom.snipGroup.replaceChildren(
+        el('option', { value: '', text: 'Ungrouped' }),
+        ...state.snippets.groups.map(g => el('option', { value: g.id }, g.name)));
+    dom.snipGroup.value = s ? (s.groupId || '') : (groupId || '');
+
+    dom.snipProjectList.replaceChildren(...state.settings.projects
+        .map(p => el('option', { value: p.cwd })));
+
+    renderSnipParamRows();
+    renderSnipProjects();
+    paintSnipPerm();
+    paintSnipPlaceholders();
+    dom.snipEditScrim.hidden = false;
+    dom.snipTitle.focus();
+}
+
+function closeSnipEditor() {
+    dom.snipEditScrim.hidden = true;
+    state.snippets.editing = null;
+    snipDraftParams = [];
+    snipDraftProjects = [];
+}
+
+/** The mode only means anything on a send, so it appears with one. */
+function paintSnipPerm() {
+    dom.snipPermRow.hidden = !dom.snipAuto.checked;
+}
+
+/**
+ * What the body and the parameters say about each other.
+ *
+ * A note in both directions and a refusal in neither, which is the bridge's rule
+ * restated where somebody can act on it: an undeclared `{{x}}` reaches the session
+ * as itself, and a parameter nothing references is a field you have not wired up
+ * yet. Saying so is the difference between a bug you can see and one you meet
+ * three sessions later.
+ */
+function paintSnipPlaceholders() {
+    const declared = new Set(snipDraftParams.map(p => p.name).filter(Boolean));
+    const used = new Set();
+    for (const m of dom.snipBody.value.matchAll(SNIP_PLACEHOLDER)) used.add(m[1]);
+    const undeclared = [...used].filter(n => !declared.has(n));
+    const unused = [...declared].filter(n => !used.has(n));
+
+    const said = [];
+    if (undeclared.length) {
+        said.push(`${undeclared.map(n => `{{${n}}}`).join(', ')} `
+            + `${undeclared.length > 1 ? 'are' : 'is'} in the message but not asked for — `
+            + `${undeclared.length > 1 ? 'they' : 'it'} will be sent as written.`);
+    }
+    if (unused.length) {
+        said.push(`${unused.join(', ')} ${unused.length > 1 ? 'are' : 'is'} asked for but `
+            + 'never used in the message.');
+    }
+    dom.snipPlaceholders.hidden = !said.length;
+    dom.snipPlaceholders.textContent = said.join(' ');
+}
+
+function renderSnipParamRows() {
+    dom.snipParams.replaceChildren(...snipDraftParams.map((p, i) => el('div', { class: 'snip-param' },
+        el('input', {
+            class: 'snip-param-name', type: 'text', value: p.name, placeholder: 'name',
+            'aria-label': 'Parameter name', spellcheck: 'false',
+            oninput: (e) => { snipDraftParams[i].name = e.target.value.trim(); paintSnipPlaceholders(); },
+        }),
+        el('input', {
+            class: 'snip-param-label', type: 'text', value: p.label || '', placeholder: 'Label',
+            'aria-label': 'Parameter label',
+            oninput: (e) => { snipDraftParams[i].label = e.target.value; },
+        }),
+        el('select', {
+            class: 'snip-param-type', 'aria-label': 'Parameter type',
+            onchange: (e) => { snipDraftParams[i].type = e.target.value; },
+        }, ['text', 'integer', 'decimal', 'date', 'time', 'datetime'].map(t => el('option', {
+            value: t, selected: t === p.type || null,
+        }, t))),
+        el('input', {
+            class: 'snip-param-default', type: 'text', value: p.default || '',
+            placeholder: 'Default', 'aria-label': 'Default value',
+            oninput: (e) => { snipDraftParams[i].default = e.target.value; },
+        }),
+        el('label', { class: 'snip-check', title: 'Must not be left empty' },
+            el('input', {
+                type: 'checkbox', checked: p.required || null,
+                onchange: (e) => { snipDraftParams[i].required = e.target.checked; },
+            }),
+            el('span', { class: 'settings-box' }),
+            el('span', { class: 'snip-param-req', text: 'needed' })),
+        el('button', {
+            class: 'snip-del', type: 'button', 'aria-label': 'Remove this parameter',
+            onclick: () => {
+                snipDraftParams.splice(i, 1);
+                renderSnipParamRows();
+                paintSnipPlaceholders();
+            },
+        }, icon('trash', 13)))));
+}
+
+function renderSnipProjects() {
+    dom.snipProjects.replaceChildren(...snipDraftProjects.map((p, i) => el('span', { class: 'snip-chip' },
+        el('span', { text: shortPath(p) }),
+        el('button', {
+            class: 'snip-chip-x', type: 'button', 'aria-label': `Remove ${p}`,
+            onclick: () => { snipDraftProjects.splice(i, 1); renderSnipProjects(); },
+        }, '✕'))));
+}
+
+function addSnipProject() {
+    const dir = dom.snipProject.value.trim();
+    if (!dir) return;
+    if (!snipDraftProjects.includes(dir)) snipDraftProjects.push(dir);
+    dom.snipProject.value = '';
+    renderSnipProjects();
+}
+
+/**
+ * @returns {object|null} the body to send, or null having said what is wrong.
+ *   The bridge refuses all of this too — this is so the answer arrives beside the
+ *   box rather than as a toast about a request.
+ */
+function readSnipEditor() {
+    const title = dom.snipTitle.value.trim();
+    const body = dom.snipBody.value;
+    if (!title) { toast('Give it a title.', 'warn'); dom.snipTitle.focus(); return null; }
+    if (!body.trim()) { toast('Give it a message.', 'warn'); dom.snipBody.focus(); return null; }
+
+    const seen = new Set();
+    for (const p of snipDraftParams) {
+        if (!/^[A-Za-z_]\w*$/.test(p.name || '')) {
+            toast(`"${p.name || ''}" is not a usable parameter name — letters, digits `
+                + 'and underscores, not starting with a digit.', 'warn');
+            return null;
+        }
+        if (seen.has(p.name)) {
+            toast(`Two parameters are both called "${p.name}".`, 'warn');
+            return null;
+        }
+        seen.add(p.name);
+    }
+
+    return {
+        title,
+        body,
+        groupId: dom.snipGroup.value || null,
+        params: snipDraftParams,
+        insert: dom.snipInsert.value,
+        autoSubmit: dom.snipAuto.checked,
+        // Only meaningful with a send, but kept either way, so unticking Send and
+        // ticking it again does not lose the mode you picked.
+        permissionMode: dom.snipPerm.value || null,
+        pinned: dom.snipPinned.checked,
+        projects: snipDraftProjects,
+    };
+}
+
+async function saveSnipEditor() {
+    const body = readSnipEditor();
+    if (!body) return;
+    const id = state.snippets.editing;
+    dom.snipSave.disabled = true;
+    try {
+        if (id) await patch(`/api/snippets/${id}`, body);
+        else await post('/api/snippets', body);
+        closeSnipEditor();
+    } catch (err) {
+        toast(`Could not save the snippet: ${err.message}`, 'error');
+    } finally {
+        dom.snipSave.disabled = false;
+    }
+}
+
 // ── schedules ────────────────────────────────────────────────────────────
 //
 // Sessions that start on a clock.
@@ -8047,12 +9104,16 @@ const SETTINGS = [
                 note: 'Ctrl+Enter sends either way.' },
         ],
     },
-    // The last two are written out in web/index.html rather than built from
-    // rows, because neither is backed by the settings file — one is per-browser
-    // storage and the other is a task rather than a setting. `node` names the
-    // element renderSettings moves into place, which is what lets them take
-    // their turn in this order instead of being stuck wherever the markup put
-    // them.
+    // The last three are written out in web/index.html rather than built from
+    // rows, because none is backed by the settings file — one is a store of its
+    // own, one is per-browser storage and the last is a task rather than a
+    // setting. `node` names the element renderSettings moves into place, which is
+    // what lets them take their turn in this order instead of being stuck wherever
+    // the markup put them.
+    {
+        title: 'Snippets', section: 'snippets', node: 'setGSnippets',
+        after: () => renderSnipSettings(),
+    },
     {
         title: 'Notifications', section: 'notify', node: 'setGNotify',
         after: () => paintNotifyRows(),
@@ -9600,6 +10661,11 @@ function connect() {
         // watching flag to reset here — the push is unconditional, so a
         // reconnected window starts receiving them again with no subscribe.
         loadDrafts();
+        // And the snippets, which matter here a little more than the drafts do:
+        // the pinned buttons are on screen whether or not any panel is open, so a
+        // missed push leaves a wrong button sitting in the composer rather than a
+        // stale card behind a panel nobody has opened.
+        loadSnippets();
         // And the schedules, on the same terms. It matters a little more here:
         // the stream is most often down because the bridge restarted, and a
         // restart is exactly when the catch-up pass runs — so the changes this
@@ -9687,6 +10753,7 @@ function connect() {
     // is also how a draft saved or started in another window disappears from
     // this one.
     es.addEventListener('drafts-changed', (e) => applyDrafts(JSON.parse(e.data)));
+    es.addEventListener('snippets-changed', (e) => applySnippets(JSON.parse(e.data)));
     es.addEventListener('schedules-changed', (e) => applySched(JSON.parse(e.data)));
 
     es.addEventListener('sessions-changed', () => loadSessions());
@@ -10001,7 +11068,7 @@ function applyRunner(s) {
     // joins the queue rather than going anywhere, and that is worth admitting
     // before the click, not after.
     dom.btnSend.textContent = busy && !state.agent ? 'Queue' : 'Send';
-    dom.btnLgtm.title = busy && !state.agent ? LGTM_TITLE_BUSY : LGTM_TITLE;
+    paintPinTitles(busy && !state.agent);
     applyQueue(s);
 
     // The escalation is armed against one turn. Once that turn is over the
@@ -10058,8 +11125,9 @@ function paintLock() {
 
     if (away) {
         dom.lockText.textContent = `This session is ${lower(awayWords(away))}.`;
-        // Both buttons, not just Send: LGTM is an ordinary message with a canned
-        // text, so it goes into the same transcript by the same path.
+        // Every send button, not just Send: a pinned snippet is an ordinary
+        // message with a written-out text, so it goes into the same transcript
+        // by the same path.
         // Not `readonly` on the box itself — a message can still be written
         // while deciding, and the fork carries whatever is in it.
         enableSend(false);
@@ -11760,49 +12828,22 @@ const autoGrow = () => grow(dom.input, 38, 220);
 // pasted-in briefing cannot push the Start button off the bottom of the modal.
 const growPrompt = () => grow(dom.newPrompt, 62, 300);
 
-/** Send and LGTM are enabled together: both are ways of sending to the session. */
+/**
+ * Every way of sending from this composer turns on and off together.
+ *
+ * The pinned snippets are in it because each one is an ordinary message with a
+ * written-out text, so it goes into the same transcript by the same path — which
+ * is the argument the LGTM button's line here used to make on its own, back when
+ * there was exactly one of them.
+ */
 function enableSend(on) {
     dom.btnSend.disabled = !on;
-    dom.btnLgtm.disabled = !on;
+    dom.btnSnippets.disabled = !on;
+    for (const b of dom.pins.children) b.disabled = !on;
     // Attaching needs a session for the same reason sending does — the file goes into
     // *that* session's checkout — so it turns on and off with them.
     dom.btnAttach.disabled = !on;
 }
-
-/**
- * What LGTM says.
- *
- * The button sends this as an ordinary message, which is the point: approving
- * work is a thing worth having in the transcript in words, and "LGTM" on its own
- * is not an instruction — it does not say whether the branch is already on a PR,
- * or what counts as done.
- *
- * It ends by naming what should stop the merge, because the failure this replaces
- * is not a bad merge, it is a green one reported over the top of a red check.
- * Repositories with no remote are the normal case on this machine, so the PR is
- * described by what it is for rather than assumed to exist.
- */
-const LGTM_PROMPT = `LGTM — take it from here and land it.
-
-- If this work is not on a pull request yet, commit whatever is outstanding on a
-  branch of its own and open one. If the repository has no remote, merging that
-  branch into the main branch is the equivalent — do that instead.
-- Run the checks this project expects of a change: its tests, lint, typecheck,
-  build, whatever it has. Fix what they turn up.
-- Once they pass, merge it.
-
-If something genuinely blocks the merge — checks you cannot fix, conflicts, a
-review asking for changes — stop and tell me instead of working around it.
-
-If you noticed work along the way that this change is not the place for, file it
-with your suggest_session tool before you finish, one call each — the refactor
-you left alone, the test that should exist, the thing you had to work around. If
-you noticed nothing, say nothing; this is not a box to fill.`;
-
-const LGTM_TITLE = 'Send: open a PR for this work if there is not one, run the '
-    + 'checks, and merge it once they pass.';
-const LGTM_TITLE_BUSY = 'Queue behind the running turn: open a PR for this work '
-    + 'if there is not one, run the checks, and merge it once they pass.';
 
 // ── optimistic sends ─────────────────────────────────────────────────────
 // A message you have just sent is not in the transcript yet, and cannot be: the
@@ -11868,9 +12909,10 @@ function clearPendingSend() {
 
 async function sendMessage({ fork = false, text: override = null, canned = false } = {}) {
     const text = override != null ? override : dom.input.value.trim();
-    // Attachments only ride on a message that came out of the box. A canned send — the
-    // LGTM button, a follow-up card — must not walk off with a screenshot you staged
-    // for something else, by the same argument that leaves the half-typed text alone.
+    // Attachments only ride on a message that came out of the box. A canned send — a
+    // snippet that sends itself, a follow-up card — must not walk off with a screenshot
+    // you staged for something else, by the same argument that leaves the half-typed
+    // text alone.
     const files = override == null ? readyAttachments(live) : [];
     // A screenshot with nothing typed under it is a message: "look at this" is the
     // whole content of it.
@@ -11878,7 +12920,7 @@ async function sendMessage({ fork = false, text: override = null, canned = false
     const sessionId = state.current.sessionId;
 
     // The lock is a rule, not a disabled button. Greying out the buttons left
-    // Enter — and every internal caller, LGTM included — going straight past it
+    // Enter — and every internal caller, a snippet included — going straight past it
     // into the two-writers case the whole thing exists to prevent. Branching is
     // exempt: a fork is the way out, and it writes to a new transcript rather
     // than this one.
@@ -12564,6 +13606,7 @@ function closeNew() {
     // never fires and a popover would still be up — fixed to the viewport, over
     // nothing — the next time the dialog opened.
     closeMenus(newC);
+    closeSnips(newC);
     // Held files are bytes in this page and were never written anywhere, so closing
     // the dialog really does discard them — which is the whole benefit of holding
     // them rather than uploading on arrival.
@@ -13626,7 +14669,51 @@ for (const type of ['dragover', 'drop']) {
 // One click, and no confirmation over the top of it: the click *is* the approval,
 // and the session still asks for whatever its permission mode makes it ask for
 // before anything is pushed or merged.
-dom.btnLgtm.addEventListener('click', () => sendMessage({ text: LGTM_PROMPT, canned: true }));
+dom.btnSnippets.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showSnips(live, dom.snipMenu.hidden);
+});
+dom.newBtnSnippets.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showSnips(newC, dom.newSnipMenu.hidden);
+});
+dom.snipMenu.addEventListener('keydown', (e) => onSnipsKey(e, live));
+dom.newSnipMenu.addEventListener('keydown', (e) => onSnipsKey(e, newC));
+
+// ✕ and Cancel are the whole close surface on both — see modalUp().
+for (const n of dom.snipFillScrim.querySelectorAll('[data-close-fill]')) {
+    n.addEventListener('click', closeSnipFill);
+}
+dom.snipFillGo.addEventListener('click', confirmSnipFill);
+// Enter in a one-line box confirms. There is no textarea parameter type, so
+// nothing in this form wants the key for itself.
+dom.snipFillForm.addEventListener('submit', (e) => { e.preventDefault(); confirmSnipFill(); });
+
+// The glyph goes in from script rather than being written into the markup,
+// because every other icon in this app comes out of the ICON map.
+dom.btnSnippets.append(icon('snippets', 17));
+
+for (const n of dom.snipEditScrim.querySelectorAll('[data-close-snip]')) {
+    n.addEventListener('click', closeSnipEditor);
+}
+dom.snipSave.addEventListener('click', saveSnipEditor);
+dom.snipAuto.addEventListener('change', paintSnipPerm);
+dom.snipBody.addEventListener('input', paintSnipPlaceholders);
+dom.snipParamAdd.addEventListener('click', () => {
+    snipDraftParams.push({ name: '', label: '', type: 'text', required: false, default: '' });
+    renderSnipParamRows();
+    paintSnipPlaceholders();
+    const last = dom.snipParams.querySelector('.snip-param:last-child .snip-param-name');
+    if (last) last.focus();
+});
+dom.snipProjectGo.addEventListener('click', addSnipProject);
+dom.snipProject.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    addSnipProject();
+});
+dom.snipNew.addEventListener('click', () => openSnipEditor(null));
+dom.snipGroupNew.addEventListener('click', newSnipGroup);
 // Wrapped, not passed: openNew now takes an options bag, and a MouseEvent is
 // not one.
 dom.tasksCollapse.addEventListener('click', () => showTasks(false));
@@ -13854,6 +14941,11 @@ const SLASH_RE = /^\/[A-Za-z0-9_:-]*$/;
 function makeComposer({ input, slashNode, mentionNode, id, ctx, container,
     closeOthers = () => {}, notReady = null, homeEnd = true, float = false,
     onInput = null,
+    // The snippets popover and the button it hangs off. A third menu on the same
+    // composer, which is what earns it the click-outside rule and the reposition
+    // pass for nothing — but deliberately *not* a member of closeMenus(), because
+    // that is what the textarea's blur calls and this popover takes focus.
+    snipBtn = null, snipNode = null,
     // Attachments. A composer with no `attachNode` takes no files at all, and
     // wireAttachments simply skips it — nothing else has to know.
     attachNode = null, attachInput = null, attachBtn = null, dropZone = null,
@@ -13868,6 +14960,10 @@ function makeComposer({ input, slashNode, mentionNode, id, ctx, container,
         id: `${id}-slash`, row: slashRow, float, c };
     c.mention = { rows: [], index: 0, seq: 0, node: mentionNode,
         id: `${id}-mention`, row: mentionRow, float, c };
+    // `caret` is where the selection was when the popover opened, which is what
+    // `insert: 'cursor'` lands on — by the time the text arrives the focus has
+    // moved at least once. See showSnips.
+    c.snips = { node: snipNode, btn: snipBtn, id: `${id}-snips`, index: 0, caret: null, c };
     return c;
 }
 
@@ -13897,6 +14993,8 @@ const live = makeComposer({
     mentionNode: dom.mentionMenu,
     id: 'live',
     container: '.input-row',
+    snipBtn: dom.btnSnippets,
+    snipNode: dom.snipMenu,
     // Addressed by session id, and the cwd rides along only as a cache key: the
     // bridge is what resolves a session to a working directory, through a
     // worktree that has since been landed and removed. A client cannot, having no
@@ -14184,6 +15282,9 @@ function repositionFloatingMenus() {
         for (const m of [c.slash, c.mention]) {
             if (m.float && !m.node.hidden) positionMenu(m);
         }
+        // Always fixed, both composers, so it always needs replacing — see
+        // positionSnips on why it does not share positionMenu.
+        if (c.snips.node && !c.snips.node.hidden) positionSnips(c);
     }
 }
 
@@ -14367,6 +15468,10 @@ document.addEventListener('click', (e) => {
     for (const c of composers) {
         if (e.target.closest(c.container)) continue;
         closeMenus(c);
+        // Closed here rather than in closeMenus(), which the textarea's blur
+        // calls: clicking the snippets button blurs the box, so a popover in that
+        // set would shut on the click that opened it.
+        closeSnips(c);
     }
 });
 
@@ -14722,6 +15827,8 @@ const newC = makeComposer({
     mentionNode: dom.newMentionMenu,
     id: 'new',
     container: '.composer-field',
+    snipBtn: dom.newBtnSnippets,
+    snipNode: dom.newSnipMenu,
     // Read fresh on every keystroke, deliberately: the box below this one is a
     // text field, and walking into a folder in the picker writes it too, so the
     // directory can change while the menu is open. `sessionId: null` is what
@@ -15041,6 +16148,11 @@ document.addEventListener('keydown', (e) => {
     // A popover can sit over a modal dialog, so it answers Escape first.
     if (e.key === 'Escape' && !dom.quotaMenu.hidden) { showQuota(false); dom.quotaPill.focus(); return; }
     if (e.key === 'Escape' && !dom.newMenu.hidden) { showNewMenu(false); dom.btnNewMenu.focus(); return; }
+    // Both snippet popovers, and above the modal rung rather than below it — the
+    // dialog's sits over #new-scrim while it is open, so a rung underneath would
+    // never run and Escape would be swallowed with the popover still up.
+    if (e.key === 'Escape' && !dom.snipMenu.hidden) { closeSnips(live, { focus: true }); return; }
+    if (e.key === 'Escape' && !dom.newSnipMenu.hidden) { closeSnips(newC, { focus: true }); return; }
     // Below them, a modal dialog swallows Escape rather than closing on it —
     // see modalUp(). Swallowed rather than left out of this ladder: without a
     // rung the key falls through to the panel *behind* the dialog, so a stray
@@ -15127,6 +16239,15 @@ document.addEventListener('keydown', (e) => {
         return;
     }
     if (command === 'rail.filter') { e.preventDefault(); dom.search.focus(); return; }
+    // Whichever composer the caret is in, and the live one otherwise — so the
+    // same chord works inside the Start-a-session dialog for nothing.
+    if (command === 'composer.snippets') {
+        const c = composers.find(x => x.input === document.activeElement) || live;
+        if (c.snips.btn.disabled) return;
+        e.preventDefault();
+        showSnips(c, c.snips.node.hidden);
+        return;
+    }
     if (command === 'session.new') { e.preventDefault(); openNew(); }
 });
 
@@ -15280,6 +16401,10 @@ function restoreView() {
 
 connect();
 loadSessions();
+// At boot rather than when a panel opens, unlike the drafts and the schedules:
+// the pinned buttons are part of the composer, so this list is on screen from the
+// first paint.
+loadSnippets();
 markInstance();
 registerWorker();
 paintDockButton();      // the remembered arrangement, before anything is drawn

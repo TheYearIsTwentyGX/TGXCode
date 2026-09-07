@@ -111,6 +111,9 @@ function check(name, got, want) {
     // What the settings panel reads: the merged answer plus what each file in
     // the chain says on its own.
     check('GET /api/prefs?files=1', (await call('/api/prefs?files=1')).status, 200);
+    // Read on every load rather than when a panel opens: the pinned buttons in
+    // the composer are drawn from it.
+    check('GET /api/snippets', (await call('/api/snippets')).status, 200);
     check('GET /api/overview', (await call('/api/overview')).status, 200);
     check('GET /api/dashboard', (await call('/api/dashboard')).status, 200);
     check('GET /api/quota', (await call('/api/quota')).status, 200);

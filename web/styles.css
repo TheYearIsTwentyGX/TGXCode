@@ -3324,7 +3324,8 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     background: var(--blue-tint);
 }
 
-/* The paperclip. Quieter than Send and LGTM on either side of it — pasting and
+/* The paperclip. Quieter than Send and the snippet buttons on either side of it —
+   pasting and
    dropping are the gestures this feature is really for, and this is the fallback
    for when there is nothing to drag from. */
 .btn-attach {
@@ -3630,22 +3631,149 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 .input-row textarea::placeholder { color: var(--text-3); }
 .input-row textarea:disabled { opacity: 0.5; }
 
-/* Quieter than Send, and next to it rather than anywhere else: it is a way of
-   sending, and the thing it sends is not something to hit by accident. */
-.btn-lgtm {
+/* ── snippets ──────────────────────────────────────────────────────────────
+   The pinned buttons and the popover behind them. Quieter than Send and beside
+   it rather than anywhere else: each is a way of sending, and the thing it sends
+   is not something to hit by accident.
+
+   `--snip-accent` carries a group's colour down from the row that sets it, and
+   everything below is mixed from that one value — `.sig.pr`'s idiom, which is
+   already how this stylesheet turns one hue into a ground and an edge. Defaulted
+   here so an ungrouped snippet is a colourless version of the same button rather
+   than an unstyled one. */
+.pins { display: contents; }
+
+.btn-pin-snip {
+    --snip-accent: var(--text-2);
     flex: none;
     height: 38px;
     padding: 0 14px;
-    color: var(--green);
+    color: var(--snip-accent);
     background: transparent;
-    border: 1px solid #344a3b;
+    border: 1px solid color-mix(in srgb, var(--snip-accent) 32%, transparent);
     font: 500 12.5px/1 var(--sans);
     letter-spacing: 0.04em;
     border-radius: var(--pill);
+    white-space: nowrap;
     transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
 }
-.btn-lgtm:hover:not(:disabled) { background: #1f2b22; border-color: var(--green); }
-.btn-lgtm:disabled { color: var(--text-4); border-color: var(--s4); cursor: default; }
+.btn-pin-snip:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--snip-accent) 12%, transparent);
+    border-color: var(--snip-accent);
+}
+.btn-pin-snip:disabled { color: var(--text-4); border-color: var(--s4); cursor: default; }
+
+/* Holds nothing but the popover's anchor: the popover itself is fixed, so this
+   exists to keep the button and its menu together for the click-outside rule. */
+.snip-wrap { position: relative; flex: none; }
+
+.btn-snippets {
+    display: grid;
+    place-items: center;
+    width: 38px;
+    height: 38px;
+    color: var(--text-3);
+    background: transparent;
+    border-radius: var(--pill);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.btn-snippets:hover:not(:disabled),
+.btn-snippets[aria-expanded="true"] { background: var(--s4); color: var(--text); }
+.btn-snippets:disabled { color: var(--text-4); cursor: default; }
+
+/* The row the dialog's button sits in. Its own row rather than a place in the
+   attach row, which is hidden in draft and schedule mode. */
+.snip-foot { margin-top: 8px; }
+
+.snip-menu {
+    /* Fixed for both composers, positioned from script — see positionSnips. The
+       dialog's copy has to be, because .modal is `overflow: hidden`; this way the
+       arithmetic lives in one place instead of two. */
+    position: fixed;
+    z-index: 60;
+    max-height: var(--snip-max, 460px);
+    overflow: auto;
+    padding: 10px;
+    background: var(--s3);
+    border-radius: var(--r);
+    box-shadow: 0 10px 30px #000a;
+    animation: menu-in var(--t-fast) var(--ease);
+    transform-origin: top right;
+    /* Groups beside each other, in columns as wide as they need. Auto-flow rather
+       than a fixed template because the number of groups *is* the data, and
+       columns rather than a wrapping grid because a wrapped fourth card lands
+       below the fold of a popover this tall — which is the one thing putting them
+       side by side was for. It scrolls sideways instead. */
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(210px, 1fr);
+    gap: 10px;
+    align-items: start;
+}
+.snip-menu.up { transform-origin: bottom right; }
+@media (prefers-reduced-motion: reduce) { .snip-menu { animation: none; } }
+
+.snip-card {
+    --snip-accent: var(--text-3);
+    /* Mixed into this popover's own surface rather than into transparent: a card
+       that mixed to transparent would take the ground behind it and read as no
+       card at all wherever the accent is close to grey. */
+    background: color-mix(in srgb, var(--snip-accent) 10%, var(--s2));
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--snip-accent) 45%, transparent);
+    border-radius: var(--r);
+    padding: 8px;
+    /* Without this a grid child refuses to shrink below its content, and every
+       ellipsis below stops working. */
+    min-width: 0;
+}
+/* Loose snippets are not a group, so they must not look like one. */
+.snip-card.is-loose { background: none; box-shadow: none; }
+
+.snip-card-name {
+    margin: 2px 4px 6px;
+    font: 600 13.5px/1.2 var(--sans);
+    letter-spacing: 0.01em;
+    color: color-mix(in srgb, var(--snip-accent) 70%, var(--text));
+}
+
+.snip-row {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    width: 100%;
+    min-width: 0;
+    text-align: left;
+    background: none;
+    border: 0;
+    border-radius: var(--r-sm);
+    padding: 6px 8px;
+    cursor: pointer;
+}
+.snip-row:hover, .snip-row[aria-selected="true"] { background: var(--s4); }
+.snip-row-title {
+    font: 400 13px/1.35 var(--sans);
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* One line of what it says, and only one: the body is cut to 120 characters in
+   script so a long single-line snippet never reaches the DOM, and clipped here so
+   the ellipsis lands at the real width. */
+.snip-row-preview {
+    font: 400 11.5px/1.4 var(--sans);
+    color: var(--text-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.snip-empty {
+    padding: 10px 8px;
+    font: 400 12.5px/1.5 var(--sans);
+    color: var(--text-3);
+    max-width: 320px;
+}
 
 .btn-send {
     flex: none;
@@ -4564,6 +4692,11 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     box-shadow: 0 24px 64px #000a;
     overflow: hidden;
 }
+/* The snippet editor. A parameters table beside a body textarea does not fit in
+   640px, and shrinking either to make it would be the wrong trade — the body is
+   the thing you are actually writing. */
+.modal.wide { width: min(880px, 100%); }
+
 .modal-head {
     display: flex;
     align-items: center;
@@ -6096,6 +6229,192 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 }
 .linkish:hover { text-decoration: underline; }
 .linkish:disabled { color: var(--text-4); cursor: default; text-decoration: none; }
+
+/* ── the snippet editor, in Settings ───────────────────────────────────── */
+
+.snip-settings-acts { display: flex; gap: 8px; margin: 4px 0 14px; }
+
+.snip-set-group {
+    --snip-accent: var(--text-3);
+    background: color-mix(in srgb, var(--snip-accent) 8%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--snip-accent) 38%, transparent);
+    border-radius: var(--r);
+    padding: 8px 10px 4px;
+    margin-bottom: 10px;
+}
+/* Ungrouped is not a group, and must not look like one — but it keeps the
+   padding, because it is still a place a drag has to be able to land. */
+.snip-set-group.is-loose { background: none; box-shadow: none; padding-left: 0; padding-right: 0; }
+
+.snip-set-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.snip-set-name {
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--r-sm);
+    padding: 4px 6px;
+    color: color-mix(in srgb, var(--snip-accent) 70%, var(--text));
+    font: 600 13.5px/1.2 var(--sans);
+}
+.snip-set-name:hover { border-color: var(--outline-soft); }
+.snip-set-name:focus { border-color: var(--outline); background: var(--s1); }
+.snip-set-accent {
+    flex: none;
+    width: 28px;
+    height: 24px;
+    padding: 0;
+    background: none;
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-xs);
+    cursor: pointer;
+}
+.snip-set-loose {
+    flex: 1;
+    font: 600 12px/1.2 var(--sans);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-4);
+}
+
+/* A minimum height so an empty group is still somewhere a drag can be dropped. */
+.snip-set-list { min-height: 12px; }
+
+.snip-set-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 4px;
+    border-radius: var(--r-sm);
+}
+.snip-set-row:hover { background: var(--s2); }
+.snip-set-text { flex: 1; min-width: 0; }
+.snip-set-title {
+    font: 400 13px/1.35 var(--sans);
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.snip-set-preview {
+    font: 400 11.5px/1.4 var(--sans);
+    color: var(--text-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.snip-set-badges { display: flex; gap: 4px; flex: none; }
+.snip-badge {
+    font: 500 10.5px/1.6 var(--sans);
+    letter-spacing: 0.03em;
+    color: var(--text-3);
+    background: var(--s3);
+    border-radius: var(--pill);
+    padding: 0 7px;
+    white-space: nowrap;
+}
+.snip-set-foot { padding: 2px 4px 6px; }
+
+.snip-grip { flex: none; color: var(--text-4); cursor: grab; display: grid; place-items: center; }
+.snip-set-row[draggable="true"]:active .snip-grip { cursor: grabbing; }
+
+.snip-move {
+    flex: none;
+    width: 22px;
+    height: 22px;
+    color: var(--text-3);
+    background: transparent;
+    border-radius: var(--r-xs);
+    font-size: 12px;
+    line-height: 1;
+}
+.snip-move:hover { background: var(--s4); color: var(--text); }
+
+.snip-del {
+    flex: none;
+    display: grid;
+    place-items: center;
+    min-width: 24px;
+    height: 24px;
+    padding: 0 6px;
+    color: var(--text-3);
+    background: transparent;
+    border-radius: var(--r-xs);
+    font: 500 11px/1 var(--sans);
+}
+.snip-del:hover { background: var(--s4); color: var(--red); }
+/* Armed, which is the confirmation — see snipDeleteButton. */
+.snip-del.armed { color: var(--red); background: color-mix(in srgb, var(--red) 16%, transparent); }
+
+/* ── the snippet dialogs ───────────────────────────────────────────────── */
+
+.snip-fill-form .field:last-child { margin-bottom: 6px; }
+
+.snip-check { position: relative; display: flex; align-items: center; gap: 8px; cursor: pointer; }
+/* `.field > label` sets `display: block` at a higher specificity than a bare
+   class, so a checkbox label inside a field has to out-specify it rather than
+   merely come after it — and take its own type back, since that rule also styles
+   these as the small grey caption above a control rather than a line to read. */
+.field > label.snip-check {
+    display: flex;
+    margin-bottom: 0;
+    font: 400 13.5px/1.4 var(--sans);
+    color: var(--text);
+}
+.snip-check input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+/* The box is a flex child here, unlike in the settings rows where it is not, and
+   without this it is squeezed to a sliver by the label beside it. */
+.snip-check .settings-box { flex: none; }
+.snip-check input:checked + .settings-box { background: var(--blue); border-color: var(--blue); }
+.snip-check input:checked + .settings-box::after { transform: rotate(40deg) scale(1); opacity: 1; }
+.snip-check input:focus-visible + .settings-box { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+.snip-sub { margin: 10px 0 0 26px; display: flex; align-items: center; gap: 10px; }
+/* An author `display` beats the UA rule for `hidden`, so every class in this file
+   that sets one carries its own — see .quota-menu[hidden] and its neighbours. */
+.snip-sub[hidden] { display: none; }
+.snip-sub label { font: 400 12.5px/1 var(--sans); color: var(--text-3); }
+
+.snip-params { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.snip-param { display: flex; align-items: center; gap: 6px; }
+.snip-param input[type="text"], .snip-param select {
+    background: var(--s1);
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-sm);
+    padding: 6px 8px;
+    color: var(--text);
+    font: 400 12.5px/1.2 var(--sans);
+    min-width: 0;
+}
+.snip-param-name { flex: 0 1 130px; font-family: var(--mono) !important; }
+.snip-param-label { flex: 1 1 130px; }
+.snip-param-type { flex: 0 1 110px; }
+.snip-param-default { flex: 1 1 110px; }
+.snip-param-req { font: 400 11.5px/1 var(--sans); color: var(--text-3); }
+
+.snip-projects { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.snip-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--s3);
+    border-radius: var(--pill);
+    padding: 3px 6px 3px 10px;
+    font: 400 12px/1.4 var(--mono);
+    color: var(--text-2);
+}
+.snip-chip-x { color: var(--text-4); background: none; font-size: 11px; padding: 0 3px; }
+.snip-chip-x:hover { color: var(--red); }
+.snip-project-add { display: flex; gap: 6px; }
+.snip-project-add input {
+    flex: 1;
+    background: var(--s1);
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-sm);
+    padding: 7px 9px;
+    color: var(--text);
+    font: 400 12.5px/1.2 var(--mono);
+}
 
 /* ── narrow windows ──────────────────────────────────────────────────── */
 
