@@ -10,6 +10,15 @@ watch those sessions run.
 This is that gap closed for `settings.json`. `CLAUDE.md` and the
 agents/commands/skills library are deliberately not here; see *What is deferred*.
 
+> **Both phases have landed.** Phase 1 is `settings.json` across four scopes
+> with a JSON tab, and is what the rest of this document is about. **Phase 2 is
+> `CLAUDE.md`** — the first deferred item below — and added
+> `bridge/claude-docs.js` with `GET`/`PUT /api/claude-docs`, the file-content
+> route this change deliberately did not add, plus a **Claude Code · Memory**
+> group beside the settings one. What that phase decided, over and above
+> repeating the reasoning here, is at the foot of this file under
+> *Phase 2: the memory files*. The rest of *What is deferred* is untouched.
+
 ## The one fact everything follows from
 
 **We do not own this format.** Claude Code ships no JSON schema anyone can read
@@ -182,10 +191,10 @@ remembered.
 
 ## What is deferred, and why
 
-- **`CLAUDE.md`.** Wanted, and the natural next increment: same two-scope shape,
-  one file per scope, and the file people edit most. It needs a file-content
-  route, which this change deliberately does not add — `/api/fs` lists
-  directories and nothing in the bridge reads or writes a file's bytes.
+- **`CLAUDE.md`.** ~~Wanted, and the natural next increment.~~ **Built** — see
+  *Phase 2* below. It was right that it needed a file-content route: adding one
+  was most of the work, and it is still the only route in the bridge that reads
+  or writes a whole file's contents.
 - **`agents/`, `commands/`, `skills/`.** None of those directories exists at
   user or project level on this machine; everything in use arrives from plugins.
   So the value there is *authoring*, which is a small file manager rather than
@@ -202,3 +211,96 @@ remembered.
 - **Watching the files.** A `/config` change from a live session does not appear
   until the panel is re-opened. The `409` is the safety net meanwhile, which is
   the right order: correctness before liveness.
+
+## Phase 2: the memory files
+
+`CLAUDE.md` at the user level and at the root of a workspace, in a text box.
+Everything above still holds; what follows is only what this phase had to decide
+on its own.
+
+### It is a separate module, and a separate group
+
+`bridge/claude-docs.js` rather than a mode of `claude-config.js`, for three
+reasons that are the same *kind* of reason phase 1 gave for not extending
+`prefs.js`:
+
+- **The unit is a file, not a key.** Half of `claude-config.js` — `leaves`,
+  `setPath`, the catalogue, the union rule for permission lists — has no meaning
+  against prose. There is nothing to parse and nothing to validate: the bytes
+  somebody typed are the value.
+- **The addressing differs.** A settings file is at
+  `<workspace>/.claude/settings.json`; the project memory file is at
+  `<workspace>/CLAUDE.md`, outside `.claude` entirely. So the directory the
+  symlink check contains the file *within* is per-scope, where phase 1 could
+  take `path.dirname(file)` for every row. Sharing the resolver would have meant
+  getting that wrong quietly.
+- **Every write carries the stamp.** Phase 1 deliberately lets a single scalar
+  patch omit it, because a read immediately before the write cannot revert a
+  sibling key. There is no partial write here, so there is no write that can do
+  without the precondition — and the window is wider anyway: a scalar patch is a
+  control being clicked, where a prose file is a draft whose read was minutes
+  ago.
+
+And a separate *group* on the page, for the reason the scope tabs would
+otherwise lie about — see below.
+
+### The two files add up, and that is the whole UI risk
+
+Claude Code reads the user file **and** the project file and concatenates them.
+Neither overrides the other, there is no `effective` reading to compute, and the
+"Overridden by … — this has no effect here" sentence every other scope-aware
+control on the settings page can draw would report that a file does nothing when
+every line in it is in force.
+
+This is the same trap phase 1 hit with `permissions.allow` and it is worth
+noting that the trap recurred *immediately* in a different shape. Phase 1's
+version was in the bridge's reading of precedence; this one is in the furniture,
+because two tabs over two files look exactly like the four tabs next to them and
+a reader has no way to tell that one pair is a chain and the other is a sum. So
+each tab carries a line naming the other file and its size, and the group is
+separate rather than a third tab inside the settings one — one control cannot
+mean both things.
+
+### Refusals, and the one that is new
+
+Symlink, size cap, scope and directory are phase 1's, with the same codes. Two
+differences:
+
+- **One cap for both directions.** Phase 1 arrived at two independently computed
+  numbers that happen to be equal — `schema.MAX_STRING * 16` on the way in and
+  `jsonfile.MAX_FILE_BYTES` on the way out. Here that would be a file the editor
+  can open and cannot save, so `MAX_DOC_BYTES` is one constant and the `GET`
+  reports it as `maxBytes` rather than letting the page hardcode it.
+- **A NUL byte is refused.** It means something that is not text arrived, most
+  likely a file picked by mistake; `claude` reads these as UTF-8 and what it
+  would make of one is undefined.
+
+And one thing deliberately *not* borrowed: an over-cap read reports
+`truncated: true` with **no text**, where `Index#persistedOutput` clips and
+returns what it got. That one feeds a viewer. This feeds an editor with a Save
+button, and half a file behind one deletes the rest on the first save.
+
+### What the real UI caught that the unit tests could not
+
+Phase 1 argued for driving the page against the real files rather than trusting
+the unit tests, and it earned its keep again. The bug: `docsEditorCard()` seeds
+its draft lazily — `if (s.draft === null) s.draft = onDisk` — so a re-render can
+never clobber typing. But `loadClaudeDocs()` calls `renderSettings()` *before*
+its fetch returns, which seeds the draft from the data then in hand; every
+render after the fetch finds a non-null draft and leaves it alone. So the box
+went on showing text that was neither what anybody typed nor what was on disk,
+while the file line above it correctly said "will be created".
+
+Nothing in the bridge was wrong, no unit test could have seen it, and it was
+found by deleting a file behind the page and watching. The fix is one line in
+the loader — drop a *clean* draft after a read, keep a dirty one — and the
+asymmetry is the point: keeping a dirty draft is the whole of the `409`
+contract.
+
+### Still deferred
+
+`CLAUDE.local.md` and `<project>/.claude/CLAUDE.md`. Claude Code reads both;
+neither exists on this machine, and `docs[]` is an array of `{scope, kind}` rows
+precisely so a third one costs a row rather than a route. `CLAUDE.local.md`
+would also want `git.ignored()` the way `settings.local.json` does, which is the
+only real work in adding it.
