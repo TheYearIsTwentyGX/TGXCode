@@ -287,9 +287,9 @@ start and delete sessions, so pointing them at the everyday instance is exactly
 the accident the rest of this file is about.
 
 The suite is `auth`, `temp`, `recent`, `pulls`, `taskboard`, `ports`, `spinner`,
-`changes`, `restart`, `handoff`, `drafts`, `notifications`, `schedule`, `usage`,
-`titles`, `tasks`, `prefs`, `claude-config`, `claude-docs` and `runner` on their
-own — no bridge needed — plus four that want a live one: `gate`,
+`changes`, `restart`, `handoff`, `drafts`, `snippets`, `notifications`, `schedule`,
+`usage`, `titles`, `tasks`, `prefs`, `paths`, `claude-config`, `claude-docs` and
+`runner` on their own — no bridge needed — plus four that want a live one: `gate`,
 `browser`, `refusals`, `unpaired`. Between them they cover the token, what a remote
 caller is refused, what an unpaired remote device sees before and after pairing, and
 what the nightly restart does when there is nobody to ask. If you touch
@@ -310,6 +310,17 @@ not delivered again. The third is not padding. The obvious fix for this bug is t
 re-queue what was in flight, and that is wrong: `claude` writes its user entry at
 submission, so a stopped turn is already in the transcript and re-sending it re-runs
 work the user cancelled.
+
+**`snippets` is the one to run when you touch the seeding.** The failure it guards is
+a deleted LGTM coming back on the next restart, which does not read as a policy — it
+reads as the delete not having worked — and it is the only bug in that feature somebody
+would report as data loss. The guard is a record of which shipped ids the file has been
+offered, never "is the list empty", and the test covers the three situations that never
+arise while you are looking at them: a file whose list you emptied, a file written before
+seeding existed, and a file written by a *newer* build, which must not be seeded at all
+because the write that followed would put a version 1 document over one the next build
+owns. It shares `snippets.json` in `STATE_DIR` with every other bridge, so it takes its
+own `XDG_DATA_HOME` for the reason the paragraph below gives.
 
 **Testing a schedule needs its own store, not the shared one.** Two things bite
 otherwise, and both were measured rather than guessed. `schedules.json` lives in

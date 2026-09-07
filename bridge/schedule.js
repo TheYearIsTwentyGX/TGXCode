@@ -624,6 +624,42 @@ function fillPrompt(prompt, facts = {}) {
     ));
 }
 
+// Separated by a rule so it reads as the harness talking rather than as the last
+// paragraph of the message — which matters, because the message above it is
+// prose somebody wrote and this is not.
+const UNATTENDED_NOTE = `---
+
+You are running unattended. A schedule started this session, not a person, and
+nobody is reading it while it runs. Nothing you ask will be answered before you
+finish, so do not wait on an answer: decide, and say plainly in your reply what
+you assumed and what you would have asked. Leave your findings in this
+transcript — it is the only place anyone will look for them.`;
+
+/**
+ * Say out loud that nobody is watching.
+ *
+ * Every session a schedule starts runs with no one in front of it — that is the
+ * whole feature — but the agent had no way to know. So it did what an agent does
+ * when it is unsure: asked, and waited. In `dontAsk` the question never even
+ * reaches a dock; it goes into a transcript nobody opens until morning. A night
+ * spent stopped at a question is the failure this paragraph exists to prevent.
+ *
+ * **Appended, never prepended.** `promptPrefix` below takes the literal head of a
+ * schedule's prompt, and `forSession` matches a session whose first prompt
+ * *starts with* it — which is how a run is tied back to its schedule once a
+ * restart has emptied the bridge's in-memory map. A preamble would break every
+ * one of those matches, and break them silently: the runs would still happen and
+ * simply stop being attributed to anything.
+ *
+ * Not folded into `fillPrompt` either. That one is pure substitution over text
+ * the person wrote, with tests that read its output as exactly that; this adds
+ * words nobody typed, and the two want telling apart when you are reading a
+ * prompt back and wondering where a sentence came from.
+ */
+function unattended(prompt) {
+    return `${String(prompt).trimEnd()}\n\n${UNATTENDED_NOTE}`;
+}
+
 // ---------------------------------------------------------------------------
 // The verdict
 // ---------------------------------------------------------------------------
@@ -1615,6 +1651,8 @@ module.exports = {
     describeCron,
     cronForm,
     fillPrompt,
+    unattended,
+    UNATTENDED_NOTE,
     verdictOf,
     reviewKey,
     unreviewedPulls,

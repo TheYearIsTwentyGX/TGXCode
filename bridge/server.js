@@ -24,12 +24,17 @@ const { Prefs } = require('./prefs');
 const { ClaudeConfig } = require('./claude-config');
 const { ClaudeDocs, MAX_DOC_BYTES } = require('./claude-docs');
 const keymap = require('./keymap');
-const { Spinner } = require('./spinner');
+const { Spinner, norm: spinnerNorm } = require('./spinner');
 const { Suggestions, STATUSES: SUGGESTION_STATUSES } = require('./suggestions');
 const { Drafts, MAX_DRAFTS } = require('./drafts');
 const {
+    Snippets, MAX_SNIPPETS, MAX_GROUPS, MAX_PARAMS, MAX_BODY, MAX_PROJECTS, MAX_TITLE,
+    INSERT_STYLES, isParamName, isAccent, scanPlaceholders,
+} = require('./snippets');
+const {
     Schedules, MAX_SCHEDULES, CATCHUP_MS,
-    parseCron, nextSlot, dueSlot, describeCron, cronForm, fillPrompt, verdictOf,
+    parseCron, nextSlot, dueSlot, describeCron, cronForm, fillPrompt, unattended,
+    verdictOf,
     reviewKey, unreviewedPulls, scheduleTitle,
 } = require('./schedule');
 const { SlashCommandCache } = require('./slash-commands');
@@ -49,7 +54,7 @@ const { mapLimit } = require('./memo');
 const overview = require('./overview');
 const taskboard = require('./taskboard');
 const tasks = require('./tasks');
-const { openInExplorer, openFile } = require('./explorer');
+const { openInExplorer, openFile, isLaunchable } = require('./explorer');
 const attachments = require('./attachments');
 const { TerminalPool } = require('./terminal');
 const commands = require('./commands');
@@ -163,6 +168,11 @@ const SUGGESTION_STATES = new Set(['open', ...SUGGESTION_STATUSES]);
 // session that exists: a draft *is* a create call, held back until you press
 // Start. See bridge/drafts.js.
 const drafts = new Drafts();
+// Canned messages, and the groups they are drawn in. What replaced the one
+// hard-coded LGTM button on the composer — see bridge/snippets.js. Named
+// `snippetStore` rather than `snippets` so that nothing here has to wonder
+// whether it is looking at the store or at the array of rows the payload carries.
+const snippetStore = new Snippets();
 // Sessions that start on a clock. A draft that is never consumed, plus a cron
 // expression, plus a gate — see bridge/schedule.js. Only the everyday instance
 // fires them; the tick below says why.
@@ -732,8 +742,10 @@ function isKnownHost(host) {
  *     person at the desk is using, and are trivially a denial of service from
  *     anywhere else. Restarting is the worst of the three to hand out: it ends every
  *     turn in flight and comes back running whatever is on disk.
- *   - **Reveal** and **DevBrowser** drive windows on the Windows host. Opening
- *     Explorer on a desktop nobody is sitting at is at best pointless.
+ *   - **Reveal**, **opening a path** and **DevBrowser** drive windows on the
+ *     Windows host. Opening Explorer on a desktop nobody is sitting at is at best
+ *     pointless — and opening a path is the one of the three that also hands that
+ *     desktop something to launch, from text a transcript happened to contain.
  *   - **Making a folder** writes to the filesystem. Note the asymmetry with the
  *     listing beside it, which stays allowed: reading the tree answers "where
  *     could a session start", and a phone may already start one. Creating a
@@ -784,6 +796,12 @@ function remoteRefusal(pathname, method) {
     // Exact equality, not a prefix: GET /api/fs stays readable remotely.
     if (pathname === '/api/fs/mkdir') {
         return 'folders can only be created on the machine they live on';
+    }
+    // Exact equality again, and for a second reason on top of the first: the
+    // window this opens is on a desk somebody is not at, and the thing it opens
+    // came out of a transcript.
+    if (pathname === '/api/fs/open') {
+        return 'a file can only be opened on the machine it lives on';
     }
     // Saving settings writes a file in the user's home directory, or inside a
     // checkout — the mkdir clause above, with a worse blast radius, because
@@ -964,6 +982,231 @@ function draftFields(body, who, { partial }) {
     if (!partial || body.model !== undefined) fields.model = body.model || null;
     if (!partial || body.title !== undefined) fields.title = body.title || null;
     if (!partial || body.test !== undefined) fields.test = !!body.test;
+
+    return { fields };
+}
+
+// ---------------------------------------------------------------------------
+// Snippets
+// ---------------------------------------------------------------------------
+
+/**
+ * A snippet as it goes out on the wire: the stored row, plus what its body and
+ * its declared parameters say about each other.
+ *
+ * Derived here rather than in each client, the way `draftOut` derives
+ * `projectName` and for the same reason — the desktop, the phone and the Android
+ * app should not each get to decide what counts as an undeclared placeholder.
+ *
+ * **Neither list is an error**, and no route below refuses on either. `undeclared`
+ * is left in the message verbatim when the snippet is used; `unused` is a
+ * parameter you have declared and not wired up yet, which is a normal state to
+ * save a half-finished snippet in. They are here so an editor can say so quietly
+ * under the body.
+ */
+function snippetOut(row) {
+    const { undeclared, unused } = scanPlaceholders(row.body, row.params);
+    return { ...row, undeclared, unused };
+}
+
+/**
+ * The whole list, which is both the GET body and the SSE payload.
+ *
+ * **Never filtered by `cwd`**, even though the GET route offers that filter: one
+ * payload goes to every open window and each window's composer is in a different
+ * directory. A client that narrowed its first load has to narrow the event too.
+ */
+function snippetsPayload() {
+    const rows = snippetStore.list().map(snippetOut);
+    const groups = snippetStore.listGroups();
+    return {
+        at: Date.now(),
+        snippets: rows,
+        groups,
+        counts: {
+            snippets: rows.length,
+            groups: groups.length,
+            pinned: rows.filter(r => r.pinned).length,
+        },
+    };
+}
+
+/**
+ * A snippet's permission mode, where null means inherit.
+ *
+ * Deliberately not `normalizeMode`. That one answers an unrecognised mode with
+ * `auto`, which is the right inert fallback for a send — `auto` is the app's
+ * default — and exactly the wrong one here, because a snippet carrying a mode
+ * *moves the user's selector* before it sends. Turning a typo into a silent change
+ * to the permission mode of the next thing you send is the one direction this
+ * field must not fail in. Null is the absence of a choice and there is nothing
+ * safer to land on.
+ *
+ * Still a normalisation rather than a refusal, for the reason `normalizeMode`
+ * exists at all: losing a whole snippet over one bad field is worse than the field
+ * doing nothing.
+ */
+function snippetMode(v) {
+    if (v == null || v === '') return null;
+    return PERMISSION_MODES.includes(v) ? v : null;
+}
+
+/**
+ * Validate what a snippet write is asking for.
+ *
+ * `partial` is PATCH: a field absent from the body is left alone rather than
+ * validated as missing. The `{fields} | {error, status, remote?}` shape is
+ * `draftFields`', and so is the habit of returning the first problem rather than
+ * collecting them — a form with one bad field is the normal case.
+ *
+ * Two fields **normalise** rather than refuse and two do not, and the split is on
+ * purpose. A parameter's `type` and a group's `accent` are open sets whose worst
+ * case is a field that still holds the right value, so an unrecognised one widens
+ * to `text` and to no accent. An unrecognised `insert` is a 400, because its three
+ * values decide what happens to text the user has *already typed* and one of them
+ * replaces it — there is no fallback that is both the natural default and
+ * harmless. It is also a closed set of three drawn as a picker, so a bad value
+ * cannot come from a person; it comes from a script, and a script is exactly the
+ * caller worth telling.
+ *
+ * @returns {{fields: object} | {error: string, status: number, remote?: boolean}}
+ */
+function snippetFields(body, who, { partial }) {
+    const fields = {};
+
+    if (!partial || body.title !== undefined) {
+        const title = body.title && String(body.title).trim();
+        if (!title) return { error: 'title is required', status: 400 };
+        if (title.length > MAX_TITLE) {
+            return { error: `title is longer than ${MAX_TITLE} characters`, status: 400 };
+        }
+        fields.title = title;
+    }
+
+    if (!partial || body.body !== undefined) {
+        const text = body.body == null ? '' : String(body.body);
+        // Non-empty once trimmed, but **stored untrimmed**: an `insert` of
+        // `append` or `cursor` makes leading and trailing whitespace part of what
+        // the snippet means. Two different tests, deliberately.
+        if (!text.trim()) return { error: 'body is required', status: 400 };
+        if (text.length > MAX_BODY) {
+            return { error: `body is longer than ${MAX_BODY} characters`, status: 400 };
+        }
+        fields.body = text;
+    }
+
+    if (!partial || body.groupId !== undefined) {
+        const groupId = body.groupId == null ? null : String(body.groupId);
+        // Checked on write and *not* on read, which is asymmetric on purpose: the
+        // caller picked from a list of groups this bridge just sent it, so a bad
+        // id here is a bug worth naming. A row already on disk pointing at a group
+        // this process cannot see may belong to another bridge that still holds
+        // it, and rewriting it would be the thing merge-on-write exists to avoid.
+        if (groupId && !snippetStore.getGroup(groupId)) {
+            return { error: 'no such snippet group', status: 400 };
+        }
+        fields.groupId = groupId;
+    }
+
+    if (!partial || body.params !== undefined) {
+        const list = body.params === undefined ? [] : body.params;
+        if (!Array.isArray(list)) return { error: 'params must be an array', status: 400 };
+        if (list.length > MAX_PARAMS) {
+            return { error: `a snippet may declare at most ${MAX_PARAMS} parameters`, status: 400 };
+        }
+        const seen = new Set();
+        for (const p of list) {
+            const name = p && p.name && String(p.name).trim();
+            // All three failures mean one thing — this parameter can never be
+            // referenced — because a parameter's identity *is* its name, and that
+            // name is what `{{name}}` in the body looks up.
+            if (!name || !isParamName(name)) {
+                return {
+                    error: `"${name || ''}" is not a usable parameter name — letters, `
+                        + 'digits and underscores, not starting with a digit',
+                    status: 400,
+                };
+            }
+            if (seen.has(name)) {
+                return { error: `two parameters are both called "${name}"`, status: 400 };
+            }
+            seen.add(name);
+        }
+        fields.params = list;
+    }
+
+    if (!partial || body.insert !== undefined) {
+        const insert = body.insert === undefined ? 'overwrite' : body.insert;
+        if (!INSERT_STYLES.includes(insert)) {
+            return {
+                error: `insert must be one of ${INSERT_STYLES.join(', ')}`,
+                status: 400,
+            };
+        }
+        fields.insert = insert;
+    }
+
+    if (!partial || body.permissionMode !== undefined) {
+        const mode = snippetMode(body.permissionMode);
+        // A snippet with `autoSubmit` and a mode is one pinned button that sets the
+        // mode and sends — which is a sharper version of what REMOTE_FORBIDDEN_MODES
+        // is about, not a weaker one. Refused twice over: here, so a phone cannot
+        // stash one, and again by the send route when it is used.
+        const refusal = mode ? modeRefusal(mode, who) : null;
+        if (refusal) return { error: refusal, status: 403, remote: true };
+        fields.permissionMode = mode;
+    }
+
+    if (!partial || body.projects !== undefined) {
+        const list = body.projects === undefined ? [] : body.projects;
+        if (!Array.isArray(list)) return { error: 'projects must be an array', status: 400 };
+        if (list.length > MAX_PROJECTS) {
+            return { error: `a snippet may name at most ${MAX_PROJECTS} projects`, status: 400 };
+        }
+        fields.projects = list;
+    }
+
+    if (!partial || body.order !== undefined) {
+        if (body.order !== undefined && body.order !== null && !Number.isInteger(body.order)) {
+            return { error: 'order must be an integer or null', status: 400 };
+        }
+        fields.order = body.order === undefined ? null : body.order;
+    }
+
+    // The rest mean "no" when absent rather than being invalid.
+    if (!partial || body.hint !== undefined) fields.hint = body.hint || null;
+    if (!partial || body.autoSubmit !== undefined) fields.autoSubmit = !!body.autoSubmit;
+    if (!partial || body.pinned !== undefined) fields.pinned = !!body.pinned;
+
+    return { fields };
+}
+
+/** The same, for a group: a name, a colour and a place in the row. */
+function snippetGroupFields(body, { partial }) {
+    const fields = {};
+
+    if (!partial || body.name !== undefined) {
+        const name = body.name && String(body.name).trim();
+        if (!name) return { error: 'name is required', status: 400 };
+        if (name.length > MAX_TITLE) {
+            return { error: `name is longer than ${MAX_TITLE} characters`, status: 400 };
+        }
+        fields.name = name;
+    }
+
+    if (!partial || body.accent !== undefined) {
+        // Normalised rather than refused — but strictly, because the client sets
+        // this as a CSS custom property and anything looser is a declaration in
+        // the page's stylesheet rather than a colour.
+        fields.accent = isAccent(body.accent) ? body.accent : null;
+    }
+
+    if (!partial || body.order !== undefined) {
+        if (body.order !== undefined && body.order !== null && !Number.isInteger(body.order)) {
+            return { error: 'order must be an integer or null', status: 400 };
+        }
+        fields.order = body.order === undefined ? null : body.order;
+    }
 
     return { fields };
 }
@@ -1299,7 +1542,13 @@ async function runSchedule(row, { force = false, who = LOCAL_CALLER, target = nu
             error: `more than ${CREATE_LIMIT.max} sessions started in a minute` };
     }
 
-    const prompt = fillPrompt(row.prompt, facts);
+    // Placeholders filled, then the note that nobody is watching — see
+    // `unattended` in bridge/schedule.js for why it is appended rather than put
+    // in front. This is the only expression that produces what a scheduled
+    // session is actually sent, so putting it here is what makes the tick, the
+    // pull-request drain and Run now agree; and Run now getting it too is the
+    // point of the docstring above, not an oversight.
+    const prompt = unattended(fillPrompt(row.prompt, facts));
     let out;
     try {
         out = pool.create({ cwd: row.cwd, prompt, model: row.model, permissionMode: mode });
@@ -2371,15 +2620,38 @@ async function api(req, res, url, pathname, who) {
         const cwd = url.searchParams.get('cwd') || '';
         const withVerbs = Boolean(url.searchParams.get('verbs'));
         const { groups: all, problems } = spinner.groups(cwd);
-        const groups = withVerbs ? all : all.map(({ verbs, ...g }) => g);
         const settings = prefs.forCwd(cwd).spinner;
         const pool = spinner.pool(cwd);
+        // A weight and a share on every group, because the bridge is where the
+        // draw is decided — a page that recomputed a share from the weights
+        // would be a second implementation of the algorithm, and the two would
+        // disagree the first time this one changed. `null` for a group that is
+        // not in play: it has no share of anything, which is a different
+        // statement from a share of zero.
+        // Keyed by the normalised name, not the written one: a bucket is named
+        // however the settings file spelled it, and `Tech_Programming` and
+        // `Tech / Programming` are the same group.
+        const shares = new Map(pool.buckets.map(b => [spinnerNorm(b.name), b]));
+        const enabledNames = new Set(settings.groups.map(spinnerNorm));
+        const groups = all.map(({ verbs, ...g }) => {
+            const bucket = shares.get(spinnerNorm(g.name));
+            const enabled = enabledNames.has(spinnerNorm(g.name));
+            const weight = !enabled ? null : bucket ? bucket.weight : 0;
+            return {
+                ...g,
+                weight,
+                share: weight && pool.weight ? weight / pool.weight : enabled ? 0 : null,
+                ...(withVerbs ? { verbs } : {}),
+            };
+        });
         return send(res, 200, {
             randomize: settings.randomize,
             rerollMs: settings.rerollMs,
             enabled: settings.groups,
+            weights: settings.weights,
             // What the spinner will actually draw from, which is not the same
-            // as `enabled` when a name in settings matches no file.
+            // as `enabled` when a name in settings matches no file — or when a
+            // group is enabled and weighed 0.
             pool: pool.verbs.length,
             groups,
             problems: [...problems, ...pool.problems],
@@ -2863,6 +3135,151 @@ async function api(req, res, url, pathname, who) {
         }
     }
 
+    // ── snippets ─────────────────────────────────────────────────────────
+    //
+    // Canned messages: a title, a body, what to ask before sending it and where
+    // it lands in the compose box — see bridge/snippets.js. What replaced the one
+    // hard-coded LGTM button.
+    //
+    // All eight in one block, beside drafts and for the reason that block gives.
+    //
+    // **`reorder` is matched before the `:id` branches**, and the order of these
+    // `if`s is load-bearing rather than stylistic: a snippet id is a UUID or a
+    // `seed-` string so a real collision is impossible, but a `POST` to
+    // `/api/snippets/reorder` reaching the id branches instead would be a silent
+    // miss rather than an error. Groups live at `/api/snippet-groups` rather than
+    // under this prefix precisely so there is only one reserved word to remember.
+    if (seg[1] === 'snippets') {
+        if (!seg[2] && req.method === 'GET') {
+            const cwd = url.searchParams.get('cwd');
+            if (!cwd) return send(res, 200, snippetsPayload());
+            // The filter is offered so a client need not implement the prefix rule
+            // itself. The counts stay whole on purpose: a popover that says "2 more
+            // here" needs both numbers, and a snippet you cannot find because you
+            // are in the wrong directory is otherwise indistinguishable from one
+            // you deleted.
+            const all = snippetsPayload();
+            return send(res, 200, {
+                ...all,
+                snippets: snippetStore.list({ cwd: cfg.expandHome(cwd) }).map(snippetOut),
+            });
+        }
+
+        if (!seg[2] && req.method === 'POST') {
+            const body = await readJson(req);
+            const v = snippetFields(body, who, { partial: false });
+            if (v.error) {
+                return send(res, v.status,
+                    v.remote ? { error: v.error, remote: true } : { error: v.error });
+            }
+            const snippet = snippetStore.create(v.fields);
+            // The store says no by returning null rather than by throwing, so the
+            // cap is a 409 and not a 500.
+            if (!snippet) {
+                return send(res, 409, {
+                    error: `there are already ${MAX_SNIPPETS} snippets — delete some `
+                        + 'before saving another',
+                });
+            }
+            broadcast('snippets-changed', snippetsPayload());
+            return send(res, 200, { snippet: snippetOut(snippet) });
+        }
+
+        // The whole arrangement in one call. A drag knows the final order and so
+        // does an up arrow, and a swap done as two PATCHes has an instant in the
+        // middle where both rows hold the same number and two events go out.
+        if (seg[2] === 'reorder' && !seg[3] && req.method === 'POST') {
+            const body = await readJson(req);
+            for (const key of ['snippets', 'groups']) {
+                if (body[key] === undefined) continue;
+                if (!Array.isArray(body[key]) || body[key].some(id => typeof id !== 'string')) {
+                    return send(res, 400, { error: `${key} must be an array of ids` });
+                }
+            }
+            const moved = snippetStore.reorder(body);
+            // Nothing moved is not an error and not worth a push: a drag that lands
+            // where it started is a no-op all the way down.
+            if (moved.snippets || moved.groups) {
+                broadcast('snippets-changed', snippetsPayload());
+            }
+            return send(res, 200, snippetsPayload());
+        }
+
+        if (seg[2] && !seg[3] && req.method === 'PATCH') {
+            const body = await readJson(req);
+            // Validated *before* the snippet is looked up, so a refused mode is a
+            // 403 whether or not the id exists — the order the drafts PATCH uses,
+            // and the reason is the same: the refusal is about what this caller
+            // may ask for, not about what it aimed at.
+            const v = snippetFields(body, who, { partial: true });
+            if (v.error) {
+                return send(res, v.status,
+                    v.remote ? { error: v.error, remote: true } : { error: v.error });
+            }
+            const snippet = snippetStore.update(seg[2], v.fields);
+            if (!snippet) return send(res, 404, { error: 'snippet not found' });
+            broadcast('snippets-changed', snippetsPayload());
+            return send(res, 200, { snippet: snippetOut(snippet) });
+        }
+
+        if (seg[2] && !seg[3] && req.method === 'DELETE') {
+            if (!snippetStore.remove(seg[2])) {
+                return send(res, 404, { error: 'snippet not found' });
+            }
+            broadcast('snippets-changed', snippetsPayload());
+            return send(res, 200, { ok: true, id: seg[2] });
+        }
+    }
+
+    // ── snippet groups ───────────────────────────────────────────────────
+    //
+    // A heading and an accent colour for the snippets drawn under it. Its own
+    // prefix rather than `/api/snippets/groups`, so that `reorder` above is the
+    // only reserved word in that path and `groups` cannot be mistaken for an id.
+    //
+    // There is no `GET`: a group is only ever read as part of the snippet list,
+    // and a route returning half the popover's data would be one more thing for a
+    // client to keep in step.
+    if (seg[1] === 'snippet-groups') {
+        if (!seg[2] && req.method === 'POST') {
+            const body = await readJson(req);
+            const v = snippetGroupFields(body, { partial: false });
+            if (v.error) return send(res, v.status, { error: v.error });
+            const group = snippetStore.createGroup(v.fields);
+            if (!group) {
+                return send(res, 409, {
+                    error: `there are already ${MAX_GROUPS} snippet groups — delete some `
+                        + 'before making another',
+                });
+            }
+            broadcast('snippets-changed', snippetsPayload());
+            return send(res, 200, { group });
+        }
+
+        if (seg[2] && !seg[3] && req.method === 'PATCH') {
+            const body = await readJson(req);
+            const v = snippetGroupFields(body, { partial: true });
+            if (v.error) return send(res, v.status, { error: v.error });
+            const group = snippetStore.updateGroup(seg[2], v.fields);
+            if (!group) return send(res, 404, { error: 'snippet group not found' });
+            broadcast('snippets-changed', snippetsPayload());
+            return send(res, 200, { group });
+        }
+
+        // Deleting a heading does not delete what was written under it. The
+        // snippets come loose and keep their `groupId`, so recreating a group with
+        // the same id puts them back — and so that one bridge is not rewriting
+        // rows on the strength of a deletion another has not seen. `orphaned` is
+        // how many moved, so the UI can say so rather than leaving somebody to
+        // notice.
+        if (seg[2] && !seg[3] && req.method === 'DELETE') {
+            const out = snippetStore.removeGroup(seg[2]);
+            if (!out) return send(res, 404, { error: 'snippet group not found' });
+            broadcast('snippets-changed', snippetsPayload());
+            return send(res, 200, { ok: true, id: seg[2], orphaned: out.orphaned });
+        }
+    }
+
     // ── schedules ────────────────────────────────────────────────────────
     //
     // A session that starts on a clock: everything `POST /api/sessions` takes,
@@ -2980,6 +3397,28 @@ async function api(req, res, url, pathname, who) {
                         + 'some before adding another',
                 });
             }
+
+            // **The draft this schedule was converted from, consumed here rather
+            // than by the client.**
+            //
+            // `POST /api/drafts/:id/start` makes the argument and this is the same
+            // shape of it: a client doing this as two calls has to decide for
+            // itself what happens when the second one fails, and there are three
+            // clients to decide it three ways. Done here, the order is the answer
+            // — the draft is the copy of this work that still exists if the save
+            // above throws, so it goes last and only on success.
+            //
+            // Deliberately *not* stored on the row. `clean()` in schedule.js is a
+            // whitelist another bridge would strip the field back out of within a
+            // tick (docs/plans/15-scheduling.md), and nothing after this moment
+            // has a use for it: the draft is gone.
+            //
+            // An id that names nothing is not an error. The schedule saved, which
+            // is what was asked for; the draft was already deleted, or belonged to
+            // a bridge with a different store.
+            const from = typeof body.fromDraft === 'string' ? body.fromDraft : null;
+            if (from && drafts.remove(from)) broadcast('drafts-changed', draftsPayload());
+
             broadcast('schedules-changed', schedulesPayload());
             return send(res, 200, { schedule: scheduleOut(row) });
         }
@@ -4326,6 +4765,65 @@ async function api(req, res, url, pathname, who) {
         }
     }
 
+    // Open a path on the Windows host: the file itself, or the folder holding it.
+    //
+    // The one route here whose argument comes out of a transcript rather than out
+    // of the app. Everywhere else that reaches explorer.js names a path this
+    // bridge computed — a session's working directory, or a file re-derived
+    // against that session's own attachments directory. Here the client is
+    // repeating text a model wrote, and `explorer.exe` handed a file does not show
+    // it, it launches it. So what Windows would do with the path is asked before
+    // the path is handed over.
+    //
+    // No roots check, deliberately, and that is the refusal on this route that was
+    // considered and dropped rather than the one that was forgotten.
+    // cfg.ALLOWED_ROOTS defaults to $HOME, which would 403 every /tmp/claude-… and
+    // /mnt/c/… link a transcript contains while buying nothing: an agent that
+    // wanted a click on something malicious could write the file inside $HOME and
+    // be inside the fence. What does the work instead is that this is local-only,
+    // that the link text is the path itself so you see what you are opening, and
+    // that isLaunchable is not negotiable.
+    //
+    // Session-free on purpose: this is about the machine, not about a
+    // conversation, which is also what lets a path work on the second-monitor
+    // board with nothing in focus.
+    if (pathname === '/api/fs/open' && req.method === 'POST') {
+        const body = await readJson(req);
+        const given = cfg.expandHome(String(body.path == null ? '' : body.path).trim());
+        if (!given) return send(res, 400, { error: 'path is required' });
+        const target = path.resolve(given);
+
+        // Asked here rather than left to explorer.js so a path that is simply gone
+        // — a plan file from a worktree that has since been landed — is a 404 and
+        // not a 502 about a program that could not be run.
+        let st;
+        try { st = fs.statSync(target); } catch {
+            return send(res, 404, { error: `${target} does not exist` });
+        }
+
+        const answer = (out, how, why) => send(res, out.ok ? 200 : 502, {
+            ok: out.ok,
+            how,
+            path: target,
+            winPath: out.path || null,
+            ...(why ? { why } : {}),
+            ...(out.error ? { error: out.error } : {}),
+        });
+
+        // A directory belongs to Explorer, and a file Windows would execute is not
+        // something a click on a sentence should do. Both degrade to the reveal
+        // instead of refusing: the folder is the same information with none of the
+        // execution. `how` is what happened rather than what was asked for, so a
+        // client can say why the file it clicked did not open.
+        const why = st.isDirectory() ? 'directory'
+            : isLaunchable(target) ? 'executable'
+                : null;
+        if (why || body.reveal) {
+            return answer(await openInExplorer(target), 'reveal', why);
+        }
+        return answer(await openFile(target), 'open');
+    }
+
     return send(res, 404, { error: 'no such endpoint', pathname });
 }
 
@@ -4838,6 +5336,17 @@ function serveStatic(req, res, pathname, who) {
         // indistinguishable from a broken binding.
         body = Buffer.from(auth.injectMeta(body.toString('utf8'),
             'cs-keymap', JSON.stringify(keymap.payload())), 'utf8');
+        // Where this bridge's filesystem is, so a path in a transcript can be
+        // drawn as a link to the Windows form of it. Local callers only, on the
+        // same reasoning as `root` and `home` on /api/health: a path on this
+        // machine is not something a browser off it can act on, and the route
+        // that opens one refuses it anyway. A page without the tag renders paths
+        // as plain text, which is the right remote answer rather than a degraded
+        // one — and the same answer outside WSL, where there is no share to name.
+        if (!who.remote && cfg.WSL_DISTRO) {
+            body = Buffer.from(auth.injectMeta(body.toString('utf8'), 'cs-host',
+                JSON.stringify({ distro: cfg.WSL_DISTRO, home: cfg.HOME })), 'utf8');
+        }
     }
     headers['Content-Length'] = body.length;
 
@@ -5408,6 +5917,12 @@ function shutdown(code = 0) {
     // losing it means the draft comes back and can be started a second time.
     // flush() merges, so writing here cannot trample another bridge either.
     try { drafts.flush(); } catch { /* nothing to save */ }
+    // The same argument one notch quieter: a snippet lost inside the debounce is a
+    // paragraph to retype rather than a session started twice. It is on this list
+    // because everything with a debounce belongs on it, and because a deletion is
+    // on the same timer — losing that one puts a snippet you removed back in the
+    // popover.
+    try { snippetStore.flush(); } catch { /* nothing to save */ }
     // The same argument, and one case where it is sharper: an unflushed
     // `lastSlotAt` means the slot this bridge just fired is not on disk, so the
     // next bridge up owes it again and the run happens twice. `claim()` flushes

@@ -570,16 +570,36 @@
                 </svg>
               </button>
               <button id="btn-send" class="btn-send" type="button" disabled>Send</button>
-              <!-- The end of a review in one click. It sends a written instruction
-                   like any other message, so the transcript records what was asked
-                   for rather than a button having happened.
+              <!-- Canned messages. Each one sends a written instruction like any
+                   other message, so the transcript records what was asked for
+                   rather than a button having happened.
 
-                   Outside Send rather than between Send and the box: the hand
-                   leaving the textarea reaches Send first, and the button that
-                   merges things is the one you have to travel past it to hit. -->
-              <button id="btn-lgtm" class="btn-lgtm" type="button" disabled
-                      title="Send: open a PR for this work if there isn't one, run the
-checks, and merge it once they pass.">LGTM</button>
+                   Outside Send rather than between Send and the box, which is the
+                   argument the LGTM button made when it was written out here: the
+                   hand leaving the textarea reaches Send first, and a button that
+                   sends something you did not just type is one you should have to
+                   travel past it to hit. LGTM is now a snippet that ships pinned,
+                   so it is still the first thing in this strip.
+
+                   Pins before the icon, so the button you aim for does not move
+                   when a snippet is pinned or a project filter hides one. -->
+              <span id="pins" class="pins"></span>
+              <div class="snip-wrap">
+                <button id="btn-snippets" class="btn-snippets" type="button" disabled
+                        aria-haspopup="listbox" aria-expanded="false"
+                        aria-controls="snip-menu"
+                        title="Snippets" aria-label="Snippets"></button>
+                <!-- Positioned from script rather than by CSS, like the two
+                     popovers above it and for one of the same reasons plus one of
+                     its own. The dialog's copy has to be, because .modal is
+                     `overflow: hidden`; this one has to be because it is wider
+                     than the button it hangs off — groups sit side by side — so it
+                     needs a left-edge clamp that an anchored popover cannot
+                     express. One code path for both, so there is one place where
+                     that arithmetic lives. -->
+                <div id="snip-menu" class="snip-menu" role="listbox" hidden
+                     aria-label="Snippets"></div>
+              </div>
             </div>
 
             <div class="opts">
@@ -830,6 +850,26 @@ checks, and merge it once they pass.">LGTM</button>
                    order SETTINGS lists them, so they are not rebuilt and not
                    pinned to the end either. -->
 
+              <!-- Messages you send often, and the buttons that send them.
+                   Written out here rather than built by renderSettings for the
+                   reason above — its controls are wired once at load — and not
+                   backed by the settings file either, which the note says out
+                   loud: these live in the bridge's own store, so the scope picker
+                   at the top of this panel does not apply to them. -->
+              <section id="set-g-snippets" class="settings-group">
+                <h2 class="settings-group-title">Snippets</h2>
+                <p class="settings-group-note">Messages you send often, and the
+                   buttons that send them. <strong>Not in the settings file</strong>
+                   — unlike everything above, these live in their own store on this
+                   machine, so the scope picker does not apply to them and a
+                   checked-in file cannot set them.</p>
+                <div class="snip-settings-acts">
+                  <button id="snip-new" class="btn small" type="button">New snippet</button>
+                  <button id="snip-group-new" class="btn small" type="button">New group</button>
+                </div>
+                <div id="snip-settings-body"></div>
+              </section>
+
               <!-- What reaches you when the window is not the thing you are
                    looking at. The rules it obeys are in announceTurn(); the note
                    says them out loud, because a notification you cannot predict
@@ -988,6 +1028,20 @@ checks, and merge it once they pass.">LGTM</button>
           </div>
         </div>
       </div>
+      <!-- What a draft or a schedule is called on its card. Shown in every mode,
+           including plain Start-a-session, because Save-as-draft is in this same
+           footer — hiding it there would mean a draft could only be named after
+           it had been saved once. Start itself ignores it, which is what the
+           placeholder is for: `POST /api/sessions` takes no title, and a session
+           is named from its conversation.
+
+           `#new-name`, not `#new-title`: that id is already the dialog's own
+           heading. The label says Name and the wire says `title`. -->
+      <div class="field">
+        <label for="new-name">Name</label>
+        <input id="new-name" type="text" spellcheck="false" autocomplete="off"
+               placeholder="Optional — names the draft or schedule card">
+      </div>
       <div class="field">
         <label for="new-prompt">First message</label>
         <!-- The same two popovers the live composer has, on the box you write a
@@ -1022,6 +1076,24 @@ checks, and merge it once they pass.">LGTM</button>
           <!-- Hidden in draft and schedule mode; see openNew(). Paste and drop are
                the gestures people use, and this is for the times there is nothing
                to drag from. -->
+          <!-- The same popover the live composer has, so a snippet is available
+               where a session's first message is written as well as where every
+               message after it is. A labelled button rather than the bare icon
+               used up there: the row below already carries a labelled Attach
+               files, and a lone glyph beside it would read as decoration.
+
+               Its own row rather than a place in that one, because that one is
+               hidden in draft and schedule mode — see openNew() — and a snippet is
+               just as useful when you are writing a draft. -->
+          <div class="compose-foot snip-foot">
+            <div class="snip-wrap">
+              <button id="new-btn-snippets" class="btn small" type="button"
+                      aria-haspopup="listbox" aria-expanded="false"
+                      aria-controls="new-snip-menu">Snippets</button>
+              <div id="new-snip-menu" class="snip-menu" role="listbox" hidden
+                   aria-label="Snippets"></div>
+            </div>
+          </div>
           <div class="compose-foot" id="new-attach-row">
             <input id="new-attach-input" type="file" multiple hidden aria-hidden="true">
             <button id="new-attach-btn" class="btn small" type="button">Attach files</button>
@@ -1232,6 +1304,12 @@ checks, and merge it once they pass.">LGTM</button>
              form — only a second button, and a title that says which of the two
              you are doing. See openNew() and drSave() in app.js. -->
         <button id="new-save" class="btn tonal" type="button">Save as draft</button>
+        <!-- The third thing you can do with a written-out create call: hand it to
+             the clock. It reopens this same dialog in schedule mode with what is
+             in front of you carried across — see drToSchedule() in app.js — so it
+             is a conversion rather than a fourth form. Hidden in schedule mode,
+             where you are already there. -->
+        <button id="new-sched" class="btn tonal" type="button">Schedule</button>
         <button id="new-go" class="btn primary" type="button">Start</button>
         <!-- Schedule mode replaces Start rather than joining it: "save this" and
              "run this now" are the same button's job here, since a schedule you
@@ -1239,6 +1317,128 @@ checks, and merge it once they pass.">LGTM</button>
              so the ordinary footer keeps its three buttons. -->
         <button id="new-sched-save" class="btn primary" type="button" hidden>Save schedule</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- What a snippet still needs before it is a message.
+
+     Its own dialog rather than fields inside the popover: the popover is a list
+     you are reading, and these are questions you are answering.
+
+     After #new-scrim in the document, which is load-bearing — every .scrim shares
+     one z-index, so stacking is DOM order, and this one has to be able to open
+     over the Start-a-session dialog. -->
+<div id="snip-fill-scrim" class="scrim" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="snip-fill-title">
+    <div class="modal-head">
+      <span id="snip-fill-title">Fill this in</span>
+      <button class="modal-close" data-close-fill type="button" aria-label="Close">✕</button>
+    </div>
+    <div class="modal-body">
+      <!-- A form, so Enter in a one-line field confirms rather than doing nothing.
+           There is no textarea parameter type, so nothing here wants Enter for
+           itself. -->
+      <form id="snip-fill-form" class="snip-fill-form"></form>
+    </div>
+    <div class="modal-foot">
+      <span class="spacer"></span>
+      <button class="btn" data-close-fill type="button">Cancel</button>
+      <button id="snip-fill-go" class="btn primary" type="button">Insert</button>
+    </div>
+  </div>
+</div>
+
+<!-- One snippet, in full. Wider than the other dialogs because a parameters table
+     beside a body textarea does not fit in 640px. -->
+<div id="snip-edit-scrim" class="scrim" hidden>
+  <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="snip-edit-title">
+    <div class="modal-head">
+      <span id="snip-edit-title">New snippet</span>
+      <button class="modal-close" data-close-snip type="button" aria-label="Close">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label for="snip-title">Title</label>
+        <input id="snip-title" type="text" autocomplete="off"
+               placeholder="What this says, in a few words">
+      </div>
+      <div class="field">
+        <label for="snip-group">Group</label>
+        <select id="snip-group"></select>
+      </div>
+      <div class="field">
+        <label for="snip-body">Message</label>
+        <textarea id="snip-body" class="grow" rows="6"
+                  placeholder="What to send. Write {{name}} where a parameter goes."></textarea>
+        <!-- What the body and the parameters say about each other. A note rather
+             than a refusal, in both directions: an undeclared {{x}} is left in the
+             message verbatim, and a parameter nothing references is a field you
+             have not wired up yet. -->
+        <div id="snip-placeholders" class="note" hidden></div>
+      </div>
+      <div class="field">
+        <label>Parameters</label>
+        <div id="snip-params" class="snip-params"></div>
+        <div>
+          <button id="snip-param-add" class="btn small" type="button">Add a parameter</button>
+        </div>
+      </div>
+      <div class="field">
+        <label for="snip-insert">Where it goes</label>
+        <select id="snip-insert">
+          <option value="overwrite">Replace what is in the box</option>
+          <option value="append">Add it to the end</option>
+          <option value="cursor">Insert at the cursor</option>
+        </select>
+      </div>
+      <div class="field">
+        <label class="snip-check">
+          <input id="snip-auto" type="checkbox">
+          <span class="settings-box"></span>
+          <span>Send it straight away</span>
+        </label>
+        <div id="snip-perm-row" class="snip-sub" hidden>
+          <label for="snip-perm">Permissions</label>
+          <select id="snip-perm">
+            <!-- Inherit is first and is the default: the button this feature
+                 replaced never moved the selector, and a snippet that silently
+                 changed the permission mode of the next thing you send would be
+                 the one surprise here worth avoiding. -->
+            <option value="">inherit — leave it where it is</option>
+            <option value="acceptEdits">acceptEdits</option>
+            <option value="auto">auto</option>
+            <option value="manual">manual</option>
+            <option value="plan">plan</option>
+            <option value="dontAsk">dontAsk</option>
+            <option value="bypassPermissions">bypassPermissions</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label class="snip-check">
+          <input id="snip-pinned" type="checkbox">
+          <span class="settings-box"></span>
+          <span>Give it a button on the composer</span>
+        </label>
+      </div>
+      <div class="field">
+        <label>Only in these projects</label>
+        <div id="snip-projects" class="snip-projects"></div>
+        <div class="snip-project-add">
+          <input id="snip-project" type="text" spellcheck="false" autocomplete="off"
+                 list="snip-project-list" placeholder="A directory, or leave empty for everywhere">
+          <datalist id="snip-project-list"></datalist>
+          <button id="snip-project-go" class="btn small" type="button">Add</button>
+        </div>
+        <div class="note">A snippet with none of these shows everywhere. With one,
+          it shows in that directory and anything under it.</div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="spacer"></span>
+      <button class="btn" data-close-snip type="button">Cancel</button>
+      <button id="snip-save" class="btn primary" type="button">Save</button>
     </div>
   </div>
 </div>
