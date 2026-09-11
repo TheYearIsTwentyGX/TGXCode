@@ -5303,6 +5303,29 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     color: var(--text-3);
 }
 
+/* Refresh carries `margin-left: auto` of its own, so wrapping it took the auto
+   up a level to keep the row looking as it did. The other two appear only in
+   the focused view. */
+.tb-tools {
+    margin-left: auto;
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.tb-search {
+    width: 260px;
+    height: 34px;
+    padding: 0 14px;
+    background: var(--s2);
+    border-radius: var(--pill);
+    color: var(--text);
+    font: 400 13px/1 var(--sans);
+    transition: background var(--t-fast) var(--ease);
+}
+.tb-search:hover, .tb-search:focus { background: var(--s3); }
+.tb-search::placeholder { color: var(--text-3); }
+
 .tb-body {
     flex: 1;
     min-height: 0;
@@ -5312,9 +5335,38 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     gap: 12px;
 }
 
+/* Focused: suggested tasks only, one column per project. Auto-flow rather than
+   a fixed template, because here the number of columns *is* the data — the four
+   above can be hardcoded because they are four states, and this is however many
+   projects have a task outstanding. `.dr-body.cols` is the same shape for the
+   same reason, and the 300px floor is the same trade: a crowded backlog scrolls
+   sideways instead of squeezing twelve cards into twelve strips, while two
+   projects still use the whole width. Vertical scrolling belongs to each
+   `.tb-col-body`, which already does it, so the body itself must not. */
+.tb-body.cols {
+    grid-template-columns: none;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(300px, 1fr);
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+/* A project name can be long and a column is narrow, so it gives way rather
+   than pushing its count off the end; the `title` says the whole of it. */
+.tb-focus-col .tb-col-head h2 {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* One line of text, so it is capped rather than ruled across the whole board.
+   It is a routine state of the focused view — an empty backlog, or a search
+   that found nothing — and not only the place an error goes. */
 .tb-note {
     grid-column: 1 / -1;
     align-self: start;
+    max-width: 560px;
     padding: 18px 20px;
     background: var(--s2);
     border-radius: var(--r);
@@ -5322,6 +5374,8 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     font-size: 13.5px;
 }
 .tb-note p { margin: 0; }
+.tb-note p + p { margin-top: 6px; }
+.tb-note p.dim { color: var(--text-4); }
 
 /* A column is a well, not a ruled-off area: the surface lifts where the column
    starts, the same way a project card does in the rail. */
@@ -5354,6 +5408,24 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 }
 /* The one column whose count is news gets to say so without being read. */
 .tb-col[data-col="needs"] .tb-col-head h2 { color: var(--yellow); }
+
+/* The way in to the focused view. Quiet but always there — it was briefly
+   hover-only, which is a fine way to keep a header clean and a poor way to let
+   anybody find out the view exists. It is a change of view rather than a thing
+   to do, so it takes the count's colour rather than a button's. */
+.tb-focus-btn {
+    flex: none;
+    height: 20px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: var(--r-sm);
+    background: var(--s2);
+    color: var(--text-4);
+    font: 500 11px/1 var(--sans);
+    cursor: pointer;
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.tb-focus-btn:hover { background: var(--s3); color: var(--text-2); }
 
 .tb-col-body {
     flex: 1;
@@ -6852,6 +6924,18 @@ body.term-resizing { user-select: none; cursor: row-resize; }
         overflow-y: auto;
     }
     .tb-col { max-height: 60vh; }
+    /* The board folds because it always has exactly four columns. The focused
+       one cannot: the count is however many projects have a task, and folding
+       would put one below the fold with nothing saying it was there. So it
+       keeps scrolling sideways and the floor comes down instead — the answer
+       `.dr-body.cols` takes below, for the same reason. */
+    .tb-body.cols {
+        grid-template-columns: none;
+        grid-auto-columns: minmax(260px, 1fr);
+        overflow-y: hidden;
+    }
+    .tb-body.cols .tb-col { max-height: none; }
+    .tb-search { width: 180px; }
 
     .dr-head { padding: 16px 16px 12px; }
     .dr-body { padding: 0 16px 20px; }

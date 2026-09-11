@@ -753,7 +753,17 @@
           <p id="tb-sub" class="tb-sub">Everything outstanding: suggested tasks,
             and every session that is not archived.</p>
         </div>
-        <button id="tb-refresh" class="dash-btn" type="button">Refresh</button>
+        <!-- Both of these belong to the focused view and are hidden until it is
+             on. The search box lives here rather than being built by the
+             renderer on purpose: `#tb-body` is rebuilt every three seconds off
+             the SSE tick, and an input inside it would need the caret-saving
+             dance the Suggested column's composer already forced. -->
+        <div class="tb-tools">
+          <input id="tb-search" class="tb-search" type="search"
+                 placeholder="Search tasks" aria-label="Search suggested tasks" hidden>
+          <button id="tb-unfocus" class="dash-btn" type="button" hidden>All columns</button>
+          <button id="tb-refresh" class="dash-btn" type="button">Refresh</button>
+        </div>
       </header>
       <div id="tb-body" class="tb-body"></div>
     </section>

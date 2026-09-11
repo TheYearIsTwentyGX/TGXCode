@@ -425,6 +425,13 @@ const state = {
         // Half-typed text in the Suggested column's box, held here rather than
         // in the DOM so it survives the redraws the board does while agents work.
         draft: '',
+        // The focused view: suggested tasks only, spread one column per
+        // project. A property of the window like `liveDock` above, so a board
+        // you left focused comes back focused. `query` deliberately is not
+        // remembered — a search still live on the next open would hide most of
+        // the board and read as the tasks having gone.
+        focus: localStorage.getItem('tbFocus') === '1',
+        query: '',
         order: new Map(), freshRank: 0, tailRank: 0 },
     // Sessions set up but not started.
     //
@@ -564,6 +571,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'btn-dash', 'dash-badge', 'dash', 'dash-sub', 'dash-body', 'dash-refresh',
     'btn-notes', 'notes-badge', 'notes', 'notes-sub', 'notes-body',
     'btn-taskboard', 'tb-badge', 'taskboard', 'tb-sub', 'tb-body', 'tb-refresh',
+    'tb-search', 'tb-unfocus',
     'btn-drafts', 'dr-badge', 'drafts', 'dr-sub', 'dr-body', 'dr-new',
     'btn-sched', 'sched-badge', 'sched', 'sched-sub', 'sched-body', 'sched-new',
     'btn-settings', 'settings', 'set-scope', 'set-project', 'set-project-wrap',
@@ -6781,6 +6789,22 @@ function takePendingJump() {
 // **One payload for the whole board.** The `taskboard` SSE event, on a three-
 // second tick the bridge only runs while somebody is watching, and only sends
 // when the answer actually moved. Nothing here fetches per card.
+//
+// **Focus is the fifth state the board can be in**, and the only one the four
+// columns cannot express. A backlog of suggested tasks outgrows its column long
+// before any of the other three fills up — they are bounded by how many sessions
+// exist, and that one is bounded by how many follow-ups every agent has ever
+// raised. So the Suggested head carries a Focus button: press it and the other
+// three columns go, and the tasks spread across the whole width one column per
+// project, with a search box over them in the header.
+//
+// It borrows the drafts panel's machinery rather than growing its own, because
+// that panel already answers the same question — a variable number of project
+// columns built out of this board's `.tb-col` chrome. `tbFocusGroups` is
+// `draftGroups` and `tbProjectColumn` is `draftColumn`; `.tb-body.cols` is
+// `.dr-body.cols`. The one thing that is this board's and not that one's is that
+// the rows still go through `tbHold` first, so a card cannot move under the
+// cursor here either.
 
 /** Tell the bridge whether this window is watching the task board. */
 function syncTaskboardWatch() {
@@ -6797,6 +6821,7 @@ function showTaskboard(on) {
     syncTaskboardWatch();
 
     if (on) {
+        tbPaintTools();
         // The subscribe above brings the payload straight back, but only if the
         // stream is up. A window that has just booted, or one whose stream is
         // reconnecting, gets it the other way rather than an empty grid.
@@ -6977,7 +7002,19 @@ function renderTaskboard() {
         return;
     }
 
-    dom.tbSub.textContent = [
+    const focused = state.taskboard.focus;
+    const groups = focused ? tbFocusGroups(d) : null;
+    const shown = focused
+        ? [...groups.values()].reduce((n, rows) => n + rows.length, 0) : 0;
+    const cols = !focused ? TB_COLUMNS.map(c => tbColumn(c, d))
+        : groups.size ? [...groups].map(([name, rows]) => tbProjectColumn(name, rows))
+            : [tbFocusNote(d)];
+    // A note is one wide block and not a row of columns, so it keeps the plain
+    // grid — otherwise it would sit in a 300px lane with the rest of the board
+    // blank beside it.
+    dom.tbBody.classList.toggle('cols', focused && groups.size > 0);
+
+    dom.tbSub.textContent = focused ? tbFocusWords(d, groups.size, shown) : [
         `${d.counts.needs} blocked on you`,
         `${d.counts.working} working`,
         `${d.counts.suggested} open ${d.counts.suggested === 1 ? 'task' : 'tasks'}`,
@@ -6985,10 +7022,12 @@ function renderTaskboard() {
     ].join(' · ');
 
     // Each column scrolls on its own, and a rebuild would otherwise throw all
-    // four scroll positions away every three seconds.
+    // four scroll positions away every three seconds. Keyed by whichever of the
+    // two things a column is — a state unfocused, a project focused — so that a
+    // column keeps its own place in its own list rather than the neighbour's.
     const scrolls = new Map();
     for (const c of dom.tbBody.querySelectorAll('.tb-col-body')) {
-        scrolls.set(c.dataset.col, c.scrollTop);
+        scrolls.set(c.dataset.col || c.dataset.project, c.scrollTop);
     }
     const bodyScroll = dom.tbBody.scrollLeft;
 
@@ -7001,10 +7040,11 @@ function renderTaskboard() {
         ? { at: active.selectionStart, to: active.selectionEnd }
         : null;
 
-    dom.tbBody.replaceChildren(...TB_COLUMNS.map(c => tbColumn(c, d)));
+    dom.tbBody.replaceChildren(...cols);
 
     for (const c of dom.tbBody.querySelectorAll('.tb-col-body')) {
-        if (scrolls.has(c.dataset.col)) c.scrollTop = scrolls.get(c.dataset.col);
+        const key = c.dataset.col || c.dataset.project;
+        if (scrolls.has(key)) c.scrollTop = scrolls.get(key);
     }
     dom.tbBody.scrollLeft = bodyScroll;
 
@@ -7026,6 +7066,17 @@ function tbColumn(col, d) {
         el('header', { class: 'tb-col-head' },
             el('h2', {}, col.label),
             el('span', { class: 'tb-count' }, String(d.counts[col.key])),
+            // The way in to the focused view, and the only one. The way out is
+            // the button in the board's header, because by then this column no
+            // longer exists to hold a second copy of it.
+            col.key === 'suggested' ? el('button', {
+                // Not `aria-pressed`: it is not a switch that stays here and
+                // lights up. Pressing it replaces the view this button is part
+                // of, and the way back is the header's.
+                class: 'tb-focus-btn', type: 'button',
+                title: 'Suggested tasks only, one column per project',
+                onclick: () => tbSetFocus(true),
+            }, 'Focus') : null,
         ),
         el('div', { class: 'tb-col-body', 'data-col': col.key },
             cards.length ? cards : el('p', { class: 'tb-empty' }, col.empty),
@@ -7076,6 +7127,125 @@ function tbTaskCards(d) {
         out.push(...rows.map(tbTaskCard));
     }
     return out;
+}
+
+// ── the focused view ─────────────────────────────────────────────────────
+
+/** Turn the focused view on or off, and remember which. */
+function tbSetFocus(on) {
+    state.taskboard.focus = on;
+    localStorage.setItem('tbFocus', on ? '1' : '0');
+    if (!on) {
+        // The box goes away with the view, so a query left behind in it would
+        // be invisible and still filtering the next time focus came on.
+        state.taskboard.query = '';
+        dom.tbSearch.value = '';
+    }
+    tbPaintTools();
+    renderTaskboard();
+    if (on) dom.tbSearch.focus({ preventScroll: true });
+}
+
+/** The header controls that belong to the focused view. */
+function tbPaintTools() {
+    const on = state.taskboard.focus;
+    dom.tbSearch.hidden = !on;
+    dom.tbUnfocus.hidden = !on;
+}
+
+/**
+ * Does a task match what is in the search box?
+ *
+ * Every word has to appear somewhere, rather than any of them, so that a second
+ * word narrows the board instead of widening it — which is what you reach for
+ * when the first one still left forty cards. The prompt is searched as well as
+ * the title because a task raised without a title is titled by its first line,
+ * and the sentence you remember is usually further in than that. The
+ * conversation's own title is in there too: "the one from the schedule work" is
+ * how you look for a task you did not read at the time.
+ */
+function tbMatches(t) {
+    const q = state.taskboard.query.trim().toLowerCase();
+    if (!q) return true;
+    const hay = [t.title, t.prompt, t.why, t.session && t.session.title]
+        .filter(Boolean).join('\n').toLowerCase();
+    return q.split(/\s+/).every(word => hay.includes(word));
+}
+
+/**
+ * The open tasks, filtered, as one group per project.
+ *
+ * `tbHold` first and the filter second, so the search narrows an order that has
+ * already been settled rather than deciding one of its own — a card keeps its
+ * place in its column as words are typed and deleted.
+ *
+ * **The order of the keys is the order of the columns, and it needs no sort.**
+ * `draftGroups` explains this at length and it is the same argument: the held
+ * rows are newest-first, a Map keeps the order its keys were first seen in, so
+ * walking them once lands the projects most-recently-suggested-in first. Held
+ * thereafter, like everything else on this board.
+ *
+ * Grouped by `session.projectName` — the key the sub-headings in the unfocused
+ * column already use — rather than by worktree, so that every task raised in a
+ * repo arrives in one column instead of being scattered across however many
+ * worktrees of it are live. The worktree is still on each card.
+ */
+function tbFocusGroups(d) {
+    const groups = new Map();
+    for (const t of tbHold('task', d.suggested, x => x.id)) {
+        if (!tbMatches(t)) continue;
+        const name = (t.session && t.session.projectName) || 'Elsewhere';
+        if (!groups.has(name)) groups.set(name, []);
+        groups.get(name).push(t);
+    }
+    return groups;
+}
+
+/**
+ * One project, as a column.
+ *
+ * `draftColumn`'s shape, for `draftColumn`'s reason: the chrome is this board's
+ * already. No `data-col`, deliberately — that attribute colours a *state*, and
+ * a project is not one. The cards keep `.tb-task`'s own stripe, which still says
+ * the right thing.
+ */
+function tbProjectColumn(name, rows) {
+    return el('section', { class: 'tb-col tb-focus-col', 'data-project': name },
+        el('header', { class: 'tb-col-head' },
+            el('h2', { title: name }, name),
+            el('span', { class: 'tb-count' }, String(rows.length)),
+        ),
+        el('div', { class: 'tb-col-body', 'data-project': name },
+            ...rows.map(tbTaskCard),
+        ),
+    );
+}
+
+/** Nothing to show: an empty board and a search that found nothing differ. */
+function tbFocusNote(d) {
+    const q = state.taskboard.query.trim();
+    if (q) {
+        return el('div', { class: 'tb-note' },
+            el('p', {}, `No task matches “${q}”.`),
+            el('p', { class: 'dim' }, `${d.counts.suggested} open `
+                + `${d.counts.suggested === 1 ? 'task is' : 'tasks are'} hidden by it.`));
+    }
+    return el('div', { class: 'tb-note' },
+        el('p', {}, 'No open tasks.'),
+        el('p', { class: 'dim' }, 'Suggested tasks are raised by agents as they '
+            + 'work, for the things they noticed and did not do.'));
+}
+
+/** The subtitle, focused. */
+function tbFocusWords(d, projects, shown) {
+    const total = d.counts.suggested;
+    const where = `${projects} ${projects === 1 ? 'project' : 'projects'}`;
+    if (state.taskboard.query.trim()) {
+        return `${shown} of ${total} matching “${state.taskboard.query.trim()}”`
+            + (projects ? ` · ${where}` : '');
+    }
+    return `${total} open ${total === 1 ? 'task' : 'tasks'}`
+        + (projects ? ` · ${where}` : '');
 }
 
 /**
@@ -17926,6 +18096,24 @@ dom.focusExit.addEventListener('click', () => setFocus(false));
 dom.liveBody.addEventListener('wheel', onDockWheel, { passive: false });
 dom.btnTaskboard.addEventListener('click', () => showTaskboard(!state.taskboard.open));
 dom.tbRefresh.addEventListener('click', () => loadTaskboard());
+dom.tbUnfocus.addEventListener('click', () => tbSetFocus(false));
+// Client-side, unlike the rail's filter next to it: the whole list of open
+// tasks is already in hand, so a round trip would only add lag to a keystroke.
+dom.tbSearch.addEventListener('input', debounce(() => {
+    state.taskboard.query = dom.tbSearch.value;
+    if (taskboardVisible()) renderTaskboard();
+}, 120));
+dom.tbSearch.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    // Clearing the box before leaving it: Escape on a full box is "show me
+    // everything again", and only on an empty one is it "I am done here".
+    if (dom.tbSearch.value) {
+        e.stopPropagation();
+        dom.tbSearch.value = '';
+        state.taskboard.query = '';
+        if (taskboardVisible()) renderTaskboard();
+    }
+});
 dom.btnDash.addEventListener('click', () => showDash(!state.dash.open));
 dom.dashRefresh.addEventListener('click', () => loadDash({ refresh: true }));
 
