@@ -33,6 +33,8 @@ const FALLBACK = {
         { id: 'session.new', group: 'Sessions', label: 'Start a session', default: 'Ctrl+N' },
         { id: 'rail.filter', group: 'Sessions', label: 'Filter sessions', default: 'Ctrl+K' },
         { id: 'composer.snippets', group: 'Composer', label: 'Snippets', default: 'Ctrl+Slash' },
+        { id: 'composer.permissionMode', group: 'Composer', label: 'Cycle permission mode', default: 'Ctrl+P' },
+        { id: 'composer.model', group: 'Composer', label: 'Cycle model', default: 'Ctrl+M' },
         { id: 'find.open', group: 'Find', label: 'Find in conversation', default: 'Ctrl+F' },
         { id: 'find.next', group: 'Find', label: 'Next match', default: 'F3' },
         { id: 'find.prev', group: 'Find', label: 'Previous match', default: 'Shift+F3' },

@@ -245,6 +245,12 @@ const state = {
     // not persisted: after a reload the transcript is the better answer, and this
     // only exists so that looking away and back does not quietly drop a choice.
     permChoice: new Map(),
+    // The same for the model, and the same reasoning. It is a Map for a reason
+    // worth writing down: the `#model` select used to be window-wide and sticky,
+    // so picking `opus` for one conversation quietly picked it for the next one
+    // you opened. A chord makes that far easier to do by accident, which is what
+    // turned an oddity into a bug — see paintModel.
+    modelChoice: new Map(),
     channels: [],
     // Ports this session mentioned that belong to another workspace, counted
     // so the strip can say they were left out rather than just look empty.
@@ -348,6 +354,10 @@ const state = {
     // The mode the bridge last reported, per session, so that a mode which moves
     // under a session can be told apart from one being seen for the first time.
     runnerMode: new Map(),
+    // Its model twin. Null is a real value here — a process started without
+    // `--model` reports one — so this holds what the bridge said, null included,
+    // and `has()` is what tells "not seen yet" from "seen, and inheriting".
+    runnerModel: new Map(),
     stopArmed: 0,           // when a soft Stop happened, for the force escalation
     // Sessions where "Send anyway" was clicked past the live-elsewhere lock.
     // Per session and not persisted: the next window, and this one after a
@@ -8936,6 +8946,50 @@ function setPermMode(mode) {
     if (state.current) state.permChoice.set(state.current.sessionId, mode);
 }
 
+// The modes Ctrl+P will land you on, in the order the dropdown lists them.
+// `dontAsk` and `bypassPermissions` are deliberately not in it: both hand the
+// agent something back, and a chord pressed one time too many is not a decision
+// to do that. Neither is hidden — they are still in the dropdown, and a session
+// already in one cycles *out* of it like any other, which is the direction that
+// should be easy.
+const CYCLE_PERM = ['acceptEdits', 'auto', 'manual', 'plan'];
+
+/**
+ * Advance a `<select>` to its next value, wrapping.
+ *
+ * @param {HTMLSelectElement} sel
+ * @param {string[]|null} allow the values a cycle may stop on, or null for all
+ *
+ * Walks from where the select is now rather than from an index kept alongside
+ * it, so the chord and the dropdown can never disagree about what "next" means
+ * — including after the mouse has moved it, and after paintPerm/paintModel have
+ * moved it on the window's behalf.
+ *
+ * Two things fall out of walking the options rather than the allow-list. A
+ * value that is not in `allow` at all still has a next — `bypassPermissions`
+ * wraps to `acceptEdits` — so there is always a way out of one. And a select
+ * offering none of `allow` is left alone rather than blanked, which is the same
+ * refusal paintPerm makes about a mode this build does not know.
+ *
+ * The `change` event is dispatched rather than the bookkeeping repeated here:
+ * the listeners above are what remember a choice against a session, and a chord
+ * that skipped them would be a second way to set these controls that forgets
+ * what the first one records.
+ */
+function cycleSelect(sel, allow) {
+    const opts = [...sel.options];
+    const at = opts.findIndex(o => o.value === sel.value);
+    for (let i = 1; i <= opts.length; i++) {
+        const o = opts[(at + i) % opts.length];
+        if (allow && !allow.includes(o.value)) continue;
+        if (o.value === sel.value) break;    // nothing else to move to
+        sel.value = o.value;
+        sel.dispatchEvent(new Event('change'));
+        flashNode(sel);
+        return;
+    }
+}
+
 /**
  * Auto-submit, in the dialog that has no Send.
  *
@@ -13683,6 +13737,16 @@ function applyRunner(s) {
         state.runnerMode.set(s.sessionId, s.permissionMode);
         if (seen && moved) state.permChoice.delete(s.sessionId);
     }
+    // The same for the model, and note the guard is `s` rather than `s.model`:
+    // null is what a process started without `--model` reports, and it is an
+    // answer — "this one is inheriting" — not a missing field to skip over.
+    if (s) {
+        const model = s.model || '';
+        const seen = state.runnerModel.has(s.sessionId);
+        const moved = state.runnerModel.get(s.sessionId) !== model;
+        state.runnerModel.set(s.sessionId, model);
+        if (seen && moved) state.modelChoice.delete(s.sessionId);
+    }
 
     dom.statusLine.dataset.state = s
         ? (s.state === 'error' ? 'error' : ask ? 'ask' : retrying ? 'stalled' : busy ? 'busy' : 'idle')
@@ -13714,6 +13778,7 @@ function applyRunner(s) {
         state.busyTimer = setInterval(() => paintStatus(state.runner), 1000);
     }
     paintPerm();
+    paintModel();
     paintLock();
     paintStatus(s);
 }
@@ -13798,6 +13863,44 @@ function paintPerm() {
     // sent. Fall back rather than inventing an option for it.
     const known = [...dom.perm.options].some(o => o.value === mode);
     dom.perm.value = known ? mode : DEFAULT_PERM;
+}
+
+/**
+ * The model selector, painted from the same kind of chain as paintPerm.
+ *
+ * This is newer than its twin and exists because the control it paints had no
+ * state at all: `#model` was read at send time and never written to, so it kept
+ * whatever you last picked for as long as the window was open and carried that
+ * across every session you opened. That was survivable while changing it meant
+ * a deliberate trip to the dropdown. Ctrl+M makes it a keystroke, so the
+ * selector now answers for the conversation in front of you like the mode does.
+ *
+ * Two differences from paintPerm, both about `''`:
+ *
+ * `??` and `has()` rather than `||`, because `''` is a real choice here — it is
+ * `inherit`, the default — and a `||` chain would fall straight through it to
+ * whatever the transcript last said.
+ *
+ * And the fallback for a value this build does not offer is `''` rather than a
+ * named model. `state.current.model` comes from the transcript and can be a
+ * resolved id (`claude-opus-5-…`) that no option matches; `inherit` is the
+ * honest thing to show for it, and — unlike blanking a `<select>`, which is the
+ * failure the same guard in paintPerm is there to prevent — it is also a value
+ * that means something when it is sent.
+ */
+function paintModel() {
+    const id = state.current && state.current.sessionId;
+    // Written as a ladder rather than a `??` chain: every rung's "no answer" is
+    // a different test — a Map that may hold `''`, an object that may be null,
+    // a field that may be absent — and one operator cannot say all three.
+    let model = '';
+    if (state.current && state.current.model) model = state.current.model;
+    if (id && state.runnerModel.has(id)) model = state.runnerModel.get(id);
+    if (state.runner) model = state.runner.model || '';
+    if (id && state.modelChoice.has(id)) model = state.modelChoice.get(id);
+
+    const known = [...dom.model.options].some(o => o.value === model);
+    dom.model.value = known ? model : '';
 }
 
 function paintStatus(s) {
@@ -17498,6 +17601,12 @@ dom.perm.addEventListener('change', () => {
     if (state.current) state.permChoice.set(state.current.sessionId, dom.perm.value);
 });
 
+// And the model, which until Ctrl+M existed was remembered against nothing at
+// all — see paintModel.
+dom.model.addEventListener('change', () => {
+    if (state.current) state.modelChoice.set(state.current.sessionId, dom.model.value);
+});
+
 dom.input.addEventListener('input', autoGrow);
 dom.input.addEventListener('input', debounce(() => {
     if (state.current) saveDraft(state.current.sessionId, dom.input.value);
@@ -17597,10 +17706,15 @@ function makeComposer({ input, slashNode, mentionNode, id, ctx, container,
     // Attachments. A composer with no `attachNode` takes no files at all, and
     // wireAttachments simply skips it — nothing else has to know.
     attachNode = null, attachInput = null, attachBtn = null, dropZone = null,
-    uploadMode = 'eager', persistKey = null, afterRender = null }) {
+    uploadMode = 'eager', persistKey = null, afterRender = null,
+    // This composer's own Permissions and Model selects, so Ctrl+P and Ctrl+M
+    // reach the box the caret is in rather than always the live one — the same
+    // reason `snipBtn` is a member. A composer with neither simply has no chord,
+    // which is what the handler's null check is for.
+    perm = null, model = null }) {
     const c = { input, container, ctx, closeOthers, notReady, homeEnd, onInput,
         attachNode, attachInput, attachBtn, dropZone, uploadMode, persistKey,
-        afterRender,
+        afterRender, perm, model,
         // Staged files, and the counter their keys come from. Per composer, because
         // a screenshot pasted into one box has nothing to do with the other.
         attach: [], attachSeq: 0 };
@@ -17668,6 +17782,8 @@ const live = makeComposer({
     // there is no path to write down.
     persistKey: () => state.current && state.current.sessionId,
     afterRender: () => enableSend(Boolean(state.current)),
+    perm: dom.perm,
+    model: dom.model,
 });
 
 // Filled by wireComposer below, live first. The keyboard map and the
@@ -18504,6 +18620,8 @@ const newC = makeComposer({
     // first: a popover placed against the box has to be placed against the height
     // it has now, not the height it had a keystroke ago.
     onInput: growPrompt,
+    perm: dom.newPerm,
+    model: dom.newModel,
 });
 wireComposer(newC);
 wireAttachments(newC);
@@ -19001,6 +19119,23 @@ document.addEventListener('keydown', (e) => {
         if (c.snips.btn.disabled) return;
         e.preventDefault();
         showSnips(c, c.snips.node.hidden);
+        return;
+    }
+    // Same resolution as the snippets chord above, and for the same reason: the
+    // dialog has its own pair of these controls, so the chord should move the
+    // ones next to the box you are typing in.
+    //
+    // `inTerm` is the one place these differ from every other composer command.
+    // Ctrl+P is readline's previous-history and the default tmux prefix, so a
+    // shell that has the focus keeps it — returning without preventDefault is
+    // what leaves the keystroke to xterm.
+    if (command === 'composer.permissionMode' || command === 'composer.model') {
+        if (inTerm) return;
+        const c = composers.find(x => x.input === document.activeElement) || live;
+        const sel = command === 'composer.model' ? c.model : c.perm;
+        if (!sel) return;
+        e.preventDefault();
+        cycleSelect(sel, command === 'composer.model' ? null : CYCLE_PERM);
         return;
     }
     if (command === 'session.new') { e.preventDefault(); openNew(); }
