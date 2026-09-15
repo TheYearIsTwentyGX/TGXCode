@@ -13,6 +13,10 @@
       content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; connect-src 'self'">
 <title>Claude Sessions</title>
 <link rel="stylesheet" href="./vendor/xterm.css">
+<!-- Before styles.css on purpose: the diff viewer re-themes diff2html by
+     redefining its --d2h-dark-* variables, and doing that without !important
+     needs our rules to come second. -->
+<link rel="stylesheet" href="./vendor/diff2html.css">
 <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
@@ -475,7 +479,10 @@
                 <button id="changes-collapse" class="tasks-collapse changes-hide"
                         type="button" title="Put this to one side">Hide</button>
               </div>
-              <div id="changes-body" class="changes-body"></div>
+              <!-- tabindex so closeDiff can put focus back in here. -1 rather than 0:
+           it should be reachable programmatically, not a stop on the way
+           through the page with Tab. -->
+      <div id="changes-body" class="changes-body" tabindex="-1"></div>
             </div>
           </aside>
           <nav id="turns" class="turns" aria-label="Your messages in this session"></nav>
@@ -1476,6 +1483,46 @@
   </div>
 </div>
 
+<!-- One file, in full.
+
+     Wider and taller than every other dialog here, because a diff is the one where
+     the room *is* the product: two 90-column panes plus their line-number gutters
+     is about 1310px, and below that side-by-side is a lie rather than a layout.
+
+     The controls are their own row above the body rather than a .modal-foot. They
+     change what you are looking at instead of agreeing to something, so they belong
+     above the thing they change, and there is no button here that commits. -->
+<div id="diff-scrim" class="scrim" hidden>
+  <div class="modal diff-modal" role="dialog" aria-modal="true" aria-labelledby="diff-title">
+    <div class="modal-head">
+      <span id="diff-title" class="diff-title"></span>
+      <span id="diff-stat" class="diff-stat"></span>
+      <button class="modal-close" data-close-diff type="button" aria-label="Close">✕</button>
+    </div>
+    <div class="diff-bar">
+      <div class="diff-seg" role="group" aria-label="Layout">
+        <button id="diff-unified" class="diff-seg-btn" type="button" aria-pressed="true">Unified</button>
+        <button id="diff-split" class="diff-seg-btn" type="button" aria-pressed="false">Side by side</button>
+      </div>
+      <label class="diff-opt"><input id="diff-words" type="checkbox"> Word diff</label>
+      <label class="diff-opt"><input id="diff-wrap" type="checkbox"> Wrap</label>
+      <!-- Only shown for a file that is staged *and* modified. Anywhere else the
+           three options would be three names for one answer. -->
+      <select id="diff-source" class="diff-source" aria-label="What to show" hidden>
+        <option value="worktree">Everything uncommitted</option>
+        <option value="staged">Staged only</option>
+        <option value="unstaged">Unstaged only</option>
+      </select>
+      <span class="spacer"></span>
+      <span id="diff-note" class="diff-note"></span>
+      <button id="diff-jump" class="btn small" type="button" hidden>Jump to the edit</button>
+      <button id="diff-reload" class="btn small" type="button">Reload</button>
+      <button id="diff-copy" class="btn small" type="button">Copy diff</button>
+    </div>
+    <div id="diff-body" class="diff-body d2h-dark-color-scheme" tabindex="0"></div>
+  </div>
+</div>
+
 <!-- Why a restart did not happen.
 
      This dialog is a terminal prompt that had nowhere to live. restart-bridge.sh
@@ -1559,10 +1606,25 @@
   </div>
 </div>
 
+<!-- A right-click menu, anchored to the pointer rather than to a control — so it is
+     the turn tooltip's shape (one fixed element, filled per open, clamped to the
+     viewport) rather than the recent-directories menu's, which is positioned by a
+     wrapper it does not have. role="menu" for the reason #new-menu carries it: it is
+     what makes arrow keys the expected thing. -->
+<div id="ctx-menu" class="ctx-menu" role="menu" hidden></div>
+
 <div id="turn-pop" class="turn-pop" role="tooltip" hidden></div>
 
 <div id="toasts" class="toasts" aria-live="polite"></div>
 
+<!-- A classic script, not the side-effect `import` vendor/xterm.js gets, and the
+     difference is not stylistic. xterm.js is the ESM build renamed; this is a UMD
+     bundle, and its footer is `}(this, …)` with `e.Diff2Html = t()`. Top-level
+     `this` in an ES module is undefined, so importing it throws a TypeError before
+     app.js has run a line. A classic script runs here in the parse and module
+     scripts are deferred past it, so window.Diff2Html is set by the time app.js is
+     evaluated. Do not "tidy" this into an import. -->
+<script src="./vendor/diff2html.js"></script>
 <script type="module" src="./app.js"></script>
 </body>
 </html>

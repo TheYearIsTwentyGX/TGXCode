@@ -102,6 +102,11 @@ const HOME = os.homedir();
     check('devservers stop', (await call('POST', '/api/devservers/stop', { headers: PHONE, body: { port: 1 } })).status, 403);
     check('devbrowser status', (await call('GET', '/api/devbrowser/status', { headers: PHONE })).status, 403);
     check('reveal', (await call('POST', '/api/sessions/abc/reveal', { headers: PHONE, body: {} })).status, 403);
+    // Reveal's argument at file granularity, plus one of its own: pointed at a
+    // .ps1 in the checkout, Windows runs it.
+    check('opening a file', (await call('POST', '/api/sessions/abc/open-file', {
+        headers: PHONE, body: { path: 'README.md' },
+    })).status, 403);
     check('mkdir', (await call('POST', '/api/fs/mkdir', {
         headers: PHONE, body: { parent: HOME, name: 'x' },
     })).status, 403);
@@ -196,6 +201,12 @@ const HOME = os.homedir();
     // may see where one could start; writing to the filesystem is the other side.
     check('listing home from a phone', (await call('GET',
         `/api/fs?path=${encodeURIComponent(HOME)}`, { headers: PHONE })).status, 200);
+    // Deliberately allowed, and asserted rather than left as an absence: a diff is
+    // a read, its bytes already reach a phone in the tool results it renders, and it
+    // is scoped to the session's own repository. 404 because the id is invented —
+    // what matters is that it is not the gate that stopped it.
+    check('reading a diff from a phone is not refused', (await call('GET',
+        '/api/sessions/abc/diff?path=README.md', { headers: PHONE })).status, 404);
 
     console.log('\n--- and the same routes from the desk ---');
     // Not 403: they may fail for their own reasons (404, 409), but the gate must
@@ -217,6 +228,19 @@ const HOME = os.homedir();
     check('opening a path that is not there is a 404', (await call('POST', '/api/fs/open', {
         headers: LOCAL, body: { path: `${HOME}/not-here-${Date.now()}.md` },
     })).status, 404);
+
+    // The path is checked before the session is looked up, so a request wrong about
+    // both is refused for the path — otherwise the 400/404 difference is an oracle
+    // for which session ids are real.
+    check('opening a file with no path', (await call('POST', '/api/sessions/abc/open-file', {
+        headers: LOCAL, body: {} })).status, 400);
+    check('opening one in a session that does not exist', (await call('POST',
+        '/api/sessions/nope/open-file', { headers: LOCAL, body: { path: 'README.md' } })).status, 404);
+    // The same ordering on the diff route, which shares the rule.
+    check('a diff with no path', (await call('GET', '/api/sessions/abc/diff',
+        { headers: LOCAL })).status, 400);
+    check('a diff with a mode git has never heard of', (await call('GET',
+        '/api/sessions/abc/diff?path=README.md&mode=cached', { headers: LOCAL })).status, 400);
 
     console.log('\n--- handing work to a session ---');
     // From the desk the gate lets it through, and it then fails on its own terms.

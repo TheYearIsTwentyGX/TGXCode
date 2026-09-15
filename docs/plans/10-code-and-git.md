@@ -29,9 +29,22 @@
 >   same call again — and a file's line counts double. Recorded ids are kept per
 >   agent to stop it.
 >
-> §B and §C still stand. §B's `"explorer"` option is already written —
-> `openFile` in `bridge/explorer.js`, which attachments use — so what is left
-> there is the editor half and the containment check.
+> §B's `"explorer"` option and its containment check are now both written.
+> `POST /api/sessions/:id/open-file` launches a repository file in its default
+> Windows program, and `sessionFilePath` in `bridge/server.js` is the containment
+> check — the shape §B asks for below, with a symlink re-check added and scoped to
+> the session's *repository root* rather than its `cwd`. It is session-addressed
+> rather than the global `POST /api/open-file` proposed below, deliberately: with
+> no session there is no directory to re-derive against, and `cfg.withinRoots`
+> alone is `$HOME`.
+>
+> §B's editor half — `code -g <path>:<line>`, the `editor` setting, the read-only
+> preview — is still open, and the preview half of it is now partly answered from
+> a different direction: `GET /api/sessions/:id/diff` renders a file's diff in the
+> app (diff2html, vendored in `web/vendor/`), reached by clicking a row in the
+> changes drawer.
+>
+> §C still stands.
 
 Three features about the code a session touched, sharing one bridge module.
 

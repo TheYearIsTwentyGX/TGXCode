@@ -325,6 +325,7 @@ time so it cannot be turned into a fan of processes.
 | `/api/shutdown`, `/api/devservers/stop` | Acts on processes the person at the desk is using. |
 | `/api/sessions/:id/reveal`, `POST /api/fs/open`, `/api/devbrowser/*` | Drives windows on the Windows host. Pointless from a phone — and `/api/fs/open` hands that host a path out of a transcript to launch, which is a thing to do while sitting in front of it or not at all. It is also the reason a remote page is served no `cs-host` meta tag: with nowhere for a path to point, the transcript draws it as text rather than as a link whose click would 403. |
 | `POST /api/sessions/:id/handoff` | Starts a turn in a session nobody is looking at, and wakes one that has no process at all. Reasonable for an agent on this machine that just changed something the other session depends on; not reasonable to reach in for from a phone, where a leaked token would mean every session on the machine spending tokens on words nobody typed. Note that a phone *may* still send to a session through `/send` — the difference is that a person is choosing the session and the words, one at a time. |
+| `POST /api/sessions/:id/open-file` | Opens a repository file in its default Windows program — a window on this machine's desktop, which is the row above's reason. It has a second one the others do not: pointed at a `.ps1` or an `.exe` in the checkout, Windows will run it. That is strictly less than `/api/terminals/*` already grants and is refused for the same reason. Its sibling `GET /api/sessions/:id/diff` is **not** refused — a diff is a read, its bytes already reach a phone inside the tool results it renders, and it is scoped to the session's own repository root rather than only to the allowed roots. A file extension denylist was considered and rejected: an agent that has just written an executable into the checkout has already won by other means, and a denylist would refuse opening the script you were editing. |
 | `POST /api/fs/mkdir` | Writes to the filesystem. `GET /api/fs` stays allowed, and the asymmetry is the point: reading the tree answers "where could a session start", and a phone may already start one. Creating a directory is reaching past the app into the machine. |
 | `PUT /api/prefs` | The mkdir clause with a longer reach: it writes a file in the user's home directory, and one of the keys in it — `quota.beaconDir` — names a directory this app then starts `claude` in. `GET /api/prefs` stays allowed, so the asymmetry is on the method rather than the path: how somebody wants a transcript folded is not a capability, and a phone has a use for the answer. |
 | `/api/claude-config`, **every method** | Claude Code's own settings, and the one family where the *read* is refused too. The contrast with `/api/prefs` above is the whole entry: that file is this app's own and its worst key names a directory; these files name hook commands, permission rules and the values of environment variables, and no client off this machine configures the CLI. So there is nothing to weigh against caution, and a leaked token should not be able to read them. The refusal is on the prefix with no method test, so whatever is added under it later is refused by default rather than by somebody remembering to. If a phone ever needs one of these reads, the answer is a narrower route — not a deleted refusal. |
@@ -333,11 +334,19 @@ time so it cannot be turned into a fan of processes.
 Independent of remoteness, and applying to every caller: a session can only start
 inside `CLAUDE_SESSIONS_ROOTS` (default `$HOME`), `/api/fs` only lists and
 `/api/fs/mkdir` only creates inside the same roots, and session creation is capped
-at 8 a minute. `POST /api/fs/open` is the one path-taking route those roots
-do **not** bound, deliberately: it opens rather than writes, opening `/tmp/…` and
-`/mnt/c/…` is the common case, and anything a caller could be induced to open it
-could have written inside `$HOME` first. What bounds it instead is this table and a
-refusal to launch the file types Windows would execute.
+at 8 a minute. `GET /api/sessions/:id/diff` and `POST /api/sessions/:id/open-file`
+are narrower still: inside those roots **and** inside the session's own repository
+root, with the path a client sends re-derived rather than trusted and re-checked
+with every symlink on it resolved, so a link written into a checkout cannot lead
+out of one.
+
+`POST /api/fs/open` is the one path-taking route those roots do **not** bound,
+deliberately: it opens rather than writes, opening `/tmp/…` and `/mnt/c/…` is the
+common case, and anything a caller could be induced to open it could have written
+inside `$HOME` first. What bounds it instead is this table and a refusal to launch
+the file types Windows would execute — the same refusal `open-file` defers to, for
+a different reason: that one is already inside a repository, and the point there is
+that a checkout is exactly where a `.ps1` an agent has just written would be.
 
 ## Authentication, in one paragraph
 

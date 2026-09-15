@@ -800,6 +800,18 @@ function remoteRefusal(pathname, method) {
     if (/^\/api\/sessions\/[^/]+\/reveal$/.test(pathname) && method === 'POST') {
         return 'opening a folder only makes sense on the machine itself';
     }
+    // The same sentence about a smaller thing, and for the same reason: what this
+    // does is put a window on *this* machine's desktop, which is not somewhere a
+    // phone can look. It is also the route that will run a `.ps1` in the checkout
+    // if you point it at one, so being local is doing real work here and not only
+    // being tidy — see the route for that.
+    //
+    // Note the sibling GET /api/sessions/:id/diff is deliberately *not* on this
+    // list. It reads, its bytes already reach a phone through the transcript, and
+    // it is scoped to the session's own repository.
+    if (/^\/api\/sessions\/[^/]+\/open-file$/.test(pathname) && method === 'POST') {
+        return 'opening a file only makes sense on the machine itself';
+    }
     // Exact equality, not a prefix: GET /api/fs stays readable remotely.
     if (pathname === '/api/fs/mkdir') {
         return 'folders can only be created on the machine they live on';
@@ -2301,6 +2313,12 @@ function logRemote(req, pathname, who) {
 // scrolls, and low enough that a `node_modules` somebody forgot to ignore cannot
 // turn one panel into a megabyte of JSON.
 const CHANGED_FILE_CAP = 400;
+
+// The three questions "what changed in this file" can mean, and the only three
+// `/diff` will answer to. An unrecognised one is a 400 rather than a silent
+// fallback to the default: a client asking for `cached` and being handed the
+// worktree would draw a confident, wrong answer.
+const DIFF_MODES = new Set(['worktree', 'staged', 'unstaged']);
 
 async function api(req, res, url, pathname, who) {
     const seg = pathname.split('/').filter(Boolean); // ['api', ...]
@@ -3998,6 +4016,105 @@ async function api(req, res, url, pathname, who) {
             });
         }
 
+        // What changed inside one of those files.
+        //
+        // The content behind a row in `/changes`. This is the *tree's* answer —
+        // the transcript's is the structured patch already on each tool result,
+        // which a client that has the conversation loaded can assemble itself, and
+        // which is the only answer left once a file has been committed. Sending
+        // both from here would mean re-parsing the transcript for a file the
+        // client can already see.
+        //
+        // Deliberately not refused to a remote caller, unlike its neighbours. Every
+        // clause in `remoteRefusal` is either a write or a reach past the app into
+        // the machine, and this is a read — one whose bytes a phone already gets,
+        // in the tool results it renders today. What makes that safe rather than
+        // merely convenient is `sessionFilePath`: the answer is scoped to this
+        // session's own repository, so a leaked token cannot walk it to ~/.ssh.
+        //
+        // No cache. `statusOf`'s fifteen seconds exist because the dashboard asks
+        // about forty directories on a timer; a diff is asked for once, by a person
+        // who wants it as it is now, and caching 2MB strings per file would trade
+        // memory for nothing.
+        if (tail === 'diff' && req.method === 'GET') {
+            const given = String(url.searchParams.get('path') || '').trim();
+            const mode = url.searchParams.get('mode') || 'worktree';
+            // Asked before the session is looked up, for `attachmentRefused`'s
+            // reason: a request wrong about both should be refused for the thing
+            // that was wrong, not have the difference read as an id oracle.
+            if (!given) return send(res, 400, { error: 'path is required' });
+            if (!DIFF_MODES.has(mode)) {
+                return send(res, 400, {
+                    error: `mode must be one of ${[...DIFF_MODES].join(', ')}`,
+                });
+            }
+
+            const summary = index.summary(sessionId);
+            if (!summary) return send(res, 404, { error: 'session not found' });
+
+            const answer = (body) => send(res, 200, {
+                path: given, mode, checkedAt: new Date().toISOString(), ...body,
+            });
+
+            const dir = workingDir(summary);
+            if (!dir) return answer({ ok: false, reason: 'no-directory' });
+
+            const tree = await git.statusOf(dir, { limit: CHANGED_FILE_CAP });
+            if (!tree || !tree.ok) {
+                return answer({ ok: false, reason: (tree && tree.reason) || 'status-failed',
+                    error: tree && tree.error });
+            }
+            const root = tree.root;
+
+            const file = cfg.sessionFilePath(root, given);
+            if (!file) {
+                // Not a 403 with the roots in it unless the roots are what refused
+                // it: "outside this session's repository" is the ordinary case here
+                // and is an answer the dialog draws, not an error.
+                if (!cfg.withinRoots(path.resolve(root, given))) {
+                    return send(res, 403, {
+                        error: 'that directory is outside the allowed roots',
+                        path: path.resolve(root, given), roots: cfg.ALLOWED_ROOTS,
+                    });
+                }
+                return answer({ ok: false, reason: 'outside-repo', root });
+            }
+
+            // Every git argument from here is `rel`, recomputed from the resolved
+            // path — never the string the client sent.
+            const rel = path.relative(root, file);
+            const entry = tree.sample.find(e => e.path === rel) || null;
+            const untracked = !!entry && entry.status === '??';
+            const counts = untracked ? null : (await git.numstat(dir)).get(rel) || null;
+
+            const meta = {
+                root, absPath: file, status: entry ? entry.status : null,
+                added: counts ? counts.added : 0,
+                deleted: counts ? counts.deleted : 0,
+                binary: !!(counts && counts.binary),
+            };
+
+            // A binary file is a fact rather than a failure, and it is known before
+            // the diff is asked for — the diff itself would only say "Binary files
+            // differ", which is not something to render as a diff.
+            if (meta.binary) return answer({ ok: true, ...meta, diff: '', bytes: 0, truncated: 0 });
+
+            if (!fs.existsSync(file) && !entry) {
+                return answer({ ok: false, reason: 'no-such-file', ...meta });
+            }
+
+            // Only when it was actually asked for. `Number(null)` is 0, so parsing
+            // an absent parameter would ask git for a diff with no context at all.
+            const askedContext = url.searchParams.get('context');
+            const out = await git.diffText(dir, rel, {
+                mode, untracked,
+                context: askedContext == null ? undefined : Number(askedContext),
+            });
+            if (!out.ok) return answer({ ok: false, ...meta, reason: out.reason, error: out.error });
+            return answer({ ok: true, ...meta,
+                diff: out.diff, bytes: out.bytes, truncated: out.truncated });
+        }
+
         // The status of the pull requests this session raised.
         //
         // Its own route rather than a field on the summary, because the summary is
@@ -4384,6 +4501,65 @@ async function api(req, res, url, pathname, who) {
             if (!dir) return send(res, 404, { error: 'no directory for this session' });
             const out = await openInExplorer(dir);
             return send(res, out.ok ? 200 : 502, { ...out, dir });
+        }
+
+        // Open one of the session's files in whatever Windows opens that kind of
+        // file with — reveal's idea, one level finer.
+        //
+        // The second route here that takes a path from the client and hands it to
+        // another program, and it re-derives it exactly as the first one does. See
+        // `sessionFilePath`: joined to a root the bridge worked out itself, checked
+        // against that root and against the allowed roots, and checked again
+        // against its real path when it turns out to be a link.
+        //
+        // This used to argue that a file-extension denylist was not the answer,
+        // on the grounds that the drawer only offers files git already reports as
+        // changed and that refusing them would break opening the script you were
+        // editing. The second half of that was wrong about what a denylist costs
+        // here: `isLaunchable` does not refuse anything, it reveals the file in
+        // its folder instead of launching it. So the cost is a click, and the
+        // saving is that a `.ps1` an agent wrote into the checkout cannot be run
+        // by clicking a row about it. Local-only on top of that, because the
+        // window it opens is on this machine's desktop.
+        if (tail === 'open-file' && req.method === 'POST') {
+            const body = await readJson(req);
+            const given = String(body.path == null ? '' : body.path).trim();
+            // Before the session lookup, so a request wrong about both is refused
+            // for the path rather than turning 400-vs-404 into an id oracle.
+            if (!given) return send(res, 400, { error: 'path is required' });
+
+            const summary = index.summary(sessionId);
+            if (!summary) return send(res, 404, { error: 'session not found' });
+            const dir = workingDir(summary);
+            if (!dir) return send(res, 404, { error: 'no directory for this session' });
+
+            const file = cfg.sessionFilePath(await sessionRoot(dir), given);
+            if (!file) {
+                // 403 rather than 404, and the same 403 whether the file is absent
+                // or out of bounds: the difference between those two is an
+                // existence oracle for everything on the machine.
+                return send(res, 403, {
+                    error: 'that file is outside this session\'s working directory',
+                });
+            }
+
+            // A file Windows would *run* is revealed in its folder instead of
+            // launched, which is the rule POST /api/fs/open landed for text a
+            // model wrote into a transcript. `isLaunchable`'s own docstring
+            // argues the two callers naming a path this app computed do not need
+            // it, and this route is one of those — but the argument is weaker
+            // here than there: what this names is a file inside a checkout, and
+            // a checkout is exactly where a `.ps1` an agent wrote ten minutes ago
+            // would be. Revealing costs a click and refuses nothing; `how` says
+            // which happened, so a client can explain it.
+            if (isLaunchable(file)) {
+                const shown = await openInExplorer(file);
+                return send(res, shown.ok ? 200 : 502,
+                    { ...shown, how: 'reveal', why: 'executable', file });
+            }
+
+            const out = await openFile(file);
+            return send(res, out.ok ? 200 : 502, { ...out, how: 'open', file });
         }
 
         // Open (or come back to) a shell in the same directory reveal would
@@ -4973,6 +5149,18 @@ function attachmentPath(cwd, given) {
         return null;
     }
     return file;
+}
+/**
+ * The repository root a session's file paths are relative to.
+ *
+ * `tree.root` only when git said `ok`. A `left-behind` answer carries a `root`
+ * too and it is the *parent* repository — the trap workingState documents — so
+ * taking it would resolve a removed worktree's paths against the main checkout.
+ */
+async function sessionRoot(dir) {
+    if (!dir) return null;
+    const tree = await git.statusOf(dir, { limit: 0 });
+    return (tree && tree.ok && tree.root) || dir;
 }
 
 /**

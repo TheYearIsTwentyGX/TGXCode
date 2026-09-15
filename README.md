@@ -1272,7 +1272,7 @@ you are away from the desk, and a phone that has dropped its connection is not.
 | Path | |
 |---|---|
 | `bridge/server.js` | HTTP + SSE, routing, static files |
-| `bridge/config.js` | Paths, ports, allowed roots — every constant with a reason attached |
+| `bridge/config.js` | Paths, ports, allowed roots — every constant with a reason attached, and the two containment checks that decide whether a path is one a caller may name |
 | `bridge/dashboard.js` | Uncommitted changes and open PRs, per project |
 | `bridge/git.js` | Every question the bridge asks git about a directory, cached once for all of them |
 | `bridge/restart.js` | Pulling this checkout and handing over to `scripts/restart-bridge.sh` — the one mutating git call |
@@ -1320,13 +1320,24 @@ you are away from the desk, and a phone that has dropped its connection is not.
 | `scripts/import-spinner-verbs.js` | Rebuilds the verb catalogue from upstream |
 | `scripts/quota-statusline.py` | Claude Code's status line, harvesting the quota percentages on the way past |
 | `scripts/install-quota-statusline.js` | Points `~/.claude/settings.json` at that script, and refuses to clobber one you already have |
-| `web/` | The UI. No build step, no dependencies |
+| `web/` | The UI. No build step: edit a file and refresh |
 | `web/terminal.js` | The terminal pane — a shell, or a run's output |
 | `web/keys.js` | Which chord means which command, and the one function that decides it |
+| `web/vendor/` | The two libraries worth not writing — xterm, and diff2html for the diff viewer. Checked-in prebuilt bundles, not a `node_modules` |
 | `app/main.js` | The Electron shell |
 | `app/make-icon.js` | Generates `app/icon.ico`, the packaged shell's icon |
 | `docs/api.md` | The bridge API, as a contract for other clients |
 | `docs/remote.md` | Reaching the bridge from a phone |
+
+`web/vendor/` is the one place a dependency is allowed, and the rule that keeps it
+cheap is that what lands there is a **prebuilt bundle, committed**, fetched with
+`npm pack` and copied in — never an `npm install`. That is what preserves the
+property `install.ps1` promises twice: changes to `bridge/` and `web/` need no
+rebuild. A bundler would make `web/app.js` a build artifact and put a build step
+between every UI edit and a refresh, which is the whole reason
+`react-diff-viewer-continued` was passed over for diff2html. Each library keeps its
+licence beside it, and the version it came from is recorded in the CSS block that
+themes it.
 
 `launch.sh` exists because `wsl.exe bash -lc` runs a *login* shell, which reads
 `~/.profile` but not `~/.bashrc` — and nvm installs itself in `~/.bashrc`. Node
