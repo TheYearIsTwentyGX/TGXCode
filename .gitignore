@@ -15,3 +15,9 @@ sidebar.png
 # beside it is checked in; this one is yours, and the app says so out loud if
 # this line ever goes missing.
 .tgxcode/commands.local.json
+
+# The same deal for settings. The Settings panel offers a "Project — local"
+# scope whose entire premise is that this file is yours and not the
+# repository's — and bridge/prefs.js has called it "the gitignored local file"
+# since before anything ignored it. Now something does.
+.tgxcode/settings.local.json

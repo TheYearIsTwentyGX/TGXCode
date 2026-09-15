@@ -4,24 +4,42 @@
 // arrives from one place only (the file tail, pushed over SSE), so a session
 // running in somebody's terminal renders identically to one started here.
 
-import { renderMarkdown, inline } from './markdown.js';
+import { renderMarkdown, inline, configurePaths } from './markdown.js';
 import { highlight, escapeHtml } from './highlight.js';
 import { TerminalPane } from './terminal.js';
+import * as keys from './keys.js';
 
 // ── api ──────────────────────────────────────────────────────────────────
 
 const HEADERS = { 'X-Claude-Sessions-Client': '1', 'Content-Type': 'application/json' };
 
+/**
+ * The Error a failed call throws, carrying the status and the body with it.
+ *
+ * Every helper below used to throw a bare `new Error(data.error)`, which is
+ * enough while every refusal means the same thing to a caller. It stopped being
+ * enough with `PUT /api/claude-config`: a `409` there is not a mistake to
+ * apologise for but a file that changed underneath, the body carries the file
+ * as it is now, and a caller that could only read the sentence would have to
+ * match on prose to tell the two apart.
+ */
+function httpError(status, data) {
+    const err = new Error(data.error || `HTTP ${status}`);
+    err.status = status;
+    err.data = data;
+    return err;
+}
+
 async function get(path) {
     const r = await fetch(path, { headers: { 'X-Claude-Sessions-Client': '1' } });
-    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
+    if (!r.ok) throw httpError(r.status, await r.json().catch(() => ({})));
     return r.json();
 }
 
 async function post(path, body) {
     const r = await fetch(path, { method: 'POST', headers: HEADERS, body: JSON.stringify(body || {}) });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    if (!r.ok) throw httpError(r.status, data);
     return data;
 }
 
@@ -48,27 +66,43 @@ async function postFile(path, file) {
         body: file,
     });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    if (!r.ok) throw httpError(r.status, data);
     return data;
 }
 
 /**
- * A partial update. The one route that takes one is `PATCH /api/drafts/:id`,
- * where the verb is load-bearing: a field left out of the body is left alone,
- * which is how the dialog can save a change to the message without restating the
- * model and the permission mode it did not touch.
+ * A partial update — `PATCH /api/drafts/:id`, `/api/snippets/:id` and their
+ * neighbours — where the verb is load-bearing: a field left out of the body is
+ * left alone, which is how a dialog can save a change to the message without
+ * restating the model and the permission mode it did not touch.
  */
 async function patch(path, body) {
     const r = await fetch(path, { method: 'PATCH', headers: HEADERS, body: JSON.stringify(body || {}) });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    if (!r.ok) throw httpError(r.status, data);
+    return data;
+}
+
+/**
+ * A whole value, replaced. Three routes: `PUT /api/prefs`,
+ * `PUT /api/claude-config` and `PUT /api/claude-docs`.
+ *
+ * Not `patch`, even though the body is a patch of sections, because what it
+ * replaces is each *key* it names — including `keyboard.bindings`, which is one
+ * key whose value is a map and so goes over wholesale. PATCH would promise a
+ * merge one level deeper than the bridge does.
+ */
+async function put(path, body) {
+    const r = await fetch(path, { method: 'PUT', headers: HEADERS, body: JSON.stringify(body || {}) });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw httpError(r.status, data);
     return data;
 }
 
 async function del(path) {
     const r = await fetch(path, { method: 'DELETE', headers: HEADERS });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    if (!r.ok) throw httpError(r.status, data);
     return data;
 }
 
@@ -87,22 +121,55 @@ const DEFAULT_PERM = 'auto';
 // drawn before an answer arrived would stay drawn the wrong way, since nothing
 // re-renders history. A project may override any of it, and that answer travels
 // with the transcript instead — see openSession.
+// Every block gets a fallback, not just the two the transcript needs. The
+// settings page draws controls straight off this, and a missing or malformed tag
+// used to leave `BOOT_PREFS.spinner` undefined — which was invisible while
+// nothing read it and is a thrown error the moment something does.
+const PREFS_FALLBACK = {
+    version: 1,
+    transcript: { groupToolCalls: true, groupMinCalls: 3, groupIncludesThinking: true },
+    live: { compact: false, hideElsewhere: false },
+    quota: { beacon: false, beaconDir: null, beaconEveryMinutes: 20 },
+    spinner: { randomize: true, groups: [], weights: {}, rerollMs: 8000 },
+    keyboard: { contextualTerminalCopy: false, composerSend: 'enter', bindings: {} },
+};
+
+/** One block of settings folded over its fallback, with the shape guaranteed. */
+const mergePrefs = (d) => {
+    const out = { ...PREFS_FALLBACK, ...(d || {}) };
+    for (const section of Object.keys(PREFS_FALLBACK)) {
+        if (section === 'version') continue;
+        out[section] = { ...PREFS_FALLBACK[section], ...((d && d[section]) || {}) };
+    }
+    return out;
+};
+
 const BOOT_PREFS = (() => {
-    const fallback = {
-        transcript: { groupToolCalls: true, groupMinCalls: 3, groupIncludesThinking: true },
-        live: { compact: false, hideElsewhere: false },
-    };
     try {
         const m = document.querySelector('meta[name="cs-prefs"]');
-        if (!m) return fallback;
-        const d = JSON.parse(decodeURIComponent(m.content));
-        return {
-            ...fallback, ...d,
-            transcript: { ...fallback.transcript, ...(d.transcript || {}) },
-            live: { ...fallback.live, ...(d.live || {}) },
-        };
-    } catch { return fallback; }
+        if (!m) return mergePrefs(null);
+        return mergePrefs(JSON.parse(decodeURIComponent(m.content)));
+    } catch { return mergePrefs(null); }
 })();
+
+// Where the bridge's filesystem is, so an absolute path in a transcript can be
+// drawn as a link to the Windows form of it. In the page for the same reason
+// BOOT_PREFS is, and absent for two reasons that need no distinguishing here: a
+// remote page is not served the tag, and neither is a bridge outside WSL.
+// Absent means markdown.js leaves paths as plain text — see configurePaths.
+const BOOT_HOST = (() => {
+    try {
+        const m = document.querySelector('meta[name="cs-host"]');
+        return m ? JSON.parse(decodeURIComponent(m.content)) : null;
+    } catch { return null; }
+})();
+
+configurePaths(BOOT_HOST);
+
+// The shortcuts, before anything can be pressed. `keyboard` is user-level only
+// (see USER_ONLY in bridge/prefs.js), so BOOT_PREFS is the whole answer and no
+// project can move a binding under you mid-session.
+keys.apply(BOOT_PREFS.keyboard);
 
 /** The transcript settings in force — the open session's, or the user's own. */
 const grouping = () => (state.prefs || BOOT_PREFS).transcript;
@@ -266,6 +333,9 @@ const state = {
     // of a session, like the terminal pane's height — you either want these in
     // view while you work or you do not.
     tasksShut: localStorage.getItem('tasksShut') === '1',
+    // Whether an already-open aside is holding its place while the new
+    // conversation's suggestions are being fetched. See renderChecklist.
+    tasksPending: false,
     // The task the big dialog is showing, if it is open. Held by id rather than
     // by object so a decision taken inside it can find its way back to the same
     // task after the panel behind has been rebuilt.
@@ -338,6 +408,9 @@ const state = {
         on: localStorage.getItem('checklistOn') !== '0',
         shut: localStorage.getItem('checklistShut') === '1',
         sessionId: null, data: null,
+        // Whether an already-open column is holding its place while the new
+        // conversation's list is still on the wire. See resetChecklist.
+        pending: false,
     },
     // The board of unfinished work. `at` is when the bridge last answered, so
     // opening it again does not re-run git over every worktree on the machine.
@@ -381,6 +454,13 @@ const state = {
         // Half-typed text in the Suggested column's box, held here rather than
         // in the DOM so it survives the redraws the board does while agents work.
         draft: '',
+        // The focused view: suggested tasks only, spread one column per
+        // project. A property of the window like `liveDock` above, so a board
+        // you left focused comes back focused. `query` deliberately is not
+        // remembered — a search still live on the next open would hide most of
+        // the board and read as the tasks having gone.
+        focus: localStorage.getItem('tbFocus') === '1',
+        query: '',
         order: new Map(), freshRank: 0, tailRank: 0 },
     // Sessions set up but not started.
     //
@@ -398,10 +478,68 @@ const state = {
     // `editing` is the id the dialog is currently editing, or null when it is
     // about to make a new one. It is what tells Save which verb to use.
     drafts: { open: false, rows: [], at: 0, loading: false, error: null, editing: null },
+    // Canned messages, and the groups they are drawn in. Drafts' terms for the
+    // push — the whole list, unconditional, held as sent — with one difference
+    // that matters: **this list is read while its panel is shut.** The pinned
+    // buttons on the composer are drawn from it, so it is loaded at boot rather
+    // than when the settings panel opens, and kept current whether or not anybody
+    // is looking at the editor.
+    //
+    // `editing` is the snippet the editor dialog has open, or null for a new one.
+    // `fill` is what the parameter dialog is asking about, held from the click
+    // that opened it until the insert that consumes it — it carries the composer
+    // and the caret, because by then the focus has moved twice.
+    snippets: {
+        rows: [], groups: [], at: 0, loading: false, error: null,
+        editing: null, fill: null, drag: null,
+    },
     // Schedules, on exactly the same terms as drafts above — an unconditional
     // push, held as sent. `editing` is the id the dialog has open, which is also
     // what puts the dialog into schedule mode at all: see openNew().
-    sched: { open: false, rows: [], at: 0, loading: false, error: null, editing: null },
+    // `fromDraft` is the draft a Schedule press converted, held from the moment
+    // the dialog reopens in schedule mode until the save that consumes it. It is
+    // not `editing` — the schedule does not exist yet — and it is deliberately
+    // not stored on the schedule either; see drToSchedule().
+    sched: {
+        open: false, rows: [], at: 0, loading: false, error: null,
+        editing: null, fromDraft: null,
+    },
+    // The settings panel. `data` is a `?files=1` answer — what is in force plus
+    // what each file in the chain says on its own, which is what lets a control
+    // tell a value you set from one you inherited.
+    //
+    // `scope` and `project` are which file it is editing; they are the panel's
+    // own state and not persisted, because a scope left selected from last week
+    // is the kind of thing that gets a preference written to the wrong file.
+    // `recording` is the command whose next keystroke becomes its binding.
+    settings: {
+        open: false, scope: 'user', project: '', projects: [],
+        data: null, spinner: null, loading: false, error: null,
+        saving: false, recording: null,
+        // The order the verb groups are drawn in, fixed on the way in. See
+        // settingGroups().
+        groupOrder: null,
+    },
+    // Claude Code's own settings, which are a different four files with a
+    // different owner — see the Claude Code section below. Its own `scope`
+    // because its chain is four rows to the page's three, and its own `draft`
+    // because the JSON tab is the one control here that is a draft by nature.
+    claudeCfg: {
+        scope: 'user', tab: 'form', data: null, loading: false, error: null,
+        saving: false, draft: null, dirty: false, jsonError: null,
+        stale: null, jumpTo: null,
+    },
+    // And Claude Code's memory files, which are two rather than four and are
+    // additive rather than a chain — see the Memory section below. All of it is
+    // a draft: the whole control is one document being typed into, so `draft`
+    // is not an exception here the way it is above but the normal case.
+    // `caret` survives the trip through Preview, which is a re-render and would
+    // otherwise put the cursor back at the top of a 23KB file.
+    claudeDocs: {
+        scope: 'user', data: null, loading: false, error: null, saving: false,
+        draft: null, dirty: false, stale: null, preview: false, caret: 0,
+        expanded: false,
+    },
     // Sessions blocked on an answer, kept whether or not the board is open, so
     // the badge on a shut board still says how many people are waiting.
     waiting: new Set(),
@@ -426,12 +564,19 @@ const $ = (id) => document.getElementById(id);
 const dom = {};
 for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-sub',
     'channels', 'scroll', 'log', 'status-line', 'status-text', 'btn-stop', 'input',
-    'btn-send', 'btn-lgtm', 'btn-attach', 'attach', 'attach-input', 'composer',
+    'btn-send', 'btn-attach', 'attach', 'attach-input', 'composer',
+    'pins', 'btn-snippets', 'snip-menu', 'new-btn-snippets', 'new-snip-menu',
+    'snip-fill-scrim', 'snip-fill-title', 'snip-fill-form', 'snip-fill-go',
+    'snip-edit-scrim', 'snip-edit-title', 'snip-title', 'snip-group', 'snip-body',
+    'snip-placeholders', 'snip-params', 'snip-param-add', 'snip-insert',
+    'snip-auto', 'snip-perm-row', 'snip-perm', 'snip-pinned', 'snip-projects',
+    'snip-project', 'snip-project-list', 'snip-project-go', 'snip-save',
+    'set-g-snippets', 'snip-new', 'snip-group-new', 'snip-settings-body',
     'slash-menu', 'mention-menu', 'new-slash-menu', 'new-mention-menu',
     'new-attach', 'new-attach-input', 'new-attach-btn', 'new-attach-row',
     'queue', 'queue-list', 'queue-count', 'queue-clear',
     'model', 'perm', 'btn-new', 'btn-new-menu', 'new-menu', 'db-status', 'db-label', 'toasts',
-    'btn-bell', 'bell-menu', 'opt-desktop', 'opt-sound', 'bell-note', 'bell-try',
+    'opt-desktop', 'opt-sound', 'notify-note', 'notify-try',
     'quota-wrap', 'quota-pill', 'quota-pill-body', 'quota-menu', 'quota-windows',
     'quota-events', 'quota-note', 'quota-refresh',
     'btn-pin', 'btn-changes', 'btn-folder', 'btn-term', 'btn-archive', 'btn-delete',
@@ -455,11 +600,17 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'btn-dash', 'dash-badge', 'dash', 'dash-sub', 'dash-body', 'dash-refresh',
     'btn-notes', 'notes-badge', 'notes', 'notes-sub', 'notes-body',
     'btn-taskboard', 'tb-badge', 'taskboard', 'tb-sub', 'tb-body', 'tb-refresh',
+    'tb-search', 'tb-unfocus',
     'btn-drafts', 'dr-badge', 'drafts', 'dr-sub', 'dr-body', 'dr-new',
     'btn-sched', 'sched-badge', 'sched', 'sched-sub', 'sched-body', 'sched-new',
+    'btn-settings', 'settings', 'set-scope', 'set-project', 'set-project-wrap',
+    'set-file', 'set-problems', 'set-body', 'set-shell', 'set-toc', 'composer-hint',
+    'memo-scrim', 'memo-title', 'memo-big', 'memo-note', 'memo-count',
+    'memo-close', 'memo-save',
+    'set-g-notify', 'set-g-pair',
     'new-cron', 'new-cron-row', 'new-cron-note', 'new-gate-ref', 'new-gate-row',
     'new-gate-kind', 'new-gate-note', 'new-gate-ref-row', 'new-pr-row',
-    'new-pr-drafts', 'new-pr-post', 'new-sched-save',
+    'new-pr-drafts', 'new-pr-post', 'new-sched-save', 'new-sched',
     'new-when-date', 'new-when-once-time', 'new-when-count', 'new-when-unit',
     'new-when-daily-time', 'new-when-weekly-time', 'new-when-days',
     'new-when-dom', 'new-when-monthly-time',
@@ -468,15 +619,14 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'btn-live', 'live-badge', 'live', 'live-sub', 'live-body', 'live-focus', 'focus-exit',
     'live-side', 'live-side-label', 'live-side-a', 'live-side-b',
     'new-scrim', 'new-cwd', 'new-picker', 'new-prompt', 'new-model', 'new-perm',
-    'new-test', 'new-test-row', 'new-go', 'new-save', 'new-title',
+    'new-test', 'new-test-row', 'new-go', 'new-save', 'new-title', 'new-name',
     'new-tab-recent', 'new-tab-browse', 'new-browse', 'new-roots', 'new-crumbs',
     'new-tree', 'new-mkdir', 'new-mkdir-name', 'new-mkdir-go', 'new-browse-note',
     'del-scrim', 'del-what', 'del-meta', 'del-go',
     'diff-scrim', 'diff-title', 'diff-stat', 'diff-unified', 'diff-split',
     'diff-words', 'diff-wrap', 'diff-source', 'diff-note', 'diff-jump',
     'diff-reload', 'diff-copy', 'diff-body', 'ctx-menu',
-    'btn-pair', 'pair-scrim', 'pair-url', 'pair-host', 'pair-hosts', 'pair-note',
-    'pair-copy',
+    'pair-url', 'pair-host', 'pair-hosts', 'pair-note', 'pair-copy',
     'btn-restart', 'restart-scrim', 'restart-lede', 'restart-problems',
     'restart-fix', 'restart-go']) {
     dom[id.replace(/-(\w)/g, (_, c) => c.toUpperCase())] = $(id);
@@ -536,6 +686,22 @@ function dur(ms) {
 }
 
 const fileName = (p) => (p ? String(p).split('/').pop() : '');
+
+// A path with the home directory folded back to `~`. The settings panel names
+// files, and every one of them starts with the same 18 characters — which is
+// the part a reader already knows and the part that pushes the rest out of a
+// narrow column. `HOME` is read off a path the bridge already sends rather than
+// asked for: `~/.tgxcode/settings.json` is always the weakest file in the
+// chain, so the prefix is derivable and needs no route.
+let homeDir = '';
+const noteHome = (userPrefsFile) => {
+    const m = /^(.*)\/\.tgxcode\/settings\.json$/.exec(userPrefsFile || '');
+    if (m) homeDir = m[1];
+};
+const shortPath = (p) => {
+    const s = String(p || '');
+    return homeDir && s.startsWith(`${homeDir}/`) ? `~${s.slice(homeDir.length)}` : s;
+};
 const shortModel = (m) => (m ? String(m).replace(/^claude-/, '').replace(/-\d{8}$/, '') : '');
 
 function clip(s, n) {
@@ -566,6 +732,48 @@ function toast(text, kind = 'info', opts = {}) {
     dom.toasts.append(t);
     if (!action) setTimeout(() => t.remove(), ms);
     return t;
+}
+
+/**
+ * Is one of the six modal dialogs up? They are `hidden`-toggled divs rather
+ * than a native `<dialog>`, so asking the DOM is the only way.
+ *
+ * **A modal is closed by its own ✕ or Cancel and by nothing else.** It used to
+ * go on Escape and on a click landing on the scrim, and both were losing work
+ * that only exists in the page: Start-a-session holds a written prompt, a
+ * directory and attachments that were never uploaded, and closing it discards
+ * all three. Escape reaches this app while a dictation tool is cancelling a
+ * phrase — Wispr Flow binds it — and the scrim click was never really a click
+ * outside: drag-selecting text in the box and releasing past its edge fires one
+ * whose target is the common ancestor, which is the scrim.
+ *
+ * Comparing the mousedown target to the mouseup target would have saved the
+ * drag alone and left Escape as it was, so both paths went instead.
+ */
+function modalUp() {
+    return !dom.newScrim.hidden || !dom.delScrim.hidden
+        || !dom.restartScrim.hidden || !dom.taskScrim.hidden
+        // Both snippet dialogs hold work that only exists in the page — typed
+        // parameter values, and a whole snippet body — so the rule above covers
+        // them for the reason it covers Start-a-session. The parameter one can
+        // also be up *over* Start-a-session, which is why it is a second term
+        // rather than a case: Escape must be swallowed either way.
+        || !dom.snipFillScrim.hidden || !dom.snipEditScrim.hidden
+        // And the full-height CLAUDE.md editor, which is the plainest case on
+        // this list: what it holds is a whole file somebody is part-way through
+        // writing. Closing it keeps the draft, so Escape here would not have
+        // *lost* anything — but six dialogs swallow the key and a seventh that
+        // answered it would be the special case this function exists to stop.
+        || !dom.memoScrim.hidden
+        // The diff viewer is the one on this list that holds no work at all — it
+        // is a read-only view and closing it loses nothing, so the paragraph
+        // above is not what puts it here. The sentence after it is: six dialogs
+        // swallow the key and a seventh that answered it would be exactly the
+        // special case this function exists to stop. It also happens to be the
+        // dialog the *scrim* half of that rule was written for — a diff is the
+        // one thing here people drag-select, and a drag released past the edge
+        // fires a click whose target is the scrim.
+        || !dom.diffScrim.hidden;
 }
 
 // ── drafts ───────────────────────────────────────────────────────────────
@@ -792,6 +1000,27 @@ const ICON = {
         + '16.3 19l1.1-12.2" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>'
         + '<path d="M9.6 6.8V4.6a1 1 0 0 1 1-1h2.8a1 1 0 0 1 1 1v2.2" stroke="currentColor" '
         + 'stroke-width="1.8" stroke-linejoin="round"/>',
+    // Two sheets. The back one is only the edges of a sheet rather than a second
+    // whole rectangle: at 14px two nested outlines 5px apart read as a smudge.
+    copy: '<rect x="9" y="9" width="11.5" height="11.5" rx="2.4" stroke="currentColor" '
+        + 'stroke-width="1.8"/><path d="M6.2 15.5H5.8A2.3 2.3 0 0 1 3.5 13.2V5.8A2.3 2.3 '
+        + '0 0 1 5.8 3.5h7.4a2.3 2.3 0 0 1 2.3 2.3v.4" stroke="currentColor" '
+        + 'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+    // The tick that says a copy landed. A glyph rather than the character, for the
+    // reason .ev-copy gives: text in a row is text the find walker indexes and a
+    // drag-selection of the message picks up.
+    tick: '<path d="m5 12.8 4.4 4.4L19 6.6" stroke="currentColor" stroke-width="2" '
+        + 'stroke-linecap="round" stroke-linejoin="round"/>',
+    // A card with two lines written on it, which is what a snippet is and what a
+    // row in the popover shows. Deliberately not a lightning bolt or a pair of
+    // scissors: every glyph in this map is the thing rather than a metaphor for it.
+    snippets: '<rect x="3.6" y="4.6" width="16.8" height="14.8" rx="2.6" '
+        + 'stroke="currentColor" stroke-width="1.8"/><path d="M7.6 9.6h8.8M7.6 13.4h5.8" '
+        + 'stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+    // Six dots, the shape every drag handle in every list is. Used in the settings
+    // editor, where a row can be dragged as well as walked with the arrow buttons.
+    grip: '<path d="M9 6.5h.01M15 6.5h.01M9 12h.01M15 12h.01M9 17.5h.01M15 17.5h.01" '
+        + 'stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>',
 };
 
 // Which glyph says each PR status. `unknown` is gh being unreachable rather than a
@@ -1465,7 +1694,14 @@ function beginOpen(summary, { keepDash = false } = {}) {
     state.tasks.clear();        // and so do the offers themselves
     state.taskOpen.clear();
     closeTaskDialog();          // it was showing a task belonging to the old one
-    renderTasks();              // empties the aside, and hides it
+    // Empties the aside, but keeps its place in the row until loadTasks answers
+    // for the new conversation — see renderChecklist for why.
+    state.tasksPending = paneUp(dom.tasks);
+    renderTasks();
+    // A snippet scoped to a project appears and disappears as you move between
+    // conversations, so the strip is rebuilt against the new directory rather than
+    // only when the list itself changes.
+    renderPins();
     resetChanges();             // and the files listed were the old session's
     renderChanges();            // which leaves the drawer saying it is looking
     resetChecklist();           // as was the task list — the push will refill it
@@ -1491,6 +1727,12 @@ function beginOpen(summary, { keepDash = false } = {}) {
 
     renderHeader();
     hideTurnPop();
+    // Emptied, but keeping its 30px until renderTurns says whether the new
+    // conversation has a rail — otherwise the column blinks out and back while
+    // the switch is animating, and takes the composer 30px with it both ways.
+    // Only if there is a rail to hold, so a conversation that never had one does
+    // not gain a reserved strip.
+    if (paneUp(dom.turns)) dom.turns.classList.add('holding');
     dom.turns.replaceChildren();
     dom.log.replaceChildren(skeleton());
     dom.scroll.scrollTop = 0;
@@ -2021,6 +2263,136 @@ function paintRunSummary(det) {
     );
 }
 
+// ── copying a message ────────────────────────────────────────────────────
+// Selecting rendered prose and pressing Ctrl+C hands over flattened text: the
+// list numbers gone, the emphasis gone, the fences gone. That is exactly wrong
+// for what a message gets pasted into — another prompt, an issue, a commit
+// message — so the row offers the source it was rendered from instead.
+
+/**
+ * The markdown a message was written in.
+ *
+ * Not read back off the DOM, and not `searchableText` either. `.prose` is the
+ * rendered result, and a selection over it is precisely what drops the numbering
+ * and the asterisks this exists to keep; `searchableText` is a haystack — it
+ * folds in file names and a tool's arguments, none of which you meant to paste.
+ * A `/command` turn never had markdown of its own, so it gets the line the row
+ * shows; an image-only turn has neither and returns empty, which is what
+ * suppresses the button.
+ */
+function messageMarkdown(ev) {
+    if (ev.command) return turnText(ev);
+    return (ev.text || '').trim();
+}
+
+/**
+ * The header line of a message: who said it, and the button that copies it.
+ *
+ * In the flow rather than floating over the body. The label line is the one line
+ * in a row whose right side is reliably empty, so a control there cannot land on
+ * the first word of a long turn — and it sits in the same place whether the
+ * message is two lines or two hundred.
+ *
+ * Only user and assistant rows call this. The other labelled kinds keep their
+ * bare `.ev-label`: a tool call and a thinking block are folds whose whole row
+ * is one `<summary>`, where a button would have to cancel the summary's own
+ * click, and they are also the only two kinds `closeRun` lifts into a `.trun` —
+ * so leaving them out is what guarantees no copy button is ever inside a fold.
+ */
+function evHead(ev, label) {
+    return el('div', { class: 'ev-head' },
+        el('div', { class: 'ev-label' }, label),
+        copyButton(ev));
+}
+
+/**
+ * `onclick`, not the delegated `.copy-btn` handler at the foot of this file.
+ *
+ * That one is delegated because the markdown renderer emits its buttons as
+ * innerHTML and they cannot be handed a listener — which is why the fence source
+ * has to ride on a `data-code` attribute. This button is built here, beside the
+ * event, so a closure is both shorter and exact: no second copy of every message
+ * in the DOM, and no id to look up. Both of those matter — the row
+ * `showPendingSend` draws has no `ev.id` and is not in `state.nodes` at all, and
+ * the subagent pane keeps its own map. It survives the two things that happen to
+ * a rendered row for free: `patchTool` and `redrawEvent` replace the node, so the
+ * closure is rebuilt with it, and `foldRun` moves the node, so the listener goes
+ * along with it.
+ */
+function copyButton(ev) {
+    const md = messageMarkdown(ev);
+    if (!md) return null;              // an image-only turn has nothing to take
+    const btn = el('button', {
+        class: 'ev-copy', type: 'button',
+        title: 'Copy message', 'aria-label': 'Copy message',
+        // No stopPropagation, unlike the rail's mini buttons: an `.ev` row is
+        // not itself clickable.
+        onclick: () => copyMessage(btn, md),
+    }, icon('copy', 14));
+    return btn;
+}
+
+/**
+ * Put a message on the clipboard twice over: as the markdown it was written in,
+ * and as the HTML that markdown renders to.
+ *
+ * Both, because the two destinations want opposite things. A prompt, an issue or
+ * a commit message wants the asterisks and the list numbers as characters; Word
+ * and Gmail want them applied. `write` with two blobs is the only call that can
+ * say that, and it is also the one most likely to be missing — so a failure
+ * there falls back to the text alone rather than to nothing.
+ */
+async function copyMessage(btn, md) {
+    try {
+        // `navigator.clipboard` is undefined outside a secure context, which the
+        // plain-http LAN bind in docs/remote.md is. Reading `.write` off it would
+        // throw here rather than reject, so the whole thing sits in the try.
+        const clip = navigator.clipboard;
+        if (!clip) throw new Error('no clipboard');
+        if (clip.write && window.ClipboardItem) {
+            try {
+                await clip.write([new ClipboardItem({
+                    'text/plain': new Blob([md], { type: 'text/plain' }),
+                    'text/html': new Blob([clipboardHtml(md)], { type: 'text/html' }),
+                })]);
+            } catch { await clip.writeText(md); }
+        } else {
+            await clip.writeText(md);
+        }
+    } catch {
+        toast('Could not reach the clipboard.', 'error');
+        return;
+    }
+    // A tick where the button was, not a toast: the row you copied is the row you
+    // are already looking at, and a toast is this app's channel for things that
+    // happened somewhere else. `.done` is also what holds the button visible once
+    // the pointer leaves — which the always-on Copy on a code block never had to
+    // arrange for itself.
+    btn.classList.add('done');
+    btn.replaceChildren(icon('tick', 14));
+    clearTimeout(btn._copyTimer);
+    btn._copyTimer = setTimeout(() => {
+        btn.classList.remove('done');
+        btn.replaceChildren(icon('copy', 14));
+    }, 1400);
+}
+
+/**
+ * The rendered half of the clipboard — the same `renderMarkdown` the row itself
+ * uses, with this app's own furniture taken back out.
+ *
+ * A fence renders with a head bar carrying a Copy button, and handing that over
+ * verbatim puts the word "Copy" above every code block in the document you
+ * pasted into. `data-code` goes with it: that is the fence's source over again,
+ * url-encoded, and nothing on the far side of a paste reads it.
+ */
+function clipboardHtml(md) {
+    const holder = el('div', { html: renderMarkdown(md) });
+    for (const head of holder.querySelectorAll('.code-head')) head.remove();
+    for (const b of holder.querySelectorAll('.code-block')) b.removeAttribute('data-code');
+    return holder.innerHTML;
+}
+
 function row(ev, kind, ...body) {
     return el('div', { class: `ev ev-${kind}`, 'data-error': ev.isError ? 'true' : null },
         el('div', { class: 'ev-time' }, clockOf(ev.ts)),
@@ -2045,7 +2417,7 @@ function renderEvent(ev) {
 
 function renderUser(ev) {
     const body = [];
-    body.push(el('div', { class: 'ev-label' }, 'You'));
+    body.push(evHead(ev, 'You'));
     if (ev.command) {
         body.push(el('div', { class: 'prose', html:
             `<p><code>/${escapeHtml(ev.command.name)}</code>`
@@ -2097,7 +2469,7 @@ function attachCards(ev) {
 
 function renderAssistant(ev) {
     return row(ev, 'assistant',
-        el('div', { class: 'ev-label' }, 'Claude'),
+        evHead(ev, 'Claude'),
         el('div', { class: 'prose', html: renderMarkdown(ev.text) }),
     );
 }
@@ -2197,8 +2569,18 @@ function renderTasks() {
     // is merged in beside them.
     const tasks = [...state.tasks.values()]
         .sort((a, b) => (Date.parse(a.ts) || 0) - (Date.parse(b.ts) || 0));
-    dom.tasks.hidden = !tasks.length;
-    if (!tasks.length) return;
+    // `tasksPending` holds an already-open aside in place while the new
+    // conversation's suggestions are still being fetched, for the reason
+    // renderChecklist gives: leaving the row and coming back a moment later is
+    // what switching between two conversations used to look like.
+    const present = tasks.length > 0 || state.tasksPending;
+    slidePane(dom.tasks, present);
+    if (!tasks.length) {
+        dom.tasksList.replaceChildren();
+        dom.tasksCount.textContent = present ? '…' : '';
+        dom.tasksStripCount.textContent = present ? '…' : '';
+        return;
+    }
 
     // Only the ones still on offer are counted. A count that includes things you
     // have already dealt with is a number that never goes down, which is the
@@ -2462,7 +2844,6 @@ function showChanges(on) {
     // 34px strip: an open drawer is what the button promises.
     if (on) collapseChanges(false, { render: false });
     renderChanges();
-    syncPaneInsets({ instant: true });   // arriving or leaving, not widening
     renderHeaderActions();
     if (on) loadChangesIfStale();
 }
@@ -2534,8 +2915,12 @@ function renderChanges() {
     // one that closes.
     closeContextMenu({ focus: false });
 
-    dom.changes.hidden = !state.changes.on || !state.current;
-    if (dom.changes.hidden) return;
+    // No pending hold here: whether this drawer is up is a window property, so
+    // it does not change when the conversation does and there is nothing to wait
+    // for. It slides for the same reason the other two do — the header button.
+    const present = !!state.changes.on && !!state.current;
+    slidePane(dom.changes, present);
+    if (!present) return;
 
     const d = state.changes.data;
     const edits = (d && d.edits) || [];
@@ -3243,7 +3628,14 @@ async function openOnHost(t) {
     // knows nothing at all — while the bridge answers precisely. Fire, and say
     // what it said. The Open folder button in the header works the same way.
     try {
-        await post(`/api/sessions/${state.current.sessionId}/open-file`, { path: t.sendPath });
+        const out = await post(`/api/sessions/${state.current.sessionId}/open-file`,
+            { path: t.sendPath });
+        // The bridge reveals rather than launches a file Windows would run. That
+        // is a success, and silence would leave you looking at a folder you did
+        // not ask for with no idea why.
+        if (out.how === 'reveal') {
+            toast('Windows would run that file, so its folder opened instead.', 'warn');
+        }
     } catch (err) {
         toast(`Could not open that file: ${err.message}`, 'error');
     }
@@ -3369,12 +3761,13 @@ function syncPaneInsets({ instant = false } = {}) {
  * anything inside the row — so this cannot feed itself.
  */
 // `instant`, and not just because the callback's first argument is a list of
-// entries rather than an options bag. Everything this notices and the explicit
-// calls do not — a column removed because its content went away, a window
-// resize crossing a media query — changes the layout in one frame, so easing
-// after it would be the lag this whole thing is about. A width animation, which
-// is the one case that should ease, recomputes the same numbers here and stops
-// at the no-op above without touching the transition.
+// entries rather than an options bag. What is left for this to be the first to
+// notice — a window resize crossing a media query, a transcript growing a
+// scrollbar — changes the layout in one frame with no animation to keep step
+// with, so easing after it would be the lag this whole thing is about. A column
+// sliding in or out is not one of those: `slidePane` has already written the
+// target by the time this runs, so it recomputes the same numbers and stops at
+// the no-op above without touching the transition in flight.
 const paneObserver = typeof ResizeObserver === 'function'
     ? new ResizeObserver(() => syncPaneInsets({ instant: true })) : null;
 
@@ -3386,6 +3779,66 @@ function watchPaneInsets() {
     // composer's padding cannot reach inside the row, so watching them still
     // cannot feed this back into itself.
     for (const k of dom.convBody.children) paneObserver.observe(k);
+    syncPaneInsets();
+}
+
+/** Pending `hidden` writes, one per column, so a reversal cancels the last. */
+const paneExits = new WeakMap();
+
+/** Whether a column is in the row now — not gone, and not on its way out. */
+function paneUp(node) {
+    return !!node && !node.hidden && !node.classList.contains('gone');
+}
+
+/** How long this element says it takes to move. 0 under reduced motion. */
+function transitionMs(node) {
+    const secs = getComputedStyle(node).transitionDuration.split(',')[0];
+    return (Number.parseFloat(secs) || 0) * 1000;
+}
+
+/**
+ * Put a column in the row or take it out, as a slide rather than a jump.
+ *
+ * `display` cannot be animated, so toggling `hidden` moved the transcript and
+ * the composer the whole width of a column in one frame. Switching between two
+ * conversations did it four times: `beginOpen` emptied both asides, which took
+ * them out, and then each one's answer arriving put it back.
+ *
+ * So a column that is leaving keeps its place in the layout at zero width until
+ * the transition has run, and only then goes `hidden`; one arriving is put in at
+ * zero width and widened on the next frame. The composer follows either way,
+ * because `--pane-w` is what `syncPaneInsets` reads and `.gone` sets it to 0.
+ *
+ * The `hidden` write is deferred by however long the element says its transition
+ * takes — read from it rather than written here, so reduced motion reports 0 and
+ * this becomes the instant behaviour it used to have, and so the number cannot
+ * drift from the CSS. `transitionend` would be more precise and does not fire at
+ * all when the transition is `none`, which is the case that would then leave a
+ * column in the layout for ever.
+ */
+function slidePane(node, present) {
+    if (!node) return;
+    clearTimeout(paneExits.get(node));
+    const was = paneUp(node);
+    if (present === was) {
+        // Already where it belongs. Still worth clearing a half-finished exit:
+        // a column re-shown mid-slide has the class on and would otherwise stay
+        // at zero width with nothing left to take it off.
+        if (present) node.classList.remove('gone');
+        return;
+    }
+
+    if (present) {
+        node.hidden = false;
+        node.classList.add('gone');
+        void node.offsetWidth;      // commit the narrow state before widening
+        node.classList.remove('gone');
+    } else {
+        node.classList.add('gone');
+        const done = () => { node.hidden = true; paneExits.delete(node); };
+        const ms = transitionMs(node);
+        if (ms > 0) paneExits.set(node, setTimeout(done, ms + 30)); else done();
+    }
     syncPaneInsets();
 }
 
@@ -3401,9 +3854,7 @@ function showChecklist(on) {
     // Asking for it from the header means wanting to see it, not wanting a 34px
     // strip — the same promise the Changed button makes.
     if (on) collapseChecklist(false, { render: false });
-    renderChecklist();
-    // A column arriving or leaving is not a width animation — see syncPaneInsets.
-    syncPaneInsets({ instant: true });
+    renderChecklist();   // slidePane inside it moves the column and the composer
     renderHeaderActions();
 }
 
@@ -3427,6 +3878,13 @@ function collapseChecklist(shut, { render = true } = {}) {
 function resetChecklist() {
     state.checklist.data = null;
     state.checklist.sessionId = null;
+    // Hold the column's place while the new conversation's list is on the wire,
+    // but only if there is a column there to hold: setting this for a column
+    // that is down would slide an empty one in and straight back out. Cleared by
+    // the `task-list` handler, which the bridge sends the moment a session is
+    // followed — including for a session with no list, which is what takes the
+    // column back out.
+    state.checklist.pending = paneUp(dom.checklist);
 }
 
 /**
@@ -3505,15 +3963,25 @@ function renderChecklist() {
     // Off, no conversation, or a session that never kept a list: no box at all
     // rather than an empty one. Most sessions keep no list, and a permanently
     // empty column would be worse than no column.
-    dom.checklist.hidden = !state.checklist.on || !state.current || !items.length;
-    if (dom.checklist.hidden) {
+    //
+    // `pending` is the exception, and it is what makes switching between two
+    // conversations that both keep a list move nothing at all. The new one's
+    // list arrives a moment after the switch, and without this the column left
+    // the row and came back — so it held its place while the answer was on the
+    // wire, showing an empty box rather than the last conversation's tasks.
+    // `resetChecklist` only sets it for a column that is already up, so this
+    // never slides an empty column *in*.
+    const present = !!state.checklist.on && !!state.current
+        && (items.length > 0 || state.checklist.pending);
+    slidePane(dom.checklist, present);
+    if (!present || !items.length) {
         // Emptied rather than just hidden. The rows and the count belonged to
         // whichever session was here before, and a hidden panel holding another
         // conversation's list is the kind of thing that resurfaces later looking
         // like a bug in whatever reveals it.
         dom.checklistBody.replaceChildren();
-        dom.checklistCount.textContent = '';
-        dom.checklistStripCount.textContent = '';
+        dom.checklistCount.textContent = present ? '…' : '';
+        dom.checklistStripCount.textContent = present ? '…' : '';
         return;
     }
 
@@ -4948,11 +5416,18 @@ async function loadTasks() {
         // is reading it. The bridge wins for everything it does know about.
         for (const [tid, task] of state.tasks) if (!next.has(tid)) next.set(tid, task);
         state.tasks = next;
+        state.tasksPending = false;
         renderTasks();
     } catch {
         // The cards already showing came off the transcript tail and are still
         // true. Interrupting somebody over a panel that is merely not fresher
         // than it was would be worse than the staleness.
+        //
+        // But the aside must not be left holding its place for ever on the
+        // strength of a request that failed, so the hold ends either way and the
+        // column settles to whatever there actually is.
+        state.tasksPending = false;
+        renderTasks();
     }
 }
 
@@ -5170,9 +5645,12 @@ async function pullAndRestart(opts = {}) {
     dom.btnRestart.disabled = true;
     dom.btnRestart.classList.add('busy');
     try {
-        // A raw fetch rather than post(): this route's 409 *is* the answer — the
-        // list of what is in the way — and post() collapses a failed response
-        // into an Error with only its `error` string.
+        // A raw fetch rather than post(), because this route's 409 *is* the
+        // answer — the list of what is in the way — and reading it as a normal
+        // response rather than out of a thrown Error is what keeps the happy
+        // path below flat. (`post()` would now carry the body too, since every
+        // helper throws httpError with `status` and `data` on it; the reason
+        // this stayed a raw fetch is shape, not capability.)
         const r = await fetch('/api/restart', {
             method: 'POST', headers: HEADERS, body: JSON.stringify(opts),
         });
@@ -5517,6 +5995,9 @@ function rememberView() {
     } else if (state.sched.open) {
         q.set('view', 'schedules');
         if (state.live.open) q.set('live', '1');
+    } else if (state.settings.open) {
+        q.set('view', 'settings');
+        if (state.live.open) q.set('live', '1');
     } else if (state.live.open) {
         q.set('view', 'live');
     }
@@ -5618,9 +6099,9 @@ function paintLiveBadge() {
     dom.liveBadge.hidden = !waiting;
     dom.liveBadge.textContent = String(waiting);
     dom.liveBadge.classList.toggle('urgent', waiting > 0);
-    dom.btnLive.title = waiting
-        ? `${waiting} session${waiting === 1 ? ' is' : 's are'} waiting for you (Ctrl+3)`
-        : 'Every session running right now (Ctrl+3)';
+    dom.btnLive.title = keys.hint(waiting
+        ? `${waiting} session${waiting === 1 ? ' is' : 's are'} waiting for you`
+        : 'Every session running right now', 'view.live');
 }
 
 /** Prime the badge at boot, for asks that were already outstanding. */
@@ -6052,9 +6533,11 @@ function cardComposer(s, busy, away) {
         state.live.drafts.set(s.sessionId, box.value);
         grow(box, 30, 84);
     });
+    // The same rule as the main composer, from the same setting: a card's box is
+    // a composer with less room, and having Enter mean two different things
+    // depending on which box you are in would be worse than either mode.
     box.addEventListener('keydown', (e) => {
-        if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
-        if (e.shiftKey || e.altKey) return;
+        if (!enterSends(e)) return;
         e.preventDefault();
         sendFromCard(s, box);
     });
@@ -6272,6 +6755,23 @@ async function stopFromCard(sessionId, btn) {
 // bridge caches underneath this, so a re-ask is usually free anyway.
 const DASH_STALE_MS = 45_000;
 
+// The whole-screen panels, named by the state slice each one lives in, in the
+// order the bar and the Ctrl ladder read them. The live board is not one of
+// them: it docks under the conversation and is *covered* by these rather than
+// exclusive with them, which is why it is absent here and handled on its own
+// below.
+//
+// One at a time, so every show…() has to close the rest. That used to be four
+// assignments repeated inside five functions, which is exactly the shape that
+// goes wrong when a sixth arrives: adding Settings would have meant editing
+// five other functions, none of which would have complained about being missed.
+const PANELS = ['taskboard', 'dash', 'notes', 'drafts', 'sched', 'settings'];
+
+/** Shut every whole-screen panel but this one. */
+function closeOtherPanels(keep) {
+    for (const p of PANELS) if (p !== keep) state[p].open = false;
+}
+
 /**
  * Which of the things `main` can hold is on screen.
  *
@@ -6295,17 +6795,11 @@ function paintPanels() {
     const docked = state.live.open && Boolean(state.current) && !state.focus;
     const full = state.live.open && !docked;
 
-    // Five whole-screen panels, and showDash/showNotes/showTaskboard/showDrafts/
-    // showSched keep them exclusive, so "one of them is up" is the only thing
-    // anything below has to ask.
-    const covered = state.dash.open || state.notes.open || state.taskboard.open
-        || state.drafts.open || state.sched.open;
+    // Six whole-screen panels, kept exclusive by closeOtherPanels, so "one of
+    // them is up" is the only thing anything below has to ask.
+    const covered = PANELS.some(p => state[p].open);
 
-    dom.dash.hidden = !state.dash.open;
-    dom.notes.hidden = !state.notes.open;
-    dom.taskboard.hidden = !state.taskboard.open;
-    dom.drafts.hidden = !state.drafts.open;
-    dom.sched.hidden = !state.sched.open;
+    for (const p of PANELS) dom[p].hidden = !state[p].open;
     dom.live.hidden = !state.live.open || covered;
     dom.live.dataset.mode = docked ? 'dock' : 'full';
     // The orientation lives on both: `main` has to change its flex direction,
@@ -6322,7 +6816,8 @@ function paintPanels() {
 
     for (const [btn, on] of [[dom.btnDash, state.dash.open], [dom.btnLive, state.live.open],
         [dom.btnNotes, state.notes.open], [dom.btnTaskboard, state.taskboard.open],
-        [dom.btnDrafts, state.drafts.open], [dom.btnSched, state.sched.open]]) {
+        [dom.btnDrafts, state.drafts.open], [dom.btnSched, state.sched.open],
+        [dom.btnSettings, state.settings.open]]) {
         btn.classList.toggle('on', on);
         btn.setAttribute('aria-pressed', String(on));
     }
@@ -6333,11 +6828,7 @@ function paintPanels() {
 
 function showDash(on) {
     state.dash.open = on;
-    // Four whole screens; one at a time.
-    if (on) {
-        state.notes.open = false; state.taskboard.open = false;
-        state.drafts.open = false; state.sched.open = false;
-    }
+    if (on) closeOtherPanels('dash');
     // The live board is not closed by this, only covered. It is a strip you
     // leave up; the work-in-flight board is a whole screen you go and read and
     // then come back from, and coming back should find things as you left them.
@@ -6389,9 +6880,9 @@ function paintDashBadge() {
     const rows = d ? d.projects.reduce((n, p) => n + p.workspaces.length, 0) : 0;
     dom.dashBadge.hidden = !rows;
     dom.dashBadge.textContent = String(rows);
-    dom.btnDash.title = rows
+    dom.btnDash.title = keys.hint(rows
         ? `${rows} ${rows === 1 ? 'place has' : 'places have'} uncommitted changes or an open pull request`
-        : 'Uncommitted changes and open pull requests, by project';
+        : 'Uncommitted changes and open pull requests, by project', 'view.dashboard');
 }
 
 function renderDash() {
@@ -6623,12 +7114,8 @@ let pendingJump = null;
 
 function showNotes(on) {
     state.notes.open = on;
-    if (on) {
-        state.dash.open = false; state.taskboard.open = false;
-        state.drafts.open = false; state.sched.open = false;
-    } else {
-        state.notes.mark = null;
-    }
+    if (on) closeOtherPanels('notes');
+    else state.notes.mark = null;
     paintPanels();
     syncBoardWatch();
     syncTaskboardWatch();
@@ -6731,9 +7218,9 @@ function paintNotesBadge() {
         : state.notes.rows.filter(r => r.loud && noteUnread(r)).length;
     dom.notesBadge.hidden = !n;
     dom.notesBadge.textContent = String(n);
-    dom.btnNotes.title = n
+    dom.btnNotes.title = keys.hint(n
         ? `${n} ${n === 1 ? 'notification' : 'notifications'} you have not dealt with`
-        : 'Everything that has reached out to you (Ctrl+5)';
+        : 'Everything that has reached out to you', 'view.history');
 }
 
 /**
@@ -6926,6 +7413,22 @@ function takePendingJump() {
 // **One payload for the whole board.** The `taskboard` SSE event, on a three-
 // second tick the bridge only runs while somebody is watching, and only sends
 // when the answer actually moved. Nothing here fetches per card.
+//
+// **Focus is the fifth state the board can be in**, and the only one the four
+// columns cannot express. A backlog of suggested tasks outgrows its column long
+// before any of the other three fills up — they are bounded by how many sessions
+// exist, and that one is bounded by how many follow-ups every agent has ever
+// raised. So the Suggested head carries a Focus button: press it and the other
+// three columns go, and the tasks spread across the whole width one column per
+// project, with a search box over them in the header.
+//
+// It borrows the drafts panel's machinery rather than growing its own, because
+// that panel already answers the same question — a variable number of project
+// columns built out of this board's `.tb-col` chrome. `tbFocusGroups` is
+// `draftGroups` and `tbProjectColumn` is `draftColumn`; `.tb-body.cols` is
+// `.dr-body.cols`. The one thing that is this board's and not that one's is that
+// the rows still go through `tbHold` first, so a card cannot move under the
+// cursor here either.
 
 /** Tell the bridge whether this window is watching the task board. */
 function syncTaskboardWatch() {
@@ -6936,16 +7439,13 @@ function syncTaskboardWatch() {
 
 function showTaskboard(on) {
     state.taskboard.open = on;
-    // Four whole screens; one at a time.
-    if (on) {
-        state.dash.open = false; state.notes.open = false;
-        state.drafts.open = false; state.sched.open = false;
-    }
+    if (on) closeOtherPanels('taskboard');
     paintPanels();
     syncBoardWatch();
     syncTaskboardWatch();
 
     if (on) {
+        tbPaintTools();
         // The subscribe above brings the payload straight back, but only if the
         // stream is up. A window that has just booted, or one whose stream is
         // reconnecting, gets it the other way rather than an empty grid.
@@ -7030,9 +7530,9 @@ function paintTaskboardBadge() {
     dom.tbBadge.textContent = String(n);
     // The same red the live board's badge uses: it is the same news.
     dom.tbBadge.classList.toggle('urgent', n > 0);
-    dom.btnTaskboard.title = n
-        ? `${n} session${n === 1 ? ' is' : 's are'} waiting for you (Ctrl+2)`
-        : 'Everything outstanding, by state (Ctrl+2)';
+    dom.btnTaskboard.title = keys.hint(n
+        ? `${n} session${n === 1 ? ' is' : 's are'} waiting for you`
+        : 'Everything outstanding, by state', 'view.tasks');
 }
 
 // ── holding the order ────────────────────────────────────────────────────
@@ -7126,7 +7626,19 @@ function renderTaskboard() {
         return;
     }
 
-    dom.tbSub.textContent = [
+    const focused = state.taskboard.focus;
+    const groups = focused ? tbFocusGroups(d) : null;
+    const shown = focused
+        ? [...groups.values()].reduce((n, rows) => n + rows.length, 0) : 0;
+    const cols = !focused ? TB_COLUMNS.map(c => tbColumn(c, d))
+        : groups.size ? [...groups].map(([name, rows]) => tbProjectColumn(name, rows))
+            : [tbFocusNote(d)];
+    // A note is one wide block and not a row of columns, so it keeps the plain
+    // grid — otherwise it would sit in a 300px lane with the rest of the board
+    // blank beside it.
+    dom.tbBody.classList.toggle('cols', focused && groups.size > 0);
+
+    dom.tbSub.textContent = focused ? tbFocusWords(d, groups.size, shown) : [
         `${d.counts.needs} blocked on you`,
         `${d.counts.working} working`,
         `${d.counts.suggested} open ${d.counts.suggested === 1 ? 'task' : 'tasks'}`,
@@ -7134,10 +7646,12 @@ function renderTaskboard() {
     ].join(' · ');
 
     // Each column scrolls on its own, and a rebuild would otherwise throw all
-    // four scroll positions away every three seconds.
+    // four scroll positions away every three seconds. Keyed by whichever of the
+    // two things a column is — a state unfocused, a project focused — so that a
+    // column keeps its own place in its own list rather than the neighbour's.
     const scrolls = new Map();
     for (const c of dom.tbBody.querySelectorAll('.tb-col-body')) {
-        scrolls.set(c.dataset.col, c.scrollTop);
+        scrolls.set(c.dataset.col || c.dataset.project, c.scrollTop);
     }
     const bodyScroll = dom.tbBody.scrollLeft;
 
@@ -7150,10 +7664,11 @@ function renderTaskboard() {
         ? { at: active.selectionStart, to: active.selectionEnd }
         : null;
 
-    dom.tbBody.replaceChildren(...TB_COLUMNS.map(c => tbColumn(c, d)));
+    dom.tbBody.replaceChildren(...cols);
 
     for (const c of dom.tbBody.querySelectorAll('.tb-col-body')) {
-        if (scrolls.has(c.dataset.col)) c.scrollTop = scrolls.get(c.dataset.col);
+        const key = c.dataset.col || c.dataset.project;
+        if (scrolls.has(key)) c.scrollTop = scrolls.get(key);
     }
     dom.tbBody.scrollLeft = bodyScroll;
 
@@ -7175,6 +7690,17 @@ function tbColumn(col, d) {
         el('header', { class: 'tb-col-head' },
             el('h2', {}, col.label),
             el('span', { class: 'tb-count' }, String(d.counts[col.key])),
+            // The way in to the focused view, and the only one. The way out is
+            // the button in the board's header, because by then this column no
+            // longer exists to hold a second copy of it.
+            col.key === 'suggested' ? el('button', {
+                // Not `aria-pressed`: it is not a switch that stays here and
+                // lights up. Pressing it replaces the view this button is part
+                // of, and the way back is the header's.
+                class: 'tb-focus-btn', type: 'button',
+                title: 'Suggested tasks only, one column per project',
+                onclick: () => tbSetFocus(true),
+            }, 'Focus') : null,
         ),
         el('div', { class: 'tb-col-body', 'data-col': col.key },
             cards.length ? cards : el('p', { class: 'tb-empty' }, col.empty),
@@ -7225,6 +7751,125 @@ function tbTaskCards(d) {
         out.push(...rows.map(tbTaskCard));
     }
     return out;
+}
+
+// ── the focused view ─────────────────────────────────────────────────────
+
+/** Turn the focused view on or off, and remember which. */
+function tbSetFocus(on) {
+    state.taskboard.focus = on;
+    localStorage.setItem('tbFocus', on ? '1' : '0');
+    if (!on) {
+        // The box goes away with the view, so a query left behind in it would
+        // be invisible and still filtering the next time focus came on.
+        state.taskboard.query = '';
+        dom.tbSearch.value = '';
+    }
+    tbPaintTools();
+    renderTaskboard();
+    if (on) dom.tbSearch.focus({ preventScroll: true });
+}
+
+/** The header controls that belong to the focused view. */
+function tbPaintTools() {
+    const on = state.taskboard.focus;
+    dom.tbSearch.hidden = !on;
+    dom.tbUnfocus.hidden = !on;
+}
+
+/**
+ * Does a task match what is in the search box?
+ *
+ * Every word has to appear somewhere, rather than any of them, so that a second
+ * word narrows the board instead of widening it — which is what you reach for
+ * when the first one still left forty cards. The prompt is searched as well as
+ * the title because a task raised without a title is titled by its first line,
+ * and the sentence you remember is usually further in than that. The
+ * conversation's own title is in there too: "the one from the schedule work" is
+ * how you look for a task you did not read at the time.
+ */
+function tbMatches(t) {
+    const q = state.taskboard.query.trim().toLowerCase();
+    if (!q) return true;
+    const hay = [t.title, t.prompt, t.why, t.session && t.session.title]
+        .filter(Boolean).join('\n').toLowerCase();
+    return q.split(/\s+/).every(word => hay.includes(word));
+}
+
+/**
+ * The open tasks, filtered, as one group per project.
+ *
+ * `tbHold` first and the filter second, so the search narrows an order that has
+ * already been settled rather than deciding one of its own — a card keeps its
+ * place in its column as words are typed and deleted.
+ *
+ * **The order of the keys is the order of the columns, and it needs no sort.**
+ * `draftGroups` explains this at length and it is the same argument: the held
+ * rows are newest-first, a Map keeps the order its keys were first seen in, so
+ * walking them once lands the projects most-recently-suggested-in first. Held
+ * thereafter, like everything else on this board.
+ *
+ * Grouped by `session.projectName` — the key the sub-headings in the unfocused
+ * column already use — rather than by worktree, so that every task raised in a
+ * repo arrives in one column instead of being scattered across however many
+ * worktrees of it are live. The worktree is still on each card.
+ */
+function tbFocusGroups(d) {
+    const groups = new Map();
+    for (const t of tbHold('task', d.suggested, x => x.id)) {
+        if (!tbMatches(t)) continue;
+        const name = (t.session && t.session.projectName) || 'Elsewhere';
+        if (!groups.has(name)) groups.set(name, []);
+        groups.get(name).push(t);
+    }
+    return groups;
+}
+
+/**
+ * One project, as a column.
+ *
+ * `draftColumn`'s shape, for `draftColumn`'s reason: the chrome is this board's
+ * already. No `data-col`, deliberately — that attribute colours a *state*, and
+ * a project is not one. The cards keep `.tb-task`'s own stripe, which still says
+ * the right thing.
+ */
+function tbProjectColumn(name, rows) {
+    return el('section', { class: 'tb-col tb-focus-col', 'data-project': name },
+        el('header', { class: 'tb-col-head' },
+            el('h2', { title: name }, name),
+            el('span', { class: 'tb-count' }, String(rows.length)),
+        ),
+        el('div', { class: 'tb-col-body', 'data-project': name },
+            ...rows.map(tbTaskCard),
+        ),
+    );
+}
+
+/** Nothing to show: an empty board and a search that found nothing differ. */
+function tbFocusNote(d) {
+    const q = state.taskboard.query.trim();
+    if (q) {
+        return el('div', { class: 'tb-note' },
+            el('p', {}, `No task matches “${q}”.`),
+            el('p', { class: 'dim' }, `${d.counts.suggested} open `
+                + `${d.counts.suggested === 1 ? 'task is' : 'tasks are'} hidden by it.`));
+    }
+    return el('div', { class: 'tb-note' },
+        el('p', {}, 'No open tasks.'),
+        el('p', { class: 'dim' }, 'Suggested tasks are raised by agents as they '
+            + 'work, for the things they noticed and did not do.'));
+}
+
+/** The subtitle, focused. */
+function tbFocusWords(d, projects, shown) {
+    const total = d.counts.suggested;
+    const where = `${projects} ${projects === 1 ? 'project' : 'projects'}`;
+    if (state.taskboard.query.trim()) {
+        return `${shown} of ${total} matching “${state.taskboard.query.trim()}”`
+            + (projects ? ` · ${where}` : '');
+    }
+    return `${total} open ${total === 1 ? 'task' : 'tasks'}`
+        + (projects ? ` · ${where}` : '');
 }
 
 /**
@@ -7492,21 +8137,25 @@ function tbArchive(s) {
 // `POST /api/sessions` takes, validated the same way when it is saved, so
 // pressing Start cannot fail for any reason you could have been told about
 // earlier. That is also why there is no second form — the Start-a-session dialog
-// already collects exactly these fields, so it grew a second button instead.
+// already collects exactly these fields, so it grew a third and a fourth: Save as
+// draft, and Schedule.
 //
 // **Nothing here moves on its own**, so none of the two boards' machinery is
 // needed: no watcher-gated tick to subscribe to, and no `tbRememberOrder` ranks
 // to stop a card sliding out from under the cursor. The bridge pushes the whole
 // list on `drafts-changed` whenever somebody changes something, and this draws it
 // in the order it arrived — newest-edited first.
+//
+// **The board is a column per project once there are two**, which is the task
+// board's shape borrowed for a different question. Over there a column is a
+// state; here it is a place, and the order of the columns is which project you
+// touched last. It costs no sort — see `draftGroups` — and below two projects it
+// stays the single readable column it has always been, because a column with
+// nothing to be told apart from is just a narrower list.
 
 function showDrafts(on) {
     state.drafts.open = on;
-    // Five whole screens; one at a time.
-    if (on) {
-        state.dash.open = false; state.notes.open = false;
-        state.taskboard.open = false; state.sched.open = false;
-    }
+    if (on) closeOtherPanels('drafts');
     paintPanels();
     syncBoardWatch();
     // This panel has no watch of its own — the push is unconditional — but it
@@ -7580,31 +8229,37 @@ function paintDraftsBadge() {
     const n = state.drafts.rows.length;
     dom.drBadge.hidden = !n;
     dom.drBadge.textContent = String(n);
-    dom.btnDrafts.title = n
-        ? `${n} draft${n === 1 ? '' : 's'} waiting to be started (Ctrl+6)`
-        : 'Sessions set up but not started (Ctrl+6)';
+    dom.btnDrafts.title = keys.hint(n
+        ? `${n} draft${n === 1 ? '' : 's'} waiting to be started`
+        : 'Sessions set up but not started', 'view.drafts');
 }
 
 // ── drawing it ───────────────────────────────────────────────────────────
 
 function renderDrafts() {
     const rows = state.drafts.rows;
+    const groups = draftGroups(rows);
+    // One project is one column, which is a column that says nothing — the same
+    // threshold the sub-headings used to use, now deciding the whole layout.
+    // Below it the panel stays the readable single column it has always been; at
+    // two it becomes the task board's shape.
+    const cols = groups.size >= 2;
 
-    dom.drSub.textContent = rows.length
-        ? `${rows.length} ${rows.length === 1 ? 'draft' : 'drafts'}, newest edit first.`
-        : 'Sessions you have set up but not started.';
+    dom.drSub.textContent = !rows.length
+        ? 'Sessions you have set up but not started.'
+        : cols
+            ? `${rows.length} drafts across ${groups.size} projects, newest edit first.`
+            : `${rows.length} ${rows.length === 1 ? 'draft' : 'drafts'}, newest edit first.`;
 
     if (state.drafts.error) {
+        dom.drBody.classList.remove('cols');
         dom.drBody.replaceChildren(el('div', { class: 'dr-note' },
             el('p', {}, `Could not read the drafts. ${state.drafts.error}`)));
         return;
     }
 
-    // The panel scrolls as one column, and a push would otherwise throw the
-    // scroll position away mid-read every time anything changed.
-    const scroll = dom.drBody.scrollTop;
-
     if (!rows.length) {
+        dom.drBody.classList.remove('cols');
         dom.drBody.replaceChildren(el('div', { class: 'dr-note' },
             el('p', {}, 'Nothing set up yet.'),
             el('p', { class: 'dim' }, 'A draft is a session with its directory, first '
@@ -7617,34 +8272,88 @@ function renderDrafts() {
         return;
     }
 
-    dom.drBody.replaceChildren(...draftCards(rows));
-    dom.drBody.scrollTop = scroll;
+    if (!cols) {
+        // The panel scrolls as one column, and a push would otherwise throw the
+        // scroll position away mid-read every time anything changed.
+        dom.drBody.classList.remove('cols');
+        const scroll = dom.drBody.scrollTop;
+        dom.drBody.replaceChildren(...rows.map(draftCard));
+        dom.drBody.scrollTop = scroll;
+        return;
+    }
+
+    // Each column scrolls on its own and the row of them scrolls sideways, so a
+    // rebuild throws away as many positions as there are projects unless every
+    // one of them is carried across — renderTaskboard's problem, and its answer.
+    // Keyed by project rather than by position: a column that has just moved
+    // left, because somebody edited a draft in it, should keep its own place in
+    // its own list rather than inherit the neighbour's.
+    const scrolls = new Map();
+    for (const c of dom.drBody.querySelectorAll('.tb-col-body')) {
+        scrolls.set(c.dataset.project, c.scrollTop);
+    }
+    const across = dom.drBody.scrollLeft;
+
+    dom.drBody.classList.add('cols');
+    dom.drBody.replaceChildren(
+        ...[...groups].map(([name, list]) => draftColumn(name, list)));
+
+    for (const c of dom.drBody.querySelectorAll('.tb-col-body')) {
+        if (scrolls.has(c.dataset.project)) c.scrollTop = scrolls.get(c.dataset.project);
+    }
+    dom.drBody.scrollLeft = across;
 }
 
 /**
- * Grouped by project, the way the task board groups suggested tasks.
+ * The drafts, by project.
  *
- * And with the same rule: a heading over the whole column says nothing, so
- * grouping only earns its keep once there is more than one group to tell apart.
+ * **The order of the keys is the order of the columns, and it needs no sort.**
+ * The bridge hands the rows over newest-`updatedAt` first, and `updatedAt` moves
+ * on a create as well as on an edit — so the first row of a project is its most
+ * recently touched draft, and a Map keeps the order its keys were first seen in.
+ * Walking the rows once therefore lands the projects in exactly the order the
+ * board wants them: most recently added-or-edited first. Quietly load-bearing,
+ * which is why it is written down here rather than left to be rediscovered — an
+ * object keyed by name would not hold it, and neither would a second pass that
+ * sorted the groups by anything else.
+ *
  * `projectName` comes off the payload rather than being derived here, so every
  * client agrees about which project a directory belongs to.
  */
-function draftCards(rows) {
+function draftGroups(rows) {
     const groups = new Map();
     for (const d of rows) {
         const name = d.projectName || 'unknown';
         if (!groups.has(name)) groups.set(name, []);
         groups.get(name).push(d);
     }
-    if (groups.size < 2) return rows.map(draftCard);
+    return groups;
+}
 
-    const out = [];
-    for (const [name, list] of groups) {
-        out.push(el('h3', { class: 'tb-sub-head' }, name,
-            el('span', {}, String(list.length))));
-        out.push(...list.map(draftCard));
-    }
-    return out;
+/**
+ * One project, as a column.
+ *
+ * The task board's own chrome — `tb-col`, `tb-col-head`, `tb-count`,
+ * `tb-col-body` — rather than a second set of styles for a shape that already
+ * exists, which is the borrowing `draftCard` below already does with `tb-card`.
+ *
+ * What differs is what a column *means*. Over there it is a state, and the
+ * colour says which one; here it is a project, and there is nothing for a colour
+ * to say. So the head carries none — `.tb-col[data-col="needs"]` is keyed on an
+ * attribute this section deliberately does not have — and the cards keep
+ * `.dr-card`'s quiet stripe, which is still the right one: a draft is the thing
+ * in this app that is explicitly not asking for anything.
+ */
+function draftColumn(name, list) {
+    return el('section', { class: 'tb-col dr-col', 'data-project': name },
+        el('header', { class: 'tb-col-head' },
+            el('h2', { title: name }, name),
+            el('span', { class: 'tb-count' }, String(list.length)),
+        ),
+        el('div', { class: 'tb-col-body', 'data-project': name },
+            ...list.map(draftCard),
+        ),
+    );
 }
 
 /**
@@ -7761,6 +8470,1021 @@ async function drDelete(d) {
     }
 }
 
+// ── snippets ─────────────────────────────────────────────────────────────
+//
+// Canned messages, and the buttons that send them.
+//
+// Drafts' machinery for the list itself — an unconditional `snippets-changed`
+// push carrying the whole payload, held as sent, no watcher to gate — with one
+// difference that shapes everything below: **this list is read while its editor
+// is shut.** The pinned buttons live on the composer, so it loads at boot rather
+// than when a panel opens, and every push repaints three places rather than one.
+//
+// **The bridge decides the order**, which is why nothing here sorts. `order` is a
+// stored decision and `null` means alphabetical, and having the store settle that
+// is what keeps the popover, the pinned strip and the editor from each arriving at
+// a slightly different answer.
+//
+// The three questions this section has to get right, none of which is obvious:
+//
+// **Where the text goes when the snippet also sends itself.** `overwrite` plus
+// `autoSubmit` is the shape the LGTM button had, and that button never touched the
+// compose box — press it with a half-written message in there and the message is
+// still there afterwards. Taking `overwrite` literally first and sending second
+// would destroy it. So that one combination, on the live composer, goes straight
+// to `sendMessage` with the text as an override and never writes to the box at
+// all; `append` and `cursor` must go through it, because what is already in the
+// box is part of what gets sent.
+//
+// **Where the caret was.** `insert: 'cursor'` needs the selection as it stood when
+// you reached for the snippet, not as it stands when the text arrives — by then
+// the popover has taken focus and the parameter dialog may have taken it again.
+// It is recorded at the gesture, and a pinned button has to record it itself
+// because it opens no popover on the way past.
+//
+// **What auto-submit means in a dialog with no Send.** See startFromSnippet.
+
+/** What a parameter of each type is asked for with. */
+const SNIP_INPUT = {
+    text: { type: 'text' },
+    integer: { type: 'number', step: '1', inputmode: 'numeric' },
+    decimal: { type: 'number', step: 'any' },
+    date: { type: 'date' },
+    time: { type: 'time' },
+    datetime: { type: 'datetime-local' },
+};
+
+/** The same expression the bridge substitutes with. Two would be one too many. */
+const SNIP_PLACEHOLDER = /\{\{\s*(\w+)\s*\}\}/g;
+
+const snipById = (id) => state.snippets.rows.find(s => s.id === id) || null;
+
+/**
+ * Take the whole payload as the truth, and repaint everything drawn from it.
+ *
+ * Three places rather than drafts' one, because two of them are visible when the
+ * editor is not: the pinned buttons on the composer, and a popover that may be
+ * open over it while another window saves an edit.
+ */
+function applySnippets(data) {
+    state.snippets.rows = data.snippets || [];
+    state.snippets.groups = data.groups || [];
+    state.snippets.at = data.at || Date.now();
+    state.snippets.error = null;
+    renderPins();
+    for (const c of composers) if (!c.snips.node.hidden) drawSnips(c);
+    if (state.settings.open) renderSnipSettings();
+}
+
+async function loadSnippets() {
+    if (state.snippets.loading) return;
+    state.snippets.loading = true;
+    try {
+        // Never with `?cwd=`, even though the route offers it. The event is not
+        // filtered — one payload goes to every window — so a narrowed first load
+        // would silently widen the moment anybody edited anything. The filter is
+        // applied here instead, per composer, which is where the directory is
+        // actually known.
+        applySnippets(await get('/api/snippets'));
+    } catch (err) {
+        state.snippets.error = err.message;
+    }
+    state.snippets.loading = false;
+}
+
+/**
+ * Does this snippet belong in a composer pointed at this directory?
+ *
+ * The bridge's `matchesCwd`, in the client because `web/` has no build step and
+ * shares no code with `bridge/`. A prefix at a path boundary: `/a/b` covers
+ * `/a/b/c` and not `/a/bc`, which is a different repository sharing five
+ * characters.
+ *
+ * **Fails open when the directory is unknown.** A composer with no session in it
+ * should show every snippet rather than none, and `state.current.cwd` is a cache
+ * key rather than the authority — the bridge is what resolves a session to a
+ * directory, through worktrees that have since been landed and removed.
+ */
+function snipVisible(s, cwd) {
+    if (!s.projects || !s.projects.length) return true;
+    if (!cwd) return true;
+    const here = String(cwd).replace(/[/\\]+$/, '');
+    return s.projects.some(p => here === p
+        || here.startsWith(p + '/') || here.startsWith(p + '\\'));
+}
+
+/** The working directory a composer is pointed at, or null. */
+function snipCwd(c) {
+    if (c === live) return (state.current && state.current.cwd) || null;
+    return dom.newCwd.value.trim() || null;
+}
+
+/** One line of what it says, for the row under the title. */
+const snipPreview = (s) => clip(s.body, 120);
+
+/** A stored accent, re-checked here because it is about to become a CSS rule. */
+const snipAccent = (g) => (g && /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(g.accent || '')
+    ? g.accent : '');
+
+/**
+ * The popover's contents: a card per group, then whatever is ungrouped.
+ *
+ * Ungrouped last rather than first. A group is drawn as a tinted card and the
+ * loose ones are a plain list, so putting the plain list first would open the
+ * popover on the part that looks like nothing.
+ */
+function snipCards(cwd) {
+    const rows = state.snippets.rows.filter(s => snipVisible(s, cwd));
+    const cards = state.snippets.groups
+        .map(g => ({ group: g, rows: rows.filter(s => s.groupId === g.id) }))
+        .filter(card => card.rows.length);
+    const known = new Set(state.snippets.groups.map(g => g.id));
+    // A snippet whose group this window cannot see draws loose rather than
+    // vanishing — the bridge keeps that `groupId` on purpose, and a row nobody can
+    // reach would be worse than one in the wrong place.
+    const loose = rows.filter(s => !s.groupId || !known.has(s.groupId));
+    if (loose.length) cards.push({ group: null, rows: loose });
+    return cards;
+}
+
+/**
+ * Fill a body from the answers, and leave alone what it cannot answer.
+ *
+ * The bridge's `fillBody`, and the rule it enforces is worth restating where it is
+ * duplicated: a placeholder with no answer falls back to its default and then to
+ * itself, **never to the empty string**. `{{` is not reserved punctuation in
+ * prose, and blanking what this does not recognise would quietly delete part of a
+ * message somebody wrote.
+ */
+function fillSnipBody(body, params, answers) {
+    const known = new Map((params || []).map(p => [p.name, p.default]));
+    return String(body).replace(SNIP_PLACEHOLDER, (whole, key) => {
+        if (!known.has(key)) return whole;
+        const given = answers[key];
+        if (given !== undefined && given !== null && given !== '') return String(given);
+        const fallback = known.get(key);
+        return fallback === null || fallback === undefined ? whole : fallback;
+    });
+}
+
+// ── the popover ──────────────────────────────────────────────────────────
+
+const snipRows = (c) => [...c.snips.node.querySelectorAll('.snip-row')];
+
+/**
+ * Place it, in fixed coordinates, against the button rather than the box.
+ *
+ * `positionMenu` cannot be reused as it stands: it anchors to `c.input` and gives
+ * the popover the box's width, and this one hangs off a button and is deliberately
+ * *wider* than its anchor, because the groups sit side by side. That is where the
+ * clamp comes from — right-aligned to the button, then held inside the viewport,
+ * which an anchored popover never had to express.
+ *
+ * Fixed for both composers rather than only the dialog's. The dialog's has to be,
+ * since `.modal` is `overflow: hidden`; doing the same for the live one costs
+ * nothing and means the arithmetic above lives in one place instead of two.
+ */
+function positionSnips(c) {
+    const m = c.snips;
+    const r = m.btn.getBoundingClientRect();
+    const gap = 6;
+    const below = window.innerHeight - r.bottom - gap * 2;
+    const above = r.top - gap * 2;
+    const up = below < 260 && above > below;
+
+    const width = Math.min(720, window.innerWidth - 24);
+    m.node.classList.toggle('up', up);
+    m.node.style.setProperty('--snip-max',
+        `${Math.max(180, Math.min(460, up ? above : below))}px`);
+    m.node.style.width = `${width}px`;
+    m.node.style.left = `${Math.max(12, Math.min(r.right - width,
+        window.innerWidth - width - 12))}px`;
+    if (up) {
+        m.node.style.top = 'auto';
+        m.node.style.bottom = `${window.innerHeight - r.top + gap}px`;
+    } else {
+        m.node.style.bottom = 'auto';
+        m.node.style.top = `${r.bottom + gap}px`;
+    }
+}
+
+function drawSnips(c) {
+    const m = c.snips;
+    const cards = snipCards(snipCwd(c));
+    m.node.replaceChildren();
+
+    if (!state.snippets.rows.length) {
+        m.node.append(el('div', { class: 'snip-empty' },
+            'No snippets yet. Add some in Settings.'));
+    } else if (!cards.length) {
+        // Told rather than shown as an empty list: a snippet hidden because you
+        // are in the wrong directory is otherwise indistinguishable from one you
+        // deleted, and that is a bad ten minutes.
+        m.node.append(el('div', { class: 'snip-empty' },
+            `None of your ${state.snippets.rows.length} snippets apply in this `
+            + 'directory. Their project list is in Settings.'));
+    }
+
+    let i = 0;
+    for (const card of cards) {
+        const accent = snipAccent(card.group);
+        const node = el('section', {
+            class: card.group ? 'snip-card' : 'snip-card is-loose',
+            style: accent ? `--snip-accent: ${accent}` : null,
+        });
+        if (card.group) {
+            node.append(el('h3', { class: 'snip-card-name', text: card.group.name }));
+        }
+        for (const s of card.rows) {
+            const at = i++;
+            node.append(el('button', {
+                class: 'snip-row', type: 'button', role: 'option',
+                'data-i': at, tabindex: at === 0 ? 0 : -1,
+                title: snipTitleFor(s, isBusy() && !state.agent, c),
+                onclick: () => chooseSnippet(c, s),
+            },
+            el('span', { class: 'snip-row-title', text: s.title }),
+            el('span', { class: 'snip-row-preview', text: snipPreview(s) })));
+        }
+        m.node.append(node);
+    }
+    paintSnipSel(c);
+}
+
+/**
+ * The highlight, and which row Tab would land on.
+ *
+ * A roving `tabindex` rather than the `aria-activedescendant` the slash and
+ * mention menus use, and the difference is not cosmetic: those keep the caret in
+ * the textarea because the list filters as you type, and this one is opened by a
+ * button with nothing being typed, so it takes focus like any other menu.
+ */
+function paintSnipSel(c) {
+    const rows = snipRows(c);
+    rows.forEach((r, i) => {
+        r.setAttribute('aria-selected', String(i === c.snips.index));
+        r.tabIndex = i === c.snips.index ? 0 : -1;
+    });
+}
+
+function focusSnipAt(c, i) {
+    const rows = snipRows(c);
+    if (!rows.length) return;
+    c.snips.index = Math.max(0, Math.min(i, rows.length - 1));
+    paintSnipSel(c);
+    rows[c.snips.index].focus();
+}
+
+function showSnips(c, on) {
+    if (!on) { closeSnips(c); return; }
+    const m = c.snips;
+    // Taken before anything moves the focus. A textarea keeps its selection across
+    // a blur, but only until something writes to `.value`, and "mostly" is not a
+    // contract to build `insert: 'cursor'` on.
+    m.caret = { start: c.input.selectionStart, end: c.input.selectionEnd };
+    // Only ever one popover up, per composer and across them.
+    closeMenus(c);
+    c.closeOthers();
+    for (const other of composers) if (other !== c) closeSnips(other);
+
+    m.index = 0;
+    m.node.hidden = false;
+    m.btn.setAttribute('aria-expanded', 'true');
+    drawSnips(c);
+    positionSnips(c);
+    focusSnipAt(c, 0);
+}
+
+function closeSnips(c, { focus = false } = {}) {
+    const m = c.snips;
+    if (m.node.hidden) return;
+    m.node.hidden = true;
+    m.node.replaceChildren();
+    m.btn.setAttribute('aria-expanded', 'false');
+    if (focus) m.btn.focus();
+}
+
+/**
+ * Arrows walk the rows, and Left and Right step between the cards.
+ *
+ * Up and Down alone would be a poor map for a popover whose whole point is that
+ * groups sit beside each other: they run down one card and then jump to the top of
+ * the next, so reaching the third group means walking through the first two.
+ */
+function onSnipsKey(e, c) {
+    const rows = snipRows(c);
+    if (!rows.length) return;
+    const at = c.snips.index;
+
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const step = e.key === 'ArrowDown' ? 1 : -1;
+        focusSnipAt(c, (at + step + rows.length) % rows.length);
+        return;
+    }
+    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+        e.preventDefault();
+        const cards = [...c.snips.node.querySelectorAll('.snip-card')];
+        const mine = cards.findIndex(card => card.contains(rows[at]));
+        const next = cards[mine + (e.key === 'ArrowRight' ? 1 : -1)];
+        if (!next) return;
+        // The same depth in the next card where there is one, so walking sideways
+        // through a row of groups stays on that row.
+        const inMine = [...cards[mine].querySelectorAll('.snip-row')].indexOf(rows[at]);
+        const there = [...next.querySelectorAll('.snip-row')];
+        focusSnipAt(c, rows.indexOf(there[Math.min(inMine, there.length - 1)]));
+        return;
+    }
+    if (e.key === 'Home' || e.key === 'End') {
+        e.preventDefault();
+        focusSnipAt(c, e.key === 'Home' ? 0 : rows.length - 1);
+        return;
+    }
+    // Tab closes and lets the focus go on, which is the recent-menu's rule.
+    // Escape is handled by the central ladder, deliberately not here.
+    if (e.key === 'Tab') closeSnips(c);
+}
+
+// ── choosing one ─────────────────────────────────────────────────────────
+
+/**
+ * The one way in: a row, a pinned button, or Enter on a row.
+ *
+ * The caret is captured here as well as in `showSnips` because a pinned button
+ * opens no popover — it is the case that would otherwise silently insert at the
+ * end of the box instead of where you were.
+ */
+function chooseSnippet(c, s) {
+    if (c.snips.node.hidden) {
+        c.snips.caret = { start: c.input.selectionStart, end: c.input.selectionEnd };
+    }
+    closeSnips(c);
+    if (s.params && s.params.length) openSnipFill(c, s);
+    else applySnippet(c, s, {});
+}
+
+function openSnipFill(c, s) {
+    state.snippets.fill = { snippet: s, composer: c };
+    dom.snipFillTitle.textContent = s.title;
+    dom.snipFillForm.replaceChildren(...s.params.map((p, i) => el('div', { class: 'field' },
+        el('label', { for: `snip-p-${i}` }, p.label || p.name),
+        el('input', {
+            id: `snip-p-${i}`, 'data-name': p.name, autocomplete: 'off',
+            required: p.required || null, value: p.default || '',
+            ...(SNIP_INPUT[p.type] || SNIP_INPUT.text),
+        }))));
+    dom.snipFillScrim.hidden = false;
+    const first = dom.snipFillForm.querySelector('input');
+    if (first) { first.focus(); first.select(); }
+}
+
+/**
+ * @returns {object|null} the answers, or null having said which box is empty.
+ *   A `default` pre-fills and nothing more, so a required parameter with one is
+ *   still a box you can clear and must then refill.
+ */
+function snipFillValues() {
+    const out = {};
+    for (const input of dom.snipFillForm.querySelectorAll('input')) {
+        const v = input.value.trim();
+        if (!v && input.required) {
+            toast(`${input.previousElementSibling.textContent} is needed.`, 'warn');
+            input.focus();
+            return null;
+        }
+        out[input.dataset.name] = v;
+    }
+    return out;
+}
+
+function confirmSnipFill() {
+    const held = state.snippets.fill;
+    if (!held) return;
+    const values = snipFillValues();
+    if (!values) return;
+    closeSnipFill();
+    applySnippet(held.composer, held.snippet, values);
+}
+
+function closeSnipFill() {
+    dom.snipFillScrim.hidden = true;
+    dom.snipFillForm.replaceChildren();
+    state.snippets.fill = null;
+}
+
+/**
+ * Put the resolved text where the snippet says, and send it if it says to.
+ *
+ * The `straight` case is the one worth reading twice. An overwriting snippet that
+ * sends itself, on the live composer, never writes to the box: the text goes to
+ * `sendMessage` as an override, which is exactly what the LGTM button did and why
+ * pressing it has never cost anybody a half-typed message. `overwrite` there
+ * describes what would have happened had you not also asked for a send.
+ *
+ * The dialog is excluded from it because `startNew()` reads `#new-prompt` — there
+ * is no override path into it — so everything there goes through the box.
+ */
+function applySnippet(c, s, values) {
+    const text = fillSnipBody(s.body, s.params, values);
+    const straight = s.autoSubmit && s.insert === 'overwrite' && c === live;
+    if (!straight) insertSnippet(c, text, s.insert);
+    if (s.autoSubmit) submitSnippet(c, s, text, straight);
+}
+
+function insertSnippet(c, text, how) {
+    const v = c.input.value;
+    if (how === 'overwrite') { insertAt(c, 0, v.length, text); return; }
+    if (how === 'append') {
+        // A blank line between, unless the box already ends in a break. Two
+        // paragraphs run together read as one, and this is a message.
+        const lead = !v ? '' : (v.endsWith('\n') ? '' : '\n\n');
+        insertAt(c, v.length, v.length, lead + text);
+        return;
+    }
+    const at = c.snips.caret || {};
+    const from = Math.min(at.start == null ? v.length : at.start, v.length);
+    const to = Math.min(Math.max(at.end == null ? from : at.end, from), v.length);
+    insertAt(c, from, to, text);
+}
+
+function submitSnippet(c, s, text, straight) {
+    if (c !== live) { startFromSnippet(s); return; }
+    if (s.permissionMode) setPermMode(s.permissionMode);
+    // `canned` is not what leaves the box alone — `override` is. It says only that
+    // the text is not worth holding on a failure, which is true exactly when it
+    // never came out of the box. Once it did, what would be dropped is something
+    // somebody typed.
+    if (straight) { sendMessage({ text, canned: true }); return; }
+    // The insert may have opened the slash menu over a box that is about to empty.
+    closeMenus(c);
+    sendMessage();
+}
+
+/**
+ * Move the permission selector, and hold it there.
+ *
+ * Writing `permChoice` is not optional bookkeeping. `paintPerm()` runs inside
+ * `applyRunner`, which fires on the `runner-status` the send provokes moments
+ * later — so without this the selector would visibly snap back to its computed
+ * answer a beat after a snippet moved it. It is the same thing the `#perm` change
+ * listener does, for the same reason: a mode is chosen for the conversation in
+ * front of you, so it is remembered against that session.
+ */
+function setPermMode(mode) {
+    if (![...dom.perm.options].some(o => o.value === mode)) return;
+    dom.perm.value = mode;
+    if (state.current) state.permChoice.set(state.current.sessionId, mode);
+}
+
+/**
+ * Auto-submit, in the dialog that has no Send.
+ *
+ * It presses Start. A snippet that says `autoSubmit` means "I do not want to look
+ * at this again", and honouring that in one of the two places a snippet can be
+ * used and not the other is the kind of difference nobody discovers until it has
+ * cost them something.
+ *
+ * It is safe to be that literal because it refuses exactly where the Start button
+ * refuses: `newDialogValues()` already toasts for a missing directory and an empty
+ * message, so the only way to reach a process is from a dialog that was one click
+ * from starting one anyway.
+ *
+ * The mode is written whether or not the start happens — "this prompt runs in plan
+ * mode" is a fact about the snippet, worth seeing even when you are going to press
+ * Start yourself. There is no `permChoice` here: `#new-perm` is the whole of that
+ * control's state, and `openNew` rewrites it on every open.
+ */
+function startFromSnippet(s) {
+    if (s.permissionMode
+        && [...dom.newPerm.options].some(o => o.value === s.permissionMode)) {
+        dom.newPerm.value = s.permissionMode;
+    }
+    if (!newDialogValues()) return;
+    startNew();
+}
+
+// ── the pinned buttons ───────────────────────────────────────────────────
+
+/**
+ * What a button will actually do, said before the click rather than after.
+ *
+ * The two prefixes are what `LGTM_TITLE` and `LGTM_TITLE_BUSY` used to be, now
+ * that the sentence after them comes from the snippet instead of from this file.
+ * `hint` is that sentence where a snippet has one, because the first line of a
+ * body is a guess and LGTM's wording was not.
+ */
+function snipTitleFor(s, busy, c = live) {
+    const what = s.hint || snipPreview(s);
+    if (!s.autoSubmit) return `Put this in the message box: ${what}`;
+    if (c !== live) return `Fill the message in and press Start: ${what}`;
+    return busy ? `Queue behind the running turn: ${what}` : `Send: ${what}`;
+}
+
+/**
+ * A button per pinned snippet, beside the snippets icon.
+ *
+ * Rebuilt whole rather than diffed: it is a handful of buttons, and it only
+ * changes when somebody edits a snippet or the open session moves to a different
+ * directory. That second one is why this is called from `openSession` as well —
+ * a snippet scoped to a project appears and disappears as you switch conversations.
+ *
+ * Disabled from `dom.btnSend` rather than from state, so there is one answer to
+ * "can this session be sent to" and a repaint cannot briefly draw a live button
+ * into a window with no session in it.
+ */
+function renderPins() {
+    const cwd = state.current && state.current.cwd;
+    const busy = isBusy() && !state.agent;
+    // Already in display order: the bridge decides it, so the strip, the popover
+    // and the editor cannot disagree.
+    const rows = state.snippets.rows.filter(s => s.pinned && snipVisible(s, cwd));
+    const group = new Map(state.snippets.groups.map(g => [g.id, g]));
+    dom.pins.replaceChildren(...rows.map((s) => {
+        const accent = snipAccent(group.get(s.groupId));
+        return el('button', {
+            class: 'btn-pin-snip', type: 'button', 'data-snip': s.id,
+            style: accent ? `--snip-accent: ${accent}` : null,
+            disabled: dom.btnSend.disabled || null,
+            title: snipTitleFor(s, busy),
+            onclick: () => chooseSnippet(live, s),
+        }, s.title);
+    }));
+}
+
+/** Re-say it when the runner state changes, without rebuilding the strip. */
+function paintPinTitles(busy) {
+    for (const b of dom.pins.children) {
+        const s = snipById(b.dataset.snip);
+        if (s) b.title = snipTitleFor(s, busy);
+    }
+}
+
+// ── the editor, in Settings ──────────────────────────────────────────────
+//
+// A group in the settings panel rather than a panel of its own, using the `node`
+// hatch `SETTINGS` already has for the two groups that are not backed by the
+// settings file. This is a third such group, and the note in the markup says so
+// out loud the way the Notifications one does: the scope picker at the top of the
+// panel means nothing here.
+//
+// **`after` fires on every unrelated save**, twice — `renderSettings` runs before
+// and after each `saveSetting` — so everything here has to be cheap and nothing
+// may eat a half-typed value. That is why the inline name box commits on `change`
+// rather than per keystroke, which is the rule `settingControl`'s `path` row
+// already follows for its own reason.
+
+/** How long a delete button offers to be sure. armForce's window and its idea. */
+const SNIP_ARM_MS = 4000;
+
+function renderSnipSettings() {
+    if (!dom.snipSettingsBody) return;
+    const rows = state.snippets.rows;
+    const groups = state.snippets.groups;
+    const known = new Set(groups.map(g => g.id));
+    dom.snipSettingsBody.replaceChildren();
+
+    for (const g of groups) {
+        dom.snipSettingsBody.append(
+            snipSettingsGroup(g, rows.filter(s => s.groupId === g.id)));
+    }
+    const loose = rows.filter(s => !s.groupId || !known.has(s.groupId));
+    // The ungrouped block is drawn even when it is empty, because it is where a
+    // drag has to be able to drop a snippet to take it out of a group.
+    dom.snipSettingsBody.append(snipSettingsGroup(null, loose));
+
+    if (!rows.length && !groups.length) {
+        dom.snipSettingsBody.append(el('p', { class: 'settings-group-note' },
+            'Nothing yet. A snippet is a message you send often — the text, what to '
+            + 'ask for before sending it, and whether it sends itself.'));
+    }
+}
+
+function snipSettingsGroup(g, rows) {
+    const accent = snipAccent(g);
+    const head = el('div', { class: 'snip-set-head' });
+
+    if (g) {
+        head.append(
+            el('span', { class: 'snip-grip', title: 'Drag to reorder' }, icon('grip', 14)),
+            el('input', {
+                class: 'snip-set-name', type: 'text', value: g.name,
+                'aria-label': 'Group name',
+                // On change, not on input: this is redrawn by every unrelated
+                // settings save, and a per-keystroke commit would race that.
+                onchange: (e) => saveSnipGroup(g.id, { name: e.target.value.trim() || g.name }),
+            }),
+            el('input', {
+                class: 'snip-set-accent', type: 'color', value: accent || '#9aa0a6',
+                'aria-label': 'Group colour', title: 'Group colour',
+                onchange: (e) => saveSnipGroup(g.id, { accent: e.target.value }),
+            }),
+            ...snipMoveButtons('group', g.id),
+            snipDeleteButton('Delete this group', () => deleteSnipGroup(g)));
+    } else {
+        head.append(el('span', { class: 'snip-set-loose', text: 'Ungrouped' }));
+    }
+
+    const list = el('div', {
+        class: 'snip-set-list', 'data-group': g ? g.id : '',
+        ondragover: (e) => onSnipDragOver(e, list),
+        ondrop: (e) => e.preventDefault(),
+    }, rows.map(s => snipSettingsRow(s)));
+
+    return el('section', {
+        class: g ? 'snip-set-group' : 'snip-set-group is-loose',
+        style: accent ? `--snip-accent: ${accent}` : null,
+    },
+    head,
+    list,
+    el('div', { class: 'snip-set-foot' },
+        el('button', {
+            class: 'linkish', type: 'button',
+            onclick: () => openSnipEditor(null, g ? g.id : null),
+        }, 'Add a snippet here')));
+}
+
+function snipSettingsRow(s) {
+    const badges = [];
+    if (s.pinned) badges.push('pinned');
+    if (s.autoSubmit) badges.push(s.permissionMode ? `sends · ${s.permissionMode}` : 'sends');
+    if (s.insert !== 'overwrite') badges.push(s.insert);
+    if (s.params.length) badges.push(`${s.params.length} to fill in`);
+    if (s.projects.length) badges.push(`${s.projects.length} project${s.projects.length > 1 ? 's' : ''}`);
+    // Reported rather than refused, in both directions — see the bridge's
+    // scanPlaceholders. The editor is where it is explained; this is the hint that
+    // sends you there.
+    if (s.undeclared.length) badges.push(`${s.undeclared.length} unasked`);
+
+    const row = el('div', {
+        class: 'snip-set-row', draggable: 'true', 'data-snip': s.id,
+        ondragstart: (e) => onSnipDragStart(e, s.id),
+        ondragend: () => commitSnipOrder(),
+    },
+    el('span', { class: 'snip-grip', title: 'Drag to reorder' }, icon('grip', 14)),
+    el('div', { class: 'snip-set-text' },
+        el('div', { class: 'snip-set-title', text: s.title }),
+        el('div', { class: 'snip-set-preview', text: snipPreview(s) })),
+    el('div', { class: 'snip-set-badges' },
+        ...badges.map(b => el('span', { class: 'snip-badge', text: b }))),
+    ...snipMoveButtons('snippet', s.id),
+    el('button', { class: 'btn small', type: 'button', onclick: () => openSnipEditor(s) }, 'Edit'),
+    snipDeleteButton('Delete this snippet', () => deleteSnippet(s)));
+    return row;
+}
+
+/**
+ * The arrows, which do what the drag does and are the whole of it for a keyboard.
+ *
+ * They move the row in the DOM and then commit the arrangement the same way a
+ * drop does, so there is one path to the bridge rather than two. Focus is put back
+ * on the button after the redraw, so holding one keeps walking the same row rather
+ * than pressing whatever landed underneath.
+ */
+function snipMoveButtons(kind, id) {
+    return [-1, 1].map(step => el('button', {
+        class: 'snip-move', type: 'button',
+        'aria-label': step < 0 ? 'Move up' : 'Move down',
+        title: step < 0 ? 'Move up' : 'Move down',
+        onclick: () => moveSnipRow(kind, id, step),
+    }, step < 0 ? '↑' : '↓'));
+}
+
+function moveSnipRow(kind, id, step) {
+    const sel = kind === 'group' ? '.snip-set-group' : '.snip-set-row';
+    const attr = kind === 'group' ? 'data-group' : 'data-snip';
+    const node = kind === 'group'
+        ? dom.snipSettingsBody.querySelector(`.snip-set-list[data-group="${CSS.escape(id)}"]`)
+            .closest('.snip-set-group')
+        : dom.snipSettingsBody.querySelector(`[${attr}="${CSS.escape(id)}"]`);
+    if (!node) return;
+
+    const siblings = [...node.parentElement.querySelectorAll(`:scope > ${sel}`)]
+        // The ungrouped block is not a group anybody ordered, and it is always last.
+        .filter(n => !n.classList.contains('is-loose') || kind !== 'group');
+    const at = siblings.indexOf(node);
+    const to = at + step;
+    if (at < 0 || to < 0 || to >= siblings.length) return;
+
+    if (step < 0) node.parentElement.insertBefore(node, siblings[to]);
+    else node.parentElement.insertBefore(siblings[to], node);
+    commitSnipOrder();
+}
+
+function onSnipDragStart(e, id) {
+    state.snippets.drag = id;
+    e.dataTransfer.effectAllowed = 'move';
+    // Firefox will not start a drag without something on the transfer.
+    e.dataTransfer.setData('text/plain', id);
+}
+
+/**
+ * Move the row under the cursor as the drag goes, rather than only on the drop.
+ *
+ * The queue's idiom, and its reason: the list you are looking at is the answer, so
+ * you should be able to see it before you let go. Dropping into another group's
+ * list is a move between groups as well as a reorder, which `commitSnipOrder`
+ * picks up from where the row ends rather than from the drag itself.
+ */
+function onSnipDragOver(e, list) {
+    const id = state.snippets.drag;
+    if (!id) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const moving = dom.snipSettingsBody.querySelector(`.snip-set-row[data-snip="${CSS.escape(id)}"]`);
+    if (!moving) return;
+
+    const after = [...list.querySelectorAll('.snip-set-row')]
+        .filter(n => n !== moving)
+        .find((n) => {
+            const box = n.getBoundingClientRect();
+            return e.clientY < box.top + box.height / 2;
+        });
+    if (after) list.insertBefore(moving, after);
+    else list.append(moving);
+}
+
+/**
+ * Tell the bridge what the DOM now says, and let the push redraw it.
+ *
+ * Read out of the DOM rather than tracked in state, which is `commitQueueOrder`'s
+ * bargain: the thing on screen is what was arranged, so reading it back cannot
+ * disagree with what somebody saw. A snippet that ended up in a different list is
+ * patched first — its `groupId` is part of where it is, and reordering it into a
+ * group it does not belong to would put it back on the next redraw.
+ */
+async function commitSnipOrder() {
+    state.snippets.drag = null;
+    const moves = [];
+    const ids = [];
+    for (const list of dom.snipSettingsBody.querySelectorAll('.snip-set-list')) {
+        const groupId = list.dataset.group || null;
+        for (const row of list.querySelectorAll('.snip-set-row')) {
+            const s = snipById(row.dataset.snip);
+            ids.push(row.dataset.snip);
+            if (s && (s.groupId || null) !== groupId) moves.push({ id: s.id, groupId });
+        }
+    }
+    const groups = [...dom.snipSettingsBody.querySelectorAll('.snip-set-group:not(.is-loose)')]
+        .map(n => n.querySelector('.snip-set-list').dataset.group);
+
+    try {
+        for (const m of moves) await patch(`/api/snippets/${m.id}`, { groupId: m.groupId });
+        await post('/api/snippets/reorder', { snippets: ids, groups });
+    } catch (err) {
+        toast(`Could not save the order: ${err.message}`, 'error');
+        // Back to what the bridge has, rather than leaving the screen claiming an
+        // arrangement that was refused.
+        renderSnipSettings();
+    }
+}
+
+/**
+ * A delete that asks once, in the button, rather than behind a third dialog.
+ *
+ * `armForce`'s idea: the second press within a few seconds is the confirmation.
+ * A scrim for this would be heavier than what is being deleted — a snippet is a
+ * paragraph you can write again, which is drafts' argument for having no dialog at
+ * all, and this is one step more careful than that because a snippet is one you
+ * tuned rather than one you just wrote.
+ */
+function snipDeleteButton(label, go) {
+    let armed = 0;
+    const b = el('button', {
+        class: 'snip-del', type: 'button', 'aria-label': label, title: label,
+        onclick: () => {
+            if (Date.now() - armed < SNIP_ARM_MS) { go(); return; }
+            armed = Date.now();
+            b.textContent = 'Really?';
+            b.classList.add('armed');
+            setTimeout(() => {
+                if (Date.now() - armed < SNIP_ARM_MS) return;
+                b.replaceChildren(icon('trash', 13));
+                b.classList.remove('armed');
+            }, SNIP_ARM_MS + 50);
+        },
+    }, icon('trash', 13));
+    return b;
+}
+
+async function deleteSnippet(s) {
+    try { await del(`/api/snippets/${s.id}`); }
+    catch (err) { toast(`Could not delete the snippet: ${err.message}`, 'error'); }
+}
+
+async function deleteSnipGroup(g) {
+    try {
+        const r = await del(`/api/snippet-groups/${g.id}`);
+        // Said rather than left to be noticed: deleting a heading does not delete
+        // what was under it, and a block of snippets moving to Ungrouped is a big
+        // enough change to announce.
+        if (r.orphaned) {
+            toast(`${r.orphaned} snippet${r.orphaned > 1 ? 's' : ''} moved to Ungrouped.`);
+        }
+    } catch (err) {
+        toast(`Could not delete the group: ${err.message}`, 'error');
+    }
+}
+
+async function newSnipGroup() {
+    try { await post('/api/snippet-groups', { name: 'New group', accent: '#a8c7fa' }); }
+    catch (err) { toast(`Could not make the group: ${err.message}`, 'error'); }
+}
+
+async function saveSnipGroup(id, fields) {
+    try { await patch(`/api/snippet-groups/${id}`, fields); }
+    catch (err) { toast(`Could not save the group: ${err.message}`, 'error'); }
+}
+
+// ── one snippet, in the editor dialog ────────────────────────────────────
+
+/** The parameter rows as they are being edited, before anything is saved. */
+let snipDraftParams = [];
+/** The project paths likewise. Held here so a redraw of the rows keeps them. */
+let snipDraftProjects = [];
+
+function openSnipEditor(s, groupId = null) {
+    state.snippets.editing = s ? s.id : null;
+    dom.snipEditTitle.textContent = s ? 'Edit snippet' : 'New snippet';
+    dom.snipTitle.value = s ? s.title : '';
+    dom.snipBody.value = s ? s.body : '';
+    dom.snipInsert.value = s ? s.insert : 'overwrite';
+    dom.snipAuto.checked = s ? s.autoSubmit : false;
+    dom.snipPerm.value = s ? (s.permissionMode || '') : '';
+    dom.snipPinned.checked = s ? s.pinned : false;
+    snipDraftParams = s ? s.params.map(p => ({ ...p })) : [];
+    snipDraftProjects = s ? [...s.projects] : [];
+
+    dom.snipGroup.replaceChildren(
+        el('option', { value: '', text: 'Ungrouped' }),
+        ...state.snippets.groups.map(g => el('option', { value: g.id }, g.name)));
+    dom.snipGroup.value = s ? (s.groupId || '') : (groupId || '');
+
+    dom.snipProjectList.replaceChildren(...state.settings.projects
+        .map(p => el('option', { value: p.cwd })));
+
+    renderSnipParamRows();
+    renderSnipProjects();
+    paintSnipPerm();
+    paintSnipPlaceholders();
+    dom.snipEditScrim.hidden = false;
+    dom.snipTitle.focus();
+}
+
+function closeSnipEditor() {
+    dom.snipEditScrim.hidden = true;
+    state.snippets.editing = null;
+    snipDraftParams = [];
+    snipDraftProjects = [];
+}
+
+/** The mode only means anything on a send, so it appears with one. */
+function paintSnipPerm() {
+    dom.snipPermRow.hidden = !dom.snipAuto.checked;
+}
+
+/**
+ * What the body and the parameters say about each other.
+ *
+ * A note in both directions and a refusal in neither, which is the bridge's rule
+ * restated where somebody can act on it: an undeclared `{{x}}` reaches the session
+ * as itself, and a parameter nothing references is a field you have not wired up
+ * yet. Saying so is the difference between a bug you can see and one you meet
+ * three sessions later.
+ */
+function paintSnipPlaceholders() {
+    const declared = new Set(snipDraftParams.map(p => p.name).filter(Boolean));
+    const used = new Set();
+    for (const m of dom.snipBody.value.matchAll(SNIP_PLACEHOLDER)) used.add(m[1]);
+    const undeclared = [...used].filter(n => !declared.has(n));
+    const unused = [...declared].filter(n => !used.has(n));
+
+    const said = [];
+    if (undeclared.length) {
+        said.push(`${undeclared.map(n => `{{${n}}}`).join(', ')} `
+            + `${undeclared.length > 1 ? 'are' : 'is'} in the message but not asked for — `
+            + `${undeclared.length > 1 ? 'they' : 'it'} will be sent as written.`);
+    }
+    if (unused.length) {
+        said.push(`${unused.join(', ')} ${unused.length > 1 ? 'are' : 'is'} asked for but `
+            + 'never used in the message.');
+    }
+    dom.snipPlaceholders.hidden = !said.length;
+    dom.snipPlaceholders.textContent = said.join(' ');
+}
+
+function renderSnipParamRows() {
+    dom.snipParams.replaceChildren(...snipDraftParams.map((p, i) => el('div', { class: 'snip-param' },
+        el('input', {
+            class: 'snip-param-name', type: 'text', value: p.name, placeholder: 'name',
+            'aria-label': 'Parameter name', spellcheck: 'false',
+            oninput: (e) => { snipDraftParams[i].name = e.target.value.trim(); paintSnipPlaceholders(); },
+        }),
+        el('input', {
+            class: 'snip-param-label', type: 'text', value: p.label || '', placeholder: 'Label',
+            'aria-label': 'Parameter label',
+            oninput: (e) => { snipDraftParams[i].label = e.target.value; },
+        }),
+        el('select', {
+            class: 'snip-param-type', 'aria-label': 'Parameter type',
+            onchange: (e) => { snipDraftParams[i].type = e.target.value; },
+        }, ['text', 'integer', 'decimal', 'date', 'time', 'datetime'].map(t => el('option', {
+            value: t, selected: t === p.type || null,
+        }, t))),
+        el('input', {
+            class: 'snip-param-default', type: 'text', value: p.default || '',
+            placeholder: 'Default', 'aria-label': 'Default value',
+            oninput: (e) => { snipDraftParams[i].default = e.target.value; },
+        }),
+        el('label', { class: 'snip-check', title: 'Must not be left empty' },
+            el('input', {
+                type: 'checkbox', checked: p.required || null,
+                onchange: (e) => { snipDraftParams[i].required = e.target.checked; },
+            }),
+            el('span', { class: 'settings-box' }),
+            el('span', { class: 'snip-param-req', text: 'needed' })),
+        el('button', {
+            class: 'snip-del', type: 'button', 'aria-label': 'Remove this parameter',
+            onclick: () => {
+                snipDraftParams.splice(i, 1);
+                renderSnipParamRows();
+                paintSnipPlaceholders();
+            },
+        }, icon('trash', 13)))));
+}
+
+function renderSnipProjects() {
+    dom.snipProjects.replaceChildren(...snipDraftProjects.map((p, i) => el('span', { class: 'snip-chip' },
+        el('span', { text: shortPath(p) }),
+        el('button', {
+            class: 'snip-chip-x', type: 'button', 'aria-label': `Remove ${p}`,
+            onclick: () => { snipDraftProjects.splice(i, 1); renderSnipProjects(); },
+        }, '✕'))));
+}
+
+function addSnipProject() {
+    const dir = dom.snipProject.value.trim();
+    if (!dir) return;
+    if (!snipDraftProjects.includes(dir)) snipDraftProjects.push(dir);
+    dom.snipProject.value = '';
+    renderSnipProjects();
+}
+
+/**
+ * @returns {object|null} the body to send, or null having said what is wrong.
+ *   The bridge refuses all of this too — this is so the answer arrives beside the
+ *   box rather than as a toast about a request.
+ */
+function readSnipEditor() {
+    const title = dom.snipTitle.value.trim();
+    const body = dom.snipBody.value;
+    if (!title) { toast('Give it a title.', 'warn'); dom.snipTitle.focus(); return null; }
+    if (!body.trim()) { toast('Give it a message.', 'warn'); dom.snipBody.focus(); return null; }
+
+    const seen = new Set();
+    for (const p of snipDraftParams) {
+        if (!/^[A-Za-z_]\w*$/.test(p.name || '')) {
+            toast(`"${p.name || ''}" is not a usable parameter name — letters, digits `
+                + 'and underscores, not starting with a digit.', 'warn');
+            return null;
+        }
+        if (seen.has(p.name)) {
+            toast(`Two parameters are both called "${p.name}".`, 'warn');
+            return null;
+        }
+        seen.add(p.name);
+    }
+
+    return {
+        title,
+        body,
+        groupId: dom.snipGroup.value || null,
+        params: snipDraftParams,
+        insert: dom.snipInsert.value,
+        autoSubmit: dom.snipAuto.checked,
+        // Only meaningful with a send, but kept either way, so unticking Send and
+        // ticking it again does not lose the mode you picked.
+        permissionMode: dom.snipPerm.value || null,
+        pinned: dom.snipPinned.checked,
+        projects: snipDraftProjects,
+    };
+}
+
+async function saveSnipEditor() {
+    const body = readSnipEditor();
+    if (!body) return;
+    const id = state.snippets.editing;
+    dom.snipSave.disabled = true;
+    try {
+        if (id) await patch(`/api/snippets/${id}`, body);
+        else await post('/api/snippets', body);
+        closeSnipEditor();
+    } catch (err) {
+        toast(`Could not save the snippet: ${err.message}`, 'error');
+    } finally {
+        dom.snipSave.disabled = false;
+    }
+}
+
 // ── schedules ────────────────────────────────────────────────────────────
 //
 // Sessions that start on a clock.
@@ -7782,11 +9506,7 @@ async function drDelete(d) {
 
 function showSched(on) {
     state.sched.open = on;
-    // Five whole screens; one at a time.
-    if (on) {
-        state.dash.open = false; state.notes.open = false;
-        state.taskboard.open = false; state.drafts.open = false;
-    }
+    if (on) closeOtherPanels('sched');
     paintPanels();
     syncBoardWatch();
     // As in showDrafts: this panel has no watch of its own, but it closes the
@@ -7841,9 +9561,9 @@ function paintSchedBadge() {
     const n = state.sched.rows.filter(s => s.enabled).length;
     dom.schedBadge.hidden = !n;
     dom.schedBadge.textContent = String(n);
-    dom.btnSched.title = n
-        ? `${n} schedule${n === 1 ? '' : 's'} armed (Ctrl+7)`
-        : 'Sessions that start on a clock (Ctrl+7)';
+    dom.btnSched.title = keys.hint(n
+        ? `${n} schedule${n === 1 ? '' : 's'} armed`
+        : 'Sessions that start on a clock', 'view.schedules');
 }
 
 // ── drawing it ───────────────────────────────────────────────────────────
@@ -8107,6 +9827,2510 @@ async function schedDelete(s) {
     } catch (err) {
         toast(`Could not delete the schedule: ${err.message}`, 'error');
     }
+}
+
+// ── settings ─────────────────────────────────────────────────────────────
+//
+// Every key in `~/.tgxcode/settings.json`, with a control in front of it.
+//
+// The file stayed the only interface for a long time and that was defensible
+// while there were three keys in it. At twelve, across four blocks, with a
+// precedence chain of four files and validators that silently drop what they do
+// not like, "go and read bridge/prefs.js" had become the answer to too many
+// questions — and the one thing the file cannot tell you is which of the four
+// files a value came from.
+//
+// So this panel answers both questions at once: what is in force, and where it
+// was set. `GET /api/prefs?files=1` returns the merged answer *and* what each
+// file says on its own, which is what lets a control distinguish a value you
+// set from one you inherited — and name the file that has taken over when a
+// stronger one has.
+//
+// **The file is still the interface.** The head names the exact path it is
+// about to write and lets you copy it, and nothing here is stored anywhere a
+// text editor cannot reach. This is a better way in, not a replacement.
+//
+// **Nothing here is a draft.** Every control saves on change, one key at a
+// time, because a settings page with a Save button has a state where what you
+// see and what is in force disagree — and the failure mode of that is a
+// preference you believe you set. One key per request also means two windows
+// editing different settings do not clobber each other.
+
+// The controls, in the order they are drawn. A key in bridge/prefs.js is one
+// row here and nothing else — no per-setting function, no switch — which is the
+// only way a settings page stays true as the file grows.
+//
+// `userOnly` mirrors USER_ONLY in bridge/prefs.js. It is drawn rather than
+// hidden at a project scope, because a section that vanishes reads as a bug and
+// a section that says why it is disabled teaches the rule.
+const SETTINGS = [
+    {
+        title: 'Reading', section: 'transcript',
+        note: 'How a transcript folds the work between one message and the next.',
+        rows: [
+            { key: 'groupToolCalls', type: 'bool',
+                label: 'Fold finished runs of tool calls',
+                note: 'Once a message closes a run, it becomes one row you can open.' },
+            { key: 'groupMinCalls', type: 'int', min: 2, max: 1000,
+                label: 'Shortest run worth folding',
+                note: 'One or two rows collapsed into a summary loses more than it saves.' },
+            { key: 'groupIncludesThinking', type: 'bool',
+                label: 'A thinking block is part of the run',
+                note: 'Off breaks the run there instead, which fragments a turn that '
+                    + 'thinks between every call.' },
+        ],
+    },
+    {
+        title: 'Live board', section: 'live',
+        note: 'The board behind Live — every session running right now.',
+        rows: [
+            { key: 'compact', type: 'bool',
+                label: 'Compact cards',
+                note: 'Stop every card at its tool-count line: no preview, no message '
+                    + 'box, no Open or Stop, no approval row. Many sessions at a glance '
+                    + 'rather than any one of them actionable in place.' },
+            { key: 'hideElsewhere', type: 'bool',
+                label: 'Leave out sessions running elsewhere',
+                note: 'Sessions under a terminal or another window — the cards this '
+                    + 'board cannot drive. It says how many it left out.' },
+        ],
+    },
+    {
+        title: 'Spinner', section: 'spinner',
+        note: 'What a turn in progress calls itself while it works.',
+        rows: [
+            { key: 'randomize', type: 'bool',
+                label: 'A themed verb in front of the work',
+                note: 'Off gives back the literal “Thinking…”.' },
+            { key: 'rerollMs', type: 'int', min: 0, max: 600000, step: 1000,
+                label: 'Milliseconds a verb stands for',
+                note: '0 pins one for the whole turn. Otherwise 1000 to 600000.' },
+            { key: 'groups', type: 'groups', wide: true,
+                label: 'Verb groups in play',
+                note: 'From ~/.tgxcode/verbs/, and a project’s own. Enabling all of '
+                    + 'them is a soup; the point of the groups is to choose a voice. '
+                    + 'Hover a group to read what is in it. The number on a group '
+                    + 'chosen is how often it gets to speak against the others — '
+                    + 'leave it at 1 for an even split, or 0 to mute it without '
+                    + 'giving it up.' },
+        ],
+    },
+    {
+        title: 'Quota', section: 'quota', userOnly: true,
+        note: 'Keeping the percentages current with no terminal open, by starting a '
+            + '`claude` for a few seconds and killing it.',
+        rows: [
+            { key: 'beacon', type: 'bool',
+                label: 'Refresh quota in the background',
+                note: 'Does nothing until a directory is named below.' },
+            { key: 'beaconDir', type: 'path',
+                label: 'Directory it runs in',
+                note: 'Open Claude Code there yourself at least once first — the beacon '
+                    + 'never answers the trust prompt, so an untrusted directory just '
+                    + 'makes every run time out.' },
+            { key: 'beaconEveryMinutes', type: 'int', min: 5, max: 1440,
+                label: 'How often, in minutes',
+                note: 'Each run is a CLI start and one tiny API call. Floor of five.' },
+        ],
+    },
+    {
+        title: 'Keyboard', section: 'keyboard', userOnly: true, keymap: true,
+        note: 'Two keys that switch in pairs, and then every shortcut this window '
+            + 'answers to.',
+        rows: [
+            { key: 'contextualTerminalCopy', type: 'bool',
+                label: 'Contextual Ctrl+C in the terminal',
+                note: 'With a selection, Ctrl+C copies it and clears it — so a second '
+                    + 'Ctrl+C still interrupts. With no selection it interrupts as '
+                    + 'always. Turning this on also makes plain Ctrl+V paste, instead '
+                    + 'of Ctrl+Shift+V. Only while the terminal has the focus.' },
+            { key: 'composerSend', type: 'choice',
+                label: 'Composer send',
+                options: [
+                    ['enter', 'Enter sends · Shift+Enter for a newline'],
+                    ['ctrl-enter', 'Enter for a newline · Ctrl+Enter sends'],
+                ],
+                note: 'Ctrl+Enter sends either way.' },
+        ],
+    },
+    // Claude Code's own settings — a different owner's files, and the one group
+    // built by a `render` rather than from `rows` or from markup. It has to be:
+    // what it draws comes from the bridge at load time rather than from a table
+    // here, because the whole point is that a key this app has never heard of
+    // still gets a control. See renderClaudeConfig().
+    {
+        title: 'Claude Code', section: 'claude', render: () => renderClaudeConfig(),
+    },
+    // The same owner's other files, and a `render` for the same reason: what it
+    // draws is a document that only the bridge has. Directly under the group
+    // above rather than a tab inside it, because those are settings with a
+    // precedence chain and these are instructions that add up — one control
+    // cannot mean both things. See renderClaudeDocs().
+    {
+        title: 'Claude Code · Memory', section: 'memory', render: () => renderClaudeDocs(),
+    },
+    // The last three are written out in web/index.html rather than built from
+    // rows, because none is backed by the settings file — one is a store of its
+    // own, one is per-browser storage and the last is a task rather than a
+    // setting. `node` names the element renderSettings moves into place, which is
+    // what lets them take their turn in this order instead of being stuck wherever
+    // the markup put them.
+    {
+        title: 'Snippets', section: 'snippets', node: 'setGSnippets',
+        after: () => renderSnipSettings(),
+    },
+    {
+        title: 'Notifications', section: 'notify', node: 'setGNotify',
+        after: () => paintNotifyRows(),
+    },
+    {
+        title: 'Connect a phone', section: 'pair', node: 'setGPair',
+        after: () => refreshPairUrl(),
+    },
+];
+
+/** Human names for the three scopes, for the sentences below. */
+const SCOPE_NAMES = {
+    user: 'User', project: 'Project — shared', 'project-local': 'Project — local',
+};
+
+function showSettings(on) {
+    state.settings.open = on;
+    if (on) closeOtherPanels('settings');
+    paintPanels();
+    syncBoardWatch();
+    syncTaskboardWatch();
+
+    if (on) {
+        // Always re-asked on open rather than cached like the dashboard is. The
+        // file can be edited by hand between two visits, and a settings page
+        // showing a stale value is the one thing it must never do.
+        loadSettings();
+    } else if (state.live.open) {
+        renderLive();
+        if (state.current) termPane.refit();
+    } else if (state.current) {
+        termPane.refit();
+    }
+    rememberView();
+}
+
+/**
+ * Which directory the project scopes are about.
+ *
+ * Defaults to the open session's project, because that is usually the answer —
+ * but it is a selector and not a reading of `state.current`, because Settings is
+ * a whole screen you go to with nothing open at least as often as you reach it
+ * mid-conversation, and a scope that silently means "wherever the rail happens
+ * to be" would write a preference into a repository you were not thinking about.
+ *
+ * With nothing open it falls back to the newest project the bridge knows,
+ * because "no project" is not a state the two project scopes can be read in —
+ * they would have no file to name and every control would be disabled with
+ * nothing saying why.
+ */
+function settingsProject() {
+    const s = state.settings;
+    if (s.project) return s.project;
+    const cur = state.current;
+    if (cur && (cur.projectCwd || cur.cwd)) return cur.projectCwd || cur.cwd;
+    return (s.projects[0] && s.projects[0].cwd) || '';
+}
+
+/**
+ * The verb catalogue, and what the spinner is currently doing with it.
+ *
+ * Its own function because it has to be asked again after a save, not only when
+ * the panel opens: this answer carries the pool size, each group's weight and
+ * each group's share, so ticking a group or changing a number moves numbers
+ * that are drawn from *here* rather than from the prefs the save returns. Left
+ * as one fetch on open, the shares sat still while the file underneath them
+ * changed — which is worse than not showing them.
+ *
+ * `verbs=1` because a group's name is not enough to choose it by — the tooltip
+ * on each one lists what is actually in it.
+ */
+async function loadSpinnerGroups(dir) {
+    const s = state.settings;
+    try { s.spinner = await get(`/api/spinner/groups?verbs=1${dir ? `&cwd=${encodeURIComponent(dir)}` : ''}`); }
+    catch { s.spinner = null; }
+}
+
+async function loadSettings() {
+    const s = state.settings;
+    if (s.loading) return;
+    s.loading = true;
+    s.error = null;
+    // A fresh look at the panel gets a fresh order for the verb groups, chosen
+    // ones first. Only here and on a scope change — never on the refetch after
+    // a save, which is the whole point of pinning it.
+    s.groupOrder = null;
+    renderSettings();
+
+    // The project list first, because settingsProject() falls back to it — and
+    // asked for once, since it is a directory listing rather than something
+    // that moves while you read a settings page.
+    if (!s.projects.length) {
+        try { s.projects = (await get('/api/projects')).projects || []; }
+        catch { /* the selector falls back to the open session's project alone */ }
+    }
+    try {
+        // The whole chain every time, whatever scope is selected: the answer
+        // carries all four files, so switching scope is a redraw rather than a
+        // fetch, and the User scope can still say which project file overrides
+        // it.
+        const dir = settingsProject();
+        s.data = await get(`/api/prefs?files=1${dir ? `&cwd=${encodeURIComponent(dir)}` : ''}`);
+        // Not awaited: it is a second group's worth of content and the page
+        // draws fine without it, the way loadPairing() below is not awaited.
+        loadClaudeConfig();
+        loadClaudeDocs();
+        // The weakest file in the chain is always the user's own, which is what
+        // tells shortPath where home is.
+        if (s.data.files && s.data.files.length) noteHome(s.data.files[0].file);
+        // Loading the spinner catalogue alongside, because the groups control is
+        // a list of checkboxes and the names can only come from the directory.
+        await loadSpinnerGroups(dir);
+        // What this machine is reachable as, for the pairing group. Not awaited
+        // into the render: it shells out to `tailscale.exe` on the Windows host,
+        // which is slow enough that holding the whole panel for it would be
+        // felt, and the group draws fine from the remembered host meanwhile.
+        loadPairing();
+    } catch (err) {
+        s.error = err.message;
+    }
+    s.loading = false;
+    renderSettings();
+}
+
+/**
+ * Save one key, and take the answer as the truth.
+ *
+ * The response carries the merged settings and the per-file breakdown, so
+ * nothing here has to guess at what the write did — including the case where
+ * the value lands in a file a stronger one is already overriding, which is the
+ * one a client that assumed success would draw wrongly.
+ */
+async function saveSetting(section, key, value) {
+    const s = state.settings;
+    if (s.saving) return;
+    s.saving = true;
+    renderSettings();
+    try {
+        const dir = settingsProject();
+        const answer = await put('/api/prefs', {
+            scope: s.scope,
+            cwd: dir,
+            patch: { [section]: { [key]: value } },
+        });
+        s.data = { ...answer.prefs, files: answer.files };
+        applyPrefsLive(answer.prefs, section);
+        // The spinner panel draws its counts and shares from the catalogue
+        // route rather than from the prefs, so a spinner save has to ask it
+        // again or the numbers beside the controls stay on the old answer.
+        if (section === 'spinner') await loadSpinnerGroups(dir);
+    } catch (err) {
+        toast(`Could not save that setting: ${err.message}`, 'error');
+    }
+    s.saving = false;
+    renderSettings();
+}
+
+/**
+ * Make a saved setting true of the window it was saved in.
+ *
+ * The page reads its settings from a `<meta>` tag baked at serve time, and
+ * `liveCompact()`/`liveHideElsewhere()` read it directly — so before this, the
+ * live-board settings did not take effect until a reload, which README said out
+ * loud. Folding the new values into that object closes the gap for everything
+ * except history, which is not re-rendered by anything: a change under
+ * `transcript` re-opens the session, because the folding decisions were made
+ * while the rows were built.
+ *
+ * Only the user-level answer is applied, which is what BOOT_PREFS is. A project
+ * scope's save shows up in this panel and travels with the next transcript.
+ */
+function applyPrefsLive(prefs, section) {
+    if (state.settings.scope !== 'user') return;
+    for (const block of Object.keys(PREFS_FALLBACK)) {
+        if (block === 'version' || !prefs[block]) continue;
+        Object.assign(BOOT_PREFS[block], prefs[block]);
+    }
+    keys.apply(BOOT_PREFS.keyboard);
+    paintShortcutHints();
+    if (state.live.open) renderLive();
+    if (section === 'keyboard') paintComposerHint();
+    if (section === 'transcript' && state.current) {
+        // Re-read the conversation so the new folding rule applies to what is
+        // already on screen. keepDash so going and looking does not close this.
+        openSession(state.current.sessionId, { keepDash: true, quiet: true });
+    }
+}
+
+/**
+ * Which file a section.key is actually coming from, and which scope set it.
+ *
+ * Walks the chain weakest-first, so the last file to mention a key is the one
+ * that wins — the same order bridge/prefs.js merges in, and the reason this is
+ * derived here rather than asked for: the two must agree, and there is only one
+ * rule to agree about.
+ */
+function settingOrigin(section, key) {
+    const files = (state.settings.data && state.settings.data.files) || [];
+    let winner = null;
+    for (const f of files) {
+        if (f.values && f.values[section] && f.values[section][key] !== undefined) winner = f;
+    }
+    return winner;
+}
+
+/** The file this scope would write, out of the chain we were handed. */
+function settingsTargetRow() {
+    const files = (state.settings.data && state.settings.data.files) || [];
+    return files.find(f => f.scope === state.settings.scope && f.target) || null;
+}
+
+function renderSettings() {
+    if (!state.settings.open) return;
+    const s = state.settings;
+
+    // The project selector only means anything for the two project scopes, and
+    // a disabled one beside "User" is a control that appears broken.
+    dom.setProjectWrap.hidden = s.scope === 'user';
+    dom.setScope.value = s.scope;
+    paintSettingsProjects();
+    paintSettingsFile();
+    paintSettingsProblems();
+
+    dom.setBody.replaceChildren();
+    if (s.error) {
+        dom.setToc.replaceChildren();
+        dom.setBody.append(el('div', { class: 'settings-error' },
+            `Could not read the settings: ${s.error}`));
+        return;
+    }
+    if (!s.data) {
+        dom.setToc.replaceChildren();
+        dom.setBody.append(el('div', { class: 'settings-empty', text: 'Reading settings…' }));
+        return;
+    }
+
+    for (const group of SETTINGS) {
+        // A group whose markup already exists is moved rather than rebuilt: its
+        // controls were wired at load and would lose their listeners to a
+        // replaceChildren. Detaching and re-appending keeps them.
+        if (group.node) {
+            dom.setBody.append(dom[group.node]);
+            if (group.after) group.after();
+            continue;
+        }
+        // A group that builds itself. One card or several — the contents list
+        // still gets one entry, and the first card carries the id it scrolls to.
+        if (group.render) {
+            dom.setBody.append(...group.render());
+            continue;
+        }
+        const locked = group.userOnly && s.scope !== 'user';
+        const card = el('section', {
+            class: 'settings-group', id: `set-g-${group.section}`,
+            'data-locked': locked || null,
+        },
+            el('h2', { class: 'settings-group-title', text: group.title }),
+            group.note ? el('p', { class: 'settings-group-note', text: group.note }) : null,
+            locked ? el('p', { class: 'settings-locked' },
+                'Set for you alone, in ', el('code', { text: '~/.tgxcode/settings.json' }),
+                ' — a checked-in file cannot change these. ',
+                el('button', {
+                    class: 'linkish', type: 'button',
+                    onclick: () => { s.scope = 'user'; renderSettings(); },
+                }, 'Switch to User')) : null);
+
+        for (const row of group.rows) card.append(settingRow(group, row, locked));
+        if (group.keymap) card.append(renderKeymap(locked));
+        dom.setBody.append(card);
+    }
+    renderSettingsToc();
+}
+
+/**
+ * Contents down the left, one entry per group.
+ *
+ * Worth the space because the panel is five groups and about forty controls,
+ * and the thing you came for is rarely the one on screen. Sticky rather than
+ * scrolling with the body, for the same reason.
+ */
+function renderSettingsToc() {
+    dom.setToc.replaceChildren(...SETTINGS.map(group => el('button', {
+        class: 'settings-toc-link', type: 'button', 'data-for': group.section,
+        onclick: () => {
+            const card = document.getElementById(`set-g-${group.section}`);
+            if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        },
+    }, group.title)));
+    markSettingsToc();
+}
+
+/**
+ * Which group the reader is in.
+ *
+ * The topmost card whose head has not yet scrolled past the top of the
+ * container wins, which is the reading that matches what a person would say
+ * they are looking at — the alternative, "whichever card covers the most
+ * pixels", flickers between two of them on a long group.
+ */
+function markSettingsToc() {
+    if (!state.settings.open) return;
+    const top = dom.setShell.getBoundingClientRect().top;
+    let active = SETTINGS[0] && SETTINGS[0].section;
+    for (const group of SETTINGS) {
+        const card = document.getElementById(`set-g-${group.section}`);
+        if (card && card.getBoundingClientRect().top - top <= 24) active = group.section;
+    }
+    for (const link of dom.setToc.children) {
+        link.classList.toggle('on', link.dataset.for === active);
+    }
+}
+
+function paintSettingsProjects() {
+    const s = state.settings;
+    const here = settingsProject();
+    // The open session's project first even when it is not in the list yet —
+    // /api/projects only knows directories a session has run in, and a brand
+    // new one has not been indexed.
+    const dirs = [...new Set([here, ...s.projects.map(p => p.cwd)].filter(Boolean))];
+    dom.setProject.replaceChildren(...dirs.map(d => el('option', {
+        value: d, selected: d === here || null,
+    }, shortPath(d))));
+    if (!dirs.length) {
+        dom.setProject.replaceChildren(el('option', { value: '', text: 'No projects yet' }));
+    }
+}
+
+function paintSettingsFile() {
+    const s = state.settings;
+    const row = settingsTargetRow();
+    const file = row ? row.file : '';
+    dom.setFile.replaceChildren();
+    if (!file) {
+        dom.setFile.append(el('span', { class: 'settings-file-none' },
+            'No settings file for that scope — pick a project above.'));
+        return;
+    }
+    // Filtered, because `append` stringifies a null into the literal word
+    // rather than skipping it the way el()'s children do.
+    dom.setFile.append(...[
+        el('span', { class: 'settings-file-lede', text: 'Writing to' }),
+        el('button', {
+            class: 'settings-file-path', type: 'button', title: 'Copy this path',
+            onclick: () => navigator.clipboard.writeText(file)
+                .then(() => toast('Path copied.'))
+                .catch(() => toast('Could not copy that path.', 'error')),
+        }, file),
+        !row.exists && el('span', { class: 'settings-file-tag', text: 'will be created' }),
+        row.exists && !row.parsed
+            && el('span', { class: 'settings-file-tag bad', text: 'does not parse — saving is refused' }),
+        !row.writable && el('span', { class: 'settings-file-tag bad', text: 'not writable' }),
+        s.saving && el('span', { class: 'settings-file-tag', text: 'saving…' }),
+    ].filter(Boolean));
+}
+
+function paintSettingsProblems() {
+    const files = (state.settings.data && state.settings.data.files) || [];
+    const rows = [];
+    for (const f of files) for (const m of f.problems || []) rows.push({ file: f.file, message: m });
+    dom.setProblems.hidden = !rows.length;
+    dom.setProblems.replaceChildren(...rows.map(r => el('div', { class: 'settings-problem' },
+        el('code', { text: shortPath(r.file) }), ' ', r.message)));
+}
+
+/**
+ * One control, with the two sentences that make it honest: whether this scope
+ * set the value, and whether something stronger has taken it over.
+ *
+ * The label reads down the left and the control sits at the right edge, with
+ * the "Clear" or "default" line under it — so the controls form one column the
+ * eye can run down, and the column does not move with the length of a label.
+ *
+ * A row marked `wide` breaks that shape on purpose: the spinner groups are a
+ * hundred-odd checkboxes and no right-hand column is the right width for them,
+ * so the text and the Clear go across the top and the control gets the full
+ * width underneath.
+ */
+function settingRow(group, row, locked) {
+    const s = state.settings;
+    const section = group.section;
+    const target = settingsTargetRow();
+    const explicit = !!(target && target.values && target.values[section]
+        && target.values[section][row.key] !== undefined);
+    const effective = s.data[section] ? s.data[section][row.key] : undefined;
+    const value = explicit ? target.values[section][row.key] : effective;
+
+    const origin = settingOrigin(section, row.key);
+    // "Stronger" means later in the chain, and the chain is the array order.
+    const files = s.data.files || [];
+    const overridden = !!(origin && target && origin.file !== target.file
+        && files.indexOf(origin) > files.indexOf(target));
+
+    const disabled = locked || !target || (target.exists && !target.parsed) || !target.writable;
+    const save = (v) => saveSetting(section, row.key, v);
+    // One control writes two keys: the spinner groups carry a weight each, and
+    // `spinner.weights` is a key of its own rather than something folded into
+    // the list. Nothing else needs this, which is why it is an extra argument
+    // and not a change to what `save` means.
+    const saveKey = (key, v) => saveSetting(section, key, v);
+
+    const text = el('div', { class: 'settings-row-text' },
+        el('div', { class: 'settings-row-label', text: row.label }),
+        row.note ? el('div', { class: 'settings-row-note', text: row.note }) : null,
+        overridden ? el('div', { class: 'settings-row-warn' },
+            `Overridden by ${SCOPE_NAMES[origin.scope]} — `,
+            el('code', { text: shortPath(origin.file) }),
+            ' wins, so this has no effect here.') : null);
+
+    const side = el('div', { class: 'settings-row-side' },
+        explicit
+            ? el('button', {
+                class: 'linkish', type: 'button', disabled: disabled || null,
+                title: 'Remove this key so the value falls back',
+                onclick: () => save(null),
+            }, 'Clear')
+            : el('span', { class: 'settings-row-from', text: origin ? `from ${SCOPE_NAMES[origin.scope]}` : 'default' }));
+
+    const control = settingControl(row, value, disabled, save, saveKey);
+
+    if (row.wide) {
+        return el('div', { class: 'settings-row is-wide' },
+            el('div', { class: 'settings-row-head' }, text, side),
+            el('div', { class: 'settings-row-wide' }, control));
+    }
+    return el('div', { class: 'settings-row' },
+        text,
+        el('div', { class: 'settings-row-ctl' }, control, side));
+}
+
+/** The input itself, by type. Each one saves on change; none of them is a draft. */
+function settingControl(row, value, disabled, save, saveKey) {
+    if (row.type === 'bool') {
+        return el('label', { class: 'settings-check' },
+            el('input', {
+                type: 'checkbox', checked: value === true || null, disabled: disabled || null,
+                onchange: (e) => save(e.target.checked),
+            }),
+            el('span', { class: 'settings-box' }));
+    }
+    if (row.type === 'int') {
+        return el('input', {
+            class: 'settings-num', type: 'number', value: value ?? '',
+            min: row.min, max: row.max, step: row.step || 1, disabled: disabled || null,
+            onchange: (e) => {
+                const n = Number(e.target.value);
+                if (!Number.isInteger(n)) { renderSettings(); return; }
+                save(n);
+            },
+        });
+    }
+    if (row.type === 'path') {
+        return el('input', {
+            class: 'settings-text', type: 'text', spellcheck: 'false',
+            value: value || '', disabled: disabled || null,
+            placeholder: 'not set',
+            // A path is the one field somebody types rather than picks, so it
+            // commits on blur or Enter instead of per keystroke.
+            onchange: (e) => save(e.target.value.trim() || null),
+        });
+    }
+    if (row.type === 'choice') {
+        return el('select', {
+            class: 'settings-select', disabled: disabled || null,
+            onchange: (e) => save(e.target.value),
+        }, row.options.map(([v, text]) => el('option', {
+            value: v, selected: v === value || null,
+        }, text)));
+    }
+    if (row.type === 'groups') return settingGroups(value, disabled, save, saveKey);
+    return el('span', { text: String(value) });
+}
+
+/**
+ * Everything in a verb group, as a tooltip.
+ *
+ * A group name is a theme and not a description — "Absurd / Nonsense" and
+ * "Kaomoji" tell you nothing about what a turn will actually call itself — so
+ * the whole list goes in, alphabetised by the bridge. Wrapped to a readable
+ * width because a native tooltip does not wrap on its own, and 185 verbs on one
+ * line is a tooltip wider than the screen.
+ */
+function verbTooltip(group) {
+    const verbs = Array.isArray(group.verbs) ? group.verbs : [];
+    if (!verbs.length) return group.name;
+    const lines = [];
+    let line = '';
+    for (const verb of verbs) {
+        const next = line ? `${line} · ${verb}` : verb;
+        if (next.length > 72) { lines.push(line); line = verb; } else { line = next; }
+    }
+    if (line) lines.push(line);
+    return `${group.name} — ${verbs.length} verb${verbs.length === 1 ? '' : 's'}\n${lines.join('\n')}`;
+}
+
+/**
+ * A group's share of the draws, as something short enough for a pill.
+ *
+ * The bridge sends the number because the bridge is where the draw happens —
+ * see the note on `GET /api/spinner/groups`. Rounding rather than a decimal:
+ * this is next to a name in a wrapped pill, and the question it answers is
+ * "which of these am I actually going to hear from", not "to what precision".
+ */
+function shareLabel(share) {
+    if (share === null || share === undefined) return '';
+    if (share === 0) return 'muted';
+    const pct = Math.round(share * 100);
+    return pct < 1 ? '<1%' : `${pct}%`;
+}
+
+/**
+ * The spinner groups, as checkboxes over what the directory actually holds,
+ * each chosen one carrying how often it gets to speak.
+ *
+ * `GET /api/spinner/groups` exists because there was no settings page and the
+ * only other answer to "what may I put in that list?" was to go and read a
+ * directory. Now that there is one, this is where that route pays for itself.
+ *
+ * **Only a chosen group gets a weight box.** There are a hundred-odd pills here
+ * and a number on every one of them would be a wall; a weight also means
+ * nothing until the group is in play. So the unchecked pills are exactly what
+ * they were, and the dozen you picked grow a box and a percentage — which is
+ * the number worth showing, since a weight on its own says nothing without the
+ * others to read it against.
+ *
+ * **The chosen ones come first, and then the order stops moving.** Alphabetical
+ * over a hundred and fifteen pills buries the dozen that are actually in play
+ * somewhere in the middle of the wall, and those are the ones you came here to
+ * read. But sorting on every render would make the list move under the cursor:
+ * tick a group and it leaps to the top, drawing your next click onto whatever
+ * slid into its place. So the order is settled once — on opening the panel, on
+ * changing project or scope — and held in `state.settings.groupOrder` for as
+ * long as you are working in it. A group ticked now goes to the top the next
+ * time you come in, which is soon enough.
+ */
+function settingGroups(value, disabled, save, saveKey) {
+    const cat = state.settings.spinner;
+    const enabled = new Set(Array.isArray(value) ? value : []);
+    if (!cat || !cat.groups || !cat.groups.length) {
+        return el('div', { class: 'settings-groups-none' },
+            'No verb groups found for this directory.');
+    }
+    const weights = (cat && cat.weights) || {};
+    const st = state.settings;
+    if (!st.groupOrder) {
+        // A stable partition: the route hands these over alphabetically, so
+        // each half keeps that order and only the split is new.
+        st.groupOrder = [
+            ...cat.groups.filter(g => enabled.has(g.name)),
+            ...cat.groups.filter(g => !enabled.has(g.name)),
+        ].map(g => g.name);
+    }
+    // Drawn in the pinned order, with anything the order has not heard of on
+    // the end — a group that appeared in the directory since it was fixed.
+    const rank = new Map(st.groupOrder.map((name, i) => [name, i]));
+    const ordered = [...cat.groups].sort((a, b) =>
+        (rank.has(a.name) ? rank.get(a.name) : rank.size) - (rank.has(b.name) ? rank.get(b.name) : rank.size));
+    const toggle = (name, on) => {
+        const next = new Set(enabled);
+        if (on) next.add(name); else next.delete(name);
+        save([...next]);
+    };
+    // A map goes over whole — `spinner.weights` is replaced by a save, not
+    // merged into, the same as `keyboard.bindings`. Unchecking a group leaves
+    // its number alone on purpose: the checkbox is how a group is turned off,
+    // and losing what you had set would make it destructive.
+    const weigh = (name, raw) => {
+        const next = { ...weights };
+        const n = Number(raw);
+        if (raw === '' || !Number.isFinite(n) || n === 1) delete next[name];
+        else next[name] = Math.min(1000, Math.max(0, n));
+        // An empty map is the same answer as no key, and no key is the tidier
+        // file — the same reason a save drops an emptied section.
+        saveKey('weights', Object.keys(next).length ? next : null);
+    };
+    const weighed = cat.groups.some(g => enabled.has(g.name) && g.weight !== 1 && g.weight !== null);
+    return el('div', { class: 'settings-groups' },
+        ordered.map(g => {
+            const on = enabled.has(g.name);
+            return el('div', { class: 'settings-group-pick', title: verbTooltip(g) },
+                el('label', { class: 'settings-group-toggle' },
+                    el('input', {
+                        type: 'checkbox', checked: on || null, disabled: disabled || null,
+                        onchange: (e) => toggle(g.name, e.target.checked),
+                    }),
+                    el('span', { class: 'settings-box' }),
+                    el('span', { class: 'settings-group-name', text: g.name }),
+                    el('span', { class: 'settings-group-count', text: `${g.count}` })),
+                // Committed on blur or Enter rather than per keystroke, like the
+                // path field: typing "12" through "1" would otherwise save a
+                // weight of 1 on the way past and re-render under your hands.
+                on ? el('input', {
+                    class: 'settings-group-weight', type: 'number', min: 0, max: 1000, step: 'any',
+                    value: g.weight === null || g.weight === undefined ? '' : `${g.weight}`,
+                    disabled: disabled || null, title: 'How often this group speaks, against the others',
+                    onchange: (e) => weigh(g.name, e.target.value.trim()),
+                }) : null,
+                on ? el('span', {
+                    class: `settings-group-share${g.share ? '' : ' is-muted'}`,
+                    text: shareLabel(g.share),
+                }) : null);
+        }),
+        // What the spinner will actually draw from, which is not the same as
+        // what is enabled when a name matches no file — or when a group is
+        // enabled and weighed 0.
+        el('div', { class: 'settings-groups-foot' },
+            `${cat.pool} verb${cat.pool === 1 ? '' : 's'} in the pool.`,
+            // The row's own Clear covers `groups`; without this there is no way
+            // to put every weight back to 1 from the page.
+            weighed ? ' ' : null,
+            weighed ? el('button', {
+                class: 'linkish', type: 'button', disabled: disabled || null,
+                title: 'Put every group back to an even share',
+                onclick: () => saveKey('weights', null),
+            }, 'Even them out') : null));
+}
+
+// ── Claude Code's own settings ───────────────────────────────────────────
+//
+// The group above this one edits `~/.tgxcode/settings.json`, which this app
+// defines. This one edits `~/.claude/settings.json` and its project siblings,
+// which it does not — and almost every difference in the code below follows
+// from that one fact.
+//
+// **The file is drawn, not the catalogue.** `bridge/claude-schema.js` says how
+// to render the keys it has heard of; everything else in the file still appears,
+// as a generic control when it holds a scalar and as a read-only row with an
+// *Edit as JSON* button when it does not. A settings page that quietly omitted
+// a permission rule it did not recognise would be worse than no page at all,
+// and that is exactly what iterating our own catalogue would do.
+//
+// **Nothing here is authoritative about precedence.** The bridge computes a
+// merged reading and says so; the page repeats the caveat rather than hiding
+// it. One consequence is visible in the UI: `permissions.allow`, `deny` and
+// `ask` *add up* across files instead of overriding, so the "Overridden by …"
+// sentence the group above draws must never appear over them. What they get
+// instead is a count of what this scope sets and what it inherits.
+//
+// **This group has its own scope tabs**, and leaves the page's scope selector
+// alone. That selector means "which of *our* three files"; Claude Code's chain
+// is four files including one nobody can write, and overloading one control
+// would move every other group on the page when you touched this one.
+
+/** The four rows of Claude Code's chain, named for a person. */
+const CLAUDE_SCOPES = {
+    user: 'User',
+    project: 'Project — shared',
+    'project-local': 'Project — local',
+    managed: 'Managed',
+};
+
+function claudeState() {
+    return state.claudeCfg;
+}
+
+/** The directory this group is about — the same one the page's selector picks. */
+function claudeDir() {
+    return settingsProject();
+}
+
+/**
+ * What the panel is currently showing, as `{dottedPath: json}`.
+ *
+ * Both halves of what a row draws, because either can move without the other:
+ * `effective` is the value in force, which changes when a *stronger* file does,
+ * and the target file's own `values` are what a control writes, which is what
+ * changes when this scope's file does. A row that shows "set here, but
+ * overridden" reads differently after either one.
+ */
+function claudeSnapshot(data) {
+    if (!data) return null;
+    const s = claudeState();
+    const out = {};
+    // The whole entry rather than its `value`: a `rules` key carries a per-file
+    // breakdown the row draws, and a rule added to a second file that the first
+    // already had moves the breakdown without moving the union.
+    for (const [path_, eff] of Object.entries(data.effective || {})) {
+        out[path_] = JSON.stringify(eff);
+    }
+    const target = (data.files || []).find(f => f.scope === s.scope);
+    for (const [path_, value] of Object.entries((target && target.values) || {})) {
+        out[path_] = `${out[path_] || ''}|own:${JSON.stringify(value)}`;
+    }
+    return out;
+}
+
+/**
+ * Point at what moved.
+ *
+ * A reload that arrives because somebody else wrote the file replaces controls
+ * silently, and a checkbox that is suddenly the other way round reads as a
+ * misremembering rather than as news. So the rows whose value actually changed
+ * are flashed — the same affordance a jump into the transcript uses, and for
+ * the same reason.
+ */
+function claudeFlash(before, after) {
+    if (!before || !after) return;
+    for (const path_ of new Set([...Object.keys(before), ...Object.keys(after)])) {
+        if (before[path_] === after[path_]) continue;
+        const row = dom.setBody
+            && dom.setBody.querySelector(`.settings-row[data-path="${CSS.escape(path_)}"]`);
+        if (row) flashNode(row);
+    }
+}
+
+/**
+ * @param {{flash?: boolean}} [opts] `flash` points at the rows that changed,
+ *   which only makes sense when the reload was somebody else's doing: a save
+ *   from this window has its own toast, and opening the panel has nothing to
+ *   have changed *from*.
+ */
+async function loadClaudeConfig({ flash = false } = {}) {
+    const s = claudeState();
+    if (s.loading) return;
+    const before = flash ? claudeSnapshot(s.data) : null;
+    s.loading = true;
+    s.error = null;
+    renderSettings();
+    try {
+        const dir = claudeDir();
+        s.data = await get(`/api/claude-config${dir ? `?cwd=${encodeURIComponent(dir)}` : ''}`);
+        // A scope the current directory does not offer — Project with no
+        // project — would leave every control disabled with no way back, so
+        // fall to the one row that always exists.
+        if (!claudeTargetRow()) s.scope = 'user';
+    } catch (err) {
+        s.data = null;
+        s.error = err.message;
+    }
+    s.loading = false;
+    renderSettings();
+    if (flash) claudeFlash(before, claudeSnapshot(s.data));
+}
+
+/** The file the current scope writes, out of what the bridge reported. */
+function claudeTargetRow() {
+    const s = claudeState();
+    if (!s.data) return null;
+    return s.data.files.find(f => f.scope === s.scope && f.target) || null;
+}
+
+/**
+ * Save one path, and take the answer rather than assuming it.
+ *
+ * `stamp` goes with anything that replaces a whole collection, because
+ * `permissions.allow` is one key holding twenty-eight rules and `claude`
+ * appends to that list itself. A `409` is not an error to apologise for — it
+ * is the page finding out it was about to drop somebody's rule — so it gets a
+ * banner and a reload rather than a toast that scrolls away.
+ */
+async function saveClaudePath(path, value, { collection = false } = {}) {
+    const s = claudeState();
+    const row = claudeTargetRow();
+    if (!row) return;
+    s.saving = true;
+    renderSettings();
+    try {
+        const body = { scope: s.scope, cwd: claudeDir(), patch: { [path]: value } };
+        if (collection) body.stamp = row.stamp;
+        const answer = await put('/api/claude-config', body);
+        s.data = answer.config;
+        s.stale = null;
+        toast(claudeSavedNote(path), 'ok');
+    } catch (err) {
+        if (err.status === 409) {
+            s.stale = err.data && err.data.text ? { text: err.data.text } : { text: null };
+            await loadClaudeConfig();
+        } else {
+            toast(`Could not save that: ${err.message}`, 'error');
+        }
+    }
+    s.saving = false;
+    renderSettings();
+}
+
+/**
+ * What to say after a save landed.
+ *
+ * Not "Saved" — the thing worth saying is that it has not reached anything yet.
+ * Claude Code reads these files when a session starts, so the change is real
+ * and invisible until one does, and "I changed it and nothing happened" is the
+ * question this sentence exists to answer before it is asked.
+ */
+function claudeSavedNote(path) {
+    const running = claudeState().data && claudeState().data.running;
+    const where = `${path} saved.`;
+    if (running) {
+        return `${where} ${running} session${running === 1 ? '' : 's'} already running `
+            + 'will not see it — new ones will.';
+    }
+    return `${where} It applies to sessions started from now on.`;
+}
+
+/** The raw JSON tab's save. Always stamped: it replaces keys nobody looked at. */
+async function saveClaudeText() {
+    const s = claudeState();
+    const row = claudeTargetRow();
+    if (!row || s.draft === null) return;
+    s.saving = true;
+    renderSettings();
+    try {
+        const answer = await put('/api/claude-config', {
+            scope: s.scope, cwd: claudeDir(), stamp: row.stamp, text: s.draft,
+        });
+        s.data = answer.config;
+        s.draft = null;
+        s.dirty = false;
+        s.stale = null;
+        s.jsonError = null;
+        toast(`${shortPath(answer.file)} written.`, 'ok');
+    } catch (err) {
+        if (err.status === 409) {
+            // The draft is kept. Losing what somebody typed in order to show
+            // them what somebody else typed is the one unforgivable move here.
+            s.stale = { text: (err.data && err.data.text) || null };
+            toast('That file changed on disk. Your draft is kept — compare and save again.', 'warn');
+            const keep = s.draft;
+            await loadClaudeConfig();
+            s.draft = keep;
+            s.dirty = true;
+        } else if (err.data && err.data.code === 'json') {
+            s.jsonError = err.message;
+        } else {
+            toast(`Could not save that file: ${err.message}`, 'error');
+        }
+    }
+    s.saving = false;
+    renderSettings();
+}
+
+/**
+ * The whole group.
+ *
+ * Returns an array so it can be several cards under one contents entry: nine
+ * catalogue groups, the keys the catalogue does not model, and the raw tab.
+ */
+function renderClaudeConfig() {
+    const s = claudeState();
+    const head = el('section', { class: 'settings-group', id: 'set-g-claude' },
+        el('h2', { class: 'settings-group-title', text: 'Claude Code' }),
+        el('p', { class: 'settings-group-note' },
+            'The settings ', el('code', { text: 'claude' }), ' itself reads — not this '
+            + 'app’s. Everything in these files is here, including keys this page has no '
+            + 'control for; what it does not recognise it shows rather than hides.'),
+        claudeScopeTabs(),
+        claudeFileLine(),
+        claudeReachNote());
+
+    if (s.error) {
+        head.append(el('div', { class: 'settings-error' },
+            `Could not read Claude Code’s settings: ${s.error}`));
+        return [head];
+    }
+    if (!s.data) {
+        head.append(el('div', { class: 'settings-empty', text: 'Reading…' }));
+        return [head];
+    }
+    if (s.stale) head.append(claudeStaleBanner());
+
+    const cards = [head];
+    if (s.tab === 'raw') {
+        cards.push(claudeRawCard());
+        return cards;
+    }
+    for (const group of s.data.catalogue) {
+        const card = el('section', { class: 'settings-group cfg-sub', id: `set-g-claude-${group.key}` },
+            el('h3', { class: 'settings-group-title', text: group.title }),
+            group.note ? el('p', { class: 'settings-group-note', text: group.note }) : null);
+        for (const row of group.rows) card.append(claudeRow(row));
+        cards.push(card);
+    }
+    cards.push(claudeUnknownCard());
+    return cards;
+}
+
+/** Which of the four files this group is looking at. */
+function claudeScopeTabs() {
+    const s = claudeState();
+    const rows = s.data ? s.data.files : [];
+    return el('div', { class: 'cfg-tabs', role: 'tablist' },
+        rows.map((f) => el('button', {
+            class: `cfg-tab${f.scope === s.scope ? ' on' : ''}`,
+            type: 'button', role: 'tab',
+            'aria-selected': f.scope === s.scope ? 'true' : 'false',
+            // A row nothing can write is still worth opening — it is the answer
+            // to "why is this not what I set?" — so Managed is selectable and
+            // read-only rather than absent.
+            title: f.readonly ? 'An administrator’s file — read-only' : f.file,
+            onclick: () => {
+                if (s.dirty && !window.confirm('Discard the JSON you have edited?')) return;
+                s.scope = f.scope;
+                s.draft = null;
+                s.dirty = false;
+                s.jsonError = null;
+                s.stale = null;
+                renderSettings();
+            },
+        },
+        CLAUDE_SCOPES[f.scope],
+        !f.exists ? el('span', { class: 'cfg-tab-tag', text: 'none' }) : null,
+        f.readonly ? el('span', { class: 'cfg-tab-tag', text: 'read-only' }) : null)),
+        el('div', { class: 'cfg-tabs-spacer' }),
+        el('button', {
+            class: `cfg-tab${s.tab === 'form' ? ' on' : ''}`, type: 'button',
+            onclick: () => { s.tab = 'form'; renderSettings(); },
+        }, 'Controls'),
+        el('button', {
+            class: `cfg-tab${s.tab === 'raw' ? ' on' : ''}`, type: 'button',
+            onclick: () => {
+                s.tab = 'raw';
+                // Always re-read on the way in, so a draft never starts from
+                // text that was true ten minutes ago.
+                loadClaudeConfig().then(() => { s.tab = 'raw'; renderSettings(); });
+            },
+        }, 'JSON'));
+}
+
+/** The path being written, and everything true about it that is worth saying. */
+function claudeFileLine() {
+    const row = claudeTargetRow();
+    const s = claudeState();
+    const readonly = s.data && s.data.files.find(f => f.scope === s.scope && f.readonly);
+    const line = el('div', { class: 'settings-file' });
+
+    if (readonly) {
+        line.append(
+            el('span', { class: 'settings-file-lede', text: 'Reading' }),
+            el('button', {
+                class: 'settings-file-path', type: 'button', title: 'Copy this path',
+                onclick: () => copyPath(readonly.file),
+            }, readonly.file),
+            el('span', { class: 'settings-file-tag' },
+                readonly.exists ? 'an administrator’s — read-only' : 'not present on this machine'));
+        return line;
+    }
+    if (!row) {
+        line.append(el('span', { class: 'settings-file-none' },
+            'No file for that scope — pick a project above.'));
+        return line;
+    }
+    // Filtered rather than passed through, because `append` stringifies a
+    // `false` into the literal word where el()'s own children skip it — the
+    // same trap paintSettingsFile() names a few hundred lines up.
+    line.append(...[
+        el('span', { class: 'settings-file-lede', text: 'Writing to' }),
+        el('button', {
+            class: 'settings-file-path', type: 'button', title: 'Copy this path',
+            onclick: () => copyPath(row.file),
+        }, row.file),
+        !row.exists && el('span', { class: 'settings-file-tag', text: 'will be created' }),
+        row.symlink
+            && el('span', { class: 'settings-file-tag bad', text: 'a symlink — saving is refused' }),
+        row.exists && !row.parsed && !row.symlink
+            && el('span', { class: 'settings-file-tag bad', text: 'does not parse — use the JSON tab' }),
+        !row.writable && !row.symlink
+            && el('span', { class: 'settings-file-tag bad', text: 'not writable' }),
+        claudeState().saving && el('span', { class: 'settings-file-tag', text: 'saving…' }),
+    ].filter(Boolean));
+
+    // Whether the local file is really private, answered by git rather than by
+    // hoping. A global excludes file counts, and a repository that relies on
+    // one is a repository a colleague's clone has no protection for.
+    if (row.scope === 'project-local') {
+        line.append(row.ignored
+            ? el('span', { class: 'settings-file-tag', title: `ignored by ${row.ignoredBy}` },
+                'gitignored')
+            : el('span', { class: 'settings-file-tag bad' },
+                'not gitignored — this file would be committed'));
+    }
+    return line;
+}
+
+const copyPath = (file) => navigator.clipboard.writeText(file)
+    .then(() => toast('Path copied.'))
+    .catch(() => toast('Could not copy that path.', 'error'));
+
+/**
+ * The sentence that stops "I changed it and nothing happened".
+ *
+ * Permanent, and above the controls rather than in a toast, because it is a
+ * fact about the whole group rather than about one save.
+ */
+function claudeReachNote() {
+    const s = claudeState();
+    const running = (s.data && s.data.running) || 0;
+    return el('p', { class: 'cfg-reach' },
+        el('strong', { text: 'Claude Code reads these when a session starts.' }),
+        ' A change here applies to sessions you start from now on',
+        running
+            ? ` — the ${running} already running will not see it.`
+            : '.',
+        s.scope === 'project-local'
+            ? el('span', { class: 'cfg-reach-more' },
+                ' Claude Code appends to this file itself every time you approve a '
+                + 'permission, so it changes under you.')
+            : null);
+}
+
+/** A conflict, kept on screen rather than thrown at a toast. */
+function claudeStaleBanner() {
+    const s = claudeState();
+    return el('div', { class: 'cfg-stale' },
+        el('div', { class: 'cfg-stale-head' }, 'This file changed on disk since the page read it.'),
+        el('p', null, 'Nothing was overwritten. Claude Code writes these files too — a '
+            + 'permission you approved, or a theme you changed in a session. What is below '
+            + 'is the file as it is now.'),
+        s.stale.text
+            ? el('details', null,
+                el('summary', { text: 'What is on disk' }),
+                el('pre', { class: 'cfg-stale-text', text: s.stale.text }))
+            : null,
+        el('button', {
+            class: 'linkish', type: 'button',
+            onclick: () => { s.stale = null; renderSettings(); },
+        }, 'Dismiss'));
+}
+
+/**
+ * One catalogued key.
+ *
+ * The three sentences that make a row honest, and the one this group must not
+ * borrow from the group above: for a `rules` list, "overridden" is wrong —
+ * those add up — so it says what this scope sets and what it inherits instead.
+ */
+function claudeRow(row) {
+    const s = claudeState();
+    const target = claudeTargetRow();
+    const readonlyRow = !target;
+    const values = readonlyRow
+        ? (s.data.files.find(f => f.scope === s.scope) || { values: {} }).values
+        : target.values;
+    const explicit = values[row.path] !== undefined;
+    const eff = s.data.effective[row.path];
+
+    // A scalar control shows what is *in force*, because writing it writes one
+    // key and the inherited value is the honest starting point.
+    //
+    // A list control must not. It edits this file's own entries and nothing
+    // else — because a list is written whole, so seeding it with what is in
+    // force means the first "add one rule" copies every inherited rule into
+    // this file as well. That is not a hypothetical: it is what the first
+    // version of this did, and adding one rule at the local scope wrote
+    // twenty-eight of the user's own rules into a repository's file.
+    // The same argument covers a map: `enabledPlugins` and `env` are single
+    // keys holding many entries, so writing the merged map would copy every
+    // inherited entry into this file alongside the one that changed.
+    const isList = row.kind === 'rules' || row.kind === 'strings';
+    const isMap = row.kind === 'map-bool' || row.kind === 'map-string';
+    const own = explicit ? values[row.path] : (isList ? [] : {});
+    const value = (isList || isMap)
+        ? own
+        : (explicit ? values[row.path] : (eff ? eff.value : undefined));
+
+    const disabled = readonlyRow || !target.writable || target.symlink
+        || (target.exists && !target.parsed);
+
+    const merged = !!(eff && eff.merged);
+    const inheritedCount = merged
+        ? eff.from.filter(f => f.scope !== s.scope).reduce((n, f) => n + f.count, 0)
+        : 0;
+    const overridden = !merged && !!(eff && explicit && target && eff.file !== target.file);
+
+    const save = (v, opts) => saveClaudePath(row.path, v, opts);
+
+    const text = el('div', { class: 'settings-row-text' },
+        el('div', { class: 'settings-row-label' },
+            row.label,
+            el('code', { class: 'cfg-path', text: row.path })),
+        row.note ? el('div', { class: 'settings-row-note', text: row.note }) : null,
+        row.hint === 'user' && s.scope !== 'user'
+            ? el('div', { class: 'settings-row-note' },
+                'Normally set for you alone rather than checked into a repository.')
+            : null,
+        overridden
+            ? el('div', { class: 'settings-row-warn' },
+                `Overridden by ${CLAUDE_SCOPES[eff.scope]} — `,
+                el('code', { text: shortPath(eff.file) }),
+                ' wins, so this has no effect here.')
+            : null,
+        merged && inheritedCount
+            ? el('div', { class: 'settings-row-note cfg-merged' },
+                `These add up across files rather than overriding: ${inheritedCount} more `
+                + `${inheritedCount === 1 ? 'rule is' : 'rules are'} in force from `
+                + `${eff.from.filter(f => f.scope !== s.scope && f.count)
+                    .map(f => CLAUDE_SCOPES[f.scope]).join(' and ')}.`)
+            : null);
+
+    const side = el('div', { class: 'settings-row-side' },
+        explicit
+            ? el('button', {
+                class: 'linkish', type: 'button', disabled: disabled || null,
+                title: 'Remove this key from this file',
+                onclick: () => save(null, { collection: !isScalarValue(values[row.path]) }),
+            }, 'Clear')
+            : el('span', { class: 'settings-row-from',
+                text: eff ? `from ${CLAUDE_SCOPES[eff.scope] || 'another file'}` : 'not set' }));
+
+    // What the *other* files contribute, so a list can show it read-only
+    // beside the entries this one owns.
+    const inherited = eff && eff.merged
+        ? eff.from.filter(f => f.scope !== s.scope && f.count)
+        : [];
+    // What is in force, for a control that has to *show* the merged answer
+    // while writing only this file's half — which is every map: a plugin
+    // enabled in the user file should read as enabled here, and unticking it
+    // should write one key rather than twenty.
+    const merged_ = eff ? eff.value : undefined;
+    const control = claudeControl(row, value, disabled, save, explicit, inherited, merged_);
+    // `data-path` is the only handle a row has: renderSettings() replaces the
+    // whole body, so a value that moved underneath cannot be pointed at unless
+    // the row it landed in can be found again. See claudeFlash().
+    if (row.wide) {
+        return el('div', { class: 'settings-row is-wide', 'data-path': row.path },
+            el('div', { class: 'settings-row-head' }, text, side),
+            el('div', { class: 'settings-row-wide' }, control));
+    }
+    return el('div', { class: 'settings-row', 'data-path': row.path },
+        text,
+        el('div', { class: 'settings-row-ctl' }, control, side));
+}
+
+const isScalarValue = (v) => v === null
+    || ['boolean', 'number', 'string'].includes(typeof v);
+
+/** The control for a catalogued kind. Every one of them saves on change. */
+function claudeControl(row, value, disabled, save, explicit, inherited, merged) {
+    switch (row.kind) {
+        case 'bool':
+            return el('label', { class: 'settings-check' },
+                el('input', {
+                    type: 'checkbox', checked: value === true || null,
+                    disabled: disabled || null,
+                    onchange: (e) => save(e.target.checked),
+                }),
+                el('span', { class: 'settings-box' }));
+
+        case 'int':
+            return el('input', {
+                class: 'settings-num', type: 'number', value: value ?? '',
+                min: row.min, max: row.max, disabled: disabled || null,
+                onchange: (e) => {
+                    const n = Number(e.target.value);
+                    if (!Number.isInteger(n)) { renderSettings(); return; }
+                    save(n);
+                },
+            });
+
+        case 'string':
+            return el('input', {
+                class: 'settings-text', type: 'text', spellcheck: 'false',
+                value: value == null ? '' : String(value),
+                placeholder: 'not set', disabled: disabled || null,
+                onchange: (e) => save(e.target.value.trim() || null),
+            });
+
+        case 'choice':
+            return claudeChoice(row, value, disabled, save, explicit);
+
+        case 'rules':
+        case 'strings':
+            return claudeList(row, Array.isArray(value) ? value : [], disabled, save, inherited);
+
+        case 'map-bool':
+            return claudeMapBool(row, value, disabled, save, merged);
+
+        case 'map-string':
+            return claudeMapString(row, value, disabled, save, merged);
+
+        case 'hooks':
+            return claudeHooks();
+
+        case 'statusline':
+            return claudeStatusLine();
+
+        default:
+            return el('code', { class: 'cfg-raw-value', text: JSON.stringify(value) });
+    }
+}
+
+/**
+ * A select whose option list may not be the whole world.
+ *
+ * A value the catalogue has never heard of is added as an option and marked,
+ * rather than being silently absent — which would leave the box showing some
+ * *other* value and one careless change away from writing it. The key that
+ * taught this is `askUserQuestionTimeout`, whose value on this machine is
+ * `never`; a page that assumed a fixed list would have offered to replace it.
+ */
+function claudeChoice(row, value, disabled, save, explicit) {
+    const options = [...row.options];
+    const unlisted = value != null && !options.includes(value);
+    return el('select', {
+        class: 'settings-select', disabled: disabled || null,
+        onchange: (e) => save(e.target.value || null),
+    },
+    !explicit ? el('option', { value: '', text: 'not set' }) : null,
+    unlisted
+        ? el('option', { value: String(value), selected: true },
+            `${value} — not a value this page lists`)
+        : null,
+    options.map(v => el('option', {
+        value: v, selected: v === value || null,
+    }, v)));
+}
+
+/**
+ * A list of opaque strings — permission rules, directories, model names.
+ *
+ * One row per entry rather than a textarea of lines, and the difference
+ * matters: a textarea makes twenty-eight rules into one draft, where a single
+ * bad paste replaces the lot. Per row, one delete is one write and one mistake
+ * loses one rule.
+ *
+ * A row is a textarea because an entry is not always short — `autoMode.allow`
+ * on this machine holds a seven-hundred-character paragraph — and the list is
+ * never sorted, so the order in the file survives and a one-rule change stays
+ * one line of diff.
+ */
+function claudeList(row, list, disabled, save, inherited = []) {
+    const commit = (next) => save(next.length ? next : null, { collection: true });
+    return el('div', { class: 'cfg-list' },
+        list.length
+            ? list.map((entry, i) => el('div', { class: 'cfg-list-row' },
+                el('textarea', {
+                    class: 'cfg-list-value', spellcheck: 'false', rows: 1,
+                    disabled: disabled || null,
+                    onfocus: (e) => grow(e.target, 26, 240),
+                    oninput: (e) => grow(e.target, 26, 240),
+                    onchange: (e) => {
+                        const text = e.target.value.trim();
+                        if (!text) { commit(list.filter((_, j) => j !== i)); return; }
+                        if (text === entry) return;
+                        if (list.includes(text)) {
+                            toast('That entry is already in this list.', 'warn');
+                            renderSettings();
+                            return;
+                        }
+                        commit(list.map((v, j) => (j === i ? text : v)));
+                    },
+                }, entry),
+                el('button', {
+                    class: 'cfg-list-x', type: 'button', disabled: disabled || null,
+                    'aria-label': `Remove ${entry}`, title: 'Remove',
+                    onclick: () => commit(list.filter((_, j) => j !== i)),
+                }, '×')))
+            : el('div', { class: 'cfg-list-none', text: 'Nothing in this file.' }),
+
+        // The other files' entries, read-only and attributed. Shown because
+        // these lists add up rather than override, so "what is in force here"
+        // is not answerable from one file — and reading it used to mean opening
+        // two. Not editable from this scope: the row that owns an entry is the
+        // row that may remove it.
+        inherited.map(from => el('div', { class: 'cfg-inherit' },
+            el('div', { class: 'cfg-inherit-head' },
+                `${from.count} more from ${CLAUDE_SCOPES[from.scope]}`,
+                el('code', { text: shortPath(from.file) })),
+            // Guarded rather than assumed: a page served by one bridge and
+            // still open when another restarts is routine here, and a missing
+            // field should cost the entry list rather than the whole panel.
+            (from.values || []).map(entry => el('div', {
+                class: 'cfg-inherit-row', text: entry,
+            })))),
+
+        el('div', { class: 'cfg-list-add' },
+            el('input', {
+                class: 'settings-text is-long', type: 'text', spellcheck: 'false',
+                placeholder: row.kind === 'rules' ? 'Bash(npm test)' : 'add an entry',
+                disabled: disabled || null,
+                onkeydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } },
+                onchange: (e) => {
+                    const text = e.target.value.trim();
+                    e.target.value = '';
+                    if (!text) return;
+                    if (list.includes(text)) {
+                        toast('That entry is already in this list.', 'warn');
+                        return;
+                    }
+                    // Appended, never inserted in sorted position: the file's
+                    // order is somebody's and not ours to tidy.
+                    commit([...list, text]);
+                },
+            })));
+}
+
+/**
+ * A checkbox per name, over the union of the file and what is installed.
+ *
+ * The union is what makes this better than a text editor: a plugin this
+ * machine has and the file has never mentioned is a row you can tick, rather
+ * than a name you have to know how to spell.
+ */
+function claudeMapBool(row, own, disabled, save, merged) {
+    const mine = asMap(own);
+    const inForce = asMap(merged);
+    const installed = claudeState().data.installedPlugins || [];
+    const names = [...new Set([
+        ...Object.keys(inForce).sort(),
+        ...installed.filter(n => !(n in inForce)).sort(),
+    ])];
+    if (!names.length) {
+        return el('div', { class: 'cfg-list-none', text: 'Nothing in this file, and nothing installed.' });
+    }
+    return el('div', { class: 'settings-groups' },
+        names.map((name) => {
+            const here = name in mine;
+            return el('label', {
+                // Ticked from what is *in force*, so a plugin the user file
+                // enables reads as enabled at a project scope too. Written as
+                // one key into this file's own map, so unticking it writes one
+                // entry rather than a copy of every inherited one.
+                class: `settings-group-pill${inForce[name] === true ? ' on' : ''}`,
+                title: here
+                    ? name
+                    : `${name} — not set in this file${name in inForce ? ', inherited' : ', installed'}`,
+            },
+            el('input', {
+                type: 'checkbox', checked: inForce[name] === true || null,
+                disabled: disabled || null,
+                onchange: (e) => save({ ...mine, [name]: e.target.checked }, { collection: true }),
+            }),
+            el('span', { class: 'settings-group-name', text: name }),
+            !here ? el('span', { class: 'settings-group-count', text: 'inherited' }) : null);
+        }));
+}
+
+const asMap = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
+
+/** Name and value rows — `env`, and anything else shaped like it. */
+function claudeMapString(row, own, disabled, save, merged) {
+    const map = asMap(own);
+    const inForce = asMap(merged);
+    // Entries another file owns. Read-only for the same reason an inherited
+    // permission rule is: the row that owns it is the row that may remove it,
+    // and an editable box that cannot delete would be a worse lie than a
+    // dimmed one.
+    const elsewhere = Object.keys(inForce).filter(n => !(n in map)).sort();
+    const names = Object.keys(map);
+    const commit = (next) => save(Object.keys(next).length ? next : null, { collection: true });
+    return el('div', { class: 'cfg-kv' },
+        names.length || elsewhere.length
+            ? names.map(name => el('div', { class: 'cfg-kv-row' },
+                el('code', { class: 'cfg-kv-name', text: name }),
+                el('input', {
+                    class: 'settings-text is-long', type: 'text', spellcheck: 'false',
+                    value: map[name], disabled: disabled || null,
+                    onchange: (e) => commit({ ...map, [name]: e.target.value }),
+                }),
+                el('button', {
+                    class: 'cfg-list-x', type: 'button', disabled: disabled || null,
+                    'aria-label': `Remove ${name}`, title: 'Remove',
+                    onclick: () => {
+                        const next = { ...map };
+                        delete next[name];
+                        commit(next);
+                    },
+                }, '×')))
+            : el('div', { class: 'cfg-list-none', text: 'Nothing in this file.' }),
+        elsewhere.length
+            ? el('div', { class: 'cfg-inherit' },
+                el('div', { class: 'cfg-inherit-head' },
+                    `${elsewhere.length} more in force from another file`),
+                elsewhere.map(name => el('div', { class: 'cfg-inherit-row' },
+                    `${name} = ${inForce[name]}`)))
+            : null,
+        el('div', { class: 'cfg-kv-add' },
+            el('input', { class: 'settings-text cfg-kv-newname', type: 'text',
+                placeholder: 'NAME', spellcheck: 'false', disabled: disabled || null }),
+            el('input', { class: 'settings-text is-long cfg-kv-newvalue', type: 'text',
+                placeholder: 'value', spellcheck: 'false', disabled: disabled || null }),
+            el('button', {
+                class: 'dash-btn', type: 'button', disabled: disabled || null,
+                onclick: (e) => {
+                    const wrap = e.target.closest('.cfg-kv-add');
+                    const name = wrap.querySelector('.cfg-kv-newname').value.trim();
+                    const val = wrap.querySelector('.cfg-kv-newvalue').value;
+                    if (!name) return;
+                    commit({ ...map, [name]: val });
+                },
+            }, 'Add')));
+}
+
+/**
+ * Every hook, and whether the script it names is still there.
+ *
+ * Read-only, and the group note says why: a hook `command` is an arbitrary
+ * shell string run on every matching tool call, which makes it the
+ * highest-privilege field in the file and a poor thing to have a casual text
+ * box over. What is offered instead is the one question a text editor cannot
+ * answer — a hook pointing at a deleted script fails silently, and nothing in
+ * Claude Code tells you.
+ */
+function claudeHooks() {
+    const hooks = claudeState().data.hooks || [];
+    if (!hooks.length) {
+        return el('div', { class: 'cfg-list-none' },
+            'No hooks in force. ', claudeJsonLink('hooks', 'Add some as JSON'));
+    }
+    return el('div', { class: 'cfg-hooks' },
+        el('table', { class: 'cfg-hooks-table' },
+            el('thead', null, el('tr', null,
+                el('th', { text: 'Event' }), el('th', { text: 'Tool' }),
+                el('th', { text: 'Runs' }), el('th', { text: 'Script' }))),
+            el('tbody', null, hooks.map(h => el('tr', null,
+                el('td', null, el('code', { text: h.event })),
+                el('td', null, h.matcher
+                    ? el('code', { text: h.matcher })
+                    : el('span', { class: 'cfg-any', text: 'any' })),
+                el('td', null, el('code', { class: 'cfg-hook-cmd', text: h.command || h.type || '—' })),
+                el('td', null, h.script
+                    ? el('span', {
+                        class: `cfg-script${h.script.exists ? '' : ' bad'}`,
+                        title: h.script.file,
+                    }, h.script.exists ? 'present' : 'missing')
+                    : el('span', { class: 'cfg-any', text: '—' })))))),
+        el('div', { class: 'cfg-list-add' }, claudeJsonLink('hooks', 'Edit as JSON')));
+}
+
+/**
+ * The status line, and whose it is.
+ *
+ * Read-only when it is the one `scripts/install-quota-statusline.js` wrote,
+ * because that script exists precisely to avoid clobbering somebody's
+ * deliberate choice — and a text box here would reopen the hole from the other
+ * side. The JSON tab still reaches it, which is the difference between making
+ * something hard and making it impossible.
+ */
+function claudeStatusLine() {
+    const line = claudeState().data.statusLine;
+    if (!line) {
+        return el('div', { class: 'cfg-list-none' },
+            'No status line set. ', claudeJsonLink('statusLine', 'Add one as JSON'));
+    }
+    return el('div', { class: 'cfg-statusline' },
+        el('code', { class: 'cfg-raw-value', text: line.command || JSON.stringify(line.value) }),
+        line.ours
+            ? el('p', { class: 'settings-row-note' },
+                'This app installed this one, to harvest the quota percentages. ',
+                el('code', { text: 'node scripts/install-quota-statusline.js --uninstall' }),
+                ' takes it back out.')
+            : el('p', { class: 'settings-row-note' },
+                'Set outside this app. ', claudeJsonLink('statusLine', 'Edit as JSON')),
+        el('div', { class: 'settings-row-from', text: `from ${CLAUDE_SCOPES[line.scope]}` }));
+}
+
+/** Jump to the JSON tab, at a key. */
+function claudeJsonLink(path, label) {
+    return el('button', {
+        class: 'linkish', type: 'button',
+        onclick: () => {
+            const s = claudeState();
+            s.tab = 'raw';
+            s.jumpTo = path;
+            loadClaudeConfig().then(() => { s.tab = 'raw'; renderSettings(); });
+        },
+    }, label);
+}
+
+/**
+ * Everything in the files this page has no control for.
+ *
+ * The most important card in the group, and the reason this feature is not
+ * simply prefs.js pointed at another file. A scalar gets a control by JSON
+ * type — which makes eight of the nineteen keys in this machine's file
+ * editable without the app claiming to know what any of them mean — and
+ * anything else gets a row and a way through to the JSON.
+ */
+function claudeUnknownCard() {
+    const s = claudeState();
+    const unknown = s.data.unknown || [];
+    const card = el('section', { class: 'settings-group cfg-sub', id: 'set-g-claude-unknown' },
+        el('h3', { class: 'settings-group-title', text: 'Also in these files' }),
+        el('p', { class: 'settings-group-note' },
+            'Keys this page has no control for. Claude Code adds settings faster than '
+            + 'this app learns their names, so nothing here is hidden — a scalar gets a '
+            + 'plain control by type, and anything larger opens in the JSON tab. Read '
+            + 'against Claude Code ', el('code', { text: s.data.catalogueAgainst }), '.'));
+
+    if (!unknown.length) {
+        card.append(el('div', { class: 'cfg-list-none',
+            text: 'Nothing — this page has a control for every key in these files.' }));
+        return card;
+    }
+
+    const target = claudeTargetRow();
+    for (const item of unknown) {
+        const values = target ? target.values : {};
+        const explicit = values[item.path] !== undefined;
+        const disabled = !target || !target.writable || target.symlink
+            || (target.exists && !target.parsed);
+        const value = explicit ? values[item.path] : undefined;
+
+        const text = el('div', { class: 'settings-row-text' },
+            el('div', { class: 'settings-row-label' }, el('code', { text: item.path })),
+            el('div', { class: 'settings-row-note' },
+                explicit ? 'Set in this file.' : `Set in ${CLAUDE_SCOPES[item.scope]}.`,
+                ' ', el('code', { class: 'cfg-raw-value', text: item.preview })));
+
+        let control;
+        if (item.kind === 'scalar' && explicit) {
+            control = claudeGenericControl(item, value, disabled);
+        } else if (item.kind === 'scalar') {
+            control = el('span', { class: 'settings-row-from',
+                text: 'inherited — open the file that sets it to change it' });
+        } else {
+            control = claudeJsonLink(item.path, 'Edit as JSON');
+        }
+
+        card.append(el('div', { class: 'settings-row', 'data-path': item.path },
+            text,
+            el('div', { class: 'settings-row-ctl' },
+                control,
+                explicit && item.kind === 'scalar'
+                    ? el('button', {
+                        class: 'linkish', type: 'button', disabled: disabled || null,
+                        onclick: () => saveClaudePath(item.path, null),
+                    }, 'Clear')
+                    : null)));
+    }
+    return card;
+}
+
+/**
+ * A control for a key nobody catalogued, chosen by what the value already is.
+ *
+ * The type is a constraint rather than a guess: the bridge refuses a write that
+ * changes it, so a checkbox cannot turn `false` into the string `"false"`. That
+ * is the whole safety argument for offering these at all.
+ */
+function claudeGenericControl(item, value, disabled) {
+    const save = (v) => saveClaudePath(item.path, v);
+    if (item.type === 'boolean') {
+        return el('label', { class: 'settings-check' },
+            el('input', {
+                type: 'checkbox', checked: value === true || null, disabled: disabled || null,
+                onchange: (e) => save(e.target.checked),
+            }),
+            el('span', { class: 'settings-box' }));
+    }
+    if (item.type === 'number') {
+        return el('input', {
+            class: 'settings-num', type: 'number', value: value ?? '',
+            disabled: disabled || null,
+            onchange: (e) => {
+                const n = Number(e.target.value);
+                if (!Number.isFinite(n)) { renderSettings(); return; }
+                save(n);
+            },
+        });
+    }
+    return el('input', {
+        class: 'settings-text', type: 'text', spellcheck: 'false',
+        value: value == null ? '' : String(value), disabled: disabled || null,
+        onchange: (e) => save(e.target.value),
+    });
+}
+
+/**
+ * The file itself, in a text box.
+ *
+ * The only thing in the app that can repair a settings file that no longer
+ * parses, and the only way to reach a key the catalogue does not model. So it
+ * is not a fallback bolted on later — it is what makes the rest of the group
+ * honest, because with it here nothing in these files is beyond reach.
+ *
+ * A textarea rather than a vendored editor. `web/vendor/` shows that vendoring
+ * is possible, and a few hundred kilobytes of code editor with no build step to
+ * prune it, to edit a four-kilobyte JSON file, is a poor trade. What a real
+ * editor would have earned — knowing where the syntax error is — is a
+ * `JSON.parse` and the offset it reports.
+ *
+ * **This one has a Save button**, unlike every other control on the page. The
+ * page's no-drafts rule exists so a control cannot disagree with what is in
+ * force; a document being typed into is a draft by nature, and saving it per
+ * keystroke would write broken JSON forty times a minute.
+ */
+function claudeRawCard() {
+    const s = claudeState();
+    const row = claudeTargetRow()
+        || s.data.files.find(f => f.scope === s.scope)
+        || null;
+    const card = el('section', { class: 'settings-group cfg-sub', id: 'set-g-claude-raw' },
+        el('h3', { class: 'settings-group-title', text: 'The file itself' }));
+
+    if (!row) {
+        card.append(el('div', { class: 'cfg-list-none', text: 'No file for that scope.' }));
+        return card;
+    }
+
+    const readonly = !!row.readonly || !row.writable || row.symlink;
+    const onDisk = row.text === null ? '' : row.text;
+    // A clean box is a *view* of the file, not a draft of it, so it re-seeds
+    // whenever the file moves. Keying that off `draft === null` instead was
+    // wrong in both directions once these files started changing underneath:
+    // loadClaudeConfig() renders twice, and the first of those — still holding
+    // the old answer — put the old text back before the new one arrived, so a
+    // clean JSON tab went on showing the previous contents under the note
+    // "Matches the file on disk." `dirty` is the thing that actually means
+    // "somebody typed here", and it is the only thing that should stop this.
+    if (s.draft === null || !s.dirty) s.draft = onDisk;
+
+    const note = el('div', { class: `cfg-json-note${s.jsonError ? ' bad' : ''}` },
+        s.jsonError || (s.dirty ? 'Edited — not saved.' : 'Matches the file on disk.'));
+
+    const box = el('textarea', {
+        class: 'cfg-json', spellcheck: 'false', autocapitalize: 'off',
+        autocorrect: 'off', disabled: readonly || null,
+        // A parse on every keystroke rather than on save: the point of the
+        // message is to be there while the mistake is still on screen. Silent
+        // on an empty box, the way describeCronSoon() is on a half-typed cron.
+        oninput: (e) => {
+            s.draft = e.target.value;
+            s.dirty = s.draft !== onDisk;
+            const text = s.draft.trim();
+            if (!text) { s.jsonError = null; }
+            else {
+                try {
+                    const doc = JSON.parse(text);
+                    s.jsonError = (doc && typeof doc === 'object' && !Array.isArray(doc))
+                        ? null : 'The document has to be a JSON object.';
+                } catch (err) { s.jsonError = err.message; }
+            }
+            note.className = `cfg-json-note${s.jsonError ? ' bad' : ''}`;
+            note.textContent = s.jsonError
+                || (s.dirty ? 'Edited — not saved.' : 'Matches the file on disk.');
+            saveBtn.disabled = readonly || !s.dirty || !!s.jsonError;
+            grow(e.target, 220, 900);
+        },
+    }, s.draft);
+
+    const saveBtn = el('button', {
+        class: 'dash-btn', type: 'button',
+        disabled: readonly || !s.dirty || !!s.jsonError || null,
+        onclick: () => saveClaudeText(),
+    }, 'Save the file');
+
+    card.append(
+        el('p', { class: 'settings-group-note' },
+            readonly
+                ? 'Read-only.'
+                : 'Saved whole, and re-indented to two spaces on the way — so a '
+                + 'hand-formatted file comes back formatted like the ones Claude Code '
+                + 'writes. Keys keep their order.'),
+        box,
+        el('div', { class: 'cfg-json-foot' },
+            note,
+            el('div', { class: 'cfg-json-acts' },
+                s.dirty
+                    ? el('button', {
+                        class: 'linkish', type: 'button',
+                        onclick: () => {
+                            s.draft = onDisk;
+                            s.dirty = false;
+                            s.jsonError = null;
+                            renderSettings();
+                        },
+                    }, 'Discard changes')
+                    : null,
+                saveBtn)));
+
+    // Requested by an Edit as JSON button. Scrolling to the key beats dropping
+    // somebody into four thousand characters with no idea where to look.
+    if (s.jumpTo) {
+        const at = onDisk.indexOf(`"${s.jumpTo.split('.')[0]}"`);
+        s.jumpTo = null;
+        if (at >= 0) {
+            setTimeout(() => {
+                box.focus();
+                box.setSelectionRange(at, at);
+                // Roughly: line height times the lines before it.
+                box.scrollTop = onDisk.slice(0, at).split('\n').length * 18 - 60;
+            }, 0);
+        }
+    }
+    return card;
+}
+
+// ── Claude Code's memory files ───────────────────────────────────────────
+//
+// `~/.claude/CLAUDE.md` and the open project's own, in a text box. The group
+// above this one edits the same owner's *settings*; this edits their
+// instructions, and the difference is not cosmetic:
+//
+// **These two files are additive.** Claude Code reads the user file and the
+// project file and both are in force — there is no precedence, nothing
+// overrides anything, and the "Overridden by … — this has no effect here"
+// sentence every other scope-aware control on this page can draw would be a lie
+// here. What each tab says instead is that the other file also applies, with
+// its size, so the scope tabs cannot be misread as a chain.
+//
+// **The whole control is a draft.** The JSON tab next door is the page's one
+// exception to the no-drafts rule; this is the second, and it is the same
+// exception rather than a new one. That rule exists so a *control* cannot
+// disagree with what is in force — a checkbox reading "on" for a setting that
+// is off is the failure it prevents. A document somebody is typing into is a
+// draft by nature: there is no keystroke at which the paragraph is finished,
+// and saving per keystroke would write half-sentences into a file every session
+// on this machine reads. So it gets a Save button, and it keeps the rule's
+// intent the way the JSON tab does — by saying out loud, at all times, whether
+// what you are looking at is what is on disk.
+//
+// A textarea rather than a vendored editor, for the reason
+// docs/plans/20-claude-config.md gives: a few hundred kilobytes of code editor
+// with no build step to prune it, to edit a twenty-kilobyte markdown file, is a
+// poor trade. What an editor would have earned here — seeing the headings as
+// headings — is renderMarkdown, which this page already has.
+
+/** The two scopes, named for a person. */
+const MEMORY_SCOPES = { user: 'User', project: 'Project' };
+
+function docsState() {
+    return state.claudeDocs;
+}
+
+/** The directory this group is about — the same one the page's selector picks. */
+function docsDir() {
+    return settingsProject();
+}
+
+async function loadClaudeDocs() {
+    const s = docsState();
+    if (s.loading) return;
+    s.loading = true;
+    s.error = null;
+    renderSettings();
+    try {
+        const dir = docsDir();
+        s.data = await get(`/api/claude-docs${dir ? `?cwd=${encodeURIComponent(dir)}` : ''}`);
+        // A *clean* draft is dropped so the box reseeds from what was just
+        // read. Without this the lazy seed in docsEditorCard() wins forever:
+        // renderSettings() runs once before this fetch returns, seeds `draft`
+        // from the data then in hand, and every render after it finds a
+        // non-null draft and leaves it alone — so the box goes on showing text
+        // that is neither what somebody typed nor what is on disk. Found by
+        // deleting a file behind the page and watching it keep the old
+        // contents while the file line correctly said "will be created".
+        //
+        // A dirty draft is kept, which is the whole point of the 409 handling
+        // below and is why this is not simply `s.draft = null`.
+        if (!s.dirty) s.draft = null;
+        // With no project there is no project row, so a scope selected earlier
+        // would leave the group with nothing to draw and no way back to
+        // something that works.
+        if (!docsRow()) s.scope = 'user';
+    } catch (err) {
+        s.data = null;
+        s.error = err.message;
+    }
+    s.loading = false;
+    renderSettings();
+}
+
+/** The row for the selected scope, out of what the bridge reported. */
+function docsRow() {
+    const s = docsState();
+    if (!s.data) return null;
+    return s.data.docs.find(d => d.scope === s.scope) || null;
+}
+
+/** The other one — the file that also applies, whichever tab you are on. */
+function docsOtherRow() {
+    const s = docsState();
+    if (!s.data) return null;
+    return s.data.docs.find(d => d.scope !== s.scope) || null;
+}
+
+/** Bytes, not characters. A 23KB CLAUDE.md is a hundred characters short of it. */
+const docsBytes = (text) => new TextEncoder().encode(text || '').length;
+
+/**
+ * The counter under the box.
+ *
+ * Exact bytes rather than formatBytes(), which is the right call everywhere
+ * else in this app and the wrong one here: rounded to "3.8 KB" the number does
+ * not move while somebody types, and a counter that does not respond to typing
+ * is furniture. The cap beside it is rounded, because that one never changes.
+ */
+function docsCount(bytes, cap) {
+    const n = bytes.toLocaleString();
+    return cap ? `${n} bytes of ${formatBytes(cap)}` : `${n} bytes`;
+}
+
+/** Is this file one the box may be typed into at all? */
+function docsEditable(row) {
+    return !!row && row.writable && !row.symlink && !row.truncated;
+}
+
+/**
+ * Leaving a scope or discarding with something unsaved in the box.
+ *
+ * A confirm rather than an autosave, because the whole point of the Save button
+ * is that this app does not get to decide when a paragraph is finished.
+ */
+function docsMayLeave(s) {
+    if (!s.dirty) return true;
+    const row = docsRow();
+    return window.confirm(
+        `Discard the changes you have made to ${row ? shortPath(row.file) : 'this file'}?`);
+}
+
+function docsClearDraft(s) {
+    s.draft = null;
+    s.dirty = false;
+    s.stale = null;
+    s.caret = 0;
+}
+
+/**
+ * The whole group.
+ *
+ * An array, like renderClaudeConfig(), so the head and the editor are separate
+ * cards under one contents entry.
+ */
+function renderClaudeDocs() {
+    const s = docsState();
+    const head = el('section', { class: 'settings-group', id: 'set-g-memory' },
+        el('h2', { class: 'settings-group-title', text: 'Claude Code · Memory' }),
+        el('p', { class: 'settings-group-note' },
+            'The instructions ', el('code', { text: 'claude' }), ' is given before your '
+            + 'first message — ', el('code', { text: 'CLAUDE.md' }), ', yours and this '
+            + 'project’s. Both apply at once; neither overrides the other.'),
+        docsScopeTabs(),
+        docsFileLine(),
+        docsBothNote(),
+        docsReachNote());
+
+    if (s.error) {
+        head.append(el('div', { class: 'settings-error' },
+            `Could not read Claude Code’s memory files: ${s.error}`));
+        return [head];
+    }
+    if (!s.data) {
+        head.append(el('div', { class: 'settings-empty', text: 'Reading…' }));
+        return [head];
+    }
+    if (s.stale) head.append(docsStaleBanner());
+
+    return [head, docsEditorCard()];
+}
+
+/** Which file, and which of the two ways of looking at it. */
+function docsScopeTabs() {
+    const s = docsState();
+    const rows = s.data ? s.data.docs : [];
+    // Both tabs are drawn even when the bridge sent no row for one, disabled
+    // with a reason. Absent, the project tab would make it look as though this
+    // app only knows about one CLAUDE.md.
+    return el('div', { class: 'cfg-tabs', role: 'tablist' },
+        ['user', 'project'].map((scope) => {
+            const row = rows.find(d => d.scope === scope);
+            return el('button', {
+                class: `cfg-tab${scope === s.scope ? ' on' : ''}`,
+                type: 'button', role: 'tab', disabled: !row || null,
+                'aria-selected': scope === s.scope ? 'true' : 'false',
+                title: row ? row.file : 'Pick a project above',
+                onclick: () => {
+                    if (!docsMayLeave(s)) return;
+                    s.scope = scope;
+                    docsClearDraft(s);
+                    renderSettings();
+                },
+            },
+            MEMORY_SCOPES[scope],
+            row && !row.exists ? el('span', { class: 'cfg-tab-tag', text: 'none' }) : null,
+            row && row.symlink ? el('span', { class: 'cfg-tab-tag', text: 'symlink' }) : null);
+        }),
+        el('div', { class: 'cfg-tabs-spacer' }),
+        el('button', {
+            class: `cfg-tab${!s.preview ? ' on' : ''}`, type: 'button',
+            onclick: () => {
+                s.preview = false;
+                renderSettings();
+            },
+        }, 'Edit'),
+        el('button', {
+            class: `cfg-tab${s.preview ? ' on' : ''}`, type: 'button',
+            onclick: () => {
+                // Where the caret was, so coming back does not drop somebody at
+                // the top of a twenty-thousand-character file.
+                const box = dom.setBody.querySelector('.cfg-md');
+                if (box) s.caret = box.selectionStart || 0;
+                s.preview = true;
+                renderSettings();
+            },
+        }, 'Preview'));
+}
+
+/** The path being written, and everything true about it worth saying. */
+function docsFileLine() {
+    const s = docsState();
+    const row = docsRow();
+    const line = el('div', { class: 'settings-file' });
+    if (!row) {
+        line.append(el('span', { class: 'settings-file-none' },
+            'No project selected — pick one above to edit its CLAUDE.md.'));
+        return line;
+    }
+    // Filtered rather than passed through: `append` stringifies a `false` into
+    // the literal word, where el()'s own children skip it.
+    line.append(...[
+        el('span', { class: 'settings-file-lede', text: 'Writing to' }),
+        el('button', {
+            class: 'settings-file-path', type: 'button', title: 'Copy this path',
+            onclick: () => copyPath(row.file),
+        }, row.file),
+        !row.exists && el('span', { class: 'settings-file-tag', text: 'will be created' }),
+        row.symlink
+            && el('span', { class: 'settings-file-tag bad', text: 'a symlink — saving is refused' }),
+        row.truncated
+            && el('span', { class: 'settings-file-tag bad', text: 'too large to edit here' }),
+        !row.writable && !row.symlink
+            && el('span', { class: 'settings-file-tag bad', text: 'not writable' }),
+        s.saving && el('span', { class: 'settings-file-tag', text: 'saving…' }),
+    ].filter(Boolean));
+    return line;
+}
+
+/**
+ * The other file, which also applies.
+ *
+ * This is the sentence that stops the scope tabs reading as a precedence
+ * chain — which is the shape every other scope selector on this page really
+ * is. The group above answers the same question with inherited permission rules
+ * listed read-only beside the editable ones; there is no per-entry equivalent
+ * for prose, so it is one line with a size on it.
+ */
+function docsBothNote() {
+    const other = docsOtherRow();
+    if (!other) return null;
+    const name = MEMORY_SCOPES[other.scope].toLowerCase();
+    return el('p', { class: 'settings-group-note cfg-md-both' },
+        other.exists
+            ? `The ${name} file applies as well — ${formatBytes(other.size)} at `
+            : `The ${name} file would apply as well, but is not there yet: `,
+        el('code', { text: shortPath(other.file) }),
+        other.exists ? '. Neither replaces the other.' : '.');
+}
+
+/** The sentence that stops "I changed it and nothing happened". */
+function docsReachNote() {
+    return el('p', { class: 'cfg-reach' },
+        el('strong', { text: 'Claude Code reads these when a session starts.' }),
+        ' A session already running has them in its context and will never pick up '
+        + 'an edit — not "not yet". Start a new one, or say the change in a message.');
+}
+
+/** A conflict, kept on screen rather than thrown at a toast. */
+function docsStaleBanner() {
+    const s = docsState();
+    return el('div', { class: 'cfg-stale' },
+        el('div', { class: 'cfg-stale-head' }, 'This file changed on disk since the page read it.'),
+        el('p', null, 'Nothing was overwritten, and nothing you typed was lost — what is in '
+            + 'the box is still yours. Below is the file as it is now.'),
+        s.stale.text
+            ? el('details', null,
+                el('summary', { text: 'What is on disk' }),
+                el('pre', { class: 'cfg-stale-text', text: s.stale.text }))
+            : null,
+        el('button', {
+            class: 'linkish', type: 'button',
+            onclick: () => { s.stale = null; renderSettings(); },
+        }, 'Dismiss'));
+}
+
+/** The file itself, in a text box — or the same text rendered. */
+function docsEditorCard() {
+    const s = docsState();
+    const row = docsRow();
+    const card = el('section', { class: 'settings-group cfg-sub', id: 'set-g-memory-file' },
+        el('h3', { class: 'settings-group-title', text: 'The file itself' }));
+
+    if (!row) {
+        card.append(el('div', { class: 'cfg-list-none', text: 'No file for that scope.' }));
+        return card;
+    }
+    // A file past the cap is reported rather than opened, because the bridge
+    // sends no text for one — and a box seeded with the first 256KB of a larger
+    // file would delete the rest on the first save. Saying so beats a box that
+    // looks like it works.
+    if (row.truncated) {
+        card.append(el('div', { class: 'cfg-list-none' },
+            `That file is ${formatBytes(row.size)}, which is past the `
+            + `${formatBytes(s.data.maxBytes)} this page will open. Edit it in a text editor.`));
+        return card;
+    }
+
+    const onDisk = row.text === null ? '' : row.text;
+    // Seeded lazily, inside the render, so a re-render can never clobber typing
+    // and `draft === null` stays the one meaning of "nothing unsaved".
+    if (s.draft === null) s.draft = onDisk;
+    const editable = docsEditable(row);
+
+    const foot = docsFoot(row);
+    const parts = {
+        note: foot.querySelector('.cfg-json-note'),
+        count: foot.querySelector('.cfg-md-count'),
+        save: foot.querySelector('.cfg-md-save'),
+        discard: foot.querySelector('.cfg-md-discard'),
+    };
+
+    if (s.preview) {
+        card.append(
+            el('p', { class: 'settings-group-note' },
+                s.dirty
+                    ? 'Rendering what is in the box, not what is on disk.'
+                    : 'Rendering the file as it is on disk.'),
+            el('div', { class: 'cfg-md-preview prose', html: renderMarkdown(s.draft) }),
+            foot);
+        docsPaintFoot(parts, editable);
+        return card;
+    }
+
+    const box = el('textarea', {
+        class: 'cfg-md', spellcheck: 'false', autocapitalize: 'off',
+        autocorrect: 'off', disabled: !editable || null,
+        // The foot's three nodes are mutated by hand rather than re-rendered: a
+        // renderSettings() here would replace the textarea and take the caret
+        // with it, mid-word.
+        oninput: (e) => {
+            s.draft = e.target.value;
+            s.dirty = s.draft !== onDisk;
+            docsPaintFoot(parts, editable);
+            grow(e.target, 220, 560);
+        },
+    }, s.draft);
+
+    card.append(
+        el('p', { class: 'settings-group-note' },
+            editable
+                ? 'Saved exactly as typed — no reformatting, and the trailing newline is '
+                + 'yours to get right.'
+                : 'Read-only.'),
+        box,
+        foot);
+
+    // Sized on the way in as well as on input. Without this the box opens at
+    // its CSS height and jumps on the first keystroke, which is a wart the JSON
+    // tab next door still has.
+    grow(box, 220, 560);
+    docsPaintFoot(parts, editable);
+    if (s.caret) {
+        // Coming back from Preview. Deferred because the node is not in the
+        // document until renderSettings() appends what this returned.
+        const at = Math.min(s.caret, s.draft.length);
+        setTimeout(() => { box.focus(); box.setSelectionRange(at, at); }, 0);
+    }
+    return card;
+}
+
+/**
+ * The row under the box: what state the draft is in, how big it is, and Save.
+ *
+ * Built empty and then painted, which is why the paint is a separate function
+ * taking the nodes — it has to run again on every keystroke without a
+ * re-render.
+ */
+function docsFoot(row) {
+    const s = docsState();
+    return el('div', { class: 'cfg-json-foot' },
+        el('div', { class: 'cfg-json-note' }),
+        el('div', { class: 'cfg-json-acts' },
+            el('span', { class: 'cfg-md-count' }),
+            el('button', {
+                class: 'linkish cfg-md-discard', type: 'button',
+                onclick: () => {
+                    if (!docsMayLeave(s)) return;
+                    docsClearDraft(s);
+                    renderSettings();
+                },
+            }, 'Discard changes'),
+            el('button', {
+                class: 'linkish cfg-md-expand', type: 'button',
+                title: 'Edit this in a full-height window',
+                onclick: () => openMemoDialog(),
+            }, 'Expand'),
+            el('button', {
+                class: 'dash-btn cfg-md-save', type: 'button',
+                onclick: () => saveClaudeDocs(),
+            }, row && !row.exists ? 'Create the file' : 'Save the file')));
+}
+
+/** Everything in the foot that changes per keystroke. */
+function docsPaintFoot(parts, editable) {
+    const s = docsState();
+    const bytes = docsBytes(s.draft);
+    const cap = (s.data && s.data.maxBytes) || 0;
+    const over = !!cap && bytes > cap;
+    if (parts.note) {
+        parts.note.className = `cfg-json-note${over ? ' bad' : ''}`;
+        parts.note.textContent = over
+            ? `That is ${formatBytes(bytes)}, past the ${formatBytes(cap)} limit — saving is refused.`
+            : (s.dirty ? 'Edited — not saved.' : 'Matches the file on disk.');
+    }
+    if (parts.count) parts.count.textContent = docsCount(bytes, cap);
+    // Discard is only an offer while there is something to discard.
+    if (parts.discard) parts.discard.hidden = !s.dirty;
+    if (parts.save) parts.save.disabled = !editable || !s.dirty || over;
+}
+
+/**
+ * The save.
+ *
+ * Always stamped: every write here replaces the whole file, which is exactly
+ * the case the bridge requires a stamp for. A file that is not there yet sends
+ * `null`, which asks to create it and is refused if something else got there
+ * first.
+ */
+async function saveClaudeDocs() {
+    const s = docsState();
+    const row = docsRow();
+    if (!row || s.draft === null) return;
+    s.saving = true;
+    renderSettings();
+    try {
+        const answer = await put('/api/claude-docs', {
+            scope: s.scope,
+            cwd: docsDir(),
+            stamp: row.exists ? row.stamp : null,
+            text: s.draft,
+        });
+        s.data = { docs: answer.docs, maxBytes: answer.maxBytes };
+        docsClearDraft(s);
+        toast(`${shortPath(answer.file)} written.`, 'ok');
+    } catch (err) {
+        if (err.status === 409) {
+            // The draft is kept. Losing what somebody typed in order to show
+            // them what somebody else typed is the one unforgivable move here,
+            // and a CLAUDE.md is somebody's afternoon rather than a checkbox.
+            s.stale = { text: (err.data && err.data.text) || null };
+            toast('That file changed on disk. Your draft is kept — compare and save again.', 'warn');
+            const keep = s.draft;
+            const caret = s.caret;
+            await loadClaudeDocs();
+            s.draft = keep;
+            s.dirty = true;
+            s.caret = caret;
+        } else {
+            toast(`Could not save that file: ${err.message}`, 'error');
+        }
+    }
+    s.saving = false;
+    renderSettings();
+    if (!dom.memoScrim.hidden) paintMemoDialog();
+}
+
+// ── the same file, full height ───────────────────────────────────────────
+//
+// The settings panel is a column, and a 23KB CLAUDE.md in a 560px box is a
+// keyhole. Expand puts the same draft in a dialog with the height of the
+// window.
+//
+// It is the *same* draft, not a copy: both textareas write
+// `state.claudeDocs.draft`, only one of them is on screen at a time, and Save
+// does the same thing from either — so there is no second source of truth to
+// reconcile. The markup lives in web/index.html because a scrim is wired once
+// at load, the way the `node` groups in SETTINGS are.
+//
+// It closes by its ✕ or Close and nothing else — see modalUp() for the rule and
+// why Escape is swallowed rather than answered.
+
+function openMemoDialog() {
+    const s = docsState();
+    const row = docsRow();
+    if (!row || row.truncated) return;
+    if (s.draft === null) s.draft = row.text === null ? '' : row.text;
+    const box = dom.setBody.querySelector('.cfg-md');
+    if (box) s.caret = box.selectionStart || 0;
+    dom.memoScrim.hidden = false;
+    paintMemoDialog();
+    dom.memoBig.focus();
+    const at = Math.min(s.caret || 0, s.draft.length);
+    dom.memoBig.setSelectionRange(at, at);
+}
+
+function closeMemoDialog() {
+    const s = docsState();
+    s.caret = dom.memoBig.selectionStart || 0;
+    dom.memoScrim.hidden = true;
+    // Redraw the inline card from the draft the dialog was editing.
+    renderSettings();
+}
+
+/** Everything in the dialog that depends on state. */
+function paintMemoDialog() {
+    const s = docsState();
+    const row = docsRow();
+    if (!row) return;
+    const editable = docsEditable(row);
+    const bytes = docsBytes(s.draft);
+    const cap = (s.data && s.data.maxBytes) || 0;
+    const over = !!cap && bytes > cap;
+
+    dom.memoTitle.textContent = shortPath(row.file);
+    // Only when it differs, so a repaint mid-typing does not move the caret.
+    if (dom.memoBig.value !== s.draft) dom.memoBig.value = s.draft || '';
+    dom.memoBig.disabled = !editable;
+    dom.memoCount.textContent = docsCount(bytes, cap);
+    dom.memoNote.className = `cfg-json-note${over ? ' bad' : ''}`;
+    dom.memoNote.textContent = over
+        ? `That is ${formatBytes(bytes)}, past the ${formatBytes(cap)} limit — saving is refused.`
+        : (s.dirty ? 'Edited — not saved.' : 'Matches the file on disk.');
+    dom.memoSave.disabled = !editable || !s.dirty || over;
+    dom.memoSave.textContent = row.exists ? 'Save the file' : 'Create the file';
+}
+
+// ── remapping a shortcut ─────────────────────────────────────────────────
+//
+// One row per command in bridge/keymap.js. Recording rather than typing: a
+// binding is a chord, and asking somebody to spell `Ctrl+Shift+3` into a text
+// field is asking them to know how this app spells things.
+//
+// The recorder swallows the keystroke it is listening for, which is why it is a
+// capture-phase listener on the document and not a keydown on the button: the
+// global handler below would otherwise act on the very chord being recorded, and
+// pressing Ctrl+4 to bind something would open the dashboard on the way past.
+
+function renderKeymap(locked) {
+    const s = state.settings;
+    const clashes = keys.clashes();
+    const clashed = new Set(clashes.map(c => c.combo));
+
+    const groups = [];
+    for (const c of keys.COMMANDS) {
+        if (!groups.length || groups[groups.length - 1].name !== c.group) {
+            groups.push({ name: c.group, rows: [] });
+        }
+        groups[groups.length - 1].rows.push(c);
+    }
+
+    return el('div', { class: 'settings-keys' },
+        el('div', { class: 'settings-keys-head' },
+            el('span', { text: 'Shortcuts' }),
+            el('span', { class: 'settings-keys-note' },
+                'Every one needs Ctrl or Alt, or a function key — the composer is a '
+                + 'text box and these have to work while you are typing in it.')),
+        // Only reachable from a hand-edited file — the recorder refuses a chord
+        // that is already taken — so it says which and leaves the fixing to you.
+        clashes.length ? el('div', { class: 'settings-row-warn' },
+            clashes.map(c => `${c.combo} is asked for by both ${c.labels.join(' and ')}; `
+                + `${c.labels[0]} wins.`).join(' ')) : null,
+        groups.map(g => el('div', { class: 'settings-keys-group' },
+            el('div', { class: 'settings-keys-group-name', text: g.name }),
+            g.rows.map(c => keymapRow(c, locked, s.recording === c.id,
+                clashed.has(keys.binding(c.id)))))),
+    );
+}
+
+function keymapRow(cmd, locked, recording, clashed) {
+    const combo = keys.binding(cmd.id);
+    const isDefault = keys.isDefault(cmd.id);
+    return el('div', {
+        class: 'settings-key-row', 'data-recording': recording || null,
+        'data-clash': clashed || null,
+    },
+        el('span', { class: 'settings-key-label', text: cmd.label }),
+        recording
+            ? el('span', { class: 'settings-key-recording', text: 'Press a chord — Esc to cancel' })
+            : el('kbd', { class: 'settings-key-combo', text: combo || 'unbound' }),
+        el('div', { class: 'settings-key-acts' },
+            el('button', {
+                class: 'linkish', type: 'button', disabled: locked || null,
+                onclick: () => startRecording(recording ? null : cmd.id),
+            }, recording ? 'Cancel' : 'Change'),
+            combo ? el('button', {
+                class: 'linkish', type: 'button', disabled: locked || null,
+                title: 'Leave this command with no shortcut',
+                onclick: () => saveBinding(cmd.id, null),
+            }, 'Unbind') : null,
+            isDefault ? null : el('button', {
+                class: 'linkish', type: 'button',
+                disabled: locked || null,
+                title: `Back to ${cmd.default}`,
+                onclick: () => saveBinding(cmd.id, undefined),
+            }, 'Reset')),
+    );
+}
+
+function startRecording(id) {
+    state.settings.recording = id;
+    renderSettings();
+}
+
+/**
+ * Write one binding.
+ *
+ * `undefined` means "back to the default", which is spelled by *removing* the
+ * id from the map rather than by writing the default into it — otherwise a
+ * command whose default changes later would be pinned to the old one by a Reset
+ * somebody clicked once. `null` means deliberately unbound, which is a value.
+ *
+ * The whole map goes over, because `keyboard.bindings` is one key as far as the
+ * bridge is concerned; see the note on `put`.
+ */
+function saveBinding(id, combo) {
+    const current = { ...(BOOT_PREFS.keyboard.bindings || {}) };
+    if (combo === undefined) delete current[id];
+    else current[id] = combo;
+    state.settings.recording = null;
+    // An empty map means every command is at its default, which is what absent
+    // means too — so send the removal and leave no `"bindings": {}` behind in a
+    // file somebody reads. Not a rule the bridge could apply to every map:
+    // `spinner.groups: []` is a real answer, and dropping it would fall back to
+    // the four groups the defaults name.
+    saveSetting('keyboard', 'bindings', Object.keys(current).length ? current : null);
+}
+
+// Capture phase, and before the global handler: the chord being recorded must
+// not also do what it is currently bound to.
+document.addEventListener('keydown', (e) => {
+    const id = state.settings.recording;
+    if (!id) return;
+    if (e.key === 'Escape') {
+        e.preventDefault(); e.stopPropagation();
+        startRecording(null);
+        return;
+    }
+    const combo = keys.comboFromEvent(e);
+    // A modifier held on its own is not a chord yet; keep listening rather than
+    // treating the first frame of Ctrl+3 as a binding of its own.
+    if (!combo) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (!keys.allowed(combo)) {
+        toast(`${combo} needs Ctrl or Alt, or has to be a function key.`, 'warn');
+        return;
+    }
+    // Refused rather than saved-and-flagged. A conflict makes one of the two
+    // commands unreachable, and the recorder is the one moment where saying so
+    // costs nothing: it stays armed, so the answer is to press something else.
+    const taken = keys.takenBy(combo);
+    if (taken && taken !== id) {
+        toast(`${combo} is already ${keys.labelOf(taken)}. Unbind that first, or pick another.`, 'warn');
+        return;
+    }
+    saveBinding(id, combo);
+}, true);
+
+/**
+ * Put the current binding into every bit of chrome that names one.
+ *
+ * The bar buttons and their dynamic titles all used to have "(Ctrl+3)" written
+ * into them, which a remap would have left lying. They go through keys.hint
+ * instead, and this is what re-runs after a save.
+ */
+function paintShortcutHints() {
+    // Each of these builds its button's title from a count, so the shortcut has
+    // to be re-inserted by the same function that writes the sentence.
+    paintDashBadge();
+    paintNotesBadge();
+    paintTaskboardBadge();
+    paintDraftsBadge();
+    paintSchedBadge();
+    paintLiveBadge();
+    dom.btnSettings.title = keys.hint('Settings', 'view.settings');
 }
 
 // ── notifications ────────────────────────────────────────────────────────
@@ -8484,7 +12708,20 @@ function openFromHash() {
     return true;
 }
 
-// ── the bell ─────────────────────────────────────────────────────────────
+// ── notification settings ────────────────────────────────────────────────
+//
+// These were a popover under a bell in the bar. The bell is gone: it was two
+// things at once — a switch and a status light — and the switch belongs with
+// every other switch. What went with it is the at-a-glance reading of whether
+// anything would fire at all, which is now only visible here; the note below
+// still says what the rules are, and `Try it` still answers "did that work".
+//
+// Per-browser, and deliberately not moved into `~/.tgxcode/settings.json` with
+// the rest of the settings page. Whether a notification *can* fire is something
+// each browser decides — a permission granted in Chrome says nothing about the
+// Electron shell — so a shared preference would show ticked on one surface and
+// be silently overruled on another. The group says "this browser only" out loud
+// rather than leaving that to be discovered.
 
 const NOTE = {
     unsupported: 'This browser has no desktop notifications, so the sound is all '
@@ -8496,13 +12733,9 @@ const NOTE = {
         + '30 seconds. Never for the session already in front of you.',
 };
 
-function renderBell() {
+function paintNotifyRows() {
     const perm = notifyPermission();
     const desktopOn = notify.desktop && perm === 'granted';
-    // Struck through only when nothing at all would fire.
-    dom.btnBell.dataset.on = String(desktopOn || notify.sound);
-    dom.btnBell.title = desktopOn || notify.sound
-        ? 'Notifications on' : 'Notifications off';
 
     // The checkbox shows what will actually happen, not what was asked for: a
     // ticked box that the browser is quietly overruling is worse than an
@@ -8512,23 +12745,9 @@ function renderBell() {
     dom.optSound.checked = notify.sound;
 
     const stuck = perm === 'denied' ? NOTE.denied : perm === 'unsupported' ? NOTE.unsupported : '';
-    dom.bellNote.textContent = stuck || NOTE.rules;
-    dom.bellNote.className = 'bell-note' + (stuck ? ' warn' : '');
+    dom.notifyNote.textContent = stuck || NOTE.rules;
+    dom.notifyNote.className = 'settings-row-note' + (stuck ? ' is-warn' : '');
 }
-
-function showBell(on) {
-    dom.bellMenu.hidden = !on;
-    dom.btnBell.setAttribute('aria-expanded', String(on));
-    // Both triggers stop the click from reaching the document, so neither
-    // popover's outside-click listener sees the other one being opened. Without
-    // this the two sit on screen together.
-    if (on) { renderBell(); showNewMenu(false); showQuota(false); }
-}
-
-dom.btnBell.addEventListener('click', (e) => {
-    e.stopPropagation();
-    showBell(dom.bellMenu.hidden);
-});
 
 dom.optDesktop.addEventListener('change', async () => {
     notify.desktop = dom.optDesktop.checked;
@@ -8539,7 +12758,7 @@ dom.optDesktop.addEventListener('change', async () => {
     if (notify.desktop && notifyPermission() === 'default') {
         try { await Notification.requestPermission(); } catch { /* renders as denied */ }
     }
-    renderBell();
+    paintNotifyRows();
 });
 
 dom.optSound.addEventListener('change', () => {
@@ -8548,12 +12767,12 @@ dom.optSound.addEventListener('change', () => {
     // This click is a gesture, which is what an AudioContext has been waiting
     // for if the page has not been touched yet.
     if (notify.sound) { wakeAudio(); chime('done'); }
-    renderBell();
+    paintNotifyRows();
 });
 
 // Worth having: Focus Assist and Do Not Disturb drop notifications without a
 // word, so "did that work" is otherwise unanswerable until a turn ends.
-dom.bellTry.addEventListener('click', () => {
+dom.notifyTry.addEventListener('click', () => {
     announce('Claude Sessions', 'This is what a finished turn will look like.', 'done', null);
     if (!notify.sound && (!notify.desktop || notifyPermission() !== 'granted')) {
         toast('Both switches are off, so nothing would fire.', 'warn');
@@ -8561,7 +12780,6 @@ dom.bellTry.addEventListener('click', () => {
 });
 
 document.addEventListener('click', (e) => {
-    if (!dom.bellMenu.hidden && !e.target.closest('.bell-wrap')) showBell(false);
 });
 
 // ── quota ────────────────────────────────────────────────────────────────
@@ -8944,10 +13162,10 @@ async function refreshQuotaNow() {
 function showQuota(on) {
     dom.quotaMenu.hidden = !on;
     dom.quotaPill.setAttribute('aria-expanded', String(on));
-    // Same reason the bell does this: the two popovers must not sit open
-    // together, and each one's outside-click listener is stopped by the other's
-    // trigger.
-    if (on) { renderQuotaPanel(); showBell(false); showNewMenu(false); }
+    // The two popovers must not sit open together, and each one's outside-click
+    // listener is stopped by the other's trigger. There were three of these
+    // until the bell's went into the settings page.
+    if (on) { renderQuotaPanel(); showNewMenu(false); }
 }
 
 async function loadQuota() {
@@ -9020,6 +13238,11 @@ function connect() {
         // watching flag to reset here — the push is unconditional, so a
         // reconnected window starts receiving them again with no subscribe.
         loadDrafts();
+        // And the snippets, which matter here a little more than the drafts do:
+        // the pinned buttons are on screen whether or not any panel is open, so a
+        // missed push leaves a wrong button sitting in the composer rather than a
+        // stale card behind a panel nobody has opened.
+        loadSnippets();
         // And the schedules, on the same terms. It matters a little more here:
         // the stream is most often down because the bridge restarted, and a
         // restart is exactly when the catch-up pass runs — so the changes this
@@ -9099,6 +13322,7 @@ function connect() {
         if (!state.current || d.sessionId !== state.current.sessionId) return;
         state.checklist.sessionId = d.sessionId;
         state.checklist.data = d;
+        state.checklist.pending = false;   // answered, so the column can settle
         renderChecklist();
     });
     // The whole list, every time, and not gated on watching the panel — see the
@@ -9106,6 +13330,7 @@ function connect() {
     // is also how a draft saved or started in another window disappears from
     // this one.
     es.addEventListener('drafts-changed', (e) => applyDrafts(JSON.parse(e.data)));
+    es.addEventListener('snippets-changed', (e) => applySnippets(JSON.parse(e.data)));
     es.addEventListener('schedules-changed', (e) => applySched(JSON.parse(e.data)));
 
     es.addEventListener('sessions-changed', () => loadSessions());
@@ -9124,6 +13349,78 @@ function connect() {
         applyRailPrs(JSON.parse(e.data));
         if (state.current) loadPrStatus();
         if (state.dash.open) loadDash();
+    });
+
+    // Settings were saved — possibly in another window, possibly this one. Two
+    // are routinely open here (the Electron shell and a browser tab on the same
+    // bridge), and a window sitting on a stale copy would keep drawing cards the
+    // old way and answering the old shortcuts, with nothing to say why.
+    //
+    // The user-level answer only, which is what BOOT_PREFS holds. A project's
+    // travels with the transcript, and re-reading it is openSession's job.
+    es.addEventListener('prefs', (e) => {
+        const p = JSON.parse(e.data);
+        for (const block of Object.keys(PREFS_FALLBACK)) {
+            if (block === 'version' || !p[block]) continue;
+            Object.assign(BOOT_PREFS[block], p[block]);
+        }
+        keys.apply(BOOT_PREFS.keyboard);
+        paintShortcutHints();
+        paintComposerHint();
+        if (state.live.open) renderLive();
+        // The panel that did the saving already has the answer; one that is open
+        // in *this* window while another saved does not.
+        if (state.settings.open && !state.settings.saving) loadSettings();
+    });
+
+    // Claude Code's settings changed. The payload is the *fact* of a change and
+    // not the content, unlike `prefs` above: nothing in this app behaves
+    // differently because of those files, so there is no `<meta>` copy to keep
+    // in sync, and pushing the contents of a file that route classifies as
+    // local-only down every open channel would be a poor trade for saving a
+    // fetch.
+    es.addEventListener('claude-config', async () => {
+        const s = state.claudeCfg;
+        if (!state.settings.open || s.saving) return;
+        // A draft in the JSON tab is never destroyed to show somebody what
+        // somebody else typed. It gets a banner and keeps what it has.
+        if (s.dirty) {
+            // The data is reloaded around the draft even so — the same
+            // keep-and-restore saveClaudeText() does on a 409 — because the
+            // banner promises "what is below is the file as it is now" and
+            // without this it would be showing the file as it was. That
+            // promise is the whole content of the banner: the draft survives,
+            // and `What is on disk` becomes something the reader can compare
+            // against rather than an absent block.
+            const keep = s.draft;
+            await loadClaudeConfig();
+            s.draft = keep;
+            s.dirty = true;
+            const row = claudeTargetRow();
+            s.stale = { text: (row && row.text) || null };
+            renderSettings();
+            return;
+        }
+        // Nothing typed, so there is nothing to protect: reload, and point at
+        // whatever moved. The JSON tab re-seeds itself from the new file
+        // because it is clean — see claudeRawCard().
+        loadClaudeConfig({ flash: true });
+    });
+
+    // The same, for a CLAUDE.md written elsewhere — another window, or `claude`
+    // itself through a memory edit. The dirty guard matters more here than it
+    // does above: the draft is not one key but a whole document somebody has
+    // been writing.
+    es.addEventListener('claude-docs', () => {
+        const s = state.claudeDocs;
+        if (!state.settings.open || s.saving) return;
+        if (s.dirty) {
+            s.stale = { text: null };
+            renderSettings();
+            if (!dom.memoScrim.hidden) paintMemoDialog();
+            return;
+        }
+        loadClaudeDocs();
     });
 
     // Someone deleted a session — possibly in another window, possibly this one.
@@ -9398,7 +13695,7 @@ function applyRunner(s) {
     // joins the queue rather than going anywhere, and that is worth admitting
     // before the click, not after.
     dom.btnSend.textContent = busy && !state.agent ? 'Queue' : 'Send';
-    dom.btnLgtm.title = busy && !state.agent ? LGTM_TITLE_BUSY : LGTM_TITLE;
+    paintPinTitles(busy && !state.agent);
     applyQueue(s);
 
     // The escalation is armed against one turn. Once that turn is over the
@@ -9455,8 +13752,9 @@ function paintLock() {
 
     if (away) {
         dom.lockText.textContent = `This session is ${lower(awayWords(away))}.`;
-        // Both buttons, not just Send: LGTM is an ordinary message with a canned
-        // text, so it goes into the same transcript by the same path.
+        // Every send button, not just Send: a pinned snippet is an ordinary
+        // message with a written-out text, so it goes into the same transcript
+        // by the same path.
         // Not `readonly` on the box itself — a message can still be written
         // while deciding, and the fork carries whatever is in it.
         enableSend(false);
@@ -9580,6 +13878,10 @@ function renderTurns() {
         onfocus: (e) => showTurnPop(e.currentTarget, i),
         onblur: hideTurnPop,
     })));
+    // Now it is known whether this conversation has a rail at all, so the hold
+    // from beginOpen can go: with turns the class changes nothing, and without
+    // them `.turns:empty` takes the column out and the composer widens into it.
+    dom.turns.classList.remove('holding');
     markActiveTurn();
 }
 
@@ -10199,7 +14501,7 @@ function openFind() {
     // an invisible bar that had claimed Escape would take it from the panel.
     if (dom.conv.hidden) return;
     if (!dom.newScrim.hidden || !dom.delScrim.hidden
-        || !dom.taskScrim.hidden || !dom.pairScrim.hidden) return;
+        || !dom.taskScrim.hidden) return;
 
     f.open = true;
     dom.find.hidden = false;
@@ -10609,8 +14911,8 @@ function onChipKey(e, entry, i, toggleOpen) {
         return;
     }
     if (e.key === 'Escape') {
-        // Escape closes the new-session dialog and leaves a subagent; while a
-        // chip has the focus it belongs to the chip.
+        // Escape leaves a subagent and closes the find bar; while a chip has the
+        // focus it belongs to the chip.
         e.preventDefault();
         e.stopPropagation();
         dropQueued(entry, { fromKeyboard: true, index: i });
@@ -11153,49 +15455,22 @@ const autoGrow = () => grow(dom.input, 38, 220);
 // pasted-in briefing cannot push the Start button off the bottom of the modal.
 const growPrompt = () => grow(dom.newPrompt, 62, 300);
 
-/** Send and LGTM are enabled together: both are ways of sending to the session. */
+/**
+ * Every way of sending from this composer turns on and off together.
+ *
+ * The pinned snippets are in it because each one is an ordinary message with a
+ * written-out text, so it goes into the same transcript by the same path — which
+ * is the argument the LGTM button's line here used to make on its own, back when
+ * there was exactly one of them.
+ */
 function enableSend(on) {
     dom.btnSend.disabled = !on;
-    dom.btnLgtm.disabled = !on;
+    dom.btnSnippets.disabled = !on;
+    for (const b of dom.pins.children) b.disabled = !on;
     // Attaching needs a session for the same reason sending does — the file goes into
     // *that* session's checkout — so it turns on and off with them.
     dom.btnAttach.disabled = !on;
 }
-
-/**
- * What LGTM says.
- *
- * The button sends this as an ordinary message, which is the point: approving
- * work is a thing worth having in the transcript in words, and "LGTM" on its own
- * is not an instruction — it does not say whether the branch is already on a PR,
- * or what counts as done.
- *
- * It ends by naming what should stop the merge, because the failure this replaces
- * is not a bad merge, it is a green one reported over the top of a red check.
- * Repositories with no remote are the normal case on this machine, so the PR is
- * described by what it is for rather than assumed to exist.
- */
-const LGTM_PROMPT = `LGTM — take it from here and land it.
-
-- If this work is not on a pull request yet, commit whatever is outstanding on a
-  branch of its own and open one. If the repository has no remote, merging that
-  branch into the main branch is the equivalent — do that instead.
-- Run the checks this project expects of a change: its tests, lint, typecheck,
-  build, whatever it has. Fix what they turn up.
-- Once they pass, merge it.
-
-If something genuinely blocks the merge — checks you cannot fix, conflicts, a
-review asking for changes — stop and tell me instead of working around it.
-
-If you noticed work along the way that this change is not the place for, file it
-with your suggest_session tool before you finish, one call each — the refactor
-you left alone, the test that should exist, the thing you had to work around. If
-you noticed nothing, say nothing; this is not a box to fill.`;
-
-const LGTM_TITLE = 'Send: open a PR for this work if there is not one, run the '
-    + 'checks, and merge it once they pass.';
-const LGTM_TITLE_BUSY = 'Queue behind the running turn: open a PR for this work '
-    + 'if there is not one, run the checks, and merge it once they pass.';
 
 // ── optimistic sends ─────────────────────────────────────────────────────
 // A message you have just sent is not in the transcript yet, and cannot be: the
@@ -11261,9 +15536,10 @@ function clearPendingSend() {
 
 async function sendMessage({ fork = false, text: override = null, canned = false } = {}) {
     const text = override != null ? override : dom.input.value.trim();
-    // Attachments only ride on a message that came out of the box. A canned send — the
-    // LGTM button, a follow-up card — must not walk off with a screenshot you staged
-    // for something else, by the same argument that leaves the half-typed text alone.
+    // Attachments only ride on a message that came out of the box. A canned send — a
+    // snippet that sends itself, a follow-up card — must not walk off with a screenshot
+    // you staged for something else, by the same argument that leaves the half-typed
+    // text alone.
     const files = override == null ? readyAttachments(live) : [];
     // A screenshot with nothing typed under it is a message: "look at this" is the
     // whole content of it.
@@ -11271,7 +15547,7 @@ async function sendMessage({ fork = false, text: override = null, canned = false
     const sessionId = state.current.sessionId;
 
     // The lock is a rule, not a disabled button. Greying out the buttons left
-    // Enter — and every internal caller, LGTM included — going straight past it
+    // Enter — and every internal caller, a snippet included — going straight past it
     // into the two-writers case the whole thing exists to prevent. Branching is
     // exempt: a fork is the way out, and it writes to a new transcript rather
     // than this one.
@@ -11551,6 +15827,10 @@ const termPane = new TerminalPane({
     mount: dom.termBody,
     onOpen: (info) => paintTermHead(info),
     onError: (msg) => toast(`Terminal: ${msg}`, 'error'),
+    // A function rather than a value, so toggling the setting reaches a shell
+    // that is already open. `keyboard` is user-level only, which is why this
+    // reads BOOT_PREFS and not the open session's answer.
+    contextualCopy: () => BOOT_PREFS.keyboard.contextualTerminalCopy,
 });
 
 function termHeight() {
@@ -11792,7 +16072,8 @@ async function loadProjects() {
 /**
  * The Start-a-session dialog, which is also the edit-a-draft dialog.
  *
- * @param {{cwd?: string, tab?: 'recent'|'browse', prompt?: string, draft?: object}} [opts]
+ * @param {{cwd?: string, tab?: 'recent'|'browse', prompt?: string, draft?: object,
+ *   schedule?: object|boolean, seed?: object}} [opts]
  *   `cwd` is a caller that has already answered "where" — the split menu passes
  *   the row you clicked. Without one the dialog opens where it always has: the
  *   session on screen, else the most recent project. `prompt` fills the first
@@ -11806,6 +16087,15 @@ async function loadProjects() {
  *   this one already collects — a second form would be the same six controls
  *   with a different chance of drifting.
  *
+ *   `schedule` is the same trick again: `true` for a new one, a row to edit that
+ *   one. It shows the two rows only a schedule has, and swaps the footer.
+ *
+ *   `seed` is prefill for a schedule that has no row yet — what the Schedule
+ *   button hands over when it converts what is on screen. It reads like a row
+ *   here, so the prefills below take it as one; the difference is that it leaves
+ *   `state.sched.editing` null, so the save is a POST rather than a PATCH. Its
+ *   one extra key is `fromDraft`, the draft the save will consume.
+ *
  * **Model and permission mode are written on every open, in both directions.**
  * They used to be left alone, which was harmless while the dialog only ever
  * started things: the selects kept your last choice, which was usually what you
@@ -11814,7 +16104,7 @@ async function loadProjects() {
  * brand-new session, having been asked for once, about something else.
  */
 async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
-    schedule = null } = {}) {
+    schedule = null, seed = null } = {}) {
     // `schedule: true` means "a new one"; a row means "edit that one". The two
     // have to be told apart because only the second has fields to prefill, and
     // both have to put the dialog in schedule mode.
@@ -11822,11 +16112,16 @@ async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     const schedMode = Boolean(schedule);
     // A draft and a schedule are the same fields with a different owner, so one
     // local stands in for whichever is being edited and the prefill below reads
-    // from it once instead of branching on every line.
-    const src = sched || draft;
+    // from it once instead of branching on every line. A `seed` joins them as a
+    // third: the same fields again, from something that is not a stored row.
+    const src = sched || seed || draft;
 
     state.drafts.editing = draft ? draft.id : null;
+    // A seed is prefill, not an edit — the schedule it describes does not exist
+    // yet — so `editing` stays null and schedSave still POSTs. What it does carry
+    // is which draft it came from, if any.
     state.sched.editing = sched ? sched.id : null;
+    state.sched.fromDraft = seed ? (seed.fromDraft || null) : null;
 
     // Ctrl+N over a live composer with `/rev` half-typed in it is reachable, and
     // a popover anchored to a box that is now behind a modal is nothing but
@@ -11836,6 +16131,10 @@ async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     dom.newScrim.hidden = false;
     dom.newPrompt.value = src ? src.prompt : prompt;
     growPrompt();
+    // Written on every open in both directions, the rule this docstring states:
+    // a name left behind from the last draft you looked at would be attached to
+    // the next thing you saved.
+    dom.newName.value = src ? (src.title || '') : '';
     dom.newTest.checked = src ? !!src.test : false;
     dom.newModel.value = src ? (src.model || '') : '';
     // The dialog's own default, and deliberately not the composer's: the first
@@ -11861,8 +16160,12 @@ async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     // reading of one: `cronForm` is what says which row an existing schedule
     // belongs on. A new schedule opens on Weekly, Tue–Sat at 02:00 — the same
     // suggestion the cron box used to open with, spelled as controls.
+    // A seeded schedule opens on One time. It is the shape the conversion is
+    // for — a draft is a thing you meant to do once, and the clock is only
+    // standing in for the Start you would have pressed — and it is a choice you
+    // can still change before saving, like every other preset here.
     setWhen(sched ? sched.cronForm : null, sched ? sched.cron : '',
-        sched ? !!sched.once : false);
+        sched ? !!sched.once : false, { newRow: seed ? 'once' : 'weekly' });
     const gate = sched ? sched.gate : null;
     dom.newGateKind.value = gate ? gate.kind : '';
     dom.newGateRef.value = gate && gate.kind === 'git-commits' ? gate.ref : '';
@@ -11878,6 +16181,10 @@ async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     // this" are the same press.
     dom.newGo.hidden = schedMode;
     dom.newSave.hidden = schedMode;
+    // Offered from Start-a-session as well as from a draft: the fields it needs
+    // are the fields this dialog always collects, and refusing to schedule
+    // something you had not saved first would be an extra step for no reason.
+    dom.newSched.hidden = schedMode;
     dom.newSchedSave.hidden = !schedMode;
     dom.newSchedSave.textContent = sched ? 'Save changes' : 'Save schedule';
 
@@ -11889,7 +16196,8 @@ async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     clearAttach(newC);
 
     dom.newTitle.textContent = schedMode
-        ? (sched ? 'Edit schedule' : 'Schedule a session')
+        ? (sched ? 'Edit schedule'
+            : (state.sched.fromDraft ? 'Schedule this draft' : 'Schedule a session'))
         : (draft ? 'Edit draft' : 'Start a session');
     dom.newSave.textContent = draft ? 'Save changes' : 'Save as draft';
     cancelMkdir();
@@ -11925,6 +16233,7 @@ function closeNew() {
     // never fires and a popover would still be up — fixed to the viewport, over
     // nothing — the next time the dialog opened.
     closeMenus(newC);
+    closeSnips(newC);
     // Held files are bytes in this page and were never written anywhere, so closing
     // the dialog really does discard them — which is the whole benefit of holding
     // them rather than uploading on arrival.
@@ -11933,6 +16242,9 @@ function closeNew() {
     // is no longer showing. openNew sets it on the way in either way.
     state.drafts.editing = null;
     state.sched.editing = null;
+    // Otherwise a schedule saved later in this window would consume a draft that
+    // an earlier, abandoned conversion had named.
+    state.sched.fromDraft = null;
 }
 
 // ── the recent-directories menu ──────────────────────────────────────────
@@ -11946,7 +16258,7 @@ let newMenuSeq = 0;
 function showNewMenu(on, { focusFirst = false } = {}) {
     dom.newMenu.hidden = !on;
     dom.btnNewMenu.setAttribute('aria-expanded', String(on));
-    if (on) { showBell(false); fillNewMenu({ focusFirst }); }
+    if (on) { showQuota(false); fillNewMenu({ focusFirst }); }
 }
 
 /**
@@ -12369,6 +16681,21 @@ function newDialogValues() {
     return body;
 }
 
+/**
+ * The name box, as the `title` field the two stores take.
+ *
+ * **Deliberately not part of `newDialogValues`.** That body is also the body of
+ * `POST /api/sessions`, which takes no title — and the docstring above says why a
+ * key a route ignores must not ride along on it. So the two callers that store a
+ * title ask for it, and Start does not.
+ *
+ * `null` rather than `''`: a PATCH reads `null` as *clear this* and absence as
+ * *leave it alone*, so emptying the box has to send something.
+ */
+function newDialogName() {
+    return dom.newName.value.trim() || null;
+}
+
 // ── the trigger picker ──────────────────────────────────────────────────────
 //
 // One direction only: **the picker composes cron and never parses it.** Reading
@@ -12508,7 +16835,7 @@ function whenValues({ quiet = false } = {}) {
  * them to the next schedule you opened, and Weekly is exactly the row where you
  * would not notice.
  */
-function setWhen(form, cron, once) {
+function setWhen(form, cron, once, { newRow = 'weekly' } = {}) {
     const f = form || {};
     // `null` is "a schedule that does not exist yet", which is *not* the same as
     // `{kind: 'custom'}` — an existing schedule whose expression no row can draw.
@@ -12518,7 +16845,12 @@ function setWhen(form, cron, once) {
 
     // A dated expression is the One time row only when the row said so. Without
     // the flag it is an annual schedule, which no row draws — so it is Custom.
-    const row = kind === 'new' ? 'weekly'
+    //
+    // `newRow` is which suggestion a *new* schedule opens on, and it is an
+    // argument rather than a caller-supplied `cronForm` on purpose: a synthetic
+    // `{kind: 'date'}` would reach the date maths below with no month and no day
+    // and put `NaN-NaN-NaN` in the box.
+    const row = kind === 'new' ? newRow
         : kind === 'date' ? (once ? 'once' : 'custom')
             : (kind === 'minutes' || kind === 'hours' ? 'every' : kind);
 
@@ -12530,7 +16862,10 @@ function setWhen(form, cron, once) {
     dom.newWhenDailyTime.value = clock;
     dom.newWhenWeeklyTime.value = clock;
     dom.newWhenMonthlyTime.value = clock;
-    dom.newWhenOnceTime.value = row === 'once' ? clock : '09:00';
+    // The One time row's two controls are written together in the block below,
+    // which has to decide a date and a time as one moment. This only leaves the
+    // row something sane for the case where it is not the one selected.
+    dom.newWhenOnceTime.value = '09:00';
     dom.newWhenDom.value = String(kind === 'monthly' ? f.day : 1);
 
     // Tue–Sat is the default week, which is what the cron box used to open on:
@@ -12538,10 +16873,27 @@ function setWhen(form, cron, once) {
     const days = new Set(kind === 'weekly' ? f.days : [2, 3, 4, 5, 6]);
     for (const box of whenDayBoxes()) box.checked = days.has(Number(box.value));
 
-    // A dated expression carries no year, so an existing one-time schedule can
-    // only be shown on the next date it matches — which is the date it will
-    // actually run, and so the honest thing to put in the box.
-    if (row === 'once') {
+    if (row === 'once' && kind === 'new') {
+        // A suggestion, the way Weekly opens on Tue–Sat at 02:00, because the one
+        // row that needs a *date* is the one row that says nothing at all until
+        // it has one — a blank box means the preview underneath reads "fill in
+        // the row you picked" and the first press of Save is a refusal.
+        //
+        // The next 09:00 still to come: this morning if it has not gone, else
+        // tomorrow. Which also clears whenValues' one local check — a moment
+        // already past is refused there, and offering one would be offering a
+        // form that cannot be saved as it stands.
+        const soon = new Date();
+        soon.setHours(9, 0, 0, 0);
+        if (soon.getTime() <= Date.now()) soon.setDate(soon.getDate() + 1);
+        dom.newWhenOnceTime.value = `${pad(soon.getHours())}:${pad(soon.getMinutes())}`;
+        dom.newWhenDate.value =
+            `${soon.getFullYear()}-${pad(soon.getMonth() + 1)}-${pad(soon.getDate())}`;
+    } else if (row === 'once') {
+        // A dated expression carries no year, so an existing one-time schedule
+        // can only be shown on the next date it matches — which is the date it
+        // will actually run, and so the honest thing to put in the box.
+        dom.newWhenOnceTime.value = clock;
         const now = new Date();
         const soon = new Date(now.getFullYear(), f.month - 1, f.day, f.hour, f.minute, 0, 0);
         if (soon.getTime() <= Date.now()) soon.setFullYear(now.getFullYear() + 1);
@@ -12609,9 +16961,17 @@ function whenBuild() {
  */
 function paintNewAttach() {
     const held = newC.attach.length;
+    // Both of the buttons that would keep this call rather than run it, because
+    // neither store carries attachments — see docs/api.md. Saying so on the
+    // button is the whole point: the files are bytes in this page and would
+    // simply not be there afterwards, with nothing to say they had gone.
     dom.newSave.disabled = held > 0;
+    dom.newSched.disabled = held > 0;
     dom.newSave.title = held
         ? 'A draft cannot carry attachments. Start the session, or remove the files.'
+        : '';
+    dom.newSched.title = held
+        ? 'A schedule cannot carry attachments. Start the session, or remove the files.'
         : '';
 }
 
@@ -12650,6 +17010,7 @@ function paintGateFields() {
 function schedDialogValues() {
     const body = newDialogValues();
     if (!body) return null;
+    body.title = newDialogName();
 
     const when = whenValues();
     if (!when) return null;
@@ -12729,6 +17090,14 @@ async function schedSave() {
     if (!body) return;
 
     const editing = state.sched.editing;
+    // The bridge is what consumes the draft, in one call, after the row is
+    // written — see POST /api/schedules. Doing it here as a second call would
+    // mean this window deciding what happens when the delete fails and the
+    // Android client deciding it again, which is the argument
+    // POST /api/drafts/:id/start already settled. Only on a create: converting a
+    // draft happens once, so an edit never carries it.
+    if (!editing && state.sched.fromDraft) body.fromDraft = state.sched.fromDraft;
+
     const label = dom.newSchedSave.textContent;
     dom.newSchedSave.disabled = true;
     dom.newSchedSave.textContent = 'Saving';
@@ -12750,6 +17119,51 @@ async function schedSave() {
 }
 
 /**
+ * Hand what is in the dialog to the clock instead.
+ *
+ * Not a fourth form. A schedule is the same create call a draft is, plus a
+ * trigger — so this reopens *this* dialog in schedule mode with the fields
+ * carried across, and the two extra rows appear underneath. `openNew` is asked
+ * for it rather than the dialog being half-rewritten in place, so there is one
+ * path in and no second state for it to drift into.
+ *
+ * It reads the boxes rather than the stored draft, so edits you have not saved
+ * come across too — which is the behaviour you want from a button sitting beside
+ * Save changes.
+ *
+ * **Three presets, and they are presets rather than inheritance.** One time,
+ * because a draft is a thing you meant to do once and the clock is only standing
+ * in for the Start you would have pressed. `dontAsk`, because a session that
+ * stops at the first question at 2 AM has wasted the night — this overrides
+ * whatever the draft had, deliberately, since the draft's mode was chosen for a
+ * run you would be watching. And 09:00 tomorrow, so the row is answerable rather
+ * than blank. All three are still controls; none of them is a decision taken
+ * away from you.
+ */
+function drToSchedule() {
+    // The same validation Start and Save-as-draft get, and for the same reason:
+    // a schedule you cannot run is worse than a refused save, because nobody is
+    // there to read the failure.
+    const body = newDialogValues();
+    if (!body) return;
+
+    openNew({
+        schedule: true,
+        seed: {
+            cwd: body.cwd,
+            prompt: body.prompt,
+            title: newDialogName(),
+            model: body.model,
+            test: body.test,
+            permissionMode: 'dontAsk',
+            // Null from a plain Start-a-session dialog, where there is nothing to
+            // consume. The save is what acts on it; see schedSave.
+            fromDraft: state.drafts.editing,
+        },
+    });
+}
+
+/**
  * Keep it instead of running it.
  *
  * The same body Start would have sent, to the drafts route rather than the
@@ -12764,6 +17178,7 @@ async function schedSave() {
 async function drSave() {
     const body = newDialogValues();
     if (!body) return;
+    body.title = newDialogName();
 
     const editing = state.drafts.editing;
     const label = dom.newSave.textContent;
@@ -12881,7 +17296,51 @@ for (const type of ['dragover', 'drop']) {
 // One click, and no confirmation over the top of it: the click *is* the approval,
 // and the session still asks for whatever its permission mode makes it ask for
 // before anything is pushed or merged.
-dom.btnLgtm.addEventListener('click', () => sendMessage({ text: LGTM_PROMPT, canned: true }));
+dom.btnSnippets.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showSnips(live, dom.snipMenu.hidden);
+});
+dom.newBtnSnippets.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showSnips(newC, dom.newSnipMenu.hidden);
+});
+dom.snipMenu.addEventListener('keydown', (e) => onSnipsKey(e, live));
+dom.newSnipMenu.addEventListener('keydown', (e) => onSnipsKey(e, newC));
+
+// ✕ and Cancel are the whole close surface on both — see modalUp().
+for (const n of dom.snipFillScrim.querySelectorAll('[data-close-fill]')) {
+    n.addEventListener('click', closeSnipFill);
+}
+dom.snipFillGo.addEventListener('click', confirmSnipFill);
+// Enter in a one-line box confirms. There is no textarea parameter type, so
+// nothing in this form wants the key for itself.
+dom.snipFillForm.addEventListener('submit', (e) => { e.preventDefault(); confirmSnipFill(); });
+
+// The glyph goes in from script rather than being written into the markup,
+// because every other icon in this app comes out of the ICON map.
+dom.btnSnippets.append(icon('snippets', 17));
+
+for (const n of dom.snipEditScrim.querySelectorAll('[data-close-snip]')) {
+    n.addEventListener('click', closeSnipEditor);
+}
+dom.snipSave.addEventListener('click', saveSnipEditor);
+dom.snipAuto.addEventListener('change', paintSnipPerm);
+dom.snipBody.addEventListener('input', paintSnipPlaceholders);
+dom.snipParamAdd.addEventListener('click', () => {
+    snipDraftParams.push({ name: '', label: '', type: 'text', required: false, default: '' });
+    renderSnipParamRows();
+    paintSnipPlaceholders();
+    const last = dom.snipParams.querySelector('.snip-param:last-child .snip-param-name');
+    if (last) last.focus();
+});
+dom.snipProjectGo.addEventListener('click', addSnipProject);
+dom.snipProject.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    addSnipProject();
+});
+dom.snipNew.addEventListener('click', () => openSnipEditor(null));
+dom.snipGroupNew.addEventListener('click', newSnipGroup);
 // Wrapped, not passed: openNew now takes an options bag, and a MouseEvent is
 // not one.
 dom.tasksCollapse.addEventListener('click', () => showTasks(false));
@@ -12896,12 +17355,31 @@ dom.checklistStrip.addEventListener('click', () => collapseChecklist(false));
 // because you clicked here. See git.clearCache.
 dom.changesRefresh.addEventListener('click', () => loadChanges({ refresh: true }));
 
+// ✕ and Cancel are the whole close surface — see modalUp().
 for (const n of dom.taskScrim.querySelectorAll('[data-close-task]')) {
     n.addEventListener('click', closeTaskDialog);
 }
-dom.taskScrim.addEventListener('click', (e) => {
-    if (e.target === dom.taskScrim) closeTaskDialog();
+
+// The full-height CLAUDE.md editor. Wired once, here, because the markup is in
+// web/index.html rather than built by a render — see the "same file, full
+// height" section above.
+//
+// The ✕ and Close are the only ways out, and Escape is swallowed rather than
+// answered: that is the rule modalUp() holds for every dialog on this page, and
+// this one is the clearest case for it — what it holds is a whole CLAUDE.md
+// somebody is part-way through writing.
+for (const n of dom.memoScrim.querySelectorAll('[data-close-memo]')) {
+    n.addEventListener('click', closeMemoDialog);
+}
+dom.memoClose.addEventListener('click', closeMemoDialog);
+dom.memoBig.addEventListener('input', () => {
+    const s = state.claudeDocs;
+    const row = docsRow();
+    s.draft = dom.memoBig.value;
+    s.dirty = s.draft !== (row && row.text !== null ? row.text : '');
+    paintMemoDialog();
 });
+dom.memoSave.addEventListener('click', () => saveClaudeDocs());
 // The prompt is the thing worth having elsewhere — pasted into a terminal, into
 // another tool, into a message to somebody. The rendered markdown is not it, so
 // the source is what goes on the clipboard.
@@ -12987,6 +17465,7 @@ dom.termGrip.addEventListener('keydown', (e) => {
 
 dom.newGo.addEventListener('click', startNew);
 dom.newSave.addEventListener('click', drSave);
+dom.newSched.addEventListener('click', drToSchedule);
 dom.dbStatus.addEventListener('click', refreshDevBrowser);
 dom.btnRestart.addEventListener('click', () => pullAndRestart());
 dom.btnBack.addEventListener('click', closeAgent);
@@ -13027,17 +17506,40 @@ dom.input.addEventListener('input', debounce(() => {
 window.addEventListener('beforeunload', () => {
     if (state.current) saveDraft(state.current.sessionId, dom.input.value);
 });
-// Enter sends, Shift+Enter breaks the line — chat convention, and what the hand
-// reaches for. Ctrl/Cmd+Enter stays wired up because it used to be the only way
-// and fingers remember. `isComposing` keeps an IME's Enter for the IME: it is
-// picking a candidate, not finishing a message.
+/**
+ * Does this Enter send, or break the line?
+ *
+ * `keyboard.composerSend` picks between two shapes. `'enter'` is the chat
+ * convention and what this app has always done: Enter sends, Shift+Enter is a
+ * newline. `'ctrl-enter'` swaps them, which is what you want when a message is
+ * three paragraphs and Enter sending it halfway through is a real cost.
+ *
+ * Ctrl/Cmd+Enter sends in both. It used to be the only way and fingers
+ * remember, and it is unambiguous under either mode.
+ *
+ * Alt+Enter is a newline throughout, and `isComposing` keeps an IME's Enter for
+ * the IME — it is picking a candidate, not finishing a message.
+ */
+function enterSends(e) {
+    if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return false;
+    if (e.altKey) return false;
+    if (e.ctrlKey || e.metaKey) return true;
+    if (e.shiftKey) return false;
+    return BOOT_PREFS.keyboard.composerSend !== 'ctrl-enter';
+}
+
 dom.input.addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
-    if (e.altKey) return;
-    if (e.shiftKey && !(e.ctrlKey || e.metaKey)) return;
+    if (!enterSends(e)) return;
     e.preventDefault();
     sendMessage();
 });
+
+/** The strip under the composer, which says whichever mode is in force. */
+function paintComposerHint() {
+    dom.composerHint.textContent = BOOT_PREFS.keyboard.composerSend === 'ctrl-enter'
+        ? 'Ctrl+Enter to send · Enter for a newline'
+        : 'Enter to send · Shift+Enter for a newline';
+}
 
 // ── slash-command completion ─────────────────────────────────────────────
 //
@@ -13087,6 +17589,11 @@ const SLASH_RE = /^\/[A-Za-z0-9_:-]*$/;
 function makeComposer({ input, slashNode, mentionNode, id, ctx, container,
     closeOthers = () => {}, notReady = null, homeEnd = true, float = false,
     onInput = null,
+    // The snippets popover and the button it hangs off. A third menu on the same
+    // composer, which is what earns it the click-outside rule and the reposition
+    // pass for nothing — but deliberately *not* a member of closeMenus(), because
+    // that is what the textarea's blur calls and this popover takes focus.
+    snipBtn = null, snipNode = null,
     // Attachments. A composer with no `attachNode` takes no files at all, and
     // wireAttachments simply skips it — nothing else has to know.
     attachNode = null, attachInput = null, attachBtn = null, dropZone = null,
@@ -13101,6 +17608,10 @@ function makeComposer({ input, slashNode, mentionNode, id, ctx, container,
         id: `${id}-slash`, row: slashRow, float, c };
     c.mention = { rows: [], index: 0, seq: 0, node: mentionNode,
         id: `${id}-mention`, row: mentionRow, float, c };
+    // `caret` is where the selection was when the popover opened, which is what
+    // `insert: 'cursor'` lands on — by the time the text arrives the focus has
+    // moved at least once. See showSnips.
+    c.snips = { node: snipNode, btn: snipBtn, id: `${id}-snips`, index: 0, caret: null, c };
     return c;
 }
 
@@ -13130,6 +17641,8 @@ const live = makeComposer({
     mentionNode: dom.mentionMenu,
     id: 'live',
     container: '.input-row',
+    snipBtn: dom.btnSnippets,
+    snipNode: dom.snipMenu,
     // Addressed by session id, and the cwd rides along only as a cache key: the
     // bridge is what resolves a session to a working directory, through a
     // worktree that has since been landed and removed. A client cannot, having no
@@ -13137,9 +17650,9 @@ const live = makeComposer({
     ctx: () => (state.current
         ? { cwd: state.current.cwd, sessionId: state.current.sessionId }
         : null),
-    // Both are main-window furniture that would otherwise sit over the popover.
-    // A composer inside a modal has neither, and passes nothing.
-    closeOthers: () => { showBell(false); showNewMenu(false); },
+    // Main-window furniture that would otherwise sit over the popover. A
+    // composer inside a modal has none of it, and passes nothing.
+    closeOthers: () => { showQuota(false); showNewMenu(false); },
 
     // Attachments. The strip is above the input row and the drop zone is the whole
     // composer, so a file can be let go anywhere near the box rather than exactly on
@@ -13417,6 +17930,9 @@ function repositionFloatingMenus() {
         for (const m of [c.slash, c.mention]) {
             if (m.float && !m.node.hidden) positionMenu(m);
         }
+        // Always fixed, both composers, so it always needs replacing — see
+        // positionSnips on why it does not share positionMenu.
+        if (c.snips.node && !c.snips.node.hidden) positionSnips(c);
     }
 }
 
@@ -13525,8 +18041,10 @@ document.addEventListener('keydown', (e) => {
     // something even when there is nothing to choose: a note is still something
     // on screen, and something on screen is what Escape dismisses. Left below
     // that check, an Escape during "Loading commands…" fell through to the
-    // central ladder — which over the Start-a-session dialog is closeNew(), and
-    // a first message you had written. Leaves the text exactly as typed.
+    // central ladder, which used to close the whole Start-a-session dialog and
+    // the first message you had written; the ladder swallows the key over a
+    // modal now, but this is still the handler that makes it mean "never mind
+    // the list". Leaves the text exactly as typed.
     if (e.key === 'Escape') {
         e.preventDefault();
         e.stopPropagation();
@@ -13598,6 +18116,10 @@ document.addEventListener('click', (e) => {
     for (const c of composers) {
         if (e.target.closest(c.container)) continue;
         closeMenus(c);
+        // Closed here rather than in closeMenus(), which the textarea's blur
+        // calls: clicking the snippets button blurs the box, so a popover in that
+        // set would shut on the click that opened it.
+        closeSnips(c);
     }
 });
 
@@ -13953,6 +18475,8 @@ const newC = makeComposer({
     mentionNode: dom.newMentionMenu,
     id: 'new',
     container: '.composer-field',
+    snipBtn: dom.newBtnSnippets,
+    snipNode: dom.newSnipMenu,
     // Read fresh on every keystroke, deliberately: the box below this one is a
     // text field, and walking into a folder in the picker writes it too, so the
     // directory can change while the menu is open. `sessionId: null` is what
@@ -13989,10 +18513,10 @@ wireAttachments(newC);
 dom.newScrim.querySelector('.modal-body')
     .addEventListener('scroll', repositionFloatingMenus);
 
+// ✕ and Cancel are the whole close surface — see modalUp().
 for (const n of dom.newScrim.querySelectorAll('[data-close]')) {
     n.addEventListener('click', closeNew);
 }
-dom.newScrim.addEventListener('click', (e) => { if (e.target === dom.newScrim) closeNew(); });
 
 dom.newTabRecent.addEventListener('click', () => setPickerTab('recent'));
 dom.newTabBrowse.addEventListener('click', () => setPickerTab('browse', { load: true }));
@@ -14012,8 +18536,10 @@ dom.newMkdir.addEventListener('click', startMkdir);
 dom.newMkdirGo.addEventListener('click', submitMkdir);
 dom.newMkdirName.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); submitMkdir(); return; }
-    // Without stopPropagation the central Escape ladder closes the whole dialog,
-    // when all this key meant was "never mind the folder".
+    // The central ladder swallows Escape over a modal, so nothing further down
+    // it is at risk — but this handler is what gives the key an answer at all,
+    // and stopPropagation keeps that answer "never mind the folder" rather than
+    // whatever the ladder grows next.
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancelMkdir(); dom.newMkdir.focus(); }
 });
 
@@ -14034,20 +18560,20 @@ dom.newCwd.addEventListener('input', () => {
     if (menuOpen(newC.slash)) updateSlashMenu(newC);
 });
 
+// ✕ and Cancel are the whole close surface — see modalUp().
 for (const n of dom.delScrim.querySelectorAll('[data-close-del]')) {
     n.addEventListener('click', closeDelete);
 }
-dom.delScrim.addEventListener('click', (e) => { if (e.target === dom.delScrim) closeDelete(); });
 
 // ── the diff viewer ──────────────────────────────────────────────────────
 
 for (const n of dom.diffScrim.querySelectorAll('[data-close-diff]')) {
     n.addEventListener('click', closeDiff);
 }
-// `e.target === scrim` and not a `closest` test, which matters more here than on
-// the other dialogs: a diff is the one people drag-select inside, and a drag that
-// happens to end on the backdrop must not be read as a click on it.
-dom.diffScrim.addEventListener('click', (e) => { if (e.target === dom.diffScrim) closeDiff(); });
+// No close-on-backdrop, and no Escape rung either — see modalUp(). This dialog is
+// why half of that rule exists: a diff is the one thing here people drag-select,
+// and a drag released past the edge fires a click whose target is the scrim, so
+// "click outside to close" reads as "lose your place for no reason".
 
 dom.diffUnified.addEventListener('click', () => setDiffOpt('split', false));
 dom.diffSplit.addEventListener('click', () => setDiffOpt('split', true));
@@ -14102,6 +18628,10 @@ window.addEventListener('resize', () => closeContextMenu({ focus: false }));
 window.addEventListener('blur', () => closeContextMenu({ focus: false }));
 
 // ── connect a phone ──────────────────────────────────────────────────────
+//
+// A group in the settings page, and a dialog off a bar button before that. The
+// move is why `loadPairing` exists where `openPair` used to: nothing opens now,
+// so the fetch hangs off the panel loading instead.
 //
 // The bridge hands this page the token in a <meta> tag when the page was fetched
 // over loopback (bridge/auth.js injectToken), which is the only reason a link can
@@ -14181,21 +18711,26 @@ function pairNote(base) {
         + 'is confidential in transit — anything on the path can read the token.';
 }
 
-async function openPair() {
-    dom.pairScrim.hidden = false;
-
-    // Only ever real values here. An earlier version offered
-    // `https://<machine>.<tailnet>.ts.net` as a datalist entry meaning "type your
-    // name over this", and picking it from the dropdown produced a URL with
-    // literal angle brackets in it. A suggestion you must correct is worse than
-    // none — so the bridge is asked what this machine is actually called, and the
-    // list is empty when it cannot say.
+/**
+ * What this machine is reachable as, asked once per settings visit.
+ *
+ * Only ever real values in the list. An earlier version offered
+ * `https://<machine>.<tailnet>.ts.net` as a datalist entry meaning "type your
+ * name over this", and picking it from the dropdown produced a URL with literal
+ * angle brackets in it. A suggestion you must correct is worse than none — so
+ * the bridge is asked what this machine is actually called, and the list is
+ * empty when it cannot say.
+ *
+ * Called from loadSettings rather than on a dialog opening, which is the only
+ * thing that changed when this stopped being a dialog. Nothing focuses or
+ * selects a field any more: a section of a page you scrolled to is not asking
+ * for the caret the way a modal that just appeared was.
+ */
+async function loadPairing() {
     if (!dom.pairHost.value) {
         dom.pairHost.value = localStorage.getItem(PAIR_HOST_KEY) || '';
     }
     refreshPairUrl();
-    dom.pairHost.focus();
-
     try {
         const info = await get('/api/pairing');
         dom.pairHosts.replaceChildren(
@@ -14207,13 +18742,9 @@ async function openPair() {
         }
         state.pairInfo = info;
         refreshPairUrl();
-        if (dom.pairHost.value) { dom.pairUrl.focus(); dom.pairUrl.select(); }
     } catch { /* leave the field to be filled in by hand */ }
 }
 
-function closePair() { dom.pairScrim.hidden = true; }
-
-dom.btnPair.addEventListener('click', openPair);
 dom.pairHost.addEventListener('input', refreshPairUrl);
 dom.pairCopy.addEventListener('click', async () => {
     if (!dom.pairUrl.value) { dom.pairHost.focus(); return; }
@@ -14230,17 +18761,10 @@ dom.pairCopy.addEventListener('click', async () => {
         toast('Could not copy — the link is selected, press Ctrl+C');
     }
 });
-for (const n of dom.pairScrim.querySelectorAll('[data-close-pair]')) {
-    n.addEventListener('click', closePair);
-}
-dom.pairScrim.addEventListener('click', (e) => { if (e.target === dom.pairScrim) closePair(); });
-
+// ✕ and Cancel are the whole close surface — see modalUp().
 for (const n of dom.restartScrim.querySelectorAll('[data-close-restart]')) {
     n.addEventListener('click', closeRestart);
 }
-dom.restartScrim.addEventListener('click', (e) => {
-    if (e.target === dom.restartScrim) closeRestart();
-});
 dom.restartFix.addEventListener('click', startFixSession);
 dom.restartGo.addEventListener('click', () => {
     // Skip the pull only if one was attempted and failed — watching it fail
@@ -14258,6 +18782,24 @@ dom.focusExit.addEventListener('click', () => setFocus(false));
 dom.liveBody.addEventListener('wheel', onDockWheel, { passive: false });
 dom.btnTaskboard.addEventListener('click', () => showTaskboard(!state.taskboard.open));
 dom.tbRefresh.addEventListener('click', () => loadTaskboard());
+dom.tbUnfocus.addEventListener('click', () => tbSetFocus(false));
+// Client-side, unlike the rail's filter next to it: the whole list of open
+// tasks is already in hand, so a round trip would only add lag to a keystroke.
+dom.tbSearch.addEventListener('input', debounce(() => {
+    state.taskboard.query = dom.tbSearch.value;
+    if (taskboardVisible()) renderTaskboard();
+}, 120));
+dom.tbSearch.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    // Clearing the box before leaving it: Escape on a full box is "show me
+    // everything again", and only on an empty one is it "I am done here".
+    if (dom.tbSearch.value) {
+        e.stopPropagation();
+        dom.tbSearch.value = '';
+        state.taskboard.query = '';
+        if (taskboardVisible()) renderTaskboard();
+    }
+});
 dom.btnDash.addEventListener('click', () => showDash(!state.dash.open));
 dom.dashRefresh.addEventListener('click', () => loadDash({ refresh: true }));
 
@@ -14269,6 +18811,52 @@ dom.btnDrafts.addEventListener('click', () => showDrafts(!state.drafts.open));
 // whole window, and closing it drops you back on the board with the new card
 // already on it rather than on whatever was behind the board.
 dom.drNew.addEventListener('click', () => openNew());
+
+dom.btnSettings.addEventListener('click', () => showSettings(!state.settings.open));
+// Which group you are in, on a frame rather than on every scroll event: this
+// reads a bounding box per group and a settings page can be scrolled fast.
+let tocFrame = 0;
+dom.setShell.addEventListener('scroll', () => {
+    if (tocFrame) return;
+    tocFrame = requestAnimationFrame(() => { tocFrame = 0; markSettingsToc(); });
+}, { passive: true });
+// Changing scope redraws off the answer already in hand — the chain came back
+// whole, so there is nothing to fetch. Changing project does need a fetch,
+// because it is a different chain.
+dom.setScope.addEventListener('change', () => {
+    state.settings.scope = dom.setScope.value;
+    state.settings.recording = null;
+    // Which groups read as chosen depends on the scope, so this is a fresh look
+    // at the list rather than the same one redrawn.
+    state.settings.groupOrder = null;
+    renderSettings();
+});
+dom.setProject.addEventListener('change', () => {
+    state.settings.project = dom.setProject.value;
+    state.settings.recording = null;
+    // Both groups are about the project that selector names, so both re-read.
+    // A JSON draft is about a file in the *old* project, so it goes — with a
+    // confirm, because it is somebody's typing.
+    const cfg = state.claudeCfg;
+    if (cfg.dirty && !window.confirm('Discard the JSON you have edited?')) {
+        dom.setProject.value = settingsProject();
+        return;
+    }
+    // And the memory draft, which is about that project's CLAUDE.md for the
+    // same reason and gets its own sentence — "the JSON you have edited" is not
+    // what somebody who has been writing prose has been doing.
+    const docs = state.claudeDocs;
+    if (docs.dirty && !window.confirm('Discard the changes you have made to CLAUDE.md?')) {
+        dom.setProject.value = settingsProject();
+        return;
+    }
+    cfg.draft = null;
+    cfg.dirty = false;
+    cfg.jsonError = null;
+    cfg.stale = null;
+    docsClearDraft(docs);
+    loadSettings();
+});
 
 dom.btnSched.addEventListener('click', () => showSched(!state.sched.open));
 // `schedule: true` rather than a row: a new one, so Save posts instead of
@@ -14309,22 +18897,33 @@ dom.lockAnyway.addEventListener('click', () => {
 });
 
 document.addEventListener('keydown', (e) => {
-    // The context menu is first because it can be opened over any of the rest.
+    // The right-click menu is above even those: it is anchored to the pointer, so
+    // it can be opened over any of them.
     if (e.key === 'Escape' && !dom.ctxMenu.hidden) { closeContextMenu({ focus: true }); return; }
-    // The confirm sits over the new-session dialog, so it answers Escape first.
-    if (e.key === 'Escape' && !dom.bellMenu.hidden) { showBell(false); dom.btnBell.focus(); return; }
+    // A popover can sit over a modal dialog, so it answers Escape first.
     if (e.key === 'Escape' && !dom.quotaMenu.hidden) { showQuota(false); dom.quotaPill.focus(); return; }
     if (e.key === 'Escape' && !dom.newMenu.hidden) { showNewMenu(false); dom.btnNewMenu.focus(); return; }
-    if (e.key === 'Escape' && !dom.delScrim.hidden) { closeDelete(); return; }
-    if (e.key === 'Escape' && !dom.diffScrim.hidden) { closeDiff(); return; }
-    if (e.key === 'Escape' && !dom.pairScrim.hidden) { closePair(); dom.btnPair.focus(); return; }
-    if (e.key === 'Escape' && !dom.restartScrim.hidden) { closeRestart(); dom.btnRestart.focus(); return; }
-    if (e.key === 'Escape' && !dom.taskScrim.hidden) { closeTaskDialog(); return; }
-    if (e.key === 'Escape' && !dom.newScrim.hidden) { closeNew(); return; }
+    // Both snippet popovers, and above the modal rung rather than below it — the
+    // dialog's sits over #new-scrim while it is open, so a rung underneath would
+    // never run and Escape would be swallowed with the popover still up.
+    if (e.key === 'Escape' && !dom.snipMenu.hidden) { closeSnips(live, { focus: true }); return; }
+    if (e.key === 'Escape' && !dom.newSnipMenu.hidden) { closeSnips(newC, { focus: true }); return; }
+    // Below them, a modal dialog swallows Escape rather than closing on it —
+    // see modalUp(). Swallowed rather than left out of this ladder: without a
+    // rung the key falls through to the panel *behind* the dialog, so a stray
+    // Escape over Start-a-session would quietly close Settings or the Taskboard
+    // instead. This listener is the last of the three registered on the
+    // document, so returning here really is the end of the road for the key.
+    if (e.key === 'Escape' && modalUp()) return;
     if (e.key === 'Escape' && state.taskboard.open) { showTaskboard(false); return; }
     if (e.key === 'Escape' && state.dash.open) { showDash(false); return; }
     if (e.key === 'Escape' && state.notes.open) { showNotes(false); return; }
     if (e.key === 'Escape' && state.drafts.open) { showDrafts(false); return; }
+    // Schedules was missing from this ladder — Escape closed the other four
+    // whole-screen panels and left that one up, which reads as the key not
+    // working rather than as a panel that is special.
+    if (e.key === 'Escape' && state.sched.open) { showSched(false); return; }
+    if (e.key === 'Escape' && state.settings.open) { showSettings(false); return; }
     // Focus mode is a way of showing the board rather than a panel of its own, so
     // Escape leaves it without also taking the board away. Closing the board is
     // the Live button's alone — it is somewhere you go and stay, not something
@@ -14338,70 +18937,135 @@ document.addEventListener('keydown', (e) => {
     // and searching it while the board runs beside you is the point.
     if (e.key === 'Escape' && state.find.open) { closeFind({ focus: true }); return; }
     if (e.key === 'Escape' && state.agent) { closeAgent(); return; }
-    // Ctrl+F, and F3 for the repeat — both of which the terminal gets first when
-    // it has the focus. xterm passes every key but Ctrl+Shift+C straight through
-    // and it bubbles here as well, so this is the only thing stopping a shell
-    // from receiving a Ctrl+F it was meant to keep. Not gated on isTyping: find
-    // has to work from the composer, which is the same reason the view shortcuts
-    // below are Ctrl-prefixed. Ctrl+Shift+F is left alone for search across
-    // sessions.
+    // Everything below is a *bound* shortcut, and web/keys.js decides which one
+    // a keystroke is — so this reads as a list of commands rather than a list of
+    // chords, and remapping one is a settings change instead of an edit here.
+    //
+    // Ctrl (or Alt) is on all of them because the composer is a textarea and
+    // these have to work while it has the focus; bridge/keymap.js enforces that
+    // rather than trusting it, so a binding that arrives here is safe to act on.
+    // Not gated on isTyping for the same reason.
+    //
+    // The terminal gets its keys first when it has the focus: xterm passes
+    // everything but its own copy chord straight through and it bubbles here as
+    // well, so `inTerm` is the only thing stopping a shell from losing a Ctrl+F
+    // it was meant to keep. Only the two find commands yield — a view shortcut
+    // is not something a shell wants, and having Ctrl+3 stop working because the
+    // cursor is in a terminal would be worse than the collision it avoids.
+    const command = keys.match(e);
+    if (!command) return;
     const inTerm = dom.termBody && dom.termBody.contains(e.target);
-    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key === 'f'
-        && state.current && !inTerm) {
+
+    // The eight things `main` can show, ordered by how wide a question each one
+    // answers: the conversation in front of you, then everything outstanding,
+    // then what is running this second, then what is unfinished in the working
+    // trees, then what already reached you, then what has not begun, then what
+    // starts on a clock, and last the settings — which are about the app rather
+    // than about any work at all. The task board arriving is what made that an
+    // ordering rather than the sequence they happened to be built in: Live and
+    // Dashboard each moved along by one, which is a real cost and worth paying
+    // once, not again. Settings going on the end rather than anywhere tidier is
+    // the same reasoning still holding.
+    const views = {
+        'view.tasks': showTaskboard,
+        'view.live': showLive,
+        'view.dashboard': showDash,
+        'view.history': showNotes,
+        'view.drafts': showDrafts,
+        'view.schedules': showSched,
+        'view.settings': showSettings,
+    };
+
+    if (command === 'view.conversation') {
+        e.preventDefault();
+        for (const show of Object.values(views)) show(false);
+        return;
+    }
+    if (views[command]) { e.preventDefault(); views[command](true); return; }
+
+    if (command === 'find.open' && state.current && !inTerm) {
         e.preventDefault();
         openFind();
         return;
     }
-    if (e.key === 'F3' && !e.ctrlKey && !e.metaKey && !e.altKey && state.current && !inTerm) {
+    if ((command === 'find.next' || command === 'find.prev') && state.current && !inTerm) {
         e.preventDefault();
-        stepFind(e.shiftKey ? -1 : 1);
+        stepFind(command === 'find.prev' ? -1 : 1);
         return;
     }
-    if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); dom.search.focus(); }
-    if ((e.ctrlKey || e.metaKey) && e.key === 'n') { e.preventDefault(); openNew(); }
-
-    // The six things `main` can show, ordered by how wide a question each one
-    // answers: the conversation in front of you, then everything outstanding,
-    // then what is running this second, then what is unfinished in the working
-    // trees, then what already reached you, then what has not begun. The task
-    // board arriving is what made that an ordering rather than the sequence they
-    // happened to be built in — Live and Dashboard each moved along by one, which
-    // is a real cost and worth it once, not worth paying again.
-    //
-    // Which is why Drafts is 6 rather than slotted in beside the task board:
-    // renumbering three shortcuts a second time would cost more than the tidier
-    // adjacency is worth. It also happens to belong at the end on the rule above
-    // — a draft is the one thing here demanding nothing of you yet — so the bar
-    // button sits last too and the two agree.
-    //
-    // Ctrl rather than a bare digit because the composer is a textarea and these
-    // have to work while it has the focus.
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && '1234567'.includes(e.key)) {
+    if (command === 'rail.filter') { e.preventDefault(); dom.search.focus(); return; }
+    // Whichever composer the caret is in, and the live one otherwise — so the
+    // same chord works inside the Start-a-session dialog for nothing.
+    if (command === 'composer.snippets') {
+        const c = composers.find(x => x.input === document.activeElement) || live;
+        if (c.snips.btn.disabled) return;
         e.preventDefault();
-        if (e.key === '1') {
-            showLive(false); showDash(false); showNotes(false);
-            showTaskboard(false); showDrafts(false); showSched(false);
-        } else if (e.key === '2') showTaskboard(true);
-        else if (e.key === '3') showLive(true);
-        else if (e.key === '4') showDash(true);
-        else if (e.key === '5') showNotes(true);
-        else if (e.key === '6') showDrafts(true);
-        else showSched(true);
+        showSnips(c, c.snips.node.hidden);
+        return;
     }
+    if (command === 'session.new') { e.preventDefault(); openNew(); }
 });
 
 // Copy buttons inside rendered markdown are delegated: the blocks are innerHTML.
+// Everywhere else, a copy button carries its own click — see copyButton.
 document.addEventListener('click', (e) => {
     const btn = e.target.closest('.copy-btn');
     if (!btn) return;
     const block = btn.closest('.code-block');
     const code = decodeURIComponent(block.dataset.code || '');
+    // Guarded rather than left to the `catch` below, which never ran: outside a
+    // secure context — the plain-http LAN bind in docs/remote.md — the property
+    // is undefined, so the call threw before there was a promise to reject and
+    // the button was dead with nothing said about it.
+    if (!navigator.clipboard) return toast('Could not copy to the clipboard.', 'error');
     navigator.clipboard.writeText(code).then(() => {
         btn.textContent = 'Copied';
         btn.classList.add('done');
         setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('done'); }, 1400);
     }).catch(() => toast('Could not copy to the clipboard.', 'error'));
 });
+
+// Paths in rendered markdown are delegated for the same reason, and intercepted
+// for a different one: Chrome refuses an http: page a file: navigation and does
+// it silently, so the href on the anchor would never fire. The href is still
+// worth carrying — copy-link-address gives a UNC path somebody can paste into
+// Explorer, and the title says what the Windows form is — but the click is ours.
+document.addEventListener('click', (e) => {
+    const a = e.target.closest('a.fs-path');
+    if (!a) return;
+    e.preventDefault();
+    // Ctrl or Shift asks for the folder instead of the file. The other two ways a
+    // click ends at a folder — the path is a directory, or Windows would run it —
+    // are the bridge's to decide, being the only side that can see the disk.
+    openPath(a.dataset.path, { reveal: e.ctrlKey || e.metaKey || e.shiftKey });
+});
+
+// Middle-click would open a tab on a file: URL Chrome refuses, i.e. a blank one.
+document.addEventListener('auxclick', (e) => {
+    if (e.button === 1 && e.target.closest('a.fs-path')) e.preventDefault();
+});
+
+/**
+ * Open a path a transcript mentioned, on the Windows host.
+ *
+ * No session id: the route is about the machine rather than a conversation,
+ * which is what lets a path on the board work with nothing in focus.
+ */
+async function openPath(p, { reveal = false } = {}) {
+    try {
+        const out = await post('/api/fs/open', { path: p, reveal });
+        // The bridge answers what it actually did. A silent reveal when the click
+        // asked for the file would look like the click had missed.
+        if (!reveal && out.how === 'reveal') {
+            toast(out.why === 'directory'
+                ? `${p} is a folder — opened it in Explorer.`
+                : `${p} is a program — showed it in Explorer rather than running it.`,
+            'warn');
+        }
+    } catch (err) {
+        toast(`Could not open ${p}: ${err.message}`, 'warn');
+    }
+}
 
 function debounce(fn, ms) {
     let t;
@@ -14441,11 +19105,13 @@ function restoreView() {
     const tb = q.get('view') === 'taskboard';
     const dr = q.get('view') === 'drafts';
     const sc = q.get('view') === 'schedules';
+    const st = q.get('view') === 'settings';
     if (q.get('view') === 'live' || q.get('live') === '1' || q.get('focus') === '1') showLive(true);
     if (dash) showDash(true);
     if (tb) showTaskboard(true);
     if (dr) showDrafts(true);
     if (sc) showSched(true);
+    if (st) showSettings(true);
     if (q.get('focus') === '1') setFocus(true);
 
     // The panels are up and the address they came from is untouched, so from
@@ -14490,11 +19156,19 @@ function restoreView() {
 
 connect();
 loadSessions();
+// At boot rather than when a panel opens, unlike the drafts and the schedules:
+// the pinned buttons are part of the composer, so this list is on screen from the
+// first paint.
+loadSnippets();
 markInstance();
-renderBell();
 registerWorker();
 paintDockButton();      // the remembered arrangement, before anything is drawn
 watchPaneInsets();      // keep the composer over the transcript as columns come and go
+// The chrome that names a shortcut, before anything can read it — the bar
+// buttons' titles are built from a count, so their static markup carries no
+// combo at all and this is what puts one there.
+paintShortcutHints();
+paintComposerHint();
 restoreView();          // and where we were, from the address that survived the refresh
 primeWaiting();
 refreshDevBrowser();

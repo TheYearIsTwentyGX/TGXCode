@@ -34,9 +34,23 @@ const write = (name, body) => fs.writeFileSync(path.join(verbs, name), JSON.stri
 
 /** A Spinner reading our directory, with the settings a case wants. */
 const spinnerWith = (settings, opts) => new Spinner(
-    { forCwd: () => ({ spinner: { randomize: true, groups: [], rerollMs: 8000, ...settings } }) },
+    { forCwd: () => ({ spinner: { randomize: true, groups: [], weights: {}, rerollMs: 8000, ...settings } }) },
     { userDir: verbs, seed: false, ...opts },
 );
+
+/** How often each verb came up over `n` draws. */
+const tally = (spinner, n) => {
+    const counts = new Map();
+    for (let i = 0; i < n; i++) {
+        const verb = spinner.pick('');
+        counts.set(verb, (counts.get(verb) || 0) + 1);
+    }
+    return counts;
+};
+
+/** The share of `n` draws that went to any of `verbs`, as a percentage. */
+const shareOf = (counts, verbs, n) =>
+    (verbs.reduce((sum, v) => sum + (counts.get(v) || 0), 0) / n) * 100;
 
 // --- a category as a filename, and back ----------------------------------
 // The slug has to survive the punctuation real category names carry, and it is
@@ -184,6 +198,86 @@ assert.strictEqual(
     'nothing to drift towards when there is one thing to say');
 ok('the drift interval follows the setting, and stops when randomizing is off');
 
+// --- weights: how often each group gets to speak ---------------------------
+// A draw is two steps — a group by weight, then a verb inside it — and the whole
+// point of the first step is that a group's share stops being decided by how
+// long its list happens to be. The bands below are wide because these are real
+// `Math.random` draws, but they are nowhere near each other: at 4,000 draws the
+// standard error is under a point, and the flat pool this replaced would have
+// put the one-verb group at 25% rather than 50%.
+write('Solo.json', { Category: 'Solo', Verbs: ['Soloing'] });
+write('Trio.json', { Category: 'Trio', Verbs: ['Firsting', 'Seconding', 'Thirding'] });
+const TRIO = ['Firsting', 'Seconding', 'Thirding'];
+
+const even = tally(spinnerWith({ groups: ['Solo', 'Trio'] }), 4000);
+const evenSolo = shareOf(even, ['Soloing'], 4000);
+assert.ok(evenSolo > 40 && evenSolo < 60,
+    `an unweighed group is one share: expected Solo near 50%, got ${evenSolo.toFixed(1)}%`);
+ok('with no weights every enabled group is equally likely, whatever its size');
+
+const tilted = tally(spinnerWith({ groups: ['Solo', 'Trio'], weights: { Trio: 3 } }), 4000);
+const tiltedTrio = shareOf(tilted, TRIO, 4000);
+assert.ok(tiltedTrio > 65 && tiltedTrio < 85,
+    `weight 3 against weight 1: expected Trio near 75%, got ${tiltedTrio.toFixed(1)}%`);
+ok('a weight is a share of the draws, not a nudge scaled by the group size');
+
+// Muting rather than unchecking: the group stays in `groups`, so the number is
+// still there when it is wanted back, but nothing it holds can be drawn.
+const muted = spinnerWith({ groups: ['Solo', 'Trio'], weights: { Solo: 0 } });
+assert.deepStrictEqual(muted.pool('').verbs, TRIO, 'a muted group is not in the pool at all');
+assert.deepStrictEqual(muted.pool('').buckets.map(b => b.name), ['Trio']);
+const mutedDraws = tally(muted, 400);
+assert.strictEqual(mutedDraws.get('Soloing'), undefined, 'a muted verb must never be drawn');
+ok('a weight of 0 mutes a group without unchecking it');
+
+assert.strictEqual(spinnerWith({ groups: ['Solo'], weights: { Solo: 0 } }).pick(''), null,
+    'nothing left to say composes to the old label, the same as no groups at all');
+ok('muting everything is the same answer as enabling nothing');
+
+// A muted group must not be the one that claims a verb a live group also has,
+// or turning a group off would quietly take a word away from the group left on.
+write('Shadow.json', { Category: 'Shadow', Verbs: ['Firsting'] });
+const shadowed = spinnerWith({ groups: ['Shadow', 'Trio'], weights: { Shadow: 0 } }).pool('');
+assert.deepStrictEqual(shadowed.verbs, TRIO, 'dedup must skip a group that can never be drawn');
+ok('a muted group does not swallow a verb from a group that is still on');
+
+// Keys are names out of a settings file, so they are matched the way every
+// other group name here is.
+write('Two_Words.json', { Category: 'Two / Words', Verbs: ['Twoing'] });
+for (const spelling of ['Two / Words', 'Two_Words', 'two-words']) {
+    const got = spinnerWith({ groups: ['Two / Words', 'Trio'], weights: { [spelling]: 9 } }).pool('');
+    assert.strictEqual(got.buckets.find(b => b.name === 'Two / Words').weight, 9,
+        `a weight spelled ${spelling} has to find the group`);
+}
+ok('a weight finds its group however the name is spelled');
+
+const strayWeight = spinnerWith({ groups: ['Trio'], weights: { 'Not A Group': 4 } }).pool('');
+assert.deepStrictEqual(strayWeight.verbs, TRIO, 'a weight nothing matches costs nothing else');
+assert.ok(strayWeight.problems.some(p => /no group named "Not A Group" to weigh/.test(p.message)));
+ok('a weight naming no group at all is reported');
+
+// Unchecking is how a group is turned off, so the number it was given is kept
+// and says nothing — the alternative makes the checkbox destructive.
+const remembered = spinnerWith({ groups: ['Trio'], weights: { Solo: 4 } }).pool('');
+assert.deepStrictEqual(remembered.verbs, TRIO);
+assert.strictEqual(remembered.problems.length, 0,
+    'a weight on a group that exists but is unchecked is not a problem');
+ok('a weight on an unchecked group is remembered quietly');
+
+// The one way a two-step draw can repeat itself: a group of one verb, drawn
+// again, holding the word already on screen. It has to reach past that group.
+const heavy = spinnerWith({ groups: ['Solo', 'Trio'], weights: { Solo: 50 } });
+for (let i = 0; i < 300; i++) {
+    assert.notStrictEqual(heavy.pick('', 'Soloing'), 'Soloing');
+}
+ok('a heavily weighted single-verb group still cannot repeat itself');
+
+// Changing a number has to be seen, and no file moved for it to be seen by.
+const before = spinnerWith({ groups: ['Solo', 'Trio'] });
+assert.strictEqual(before.pool('').weight, 2);
+assert.strictEqual(spinnerWith({ groups: ['Solo', 'Trio'], weights: { Trio: 7 } }).pool('').weight, 8);
+ok('the pool cache keys on the weights as well as the files');
+
 // --- seeding --------------------------------------------------------------
 // The catalogue is written out on first run because a collection with no UI in
 // front of it has to be on disk to be editable at all.
@@ -227,6 +321,12 @@ assert.strictEqual(shape.groups(['Monty Python', 7]), false);
 assert.strictEqual(shape.groups(['']), false);
 assert.strictEqual(shape.groups(new Array(201).fill('x')), false);
 assert.strictEqual(shape.groups(['x'.repeat(81)]), false);
+
+assert.strictEqual(shape.weights({}), true, 'no weights at all is the default');
+assert.strictEqual(shape.weights({ Trio: 3 }), true);
+assert.strictEqual(shape.weights([]), false, 'a list of weights names nothing');
+assert.strictEqual(shape.weights(null), false);
+assert.strictEqual(shape.weights('Trio'), false);
 
 assert.strictEqual(shape.rerollMs(8000), true);
 assert.strictEqual(shape.rerollMs(0), true, '0 is how you turn the drift off');

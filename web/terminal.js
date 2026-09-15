@@ -89,13 +89,18 @@ function theme() {
 
 export class TerminalPane {
     /**
-     * @param {{mount: HTMLElement, onOpen?: Function, onExit?: Function, onError?: Function}} opts
+     * @param {{mount: HTMLElement, onOpen?: Function, onExit?: Function,
+     *   onError?: Function, contextualCopy?: () => boolean}} opts
+     *   `contextualCopy` is asked every keystroke rather than read once — the
+     *   setting can be toggled while a shell is open, and a pane that captured
+     *   it at build() would keep the old answer until you closed the session.
      */
     constructor(opts) {
         this.mount = opts.mount;
         this.onOpen = opts.onOpen || (() => {});
         this.onExit = opts.onExit || (() => {});
         this.onError = opts.onError || (() => {});
+        this.contextualCopy = opts.contextualCopy || (() => false);
 
         this.term = null;
         this.fit = null;
@@ -135,23 +140,55 @@ export class TerminalPane {
         this.term.onBinary((d) => this.input(latin1(d)));
         this.term.onResize(({ rows, cols }) => this.pushSize(rows, cols));
 
-        // Ctrl+C has to stay an interrupt here, which is what the shell expects,
-        // so copy takes the Ctrl+Shift pair a terminal normally uses. Copy needs
-        // this handler because an xterm selection is not a DOM selection, so the
-        // browser has nothing of its own to copy.
+        // Copy and paste, and the one setting that moves them.
         //
-        // Paste is deliberately absent. Ctrl+Shift+V already reaches xterm as an
-        // ordinary paste event, which it brackets and forwards on its own; a
-        // clipboard.readText() branch here delivers the same text a second time,
-        // because returning false only stops xterm from handling the key and
-        // never cancels the browser's own paste.
+        // By default Ctrl+C stays an interrupt — which is what the shell expects
+        // — so copy takes the Ctrl+Shift pair a terminal normally uses. Copy
+        // needs this handler at all because an xterm selection is not a DOM
+        // selection, so the browser has nothing of its own to copy.
+        //
+        // Ctrl+Shift+V is deliberately absent. It already reaches xterm as an
+        // ordinary paste event, which xterm brackets and forwards on its own; a
+        // `clipboard.readText()` branch here delivers the same text a second
+        // time, because returning false only stops *xterm* from handling the key
+        // and never cancels the browser's own paste.
+        //
+        // **`keyboard.contextualTerminalCopy` swaps that for the Windows
+        // Terminal arrangement**, and the mechanism is the same sentence read
+        // the other way round. Returning false makes xterm's `_keyDown` bail
+        // before it calls preventDefault, so:
+        //
+        //   - Ctrl+V is not sent to the pty as ^V, and the browser's native
+        //     paste fires and reaches xterm anyway. No clipboard read here, for
+        //     the reason above.
+        //   - Ctrl+C over a selection copies and *clears* it. Clearing is
+        //     load-bearing: without it a selection left in the scrollback makes
+        //     every Ctrl+C a copy, and the runaway process you were trying to
+        //     stop never gets its interrupt. With it, the first Ctrl+C copies
+        //     and the second interrupts.
+        //   - Ctrl+C with nothing selected is untouched.
+        //
+        // This only ever runs for keys delivered to xterm's own textarea, which
+        // is what makes "only while the terminal has the focus" free rather than
+        // something to arrange.
         this.term.attachCustomKeyEventHandler((e) => {
             if (e.type !== 'keydown') return true;
-            if (e.ctrlKey && e.shiftKey && e.code === 'KeyC') {
+            const ctrlOnly = (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey;
+
+            if (e.ctrlKey && e.shiftKey && !e.altKey && e.code === 'KeyC') {
                 const sel = this.term.getSelection();
                 if (sel) navigator.clipboard.writeText(sel).catch(() => {});
                 return false;
             }
+            if (!this.contextualCopy()) return true;
+
+            if (ctrlOnly && e.code === 'KeyC' && this.term.hasSelection()) {
+                const sel = this.term.getSelection();
+                if (sel) navigator.clipboard.writeText(sel).catch(() => {});
+                this.term.clearSelection();
+                return false;
+            }
+            if (ctrlOnly && e.code === 'KeyV') return false;
             return true;
         });
 

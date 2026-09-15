@@ -118,20 +118,41 @@ tweak.
   into the composer. Combined with plan 08, offer **Edit and branch here**,
   which is the version that doesn't duplicate context.
 
-## E. Snippets
+## E. Snippets — **shipped**
 
 **Why.** Low-effort, high-frequency. The same three or four prompts get typed
 repeatedly.
 
-**Design.**
+Shipped as designed in the two places that mattered — `snippets.json` in the
+state directory, `Ctrl+/`, and the same popover on the new-session dialog — with
+one deliberate departure and one addition.
 
-- Stored in `~/.local/share/claude-sessions/snippets.json` — ours to own,
-  alongside `flags.json`.
-- `Ctrl+/` opens the list; insert at cursor.
-- Simple `{{cwd}}`, `{{branch}}`, `{{selection}}` substitution, resolved from
-  the current session's summary.
-- Also offered in the new-session dialog, where a starter prompt is required
-  anyway (`startNew`, `app.js:1130` refuses an empty prompt).
+**The substitution is declared, not resolved from the session.** The design here
+was `{{cwd}}`, `{{branch}}`, `{{selection}}`, filled in from the current summary.
+What shipped is a `params` list on each snippet — name, label, type, required,
+default — and a small form that asks for them before inserting. The two are not
+the same feature: a resolved placeholder is a fact the app already knows, and a
+declared one is a question only the person can answer, which is what "review
+*which* branch" actually is. Nothing stops the resolved kind being added later
+alongside it; an undeclared `{{x}}` is deliberately left in the message verbatim,
+so a future build can start answering names this one passes through.
+
+**And the button became one of them.** LGTM was a hard-coded button next to Send
+with its text in `web/app.js`; it is now the seeded first row of this store, with
+`insert: 'overwrite'`, `autoSubmit: true` and `pinned: true` — which is exactly
+what that button was, written down. Any snippet can be pinned the same way. The
+rest of what shipped beyond this design: groups with an accent colour, a custom
+order set by dragging or with arrow buttons, a per-snippet permission mode for
+the ones that send themselves, and an optional list of projects a snippet applies
+to.
+
+**One rule worth keeping in mind if this is extended.** `overwrite` plus
+`autoSubmit` never writes to the compose box at all — the text goes straight to
+`sendMessage` as an override. Taking `overwrite` literally first and sending
+second would destroy a half-typed message, which is the one thing the LGTM button
+had always been careful not to do.
+
+See `docs/api.md` for the wire surface and `bridge/snippets.js` for the store.
 
 ## Keyboard map after this plan
 

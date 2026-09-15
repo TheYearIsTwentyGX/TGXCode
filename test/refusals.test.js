@@ -110,6 +110,60 @@ const HOME = os.homedir();
     check('mkdir', (await call('POST', '/api/fs/mkdir', {
         headers: PHONE, body: { parent: HOME, name: 'x' },
     })).status, 403);
+    // Opening a path is the mkdir clause with a window on the end of it, and the
+    // path comes out of a transcript rather than out of the app.
+    check('opening a path', (await call('POST', '/api/fs/open', {
+        headers: PHONE, body: { path: `${HOME}/x.md` },
+    })).status, 403);
+    // The client-side half of the same rule: with no cs-host tag the page cannot
+    // draw the link whose click that route would refuse.
+    check('and a phone is not told where the filesystem is',
+        /name="cs-host"/.test((await call('GET', '/', { headers: PHONE })).text), false);
+    // Saving settings is the mkdir clause with a longer reach: it writes a file
+    // in the user's home directory, and one of the keys in it names a directory
+    // this app then starts `claude` in. The *read* stays open, two lines down —
+    // how somebody wants a transcript folded is not a capability, and pinning
+    // both here is what stops a future prefix rule taking the GET with it.
+    check('saving settings', (await call('PUT', '/api/prefs', {
+        headers: PHONE, body: { scope: 'user', patch: {} },
+    })).status, 403);
+    check('but reading them is fine', (await call('GET', '/api/prefs', { headers: PHONE })).status, 200);
+    check('and so is the shortcut catalogue',
+        (await call('GET', '/api/keymap', { headers: PHONE })).status, 200);
+    // Claude Code's own settings are the other way round, and this is the pair
+    // of checks that pins the asymmetry so a later tidy-up cannot quietly
+    // align them. Those files name hook commands, permission rules and the
+    // *values* of environment variables, and no client off this machine
+    // configures the CLI — so unlike /api/prefs there is nothing to weigh
+    // against caution and the read is refused too.
+    check('saving Claude Code’s settings', (await call('PUT', '/api/claude-config', {
+        headers: PHONE, body: { scope: 'user', patch: {} },
+    })).status, 403);
+    check('and reading them is refused as well — unlike /api/prefs',
+        (await call('GET', '/api/claude-config', { headers: PHONE })).status, 403);
+    // The refusal is a prefix with no method test, so anything added under it
+    // later is refused by default rather than by being remembered.
+    check('as is anything under that prefix',
+        (await call('GET', '/api/claude-config/anything', { headers: PHONE })).status, 403);
+    // Claude Code's memory files, refused the same way — the same three checks,
+    // because the same three things could go wrong. A project's CLAUDE.md is
+    // repository source and a user's describes the machine; neither is
+    // something a client off this machine has a use for, and a leaked token
+    // should not be able to rewrite what every session here is told.
+    check('saving Claude Code’s memory', (await call('PUT', '/api/claude-docs', {
+        headers: PHONE, body: { scope: 'user', stamp: null, text: '' },
+    })).status, 403);
+    check('and reading it is refused as well',
+        (await call('GET', '/api/claude-docs', { headers: PHONE })).status, 403);
+    check('as is anything under that prefix too',
+        (await call('GET', '/api/claude-docs/anything', { headers: PHONE })).status, 403);
+    // The header every non-GET under /api/ has needed since the CSRF guard
+    // landed, and the first thing a new client 403s on. Pinned here on the
+    // newest write route because that document says so and this suite is where
+    // a write surface gets exercised.
+    check('a local save without the client header', (await call('PUT', '/api/prefs', {
+        headers: { authorization: `Bearer ${TOKEN}` }, body: { scope: 'user', patch: {} },
+    })).status, 403);
     // Same argument as mkdir: attaching a file writes it into a checkout. Refused
     // before the name or the session id is looked at, so this holds for any of them.
     check('attaching a file', (await upload('/api/sessions/abc/attachments?name=x.png', {
@@ -165,6 +219,15 @@ const HOME = os.homedir();
     // terms, which is the distinction being tested.
     check('a run locally reaches its own not-found',
         (await call('GET', '/api/runs/nope', { headers: LOCAL })).status, 404);
+    // Opening a path locally, as far as it can be taken without popping a window
+    // on the user's desktop: the two answers that are refusals of its own rather
+    // than the gate's.
+    check('opening nothing is a 400', (await call('POST', '/api/fs/open', {
+        headers: LOCAL, body: {},
+    })).status, 400);
+    check('opening a path that is not there is a 404', (await call('POST', '/api/fs/open', {
+        headers: LOCAL, body: { path: `${HOME}/not-here-${Date.now()}.md` },
+    })).status, 404);
 
     // The path is checked before the session is looked up, so a request wrong about
     // both is refused for the path — otherwise the 400/404 difference is an oracle

@@ -115,13 +115,20 @@ create one in `%APPDATA%\claude-sessions\`:
 | **Dashboard** | The button in the top bar, with a count of how many places are unfinished. It lists, per project, every directory holding uncommitted changes and every pull request still open, with the sessions that worked there as links back into the conversation. |
 | **Open folder** | The folder button by the title shows the session's working directory in Windows File Explorer, through the `\\wsl.localhost` share. |
 | **Composer** | Sends to the session, resuming it in place — the same transcript a terminal would append to. |
-| **LGTM** | Beside *Send*, for when you have read the work and it is done: it sends a written instruction to put the change on a pull request if it is not on one already, run the project's checks, merge once they pass, and file anything it noticed along the way as a suggested task — and to stop and say so if something blocks it. One click, no confirmation over the top; the session still asks for what its permission mode makes it ask for. |
+| **Snippets** | Messages you send often, behind the icon beside *Send* — and on the Start-a-session box too. Each one says where it lands (replace the box, add to the end, insert at the cursor), whether it sends itself, and which permission mode it sends under; `{{placeholders}}` in the text become a small form to fill in first. They sit in coloured groups, in an order you set by dragging or with the arrows, and any of them can be **pinned** to a button of its own. **LGTM** ships pinned: it sends a written instruction to put the change on a pull request if it is not on one already, run the project's checks, merge once they pass, and file anything it noticed along the way as a suggested task — and to stop and say so if something blocks it. One click, no confirmation over the top; the session still asks for what its permission mode makes it ask for, and a half-typed message in the box survives the press. Edit them under *Snippets* in Settings. |
 | **Send queue** | Write while an agent is working and the message waits, listed above the composer in send order. Each one can be expanded, reordered, pulled back for editing, or dropped, right up until its turn starts. `Shift+Tab` out of the composer to work through them without the mouse. |
 | **Suggested** | The panel beside the transcript. An agent that notices work outside what it was asked to do files it there, with the prompt already written. Each one folds to its title, and the ⤢ on a row opens it at full width to read; *Start* runs it, *Edit first* opens it in the Start dialog, *Dismiss* puts it away. *Hide* collapses the whole panel to a strip. |
 | **Mentions** | `@` in the composer lists the other sessions running on this machine and inserts the one you pick as `@[name]` — the name an agent addresses it by. |
 
-Shortcuts: `Ctrl+Enter` send, `Ctrl+K` filter, `Ctrl+N` new session, `Esc` leave
-a subagent, `Ctrl+R` reload, `Ctrl+±` zoom, `F12` devtools.
+Shortcuts: `Enter` send (or `Ctrl+Enter`, and *Settings → Keyboard* swaps the
+two), `Ctrl+1`–`Ctrl+8` the eight things the main pane can show, `Ctrl+F` find
+in the conversation with `F3`/`Shift+F3` for the next and previous match,
+`Ctrl+K` filter, `Ctrl+N` new session, `Esc` leave a subagent or close whatever
+is on top, `Ctrl+R` reload, `Ctrl+±` zoom, `F12` devtools.
+
+Every one of those but the last three can be remapped — see *Settings*. The last
+three belong to the Electron shell rather than the page, which is why they
+cannot.
 
 In the send queue, `Shift+Tab` from the composer reaches the message you wrote
 last, and from there: `↑`/`↓` pick, `Alt+↑`/`Alt+↓` move it, `Space` show it in
@@ -480,7 +487,11 @@ same directory it declares its commands in and with the same precedence — see
 `docs/api.md` under `GET /api/prefs`. A value that is not what the key allows is
 ignored and the default stands, rather than being taken at face value.
 
-There is no settings page yet; the file is the interface.
+There is a settings page — **Settings** in the bar, or `Ctrl+8` — and the file is
+still the interface. The page names the exact file it is about to write, saves
+one key at a time, and says for each control whether this scope set the value or
+inherited it, and which file has taken it over when a stronger one has. See
+*Settings* below.
 
 ### Cutting the live board down
 
@@ -520,8 +531,9 @@ conversation happens to be open decide how the rest are drawn is a setting that
 appears to change on its own.
 
 An existing `~/.tgxcode/settings.json` will not have grown the block: the
-defaults are only written out when there is no file at all. Add it by hand, and
-until you do, both are `false`. Neither is picked up until the page reloads.
+defaults are only written out when there is no file at all. Add it by hand, or
+tick the two boxes under *Settings → Live board*, which writes them for you and
+repaints the board without a reload. A file edited by hand still needs one.
 
 ### What a turn in progress calls itself
 
@@ -576,13 +588,15 @@ it is missing altogether, never file by file, because the alternative is your
 edits undoing themselves on the next run. A project can ship its own groups in
 `<checkout>/.tgxcode/verbs/`, and they win over the ones in your home directory.
 
-Which groups are *in play* is a setting, in the same file as the rest:
+Which groups are *in play*, and how often each of them speaks, is a setting in
+the same file as the rest:
 
 ```json
 {
   "spinner": {
     "randomize": true,
     "groups": ["Claude Code Defaults", "Monty Python", "Absurd / Nonsense", "Tech / Programming"],
+    "weights": { "Monty Python": 4, "Claude Code Defaults": 0 },
     "rerollMs": 8000
   }
 }
@@ -591,6 +605,24 @@ Which groups are *in play* is a setting, in the same file as the rest:
 Only the groups named there are ever opened, so the size of the directory costs
 nothing. `randomize: false` gives back `Thinking…` and nothing else changes.
 
+**A draw is two steps: a group by its weight, then a verb inside it.** A group
+nobody weighed is `1`, so `weights: {}` is every enabled group equally likely,
+and `4` against `1` is drawn four times as often — whatever the two groups'
+sizes. `0` mutes a group without unchecking it, which is the difference between
+"not now" and "forget this"; unchecking one leaves its number alone for when you
+want it back. Names are matched the way they are everywhere else here, so
+`"Tech / Programming"`, `"Tech_Programming"` and `"tech-programming"` all weigh
+the same group.
+
+That second step had to exist. For its first life this drew from one flat pool,
+which made a group's share of the labels its *verb count* over the total — and
+the counts are an artefact of how long each list happened to be upstream, not a
+statement about how often you want to hear from it. Fifteen groups enabled here
+gave `Claude Code Defaults` 32% of every label on the strength of having 185
+entries, while `Monty Python` got 1.9% and a group added by hand was drowned six
+to one by the defaults nobody chose. Choosing a voice is what the groups are
+for, so the shares are now the setting and the counts are just counts.
+
 `rerollMs` is how long a verb stands before the next is drawn, and it is the
 only thing that moves it — the half after it changes on its own as the work
 does. `0` pins one verb for the whole turn.
@@ -598,9 +630,22 @@ does. `0` pins one verb for the whole turn.
 A verb is only worn by work. A question waiting on you, an API retry, starting
 up and going idle say what they are and nothing else.
 
-`GET /api/spinner/groups?cwd=` lists what you have, with a count each and the
-reason any group failed to load — the discoverable half of a setting with no
-page in front of it.
+`GET /api/spinner/groups?cwd=` lists what you have, with a count each, the share
+of the draws each one is getting, and the reason any group failed to load. It was
+built as the discoverable half of a setting with no page in front of it; now it
+is what the Settings panel draws its checkboxes from, and hovering one lists the
+verbs inside it. A group you have chosen also carries a box for its weight and
+the percentage that weight works out to — the number is meaningless on its own,
+and the point of showing the share is that you can see what a change did before
+you go looking for it in a label.
+
+The chosen groups are drawn first, and then the order stops moving. Alphabetical
+over a hundred and fifteen pills buries the dozen actually in play somewhere in
+the wall, and those are the ones you opened the panel to read; but re-sorting as
+you tick would make the list jump under the cursor and put your next click on
+whatever slid into the gap. So the split is settled on the way in — opening the
+panel, changing project or scope — and a group you tick now goes to the top the
+next time you come in.
 
 Two things worth knowing. The session rail has room for about twenty characters,
 which is not enough for both halves, so it shows the one that carries
@@ -610,6 +655,209 @@ twenty-three of the groups are full sentences rather than words, which truncate
 in the rail for the same reason — the groups enabled by default are all short.
 
 [verbs]: https://github.com/wynandw87/claude-code-spinner-verbs
+
+### Settings
+
+**Settings** in the bar, or `Ctrl+8`. Every key in `~/.tgxcode/settings.json`
+with a control in front of it — the reading settings above, the live board, the
+spinner, the quota beacon, and the keyboard — plus two groups that are not in
+that file: **Notifications**, which is per-browser, and **Connect a phone**,
+which is a task rather than a setting. Both used to be buttons in the top bar.
+
+The file stayed the only interface for a long time and that was defensible while
+there were three keys in it. At twelve, across five blocks, with a precedence
+chain of four files and validators that silently drop what they do not like,
+"go and read `bridge/prefs.js`" had become the answer to too many questions —
+and the one thing the file cannot tell you is which of the four files a value
+came from.
+
+So the panel answers both questions at once. A **scope** selector picks which
+file you are editing — *User*, *Project — shared* (checked in, for everyone who
+clones the repo) or *Project — local* (gitignored, yours) — beside a **project**
+selector that does not depend on what the rail happens to be showing. Under
+them it names the exact path it is about to write. Each control says whether
+this scope set the value or inherited it, offers *Clear* to remove a key so it
+falls back rather than pinning a default, and names the file that has taken over
+when a stronger one has.
+
+Nothing here is a draft: every control saves on change, one key at a time. A
+settings page with a Save button has a state where what you see and what is in
+force disagree, and the failure mode of that is a preference you believe you
+set. It also means two windows editing different settings do not clobber each
+other, and a save reaches the other window over the live channel rather than
+waiting for a reload.
+
+**Two things on this page do have a Save button**, and they are the same
+exception rather than two: the JSON tab in *Claude Code*, and the text box in
+*Claude Code · Memory*. The rule above is about a **control** — a checkbox that
+reads "on" for a setting that is off is what it prevents. A document somebody is
+typing into is a draft by nature; there is no keystroke at which a paragraph is
+finished, and saving per keystroke would write broken JSON forty times a minute
+and half-sentences into a file every session reads. Both keep the rule's intent
+the other way round, by saying at all times whether what you are looking at is
+what is on disk.
+
+**Two sections are yours alone** — the quota beacon and the keyboard — and a
+project file that sets one is ignored and says so. What directory this app
+starts `claude` in is not a repository's business, and a repository that could
+rebind your keys could make the window unusable with hand-editing a file as the
+only way back.
+
+#### Keys
+
+The *Keyboard* group holds two settings that each swap a pair of keys, and then
+the shortcut table.
+
+**Contextual Ctrl+C in the terminal.** Off by default. On, `Ctrl+C` copies the
+selection and clears it when the terminal has one, and interrupts as always when
+it does not — so a second `Ctrl+C` still interrupts, which is the whole reason
+it clears. Plain `Ctrl+V` then pastes, instead of `Ctrl+Shift+V`. Only while the
+terminal has the focus; `Ctrl+Shift+C` and `Ctrl+Shift+V` keep working either
+way. Off by default because the alternative is changing what `Ctrl+C` does to
+somebody who did not ask: a selection left in the scrollback would turn an
+interrupt into a copy, and the process you were trying to stop keeps running.
+
+**Composer send.** `Enter` sends and `Shift+Enter` is a newline, which is what
+this app has always done — or the reverse, for when a message is three
+paragraphs and `Enter` sending it halfway through is a real cost.
+`Ctrl+Enter` sends under both.
+
+**The shortcut table** covers the eight views, the two rail shortcuts and the
+three find shortcuts. *Change* listens for a chord and swallows it, so binding
+`Ctrl+4` does not open the dashboard on the way past; *Unbind* leaves a command
+with no shortcut, which is a thing you can ask for and is not the same as
+resetting it; *Reset* puts it back to the default by removing the override
+rather than by writing the default down, so a default that changes later is not
+pinned to today's.
+
+A chord has to carry `Ctrl` or `Alt`, or be a function key. These fire while the
+composer has the focus, and the composer is a text box — bind a bare letter and
+that letter stops being typeable, with hand-editing the settings file as the
+only way back. A chord another command already holds is refused with the name of
+that command rather than saved into a conflict.
+
+Bindings name **physical** keys: `Ctrl+Shift+3` is the 3 key, whatever your
+layout puts there, because `Shift+3` arrives as `#` on a US keyboard and `£` on
+a UK one and a binding written against the character works on one and silently
+fails on the next. `Ctrl` and `Cmd` are one modifier.
+
+What the table does *not* cover: arrow keys in a menu, `Enter` in a text field,
+`Escape`, the `Y`/`A`/`N` letters on a card that already has the focus. Those
+are widget semantics rather than shortcuts, and remapping them means breaking
+keyboard navigation. Nor the Electron shell's `Ctrl+R`, `F12` and zoom, which
+live in the packaged executable rather than the page.
+
+#### Claude Code's own settings
+
+The group below the app's own edits a different owner's files:
+`~/.claude/settings.json`, a project's `.claude/settings.json` and
+`.claude/settings.local.json`, and — read-only, and reported even when it is
+absent — an administrator's `/etc/claude-code/managed-settings.json`. Permission
+rules, hooks, the model, the environment, plugins, worktree defaults. It has its
+own scope tabs, because that chain is four files where the app's own is three,
+and its own **JSON** tab.
+
+Three things about it are deliberately unlike every other group on the page,
+and all three come from not owning the format:
+
+**Nothing is hidden.** Claude Code ships no schema anyone can read — it is one
+bundled binary — so the list of keys with a control in front of them is
+hand-written and always a little behind. So an *Also in these files* card carries
+everything the list does not: a key holding a bool, a number or a string gets a
+plain control chosen by what it already is, and anything larger gets a line of
+JSON and a way through to the JSON tab. A value the page does not recognise is
+shown as it is rather than corrected — `askUserQuestionTimeout` is the string
+`never` on this machine, and a page that assumed a number would have offered to
+replace it with zero.
+
+**Permission lists add up rather than override.** `allow`, `deny` and `ask`
+combine across every file, so the twenty-eight rules in your own file and the
+twenty-five in a project's are all in force. Each row therefore edits *this
+file's* entries and lists the others read-only, attributed to the file they came
+from. It is also the answer to a question that used to need two editors open.
+
+**A save reaches the next session, not the ones running.** Claude Code reads
+these files when a session starts. The group says so, with a count of how many
+sessions are live, because "I changed it and nothing happened" is otherwise the
+next thing that happens. And because `claude` writes these files itself — a
+theme from `/config`, a permission you approved mid-turn — a write that would
+replace a whole key carries the stamp of the file it was read from and is
+**refused** rather than allowed to clobber. Nothing is merged: a conflict says
+what is on disk now and leaves the decision to you.
+
+The JSON tab is not a fallback bolted on. It is what makes the rest honest —
+with it there, no key in those files is beyond reach, and it is the only thing
+in the app that can repair a settings file that no longer parses. It is also the
+one control on this page with a **Save** button: a document being typed into is
+a draft by nature, and the no-drafts rule exists to stop a *control* disagreeing
+with what is in force.
+
+Two things stay out. `~/.claude.json` is sixty-six kilobytes whose largest key
+is a feature-flag cache — app state, not a settings file. And a project's
+`.mcp.json` is not ignored by default and commonly carries tokens, so it wants
+its own decision rather than a row here.
+
+#### Claude Code's memory
+
+The group below that one edits the same owner's *instructions* rather than their
+settings: `~/.claude/CLAUDE.md` and the open project's own. It is the file people
+edit most often, and until now the one thing on this page you had to leave the
+app for — from the window you sit in to watch those sessions run.
+
+A text box in a monospace font, a **Preview** that renders it, a byte count
+against the limit, and **Expand** for a full-height editor, because twenty-three
+kilobytes of markdown in a settings column is a keyhole. That editor closes by
+its ✕ or *Close* and nothing else, like every other dialog here — it is holding
+a file you are part-way through writing, which is the case that rule is for. Not a vendored code
+editor: a few hundred kilobytes of one, with no build step to prune it, to edit
+a markdown file is a poor trade, and the one thing it would have earned — seeing
+the headings as headings — is the Preview toggle.
+
+**The two files add up.** This is the one way the group is unlike every other
+scope selector on the page, and the reason it is a separate group rather than a
+tab inside the one above. Those files are a chain, where the strongest one to
+mention a key wins; Claude Code reads *both* of these and joins them, so nothing
+here is ever overridden. Each tab therefore says that the other file applies as
+well, with its size, instead of the "overridden by … — this has no effect here"
+sentence that would be a flat lie.
+
+**An edit reaches the next session and never the ones running** — which is a
+stronger claim than the settings group makes. Those files are read when a
+session starts; these are read when a session starts *and put in its context*,
+so a session already going is not waiting to notice the change, it is holding
+the old text until it ends.
+
+The rest is the same discipline as the JSON tab, for the same reasons: a save
+carries the stamp of the file it was read from and is **refused** rather than
+allowed to clobber something written since, and a refusal keeps what you typed
+and shows you what is on disk beside it. Nothing is merged — prose has no
+sensible union — so a conflict is yours to look at. A symlink is reported and
+never written through, and a file past 256KB is named and its size given rather
+than opened, because a box seeded with the first 256KB of a larger file would
+delete the rest on the first save.
+
+`CLAUDE.local.md` and a project's `.claude/CLAUDE.md` are not here. Neither
+exists on this machine, and the route is shaped to take another scope when one
+does.
+
+#### The two groups that are not settings-file settings
+
+The last two groups came out of the top bar, which had collected a button each
+for them.
+
+**Notifications** is the bell's old popover, and is per-browser — see
+*Notifications* above for what it decides and why it is not shared.
+
+**Connect a phone** was a dialog. It builds the pairing link: a host, because
+this page is served on 127.0.0.1 and that is the one address useless to a phone,
+and the link itself with a Copy beside it. The note under the host says what is
+still missing for *that* address rather than how tunnelling works in general —
+reaching a `.ts.net` name does nothing until `tailscale serve` points at this
+port, and that is the step people forget. See *Reaching it from a phone*.
+
+Both are written into `web/index.html` rather than built from the settings
+table, because their controls are wired once at load; the panel moves them into
+place so they still take their turn in the order the table lists.
 
 ### Test sessions
 
@@ -760,9 +1008,20 @@ draw". For these two it is exactly the dialog it can draw.
 
 ### Notifications
 
-The bell in the top bar decides what reaches you about a session you are not
-watching — a desktop notification, a short chime, or both. Clicking one opens
-that session.
+*Settings* → **Notifications** decides what reaches you about a session you are
+not watching — a desktop notification, a short chime, or both. Clicking one
+opens that session.
+
+These two switches are the one part of the settings page that is **per-browser**,
+kept in its own storage rather than in `~/.tgxcode/settings.json`: whether a
+notification can fire at all is something each browser decides, so a permission
+granted in one says nothing about another, and a shared preference would show
+ticked on one surface while being silently overruled on the next.
+
+There was a bell in the top bar, which was a switch and a status light at once.
+The switch moved here with every other switch. What went with the bell is the
+at-a-glance reading of whether anything would fire — so if the app has gone
+quiet, this is now the place that says why.
 
 Two different things get announced, and they are not held to the same standard.
 
@@ -809,7 +1068,7 @@ number that can quietly change meaning.
 Two limits worth knowing. **The page is what listens**, not the Windows shell, so
 a window that is closed hears nothing — the tray and a shell-side subscriber are
 in `docs/plans/02-notifications-and-shell.md`. And Windows **Focus Assist** drops
-notifications without a word; **Try it** in the bell menu is there so you can
+notifications without a word; **Try it**, in that group, is there so you can
 tell that apart from the app being wrong.
 
 In a browser, the first tick of *Show a desktop notification* is what asks
@@ -940,6 +1199,26 @@ It arrives on the same follow the transcript does, pushed when the list actually
 moves, because a task list moves *during* a turn and watching step 3 of 7 become
 step 4 is the whole point. Nothing polls it.
 
+### The columns slide, and hold their place
+
+All three columns beside the transcript — this one, **Suggested** and **Changed**
+— are the same width, and none of them jumps. A column arriving or leaving slides,
+and the transcript and the composer slide with it rather than being shoved across
+in a single frame.
+
+The part that matters more is what *doesn't* move. Going from one conversation to
+another used to tear both asides down and rebuild them, so two conversations that
+both kept a task list still made the whole pane jump out and back — four times
+over, once the turn rail was counted. A column now holds its place while the new
+conversation's answer is on the wire, showing an empty box rather than the last
+conversation's contents, and only leaves if the new conversation turns out not to
+need it. Switching between two conversations with the same columns open moves
+nothing at all.
+
+Under `prefers-reduced-motion` none of it animates: the slide duration is read
+from the stylesheet, so it reports zero and the columns appear and disappear the
+way they used to.
+
 **Claude Code stopped offering the task tools by default.** Opus 4.8, Sonnet 5 and
 newer models are not given `TaskCreate`/`TaskUpdate` or `TodoWrite` unless
 `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` is set — so this panel, and the progress bars on
@@ -1015,14 +1294,20 @@ you are away from the desk, and a phone that has dropped its connection is not.
 | `bridge/ports.js` | Finding a port that is free *and* unclaimed, holding it, and remembering it |
 | `bridge/devservers.js` | Port detection, ranking, and stopping a server |
 | `bridge/devbrowser.js` | DevBrowser control client |
-| `bridge/explorer.js` | Opens a WSL directory in File Explorer |
+| `bridge/explorer.js` | Opens a WSL directory in File Explorer, a file in whatever Windows opens it with, and knows what it will not launch |
 | `bridge/notifications.js` | The notification log, what is worth raising, and what you have already read |
 | `bridge/flags.js` | Pinned, archived and test state |
-| `bridge/prefs.js` | Settings from `~/.tgxcode/` and from the project |
+| `bridge/prefs.js` | Settings from `~/.tgxcode/` and from the project — which file each one came from, and which one a save goes to |
+| `bridge/claude-config.js` | Claude Code's *own* settings files — the chain, what each one says, and the preconditions on writing somebody else's format |
+| `bridge/claude-schema.js` | Which of Claude Code's keys this app has a control for, and what happens to the ones it does not |
+| `bridge/claude-docs.js` | Claude Code's memory files — which `CLAUDE.md` a scope means, and reading and writing one whole |
+| `bridge/jsonfile.js` | Reading and writing one small JSON file: the size cap, the BOM, the atomic write, the stamp |
+| `bridge/keymap.js` | The shortcuts that may be rebound, and the grammar for writing one down |
 | `bridge/spinner.js` | What a turn in progress calls itself, out of `~/.tgxcode/verbs/` |
 | `bridge/spinner-verbs.json` | The verb catalogue, and the seed for that directory |
 | `bridge/suggestions.js` | What you did about a suggested follow-up |
 | `bridge/drafts.js` | Sessions set up but not started — a create call, held back |
+| `bridge/snippets.js` | Canned messages and the groups they sit in — what replaced the one hard-coded LGTM button |
 | `bridge/usage.js` | How much of the 5-hour window and the week are gone, merged from turn events and the status line |
 | `bridge/beacon.js` | A `claude` started for four seconds and killed, so the quota percentages refresh with no terminal open |
 | `bridge/schedule.js` | Sessions that start on a clock — the store, the cron, and what counts as new since last time (a branch's commits, or a pull request nobody has reviewed) |
@@ -1037,6 +1322,7 @@ you are away from the desk, and a phone that has dropped its connection is not.
 | `scripts/install-quota-statusline.js` | Points `~/.claude/settings.json` at that script, and refuses to clobber one you already have |
 | `web/` | The UI. No build step: edit a file and refresh |
 | `web/terminal.js` | The terminal pane — a shell, or a run's output |
+| `web/keys.js` | Which chord means which command, and the one function that decides it |
 | `web/vendor/` | The two libraries worth not writing — xterm, and diff2html for the diff viewer. Checked-in prebuilt bundles, not a `node_modules` |
 | `app/main.js` | The Electron shell |
 | `app/make-icon.js` | Generates `app/icon.ico`, the packaged shell's icon |
