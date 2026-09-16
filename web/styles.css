@@ -402,7 +402,40 @@ a:hover { text-decoration: underline; }
     padding: 0 8px 8px;
 }
 
-.rail-head { padding: 0 4px 10px; }
+.rail-head { display: flex; flex-direction: column; gap: 6px; padding: 0 4px 10px; }
+
+/* Secondary to the button above it and drawn that way: the rail's ground rather
+   than a raised surface, and a light that says on without competing with New
+   session for the eye. Full width because everything in this column is. */
+.rail-filter {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    height: 30px;
+    padding: 0 12px;
+    background: var(--s2);
+    color: var(--text-3);
+    font: 500 12px/1 var(--sans);
+    border-radius: var(--pill);
+    white-space: nowrap;
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.rail-filter:hover { background: var(--s3); color: var(--text); }
+.rail-filter svg { flex: none; color: var(--text-4); }
+.rail-filter-label { overflow: hidden; text-overflow: ellipsis; }
+.rail-filter[aria-pressed="true"] { background: var(--blue-cont); color: #dbe6fb; }
+.rail-filter[aria-pressed="true"] svg { color: var(--blue); }
+
+/* How many sessions the button is talking about — the same number whether it is
+   on or off, so it reads as "hide those 12" and then as "12 are hidden". */
+.rail-filter-count {
+    margin-left: auto;
+    color: var(--text-4);
+    font-variant-numeric: tabular-nums;
+}
+.rail-filter[aria-pressed="true"] .rail-filter-count { color: #b9cdf0; }
+.rail-filter-count[hidden] { display: none; }
 
 /* Two buttons that read as one control: one height, one outer radius, and a
    hairline of the rail showing between them. Each half lights on its own, so the

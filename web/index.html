@@ -234,6 +234,23 @@
         <div id="new-menu" class="new-menu" role="menu"
              aria-label="Recent directories" hidden></div>
       </div>
+
+      <!-- The rail's other filter. The search box in the bar answers "where is
+           that one"; this answers "what is still going on", which is the rail's
+           standing question and the reason a week-old row of landed work is in
+           the way. The glyph is the merged badge it filters, at the size the
+           badge is drawn. -->
+      <button id="hide-done" class="rail-filter" type="button" aria-pressed="false"
+              title="Hide sessions whose pull requests are all merged or closed">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M18.8 4.6v14.8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <path d="M4.4 12h9.8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          <path d="m10.6 8.3 3.9 3.7-3.9 3.7" stroke="currentColor" stroke-width="1.8"
+                stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="rail-filter-label">Hide finished</span>
+        <span id="hide-done-count" class="rail-filter-count" hidden></span>
+      </button>
     </div>
     <div id="rail" class="rail-scroll"></div>
   </nav>

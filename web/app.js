@@ -287,6 +287,10 @@ const state = {
         try { return new Set(JSON.parse(localStorage.getItem('railSchedOpen') || '[]')); }
         catch { return new Set(); }
     })(),
+    // Whether the rail is hiding sessions whose pull requests have all settled.
+    // localStorage rather than prefs, like everything else about how this rail is
+    // drawn: it is a view of one window, and the bridge has no use for it.
+    hideDone: localStorage.getItem('railHideDone') === '1',
     // Where each row and each group card sits, decided once — see rememberOrder.
     order: new Map(),       // sessionId -> rank
     groupOrder: new Map(),  // group key -> rank
@@ -575,7 +579,8 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'slash-menu', 'mention-menu', 'new-slash-menu', 'new-mention-menu',
     'new-attach', 'new-attach-input', 'new-attach-btn', 'new-attach-row',
     'queue', 'queue-list', 'queue-count', 'queue-clear',
-    'model', 'perm', 'btn-new', 'btn-new-menu', 'new-menu', 'db-status', 'db-label', 'toasts',
+    'model', 'perm', 'btn-new', 'btn-new-menu', 'new-menu', 'hide-done', 'hide-done-count',
+    'db-status', 'db-label', 'toasts',
     'opt-desktop', 'opt-sound', 'notify-note', 'notify-try',
     'quota-wrap', 'quota-pill', 'quota-pill-body', 'quota-menu', 'quota-windows',
     'quota-events', 'quota-note', 'quota-refresh',
@@ -879,11 +884,21 @@ async function loadSessions() {
 function applyRailPrs(payload) {
     state.railPrs = new Map(Object.entries((payload && payload.sessions) || {}));
     state.prsError = (payload && payload.gh && payload.gh.error) || null;
+
+    // With `hideDone` on this payload decides which rows exist, not just what
+    // colour they are — a PR landing has to take its row with it — so the whole
+    // rail is rebuilt and the patching below is skipped. Hover and focus are what
+    // that costs, and only on the update that changes the answer.
+    if (state.hideDone) { renderRail(); return; }
+
     for (const s of state.sessions) {
         if (!s.prs || !s.prs.length) continue;
         const strip = dom.rail.querySelector(`[data-id="${CSS.escape(s.sessionId)}"]`);
         if (strip) patchPrBadge(strip, s);
     }
+    // The button counts finished sessions whether or not it is hiding them — that
+    // count is the reason to press it, and this is the only thing that moves it.
+    paintHideDone(state.sessions.filter(s => inProjectCard(s) && prDone(s)).length);
 }
 
 /** The one fetch of `/api/prs` a window makes: its first paint. */
@@ -897,6 +912,12 @@ async function loadRailPrs() {
 }
 
 const groupKeyOf = (s) => `project:${s.projectName || 'unknown'}`;
+
+// The sessions that land in a project card, which are the only ones `hideDone`
+// filters. Shared with `applyRailPrs`, which counts them for the button without
+// rebuilding the rail — two copies of this is how the count and the rows would
+// come to disagree.
+const inProjectCard = (s) => !s.pinned && !s.archived && !s.test;
 
 /**
  * Decide where each row and each group card sits, once.
@@ -1050,6 +1071,7 @@ function renderRail() {
     dom.rail.replaceChildren();
 
     if (!state.sessions.length) {
+        paintHideDone(0);
         dom.rail.append(el('div', { class: 'rail-empty' },
             state.query ? 'Nothing matches that filter.' : 'No sessions on disk yet.'));
         return;
@@ -1064,7 +1086,25 @@ function renderRail() {
     // is to be able to find it again and delete it. Only a development bridge
     // sends any, so the everyday window never grows this card.
     const test = ordered.filter(s => s.test && !s.pinned && !s.archived);
-    const rest = ordered.filter(s => !s.pinned && !s.archived && !s.test);
+    const rest = ordered.filter(inProjectCard);
+
+    // `hideDone`: drop the rows whose work has landed. Only from the project
+    // cards — pinning is something you did on purpose, archived is already out of
+    // the way, and the test card exists to be emptied by hand.
+    //
+    // Two things are never hidden. The session on screen, because a row leaving
+    // from under the conversation you are reading is the rail disagreeing with the
+    // main pane about where you are. And nothing at all while a search is running,
+    // for the reason `isOpen` gives for forcing groups open: a filter must not hide
+    // its own results, and somebody typing the title of a merged session is looking
+    // for exactly that.
+    const hiding = state.hideDone && !state.query;
+    const finished = rest.filter(prDone);
+    const gone = new Set(hiding
+        ? finished.filter(s => !state.current || state.current.sessionId !== s.sessionId)
+            .map(s => s.sessionId)
+        : []);
+    paintHideDone(finished.length);
 
     // Pinned first, across every project — that is the point of pinning.
     if (pinned.length) dom.rail.append(groupCard('pinned', 'Pinned', pinned));
@@ -1085,12 +1125,19 @@ function renderRail() {
         // be a great many of them and they are all alike, and a fortnight of
         // nightly reviews between you and the conversation you are looking for
         // is what the rail exists to prevent.
-        const sched = list.filter(s => s.schedule);
-        const plain = list.filter(s => !s.schedule);
+        const shown = list.filter(s => !gone.has(s.sessionId));
+        // A project with nothing left to show goes with its rows. An empty card
+        // is a heading claiming a count it is not drawing, which is the one thing
+        // `all` below is there to avoid.
+        if (!shown.length) continue;
+        const sched = shown.filter(s => s.schedule);
+        const plain = shown.filter(s => !s.schedule);
         dom.rail.append(groupCard(key, label, plain, {
             // The project heading still counts what it contains, subsection
             // included: a card saying 3 above a shut section holding 11 is
-            // wrong about the project, which is what the heading names.
+            // wrong about the project, which is what the heading names. Hidden
+            // rows are counted for the same reason — the project has them, and
+            // the button in the rail head is where the hiding is accounted for.
             all: list,
             lead: sched.length
                 ? groupCard(`sched:${key}`, 'Scheduled', sched, { nested: true })
@@ -1100,6 +1147,38 @@ function renderRail() {
 
     if (test.length) dom.rail.append(groupCard('test', 'Test sessions', test));
     if (archived.length) dom.rail.append(groupCard('archived', 'Archived', archived));
+
+    // Said out loud rather than left to look like a rail that has lost its
+    // sessions — the same promise the live board makes when `hideElsewhere`
+    // empties it. The button above is still lit, but an empty column is read
+    // before the control that caused it.
+    if (!dom.rail.childElementCount && gone.size) {
+        dom.rail.append(el('div', { class: 'rail-empty' },
+            `${gone.size === 1 ? 'One session is' : `All ${gone.size} sessions are`} finished, `
+            + 'and hidden. Press Hide finished to see them.'));
+    }
+}
+
+/**
+ * The Hide finished button's own state.
+ *
+ * `count` is how many sessions are finished, which is the same number whether the
+ * filter is on or off — it reads as "hide those 12" before the press and "12 are
+ * hidden" after it. Suppressed at zero rather than shown as 0, because nothing to
+ * hide is not a quantity worth a glyph in a rail this narrow.
+ *
+ * Called from `renderRail`, which knows the number, and from `applyRailPrs`, which
+ * is when the number moves without the rail being rebuilt.
+ */
+function paintHideDone(count) {
+    dom.hideDone.setAttribute('aria-pressed', String(state.hideDone));
+    dom.hideDoneCount.textContent = String(count);
+    dom.hideDoneCount.hidden = !count;
+    // Stale while a search is running: the rail is showing everything regardless,
+    // so the button says why rather than appearing to have stopped working.
+    dom.hideDone.title = state.query && state.hideDone
+        ? 'Showing finished sessions too, while the filter box has something in it'
+        : 'Hide sessions whose pull requests are all merged or closed';
 }
 
 /**
@@ -1306,6 +1385,24 @@ function activityBits(runner) {
                 clip(runner.detail || runner.activity || 'Working', 22))),
     ];
 }
+
+/**
+ * Is there nothing left open on this session's pull requests?
+ *
+ * `merged` and `closed` are the last two in the bridge's `ATTENTION_ORDER`, below
+ * every live state, so a session reduces to one of those two words only when none
+ * of its PRs is still going. The single word is therefore already the "all of
+ * them" test and the counts do not need consulting — which is the same reason the
+ * ranking lives on the bridge and is not copied here.
+ *
+ * A session with no PRs is not finished, it is unmeasured, and has no entry here
+ * at all; nor is one whose PRs could not be reached, which is `unknown`. Both keep
+ * their rows, which is the distinction `prBadge` already draws in colour.
+ */
+const prDone = (s) => {
+    const agg = state.railPrs.get(s.sessionId);
+    return !!agg && (agg.status === 'merged' || agg.status === 'closed');
+};
 
 /**
  * What a session's pull requests have come to, as one glyph.
@@ -17232,6 +17329,15 @@ dom.search.addEventListener('input', debounce(() => {
     loadSessions();
 }, 180));
 
+// The rail's other filter. `renderRail` repaints the button itself, because it is
+// the thing that knows how many sessions the answer covers.
+dom.hideDone.addEventListener('click', () => {
+    state.hideDone = !state.hideDone;
+    try { localStorage.setItem('railHideDone', state.hideDone ? '1' : '0'); }
+    catch { /* private mode */ }
+    renderRail();
+});
+
 // Find in conversation. The index and the count run on the debounce so the
 // number keeps up with typing; the marks are painted on the frame after it.
 dom.findInput.addEventListener('input', debounce(() => {
@@ -19163,6 +19269,7 @@ loadSnippets();
 markInstance();
 registerWorker();
 paintDockButton();      // the remembered arrangement, before anything is drawn
+paintHideDone(0);       // and the remembered rail filter, lit before the rows arrive
 watchPaneInsets();      // keep the composer over the transcript as columns come and go
 // The chrome that names a shortcut, before anything can read it — the bar
 // buttons' titles are built from a count, so their static markup carries no
