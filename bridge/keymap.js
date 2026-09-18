@@ -13,7 +13,7 @@
 // `cs-prefs`.
 //
 // **What is in the catalogue is deliberately narrow.** The window has around
-// forty key handlers and only these thirteen are shortcuts in the sense worth
+// forty key handlers and only the ones below are shortcuts in the sense worth
 // remapping — a name for a place to go, or for an action, that happens to have a
 // chord attached. The rest are widget semantics: arrows moving through a menu,
 // Enter committing a text field, Escape dismissing what is on top, the Y/A/N
@@ -87,6 +87,7 @@ const COMMANDS = [
     { id: 'view.settings', group: 'Views', label: 'Settings', default: 'Ctrl+8' },
     { id: 'session.new', group: 'Sessions', label: 'Start a session', default: 'Ctrl+N' },
     { id: 'rail.filter', group: 'Sessions', label: 'Filter sessions', default: 'Ctrl+K' },
+    { id: 'terminal.toggle', group: 'Sessions', label: 'Terminal', default: 'Ctrl+Backquote' },
     { id: 'composer.snippets', group: 'Composer', label: 'Snippets', default: 'Ctrl+Slash' },
     { id: 'find.open', group: 'Find', label: 'Find in conversation', default: 'Ctrl+F' },
     { id: 'find.next', group: 'Find', label: 'Next match', default: 'F3' },
