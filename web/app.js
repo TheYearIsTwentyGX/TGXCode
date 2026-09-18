@@ -583,7 +583,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'db-status', 'db-label', 'toasts',
     'opt-desktop', 'opt-sound', 'notify-note', 'notify-try',
     'quota-wrap', 'quota-pill', 'quota-pill-body', 'quota-menu', 'quota-windows',
-    'quota-events', 'quota-note', 'quota-refresh',
+    'quota-events', 'quota-note', 'quota-refresh', 'quota-live',
     'btn-pin', 'btn-changes', 'btn-folder', 'btn-term', 'btn-archive', 'btn-delete',
     'turns', 'turn-pop',
     'find', 'find-input', 'find-count', 'find-prev', 'find-next',
@@ -12917,6 +12917,10 @@ const quota = {
     // beacon that ran and failed. That one reports itself through
     // `beacon.reason`, which the panel already draws.
     refreshError: null,
+    // The handle that takes the flash back off the pill. Held so that two
+    // windows going bad moments apart cannot leave the first one's timer
+    // stripping the second one's highlight.
+    flashTimer: null,
 };
 
 /** Seconds since the snapshot was taken, on this window's clock. */
@@ -13017,6 +13021,13 @@ function renderQuotaPill() {
         if (typeof w.resetsAt === 'number') {
             titles[titles.length - 1] += `, resets in ${fmtLeft(w.resetsAt)}`;
         }
+        // The word the flash was about, so hovering the pill still explains it
+        // once the highlight has faded — and so the accessible name carries it
+        // for somebody who never saw the highlight at all.
+        if (w.status && w.status !== 'allowed') {
+            titles[titles.length - 1] += w.status === 'rejected'
+                ? ' — limit reached' : ' — nearly spent';
+        }
     }
 
     // When the window comes back. The percentage says whether to worry; this
@@ -13044,7 +13055,14 @@ function renderQuotaPill() {
             el('span', { text: fmtLeft(clock.resetsAt) })));
     }
 
-    dom.quotaPill.title = titles.join(' · ');
+    const summary = titles.join(' · ');
+    dom.quotaPill.title = summary;
+    // The button's own text is "5h 98% 12m", which is a fine glance and a poor
+    // accessible name, and `title` is only a fallback accname that browsers
+    // disagree about using. Set here rather than once in the HTML because this
+    // function re-runs every 30 seconds on quota.timer, and a name fixed at load
+    // is a name that goes stale.
+    dom.quotaPill.setAttribute('aria-label', `Quota used. ${summary}`);
 }
 
 function renderQuotaPanel() {
@@ -13231,6 +13249,115 @@ function renderQuota() {
 }
 
 /**
+ * How bad a window's status is, as a number worth comparing.
+ *
+ * A missing status is 0 rather than "unknown": a window nobody has reported on
+ * is not a complaint, and renderQuotaPill already draws it without a colour. An
+ * unrecognised string sorts as a warning rather than as fine — a status this app
+ * has never heard of is not something to stay quiet about, and the CLI has added
+ * to this vocabulary before.
+ */
+const QUOTA_RANK = { allowed: 0, allowed_warning: 1, rejected: 2 };
+function quotaRank(status) {
+    if (!status) return 0;
+    const r = QUOTA_RANK[status];
+    return r === undefined ? 1 : r;
+}
+
+/**
+ * One quota snapshot, applied. The only place `quota.snap` should ever be set.
+ *
+ * Funnelled because there are three sources — the SSE push, the reconnect reload
+ * and the Refresh button — and a flash that fires from one of them and not the
+ * others is a notification whose presence depends on how the snapshot happened
+ * to arrive.
+ *
+ * **The render has to come before the flash, not after.** `.quota-wrap[hidden]`
+ * sets `display: none`, and a CSS animation added to a `display: none` subtree
+ * never runs at all. renderQuota() is what takes the wrap out of hidden when the
+ * first reading for a window lands — which is exactly the case a rate limit
+ * arrives in.
+ */
+function applyQuotaSnapshot(next) {
+    const before = quota.snap;
+    quota.snap = next;
+    quota.at = Date.now();
+    renderQuota();
+    quotaFlash(before, next);
+}
+
+/**
+ * A window's status got worse — say so on the pill.
+ *
+ * This replaced a toast. `bridge/runner.js` emits a `notice` for a rate limit on
+ * every turn for as long as the limit holds, so the toast was the same sentence
+ * three times an hour, over the composer, about something already drawn in
+ * colour in the header. What the pill was missing was not information; it was
+ * something that moves when the state gets worse.
+ *
+ * Shaped after claudeFlash(): a before/after diff that points at the thing that
+ * moved, rather than a second idea about what "this just changed" looks like.
+ *
+ * **Per window, not worst-overall.** With the 5-hour window already `rejected`
+ * and the weekly one going `allowed` -> `rejected`, the worst status is
+ * `rejected` on both sides — a worst-only compare says nothing about a second
+ * window falling over, which is the moment somebody most needs telling.
+ *
+ * **A null `before` never flashes.** A cold start with a limit already in force
+ * renders a red pill and stays quiet: nothing just happened, and a page load is
+ * not news. It does mean a reconnect flashes for anything that worsened while
+ * the stream was down, which is the point — loadQuota() runs on `open` for
+ * exactly that catch-up.
+ *
+ * There is no repeat suppression here and none is needed. bridge/server.js only
+ * broadcasts `quota` when usage.noteRateLimitEvent says a reading moved, and a
+ * reading that moved without a status change raises no rank. Two gates, neither
+ * of which is a timer somebody has to tune.
+ */
+function quotaFlash(before, after) {
+    if (!before || !after) return;
+
+    const was = new Map((before.windows || []).map(w => [w.type, quotaRank(w.status)]));
+    let worst = 0;
+    let which = null;
+    for (const w of (after.windows || [])) {
+        const now = quotaRank(w.status);
+        // A type never seen before, arriving already bad, counts as a rise from
+        // fine — which is why the fallback is 0 rather than `now`.
+        if (now <= (was.has(w.type) ? was.get(w.type) : 0)) continue;
+        if (now > worst) { worst = now; which = w; }
+    }
+    if (!worst) return;
+
+    const said = `${which.label} quota ${worst >= 2 ? 'limit reached' : 'nearly spent'}.`;
+
+    // No window data means no pill on screen, and a flash nobody can see is not
+    // a notification. This is the one case that still earns the toast the rest
+    // of this replaced. It should be unreachable — a rate_limit_event always
+    // carries a status, and renderQuotaPill shows the wrap for a status alone —
+    // but the failure mode without it is silence, which is the thing this
+    // feature exists to avoid.
+    if (dom.quotaWrap.hidden) { toast(said, 'warn', 7000); return; }
+
+    // #toasts was the aria-live region and is no longer in this path, so the
+    // flash would otherwise announce nothing at all.
+    dom.quotaLive.textContent = said;
+
+    const pill = dom.quotaPill;
+    pill.dataset.flash = worst >= 2 ? 'bad' : 'warn';
+    pill.classList.remove('q-flash');
+    void pill.offsetWidth;      // restart it when a second window goes moments later
+    pill.classList.add('q-flash');
+    clearTimeout(quota.flashTimer);
+    // Three 0.7s pulses. Removing the class is also what ends the reduced-motion
+    // treatment, which holds the tint rather than animating it.
+    quota.flashTimer = setTimeout(() => {
+        pill.classList.remove('q-flash');
+        delete pill.dataset.flash;
+    }, 2100);
+}
+
+/**
  * Refresh the percentage now.
  *
  * The bridge answers with the whole quota payload rather than an
@@ -13245,10 +13372,11 @@ async function refreshQuotaNow() {
     renderQuota();
     try {
         const out = await post('/api/quota/refresh');
-        if (out && out.quota) {
-            quota.snap = out.quota;
-            quota.at = Date.now();
-        }
+        // The beacon only ever moves `usedPercent` and the harvest stamp —
+        // `status` is stream-only (bridge/usage.js) — so pressing Refresh cannot
+        // flash the pill. It goes through the funnel anyway rather than relying
+        // on that staying true.
+        if (out && out.quota) applyQuotaSnapshot(out.quota);
     } catch (err) {
         // A 409: not set up, or a run already going. Both are worth a line in
         // the panel and neither is worth a toast — the user is looking straight
@@ -13271,10 +13399,7 @@ function showQuota(on) {
 
 async function loadQuota() {
     try {
-        const snap = await get('/api/quota');
-        quota.snap = snap;
-        quota.at = Date.now();
-        renderQuota();
+        applyQuotaSnapshot(await get('/api/quota'));
     } catch {
         // A bridge without the route, or one that is down. The pill simply does
         // not appear; there is nothing here worth a toast.
@@ -13581,15 +13706,25 @@ function connect() {
 
     es.addEventListener('notice', (e) => {
         const n = JSON.parse(e.data);
+        // Rate limits belong to the pill. `rate_limit_event` arrives on every
+        // turn for as long as the limit holds, so as a toast this was a column
+        // of identical warnings over the composer — each one dismissed, each one
+        // back next turn — about something already drawn in the header. The
+        // `quota` event the runner emits immediately before this one is what
+        // flashes it; see quotaFlash().
+        //
+        // Dropped here rather than at the bridge on purpose. The Android client
+        // in ~/Other/tgxcode-mobile has no header pill, so a toast is still the
+        // right answer there, and silencing the notice on the wire would take
+        // the signal away from a client with nowhere else to put it.
+        if (n.kind === 'rate_limit') return;
         toast(n.text, n.level === 'warn' ? 'warn' : 'info', 7000);
     });
 
     // The whole snapshot, not a delta: it is a handful of windows and the
     // bridge only sends it when a reading actually moved.
     es.addEventListener('quota', (e) => {
-        quota.snap = JSON.parse(e.data);
-        quota.at = Date.now();
-        renderQuota();
+        applyQuotaSnapshot(JSON.parse(e.data));
     });
 
     // A process reported a command list that differs from the one we hold —
