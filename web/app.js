@@ -2068,8 +2068,9 @@ function renderHeaderActions() {
     dom.btnChanges.title = state.changes.on
         ? 'Hide what this session changed' : 'What this session changed';
     dom.btnFolder.title = `Show ${s.cwd} in File Explorer`;
-    dom.btnTerm.title = dom.termPane.hidden
-        ? `Open a terminal in ${s.cwd}` : 'Hide the terminal';
+    dom.btnTerm.title = keys.hint(
+        dom.termPane.hidden ? `Open a terminal in ${s.cwd}` : 'Hide the terminal',
+        'terminal.toggle');
 }
 
 // A session transcript and a subagent transcript render identically — they
@@ -12428,6 +12429,9 @@ function paintShortcutHints() {
     paintSchedBadge();
     paintLiveBadge();
     dom.btnSettings.title = keys.hint('Settings', 'view.settings');
+    // Builds the terminal button's title from the session's cwd, and returns on
+    // its own when there is no session to build one from.
+    renderHeaderActions();
 }
 
 // ── notifications ────────────────────────────────────────────────────────
@@ -16097,7 +16101,15 @@ function showTerm(on, { focus = false } = {}) {
     dom.btnTerm.classList.toggle('on', on);
     dom.btnTerm.setAttribute('aria-pressed', String(on));
     renderHeaderActions();
-    if (!on) { termPane.detach(); return; }
+    if (!on) {
+        // The focus was inside the thing that just disappeared — the shell, or
+        // the Hide button that did it — so it would otherwise fall to <body> and
+        // the next keystroke would go nowhere. The composer is where you were
+        // going anyway.
+        if (dom.termPane.contains(document.activeElement) && !dom.input.disabled) dom.input.focus();
+        termPane.detach();
+        return;
+    }
 
     setTermHeight(termHeight());
     syncTerm();
@@ -19100,6 +19112,23 @@ document.addEventListener('keydown', (e) => {
         return;
     }
     if (command === 'rail.filter') { e.preventDefault(); dom.search.focus(); return; }
+    // Three states rather than two, which is what Ctrl+` means in every editor
+    // that has one: show it, then focus it, then put it away. So the chord is a
+    // way *into* the terminal and not only a way to see it. The toolbar button
+    // stays a plain show/hide — it cannot tell where the focus is, and a mouse
+    // already puts the caret where it is going.
+    //
+    // This is why the `inTerm` guard above is not a blanket return: the hide
+    // branch is the one case where a chord pressed inside the shell is meant for
+    // the window rather than for the pty.
+    if (command === 'terminal.toggle') {
+        if (!state.current) return;   // no session, no shell — as the button does
+        e.preventDefault();
+        if (dom.termPane.hidden) showTerm(true, { focus: true });
+        else if (!inTerm) termPane.focus();
+        else showTerm(false);
+        return;
+    }
     // Whichever composer the caret is in, and the live one otherwise — so the
     // same chord works inside the Start-a-session dialog for nothing.
     if (command === 'composer.snippets') {
