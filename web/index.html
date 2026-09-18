@@ -185,6 +185,13 @@
       </div>
     </div>
 
+    <!-- The flash on the pill is the whole of the rate-limit notification now,
+         and a flash announces nothing. Outside #quota-wrap on purpose: that
+         element carries `hidden` whenever there is no window data to draw, and a
+         live region inside a hidden subtree is not announced at all. A <span>
+         because `.bar > *` is given `-webkit-app-region: no-drag`. -->
+    <span id="quota-live" class="sr-only" role="status" aria-live="polite"></span>
+
     <!-- Grouped with the DevBrowser pill rather than with Tasks and Board: those
          are places to go, and these two are the state of the machine. Hidden for
          a remote caller, which is a courtesy — the route refuses it either way. -->
