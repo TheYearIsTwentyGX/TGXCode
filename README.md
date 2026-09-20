@@ -1,10 +1,15 @@
 # Claude Sessions
 
-A Windows desktop app for the Claude Code sessions running in WSL2 on this
-machine. It lists every session on disk, renders each one as a conversation with
-formatted code, and lets you send new messages or start new sessions — and when
-a session has a dev server up, one click switches
-[DevBrowser](../dev-browser) to that port's tab.
+A desktop app for the Claude Code sessions running on this machine. It lists
+every session on disk, renders each one as a conversation with formatted code,
+and lets you send new messages or start new sessions — and when a session has a
+dev server up, one click switches [DevBrowser](../dev-browser) to that port's
+tab.
+
+It runs two ways: **on Linux**, where the app and the sessions are on the same
+machine, and **on Windows**, where the window is a Windows executable and the
+sessions live in WSL2. The difference is smaller than it sounds — see *How it
+fits together*.
 
 Sessions running in a terminal show up here too and stream as they go: the app
 reads the same transcripts Claude Code writes, so there is no separate world.
@@ -14,16 +19,16 @@ reads the same transcripts Claude Code writes, so there is no separate world.
 ## How it fits together
 
 ```
-   Windows                                  WSL2 (Ubuntu)
+   the shell                                Linux
    ┌───────────────────┐                    ┌──────────────────────────────┐
    │ ClaudeSessions    │  HTTP + SSE        │ bridge  (node, no deps)      │
-   │ .exe (Electron)   │ ─────────────────► │   • indexes ~/.claude        │
+   │ (Electron)        │ ─────────────────► │   • indexes ~/.claude        │
    │                   │  127.0.0.1:45888   │   • tails transcripts        │
    │ a window, and     │                    │   • runs `claude`            │
    │ nothing else      │                    │   • serves web/              │
    └───────────────────┘                    └──────────┬───────────────────┘
             │                                          │
-            │ starts on launch (wsl.exe)               │ spawns
+            │ starts on launch (bash, or wsl.exe)      │ spawns
             └──────────────────────────────────────────┤
                                                        ▼
    ┌───────────────────┐                    ┌──────────────────────────────┐
@@ -32,46 +37,108 @@ reads the same transcripts Claude Code writes, so there is no separate world.
    └───────────────────┘                    └──────────────────────────────┘
 ```
 
-The split matters. All the real work happens in the **bridge**, a dependency-free
-Node process inside WSL: it reads `~/.claude/projects` at native speed, spawns
-`claude` with the right environment, and serves the UI. The **Electron shell** is
-about 200 lines that start the bridge and point a window at it.
+**On Linux both boxes are the same machine.** On Windows the left one is a
+Windows executable and the right one is WSL2 — which works because WSL runs with
+`networkingMode=mirrored` here, so `127.0.0.1` is the same loopback on both
+sides: no port proxy, no firewall rule. It is the same trick DevBrowser's control
+channel uses. The arrow is the same HTTP either way, which is why there is one
+app and not two.
 
-Two things follow from that:
+The split matters more than the platform. All the real work happens in the
+**bridge**, a dependency-free Node process: it reads `~/.claude/projects` at
+native speed, spawns `claude` with the right environment, and serves the UI. The
+**Electron shell** is about 200 lines that start the bridge and point a window at
+it, and there is exactly one thing it does that the page cannot do for itself
+(raise the window for a clicked notification).
+
+Three things follow from that:
 
 - **Editing `bridge/` or `web/` needs no rebuild.** Restart the app (or press
-  Ctrl+R for UI-only changes). You only rerun `install.ps1` when `app/main.js`
-  or `package.json` changes.
-- **The UI works in any browser.** Run `npm run bridge` in WSL and open
-  <http://127.0.0.1:45888>. Handy for iterating on the frontend.
-
-This works because WSL runs with `networkingMode=mirrored` here, so `127.0.0.1`
-is the same loopback on both sides — no port proxy, no firewall rule. It is the
-same trick DevBrowser's control channel uses.
+  Ctrl+R for UI-only changes). You only rebuild when `app/main.js` or
+  `package.json` changes.
+- **The UI works in any browser.** Run `npm run bridge` and open
+  <http://127.0.0.1:45888>. Handy for iterating on the frontend, and a perfectly
+  reasonable way to use the app if you would rather not install a shell at all.
+- **The bridge barely knows which host it is on.** One module, `bridge/platform.js`,
+  and two things that read it: what opens a file (`explorer.exe` or `xdg-open`)
+  and where DevBrowser keeps its control-server file. Everything else — the pty,
+  port ownership, process liveness — is plain Linux on both.
 
 ## Scripts
 
-All of these run from WSL, in this directory.
+All of these run in this directory — from a Linux shell, or from WSL on a Windows
+machine.
 
 | | |
 |---|---|
-| `npm start` | Launch the Windows app. It starts its own bridge on 45888. |
+| `npm start` | Launch the app. It starts its own bridge on 45888. |
 | `npm run restart` | Restart the everyday bridge so it picks up whatever is on main. Refuses while a turn is in flight; `-- --pull` fast-forwards from origin first, `-- --status` just reports. With no terminal to ask at — under cron — it leaves uncommitted `bridge/` changes alone and exits 3 rather than reporting a restart that never happened; `-- --yes` loads them anyway. |
 | `npm run dev` | A **separate** instance on 45899 plus its own window, for working on this app without disturbing the one you actually use. |
 | `npm run dev:headless` | The same, bridge only — open the printed URL in a browser. The fastest loop for UI work: edit `web/`, hit refresh. |
 | `npm run bridge` | The bridge in the foreground on 45888. This is the everyday instance; use `dev` instead unless you mean it. |
 | `npm run land` | From a worktree: merge the PR for the branch you are on, then fast-forward the main checkout at `~/Other/claude-sessions`. Never restarts the bridge. `-- --status` reports, `-- --dry-run` rehearses. |
 | `npm test` | The auth and remote-access tests. Starts a bridge on a free port, runs everything, stops it; `npm test -- 45901` runs against one you already have. It will not use 45888. |
-| `npm run build` | Build and install the app (calls `install.ps1` through PowerShell). Pass options after `--`, e.g. `npm run build -- -NoInstall`. |
-| `npm run icon` | Regenerate `app/icon.ico`. |
+| `npm run build` | Build the app. On Linux, electron-builder in this directory. From WSL, `install.ps1` through PowerShell. Pass options after `--`, e.g. `npm run build -- -NoInstall`. |
+| `npm run icon` | Regenerate `app/icon.ico` and `app/icon.png`. |
 
-There is deliberately no `node_modules` in this repo and `electron .` will not
-work here: the shell is packaged from a staging directory on the Windows side,
-and a Linux Electron is not the app you want anyway. `npm start` finds the built
-executable instead, and tells you what to run if it is missing. (`npm run dist`
-exists only for `install.ps1` to call inside that staging directory.)
+**From WSL there is deliberately no `node_modules` and `electron .` does not
+work**: the shell is packaged from a staging directory on the Windows side, and a
+Linux Electron is not the app you want when the window has to be a Windows one.
+`npm start` finds the built executable instead, and tells you what to run if it
+is missing. (`npm run dist` exists only for `install.ps1` to call inside that
+staging directory.)
+
+**On Linux that objection disappears**, because the Linux build *is* the app you
+want. `npm run build` installs the devDependencies in place the first time and
+packages an AppImage; `npm run dev` prefers `electron .` over a built copy, so
+editing `app/main.js` has the same short loop as editing `bridge/`. What stays
+true on both is the rule that matters: **`dependencies` is empty and must remain
+so** — see *You cannot add a dependency* in CLAUDE.md, which is about what gets
+packaged, not about whether a devDependency may exist on disk.
+
+## Requirements
+
+The bridge is dependency-free Node against a fairly plain Linux userland, and it
+is specific about which parts of that userland it uses:
+
+| | For |
+|---|---|
+| node | The bridge. `bridge/launch.sh` finds an nvm-managed one if it is not on `PATH`. |
+| `claude` | The whole point. On `PATH`, or named by `CLAUDE_SESSIONS_CLAUDE_BIN`. |
+| `bash` | `launch.sh`, the terminal pane, `restart-bridge.sh`. |
+| `util-linux` — `script`, `stty` | The pty. There is no node-pty here and no native modules; `script(1)` *is* the terminal. |
+| `iproute2` — `ss` | Which process holds a dev server's port. |
+| `procps` — `ps` | The quota beacon. |
+| `git`, `curl`, `python3` | Changes and diffs; the health check and restart script. |
+| `xdg-utils` — `xdg-open` | Opening a file or folder, on a Linux host. |
+| `gh` *(optional)* | Pull requests. |
+| `tailscale` *(optional)* | Reaching the bridge from a phone; see `docs/remote.md`. |
+
+`/proc` is read directly for process liveness and a dev server's working
+directory, so this wants Linux specifically rather than any Unix.
+
+On Windows, add WSL2 with `networkingMode=mirrored`, and PowerShell for the
+build.
 
 ## Install
+
+### On Linux
+
+```bash
+npm run build       # installs devDependencies, then packages an AppImage into dist/
+npm start           # run it
+```
+
+Or skip the shell entirely — `npm run bridge`, then open
+<http://127.0.0.1:45888>. The UI is the same; what you give up is the window
+raising itself when you click a notification.
+
+To have the bridge up at login, the simplest thing that works is the app
+starting it, which it already does. For one that is up whether or not you have
+opened the app, `scripts/restart-bridge.sh` is cron-hardened and takes no
+arguments — see *Picking up new code*.
+
+### On Windows
 
 From PowerShell, in this directory:
 
@@ -93,11 +160,14 @@ over the `\\wsl.localhost` share.
 
 The script bakes the bridge location into `app/config.json`. To change it later
 without rebuilding, edit `config.json` next to the installed executable, or
-create one in `%APPDATA%\claude-sessions\`:
+create one in `%APPDATA%\claude-sessions\` (on Linux,
+`~/.config/claude-sessions/`):
 
 ```json
 { "bridgeDir": "~/Other/claude-sessions", "distro": "Ubuntu" }
 ```
+
+`distro` is read only on Windows; on Linux there is no relay for it to name.
 
 ## Using it
 
@@ -113,7 +183,7 @@ create one in `%APPDATA%\claude-sessions\`:
 | **Dev servers** | The second chip row. Green means the port is answering right now; click to switch DevBrowser to that tab, starting DevBrowser if it isn't running. The button on the end shuts the server down — one click arms it, the next signals. |
 | **Task board** | `Ctrl+2`, or *Tasks* in the top bar with a count of how many sessions are blocked on you. Four columns over everything outstanding: **Needs you** (a permission, a plan or a question waiting, or a turn that failed), **Working**, **Suggested** — every open task from every session, not only the conversation you have open — and **Idle**. Archived sessions are not on it; that is what archiving is for. A task card starts the work or opens it to read; a session card opens the conversation, and the button that appears on hover archives it. Idle leads with what has moved today and *Show all* pages in the rest. Nothing on it reorders while you read — see *The rail is sorted on load*. |
 | **Dashboard** | The button in the top bar, with a count of how many places are unfinished. It lists, per project, every directory holding uncommitted changes and every pull request still open, with the sessions that worked there as links back into the conversation. |
-| **Open folder** | The folder button by the title shows the session's working directory in Windows File Explorer, through the `\\wsl.localhost` share. |
+| **Open folder** | The folder button by the title shows the session's working directory in the host's file manager — on Linux whatever `xdg-open` picks, and from WSL, Windows File Explorer through the `\\wsl.localhost` share. |
 | **Composer** | Sends to the session, resuming it in place — the same transcript a terminal would append to. |
 | **Snippets** | Messages you send often, behind the icon beside *Send* — and on the Start-a-session box too. Each one says where it lands (replace the box, add to the end, insert at the cursor), whether it sends itself, and which permission mode it sends under; `{{placeholders}}` in the text become a small form to fill in first. They sit in coloured groups, in an order you set by dragging or with the arrows, and any of them can be **pinned** to a button of its own. **LGTM** ships pinned: it sends a written instruction to put the change on a pull request if it is not on one already, run the project's checks, merge once they pass, and file anything it noticed along the way as a suggested task — and to stop and say so if something blocks it. One click, no confirmation over the top; the session still asks for what its permission mode makes it ask for, and a half-typed message in the box survives the press. Edit them under *Snippets* in Settings. |
 | **Send queue** | Write while an agent is working and the message waits, listed above the composer in send order. Each one can be expanded, reordered, pulled back for editing, or dropped, right up until its turn starts. `Shift+Tab` out of the composer to work through them without the mouse. |
@@ -1065,11 +1135,19 @@ within milliseconds, but the result's duration falls back to the CLI's *API*
 time when the wall-clock field is missing, and a threshold should not rest on a
 number that can quietly change meaning.
 
-Two limits worth knowing. **The page is what listens**, not the Windows shell, so
+Two limits worth knowing. **The page is what listens**, not the Electron shell, so
 a window that is closed hears nothing — the tray and a shell-side subscriber are
-in `docs/plans/02-notifications-and-shell.md`. And Windows **Focus Assist** drops
-notifications without a word; **Try it**, in that group, is there so you can
-tell that apart from the app being wrong.
+in `docs/plans/02-notifications-and-shell.md`. And a desktop's own do-not-disturb
+drops notifications without a word — Windows **Focus Assist**, or GNOME and KDE's
+equivalents; **Try it**, in that group, is there so you can tell that apart from
+the app being wrong.
+
+One more on Linux: clicking a notification asks the shell to raise its window,
+and whether it *can* is the compositor's decision rather than this app's. Most
+X11 window managers allow it; Wayland compositors generally do not, and turn the
+request into an attention hint on the dock instead. See `raise()` in
+`app/main.js` — there is no API that overrides this, and the point of the policy
+is that there is not.
 
 In a browser, the first tick of *Show a desktop notification* is what asks
 permission — the click is the gesture browsers require, and a prompt nobody
@@ -1250,10 +1328,12 @@ token travels.
 
 Reaching the bridge from outside the flat is a deployment choice, and
 [`docs/remote.md`](docs/remote.md) is the runbook. The short version is
-`tailscale serve` on the Windows host: free, no port forwarding, and — because WSL
-runs mirrored and the proxy talks to Windows loopback — **the bridge never binds
-anything but `127.0.0.1`**. That matters here, where the home network is a subnet
-shared with the building.
+`tailscale serve`: free, no port forwarding, and **the bridge never binds
+anything but `127.0.0.1`**. On Linux the proxy is simply on the same machine as
+the bridge; from WSL it runs on the Windows host and talks to Windows loopback,
+which mirrored networking makes the same socket. Either way the bridge stays
+where it is. That matters here, where the home network is a subnet shared with
+the building.
 
 **What a phone will not let you do.** It can watch, send, answer permissions, plans
 and questions, and start an ordinary session. It cannot open a terminal, shut the
@@ -1340,10 +1420,13 @@ between every UI edit and a refresh, which is the whole reason
 licence beside it, and the version it came from is recorded in the CSS block that
 themes it.
 
-`launch.sh` exists because `wsl.exe bash -lc` runs a *login* shell, which reads
-`~/.profile` but not `~/.bashrc` — and nvm installs itself in `~/.bashrc`. Node
-is simply absent in that context, so every caller goes through the script that
-knows where to look.
+`launch.sh` exists because the shell starts the bridge with `bash -lc` — a
+*login* shell, which reads `~/.profile` but not `~/.bashrc`, and nvm installs
+itself in `~/.bashrc`. Node is simply absent in that context, so every caller
+goes through the script that knows where to look. The `-lc` came from
+`wsl.exe bash -lc` originally, but the problem is not WSL's: cron and systemd
+give you the same empty `PATH` on any machine, which is why the script stayed
+when the relay became optional.
 
 ## Two instances
 
@@ -1381,7 +1464,7 @@ The bridge handed its own environment to every session it started, so an agent
 working on this codebase inherited `CLAUDE_SESSIONS_PORT=45888`. Nothing then had
 to mention a port for the mistake to happen: `bash bridge/launch.sh` in a worktree
 bound the everyday one. It came up reporting `dev: false`, because that flag is
-derived from the port. And the Windows shell, which starts a bridge only when
+derived from the port. And the desktop shell, which starts a bridge only when
 nothing answers, adopted it. The result is a window that looks exactly like the
 everyday app — no amber badge, no `dev` in the title — serving a branch's `web/`
 out of a worktree that may be weeks stale. A change merged to `main` is then
@@ -1452,6 +1535,9 @@ MAILTO=""
 0 0 * * * /home/dylan_hays/Other/claude-sessions/scripts/restart-bridge.sh >/tmp/bridge.log 2>&1
 ```
 
+The path in it is absolute and belongs to this machine; on a new one, re-create
+the entry rather than expecting the repo to carry it.
+
 `MAILTO=""` means cron mails nothing, and `/tmp` is a tmpfs that WSL empties on
 every shutdown, so that redirect is not a record of anything — by morning it is
 usually gone. The script therefore keeps its own, appended, next to the bridge's
@@ -1473,7 +1559,10 @@ Two readings worth knowing:
 - **A `start` line with no outcome after it** — the script was killed part-way.
 - **No `start` line at all for that night** — cron never fired, which on this
   machine usually means WSL was not running at midnight. That is a different
-  problem from a skip, and used to be indistinguishable from one.
+  problem from a skip, and used to be indistinguishable from one. On a Linux
+  machine that is left on, this reading mostly stops happening; on a laptop that
+  sleeps, a systemd timer with `Persistent=true` catches up on wake where cron
+  does not. The script does not care which starts it.
 
 A dirty main checkout does **not** stop the nightly run any more, unless the
 dirty files are under `bridge/`. That is the only directory a restart actually
