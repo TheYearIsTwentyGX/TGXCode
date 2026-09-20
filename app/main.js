@@ -1,15 +1,24 @@
 'use strict';
 
-// The Windows-side shell.
+// The desktop shell.
 //
 // Everything that matters — reading transcripts, running `claude`, talking to
-// DevBrowser — happens in the bridge, a plain Node process inside WSL. This
-// shell only makes sure the bridge is up and points a window at it. That split
-// means the UI can be edited and reloaded from WSL with no rebuild here, and it
-// keeps all filesystem work on the Linux side where the files actually live.
+// DevBrowser — happens in the bridge, a plain Node process. This shell only
+// makes sure the bridge is up and points a window at it. That split means the UI
+// can be edited and reloaded with no rebuild here, and it keeps all filesystem
+// work on the Linux side where the files actually live.
 //
-// WSL on this machine runs with networkingMode=mirrored, so the bridge binding
-// 127.0.0.1 inside Linux is reachable from Windows at the same address.
+// It runs on two hosts, and the difference is one function:
+//
+//   - **On Windows**, the bridge lives inside WSL and is started through
+//     `wsl.exe bash -lc`. WSL runs with networkingMode=mirrored here, so the
+//     bridge binding 127.0.0.1 inside Linux is reachable from Windows at the
+//     same address — which is the whole reason this arrangement works.
+//   - **On Linux**, the bridge is on this machine and the relay is just `bash`.
+//
+// See bridgeShell(). Everything else in this file — the health ping, the
+// port-reclaim logic, the window, the single-instance lock — is the same on
+// both and does not know which it is on.
 
 const { app, BrowserWindow, shell, Menu, screen, ipcMain } = require('electron');
 const path = require('path');
@@ -29,14 +38,19 @@ function usePort(port) {
     ORIGIN = `http://127.0.0.1:${PORT}`;
 }
 
-// Where the bridge lives inside WSL. Override in config.json next to this file
-// or with CLAUDE_SESSIONS_DIR, which is what you want when running from a
-// worktree rather than the checkout.
+// Where the bridge lives. Override in config.json next to this file or with
+// CLAUDE_SESSIONS_DIR, which is what you want when running from a worktree
+// rather than the checkout.
 const DEFAULTS = {
-    distro: '',                              // empty = WSL's default distro
+    distro: '',                              // Windows only; empty = WSL's default distro
     bridgeDir: '~/Other/claude-sessions',
     port: DEFAULT_PORT,
 };
+
+// Windows means "the bridge is across a WSL boundary"; anything else means it is
+// on this machine. Checked here rather than in each caller so the two spawns
+// below read the same way.
+const VIA_WSL = process.platform === 'win32';
 
 let mainWindow = null;
 let bridgeStartedByUs = false;
@@ -91,22 +105,43 @@ const LOG_DIR = '"${XDG_CACHE_HOME:-$HOME/.cache}/claude-sessions"';
 const logFile = () => `${LOG_DIR}/bridge-${PORT}.log`;
 
 /**
+ * How to run a bash script where the bridge lives.
+ *
+ * On Windows that is across the WSL boundary, and `-d` picks the distro when
+ * config names one. On Linux the bridge is on this machine, so the relay
+ * disappears and bash is spawned directly.
+ *
+ * The *script* is identical either way, and deliberately so: it is plain POSIX
+ * and it is the thing that knows how to start a bridge. Only the two words in
+ * front of it differ.
+ */
+function bridgeShell(cfg, script) {
+    if (!VIA_WSL) return { cmd: 'bash', args: ['-lc', script] };
+    const args = [];
+    if (cfg.distro) args.push('-d', cfg.distro);
+    args.push('bash', '-lc', script);
+    return { cmd: 'wsl.exe', args };
+}
+
+/**
  * Start the bridge without leaving a console window on screen.
  *
- * The obvious approach — spawning wsl.exe with `detached: true` so the bridge
- * outlives this app — is exactly what puts a console on the user's desktop:
+ * The obvious approach — spawning the relay with `detached: true` so the bridge
+ * outlives this app — is exactly what puts a console on a Windows desktop:
  * Windows always gives a detached child its own console, and `windowsHide` is
  * ignored in that case.
  *
  * So detach on the Linux side instead. `setsid` reparents the bridge away from
- * the wsl.exe relay, the relay exits immediately, and this stays an ordinary
- * hidden child process. The bridge still survives closing the window, and
- * anything it prints goes to a log we can read back if it fails to come up.
+ * the relay, the relay exits immediately, and this stays an ordinary hidden
+ * child process. The bridge still survives closing the window, and anything it
+ * prints goes to a log we can read back if it fails to come up.
+ *
+ * That `setsid` is why this needs no `detached: true` on Linux either: the
+ * script has already done the detaching by the time bash returns. The Windows
+ * rationale above is the *reason* the script is shaped this way, but the shape
+ * is correct on both hosts, so there is one script and not two.
  */
 function startBridge(cfg) {
-    const args = [];
-    if (cfg.distro) args.push('-d', cfg.distro);
-
     // launch.sh finds a node first: a login shell does not read ~/.bashrc, which
     // is where nvm puts itself, so plain `node` is not on PATH here.
     const script = [
@@ -116,9 +151,9 @@ function startBridge(cfg) {
         `setsid nohup bash bridge/launch.sh >${logFile()} 2>&1 </dev/null &`,
         'exit 0',
     ].join('\n');
-    args.push('bash', '-lc', script);
 
-    const child = spawn('wsl.exe', args, { stdio: 'ignore', windowsHide: true });
+    const { cmd, args } = bridgeShell(cfg, script);
+    const child = spawn(cmd, args, { stdio: 'ignore', windowsHide: true });
     child.on('error', (err) => console.error(`[claude-sessions] ${err.message}`));
 
     bridgeStartedByUs = true;
@@ -127,10 +162,8 @@ function startBridge(cfg) {
 /** The bridge's own output, for when it never answers. */
 function readBridgeLog(cfg) {
     return new Promise((resolve) => {
-        const args = [];
-        if (cfg.distro) args.push('-d', cfg.distro);
-        args.push('bash', '-lc', `tail -n 40 ${logFile()} 2>/dev/null`);
-        execFile('wsl.exe', args, { windowsHide: true, timeout: 8000 },
+        const { cmd, args } = bridgeShell(cfg, `tail -n 40 ${logFile()} 2>/dev/null`);
+        execFile(cmd, args, { windowsHide: true, timeout: 8000 },
             (err, stdout) => resolve(String(stdout || '').trim()));
     });
 }
@@ -365,7 +398,10 @@ function createWindow() {
         // Name the instance in the title bar: two identical windows, one of them
         // holding real work, is a mistake waiting to happen.
         title: PORT === DEFAULT_PORT ? 'Claude Sessions' : `Claude Sessions — dev :${PORT}`,
-        icon: path.join(__dirname, 'icon.ico'),
+        // .ico is a Windows format and Linux wants a PNG. Both are generated by
+        // app/make-icon.js from the same source, so this is a filename choice
+        // and not two pictures to keep in step.
+        icon: path.join(__dirname, VIA_WSL ? 'icon.ico' : 'icon.png'),
         autoHideMenuBar: true,
         webPreferences: {
             nodeIntegration: false,
@@ -444,6 +480,15 @@ function createWindow() {
 // electron-builder writes `build.appId` onto both shortcuts it creates
 // (`WinShell::SetLnkAUMI` in its NSIS template), which is where this value comes
 // from and why the two must be changed together.
+//
+// On Linux this call is a no-op, and the same job — telling the desktop which
+// installed application a notification belongs to — is done by the .desktop file
+// instead. The name matters there in the same way and for the same reason: the
+// notification daemon matches on the desktop entry's basename, so
+// `build.linux.desktop.StartupWMClass` and `app.getName()` have to agree with
+// what electron-builder installs, or clicks land nowhere. That is the Linux
+// spelling of the bug this comment records, and it is worth checking on the
+// first real Linux build rather than assuming.
 app.setAppUserModelId('com.claudesessions.desktop');
 
 // One window, however it was asked for.
@@ -473,13 +518,44 @@ else app.on('second-instance', () => raise(mainWindow));
 //
 // Sent by preload.js, which is the page's only way to ask — and by
 // `second-instance` above, which has no page to ask on behalf of.
+//
+// **The always-on-top trick is a Windows answer and does not travel.** X11
+// window managers vary in whether they honour it; Wayland compositors mostly
+// refuse focus-stealing outright by design, and GNOME in particular turns any
+// such request into a "Window is ready" hint in the tray rather than a raise.
+// There is no API that overrides that — it is the compositor's policy and the
+// point of it is that applications cannot.
+//
+// So on Linux: ask properly, then fall back to `flashFrame`, which is what the
+// compositor's own convention for "this window wants you" maps onto (an urgency
+// hint on X11, a needs-attention state on Wayland). A window that raises gets
+// raised; one that does not at least lights up in the dock instead of the click
+// doing nothing visible at all. Worth confirming on the actual desktop — which
+// of these two happens is a property of the machine, not of this file.
 function raise(win) {
     if (!win || win.isDestroyed()) return;
     if (win.isMinimized()) win.restore();
-    win.setAlwaysOnTop(true);
+
+    if (VIA_WSL) {
+        // The foreground lock: Windows will not let a background process take
+        // the foreground on its own, which is why `window.focus()` from the page
+        // does nothing useful. Marking the window always-on-top for the length
+        // of the call is the way through it — the flag bypasses the lock, and
+        // clearing it immediately afterwards means the window does not actually
+        // stay on top of everything else.
+        win.setAlwaysOnTop(true);
+        win.show();
+        win.setAlwaysOnTop(false);
+        win.focus();
+        return;
+    }
+
     win.show();
-    win.setAlwaysOnTop(false);
     win.focus();
+    if (!win.isFocused()) win.flashFrame(true);
+    // Clear the hint once the window is actually looked at, so it does not sit
+    // demanding attention it has already had.
+    win.once('focus', () => { if (!win.isDestroyed()) win.flashFrame(false); });
 }
 
 ipcMain.on('reveal-window', (event) => {
