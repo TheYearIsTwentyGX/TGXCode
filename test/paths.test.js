@@ -151,9 +151,15 @@ process.removeAllListeners('warning');
     assert.strictEqual(tilde.href, 'file://wsl.localhost/Ubuntu/home/tester/Other/x/README.md');
     ok('a ~ path is displayed expanded and sent unexpanded');
 
-    // --- what Windows must not be asked to launch -------------------------
+    // --- what the host must not be asked to launch -------------------------
     for (const f of ['/home/x/a.exe', '/home/x/a.EXE', '/home/x/a.lnk', '/home/x/a.url',
         '/home/x/a.ps1', '/home/x/a.bat', '/home/x/a.msi', '/home/x/a.appref-ms']) {
+        assert.strictEqual(isLaunchable(f), true, f);
+    }
+    // A Linux desktop runs these, and a `.desktop` is the Linux `.lnk`: a
+    // pointer to a command that nothing on this side can see the far end of.
+    for (const f of ['/home/x/a.desktop', '/home/x/a.AppImage', '/home/x/a.appimage',
+        '/home/x/a.run', '/home/x/a.bin']) {
         assert.strictEqual(isLaunchable(f), true, f);
     }
     // Deliberately openable, and pinned so a later tidy-up does not "fix" it:
@@ -162,7 +168,22 @@ process.removeAllListeners('warning');
         '/home/x/noext', '', null]) {
         assert.strictEqual(isLaunchable(f), false, String(f));
     }
-    ok('isLaunchable names the file types Windows would run, and only those');
+    ok('isLaunchable names the file types either host would run, and only those');
+
+    // The list is one set rather than a pair chosen by platform, so that it
+    // stays a pure function and cannot be wrong about which host it is on. That
+    // is a decision, not an accident, and this is what pins it: the answer must
+    // not move when the host does.
+    const wasKind = process.env.CLAUDE_SESSIONS_HOST_KIND;
+    for (const kind of ['wsl', 'linux']) {
+        process.env.CLAUDE_SESSIONS_HOST_KIND = kind;
+        assert.strictEqual(isLaunchable('/home/x/a.ps1'), true, `${kind}: .ps1`);
+        assert.strictEqual(isLaunchable('/home/x/a.desktop'), true, `${kind}: .desktop`);
+        assert.strictEqual(isLaunchable('/home/x/app.js'), false, `${kind}: .js`);
+    }
+    if (wasKind === undefined) delete process.env.CLAUDE_SESSIONS_HOST_KIND;
+    else process.env.CLAUDE_SESSIONS_HOST_KIND = wasKind;
+    ok('isLaunchable gives the same answer on either host');
 
     console.log(`\n${pass} path checks passed`);
 })();

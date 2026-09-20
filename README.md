@@ -1294,7 +1294,8 @@ you are away from the desk, and a phone that has dropped its connection is not.
 | `bridge/ports.js` | Finding a port that is free *and* unclaimed, holding it, and remembering it |
 | `bridge/devservers.js` | Port detection, ranking, and stopping a server |
 | `bridge/devbrowser.js` | DevBrowser control client |
-| `bridge/explorer.js` | Opens a WSL directory in File Explorer, a file in whatever Windows opens it with, and knows what it will not launch |
+| `bridge/explorer.js` | Opens a directory in the host's file manager, a file in whatever the host opens it with, and knows what it will not launch |
+| `bridge/platform.js` | Whether there is a Windows on the other side of this bridge, and the env var that lets a test pretend otherwise |
 | `bridge/notifications.js` | The notification log, what is worth raising, and what you have already read |
 | `bridge/flags.js` | Pinned, archived and test state |
 | `bridge/prefs.js` | Settings from `~/.tgxcode/` and from the project — which file each one came from, and which one a save goes to |
