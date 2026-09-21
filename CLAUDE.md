@@ -533,4 +533,4 @@ sectioned by comment headers, so search for the section name rather than scrolli
   checkout clean — leaving half-finished `bridge/` edits in it is what silently
   pins the everyday instance to yesterday's code. Nothing else in that directory
   blocks it: `web/` is read per request and is already live, and docs, tests and
-  scripts the bridge never reads. See README §Picking up new code.
+  scripts the bridge never reads. See docs/manual.md §Picking up new code.
