@@ -1500,8 +1500,9 @@ started it, which is the entire point of having one.
 The bridge runs whatever was on disk when it started, so it keeps running old
 code until you restart it.
 
-**The quickest way is the button in the header**, beside the DevBrowser pill: it
-fast-forwards the checkout this bridge is serving and restarts it. When something
+**The quickest way is at the foot of the quota popover** — click the quota pill
+in the header, then *Restart bridge*: it fast-forwards the checkout this bridge
+is serving and restarts it, and the row says which checkout that is. When something
 is in the way it says so rather than doing half of it — turns in flight, a pull
 that would not fast-forward, uncommitted `bridge/` code — and offers to cancel,
 to hand the checkout to a session, or to go ahead anyway. That third choice is

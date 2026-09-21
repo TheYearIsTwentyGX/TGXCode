@@ -594,6 +594,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'opt-desktop', 'opt-sound', 'notify-note', 'notify-try',
     'quota-wrap', 'quota-pill', 'quota-pill-body', 'quota-menu', 'quota-windows',
     'quota-events', 'quota-note', 'quota-refresh', 'quota-live',
+    'quota-restart', 'quota-restart-label', 'quota-restart-sub',
     'btn-pin', 'btn-changes', 'btn-folder', 'btn-term', 'btn-archive', 'btn-delete',
     'turns', 'turn-pop',
     'find', 'find-input', 'find-count', 'find-prev', 'find-next',
@@ -642,7 +643,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'diff-words', 'diff-wrap', 'diff-source', 'diff-note', 'diff-jump',
     'diff-reload', 'diff-copy', 'diff-body', 'ctx-menu',
     'pair-url', 'pair-host', 'pair-hosts', 'pair-note', 'pair-copy',
-    'btn-restart', 'restart-scrim', 'restart-lede', 'restart-problems',
+    'restart-scrim', 'restart-lede', 'restart-problems',
     'restart-fix', 'restart-go']) {
     dom[id.replace(/-(\w)/g, (_, c) => c.toUpperCase())] = $(id);
 }
@@ -5713,13 +5714,22 @@ async function markInstance() {
         // it: it is the checkout the restart button pulls, and the cwd a session
         // started to sort that checkout out has to run in.
         state.root = h.root || '';
+        // The other way in to `homeDir`, and the earlier one: noteHome() reads
+        // it off the user prefs file, which arrives well after first paint, so
+        // until now a path drawn before that showed all 18 leading characters
+        // and then silently shortened. Health answers first and knows the
+        // answer, so shortPath is reliable from here rather than eventually.
+        if (h.home) noteHome(`${h.home}/.tgxcode/settings.json`);
         // Starting a session that only this instance will list is a development
         // affordance; offering it in the everyday window would be offering to
         // hide a real conversation from the window you are standing in.
         dom.newTestRow.hidden = !state.dev;
         // Restarting the bridge is refused to a remote caller at the route. Not
-        // drawing the button is the courtesy on top of that.
-        dom.btnRestart.hidden = state.remote;
+        // drawing the row is the courtesy on top of that. Rendered rather than
+        // set here because the pill's own visibility now turns on `remote` too,
+        // and this is the moment that answer arrives — first paint has already
+        // happened by the time /api/health comes back.
+        renderQuota();
         if (!h.dev) return;
         document.title = `Claude Sessions — dev :${h.port}`;
         document.querySelector('.wordmark').append(
@@ -5750,8 +5760,9 @@ const RESTART_POLL_MS = 700;
  * the fast-forward, which is what Restart anyway does after watching one fail.
  */
 async function pullAndRestart(opts = {}) {
-    dom.btnRestart.disabled = true;
-    dom.btnRestart.classList.add('busy');
+    dom.quotaRestart.disabled = true;
+    dom.quotaRestart.classList.add('busy');
+    renderQuotaRestart();
     try {
         // A raw fetch rather than post(), because this route's 409 *is* the
         // answer — the list of what is in the way — and reading it as a normal
@@ -5775,8 +5786,9 @@ async function pullAndRestart(opts = {}) {
         // By here one of the outcomes is known: the dialog is up, the new bridge
         // answered, or the wait timed out. The button is worth clicking again in
         // all three.
-        dom.btnRestart.classList.remove('busy');
-        dom.btnRestart.disabled = false;
+        dom.quotaRestart.classList.remove('busy');
+        dom.quotaRestart.disabled = false;
+        renderQuotaRestart();
     }
 }
 
@@ -5860,6 +5872,10 @@ function openRestartDialog(payload) {
     const fixable = payload.problems.some((p) => p.kind !== 'busy');
     dom.restartFix.hidden = !fixable;
 
+    // The click that got here came from inside the quota popover, and the
+    // outside-click listener only closes that on a click outside .quota-wrap —
+    // which the scrim is. Without this it sits open behind the modal.
+    showQuota(false);
     dom.restartScrim.hidden = false;
     dom.restartGo.focus();
 }
@@ -13062,7 +13078,20 @@ function renderQuotaPill() {
     const windows = (quota.snap && quota.snap.windows) || [];
     const shown = windows.filter(w => w.usedPercent !== null || w.status);
     if (!shown.length) {
-        dom.quotaWrap.hidden = true;
+        // The restart row lives in this popover now, so a local window keeps the
+        // pill even with nothing to report — hiding it would hide the only way
+        // to restart the bridge from the UI, and a machine with the beacon off
+        // or no trusted directory never gets a reading at all. A remote caller
+        // cannot restart anything, so for them an empty pill is still empty.
+        dom.quotaWrap.hidden = state.remote;
+        // The same label-then-number shape a window gets below, so an empty pill
+        // reads as "quota: nothing yet" rather than as a stray mark in the bar.
+        // The dash is already this file's word for a window with no percentage.
+        body.append(el('span', { class: 'q-win' },
+            el('span', { class: 'q-label', text: 'Quota' }),
+            el('span', { class: 'q-num', text: '—' })));
+        dom.quotaPill.title = 'No quota reading yet';
+        dom.quotaPill.setAttribute('aria-label', 'No quota reading yet. Bridge controls');
         return;
     }
     dom.quotaWrap.hidden = false;
@@ -13321,9 +13350,33 @@ function renderQuotaRefresh() {
             : `Start a few-second Claude session in ${dir} just to read the percentage`;
 }
 
+/**
+ * The restart row's label, and whether it can be pressed.
+ *
+ * `busy` comes off the class rather than a flag of its own so that
+ * pullAndRestart's existing classList calls stay the single record of a restart
+ * in progress — there is exactly one place that knows, and this reads it.
+ */
+function renderQuotaRestart() {
+    const btn = dom.quotaRestart;
+    btn.hidden = state.remote;
+    const busy = btn.classList.contains('busy');
+
+    dom.quotaRestartLabel.textContent = busy ? 'Restarting…' : 'Restart bridge';
+    dom.quotaRestartSub.textContent = busy
+        ? 'Waiting for the replacement to answer'
+        // shortPath rather than the raw checkout: this popover is 306px wide,
+        // and every path on this machine opens with the same 18 characters.
+        : `Pull and restart ${state.root ? shortPath(state.root) : 'this bridge'}`;
+    btn.title = busy
+        ? 'Waiting for a bridge with a different pid to answer'
+        : 'Fast-forward the checkout this bridge is serving, then restart it';
+}
+
 function renderQuota() {
     renderQuotaPill();
     renderQuotaRefresh();
+    renderQuotaRestart();
     if (!dom.quotaMenu.hidden) renderQuotaPanel();
     syncQuotaClock();
 }
@@ -13580,6 +13633,14 @@ dom.quotaRefresh.addEventListener('click', (e) => {
     // reading, hiding the result.
     e.stopPropagation();
     refreshQuotaNow();
+});
+
+dom.quotaRestart.addEventListener('click', (e) => {
+    // Same reason as Refresh above: this button is inside the popover, and
+    // without this the pill's toggle and the document listener would shut it on
+    // the click that asked for a restart — taking the busy label with it.
+    e.stopPropagation();
+    pullAndRestart();
 });
 
 dom.quotaPill.addEventListener('click', (e) => {
@@ -17975,7 +18036,6 @@ dom.newGo.addEventListener('click', startNew);
 dom.newSave.addEventListener('click', drSave);
 dom.newSched.addEventListener('click', drToSchedule);
 dom.dbStatus.addEventListener('click', refreshDevBrowser);
-dom.btnRestart.addEventListener('click', () => pullAndRestart());
 dom.btnBack.addEventListener('click', closeAgent);
 
 // The plan view outlives any one plan, so its listeners are bound here once
