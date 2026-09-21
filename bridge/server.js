@@ -3814,6 +3814,42 @@ async function api(req, res, url, pathname, who) {
             // in the everyday window while the first rescan catches up.
             if (body.test) flags.set(out.sessionId, { test: true });
             index.note(out.sessionId);
+
+            // **The draft this was started from, consumed here rather than by
+            // the caller.**
+            //
+            // Pressing Start in the dialog you opened a draft in is the same act
+            // as pressing Start on its card, so it has to leave the board the
+            // same way. It did not: the card's button is
+            // `POST /api/drafts/:id/start` and this route had never heard of
+            // drafts, so editing a draft and starting it from the dialog spawned
+            // the session and left the card sitting there to be started again.
+            //
+            // A field on this call rather than a `DELETE /api/drafts/:id` the
+            // caller sends afterwards — the argument `POST /api/schedules` makes
+            // about the same field. As two calls, each client has to decide for
+            // itself what a failed second one means once the first has already
+            // started a process, and there are three of them to decide it three
+            // ways. Here the order *is* the answer.
+            //
+            // After `pool.create` and only if it returned: until then the draft
+            // is the only copy of what was typed, so a directory moved since you
+            // saved it costs you the press and nothing else. The rule
+            // `/api/drafts/:id/start` states, for the reason it gives.
+            //
+            // Nothing is re-validated on the way through, unlike that route,
+            // because nothing off the draft is used to spawn — `cwd`, `prompt`
+            // and the mode all came off this request and are already past
+            // `resolveWorkdir`, `normalizeMode` and `modeRefusal`. Consuming one
+            // is a delete, which a remote caller may already do.
+            //
+            // An id naming no draft is not an error. The session started, which
+            // is what was asked for, and an id goes missing for two innocent
+            // reasons: it was already deleted, or it belongs to a bridge with
+            // another state directory.
+            const from = typeof body.fromDraft === 'string' ? body.fromDraft : null;
+            if (from && drafts.remove(from)) broadcast('drafts-changed', draftsPayload());
+
             return send(res, 200, { ...out, test: !!body.test });
         } catch (err) {
             return send(res, 400, { error: err.message });
