@@ -348,6 +348,10 @@ a:hover { text-decoration: underline; }
     border-left: 1px solid var(--s4);
     color: var(--text-4);
     font-variant-numeric: tabular-nums;
+    /* "8m 05s" has a space in it and the header bar is a tight flex row, so
+       without this the countdown breaks after the minutes and the pill grows
+       to two lines — which it did the moment seconds were added. */
+    white-space: nowrap;
 }
 .q-reset svg { flex: none; }
 
@@ -428,12 +432,16 @@ a:hover { text-decoration: underline; }
 
 .q-row .q-bar { width: 100%; height: 5px; margin: 6px 0 5px; }
 
+/* tabular-nums because the right-hand half of this row is a countdown that
+   ticks every second (tickQuotaClocks), and proportional digits make the whole
+   row shuffle sideways once a second. */
 .q-row-sub {
     display: flex;
     justify-content: space-between;
     gap: 10px;
     font: 400 11.5px/1.5 var(--sans);
     color: var(--text-4);
+    font-variant-numeric: tabular-nums;
 }
 .q-row-sub .warn { color: var(--yellow); }
 .q-row-sub .bad { color: var(--red); }
