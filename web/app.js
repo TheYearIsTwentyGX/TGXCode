@@ -17441,9 +17441,36 @@ async function drSave() {
     }
 }
 
+/**
+ * Run it.
+ *
+ * **If the dialog was opened on a draft, this consumes it** — the same press the
+ * card's Start button is, so it has to leave the board the same way. The id goes
+ * to the bridge as `fromDraft` and the delete happens there, after the session
+ * spawns: the reasoning `drStart` and `schedSave` both give, which is that as two
+ * calls from here, every client has to decide separately what a failed delete
+ * means once a process is already running.
+ *
+ * What the dialog holds is what starts, and it is *not* written back to the draft
+ * first. Editing the prompt and pressing Start runs the edit and drops the draft
+ * unedited — Start is a decision not to keep it. Save changes is next to it for
+ * the other answer.
+ */
 async function startNew() {
     const body = newDialogValues();
     if (!body) return;
+    // Read before the post, because `closeNew` clears it and the panel close
+    // below happens after. Null on every other way in: `openNew` writes this on
+    // each open and `closeNew` clears it, so Ctrl+N and a Recent-directory open
+    // carry nothing stale from the last draft you looked at. A snippet's
+    // auto-submit *inside* an open draft does consume it, which is right — that
+    // path presses this button.
+    //
+    // Set here rather than in `newDialogValues`, whose body is also `drSave`'s
+    // and `schedSave`'s: a draft PATCHed with a key naming itself would be noise
+    // on a route that ignores it.
+    const fromDraft = state.drafts.editing;
+    if (fromDraft) body.fromDraft = fromDraft;
 
     dom.newGo.disabled = true;
     dom.newGo.textContent = 'Starting';
@@ -17458,6 +17485,11 @@ async function startNew() {
         }
         const r = await post('/api/sessions', body);
         closeNew();
+        // Only when a draft was consumed, and the same move `drStart` makes: the
+        // board has one fewer card and we are about to open a session behind it,
+        // so leaving it up would put a list over the thing it just started. A
+        // plain Ctrl+N from an open board is not that, and leaves it alone.
+        if (fromDraft && draftsVisible()) showDrafts(false);
         toast('Session started.', 'ok');
         // The transcript only exists once `claude` writes its first line.
         openSessionSoon(r.sessionId);
