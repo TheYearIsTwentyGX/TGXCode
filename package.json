@@ -1,7 +1,7 @@
 {
   "name": "claude-sessions",
   "version": "1.0.0",
-  "description": "Manage Claude Code sessions running in WSL2 from a Windows desktop app",
+  "description": "Manage Claude Code sessions from a desktop app — on Linux, or on Windows with the bridge in WSL2",
   "main": "app/main.js",
   "author": "Dylan Hays",
   "private": true,
@@ -41,6 +41,17 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "runAfterFinish": true
+    },
+    "linux": {
+      "icon": "app/icon.png",
+      "target": [
+        "AppImage"
+      ],
+      "category": "Development",
+      "synopsis": "Manage Claude Code sessions",
+      "desktop": {
+        "StartupWMClass": "ClaudeSessions"
+      }
     }
   }
 }
