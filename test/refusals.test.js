@@ -327,6 +327,26 @@ const HOME = os.homedir();
     check('tidied up', (await call('DELETE', `/api/drafts/${savedId}`,
         { headers: LOCAL })).status, 200);
 
+    // The same invariant reached from the other side. A dialog opened on a draft
+    // hands its id to `POST /api/sessions` as `fromDraft`, and a create that
+    // never spawned must leave the draft where it was — the ordering that whole
+    // block of comment in server.js is about. `/etc` is the suite's refused
+    // directory, so this fails before `pool.create` and starts no process.
+    const kept = await call('POST', '/api/drafts', {
+        headers: LOCAL,
+        body: { cwd: HOME, prompt: 'edited but never started', test: true },
+    });
+    const keptId = kept.body && kept.body.draft && kept.body.draft.id;
+    check('a create that 400s does not consume its fromDraft', (await call(
+        'POST', '/api/sessions',
+        { headers: LOCAL, body: { cwd: '/etc', prompt: 'x', fromDraft: keptId } },
+    )).status, 400);
+    const stillThere = await call('GET', '/api/drafts', { headers: LOCAL });
+    check('and that draft is still on the board',
+        (stillThere.body.drafts || []).some(d => d.id === keptId), true);
+    check('tidied up', (await call('DELETE', `/api/drafts/${keptId}`,
+        { headers: LOCAL })).status, 200);
+
     // Reading and writing drafts is otherwise a phone's business: setting work up
     // at the desk and releasing it from a phone is the case they exist for.
     check('a phone may read drafts', (await call('GET', '/api/drafts',

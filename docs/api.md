@@ -2070,7 +2070,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `task-list` | `{sessionId, source, items[], done, total, current, idle, ts, truncated}` — the **whole** `GET /api/sessions/:id/tasks` payload, so there is nothing to refetch. **Not a `POST /api/subscribe` flag of its own**: it rides the transcript follow, because a task list only moves while a turn is running and that is exactly when a client is following one. Sent **once as soon as a session is followed** — an open panel does not wait for the first change — and after that only when the list has actually moved, so a session with a static list is silent. Carries `sessionId`, so a payload for a conversation the client has left is safe to drop |
 | `overview` | the board; sent only when it has actually changed |
 | `taskboard` | the task board; every ~3s while watched, and only when it has actually changed. Never carries `?idle=all` |
-| `drafts-changed` | `{at, drafts[], counts}` — the whole `GET /api/drafts` payload, so there is nothing to refetch. **Not gated by a `POST /api/subscribe` flag**, unlike `overview` and `taskboard`: a draft only changes because somebody changed it, so there is no tick to switch on and every window gets every change. Fires on create, edit, delete, and on a start (which deletes one) |
+| `drafts-changed` | `{at, drafts[], counts}` — the whole `GET /api/drafts` payload, so there is nothing to refetch. **Not gated by a `POST /api/subscribe` flag**, unlike `overview` and `taskboard`: a draft only changes because somebody changed it, so there is no tick to switch on and every window gets every change. Fires on create, edit, delete, and on anything that consumes one — `POST /api/drafts/:id/start`, and a `fromDraft` on `POST /api/sessions` or `POST /api/schedules` |
 | `snippets-changed` | `{at, snippets[], groups[], counts}` — the whole `GET /api/snippets` payload, so there is nothing to refetch. Ungated, exactly as `drafts-changed` is, and like it, it never fires without somebody having done something: a snippet or group created, edited or deleted, and a reorder **that actually moved a row** — a drag that lands where it started pushes nothing. Both arrays every time, because deleting a group re-homes its snippets and sending half the answer would leave a client drawing a card that no longer exists. **Always unfiltered by `cwd`**, so a client that fetched with `?cwd=` must apply the filter itself here or watch its list silently widen |
 | `schedules-changed` | `{at, schedules[], counts}` — the whole `GET /api/schedules` payload. Ungated, exactly as `drafts-changed` is. Unlike that one it fires **without anybody having done anything**: a schedule firing, skipping a slot, or having its outcome recorded when the turn ends all push it. So a client that assumed the payload only moves in response to a user action will be wrong here, and pleasantly so — this is how a card starts saying "ran 2h ago — BLOCK" while nobody is looking at it |
 | `sessions-changed` | `{at}` — a nudge to refetch the list |
@@ -2141,7 +2141,7 @@ causes auto-denials.
 
 ### `POST /api/sessions`
 
-`{cwd, prompt, model?, permissionMode?, test?, attachments?}` →
+`{cwd, prompt, model?, permissionMode?, test?, attachments?, fromDraft?}` →
 `{sessionId, status, test}`.
 
 `cwd` must be inside the allowed roots. `test: true` keeps it out of the everyday
@@ -2167,6 +2167,19 @@ The first turn then carries the note naming each file *and* an inline image bloc
 for each real PNG, JPEG, GIF or WebP within the inline budget — the same content
 any later message gets. Before this field existed a session could not be started
 with the screenshot that was the reason for starting it.
+
+**`fromDraft` is a draft id to consume** — the id of a `GET /api/drafts` row this call
+was built from, for a client that loaded a draft into its own form and then started the
+result instead of saving it. The draft is deleted **after** the session spawns and only
+if it did, so a `400` here leaves it exactly where it was; a `drafts-changed` push
+follows the deletion, before the response. Same field, same rule and the same reasoning
+as `POST /api/schedules`, and an id naming no draft is **not** an error — the session
+started, which is what was asked for.
+
+The fields sent here are what start, and they are **not** written back to the draft
+first. Editing the prompt and passing `fromDraft` runs the edited prompt and drops the
+draft unedited: sending it is a decision not to keep the draft. A client that wants the
+edit kept should `PATCH /api/drafts/:id` and then `POST /api/drafts/:id/start`.
 
 **`status` is a whole runner status object** — the `runner-status` payload, for the
 process that was just started — not a word describing the outcome. Same on
@@ -2294,6 +2307,13 @@ saved at the machine must not become a way for a phone to start `bypassPermissio
 `404` for an unknown id; `403` for a `permissionMode` this caller may not start; `400`
 if the directory no longer resolves; `429` past 8 sessions started in a minute — the
 same bucket `POST /api/sessions` draws on, because both spawn a process.
+
+**This is not the only way a draft is consumed.** `POST /api/sessions` and
+`POST /api/schedules` each take a `fromDraft` id and delete it on success, for a client
+that loaded a draft into its own form and then started or scheduled the edited version
+rather than saving it. Use this route when nothing was edited: it needs no body, and the
+arguments it spawns with are the ones on the file rather than ones the caller has to
+send back.
 
 ### `POST /api/snippets`
 
