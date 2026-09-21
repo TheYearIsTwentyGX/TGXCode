@@ -59,12 +59,19 @@ const called = () => {
 };
 const reset = () => { try { fs.unlinkSync(marker); } catch { /* never written */ } };
 
-const realPath = process.env.PATH;
-const realKind = process.env.CLAUDE_SESSIONS_HOST_KIND;
+// Everything this test moves, so a failure part-way through does not leave the
+// process pointed at a temp directory that is about to be deleted.
+const saved = {
+    PATH: process.env.PATH,
+    HOME: process.env.HOME,
+    XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+    CLAUDE_SESSIONS_HOST_KIND: process.env.CLAUDE_SESSIONS_HOST_KIND,
+};
 const restore = () => {
-    process.env.PATH = realPath;
-    if (realKind === undefined) delete process.env.CLAUDE_SESSIONS_HOST_KIND;
-    else process.env.CLAUDE_SESSIONS_HOST_KIND = realKind;
+    for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+    }
     try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* best effort */ }
 };
 
@@ -157,13 +164,23 @@ fs.mkdirSync(aDir);
     ok('revealing under WSL still goes through Explorer');
 
     // --- DevBrowser discovery ---------------------------------------------
+    //
+    // linuxBinary() looks in ~/.local/bin as well as on PATH, so a fake PATH
+    // alone does not isolate this: on a machine where DevBrowser *is* installed
+    // it would find the real one. os.homedir() reads $HOME on POSIX, so moving
+    // that is what makes these assertions about the code rather than about
+    // whichever machine is running them.
 
     process.env.CLAUDE_SESSIONS_HOST_KIND = 'linux';
     process.env.XDG_CONFIG_HOME = tmp;
+    process.env.HOME = tmp;
+
+    const localBin = path.join(tmp, '.local', 'bin');
+    fs.mkdirSync(localBin, { recursive: true });
 
     reset();
-    const bin = await devbrowser.installedPath();
-    assert.strictEqual(bin, null, 'nothing named DevBrowser is on this fake PATH');
+    assert.strictEqual(await devbrowser.installedPath(), null,
+        'nothing named DevBrowser has been planted yet');
     assert.deepStrictEqual(called(), [], 'finding it is a filesystem question, not a spawn');
     ok('DevBrowser discovery on a Linux host spawns nothing');
 
@@ -173,6 +190,25 @@ fs.mkdirSync(aDir);
     assert.match(launched.error, /no DevBrowser binary/);
     assert.ok(!called().includes('cmd.exe'), 'cmd.exe must not be reached on Linux');
     ok('launching on a Linux host reports "not installed" without touching cmd.exe');
+
+    // Lower-case `devbrowser` is the shell CLI, not the app. Planting one must
+    // change nothing: spawning it would start no window, then wait out the
+    // launch timeout and report that instead of "not installed". This is the
+    // reason linuxBinary() names its candidates explicitly, so it is the part
+    // most worth a test.
+    fake('devbrowser');
+    fs.writeFileSync(path.join(localBin, 'devbrowser.AppImage'), '');
+    fs.chmodSync(path.join(localBin, 'devbrowser.AppImage'), 0o755);
+    assert.strictEqual(await devbrowser.installedPath(), null,
+        'the CLI must never be mistaken for the app');
+    ok('lower-case devbrowser is not a launch candidate');
+
+    // The real thing, found where a personally-built Electron app lands.
+    const appImage = path.join(localBin, 'DevBrowser.AppImage');
+    fs.writeFileSync(appImage, '');
+    fs.chmodSync(appImage, 0o755);
+    assert.strictEqual(await devbrowser.installedPath(), appImage);
+    ok('an AppImage in ~/.local/bin is found');
 
     // The control port comes out of the app's own file, at the Linux location.
     // Nothing above this has asked for the port, so the module's few-second
