@@ -44,6 +44,13 @@ how the Electron shell already talks to it. `tailscale serve` runs on the *Windo
 side and proxies to that same loopback address. The socket stays where it is; only
 Tailscale is exposed, and only to your own devices.
 
+**On a Linux host the same argument is shorter.** There is no boundary to cross:
+`tailscale serve --bg --https=443 http://127.0.0.1:45888` runs on the machine the
+bridge is on, proxying to the same loopback socket. Everything below that says
+"from PowerShell" is then just a shell, and `tailscale.exe` is `tailscale` —
+`/api/pairing` already looks on `PATH` before it looks on the Windows host, so the
+phone button needs no change.
+
 ### Setup
 
 1. **Check Tailscale is up.** This machine is `tg-dylanh` on tailnet
@@ -90,7 +97,8 @@ Tailscale is exposed, and only to your own devices.
 
 5. **Pair the phone.** In the desktop window, press the phone button in the top bar.
    It asks the bridge what this machine is actually called — `/api/pairing` shells
-   out to `tailscale.exe` — so the link comes prefilled and correct, and the note
+   out to `tailscale` on `PATH`, or `tailscale.exe` on the Windows host when there
+   is none — so the link comes prefilled and correct, and the note
    underneath tells you whether `tailscale serve` is already pointing at this port
    or still needs running. Or build it by hand:
 
@@ -323,9 +331,9 @@ time so it cannot be turned into a fan of processes.
 | `bypassPermissions`, `dontAsk` | Runs everything unasked. A deliberate choice at the desk, not one tap away on a device that might be in someone else's hand. Refused on send too, so a session cannot be escalated after the fact. |
 | `/api/terminals/*` | A raw pty. Everything else is mediated by the app; this is a shell, and a leaked token that reaches it has the machine. |
 | `/api/shutdown`, `/api/devservers/stop` | Acts on processes the person at the desk is using. |
-| `/api/sessions/:id/reveal`, `POST /api/fs/open`, `/api/devbrowser/*` | Drives windows on the Windows host. Pointless from a phone — and `/api/fs/open` hands that host a path out of a transcript to launch, which is a thing to do while sitting in front of it or not at all. It is also the reason a remote page is served no `cs-host` meta tag: with nowhere for a path to point, the transcript draws it as text rather than as a link whose click would 403. |
+| `/api/sessions/:id/reveal`, `POST /api/fs/open`, `/api/devbrowser/*` | Drives windows on the host's desktop — Windows' under WSL, the local one on a Linux machine; the refusal does not care which. Pointless from a phone either way — and `/api/fs/open` hands that desktop a path out of a transcript to launch, which is a thing to do while sitting in front of it or not at all. It is also the reason a remote page is served no `cs-host` meta tag: with nowhere for a path to point, the transcript draws it as text rather than as a link whose click would 403. |
 | `POST /api/sessions/:id/handoff` | Starts a turn in a session nobody is looking at, and wakes one that has no process at all. Reasonable for an agent on this machine that just changed something the other session depends on; not reasonable to reach in for from a phone, where a leaked token would mean every session on the machine spending tokens on words nobody typed. Note that a phone *may* still send to a session through `/send` — the difference is that a person is choosing the session and the words, one at a time. |
-| `POST /api/sessions/:id/open-file` | Opens a repository file in its default Windows program — a window on this machine's desktop, which is the row above's reason. It has a second one the others do not: pointed at a `.ps1` or an `.exe` in the checkout, Windows will run it. That is strictly less than `/api/terminals/*` already grants and is refused for the same reason. Its sibling `GET /api/sessions/:id/diff` is **not** refused — a diff is a read, its bytes already reach a phone inside the tool results it renders, and it is scoped to the session's own repository root rather than only to the allowed roots. A file extension denylist was considered and rejected: an agent that has just written an executable into the checkout has already won by other means, and a denylist would refuse opening the script you were editing. |
+| `POST /api/sessions/:id/open-file` | Opens a repository file in its default program — a window on this machine's desktop, which is the row above's reason. It has a second one the others do not: pointed at a `.ps1` or an `.exe` in the checkout, Windows will run it, and at a `.desktop` or an `.AppImage`, so will a Linux desktop. That is strictly less than `/api/terminals/*` already grants and is refused for the same reason. Its sibling `GET /api/sessions/:id/diff` is **not** refused — a diff is a read, its bytes already reach a phone inside the tool results it renders, and it is scoped to the session's own repository root rather than only to the allowed roots. A file extension denylist was once considered and rejected here, on the grounds that it would refuse opening the script you were editing; that was wrong about what the denylist costs, and the route now applies `isLaunchable` — see `docs/api.md`. It refuses nothing, it *reveals* the file in its folder instead of launching it, so the cost is a click. The remote refusal on this route stands regardless: it is about whose desktop the window appears on, not about what the file is. |
 | `POST /api/fs/mkdir` | Writes to the filesystem. `GET /api/fs` stays allowed, and the asymmetry is the point: reading the tree answers "where could a session start", and a phone may already start one. Creating a directory is reaching past the app into the machine. |
 | `PUT /api/prefs` | The mkdir clause with a longer reach: it writes a file in the user's home directory, and one of the keys in it — `quota.beaconDir` — names a directory this app then starts `claude` in. `GET /api/prefs` stays allowed, so the asymmetry is on the method rather than the path: how somebody wants a transcript folded is not a capability, and a phone has a use for the answer. |
 | `/api/claude-config`, **every method** | Claude Code's own settings, and the one family where the *read* is refused too. The contrast with `/api/prefs` above is the whole entry: that file is this app's own and its worst key names a directory; these files name hook commands, permission rules and the values of environment variables, and no client off this machine configures the CLI. So there is nothing to weigh against caution, and a leaked token should not be able to read them. The refusal is on the prefix with no method test, so whatever is added under it later is refused by default rather than by somebody remembering to. If a phone ever needs one of these reads, the answer is a narrower route — not a deleted refusal. |

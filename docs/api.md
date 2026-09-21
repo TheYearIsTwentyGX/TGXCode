@@ -121,6 +121,29 @@ render paths as plain text rather than guess a distribution name.
 
 The translation that is *acted* on is never this one — see `POST /api/fs/open`.
 
+### The host the bridge opens files on
+
+The bridge runs on Linux either way — it is a Linux process under WSL too, so
+`process.platform` is `linux` on both — but what it can hand a path to is not the
+same, and four routes differ because of it:
+`POST /api/fs/open`, `POST /api/sessions/:id/open-file`,
+`POST /api/sessions/:id/reveal` and `POST /api/sessions/:id/attachments/open`.
+
+| | WSL | Linux |
+|---|---|---|
+| Opens a file with | `explorer.exe` | `xdg-open` |
+| Reveals a folder with | `explorer.exe` | `xdg-open`, or `org.freedesktop.FileManager1` to select a file |
+| Path handed over | `wslpath -w` output | the Linux path unchanged |
+| `cs-host` meta tag | served | not served |
+| Unregistered file type | `200`, Windows shows its own dialog | `502`, nothing opened |
+
+**There is no route that reports which host this is**, and adding one has been
+deliberately avoided: `cs-host` already distinguishes them for the only purpose a
+client has — whether to draw a Windows path — and a second signal would be one more
+thing to keep true. A client should branch on the presence of `cs-host`, or better,
+on nothing at all: every field above is well-defined on both hosts, and a client that
+renders `path`/`winPath` as opaque text is correct on either.
+
 ## Local vs remote
 
 Every request is classified. `remote` is true if **any** of: the socket is not
@@ -768,13 +791,18 @@ walk it to `~/.ssh`.
 ### `POST /api/sessions/:id/open-file`
 
 `{path}` → `{ok, how, file, path}` — opens one of the session's files in whatever
-program Windows opens that kind of file with. `POST /api/sessions/:id/reveal` for the
-folder, this for the file.
+program the **host desktop** opens that kind of file with. `POST /api/sessions/:id/reveal`
+for the folder, this for the file.
+
+There are two hosts and the difference is visible in the answer; see
+*The host the bridge opens files on* below. Under WSL this hands the file to
+`explorer.exe`, and on a Linux host to `xdg-open`.
 
 `how` is `"open"` or `"reveal"`, and it says what *happened* rather than what was
-asked for. A file Windows would **run** rather than open — the `isLaunchable` list
-`POST /api/fs/open` uses, `.ps1`, `.exe`, `.lnk` and the rest — is revealed in its
-folder instead, with `why: "executable"`. That is not a refusal and not an error: it
+asked for. A file the host would **run** rather than open — the `isLaunchable` list
+`POST /api/fs/open` uses, `.ps1`, `.exe`, `.lnk`, `.desktop` and the rest — is
+revealed in its folder instead, with `why: "executable"`. That is not a refusal and
+not an error: it
 is `200`, and the folder is the same information with none of the execution. A
 checkout is exactly where a `.ps1` an agent wrote ten minutes ago would be, which is
 why this route defers to that list even though its path is one the bridge computed.
@@ -786,17 +814,31 @@ or out of bounds**, because the difference between those two answers is an exist
 oracle for everything on the machine. An empty `path` is `400`, again before the
 session lookup.
 
-`file` in the answer is the WSL path; **`path` is the Windows one**
-(`\\wsl.localhost\…`) that was handed to `explorer.exe`. `502` with `ok: false` means
-the launch itself failed — no `explorer.exe` on `PATH`, or `wslpath` could not
-translate. A file type with **no** registered handler still reports `ok: true`:
-Windows shows its own "how do you want to open this" dialog, and that is a success.
+`file` in the answer is always the Linux path. **`path` is the path as it was handed
+to the host's file manager**, which is host-dependent and is the one field on this
+route a client must not assume the shape of:
 
-One limitation worth knowing rather than working around: Windows joins an argument
-vector into a single command line and Explorer parses its own, comma-separated. A
-filename containing a comma therefore opens the wrong thing or nothing. It cannot
-escape the tree — the path is validated before `wslpath` sees it, and `execFile` uses
-no shell — so this is a visible failure on an unusual filename, not a hole.
+| Host | `path` |
+|---|---|
+| WSL | the Windows form, `\\wsl.localhost\…`, from `wslpath -w` |
+| Linux | the same Linux path as `file` |
+
+`502` with `ok: false` means the launch itself failed, and what counts as a failure
+differs because the two openers differ in how much they will tell you:
+
+- **Under WSL**, only a missing `explorer.exe` or a `wslpath` that could not
+  translate. A file type with **no** registered handler still reports `ok: true`:
+  Windows shows its own "how do you want to open this" dialog, and that is a success.
+- **On Linux**, `xdg-open`'s exit codes are specified and are believed, so a file
+  type nothing is registered for *is* a `502`. Nothing appeared on screen, and saying
+  otherwise would be a lie a client cannot check.
+
+One limitation worth knowing rather than working around, and it is WSL-only: Windows
+joins an argument vector into a single command line and Explorer parses its own,
+comma-separated. A filename containing a comma therefore opens the wrong thing or
+nothing. It cannot escape the tree — the path is validated before `wslpath` sees it,
+and `execFile` uses no shell — so this is a visible failure on an unusual filename,
+not a hole. `xdg-open` takes an argument vector and does not have this problem.
 
 **Local only.** A remote caller gets
 `403 {"error": "opening a file only makes sense on the machine itself"}`. The window
@@ -2047,7 +2089,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `runner-status` | see below |
 | `permission-request` | `{sessionId, ...ask}` |
 | `permission-resolved` | `{sessionId, requestId, outcome}` |
-| `notice` | `{sessionId, level, kind, text}` |
+| `notice` | `{sessionId: string, level: 'warn', kind: string, text: string}` — something worth telling the user that is not a permission ask. Every notice the bridge sends today is `level: 'warn'`; treat any other level as informational. `kind` is one of `no_permission_prompt`, `permission_uninteractive`, `mode_change_failed`, `permission_auto_denied`, `permission_denied`, `api_retry`, `turn_failed`, `rate_limit` — and an unrecognised kind is a plain warning, not an error. **`rate_limit` is not one per limit: it repeats on every turn for as long as the limit holds**, because the CLI sends an identical `rate_limit_event` each time and this one is not deduplicated the way the `quota` event below is. A client that toasts it unconditionally therefore stacks the same warning over and over for an afternoon. `web/app.js` drops this kind entirely and flashes the header quota pill off the `quota` event instead; a client with nowhere to put a persistent indicator should throttle the toast itself. Everything the notice says is also in `GET /api/quota` — `windows[].status` for the current state and `events` for the history |
 | `quota` | **the whole `GET /api/quota` payload**, so there is nothing to refetch. Ungated, like `drafts-changed`. Fires only when a reading actually moved — the CLI sends an identical `rate_limit_event` on every turn and those are dropped rather than pushed. Note it carries **no `sessionId`**: quota is account-wide, and which session happened to observe it says nothing. A window that has been near a limit for an hour will therefore push nothing at all, which is why `usedPercentAt` matters more than the arrival time of this event |
 | `turn-complete` | `{sessionId, isError, detail, retries, costUsd, durationMs, numTurns, stopReason}` — the runner's `lastResult` with the session id on it. `detail` is null unless `isError` |
 | `send-failed` | `{sessionId, kind, message, unsent: [text]}` — a send that never became a turn; hand the text back to the user. `unsent` is an array of **strings**, in send order, and may be empty — the event still means the send failed, and `message` is then the whole of it. `kind` is one of `busy-elsewhere` (the session is running somewhere else; offer to branch), `no-claude`, `missing`, `unknown`, `exited` (the process ended without answering) or `retired` (the bridge shut the process down with messages still queued). Treat an unrecognised kind as `unknown`. Attachments are **not** carried: a message that had files comes back as its text alone |
@@ -3067,21 +3109,30 @@ has to attach it at the moment it starts it.
 
 ### `POST /api/sessions/:id/attachments/open`
 
-`{path}` → `{ok, path, file}`. Opens the file in whatever the Windows host opens that
+`{path}` → `{ok, path, file}`. Opens the file in whatever the host desktop opens that
 kind of file with. Only the basename is taken from the caller; the directory is
 recomputed, so `404` means "not one of this session's attachments" rather than
 "missing". Local callers only.
+
+`file` is the Linux path; `path` is the path as handed to the host's file manager,
+with the same host-dependent shape as `POST /api/sessions/:id/open-file`.
 
 ### `POST /api/fs/open`
 
 `{path: string, reveal?: boolean}` →
 `{ok: true, how: "open" | "reveal", path: string, winPath: string | null, why?: "directory" | "executable"}`.
 
-Opens a path on the Windows host: the file, in whatever Windows opens that kind of
-file with, or — with `reveal: true` — the folder holding it, in File Explorer.
+Opens a path on the host desktop: the file, in whatever the host opens that kind of
+file with, or — with `reveal: true` — the folder holding it, in the file manager.
 `path` is a Linux path on the machine the bridge runs on and a leading `~` means
 `$HOME`, as everywhere else. `path` in the answer is the resolved Linux path, not the
 one you sent. Local callers only.
+
+Under WSL the opener is `explorer.exe`; on a Linux host it is `xdg-open`, and a
+`reveal` of a *file* is handed to the `org.freedesktop.FileManager1` D-Bus interface
+so the file is **selected** in its folder rather than the folder merely opened. If no
+file manager implements that interface the folder is opened instead, which is what
+WSL does in every case. Nothing in the response distinguishes those two outcomes.
 
 Session-free on purpose: this is about the machine rather than a conversation, so a
 client with nothing in focus can still open a path a transcript mentioned. Unlike
@@ -3094,12 +3145,17 @@ kinds of path are revealed even when you asked to open them, and come back
 `how: "reveal"` with `why` naming which:
 
 - `why: "directory"` — the path is a folder.
-- `why: "executable"` — the extension is one Windows would *run* rather than open:
+- `why: "executable"` — the extension is one a host would *run* rather than open:
   `.exe .com .bat .cmd .ps1 .psm1 .msi .msp .lnk .url .scr .pif .vbs .vbe .wsf .wsh
-  .hta .reg .jar .cpl .msc .scf .appref-ms`. That is a degrade rather than a refusal:
-  the folder is the same information with none of the execution. Note what is
-  deliberately **not** on that list — `.js`, `.ts`, `.py`, `.sh`, `.md` all open
-  normally.
+  .hta .reg .jar .cpl .msc .scf .appref-ms` (Windows) and `.desktop .appimage .run
+  .bin` (a Linux desktop). That is a degrade rather than a refusal: the folder is the
+  same information with none of the execution. Note what is deliberately **not** on
+  that list — `.js`, `.ts`, `.py`, `.sh`, `.md` all open normally.
+
+  **The list is one set, not a pair chosen by host.** Both halves apply on both
+  hosts, so this field does not change meaning when the bridge moves — an entry that
+  is inert on the running host costs one extra click, and a client can cache the list
+  without asking what it is running on.
 
 There is **no roots check**: unlike `GET /api/fs` and `POST /api/fs/mkdir`, this route
 is not bounded by `CLAUDE_SESSIONS_ROOTS`. Opening `/tmp/…` and `/mnt/c/…` is the
@@ -3107,12 +3163,23 @@ common case, and a fence at `$HOME` would refuse those while buying little — a
 a caller could be induced to open, it could have written inside `$HOME` first. The
 route being local-only, and the launchable list above, are what carry the weight.
 
-`winPath` is the `\\wsl.localhost\…` or `C:\…` form `wslpath -w` produced. It is the
-authoritative translation; the `cs-host` meta tag exists only so a client can
-*display* an approximation of it before asking.
+**`winPath` is host-dependent, and its name is older than the second host.** It is
+the path as handed to the file manager:
 
-`400` for a missing `path`. `404` when nothing is at that path. `502` when `wslpath`
-or `explorer.exe` could not be run.
+| Host | `winPath` |
+|---|---|
+| WSL | the `\\wsl.localhost\…` or `C:\…` form `wslpath -w` produced |
+| Linux | the resolved Linux path — the same string as `path` |
+
+Under WSL it is the authoritative translation, and the `cs-host` meta tag exists only
+so a client can *display* an approximation of it before asking. On a Linux host there
+is no translation to be authoritative about, `cs-host` is not served at all, and a
+client should render the path as it stands. It is `null` only when the opener was
+never reached.
+
+`400` for a missing `path`. `404` when nothing is at that path. `502` when the opener
+could not be run — under WSL `wslpath` or `explorer.exe`, and on Linux `xdg-open`,
+which unlike Explorer also reports a file type nothing is registered for.
 
 ### `POST /api/sessions/:id/permission`
 
@@ -3214,7 +3281,9 @@ a *file* of that name is in the way. Creating one that is already a directory is
 **200** with `created: false` — the caller wanted a folder there and there is one.
 
 `/api/pairing` returns `{hosts: [{url, kind}], tailscale: {name, https, running},
-served, port}`, by shelling out to `tailscale.exe` on the Windows host. `served` is
+served, port}`, by shelling out to `tailscale`. It looks on `PATH` first and falls
+back to `tailscale.exe` on the Windows host, so a real Linux Tailscale wins wherever
+one exists and no client sees the difference. `served` is
 the origin `tailscale serve` is already proxying to this port, or null. Every `url`
 is a real value a client can use directly — never a placeholder to be edited. When
 nothing can be determined, `hosts` is empty and the caller should ask.

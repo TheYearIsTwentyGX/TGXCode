@@ -32,6 +32,7 @@ const FALLBACK = {
         { id: 'view.settings', group: 'Views', label: 'Settings', default: 'Ctrl+8' },
         { id: 'session.new', group: 'Sessions', label: 'Start a session', default: 'Ctrl+N' },
         { id: 'rail.filter', group: 'Sessions', label: 'Filter sessions', default: 'Ctrl+K' },
+        { id: 'terminal.toggle', group: 'Sessions', label: 'Terminal', default: 'Ctrl+Backquote' },
         { id: 'composer.snippets', group: 'Composer', label: 'Snippets', default: 'Ctrl+Slash' },
         { id: 'composer.permissionMode', group: 'Composer', label: 'Cycle permission mode', default: 'Ctrl+P' },
         { id: 'composer.model', group: 'Composer', label: 'Cycle model', default: 'Ctrl+M' },

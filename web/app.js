@@ -293,6 +293,10 @@ const state = {
         try { return new Set(JSON.parse(localStorage.getItem('railSchedOpen') || '[]')); }
         catch { return new Set(); }
     })(),
+    // Whether the rail is hiding sessions whose pull requests have all settled.
+    // localStorage rather than prefs, like everything else about how this rail is
+    // drawn: it is a view of one window, and the bridge has no use for it.
+    hideDone: localStorage.getItem('railHideDone') === '1',
     // Where each row and each group card sits, decided once — see rememberOrder.
     order: new Map(),       // sessionId -> rank
     groupOrder: new Map(),  // group key -> rank
@@ -585,10 +589,11 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'slash-menu', 'mention-menu', 'new-slash-menu', 'new-mention-menu',
     'new-attach', 'new-attach-input', 'new-attach-btn', 'new-attach-row',
     'queue', 'queue-list', 'queue-count', 'queue-clear',
-    'model', 'perm', 'btn-new', 'btn-new-menu', 'new-menu', 'db-status', 'db-label', 'toasts',
+    'model', 'perm', 'btn-new', 'btn-new-menu', 'new-menu', 'hide-done', 'hide-done-count',
+    'db-status', 'db-label', 'toasts',
     'opt-desktop', 'opt-sound', 'notify-note', 'notify-try',
     'quota-wrap', 'quota-pill', 'quota-pill-body', 'quota-menu', 'quota-windows',
-    'quota-events', 'quota-note', 'quota-refresh',
+    'quota-events', 'quota-note', 'quota-refresh', 'quota-live',
     'btn-pin', 'btn-changes', 'btn-folder', 'btn-term', 'btn-archive', 'btn-delete',
     'turns', 'turn-pop',
     'find', 'find-input', 'find-count', 'find-prev', 'find-next',
@@ -889,11 +894,21 @@ async function loadSessions() {
 function applyRailPrs(payload) {
     state.railPrs = new Map(Object.entries((payload && payload.sessions) || {}));
     state.prsError = (payload && payload.gh && payload.gh.error) || null;
+
+    // With `hideDone` on this payload decides which rows exist, not just what
+    // colour they are — a PR landing has to take its row with it — so the whole
+    // rail is rebuilt and the patching below is skipped. Hover and focus are what
+    // that costs, and only on the update that changes the answer.
+    if (state.hideDone) { renderRail(); return; }
+
     for (const s of state.sessions) {
         if (!s.prs || !s.prs.length) continue;
         const strip = dom.rail.querySelector(`[data-id="${CSS.escape(s.sessionId)}"]`);
         if (strip) patchPrBadge(strip, s);
     }
+    // The button counts finished sessions whether or not it is hiding them — that
+    // count is the reason to press it, and this is the only thing that moves it.
+    paintHideDone(state.sessions.filter(s => inProjectCard(s) && prDone(s)).length);
 }
 
 /** The one fetch of `/api/prs` a window makes: its first paint. */
@@ -907,6 +922,12 @@ async function loadRailPrs() {
 }
 
 const groupKeyOf = (s) => `project:${s.projectName || 'unknown'}`;
+
+// The sessions that land in a project card, which are the only ones `hideDone`
+// filters. Shared with `applyRailPrs`, which counts them for the button without
+// rebuilding the rail — two copies of this is how the count and the rows would
+// come to disagree.
+const inProjectCard = (s) => !s.pinned && !s.archived && !s.test;
 
 /**
  * Decide where each row and each group card sits, once.
@@ -1060,6 +1081,7 @@ function renderRail() {
     dom.rail.replaceChildren();
 
     if (!state.sessions.length) {
+        paintHideDone(0);
         dom.rail.append(el('div', { class: 'rail-empty' },
             state.query ? 'Nothing matches that filter.' : 'No sessions on disk yet.'));
         return;
@@ -1074,7 +1096,25 @@ function renderRail() {
     // is to be able to find it again and delete it. Only a development bridge
     // sends any, so the everyday window never grows this card.
     const test = ordered.filter(s => s.test && !s.pinned && !s.archived);
-    const rest = ordered.filter(s => !s.pinned && !s.archived && !s.test);
+    const rest = ordered.filter(inProjectCard);
+
+    // `hideDone`: drop the rows whose work has landed. Only from the project
+    // cards — pinning is something you did on purpose, archived is already out of
+    // the way, and the test card exists to be emptied by hand.
+    //
+    // Two things are never hidden. The session on screen, because a row leaving
+    // from under the conversation you are reading is the rail disagreeing with the
+    // main pane about where you are. And nothing at all while a search is running,
+    // for the reason `isOpen` gives for forcing groups open: a filter must not hide
+    // its own results, and somebody typing the title of a merged session is looking
+    // for exactly that.
+    const hiding = state.hideDone && !state.query;
+    const finished = rest.filter(prDone);
+    const gone = new Set(hiding
+        ? finished.filter(s => !state.current || state.current.sessionId !== s.sessionId)
+            .map(s => s.sessionId)
+        : []);
+    paintHideDone(finished.length);
 
     // Pinned first, across every project — that is the point of pinning.
     if (pinned.length) dom.rail.append(groupCard('pinned', 'Pinned', pinned));
@@ -1095,12 +1135,19 @@ function renderRail() {
         // be a great many of them and they are all alike, and a fortnight of
         // nightly reviews between you and the conversation you are looking for
         // is what the rail exists to prevent.
-        const sched = list.filter(s => s.schedule);
-        const plain = list.filter(s => !s.schedule);
+        const shown = list.filter(s => !gone.has(s.sessionId));
+        // A project with nothing left to show goes with its rows. An empty card
+        // is a heading claiming a count it is not drawing, which is the one thing
+        // `all` below is there to avoid.
+        if (!shown.length) continue;
+        const sched = shown.filter(s => s.schedule);
+        const plain = shown.filter(s => !s.schedule);
         dom.rail.append(groupCard(key, label, plain, {
             // The project heading still counts what it contains, subsection
             // included: a card saying 3 above a shut section holding 11 is
-            // wrong about the project, which is what the heading names.
+            // wrong about the project, which is what the heading names. Hidden
+            // rows are counted for the same reason — the project has them, and
+            // the button in the rail head is where the hiding is accounted for.
             all: list,
             lead: sched.length
                 ? groupCard(`sched:${key}`, 'Scheduled', sched, { nested: true })
@@ -1110,6 +1157,38 @@ function renderRail() {
 
     if (test.length) dom.rail.append(groupCard('test', 'Test sessions', test));
     if (archived.length) dom.rail.append(groupCard('archived', 'Archived', archived));
+
+    // Said out loud rather than left to look like a rail that has lost its
+    // sessions — the same promise the live board makes when `hideElsewhere`
+    // empties it. The button above is still lit, but an empty column is read
+    // before the control that caused it.
+    if (!dom.rail.childElementCount && gone.size) {
+        dom.rail.append(el('div', { class: 'rail-empty' },
+            `${gone.size === 1 ? 'One session is' : `All ${gone.size} sessions are`} finished, `
+            + 'and hidden. Press Hide finished to see them.'));
+    }
+}
+
+/**
+ * The Hide finished button's own state.
+ *
+ * `count` is how many sessions are finished, which is the same number whether the
+ * filter is on or off — it reads as "hide those 12" before the press and "12 are
+ * hidden" after it. Suppressed at zero rather than shown as 0, because nothing to
+ * hide is not a quantity worth a glyph in a rail this narrow.
+ *
+ * Called from `renderRail`, which knows the number, and from `applyRailPrs`, which
+ * is when the number moves without the rail being rebuilt.
+ */
+function paintHideDone(count) {
+    dom.hideDone.setAttribute('aria-pressed', String(state.hideDone));
+    dom.hideDoneCount.textContent = String(count);
+    dom.hideDoneCount.hidden = !count;
+    // Stale while a search is running: the rail is showing everything regardless,
+    // so the button says why rather than appearing to have stopped working.
+    dom.hideDone.title = state.query && state.hideDone
+        ? 'Showing finished sessions too, while the filter box has something in it'
+        : 'Hide sessions whose pull requests are all merged or closed';
 }
 
 /**
@@ -1316,6 +1395,24 @@ function activityBits(runner) {
                 clip(runner.detail || runner.activity || 'Working', 22))),
     ];
 }
+
+/**
+ * Is there nothing left open on this session's pull requests?
+ *
+ * `merged` and `closed` are the last two in the bridge's `ATTENTION_ORDER`, below
+ * every live state, so a session reduces to one of those two words only when none
+ * of its PRs is still going. The single word is therefore already the "all of
+ * them" test and the counts do not need consulting — which is the same reason the
+ * ranking lives on the bridge and is not copied here.
+ *
+ * A session with no PRs is not finished, it is unmeasured, and has no entry here
+ * at all; nor is one whose PRs could not be reached, which is `unknown`. Both keep
+ * their rows, which is the distinction `prBadge` already draws in colour.
+ */
+const prDone = (s) => {
+    const agg = state.railPrs.get(s.sessionId);
+    return !!agg && (agg.status === 'merged' || agg.status === 'closed');
+};
 
 /**
  * What a session's pull requests have come to, as one glyph.
@@ -1981,8 +2078,9 @@ function renderHeaderActions() {
     dom.btnChanges.title = state.changes.on
         ? 'Hide what this session changed' : 'What this session changed';
     dom.btnFolder.title = `Show ${s.cwd} in File Explorer`;
-    dom.btnTerm.title = dom.termPane.hidden
-        ? `Open a terminal in ${s.cwd}` : 'Hide the terminal';
+    dom.btnTerm.title = keys.hint(
+        dom.termPane.hidden ? `Open a terminal in ${s.cwd}` : 'Hide the terminal',
+        'terminal.toggle');
 }
 
 // A session transcript and a subagent transcript render identically — they
@@ -12385,6 +12483,9 @@ function paintShortcutHints() {
     paintSchedBadge();
     paintLiveBadge();
     dom.btnSettings.title = keys.hint('Settings', 'view.settings');
+    // Builds the terminal button's title from the session's cwd, and returns on
+    // its own when there is no session to build one from.
+    renderHeaderActions();
 }
 
 // ── notifications ────────────────────────────────────────────────────────
@@ -12870,6 +12971,10 @@ const quota = {
     // beacon that ran and failed. That one reports itself through
     // `beacon.reason`, which the panel already draws.
     refreshError: null,
+    // The handle that takes the flash back off the pill. Held so that two
+    // windows going bad moments apart cannot leave the first one's timer
+    // stripping the second one's highlight.
+    flashTimer: null,
 };
 
 /** Seconds since the snapshot was taken, on this window's clock. */
@@ -12970,6 +13075,13 @@ function renderQuotaPill() {
         if (typeof w.resetsAt === 'number') {
             titles[titles.length - 1] += `, resets in ${fmtLeft(w.resetsAt)}`;
         }
+        // The word the flash was about, so hovering the pill still explains it
+        // once the highlight has faded — and so the accessible name carries it
+        // for somebody who never saw the highlight at all.
+        if (w.status && w.status !== 'allowed') {
+            titles[titles.length - 1] += w.status === 'rejected'
+                ? ' — limit reached' : ' — nearly spent';
+        }
     }
 
     // When the window comes back. The percentage says whether to worry; this
@@ -12997,7 +13109,14 @@ function renderQuotaPill() {
             el('span', { text: fmtLeft(clock.resetsAt) })));
     }
 
-    dom.quotaPill.title = titles.join(' · ');
+    const summary = titles.join(' · ');
+    dom.quotaPill.title = summary;
+    // The button's own text is "5h 98% 12m", which is a fine glance and a poor
+    // accessible name, and `title` is only a fallback accname that browsers
+    // disagree about using. Set here rather than once in the HTML because this
+    // function re-runs every 30 seconds on quota.timer, and a name fixed at load
+    // is a name that goes stale.
+    dom.quotaPill.setAttribute('aria-label', `Quota used. ${summary}`);
 }
 
 function renderQuotaPanel() {
@@ -13184,6 +13303,115 @@ function renderQuota() {
 }
 
 /**
+ * How bad a window's status is, as a number worth comparing.
+ *
+ * A missing status is 0 rather than "unknown": a window nobody has reported on
+ * is not a complaint, and renderQuotaPill already draws it without a colour. An
+ * unrecognised string sorts as a warning rather than as fine — a status this app
+ * has never heard of is not something to stay quiet about, and the CLI has added
+ * to this vocabulary before.
+ */
+const QUOTA_RANK = { allowed: 0, allowed_warning: 1, rejected: 2 };
+function quotaRank(status) {
+    if (!status) return 0;
+    const r = QUOTA_RANK[status];
+    return r === undefined ? 1 : r;
+}
+
+/**
+ * One quota snapshot, applied. The only place `quota.snap` should ever be set.
+ *
+ * Funnelled because there are three sources — the SSE push, the reconnect reload
+ * and the Refresh button — and a flash that fires from one of them and not the
+ * others is a notification whose presence depends on how the snapshot happened
+ * to arrive.
+ *
+ * **The render has to come before the flash, not after.** `.quota-wrap[hidden]`
+ * sets `display: none`, and a CSS animation added to a `display: none` subtree
+ * never runs at all. renderQuota() is what takes the wrap out of hidden when the
+ * first reading for a window lands — which is exactly the case a rate limit
+ * arrives in.
+ */
+function applyQuotaSnapshot(next) {
+    const before = quota.snap;
+    quota.snap = next;
+    quota.at = Date.now();
+    renderQuota();
+    quotaFlash(before, next);
+}
+
+/**
+ * A window's status got worse — say so on the pill.
+ *
+ * This replaced a toast. `bridge/runner.js` emits a `notice` for a rate limit on
+ * every turn for as long as the limit holds, so the toast was the same sentence
+ * three times an hour, over the composer, about something already drawn in
+ * colour in the header. What the pill was missing was not information; it was
+ * something that moves when the state gets worse.
+ *
+ * Shaped after claudeFlash(): a before/after diff that points at the thing that
+ * moved, rather than a second idea about what "this just changed" looks like.
+ *
+ * **Per window, not worst-overall.** With the 5-hour window already `rejected`
+ * and the weekly one going `allowed` -> `rejected`, the worst status is
+ * `rejected` on both sides — a worst-only compare says nothing about a second
+ * window falling over, which is the moment somebody most needs telling.
+ *
+ * **A null `before` never flashes.** A cold start with a limit already in force
+ * renders a red pill and stays quiet: nothing just happened, and a page load is
+ * not news. It does mean a reconnect flashes for anything that worsened while
+ * the stream was down, which is the point — loadQuota() runs on `open` for
+ * exactly that catch-up.
+ *
+ * There is no repeat suppression here and none is needed. bridge/server.js only
+ * broadcasts `quota` when usage.noteRateLimitEvent says a reading moved, and a
+ * reading that moved without a status change raises no rank. Two gates, neither
+ * of which is a timer somebody has to tune.
+ */
+function quotaFlash(before, after) {
+    if (!before || !after) return;
+
+    const was = new Map((before.windows || []).map(w => [w.type, quotaRank(w.status)]));
+    let worst = 0;
+    let which = null;
+    for (const w of (after.windows || [])) {
+        const now = quotaRank(w.status);
+        // A type never seen before, arriving already bad, counts as a rise from
+        // fine — which is why the fallback is 0 rather than `now`.
+        if (now <= (was.has(w.type) ? was.get(w.type) : 0)) continue;
+        if (now > worst) { worst = now; which = w; }
+    }
+    if (!worst) return;
+
+    const said = `${which.label} quota ${worst >= 2 ? 'limit reached' : 'nearly spent'}.`;
+
+    // No window data means no pill on screen, and a flash nobody can see is not
+    // a notification. This is the one case that still earns the toast the rest
+    // of this replaced. It should be unreachable — a rate_limit_event always
+    // carries a status, and renderQuotaPill shows the wrap for a status alone —
+    // but the failure mode without it is silence, which is the thing this
+    // feature exists to avoid.
+    if (dom.quotaWrap.hidden) { toast(said, 'warn', 7000); return; }
+
+    // #toasts was the aria-live region and is no longer in this path, so the
+    // flash would otherwise announce nothing at all.
+    dom.quotaLive.textContent = said;
+
+    const pill = dom.quotaPill;
+    pill.dataset.flash = worst >= 2 ? 'bad' : 'warn';
+    pill.classList.remove('q-flash');
+    void pill.offsetWidth;      // restart it when a second window goes moments later
+    pill.classList.add('q-flash');
+    clearTimeout(quota.flashTimer);
+    // Three 0.7s pulses. Removing the class is also what ends the reduced-motion
+    // treatment, which holds the tint rather than animating it.
+    quota.flashTimer = setTimeout(() => {
+        pill.classList.remove('q-flash');
+        delete pill.dataset.flash;
+    }, 2100);
+}
+
+/**
  * Refresh the percentage now.
  *
  * The bridge answers with the whole quota payload rather than an
@@ -13198,10 +13426,11 @@ async function refreshQuotaNow() {
     renderQuota();
     try {
         const out = await post('/api/quota/refresh');
-        if (out && out.quota) {
-            quota.snap = out.quota;
-            quota.at = Date.now();
-        }
+        // The beacon only ever moves `usedPercent` and the harvest stamp —
+        // `status` is stream-only (bridge/usage.js) — so pressing Refresh cannot
+        // flash the pill. It goes through the funnel anyway rather than relying
+        // on that staying true.
+        if (out && out.quota) applyQuotaSnapshot(out.quota);
     } catch (err) {
         // A 409: not set up, or a run already going. Both are worth a line in
         // the panel and neither is worth a toast — the user is looking straight
@@ -13224,10 +13453,7 @@ function showQuota(on) {
 
 async function loadQuota() {
     try {
-        const snap = await get('/api/quota');
-        quota.snap = snap;
-        quota.at = Date.now();
-        renderQuota();
+        applyQuotaSnapshot(await get('/api/quota'));
     } catch {
         // A bridge without the route, or one that is down. The pill simply does
         // not appear; there is nothing here worth a toast.
@@ -13534,15 +13760,25 @@ function connect() {
 
     es.addEventListener('notice', (e) => {
         const n = JSON.parse(e.data);
+        // Rate limits belong to the pill. `rate_limit_event` arrives on every
+        // turn for as long as the limit holds, so as a toast this was a column
+        // of identical warnings over the composer — each one dismissed, each one
+        // back next turn — about something already drawn in the header. The
+        // `quota` event the runner emits immediately before this one is what
+        // flashes it; see quotaFlash().
+        //
+        // Dropped here rather than at the bridge on purpose. The Android client
+        // in ~/Other/tgxcode-mobile has no header pill, so a toast is still the
+        // right answer there, and silencing the notice on the wire would take
+        // the signal away from a client with nowhere else to put it.
+        if (n.kind === 'rate_limit') return;
         toast(n.text, n.level === 'warn' ? 'warn' : 'info', 7000);
     });
 
     // The whole snapshot, not a delta: it is a handful of windows and the
     // bridge only sends it when a reading actually moved.
     es.addEventListener('quota', (e) => {
-        quota.snap = JSON.parse(e.data);
-        quota.at = Date.now();
-        renderQuota();
+        applyQuotaSnapshot(JSON.parse(e.data));
     });
 
     // A process reported a command list that differs from the one we hold —
@@ -16103,7 +16339,15 @@ function showTerm(on, { focus = false } = {}) {
     dom.btnTerm.classList.toggle('on', on);
     dom.btnTerm.setAttribute('aria-pressed', String(on));
     renderHeaderActions();
-    if (!on) { termPane.detach(); return; }
+    if (!on) {
+        // The focus was inside the thing that just disappeared — the shell, or
+        // the Hide button that did it — so it would otherwise fall to <body> and
+        // the next keystroke would go nowhere. The composer is where you were
+        // going anyway.
+        if (dom.termPane.contains(document.activeElement) && !dom.input.disabled) dom.input.focus();
+        termPane.detach();
+        return;
+    }
 
     setTermHeight(termHeight());
     syncTerm();
@@ -17334,6 +17578,15 @@ dom.search.addEventListener('input', debounce(() => {
     state.query = dom.search.value;
     loadSessions();
 }, 180));
+
+// The rail's other filter. `renderRail` repaints the button itself, because it is
+// the thing that knows how many sessions the answer covers.
+dom.hideDone.addEventListener('click', () => {
+    state.hideDone = !state.hideDone;
+    try { localStorage.setItem('railHideDone', state.hideDone ? '1' : '0'); }
+    catch { /* private mode */ }
+    renderRail();
+});
 
 // Find in conversation. The index and the count run on the debounce so the
 // number keeps up with typing; the marks are painted on the frame after it.
@@ -19067,9 +19320,12 @@ document.addEventListener('keydown', (e) => {
     // The terminal gets its keys first when it has the focus: xterm passes
     // everything but its own copy chord straight through and it bubbles here as
     // well, so `inTerm` is the only thing stopping a shell from losing a Ctrl+F
-    // it was meant to keep. Only the two find commands yield — a view shortcut
+    // it was meant to keep. Only the commands whose chord a shell has a use of
+    // its own for yield — the two find ones, and the two composer cycles, whose
+    // Ctrl+P is readline's previous-history and the tmux prefix. A view shortcut
     // is not something a shell wants, and having Ctrl+3 stop working because the
     // cursor is in a terminal would be worse than the collision it avoids.
+    // `terminal.toggle` reads `inTerm` for a third thing again — see there.
     const command = keys.match(e);
     if (!command) return;
     const inTerm = dom.termBody && dom.termBody.contains(e.target);
@@ -19112,6 +19368,23 @@ document.addEventListener('keydown', (e) => {
         return;
     }
     if (command === 'rail.filter') { e.preventDefault(); dom.search.focus(); return; }
+    // Three states rather than two, which is what Ctrl+` means in every editor
+    // that has one: show it, then focus it, then put it away. So the chord is a
+    // way *into* the terminal and not only a way to see it. The toolbar button
+    // stays a plain show/hide — it cannot tell where the focus is, and a mouse
+    // already puts the caret where it is going.
+    //
+    // This is why the `inTerm` guard above is not a blanket return: the hide
+    // branch is the one case where a chord pressed inside the shell is meant for
+    // the window rather than for the pty.
+    if (command === 'terminal.toggle') {
+        if (!state.current) return;   // no session, no shell — as the button does
+        e.preventDefault();
+        if (dom.termPane.hidden) showTerm(true, { focus: true });
+        else if (!inTerm) termPane.focus();
+        else showTerm(false);
+        return;
+    }
     // Whichever composer the caret is in, and the live one otherwise — so the
     // same chord works inside the Start-a-session dialog for nothing.
     if (command === 'composer.snippets') {
@@ -19298,6 +19571,7 @@ loadSnippets();
 markInstance();
 registerWorker();
 paintDockButton();      // the remembered arrangement, before anything is drawn
+paintHideDone(0);       // and the remembered rail filter, lit before the rows arrive
 watchPaneInsets();      // keep the composer over the transcript as columns come and go
 // The chrome that names a shortcut, before anything can read it — the bar
 // buttons' titles are built from a count, so their static markup carries no

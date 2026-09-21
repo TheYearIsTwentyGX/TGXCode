@@ -452,6 +452,14 @@ packaged, and if one of those has to ship, say so and let the user run it.
 Two agents packaging at once will also pull the executable out from under each
 other, since the staging directory is wiped and rebuilt.
 
+**On a Linux host the rule is the same and the reason is weaker.** There is no
+staging directory and no file lock on a running executable, so `npm run build`
+cannot pull anything out from under anyone — but it still replaces the app the
+user is looking at, and a rebuild is still not something to do unasked. What does
+*not* need asking there is `npm install`: it only fetches devDependencies into a
+gitignored `node_modules/`, and `electron .` out of it is the normal way to look
+at an `app/main.js` change without packaging anything.
+
 ## What is safe
 
 - Editing anything under `bridge/`, `web/`, `scripts/`.
@@ -486,12 +494,26 @@ sectioned by comment headers, so search for the section name rather than scrolli
   with the conversation in it. Before that the index took whichever copy was
   scanned last, so directory order decided whether a session showed its history
   or showed 0 turns and nothing at all.
-- **No `node_modules`, on purpose.** `electron .` will not work here; the shell
-  is packaged from a Windows-side staging directory. `npm start` finds the built
-  executable instead.
+- **No `node_modules` on the Windows path, on purpose.** `electron .` will not
+  work from WSL; the shell is packaged from a Windows-side staging directory, and
+  a Linux Electron is not the app you want when the window has to be a Windows
+  one. `npm start` finds the built executable instead. On a Linux host the
+  opposite is true — `npm run build` installs devDependencies in place and
+  `electron .` is the short loop. The rule that holds on both is about
+  `dependencies`, not `node_modules`: see *You cannot add a dependency*.
 - **A login shell has neither node nor `claude` on PATH** — nvm and `~/.local/bin`
   both come from `~/.bashrc`, which `bash -lc` never reads. `bridge/launch.sh`
-  resolves node itself; that is why it exists.
+  resolves node itself; that is why it exists. This is not a WSL quirk: cron and
+  systemd hand you the same empty `PATH` on any machine.
+- **The bridge knows which host it is on in exactly one place.**
+  `bridge/platform.js` — `isWsl()`, from `WSL_DISTRO_NAME` or
+  `/proc/sys/fs/binfmt_misc/WSLInterop`, overridable with
+  `CLAUDE_SESSIONS_HOST_KIND` so tests can drive both branches from either
+  machine. Two modules read it: `bridge/explorer.js` (`explorer.exe` vs
+  `xdg-open`) and `bridge/devbrowser.js` (where the control-server file lives).
+  If you are about to add a third `process.platform` check somewhere, use this
+  instead — and add a case to `test/platform.test.js`, which asserts on *what got
+  spawned* rather than on an error string.
 - **Commit messages are prose, not prefixes.** The log is uniform: an imperative
   sentence-case subject describing the change as the user meets it — "Give each
   session its own terminal pane", "Let an approval card wait as long as you do" —

@@ -69,6 +69,20 @@ body {
 
 ::selection { background: #2e4a75; color: #fff; }
 
+/* Text for a screen reader and nothing else. Clipped rather than `display:none`
+   or `visibility:hidden`, either of which takes it out of the accessibility tree
+   along with the pixels, which is the whole thing it is for. */
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
 ::-webkit-scrollbar { width: 12px; height: 12px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
@@ -225,6 +239,70 @@ a:hover { text-decoration: underline; }
 }
 .quota-pill:hover { background: var(--s3); color: var(--text); }
 .quota-pill[aria-expanded="true"] { background: var(--s3); color: var(--text); }
+
+/* A window just went from fine to not-fine. This was a toast until it wasn't,
+   and a toast was the wrong shape for it twice over: `rate_limit_event` arrives
+   on *every* turn for as long as the limit holds, so it stacked identical
+   warnings over the composer, and the thing it was about is already drawn a few
+   pixels away in the header. So the pill says it about itself. See quotaFlash()
+   in web/app.js.
+
+   These rules sit after `:hover` and `[aria-expanded]` on purpose — all three
+   are specificity (0,2,0), so source order is what decides the flash still shows
+   while the pointer is over the pill.
+
+   The ring is a spread `box-shadow` for the reason flash-settings-row gives
+   further down this file: the pill has `padding: 0 13px` and a background of its
+   own, so a highlight has to be carried out past it by something that takes no
+   part in layout. The shadow inherits `border-radius: var(--pill)`, so it comes
+   out as a ring around a capsule rather than as a rectangle clipped to the text.
+
+   Tinted with color-mix into --s2 rather than two new hex values, so the colour
+   the pill settles back to is the one it actually lives on rather than a
+   near-miss somebody has to notice later. */
+.quota-pill.q-flash {
+    background: var(--q-flash-tint);
+    animation: flash-quota-pill 0.7s var(--ease) 3;
+}
+.quota-pill.q-flash[data-flash="warn"] {
+    --q-flash-tint: color-mix(in srgb, var(--yellow) 22%, var(--s2));
+    --q-flash-ring: color-mix(in srgb, var(--yellow) 55%, transparent);
+}
+.quota-pill.q-flash[data-flash="bad"] {
+    --q-flash-tint: color-mix(in srgb, var(--red) 24%, var(--s2));
+    --q-flash-ring: color-mix(in srgb, var(--red) 60%, transparent);
+}
+
+/* Three rings rather than one fade. A single 1.3s wash in the corner of a wide
+   window is exactly what the toast was covering for, and this is now the only
+   thing on screen that moves when a limit is hit.
+
+   The ring reaches its full spread in the first third and then fades *in place*,
+   rather than fading as it expands. The obvious radar-ping shape — grow and fade
+   together — does not work here: a shadow with no spread sits entirely behind an
+   opaque pill, so the ring is at its most transparent exactly when it first
+   becomes visible, and --ease is cubic-bezier(0.2, 0, 0, 1), which front-loads
+   hard enough that it is all but gone by the time it clears the edge. Measured
+   at 8% alpha before it was split in two. */
+@keyframes flash-quota-pill {
+    0%   { box-shadow: 0 0 0 0 var(--q-flash-ring); }
+    35%  { box-shadow: 0 0 0 5px var(--q-flash-ring); }
+    100% { box-shadow: 0 0 0 5px transparent; }
+}
+
+/* Not `animation: none`, which is what every other flash in this file does.
+   Those are a nicety over something the user is already looking at; this one is
+   the only channel left now the toast is gone, so switching it off switches the
+   feature off for anybody who asked for less motion. The tint and a static ring
+   are held instead for the 2.1s the class is applied, and .quota-pill's existing
+   `transition: background` fades them in and out — a colour crossfade, which is
+   not the problem this query is about. */
+@media (prefers-reduced-motion: reduce) {
+    .quota-pill.q-flash {
+        animation: none;
+        box-shadow: 0 0 0 5px var(--q-flash-ring);
+    }
+}
 
 .quota-pill #quota-pill-body { display: flex; align-items: center; gap: 9px; }
 
@@ -402,7 +480,40 @@ a:hover { text-decoration: underline; }
     padding: 0 8px 8px;
 }
 
-.rail-head { padding: 0 4px 10px; }
+.rail-head { display: flex; flex-direction: column; gap: 6px; padding: 0 4px 10px; }
+
+/* Secondary to the button above it and drawn that way: the rail's ground rather
+   than a raised surface, and a light that says on without competing with New
+   session for the eye. Full width because everything in this column is. */
+.rail-filter {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    height: 30px;
+    padding: 0 12px;
+    background: var(--s2);
+    color: var(--text-3);
+    font: 500 12px/1 var(--sans);
+    border-radius: var(--pill);
+    white-space: nowrap;
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.rail-filter:hover { background: var(--s3); color: var(--text); }
+.rail-filter svg { flex: none; color: var(--text-4); }
+.rail-filter-label { overflow: hidden; text-overflow: ellipsis; }
+.rail-filter[aria-pressed="true"] { background: var(--blue-cont); color: #dbe6fb; }
+.rail-filter[aria-pressed="true"] svg { color: var(--blue); }
+
+/* How many sessions the button is talking about — the same number whether it is
+   on or off, so it reads as "hide those 12" and then as "12 are hidden". */
+.rail-filter-count {
+    margin-left: auto;
+    color: var(--text-4);
+    font-variant-numeric: tabular-nums;
+}
+.rail-filter[aria-pressed="true"] .rail-filter-count { color: #b9cdf0; }
+.rail-filter-count[hidden] { display: none; }
 
 /* Two buttons that read as one control: one height, one outer radius, and a
    hairline of the rail showing between them. Each half lights on its own, so the

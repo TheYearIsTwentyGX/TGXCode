@@ -1,9 +1,15 @@
 'use strict';
 
-// Generates app/icon.ico — the taskbar and Start-menu icon.
+// Generates app/icon.ico and app/icon.png — the taskbar, Start-menu and
+// application-launcher icons.
 //
-// Run with `node app/make-icon.js` after editing; the .ico is committed so a
-// normal build never needs to.
+// Two files because the two hosts want different containers for the same
+// picture: Windows reads the ICO, and every Linux desktop and electron-builder's
+// Linux targets want a PNG (256px, which is what `build.linux.icon` expects).
+// They come out of one render, so there is no second picture to keep in step.
+//
+// Run with `node app/make-icon.js` after editing; both are committed so a normal
+// build never needs to.
 //
 // Everything here is hand-rolled because the project has no dependencies and a
 // build step for one icon is not worth it. Shapes are signed distance fields,
@@ -208,9 +214,18 @@ const out = path.join(__dirname, 'icon.ico');
 fs.writeFileSync(out, ico);
 console.log(`wrote ${out} — ${SIZES.join(', ')}px, ${(ico.length / 1024).toFixed(1)}KB`);
 
-// A PNG copy is handy for previewing the design without an ICO viewer.
+// The largest size, as a plain PNG: what Linux desktops and electron-builder's
+// Linux targets read. Written every run rather than behind a flag, because a
+// build reads it and an icon that is stale on one host and current on the other
+// is the kind of difference nobody notices until it ships.
+const big = images[images.length - 1];
+const png = path.join(__dirname, 'icon.png');
+fs.writeFileSync(png, big.png);
+console.log(`wrote ${png} — ${big.size}px, ${(big.png.length / 1024).toFixed(1)}KB`);
+
+// A copy under another name is handy for previewing the design without an ICO
+// viewer, and predates icon.png being a build input.
 if (process.argv.includes('--preview')) {
-    const big = images[images.length - 1];
     const p = path.join(__dirname, 'icon-preview.png');
     fs.writeFileSync(p, big.png);
     console.log(`wrote ${p}`);

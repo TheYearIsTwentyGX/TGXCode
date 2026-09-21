@@ -14,7 +14,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawn, execFile } = require('child_process');
-const { toWindowsPath, winEnvAsWslPath } = require('./win');
+const { toWindowsPath, winEnvAsWslPath, isWsl } = require('./win');
 
 const { DEFAULT_PORT, DEV_PORT } = require('../bridge/config');
 const ports = require('../bridge/ports');
@@ -64,6 +64,33 @@ function findExe() {
         path.join(local, 'Programs', 'ClaudeSessions', 'ClaudeSessions.exe'),
         path.join(local, 'ClaudeSessions-build', 'dist', 'win-unpacked', 'ClaudeSessions.exe'),
     ].find(p => fs.existsSync(p)) || null;
+}
+
+/**
+ * The Linux shell to point at this bridge, or null.
+ *
+ * `electron .` is listed *first* here and last in scripts/start.js, and the
+ * difference is deliberate: `npm start` wants the app as installed, while this
+ * wants the app as it is in the checkout you are editing. Building an AppImage
+ * to see a one-line change to app/main.js is exactly the round trip the rest of
+ * this project avoids.
+ */
+function findLinuxApp() {
+    const electron = path.join(repo, 'node_modules', '.bin', 'electron');
+    if (fs.existsSync(electron)) return { cmd: electron, args: [repo] };
+
+    const unpacked = path.join(repo, 'dist', 'linux-unpacked', 'ClaudeSessions');
+    if (fs.existsSync(unpacked)) return { cmd: unpacked, args: [] };
+
+    try {
+        const image = fs.readdirSync(path.join(repo, 'dist'))
+            .filter(f => f.endsWith('.AppImage'))
+            .map(f => path.join(repo, 'dist', f))
+            .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
+        if (image) return { cmd: image, args: [] };
+    } catch { /* never built */ }
+
+    return null;
 }
 
 /**
@@ -126,8 +153,9 @@ function askedPort() {
 
     if (!wantsWindow) return;
 
-    const exe = findExe();
-    if (!exe) {
+    const onWsl = isWsl();
+    const app = onWsl ? findExe() : findLinuxApp();
+    if (!app) {
         console.log('  No built app found, so no window. The UI works in a browser at');
         console.log(`  ${origin} — or run \`npm run build\` for the desktop shell.`);
         console.log('');
@@ -136,12 +164,23 @@ function askedPort() {
 
     // Give the bridge a moment so the window does not open on a splash.
     setTimeout(() => {
-        const winPath = toWindowsPath(exe);
-        if (!winPath) return;
-        // The port travels in the environment; the shell prefers it over config.json.
-        execFile('cmd.exe',
-            ['/c', 'set', `CLAUDE_SESSIONS_PORT=${port}`, '&&', 'start', '', winPath],
-            { cwd: '/mnt/c' }, () => {});
+        // The port travels in the environment either way; the shell prefers it
+        // over config.json.
+        if (onWsl) {
+            const winPath = toWindowsPath(app);
+            if (!winPath) return;
+            execFile('cmd.exe',
+                ['/c', 'set', `CLAUDE_SESSIONS_PORT=${port}`, '&&', 'start', '', winPath],
+                { cwd: '/mnt/c' }, () => {});
+        } else {
+            const child = spawn(app.cmd, app.args, {
+                detached: true,
+                stdio: 'ignore',
+                env: { ...process.env, CLAUDE_SESSIONS_PORT: String(port) },
+            });
+            child.on('error', err => console.error(`  Could not open a window: ${err.message}`));
+            child.unref();
+        }
         console.log(`  Opening a window against ${origin}…`);
     }, 2500);
 })();
