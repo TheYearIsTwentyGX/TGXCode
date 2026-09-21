@@ -12963,6 +12963,13 @@ const quota = {
     // advance without refetching and without trusting the two clocks to agree.
     at: 0,
     timer: null,
+    // The one-second countdown, live only while something is actually counting
+    // down. Separate from `timer` because it rewrites text and nothing else —
+    // see tickQuotaClocks for why it must not be a faster renderQuota.
+    tick: null,
+    // The reset we have already refetched for, so a countdown that lands on
+    // zero asks the bridge once rather than once a second.
+    awaitedReset: 0,
     // A manual refresh is in flight. Held here rather than read off
     // `snap.beacon.running` because the snapshot is only as current as the last
     // fetch, and the button has to change the instant it is pressed.
@@ -13000,24 +13007,34 @@ function fmtAge(seconds) {
     return `${Math.round(seconds / 86400)}d ago`;
 }
 
-/** Time until a reset, phrased as a wait rather than a clock time. */
 /**
  * Time until a reset, phrased as a wait rather than a clock time.
  *
- * **Both halves come out of one rounded total**, which is the whole trick. The
- * obvious way — floor the hours, round the leftover minutes — prints "3h 60m"
- * at three hours fifty-nine and a half, because the two units are decided
- * independently and nothing reconciles them. Same shape of bug gives "1d 24h".
- * Round once to the smaller unit, then divide.
+ * **Every pair of units comes out of one rounded total**, which is the whole
+ * trick. The obvious way — floor the hours, round the leftover minutes — prints
+ * "3h 60m" at three hours fifty-nine and a half, because the two units are
+ * decided independently and nothing reconciles them. Same shape of bug gives
+ * "1d 24h", and "60m 00s" one second under the hour. Round once to the smaller
+ * unit, then divide.
+ *
+ * Seconds are only shown inside the last hour. Above that they would be a
+ * flickering digit on a number nobody is watching that closely; below it, the
+ * countdown is the thing being watched, which is why tickQuotaClocks exists.
  */
 function fmtLeft(resetsAt) {
     if (!quota.snap || typeof resetsAt !== 'number') return '';
     const s = resetsAt - (quota.snap.now + quotaDrift());
     if (s <= 0) return 'due now';
 
-    const mins = Math.round(s / 60);
-    if (mins < 60) return `${Math.max(1, mins)}m`;
+    // Whole seconds first, and everything below buckets on this rather than on
+    // `s`: ceil(3599.5) is 3600, which has to read "1h" and not "60m 00s".
+    const total = Math.ceil(s);
+    if (total < 60) return `${total}s`;
+    if (total < 3600) return `${Math.floor(total / 60)}m ${pad(total % 60)}s`;
 
+    // An hour and up, in minutes. No `mins < 60` case to handle — the seconds
+    // path above owns everything under the hour.
+    const mins = Math.round(total / 60);
     const hours = Math.floor(mins / 60);
     const restMins = mins % 60;
     if (hours < 24) return restMins ? `${hours}h ${restMins}m` : `${hours}h`;
@@ -13106,7 +13123,10 @@ function renderQuotaPill() {
                     + '<path d="M12 7v5.2l3.4 2" stroke="currentColor" stroke-width="2"'
                     + ' stroke-linecap="round" stroke-linejoin="round"/>',
             }),
-            el('span', { text: fmtLeft(clock.resetsAt) })));
+            // data-resets-at is what tickQuotaClocks finds. It carries the
+            // timestamp rather than the rendered text, so the tick needs to
+            // know nothing about the shape of a snapshot.
+            el('span', { 'data-resets-at': String(clock.resetsAt), text: fmtLeft(clock.resetsAt) })));
     }
 
     const summary = titles.join(' · ');
@@ -13150,13 +13170,18 @@ function renderQuotaPanel() {
         const sub = el('div', { class: 'q-row-sub' },
             el('span', { class: stale ? 'warn' : '', text: left }));
 
-        const bits = [];
-        if (w.resetsAt) bits.push(`resets in ${fmtLeft(w.resetsAt)}`);
-        if (w.isUsingOverage) bits.push('on overage');
-        sub.append(el('span', {
+        // The reset gets an element of its own rather than being joined into
+        // one string: tickQuotaClocks rewrites its text every second, and it
+        // cannot do that to a span that also holds the overage note.
+        const right = el('span', {
             class: w.status === 'rejected' ? 'bad' : w.status === 'allowed_warning' ? 'warn' : '',
-            text: bits.join(' · '),
-        }));
+        });
+        if (w.resetsAt) {
+            right.append('resets in ',
+                el('span', { 'data-resets-at': String(w.resetsAt), text: fmtLeft(w.resetsAt) }));
+        }
+        if (w.isUsingOverage) right.append(w.resetsAt ? ' · on overage' : 'on overage');
+        sub.append(right);
         row.append(sub);
         rows.append(row);
     }
@@ -13300,6 +13325,90 @@ function renderQuota() {
     renderQuotaPill();
     renderQuotaRefresh();
     if (!dom.quotaMenu.hidden) renderQuotaPanel();
+    syncQuotaClock();
+}
+
+/** Seconds left on a reset, on the server's clock corrected for drift. */
+function quotaLeft(resetsAt) {
+    return resetsAt - (quota.snap.now + quotaDrift());
+}
+
+/**
+ * Every countdown currently on screen, pill and panel alike.
+ *
+ * The panel only counts while it is open. Closing it hides #quota-menu without
+ * emptying it, so its rows are still in the document — ticking them would keep
+ * the interval alive over text nobody can see, and worse, would keep it alive
+ * after the pill's own countdown had run out. Reopening rebuilds the rows, so
+ * nothing stale is ever shown.
+ */
+function quotaClockNodes() {
+    const nodes = [...dom.quotaPillBody.querySelectorAll('[data-resets-at]')];
+    if (!dom.quotaMenu.hidden) nodes.push(...dom.quotaWindows.querySelectorAll('[data-resets-at]'));
+    return nodes;
+}
+
+/**
+ * Move every countdown on the pill and in the panel.
+ *
+ * **Text only, on purpose.** The obvious implementation of a per-second
+ * countdown is renderQuota on a one-second interval, and that is wrong twice
+ * over: renderQuotaPill empties #quota-pill-body and rebuilds it, so anything
+ * decorating a window group would be destroyed roughly once a second, and it
+ * redraws two bars and a whole panel to move one digit. Shaped after
+ * tickCardClocks instead — find the marked nodes, rewrite their text, touch
+ * nothing else.
+ *
+ * `title` and `aria-label` are deliberately left to the thirty-second repaint.
+ * They are the pill's accessible name, and a name that changes every second is
+ * announced as a name that changes every second.
+ */
+function tickQuotaClocks() {
+    if (!quota.snap) return stopQuotaClock();
+
+    let counting = false;
+    let last = 0;
+    for (const n of quotaClockNodes()) {
+        const at = Number(n.dataset.resetsAt);
+        n.textContent = fmtLeft(at);
+        if (quotaLeft(at) > 0) counting = true;
+        last = at;
+    }
+    if (counting || !last) return;
+
+    // Everything on screen has run out. Stop, and ask once for a snapshot that
+    // knows what comes next: the bridge drops a window whose reset has passed
+    // (bridge/usage.js), so without this the pill sits on "due now" until some
+    // unrelated turn happens to push one. Guarded by the timestamp rather than
+    // by a bare flag, so a fetch that changes nothing cannot become a poll.
+    stopQuotaClock();
+    if (quota.awaitedReset !== last) {
+        quota.awaitedReset = last;
+        loadQuota();
+    }
+}
+
+function stopQuotaClock() {
+    clearInterval(quota.tick);
+    quota.tick = null;
+}
+
+/**
+ * Run the tick only while a reset is actually approaching.
+ *
+ * Called from renderQuota, which covers every way the marked nodes can change:
+ * a snapshot arriving, the panel opening, and the thirty-second repaint. So the
+ * interval is never left running over a pill with no countdown in it, and it
+ * starts the moment the first reset time is picked up.
+ */
+function syncQuotaClock() {
+    const live = !!quota.snap
+        && quotaClockNodes().some(n => quotaLeft(Number(n.dataset.resetsAt)) > 0);
+    if (live) {
+        if (!quota.tick) quota.tick = setInterval(tickQuotaClocks, 1000);
+    } else if (quota.tick) {
+        stopQuotaClock();
+    }
 }
 
 /**
@@ -13448,7 +13557,12 @@ function showQuota(on) {
     // The two popovers must not sit open together, and each one's outside-click
     // listener is stopped by the other's trigger. There were three of these
     // until the bell's went into the settings page.
+    // syncQuotaClock as well as the render: the panel can hold a countdown the
+    // pill does not draw — the pill only clocks a window that has a percentage
+    // or a status — so opening it is one of the ways a first reset time reaches
+    // the screen, and closing it is one of the ways the last one leaves.
     if (on) { renderQuotaPanel(); showNewMenu(false); }
+    syncQuotaClock();
 }
 
 async function loadQuota() {
@@ -13477,9 +13591,15 @@ document.addEventListener('click', (e) => {
     if (!dom.quotaMenu.hidden && !e.target.closest('.quota-wrap')) showQuota(false);
 });
 
-// Ages and reset countdowns move on their own, so the pill is repainted on a
-// clock rather than only when a snapshot arrives. Half a minute is enough for a
-// countdown in minutes and cheap enough to leave running.
+// Ages move on their own, so the pill is repainted on a clock rather than only
+// when a snapshot arrives. Half a minute is enough for "12m ago" and for the
+// crossing into stale, and cheap enough to leave running.
+//
+// The countdown does not wait for this — tickQuotaClocks runs it at 1 Hz. What
+// this interval still owns for the countdown is the marking: it is a full
+// render, so it is what puts data-resets-at back on a rebuilt pill, and its
+// syncQuotaClock is the safety net that starts the tick if a reset time ever
+// arrives by a path that forgets to render.
 quota.timer = setInterval(renderQuota, 30000);
 
 // ── streaming ────────────────────────────────────────────────────────────
