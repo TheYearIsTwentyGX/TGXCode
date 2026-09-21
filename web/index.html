@@ -182,6 +182,26 @@
         <div id="quota-windows"></div>
         <div id="quota-events" class="quota-events"></div>
         <div id="quota-note" class="quota-note"></div>
+
+        <!-- Restarting the bridge is the state of the machine, which is what
+             this popover is about; in the bar it was an unlabelled glyph next
+             to DevBrowser with only a title to say what it did. `hidden` here
+             rather than shown by default: markInstance() decides, and a row
+             that flashes in before /api/health answers is worse than one that
+             arrives a beat late. -->
+        <button id="quota-restart" class="quota-restart" type="button" hidden>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M20.5 12a8.5 8.5 0 1 1-8.5-8.5c2.38 0 4.66.94 6.36 2.64L20.5 8"
+                  stroke="currentColor" stroke-width="1.7"
+                  stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M20.5 3.5v4.5h-4.5" stroke="currentColor" stroke-width="1.7"
+                  stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span class="qr-text">
+            <span class="qr-label" id="quota-restart-label">Restart bridge</span>
+            <span class="qr-sub" id="quota-restart-sub"></span>
+          </span>
+        </button>
       </div>
     </div>
 
@@ -191,20 +211,6 @@
          live region inside a hidden subtree is not announced at all. A <span>
          because `.bar > *` is given `-webkit-app-region: no-drag`. -->
     <span id="quota-live" class="sr-only" role="status" aria-live="polite"></span>
-
-    <!-- Grouped with the DevBrowser pill rather than with Tasks and Board: those
-         are places to go, and these two are the state of the machine. Hidden for
-         a remote caller, which is a courtesy — the route refuses it either way. -->
-    <button id="btn-restart" class="bar-btn icon-only" type="button"
-            title="Pull and restart the bridge">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <path d="M20.5 12a8.5 8.5 0 1 1-8.5-8.5c2.38 0 4.66.94 6.36 2.64L20.5 8"
-              stroke="currentColor" stroke-width="1.7"
-              stroke-linecap="round" stroke-linejoin="round"/>
-        <path d="M20.5 3.5v4.5h-4.5" stroke="currentColor" stroke-width="1.7"
-              stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
-    </button>
 
     <button id="db-status" class="db-status" data-up="false" type="button"
             title="DevBrowser connection">

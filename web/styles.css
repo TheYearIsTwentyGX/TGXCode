@@ -467,6 +467,45 @@ a:hover { text-decoration: underline; }
     word-break: break-all;
 }
 
+/* The foot of the popover rather than a widget inside it: the menu has
+   `padding: 13px 15px 12px`, so a row that stopped short of those edges would
+   read as a card within a card. The negative margins bleed it back out to the
+   corners and the bottom radius finishes them.
+
+   Busy and disabled are lifted from .quota-refresh above, which is the point of
+   moving this control here at all — there is no `.bar-btn.busy` rule anywhere in
+   this file, so the old header button looked inert for the whole 45 seconds a
+   restart can take. */
+.quota-restart {
+    display: flex;
+    /* Not centred: the sub line wraps to two on a worktree path, and a centred
+       icon then sits beside the path rather than beside the label it belongs to. */
+    align-items: flex-start;
+    gap: 9px;
+    width: calc(100% + 30px);
+    margin: 11px -15px -12px;
+    padding: 9px 15px 10px;
+    border: 0;
+    border-top: 1px solid var(--s2);
+    border-radius: 0 0 var(--r) var(--r);
+    background: none;
+    color: var(--text-3);
+    text-align: left;
+    cursor: pointer;
+}
+.quota-restart[hidden] { display: none; }
+.quota-restart:hover:not(:disabled) { background: var(--s4); color: var(--text); }
+.quota-restart:disabled { opacity: 0.45; cursor: default; }
+.quota-restart.busy { cursor: wait; }
+.quota-restart svg { flex: none; margin-top: 2px; }
+
+.qr-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.qr-label { font: 400 12.5px/1.3 var(--sans); }
+/* A worktree checkout is a long path with no spaces in it, and this popover is
+   306px wide — without this it runs off the edge rather than wrapping. */
+.qr-sub { font: 400 11px/1.4 var(--sans); color: var(--text-4); overflow-wrap: anywhere; }
+.qr-sub:empty { display: none; }
+
 @media (prefers-reduced-motion: reduce) { .quota-menu { animation: none; } }
 
 
