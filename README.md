@@ -269,12 +269,12 @@ click.
 happened; an offer is the one thing in the pane that has not happened yet, and it
 is a decision waiting on you rather than an event. Inline it interrupted the
 reading and scrolled away; in the aside it stays put and stays optional. Each
-task folds to its title — open by default while it is still an offer, folded once
-you have dealt with it — and the panel itself folds to a strip, so a session that
-suggested six things is not permanently narrower than one that suggested none.
-Whether the panel is open is remembered across sessions, like the terminal pane's
-height; which tasks are open is not, because the useful default changes as you
-deal with them.
+task folds to its title — all of them, whatever you have decided about them, so
+the panel reads as a list of what is on offer rather than a column of prompts —
+and the panel itself folds to a strip, so a session that suggested six things is
+not permanently narrower than one that suggested none. Whether the panel is open
+is remembered across sessions, like the terminal pane's height; which tasks you
+opened is not, because they are long and folding them again is the point.
 
 **The ⤢ on a row opens the task at a readable width.** 300px is right for
 scanning a list and wrong for reading a prompt written to brief an agent that has
