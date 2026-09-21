@@ -329,9 +329,9 @@ const state = {
     // out of the transcript on the way past — see appendEvents — because they are
     // drawn in the aside beside the log rather than in it.
     tasks: new Map(),         // toolUseId -> ev
-    // Which task bodies are open. Only the ones you have actually toggled: the
-    // default is worked out per task in taskCard, so an offer you have not dealt
-    // with opens itself and one you have dealt with does not.
+    // Which task bodies are open. Only the ones you have actually opened: a card
+    // starts folded whatever its status, so absence means folded rather than
+    // "not decided yet".
     taskOpen: new Map(),      // toolUseId -> bool
     // Whether the aside is showing at all. A property of the window rather than
     // of a session, like the terminal pane's height — you either want these in
@@ -2652,11 +2652,10 @@ function renderAgentDone(ev) {
 //
 // The panel collapses to a strip, because a session that suggested six things
 // should not be permanently narrower than one that suggested none. Each task
-// collapses on its own too, and the default is per task rather than global: an
-// offer you have not dealt with opens itself, one you have opens to a line.
-
-/** What a task's body should do when nothing has been said about it. */
-const taskOpenByDefault = (acted) => !acted;
+// collapses on its own too, and every one of them starts folded — the panel is
+// for seeing what is on offer, and a prompt written to brief an agent with none
+// of your context runs to paragraphs, so a single open body fills the column.
+// Opening one, or the ⤢ dialog, is how you read it.
 
 /** The whole aside, rebuilt from state.tasks. Cheap: there are never many. */
 function renderTasks() {
@@ -2705,8 +2704,9 @@ function renderTasks() {
  */
 function taskCard(ev) {
     const acted = state.suggestions.get(ev.id) || null;
-    const remembered = state.taskOpen.get(ev.id);
-    const open = remembered === undefined ? taskOpenByDefault(acted) : remembered;
+    // Folded unless you opened it yourself, and then only until you leave the
+    // conversation. `acted` is still wanted below for the tint.
+    const open = state.taskOpen.get(ev.id) === true;
 
     const det = el('details', {
         class: 'task', 'data-status': acted ? acted.status : 'open',
@@ -2892,9 +2892,9 @@ async function actOnSuggestion(ev, status, startedId = null) {
 
     if (status) state.suggestions.set(ev.id, { status, startedId, at: Date.now() });
     else state.suggestions.delete(ev.id);
-    // Deciding about a task is also finishing with it, so it folds away — and
-    // undoing opens it again. Left to the default rather than remembered, which
-    // is the one place the remembered state would be actively unhelpful.
+    // Deciding about a task is also finishing with it, so a card you had opened
+    // folds away. Dropped rather than set false so it goes back to the default,
+    // which is the one place the remembered state would be actively unhelpful.
     state.taskOpen.delete(ev.id);
     renderTasks();
     if (state.taskDialog === ev.id) paintTaskDialogActions(ev);
