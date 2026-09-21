@@ -2125,10 +2125,26 @@ a:hover { text-decoration: underline; }
     0%, 55% { background: var(--blue-tint); box-shadow: 0 0 0 8px var(--blue-tint); }
     100% { background: transparent; box-shadow: 0 0 0 8px transparent; }
 }
+/* A select the keyboard just moved. Ctrl+P and Ctrl+M cycle the composer's
+ * Permissions and Model, and a value changing on its own is easy to miss in a
+ * row of small pills — so the same "this just changed" vocabulary as the two
+ * above, aimed at a control rather than a row.
+ *
+ * A ring and no background, which is the one thing it does differently. The
+ * other three end on `transparent` because they highlight something with no
+ * resting background of its own; a select has one, so ending there would leave
+ * the pill flat until the next repaint. The spread `box-shadow` follows the
+ * pill's own border-radius and takes no part in layout. */
+select.flash { animation: flash-select 1.3s var(--ease); }
+@keyframes flash-select {
+    0%, 55% { box-shadow: 0 0 0 3px var(--blue-tint); }
+    100% { box-shadow: 0 0 0 3px transparent; }
+}
 @media (prefers-reduced-motion: reduce) {
     .ev-user.flash .ev-body,
     .ev:not(.ev-user).flash .ev-body,
-    .settings-row.flash { animation: none; }
+    .settings-row.flash,
+    select.flash { animation: none; }
 }
 
 /* ── find in conversation ────────────────────────────────────────────── */
