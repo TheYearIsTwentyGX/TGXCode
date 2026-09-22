@@ -912,6 +912,18 @@ a:hover { text-decoration: underline; }
     font-size: 10.5px;
 }
 
+/* Messages waiting on a clock rather than on a turn. The same badge in the amber
+   of a schedule, because the two facts are different in the one way that matters:
+   a queued message goes as soon as the turn ends, and this one goes at 2am. */
+.strip-meta .due {
+    flex: none;
+    padding: 1px 7px;
+    border-radius: var(--pill);
+    background: #3a2f16;
+    color: var(--yellow);
+    font-size: 10.5px;
+}
+
 /* Whether a session is doing anything, at the head of the line.
    It used to be green-for-active only, standing down for running rows on the
    grounds that the activity line said it better. But the activity line is last on
@@ -3543,6 +3555,170 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     border-color: var(--outline);
 }
 .btn-attach:disabled { color: var(--text-4); border-color: var(--s3); cursor: default; }
+
+/* Send later.
+   ---------------------------------------------------------------------------
+   The button borrows .btn-attach's shape rather than .btn-snippets' — it sits in
+   the same run as Attach, on the left of Send, and the two should read as one
+   pair of ways in rather than as a bordered one and a borderless one.
+
+   A pending chip is amber throughout. The queue's chips are neutral because they
+   are about to go; these are about to go *in six hours*, in a mode that may be
+   bypassPermissions, and they should not look like the same fact. */
+
+.later-wrap { position: relative; flex: none; }
+
+.btn-later {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px; height: 38px;
+    color: var(--text-3);
+    background: transparent;
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--pill);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
+                border-color var(--t-fast) var(--ease);
+}
+.btn-later:hover:not(:disabled),
+.btn-later[aria-expanded="true"] {
+    background: var(--s3);
+    color: var(--text);
+    border-color: var(--outline);
+}
+.btn-later:disabled { color: var(--text-4); border-color: var(--s3); cursor: default; }
+
+/* The popover shares .snip-menu's box, animation and positioning; this is only
+   what differs. Written as `.snip-menu.later-menu` because .snip-menu is defined
+   further down this file and would otherwise win on order — it lays its children
+   out as side-by-side grid columns, which is right for snippet groups and wrong
+   for a list of times. */
+.snip-menu.later-menu {
+    display: block;
+    width: auto;
+    padding: 5px;
+    min-width: 236px;
+}
+.later-row {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    width: 100%;
+    padding: 6px 9px;
+    border-radius: var(--r);
+    text-align: left;
+    font: 400 12.5px/1.4 var(--sans);
+    color: var(--text-2);
+}
+.later-row:hover, .later-row.on { background: var(--s4); color: var(--text); }
+/* The absolute time, beside the relative one that names the row. Muted and in the
+   mono face, because it is the thing you check rather than the thing you read. */
+.later-row .at { margin-left: auto; font: 400 11px/1.4 var(--mono); color: var(--text-4); }
+.later-row:hover .at, .later-row.on .at { color: var(--text-3); }
+
+.later-sep { height: 1px; margin: 5px 4px; background: var(--outline-soft); }
+
+/* Picking an exact time, and the mode it will be delivered in. Not rows: both are
+   fields, and a field that looks like a row you can press is a field people press
+   and then wonder why nothing happened. */
+.later-fields { padding: 4px 9px 7px; display: flex; flex-direction: column; gap: 7px; }
+.later-fields label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font: 400 11.5px/1.4 var(--sans);
+    color: var(--text-3);
+}
+.later-fields input, .later-fields select {
+    flex: 1;
+    min-width: 0;
+    padding: 4px 6px;
+    background: var(--s2);
+    color: var(--text);
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r);
+    font: 400 11.5px/1.4 var(--sans);
+}
+.later-fields .go {
+    align-self: flex-end;
+    padding: 4px 12px;
+    border-radius: var(--pill);
+    background: var(--blue-cont);
+    color: #e6edff;
+    font: 500 11.5px/1.4 var(--sans);
+}
+.later-fields .go:hover { background: var(--blue); color: #062e6f; }
+
+/* The chips, above the queue. */
+.later[hidden] { display: none; }
+.later {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 8px;
+}
+
+.later-chip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 6px 5px 8px;
+    background: var(--s2);
+    border-left: 2px solid var(--yellow);
+    border-radius: var(--r);
+    transition: background var(--t-fast) var(--ease);
+}
+.later-chip:hover { background: var(--s3); }
+/* Delivered, missed or failed: it is a record now, not a plan, so the accent goes
+   and the row steps back. A failure keeps a colour, because it is the one you have
+   to do something about. */
+.later-chip.done { border-left-color: var(--outline-soft); opacity: 0.72; }
+.later-chip.bad { border-left-color: var(--red); }
+
+.later-when {
+    flex: none;
+    font: 400 11px/17px var(--mono);
+    color: var(--yellow);
+    white-space: nowrap;
+}
+.later-chip.done .later-when { color: var(--text-4); }
+.later-chip.bad .later-when { color: var(--red); }
+
+/* The mode is on the face of the chip and not in its expansion, because
+   bypassPermissions arriving at 2am is the single most consequential thing about
+   a scheduled message and it must not be something you have to click to find. */
+.later-mode {
+    flex: none;
+    padding: 1px 7px 2px;
+    border-radius: var(--pill);
+    background: var(--s4);
+    font: 400 10.5px/1.4 var(--mono);
+    color: var(--text-3);
+    cursor: default;
+}
+/* bypassPermissions and dontAsk, which is what this pill is really for. */
+.later-mode.loud { background: #3a2f16; color: var(--yellow); }
+
+.later-text {
+    flex: 1;
+    min-width: 0;
+    padding: 0;
+    text-align: left;
+    font: 400 12.5px/1.5 var(--sans);
+    color: var(--text-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+}
+.later-chip.open .later-text {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 132px;
+    overflow-y: auto;
+}
+.later-text:hover { color: var(--text); }
 
 /* Images a turn carried, inline. Was two inline properties on the <img> itself, which
    was enough while one image per turn was the only shape there was. */

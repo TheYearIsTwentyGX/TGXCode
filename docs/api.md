@@ -286,6 +286,7 @@ project filter on `GET /api/sessions?project=`.
 | `pinned`, `archived`, `test`, `active` | bools |
 | **`worktree`** | **object or null** — `{name, branch, path, originalCwd}` |
 | **`schedule`** | **object or null** — `{id, title}`, both strings; see below |
+| **`later`** | **object or null** — `{pending, nextAt}`, both numbers; see below |
 | `prs` | array of `{number, url, repo}`, empty if none |
 | **`live`** | **object or null** — see below |
 | **`runner`** | **object or absent** — four fields only, see below |
@@ -305,6 +306,19 @@ is indistinguishable. **A title the user set by hand wins** — `custom-title` a
 `schedule` is still there. A client that wants the schedule's name without the date
 reads `schedule.title`; one that wants to group scheduled runs tests `schedule` for
 null and needs nothing else.
+
+**`later` is the count and the clock, not the messages.** `{pending, nextAt}` when this
+session has messages waiting to be delivered to it — the number still `pending`, and the
+epoch ms of the soonest — and **`null`** when it has none, which is nearly every session.
+It is here so a rail can say "something arrives here at 02:00" without a second fetch,
+since opening the session is the one thing nobody is going to do at 02:00. The messages
+themselves are `GET /api/sessions/:id/later`.
+
+Note the shape of the staleness: this is computed per request, but the session list is
+not pushed when a message is delivered — `later-changed` is. So a client that draws a
+badge from this field and never refetches will show a message that has already gone.
+`web/app.js` draws its badge from the `later-changed` payload instead and leaves this
+field for clients that fetch sessions and nothing else.
 
 `titleSource` says where `title` came from: `custom-title`, `agent-name`, `ai-title`
 (Claude Code's own entries), `schedule` (composed as above), `prompt` (the first line
@@ -1298,6 +1312,114 @@ had ticked would mean losing it. The flag only decides what the session becomes.
 Also pushed as the `drafts-changed` SSE event, which is how the UI reads it. That event
 carries this same payload, so a client never has to come back here after the first load.
 
+### `GET /api/later`
+
+Messages written now and delivered to a session that **already exists**, at a time you
+picked. Where a draft is a `POST /api/sessions` held back, one of these is a
+`POST /api/sessions/:id/send` held back.
+
+```json
+{
+  "at": 1790086932143,
+  "messages": [
+    { "id": "fcaf1abd-2c91-4648-ae9a-895916fd4de6",
+      "sessionId": "8ee90bfa-bfab-47d6-aba0-ba2482a2cc47",
+      "cwd": "/home/dylan_hays/Other/claude-sessions",
+      "projectName": "claude-sessions",
+      "text": "You may now modify app data to get the screenshots.",
+      "attachments": [],
+      "model": null, "permissionMode": "bypassPermissions",
+      "at": 1790112000000, "state": "pending", "late": false, "test": false,
+      "createdAt": 1790086931954, "updatedAt": 1790086931954,
+      "sentAt": null, "error": null }
+  ],
+  "counts": { "total": 1, "pending": 1 }
+}
+```
+
+**Read the section on `permissionMode` below before building a client for this.** It is
+the field that decides whether the feature works at all, and the obvious default is the
+one value that cannot.
+
+| Field | Type |
+|---|---|
+| `id` | string, a UUID |
+| `sessionId` | string — the session this will be delivered to. Always a session that existed when the message was written; a message whose session is later deleted is deleted with it |
+| `cwd` | string — where that session was working when this was written. **Display only**: the delivery re-resolves the directory from the session itself, so a checkout that moved is a recorded failure rather than a message sent somewhere else |
+| **`projectName`** | string — derived, not stored, exactly as on a draft |
+| `text` | string. May be `""` when `attachments` is non-empty — a screenshot with nothing typed under it is a message |
+| **`attachments`** | **array of objects**, `[{path, relPath, mediaType}]`, each of the last two a string or null; `[]` for most messages, at most 5. Files already written by the attachments route. Re-derived against the session's own directory at delivery, so one tidied away in the meantime is dropped rather than failing the message |
+| **`model`** | **string or null.** `null` is `inherit`. Not `""` |
+| **`permissionMode`** | string, one of the six in `POST /api/sessions/:id/send`, and **never absent** — see below |
+| `at` | number, epoch ms — when it is due |
+| **`state`** | string, one of `pending` · `delivering` · `sent` · `missed` · `failed`. `delivering` is a claim a tick holds and is normally seen only for a moment; a client should draw it as in-progress rather than as a state of its own |
+| **`late`** | **boolean** — derived per request, and `true` only on a `pending` row that is now past its window. The window lives on the bridge, so a client cannot compute this; without it a chip would say "in −20 minutes" about a message that is never going to be delivered |
+| `test` | boolean — **copied off the target session's own `test` flag** when the message was written, not chosen by the caller. It decides which bridge delivers the row; see below |
+| `createdAt`, `updatedAt` | numbers, epoch ms. `createdAt` never moves |
+| `sentAt` | **number or null**, epoch ms — when it was handed to the process. `null` until then |
+| `error` | **string or null** — why it is `missed` or `failed`, in a sentence fit to show |
+
+Ordered **soonest `at` first** — the order they will happen in, which is the order to
+read them in. Delivered and missed rows keep their place in that order rather than
+moving to an end.
+
+`counts.pending` counts only `state: "pending"`, so it is what a badge should draw;
+`counts.total` includes the week of history described under retention.
+
+#### `permissionMode` is the feature, not a detail of it
+
+A permission ask raised while **no client is attached to `/api/events`** is denied
+immediately, and two denials stop the turn — see *Being connected is load-bearing*. A
+message delivered at 02:00 therefore does not run unattended in `auto`; it stalls on the
+first tool call and gives up, and the only sign is a session that did nothing in the
+night.
+
+So: **the mode is stored per message, is required on create, and is never defaulted at
+delivery.** `web/app.js` offers `bypassPermissions` first and remembers the last choice.
+A client that omits the field gets a `400` rather than a silent `auto`, which is the one
+place this deliberately departs from `POST /api/sessions/:id/send`.
+
+The mode is also applied on the way in: delivering with a model or mode that differs
+from the session's current one replaces the process, exactly as a `/send` with a changed
+mode does. That is why the tick **waits for the session to be idle** in that case rather
+than delivering behind the turn — replacing the process ends the turn in flight, and
+killing a 2am turn to deliver a message meant to help it would be the worst thing this
+could do. A message whose mode already matches is simply queued behind the turn.
+
+#### Which bridge delivers, and when it gives up
+
+**One hour of grace.** A message more than an hour past its time is marked `missed` and
+**not delivered**, with a loud notification. That is far tighter than the schedule tick's
+12-hour catch-up on purpose: a *session* started seven hours late is merely late, but an
+*instruction* seven hours late is the wrong instruction, and this one arrives carrying
+the permission to act on itself.
+
+**The everyday bridge delivers real messages and a dev bridge delivers `test` ones**, the
+same symmetric rule the schedule tick applies — but here the flag is not something a
+caller sets. It is copied off the target session, so it says no more than "the bridge
+that owns this session is the one that delivers to it". Unlike schedules this needs no
+`CLAUDE_SESSIONS_SCHEDULE_ON_DEV`: a scheduled message can only speak to a session that
+already exists, so there is no unattended-agent-in-the-user's-checkout hazard for that
+variable to guard.
+
+**A message interrupted mid-delivery is marked `failed` and never retried.** If the
+bridge stops between claiming a message and hearing back, the message may already be in
+the transcript — `claude` writes its user entry at submission — so re-sending it would
+re-run work that has already happened. The `error` says so.
+
+**Retention.** `sent`, `missed` and `failed` rows are kept for **seven days** and then
+dropped, and every row for a session goes when the session is deleted. So a client must
+treat this list as something that shrinks underneath it.
+
+Also pushed as the `later-changed` SSE event, carrying this same payload.
+
+### `GET /api/sessions/:id/later`
+
+→ `{messages: [...]}`, the same rows as above filtered to one session. Nothing else
+differs; it exists so a conversation view does not have to hold the whole list.
+
+`404` for an unknown session. An empty `messages` is the normal answer.
+
 ### `GET /api/snippets?cwd=<path>`
 
 Canned messages, and the groups they are drawn in. What replaced the one hard-coded
@@ -1715,7 +1837,8 @@ A row is:
 ```
 
 `type` is one of `permission`, `plan`, `question`, `finished`, `failed`, `agent-done`,
-`peer-message`, `handoff`, `schedule-findings`, `schedule-failed`, `schedule-missed`.
+`peer-message`, `handoff`, `schedule-findings`, `schedule-failed`, `schedule-missed`,
+`later-failed`, `later-missed`.
 `summary` is clipped to 200 characters and `detail` to 400.
 
 **`sessionId` may be `null`, and it is on two of the three schedule types.** Every row
@@ -1726,6 +1849,15 @@ are exactly the rows worth raising. On such a row `title` is the schedule's name
 there is nothing to navigate to, so **a client that links the whole row to
 `/api/sessions/<sessionId>` must check for `null` first**. `schedule-findings` does
 carry one; the other two do not.
+
+**The two `later-` types always carry one**, and that is not an accident of this
+implementation: a scheduled message is written against a session that exists, so there
+is always somewhere for the row to open. `title` on those is the *session's* title, not
+a schedule's. `later-missed` means the bridge was not running when the message was due
+and more than an hour had passed by the time it could be; `later-failed` means a
+delivery was attempted and did not land, or was interrupted mid-flight. In every case
+the message survives in `GET /api/later` with its `error` set, so nothing anybody wrote
+is lost.
 `outcome` and `outcomeAt` are filled in later, on the row that already exists, when an
 ask is answered — so a row is mutable and a client holding one should patch it rather
 than assume it is final. `anchorId` is a `toolUseId` where there is one, so a client
@@ -2071,6 +2203,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `overview` | the board; sent only when it has actually changed |
 | `taskboard` | the task board; every ~3s while watched, and only when it has actually changed. Never carries `?idle=all` |
 | `drafts-changed` | `{at, drafts[], counts}` — the whole `GET /api/drafts` payload, so there is nothing to refetch. **Not gated by a `POST /api/subscribe` flag**, unlike `overview` and `taskboard`: a draft only changes because somebody changed it, so there is no tick to switch on and every window gets every change. Fires on create, edit, delete, and on anything that consumes one — `POST /api/drafts/:id/start`, and a `fromDraft` on `POST /api/sessions` or `POST /api/schedules` |
+| `later-changed` | `{at, messages[], counts}` — the whole `GET /api/later` payload, so there is nothing to refetch. Ungated, exactly as `drafts-changed` is. Like `schedules-changed` and unlike `drafts-changed` it also fires **without anybody having done anything**: a delivery, a message going past its window, and a failed wake all move it. That is how a chip starts saying "sent 02:00" while nobody is looking at it, and it is the only signal a client gets that a scheduled message has left — the session list is not pushed for it |
 | `snippets-changed` | `{at, snippets[], groups[], counts}` — the whole `GET /api/snippets` payload, so there is nothing to refetch. Ungated, exactly as `drafts-changed` is, and like it, it never fires without somebody having done something: a snippet or group created, edited or deleted, and a reorder **that actually moved a row** — a drag that lands where it started pushes nothing. Both arrays every time, because deleting a group re-homes its snippets and sending half the answer would leave a client drawing a card that no longer exists. **Always unfiltered by `cwd`**, so a client that fetched with `?cwd=` must apply the filter itself here or watch its list silently widen |
 | `schedules-changed` | `{at, schedules[], counts}` — the whole `GET /api/schedules` payload. Ungated, exactly as `drafts-changed` is. Unlike that one it fires **without anybody having done anything**: a schedule firing, skipping a slot, or having its outcome recorded when the turn ends all push it. So a client that assumed the payload only moves in response to a user action will be wrong here, and pleasantly so — this is how a card starts saying "ran 2h ago — BLOCK" while nobody is looking at it |
 | `sessions-changed` | `{at}` — a nudge to refetch the list |
@@ -2314,6 +2447,86 @@ that loaded a draft into its own form and then started or scheduled the edited v
 rather than saving it. Use this route when nothing was edited: it needs no body, and the
 arguments it spawns with are the ones on the file rather than ones the caller has to
 send back.
+
+### `POST /api/sessions/:id/later`
+
+`{text, attachments?, model?, permissionMode, at}` → `{message}`, the row as
+`GET /api/later` returns it.
+
+The create lives on the session because a scheduled message is written *against* one.
+Everything after this is about one message and takes no session in the path.
+
+**`permissionMode` is required**, and that is the one rule worth reading twice. `/send`
+normalises an absent one to `auto`; here an absent one is a `400`, because `auto` is the
+single mode that cannot work when nobody is watching and making it the silent default
+would mean a feature that fails only at night. See *`permissionMode` is the feature*
+under `GET /api/later`.
+
+`at` is epoch ms, must be **in the future** and **within 30 days** — the upper bound is
+what makes a typo'd year a refusal rather than a row that sits in the file forever.
+
+`text` may be empty when `attachments` is non-empty, the send route's rule. `attachments`
+is `[{path, relPath?, mediaType?}]`, at most five, naming files already uploaded through
+`POST /api/sessions/:id/attachments`.
+
+`test` is **not** a field here: it is copied off the session.
+
+`400` for a missing or past `at`, an `at` too far out, an empty message with no
+attachment, or a missing `permissionMode`; `403` for a `permissionMode` a remote caller
+may not ask for — `bypassPermissions` and `dontAsk`, the same pair refused everywhere
+else, and **checked before the session is looked up**, so a refusal is a `403` whether or
+not the id is real; `404` for an unknown session; `409` past **20 pending messages for
+one session**, which is a ceiling and not a lifetime budget — cancelling one makes room.
+
+### `PATCH /api/later/:id`
+
+Any subset of `{text, attachments, model, permissionMode, at}` → `{message}`.
+
+**A genuine partial**, `PATCH /api/drafts/:id`'s rule: a field left out is left alone, so
+rescheduling does not restate the mode and cannot silently reset it. Every field is
+validated as it is on create, and the body is checked before the id is looked up, so the
+refusals are the same plus `404`.
+
+`409` when the message is no longer `pending` — `{"error": "that message is sent — it
+cannot be changed now"}`. Editing a message already handed to a process would be editing
+the past.
+
+`createdAt` is never touched; `updatedAt` always is.
+
+### `DELETE /api/later/:id`
+
+→ `{ok: true, id}`; `404` if there is no such message.
+
+A hard delete, and it is how a message is **cancelled** — there is no `cancelled` state.
+That asymmetry is deliberate: "it was sent" and "it was missed" are things you come back
+in the morning to read, and a message you thought better of is not. Deleting a message
+that has already been delivered clears the record of it and nothing more; the turn it
+produced is in the transcript either way.
+
+### `POST /api/later/:id/send`
+
+No body → `{ok: true, message, status, queued, woke}` — deliver it now, whatever its
+clock says.
+
+**The same function the tick calls**, which is `POST /api/schedules/:id/run`'s rule and
+matters for the same reason: "the button delivers what the clock delivers" is only true
+if there is one path. That includes the wait-for-idle rule, so pressing this cannot end a
+turn either.
+
+- **`status` is a whole runner status object**, the `runner-status` payload for the
+  process the message went to — not a word describing the outcome.
+- `queued` says whether the message is still waiting behind a turn on this side, exactly
+  as `POST /api/sessions/:id/send` uses it.
+- `woke` is true when the delivery is what started the process. A woken session is
+  watched briefly before this answers, so a `claude --resume` that refuses is a `502`
+  here rather than a delivery falsely reported as made.
+
+`404` unknown id. `403` for a `permissionMode` this caller may not send — re-checked
+here and not only at write time, because the store is hand-editable and outlives the
+process that wrote it. `409` twice over, and both mean *nothing happened, try again*: the
+message is not `pending`, or the session is held in a terminal or mid-turn with a mode
+this message would change. `502` for a delivery that was attempted and did not land; the
+message is marked `failed` and its text is still in the row.
 
 ### `POST /api/snippets`
 

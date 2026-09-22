@@ -273,6 +273,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/spinner-verbs.json` | The verb catalogue, and the seed for that directory |
 | `bridge/suggestions.js` | What you did about a suggested follow-up |
 | `bridge/drafts.js` | Sessions set up but not started — a create call, held back |
+| `bridge/later.js` | Messages delivered to a session at a time you picked — a send, held back |
 | `bridge/snippets.js` | Canned messages and the groups they sit in |
 | `bridge/usage.js` | How much of the 5-hour window and the week are gone, merged from turn events and the status line |
 | `bridge/beacon.js` | A `claude` started for four seconds and killed, so the quota percentages refresh with no terminal open |
