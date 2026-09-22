@@ -24,7 +24,16 @@
 // you want to see is a preference about the app, not about the machine you
 // happened to open it on.
 //
-// `keyboard` is the fourth, and it is the one section that is not about a view
+// `projects` is the fourth, and it is the only one that is a *map* rather than
+// a handful of named keys: a colour per project directory, which the rail, the
+// boards and the Start-a-session dialog wear so that a session scoped to the
+// wrong checkout is something you see rather than something you read. It is
+// here for `live`'s reason again — a colour you chose should be the same colour
+// in the Electron window and in a tab — and it is **user-only** for a reason of
+// its own, spelled out at USER_ONLY below: the map names other projects' paths,
+// so a repository setting one would be a repository colouring its neighbours.
+//
+// `keyboard` is the fifth, and it is the one section that is not about a view
 // at all: which chord reaches which command, what Enter does in the composer,
 // and whether Ctrl+C in the terminal copies a selection or interrupts. The
 // bindings themselves are validated against bridge/keymap.js, which owns the
@@ -54,6 +63,12 @@ const path = require('path');
 const cfg = require('./config');
 const keymap = require('./keymap');
 const { readJson, serialize, writeAtomic, writable, refuse } = require('./jsonfile');
+// The accent rule, borrowed rather than copied. bridge/snippets.js owns it and
+// argues at length for why it is that strict — the client turns the value into
+// a CSS custom property, so `red`, `var(--x)` and `#fff;}` are all refused. A
+// project's colour ends up in the same stylesheet as a snippet group's, so the
+// two must not drift apart.
+const { isAccent } = require('./snippets');
 const { projectRootOf } = require('./transcript');
 
 const VERSION = 1;
@@ -67,6 +82,13 @@ const VERSION = 1;
 // file that changes monthly is a poor trade, and this is read once per session
 // open.
 const CACHE_MS = 2000;
+
+// How many projects may carry a colour. The same bound `spinner.groups` and
+// `spinner.weights` take, for the same reason: this is a file people edit, and
+// one naming ten thousand directories is either a mistake or an attempt to make
+// the bridge do unbounded work. Nobody has two hundred projects; anybody who
+// does has stopped being able to tell them apart by colour anyway.
+const MAX_COLORS = 200;
 
 const DEFAULTS = {
     version: VERSION,
@@ -96,6 +118,23 @@ const DEFAULTS = {
         // Off by default, because a session you cannot drive from here is still
         // a session you may want to know is running.
         hideElsewhere: false,
+    },
+    projects: {
+        // Directory -> `#rgb` or `#rrggbb`. Absent means no colour, which is
+        // what nearly every project is: the point of colouring one is to tell
+        // it apart from the rest, and a rail where every card is painted says
+        // no more than a rail where none is.
+        //
+        // Keyed by **path**, not by the name the rail draws. That name is the
+        // last segment of the directory, so two checkouts called `api` share
+        // one, and a colour keyed on it would be wrong for both of them.
+        //
+        // A directory is matched as a prefix at a path boundary, longest first,
+        // so a worktree under `<proj>/.claude/worktrees/` wears its checkout's
+        // colour without anything having to be said about it twice. That rule
+        // lives in the client — see projectColor() in web/app.js — because it
+        // is asked on every keystroke in the Start-a-session dialog.
+        colors: {},
     },
     quota: {
         // Refresh the quota percentages by starting a short-lived `claude`,
@@ -180,7 +219,7 @@ const DEFAULTS = {
 // quotaPrefs) — which held, but left `GET /api/prefs?cwd=…` echoing a project's
 // value back as though it counted. That was harmless while nothing read the
 // answer and is not once a settings page prints which file wins for each key.
-const USER_ONLY = new Set(['quota', 'keyboard']);
+const USER_ONLY = new Set(['quota', 'keyboard', 'projects']);
 
 // What each key is allowed to be. A file is a thing people edit, so a bad value
 // is dropped and the default kept rather than taken at face value — a
@@ -195,6 +234,17 @@ const SHAPE = {
     live: {
         compact: (v) => typeof v === 'boolean',
         hideElsewhere: (v) => typeof v === 'boolean',
+    },
+    projects: {
+        // The last gate rather than the only one, as `keyboard.bindings` and
+        // `spinner.weights` are: cleanColors() below has already thrown out the
+        // entries that fail, one problem each.
+        colors: (v) => {
+            if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
+            const dirs = Object.keys(v);
+            if (dirs.length > MAX_COLORS) return false;
+            return dirs.every(d => d.startsWith('/') && d === path.resolve(d) && isAccent(v[d]));
+        },
     },
     quota: {
         beacon: (v) => typeof v === 'boolean',
@@ -313,12 +363,58 @@ function cleanWeights(value, note) {
     return out;
 }
 
+/**
+ * `projects.colors`, entry by entry.
+ *
+ * The third of these and the same shape as the two above, for the reason they
+ * both give: one hand-typed colour that is not a colour must not throw away the
+ * projects beside it. What is different is that the *key* can fail too — this
+ * is the only setting whose keys carry meaning — so a directory that is not an
+ * absolute path is rejected on its own account rather than silently colouring
+ * nothing.
+ *
+ * Paths are resolved, so `~/proj/` and `/home/you/proj/../proj` cannot become a
+ * second entry for a project that already has one. `~` is deliberately *not*
+ * expanded: the client sends the same absolute directories `GET /api/projects`
+ * gave it, and a file written by hand with a `~` in it is better rejected with
+ * a message than quietly attached to whoever the bridge is running as.
+ *
+ * @param {*} value whatever the file had
+ * @param {(msg: string) => void} note where a rejected entry gets reported
+ * @returns {object|undefined} the cleaned map, or undefined to leave the
+ *   default alone — which is what a value that is not a map at all gets.
+ */
+function cleanColors(value, note) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    const out = {};
+    let n = 0;
+    for (const [dir, raw] of Object.entries(value)) {
+        if (typeof dir !== 'string' || !dir.startsWith('/') || dir.length > 4096) {
+            note(`${JSON.stringify(dir)} is not an absolute directory`);
+            continue;
+        }
+        if (!isAccent(raw)) {
+            note(`${JSON.stringify(raw)} is not a colour for ${JSON.stringify(dir)}`
+                + ' — #abc or #aabbcc');
+            continue;
+        }
+        if (n >= MAX_COLORS) {
+            note(`more than ${MAX_COLORS} project colours — the rest dropped`);
+            break;
+        }
+        n++;
+        out[path.resolve(dir)] = raw;
+    }
+    return out;
+}
+
 // Section keys whose value is a map and so gets the treatment above, before
-// SHAPE sees it. Two entries; the table exists so the next one does not have to
-// special-case merge().
+// SHAPE sees it. Three entries; the table exists so the next one does not have
+// to special-case merge().
 const SANITIZE = {
     keyboard: { bindings: cleanBindings },
     spinner: { weights: cleanWeights },
+    projects: { colors: cleanColors },
 };
 
 /**
@@ -468,7 +564,7 @@ class Prefs {
      * @param {string} [dir] a workspace — a session's cwd. Omitted gives the
      *   user-level answer, which is what the page is served before it knows
      *   which conversation it is about to show.
-     * @returns {{version, transcript, live, quota, spinner, keyboard,
+     * @returns {{version, transcript, live, projects, quota, spinner, keyboard,
      *   sources: string[], problems: object[]}}
      */
     forCwd(dir) {
@@ -494,6 +590,7 @@ class Prefs {
             version: VERSION,
             transcript: { ...DEFAULTS.transcript },
             live: { ...DEFAULTS.live },
+            projects: { ...DEFAULTS.projects, colors: { ...DEFAULTS.projects.colors } },
             quota: { ...DEFAULTS.quota },
             spinner: { ...DEFAULTS.spinner, weights: { ...DEFAULTS.spinner.weights } },
             keyboard: { ...DEFAULTS.keyboard, bindings: { ...DEFAULTS.keyboard.bindings } },

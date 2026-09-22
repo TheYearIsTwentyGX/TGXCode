@@ -55,6 +55,13 @@ class SessionIndex extends EventEmitter {
          * @type {import('./schedule').Schedules|null}
          */
         this.schedules = null;
+        /**
+         * Messages waiting on a clock, so a rail row can say that something is due
+         * overnight. Set from server.js for the reason the three above are, and with
+         * the same guarantee: absent, every session reports `later: null`.
+         * @type {import('./later').Later|null}
+         */
+        this.later = null;
         /** @type {Map<string, {file, dir, size, mtimeMs, meta}>} keyed by sessionId */
         this.sessions = new Map();
         /**
@@ -410,6 +417,11 @@ class SessionIndex extends EventEmitter {
             // with the title already resolved, since a schedule's own `title` is
             // nullable. Null for everything else, which is nearly everything.
             schedule,
+            // Messages written for this session and waiting on a clock —
+            // `{pending, nextAt}`, or null when nothing is. The rail draws it so
+            // that "something arrives here at 2am" is answerable without opening
+            // the session, which is the one thing nobody is going to do at 2am.
+            later: this.later ? this.later.pendingFor(m.sessionId) : null,
             cwd: m.cwd,
             projectCwd: m.projectCwd,
             projectName: projectName(m.projectCwd || m.cwd),

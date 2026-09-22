@@ -1177,6 +1177,15 @@ function resultPayload(block, entry, ctx) {
     ev.persistedPath = spill ? spill[1]
         : (structured && structured.persistedOutputPath) || null;
 
+    // `toolUseResult` is an object for a call that produced structure and a bare
+    // string — "Error: …" — on every error path. The fields above get away with
+    // reading straight through it because a string answers `undefined` to every
+    // property they want. The two below ask first, because what they are looking
+    // for is exactly what an error case would plausibly carry, and an accidental
+    // guard is one refactor away from not being one.
+    const struct = structured && typeof structured === 'object'
+        && !Array.isArray(structured) ? structured : null;
+
     ev.result = {
         text,
         stdout: structured && typeof structured.stdout === 'string' ? structured.stdout : null,
@@ -1186,6 +1195,35 @@ function resultPayload(block, entry, ctx) {
             || (structured.file && structured.file.filePath)) || null,
         interrupted: !!(structured && structured.interrupted),
         backgroundTaskId: (structured && structured.backgroundTaskId) || null,
+        // What you picked, for an AskUserQuestion. Keyed by the exact question
+        // text — Claude Code's choice, not ours — with the chosen option label
+        // as the value, several of them joined for a multi-select, or a typed
+        // sentence when the answer went through "Other".
+        //
+        // The other half of that result, `questions`, is a verbatim echo of the
+        // call's own input and is deliberately left behind: carrying it would
+        // double the payload to repeat what the client already has.
+        //
+        // Without this the record of a decision showed the choices and not the
+        // choice — every option drawn with the same mark, because the one fact
+        // worth reading back was dropped here.
+        answers: struct && struct.answers && typeof struct.answers === 'object'
+            && !Array.isArray(struct.answers) ? struct.answers : null,
+        // The plan that was *approved*, which is not always the plan that was
+        // proposed: approving with a note appends `## Note from the user` to it
+        // (see _answerConversation in runner.js) and editing it rewrites it.
+        // `input.plan` keeps the proposal; this is what was agreed to, and the
+        // note exists nowhere else.
+        //
+        // Carried whenever it is there rather than only when it differs from
+        // the input. A field whose presence depends on whether the call and its
+        // result were read in the same pass is the kind of difference a second
+        // client cannot discover, and docs/api.md would have to describe two
+        // shapes instead of one.
+        plan: struct && typeof struct.plan === 'string' ? struct.plan : null,
+        // Written only when true, so its absence is not "not edited" arriving
+        // as a fact — it is the usual case saying nothing.
+        planWasEdited: !!(struct && struct.planWasEdited),
     };
 
     // A Task/Agent call writes its own transcript keyed by the tool_use id.

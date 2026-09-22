@@ -24,7 +24,7 @@ it, and how the pieces fit together. Start there if you have not already.
 | **Dashboard** | The button in the top bar, with a count of how many places are unfinished. It lists, per project, every directory holding uncommitted changes and every pull request still open, with the sessions that worked there as links back into the conversation. |
 | **Open folder** | The folder button by the title shows the session's working directory in the host's file manager — on Linux whatever `xdg-open` picks, and from WSL, Windows File Explorer through the `\\wsl.localhost` share. |
 | **Composer** | Sends to the session, resuming it in place — the same transcript a terminal would append to. |
-| **Snippets** | Messages you send often, behind the icon beside *Send* — and on the Start-a-session box too. Each one says where it lands (replace the box, add to the end, insert at the cursor), whether it sends itself, and which permission mode it sends under; `{{placeholders}}` in the text become a small form to fill in first. They sit in coloured groups, in an order you set by dragging or with the arrows, and any of them can be **pinned** to a button of its own. **LGTM** ships pinned: it sends a written instruction to put the change on a pull request if it is not on one already, run the project's checks, merge once they pass, and file anything it noticed along the way as a suggested task — and to stop and say so if something blocks it. One click, no confirmation over the top; the session still asks for what its permission mode makes it ask for, and a half-typed message in the box survives the press. Edit them under *Snippets* in Settings. |
+| **Snippets** | Messages you send often, behind the icon beside *Send* — and on the Start-a-session box too. Each one says where it lands (replace the box, add to the end, insert at the cursor), whether it sends itself, and which permission mode it sends under; `{{placeholders}}` in the text become a small form to fill in first. They sit in coloured groups, in an order you set by dragging or with the arrows, and any of them can be **pinned** to a button of its own. **LGTM** ships pinned: it sends a written instruction to put the change on a pull request if it is not on one already, run the project's checks, merge once they pass, and file anything it noticed along the way as a suggested task — and to stop and say so if something blocks it. One click, no confirmation over the top; the session still asks for what its permission mode makes it ask for, and a half-typed message in the box survives the press. **Right-click any snippet** — a row in the list or a pinned button — to use it once some other way than the way it is set up: the LGTM text in the box to edit rather than sent, or a snippet that normally just sits there sent as it is. It changes nothing about the snippet. Edit them under *Snippets* in Settings. |
 | **Send queue** | Write while an agent is working and the message waits, listed above the composer in send order. Each one can be expanded, reordered, pulled back for editing, or dropped, right up until its turn starts. `Shift+Tab` out of the composer to work through them without the mouse. |
 | **Suggested** | The panel beside the transcript. An agent that notices work outside what it was asked to do files it there, with the prompt already written. Each one folds to its title, and the ⤢ on a row opens it at full width to read; *Start* runs it, *Edit first* opens it in the Start dialog, *Dismiss* puts it away. *Hide* collapses the whole panel to a strip. |
 | **Mentions** | `@` in the composer lists the other sessions running on this machine and inserts the one you pick as `@[name]` — the name an agent addresses it by. |
@@ -308,6 +308,50 @@ moves the focus to the row that took the dropped one's place, or to the composer
 if that was the last one, because focus falling to the body would leave the next
 `Esc` closing something else entirely.
 
+### And Send later holds one until an hour you choose
+
+Some instructions are only true in the middle of the night. The one this was built
+for: an agent taking screenshots has to modify app data to get them, and the
+go-ahead should arrive at 2am, when disturbing that data costs nothing and nobody
+is going to notice.
+
+The clock beside **Send** takes the message you have written and holds it. Pick
+*in 30 minutes*, *tonight at 02:00*, or an exact time; it leaves the box the way a
+sent message does and comes back as a chip above the queue, which reads
+bottom-to-top as what you are typing, what is attached, what goes next, and what
+goes in the night. Cancel it with the ×, or press **Send now** to stop waiting.
+A rail row carries a 🕐 badge with the time, so a session with something due
+overnight says so from the outside.
+
+**The mode is the part to get right, and it is on the face of every chip.** When
+no window is open, a session that asks for permission is denied automatically —
+twice, and then the turn stops. That is a good rule while you are asleep and a
+useless one for a message whose whole content is *you may now do the thing*, so a
+scheduled message carries its own permission mode and the popover offers
+`bypassPermissions` first. It is a real choice with a real cost: the turn it
+starts has no permission gate and nobody watching it. Making it per message, in
+front of you, and printed on the chip afterwards is the most this app can do about
+that.
+
+Three things it will not do:
+
+- **Deliver a message more than an hour late.** The bridge is not up
+  continuously — machines sleep, bridges restart — and a slot missed while it was
+  down is found on the way back up. But an instruction seven hours late is the
+  wrong instruction, so past an hour the message is marked *missed*, you get a
+  notification, and nothing is sent. The text is still on the chip.
+- **End a turn to deliver one.** If the session is mid-turn and the message would
+  change its permission mode, delivering would replace the process and kill the
+  turn. It waits for idle instead. A message that would not change anything simply
+  joins the queue behind the turn, which is what you want.
+- **Send one twice.** If the bridge stops between taking a message and hearing
+  back, the message is marked *failed* rather than retried — `claude` writes your
+  message to the transcript the moment it is submitted, so it may well have
+  arrived, and re-running work you already paid for is the more expensive mistake.
+
+A stopped session is resumed to receive one, which is the point: the agent you
+left at midnight is the agent that reads it.
+
 ### The rail is sorted on load, and then left alone
 
 The bridge returns sessions ordered by when *you* last wrote in them, and it
@@ -568,13 +612,14 @@ in the rail for the same reason — the groups enabled by default are all short.
 ### Settings
 
 **Settings** in the bar, or `Ctrl+8`. Every key in `~/.tgxcode/settings.json`
-with a control in front of it — the reading settings above, the live board, the
-spinner, the quota beacon, and the keyboard — plus two groups that are not in
-that file: **Notifications**, which is per-browser, and **Connect a phone**,
-which is a task rather than a setting. Both used to be buttons in the top bar.
+with a control in front of it — the reading settings above, the live board,
+project colours, the spinner, the quota beacon, and the keyboard — plus two
+groups that are not in that file: **Notifications**, which is per-browser, and
+**Connect a phone**, which is a task rather than a setting. Both used to be
+buttons in the top bar.
 
 The file stayed the only interface for a long time and that was defensible while
-there were three keys in it. At twelve, across five blocks, with a precedence
+there were three keys in it. At sixteen, across six blocks, with a precedence
 chain of four files and validators that silently drop what they do not like,
 "go and read `bridge/prefs.js`" had become the answer to too many questions —
 and the one thing the file cannot tell you is which of the four files a value
@@ -606,11 +651,54 @@ and half-sentences into a file every session reads. Both keep the rule's intent
 the other way round, by saying at all times whether what you are looking at is
 what is on disk.
 
-**Two sections are yours alone** — the quota beacon and the keyboard — and a
-project file that sets one is ignored and says so. What directory this app
-starts `claude` in is not a repository's business, and a repository that could
-rebind your keys could make the window unusable with hand-editing a file as the
-only way back.
+**Three sections are yours alone** — the quota beacon, the keyboard and project
+colours — and a project file that sets one is ignored and says so. What directory
+this app starts `claude` in is not a repository's business, and a repository that
+could rebind your keys could make the window unusable with hand-editing a file as
+the only way back. Colours are yours for a different reason: the list is keyed by
+directory, so it names *other* projects, and a repository setting one would be a
+repository colouring its neighbours.
+
+#### Project colours
+
+Nearly every checkout on this machine is the same project in a different
+worktree, and the thing that decides which one a session belongs to is a
+directory typed into a box. That made scoping a session wrongly a mistake with
+no tell until it had already run.
+
+So a project can be given a colour, and everything that names a project wears
+it: the rail's project cards, the drafts board's and task board's project
+columns, the dashboard's project cards, and — where it matters most — the dialog
+that starts a session or writes a schedule, which takes it on its heading, its
+top edge, the row you picked, and the screen behind it.
+
+Two ways to set one, and they are the same picker:
+
+- the **⋮** on a project's card in the rail, which appears when you hover it;
+- the **Projects** group in Settings, which lists every project the bridge knows
+  and is where you would colour several at once.
+
+Six colours from the app's own palette, and a picker for anything else. **No
+colour** clears it, which is what almost every project is: the point of
+colouring one is to tell it apart from the rest, and a rail where every card is
+painted says no more than a rail where none is. Nothing is a draft here either —
+the swatch saves on the press, and the rail behind the dialog recolours as you
+go.
+
+**A worktree wears its checkout's colour.** The list is keyed by project root and
+a directory matches on the path above it, so anything under
+`<project>/.claude/worktrees/` is coloured without being listed, and the longest
+match wins if you colour a worktree of its own. A directory that merely starts
+with the same letters — `claude-sessions-elsewhere` against `claude-sessions` —
+does not match; the boundary is part of the rule.
+
+**The dialog no longer picks a project for you.** It used to fill the box from
+whichever session was open, and failing that from the most recently active
+project, so the commonest way to scope something wrongly was not noticing it had
+been answered. It now opens empty and says *No project selected* in its heading
+until you choose. Everything that meant a particular project still passes one —
+editing a draft or a schedule, the split button beside **New session**, the
+Start on a suggested task — so only the guessing went.
 
 #### Keys
 
@@ -1197,12 +1285,20 @@ Both read the same `~/.claude/projects`, so a session started in one appears in
 the other — they are two views of the same transcripts. What is separate is the
 *process*, and that is the point:
 
-**Killing a bridge kills the turns running under it.** `claude` reads stdin for
-its input, so when the bridge exits and that pipe closes, it treats it as
+**Killing a bridge no longer kills the turns running under it.** `claude` reads
+stdin for its input, so when whoever holds that pipe exits, it treats it as
 end-of-input and stops mid-turn. Running it detached with its output on a file
-descriptor does not change that — both were tried and measured. There is no way
-to make a turn outlive its bridge, so the only real protection is not killing
-the bridge somebody is using. Hence two ports.
+descriptor does not change that — both were tried and measured. So the pipe is
+held by something else: the **session host**, `bridge/host.js`, a small process
+per port that starts `claude` for the bridge and relays its input and output. When
+a bridge exits, the host keeps its sessions running, and the next bridge on the
+same port picks them up, approval cards included. `/api/health` names the host
+(`sessionHost`) and counts the turns a restart *would* still end (`atRisk`): those
+started while no host could be reached.
+
+Killing the host itself does end everything it holds, and it is the one process
+that is shared by everything on its port. Hence two ports still: a dev bridge has
+its own host, and nothing done to it can reach the everyday one's.
 
 `pkill -f bridge/server.js` matches every bridge, including the everyday one.
 To stop your own, Ctrl-C the `npm run dev` that started it, or kill it by port:
@@ -1278,7 +1374,8 @@ alias restart-bridge='bash ~/src/tgxcode/scripts/restart-bridge.sh'
 ```
 
 Then `restart-bridge` from anywhere. It touches only the everyday port, refuses
-while a turn is in flight (`--force` overrides), takes `--pull` to fast-forward
+while a turn is in flight outside the session host (`--force` overrides; turns in
+the host survive the restart and are not counted), takes `--pull` to fast-forward
 from origin first, and `--status` to just report what is running. Any open
 window reconnects on its own.
 

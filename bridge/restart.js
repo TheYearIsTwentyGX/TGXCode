@@ -76,8 +76,11 @@ async function blockers(dir, { busy = 0, force = false } = {}) {
     if (busy > 0 && !force) {
         out.push({
             kind: 'busy',
-            text: `${busy} turn${busy === 1 ? '' : 's'} still running. A restart ends `
-                + 'them — Claude stops when its input pipe closes.',
+            // `busy` here is what the caller counted as *at risk* — turns not in the
+            // session host, which a restart really does end. Hosted turns survive
+            // one and are not counted; see RunnerPool#atRiskCount.
+            text: `${busy} turn${busy === 1 ? '' : 's'} still running outside the session `
+                + 'host. A restart ends them — Claude stops when its input pipe closes.',
         });
     }
 
