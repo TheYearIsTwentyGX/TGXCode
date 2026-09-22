@@ -65,9 +65,10 @@ const QUESTIONS = [
         options: [{ label: 'Wide modal' }, { label: 'Equal columns' }],
     },
     {
-        // A label with a comma of its own. 185 questions on this machine had
-        // one, which is why the documented way to read a multi-select answer
-        // consumes whole labels rather than splitting on ", ".
+        // A label with a comma of its own. 187 of 414 real questions on this
+        // machine had one, which is why the documented way to read a
+        // multi-select answer consumes whole labels rather than splitting on
+        // ", ".
         question: 'Which surfaces?', header: 'Surfaces', multiSelect: true,
         options: [{ label: 'Bar, count, cycling' }, { label: 'The rail' }],
     },
