@@ -234,7 +234,14 @@ const state = {
     run: [],
     agentRun: [],
     turns: [],              // the user messages, in order, for the turn rail
+    // The tick element per user turn, parallel to `turns`. markActiveTurn used
+    // to index dom.turns.children, which stopped being the same list the moment
+    // plans and questions joined the rail.
+    turnTicks: [],
     activeTurn: -1,
+    // The plan or question the review dialog is showing, by event id. An id and
+    // not the event: patchTool rebuilds the object when a result lands.
+    review: { evId: null },
     agents: [],             // subagent records for this session, from the bridge
     agent: null,            // the subagent being viewed, if any
     agentOffset: 0,
@@ -655,6 +662,8 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'diff-scrim', 'diff-title', 'diff-stat', 'diff-unified', 'diff-split',
     'diff-words', 'diff-wrap', 'diff-source', 'diff-note', 'diff-jump',
     'diff-reload', 'diff-copy', 'diff-body', 'ctx-menu',
+    'review-scrim', 'review-modal', 'review-kind', 'review-title', 'review-when',
+    'review-outcome', 'review-body', 'review-jump',
     'pair-url', 'pair-host', 'pair-hosts', 'pair-note', 'pair-copy',
     'restart-scrim', 'restart-lede', 'restart-problems',
     'restart-fix', 'restart-go']) {
@@ -764,8 +773,11 @@ function toast(text, kind = 'info', opts = {}) {
 }
 
 /**
- * Is one of the six modal dialogs up? They are `hidden`-toggled divs rather
+ * Is one of the modal dialogs up? They are `hidden`-toggled divs rather
  * than a native `<dialog>`, so asking the DOM is the only way.
+ *
+ * Deliberately not a count — this said "six" through two additions and was
+ * wrong by the time anyone read it.
  *
  * **A modal is closed by its own ✕ or Cancel and by nothing else.** It used to
  * go on Escape and on a click landing on the scrim, and both were losing work
@@ -802,7 +814,11 @@ function modalUp() {
         // dialog the *scrim* half of that rule was written for — a diff is the
         // one thing here people drag-select, and a drag released past the edge
         // fires a click whose target is the scrim.
-        || !dom.diffScrim.hidden;
+        || !dom.diffScrim.hidden
+        // The plan/question review, which is the diff viewer's case exactly: a
+        // read-only replay holding no work, so the paragraph above is not what
+        // puts it here either. The sentence after it is.
+        || !dom.reviewScrim.hidden;
 }
 
 // ── drafts ───────────────────────────────────────────────────────────────
@@ -1658,6 +1674,7 @@ function clearCurrent() {
     state.run.length = 0;
     state.prefs = null;     // the next session's project may answer differently
     state.turns = [];
+    state.turnTicks = [];
     state.activeTurn = -1;
     state.agents = [];
     state.ask = null;
@@ -1805,6 +1822,7 @@ function beginOpen(summary, { keepDash = false } = {}) {
     state.run.length = 0;
     state.prefs = null;     // the next session's project may answer differently
     state.turns = [];
+    state.turnTicks = [];
     state.activeTurn = -1;
     state.pinned = true;
     state.agents = [];  // the previous session's agents are not this one's
@@ -1815,6 +1833,7 @@ function beginOpen(summary, { keepDash = false } = {}) {
     state.tasks.clear();        // and so do the offers themselves
     state.taskOpen.clear();
     closeTaskDialog();          // it was showing a task belonging to the old one
+    closeReview();              // and so was the plan or question review
     // Empties the aside, but keeps its place in the row until loadTasks answers
     // for the new conversation — see renderChecklist for why.
     state.tasksPending = paneUp(dom.tasks);
@@ -2133,6 +2152,7 @@ function appendEvents(events, view = SESSION_VIEW, { live = false } = {}) {
         frag = document.createDocumentFragment();
     };
     let newTurn = false;
+    let newMark = false;
     let sawAgent = false;
     let newTasks = false;
     for (const ev of events) {
@@ -2171,6 +2191,8 @@ function appendEvents(events, view = SESSION_VIEW, { live = false } = {}) {
         if (ev.kind === 'tool') {
             view.tools.set(ev.id, { ev, node });
             if (view.plans && ev.name === 'ExitPlanMode') view.plans.add(ev.id);
+            // A plan or a question is a rail marker as much as a message is.
+            if (REVIEWABLE[ev.name]) newMark = true;
             if (ev.name === 'Task' || ev.name === 'Agent') sawAgent = true;
         }
         if (ev.kind === 'user') {
@@ -2202,7 +2224,10 @@ function appendEvents(events, view = SESSION_VIEW, { live = false } = {}) {
     if (!isBusy()) closeRun(view);
     if (newTasks) { renderTasks(); if (live) loadTasksSoon(); }
     if (!view.isAgent) {
-        if (newTurn) renderTurns();
+        // Waiting for the next message to redraw would leave a plan's marker
+        // missing for the whole of the work it authorised, which is the longest
+        // gap in the session.
+        if (newTurn || newMark) renderTurns();
         // A Task call that has only just appeared belongs on the strip now, not
         // after the next poll.
         if (sawAgent) { renderAgents(); loadAgents(); }
@@ -2247,6 +2272,22 @@ function patchTool(patch, view = SESSION_VIEW) {
     view.nodes.set(entry.ev.id, entry);
     // A result landing on a Task call is a subagent finishing: the strip says so.
     if (!view.isAgent && entry.ev.agent) renderAgents();
+    // A plan approved or a question answered changes what its tick says, and the
+    // tick is the only place that outcome shows without opening anything.
+    //
+    // It is also the one thing here that *must* redraw rather than merely
+    // wanting to. The swap above replaces `entry.node`, and the rail holds its
+    // own list of those nodes — so without this the marker would point at a node
+    // that is no longer in the document, markActiveTurn would measure it, and
+    // "show it in the transcript" would scroll nowhere. Rebuilding reads the
+    // fresh node back out of `view.nodes`, which is why it happens after the
+    // `set` above and not before. Gated on the name because the rail is rebuilt
+    // whole and a busy turn lands a tool result several times a second.
+    if (!view.isAgent && REVIEWABLE[entry.ev.name]) {
+        renderTurns();
+        // And if that ask is the one on screen, it is now out of date too.
+        if (state.review.evId === entry.ev.id) paintReview();
+    }
     markFindDirty();
 }
 
@@ -5033,9 +5074,14 @@ function toolBody(ev) {
     } else if (ev.name === 'ExitPlanMode') {
         // The card is long gone by the time anyone reads this back; the plan
         // that was approved is the whole content of the call.
-        out.push(section('Plan', el('div', { class: 'prose', html: renderMarkdown(i.plan || '') })));
+        //
+        // `r.plan` in preference to `i.plan`: the input is the plan as put
+        // forward and the result is the plan as agreed to, and they differ when
+        // it was edited or approved with a note. The note exists nowhere else.
+        out.push(section('Plan',
+            el('div', { class: 'prose', html: renderMarkdown(r.plan || i.plan || '') })));
     } else if (ev.name === 'AskUserQuestion') {
-        out.push(section('Questions', questionsView(i.questions || [])));
+        out.push(section('Questions', questionsView(i.questions || [], r.answers)));
     } else if (ev.name === 'SendMessage') {
         // One half of a conversation between two sessions. Rendered as prose
         // rather than as a key-value dump because it is a message somebody
@@ -5232,24 +5278,278 @@ function todoView(items) {
 }
 
 /**
- * What was asked, read back later.
+ * Which options an answer picked, and what was typed instead.
  *
- * The answer is not here — it is in the tool result, which says what was picked
- * — so this stays a record of the question and the choices it offered.
+ * `result.answers` is one string per question, and it carries three different
+ * things with nothing to tell them apart: a single choice is the option's label
+ * verbatim, a multi-select is the chosen labels joined `", "`, and an answer
+ * typed into the tool's "Other" box is a sentence matching no label at all.
+ * Measured over 414 real answers on this machine: 83% one label, 4% several
+ * joined, 13% free text, 1% a label with typed words after it. All four are
+ * common enough to get right.
+ *
+ * **It is not a split.** 187 of those questions had an option label containing
+ * a comma of its own — `"Bar, count, cycling (Recommended)"` — so splitting on
+ * `", "` shreds the label and marks nothing. This consumes whole labels off the
+ * front instead, for as long as the front keeps being one.
+ *
+ * Longest first, and that is not a tidiness preference: one label is regularly
+ * a prefix of another ("Approve" / "Approve with feedback"), and taking the
+ * short one first leaves a fragment that then matches nothing and reads back as
+ * free text. The separator is a pattern rather than the literal `", "` the dock
+ * writes because a transcript on this machine joined with `","` and no space.
+ *
+ * **One case cannot be got right, because the data does not hold it.** Ticking
+ * an option and then adding a condition in the "Other" box produces the same
+ * string, byte for byte, as typing that whole sentence into "Other" alone — the
+ * dock joins the picks and pushes the typed answer onto the end, and nothing
+ * records which came from where. So `"Hard delete, but make them confirm"` is
+ * read as the option plus a note. That is the reading the real answers support:
+ * every mixed case on this machine is somebody agreeing with an option and
+ * qualifying it. Treating the whole thing as free text instead would be wrong
+ * about all of them to avoid being wrong about a sentence that happens to open
+ * with a label and a comma, which is the rarer mistake and the cheaper one —
+ * the typed words are shown either way, so what is at stake is one mark.
+ *
+ * Whatever is left over comes back verbatim rather than reassembled, so a typed
+ * answer reads exactly as it was typed. `docs/api.md` documents this rule, so
+ * the Android client derives it from one written contract rather than from a
+ * second implementation of this function.
  */
-function questionsView(questions) {
+function readAnswer(answer, options) {
+    const said = String(answer == null ? '' : answer).trim();
+    const labels = (options || []).map(o => (o && o.label) || '').filter(Boolean);
+    const chosen = new Set();
+    if (!said) return { chosen, said: '' };
+
+    // The common case, and the only one immune to every hazard above.
+    if (labels.includes(said)) { chosen.add(said); return { chosen, said: '' }; }
+
+    // Only from the front, and only while the front keeps being a label. That
+    // is how the dock builds the string — `picks.join(', ')` and then the typed
+    // answer pushed on the end — so labels are a prefix and free text is the
+    // tail. Searching the whole string instead would match a label quoted in the
+    // middle of a sentence ("Because of X, Wide modal, is wrong") and mark an
+    // option the person was arguing against.
+    const byLength = [...labels].sort((a, b) => b.length - a.length);
+    let rest = said;
+    while (rest) {
+        const hit = byLength.find(l => rest.startsWith(l)
+            && (rest.length === l.length || /^\s*,/.test(rest.slice(l.length))));
+        if (!hit) break;
+        chosen.add(hit);
+        rest = rest.slice(hit.length).replace(/^\s*,\s*/, '');
+    }
+    return { chosen, said: rest.trim() };
+}
+
+/**
+ * What was asked, read back later — and what was answered.
+ *
+ * The answer used to be missing here, because the bridge dropped it: every
+ * option was drawn with the same `○` and the one fact worth reading back was
+ * gone. `result.answers` carries it now, so this marks the option that was
+ * picked and prints anything typed instead.
+ *
+ * The same two marks the review dialog uses, off the same `readAnswer`, for the
+ * reason `todoView` above gives about its own list: the three places a question
+ * is now drawn cannot be allowed to disagree about what was chosen.
+ */
+function questionsView(questions, answers) {
     const list = el('div', { class: 'qview' });
     for (const q of questions) {
+        const { chosen, said } = readAnswer(answers && answers[q.question], q.options);
         list.append(el('div', { class: 'qview-q' },
             q.header ? el('span', { class: 'perm-q-chip' }, q.header) : null,
             el('span', {}, q.question || '')));
         for (const opt of q.options || []) {
-            list.append(el('div', { class: 'qview-o' },
-                el('span', { class: 'qview-mark' }, '○'),
+            const picked = chosen.has(opt.label || '');
+            list.append(el('div', { class: 'qview-o', 'data-chosen': picked ? '1' : null },
+                el('span', { class: 'qview-mark' }, picked ? '●' : '○'),
                 el('span', {}, opt.label || '')));
+        }
+        // Typed rather than picked. Shown as its own row rather than folded in
+        // with the options, because it is not one of them.
+        if (said) {
+            list.append(el('div', { class: 'qview-o qview-said', 'data-chosen': '1' },
+                el('span', { class: 'qview-mark' }, '●'), el('span', {}, said)));
         }
     }
     return list;
+}
+
+// ── reviewing a plan or a question ───────────────────────────────────────
+//
+// Both get a whole surface while they are live — #plan-pane lays a plan over
+// the transcript, #ask-dock walks you through the questions — and then they are
+// gone, collapsed into an ordinary tool row somewhere in the log. These are the
+// two moments in a session where *you* decided something, and they were the
+// hardest things in it to find again.
+//
+// So the turn rail carries a marker for each (see renderTurns), and this is
+// what a marker opens: the same thing, replayed, read-only.
+
+/** What became of an ask, in the few words a tick label and a popover have room for. */
+function markOutcome(ev) {
+    if (!ev.result) return 'still waiting';
+    const stopped = /^Stopped from Claude Sessions/.test(ev.result.text || '');
+    if (ev.name === 'ExitPlanMode') {
+        if (ev.status === 'error') return stopped ? 'stopped' : 'sent back';
+        return ev.result.planWasEdited ? 'approved with a note' : 'approved';
+    }
+    if (ev.status === 'error') return stopped ? 'stopped' : 'dismissed';
+    return 'answered';
+}
+
+/**
+ * Open the review for a plan or a question.
+ *
+ * Keyed by the event id rather than by the entry, because `patchTool` rebuilds
+ * the block and swaps `entry.node` out from under anything holding one — so a
+ * dialog opened on a plan that is still waiting, and still up when the answer
+ * lands, would otherwise repaint from a stale object and jump to a detached
+ * node. The same late lookup `jumpToFile` does, for the same reason.
+ */
+function openReview(evId) {
+    if (!state.nodes.has(evId)) return;
+    state.review.evId = evId;
+    closeContextMenu({ focus: false });
+    hideTurnPop();
+    paintReview();
+    dom.reviewScrim.hidden = false;
+    // The dialog itself, not its body: focus has to come inside the scrim or the
+    // keyboard is still out in the rail behind it, but a body that fills the
+    // dialog wears the focus ring as a border around everything, which reads as
+    // decoration rather than as focus. The body stays tabbable, so one Tab gets
+    // the arrow keys scrolling a long plan.
+    dom.reviewModal.focus({ preventScroll: true });
+}
+
+function closeReview() {
+    if (dom.reviewScrim.hidden) return;
+    state.review.evId = null;
+    dom.reviewScrim.hidden = true;
+    // A plan is tens of kilobytes of rendered markdown and a four-question
+    // review is a few hundred nodes of options and previews. Same reason
+    // closeDiff empties its body rather than leaving it attached to a hidden
+    // dialog nobody is looking at.
+    dom.reviewBody.replaceChildren();
+    dom.reviewOutcome.replaceChildren();
+}
+
+/** Fill the dialog from whatever the event says now. Safe to call again. */
+function paintReview() {
+    const entry = state.nodes.get(state.review.evId);
+    if (!entry) return closeReview();
+    const ev = entry.ev;
+    const plan = ev.name === 'ExitPlanMode';
+
+    dom.reviewKind.textContent = plan ? 'Plan' : 'Question';
+    dom.reviewTitle.textContent = markOutcome(ev);
+    dom.reviewWhen.textContent = clockOf(ev.resultTs || ev.ts);
+    dom.reviewModal.dataset.kind = plan ? 'plan' : 'question';
+    dom.reviewOutcome.replaceChildren();
+    dom.reviewBody.replaceChildren(plan ? reviewPlan(ev) : reviewQuestions(ev));
+}
+
+/**
+ * The plan, as markdown.
+ *
+ * `result.plan` in preference to `input.plan`: the input is what was put
+ * forward and the result is what was agreed to. Approving with a note appends a
+ * `## Note from the user` section to the plan the tool receives, so that note
+ * exists in the result and nowhere else — and showing the proposal instead
+ * would quietly drop the one part of the plan you wrote yourself.
+ */
+function reviewPlan(ev) {
+    const r = ev.result || {};
+    const text = r.plan || ev.input.plan || '';
+
+    if (ev.status === 'error') {
+        const stopped = /^Stopped from Claude Sessions/.test(r.text || '');
+        dom.reviewOutcome.replaceChildren(stopped
+            // Nobody turned this down — the turn ended while it was still up.
+            // Printing the canned sentence as though it were feedback would put
+            // words in the user's mouth.
+            ? el('span', { class: 'review-said' }, 'Stopped before it was answered.')
+            : el('div', {},
+                el('span', { class: 'review-said-head' }, 'Kept planning — what you said'),
+                el('div', { class: 'review-said' }, r.text || '')));
+    } else if (r.planWasEdited) {
+        dom.reviewOutcome.replaceChildren(el('span', { class: 'review-said' },
+            'Approved with a note, which is at the foot of the plan.'));
+    }
+
+    return el('div', { class: 'plan-rev prose', html: renderMarkdown(text) });
+}
+
+/**
+ * Every question at once, side by side.
+ *
+ * The live dock shows one at a time and moves you on as you answer, which is
+ * right when you are answering and wrong when you are reading back: what you
+ * want then is the shape of the whole decision, and that means seeing the
+ * questions together.
+ *
+ * The columns reuse the dock's own classes — .perm-q, .perm-opt and the rest —
+ * so this looks like the thing it is replaying rather than like a second design
+ * of it. What it does not reuse is the inputs: these are divs, because a radio
+ * you cannot change is a control that lies about being one.
+ */
+function reviewQuestions(ev) {
+    const qs = ev.input.questions || [];
+    const answers = (ev.result && ev.result.answers) || null;
+    const grid = el('div', { class: 'qrev' });
+    // The dialog is sized from the count — see .review-modal in the CSS. One
+    // question in a 1400px box is a sentence marooned in a field; four at 640
+    // are four unreadable columns, and the count is known the moment it opens.
+    dom.reviewModal.dataset.cols = String(Math.min(Math.max(qs.length, 1), 4));
+
+    if (ev.status === 'error') {
+        const stopped = /^Stopped from Claude Sessions/.test((ev.result || {}).text || '');
+        dom.reviewOutcome.replaceChildren(el('span', { class: 'review-said' }, stopped
+            ? 'Stopped before it was answered.'
+            : 'Dismissed — Claude carried on unaided.'));
+    }
+
+    for (const q of qs) {
+        const { chosen, said } = readAnswer(answers && answers[q.question], q.options);
+        const col = el('div', { class: 'perm-q', role: 'group',
+            'aria-label': q.question || q.header || 'Question' });
+        col.append(el('div', { class: 'perm-q-head' },
+            q.header ? el('span', { class: 'perm-q-chip' }, q.header) : null,
+            el('span', { class: 'perm-q-text' }, q.question || '')));
+
+        for (const opt of q.options || []) {
+            const picked = chosen.has(opt.label || '');
+            col.append(el('div', { class: 'perm-opt', 'data-chosen': picked ? '1' : null },
+                el('span', { class: 'qrev-mark' }, picked ? '●' : '○'),
+                el('span', { class: 'perm-opt-body' },
+                    el('span', { class: 'perm-opt-label' }, opt.label || ''),
+                    opt.description ? el('span', { class: 'perm-opt-desc' }, opt.description) : null,
+                    // Kept, for the reason the dock keeps it: a preview is what
+                    // you were comparing, and one you have to hover for cannot
+                    // be compared.
+                    opt.preview ? el('pre', { class: 'perm-opt-preview' }, opt.preview) : null)));
+        }
+
+        // Typed rather than picked. About one answer in nine goes through the
+        // tool's "Other" box, and a handful do both — picking an option and
+        // adding a condition to it — so this is "also" when something was
+        // chosen and stands alone when nothing was.
+        if (said) {
+            col.append(el('div', { class: 'qrev-said' },
+                el('span', { class: 'qrev-said-head' }, chosen.size ? 'You also said' : 'You said'),
+                el('span', {}, said)));
+        } else if (!chosen.size) {
+            col.append(el('div', { class: 'qrev-none' }, 'Not answered'));
+        }
+
+        grid.append(col);
+    }
+
+    if (!qs.length) grid.append(el('div', { class: 'qrev-none' }, 'No questions recorded.'));
+    return grid;
 }
 
 function kvView(obj) {
@@ -15338,9 +15638,14 @@ function scrollToEnd(instant) {
 }
 
 // ── turn rail ────────────────────────────────────────────────────────────
-// A tick per thing you said, down the right edge of the transcript. Hovering
-// reads the message back; clicking jumps to it. Built from the rendered log,
-// so a session streaming in a terminal grows its rail as it goes.
+// A tick per thing you said, down the right edge of the transcript, and one for
+// each plan and each question — the other two moments the conversation stopped
+// and waited for you. Hovering reads it back; clicking a message jumps to it and
+// clicking a plan or a question opens it (see openReview). Built from the
+// rendered log, so a session streaming in a terminal grows its rail as it goes.
+
+/** The two tool calls that are a moment in the conversation rather than work. */
+const REVIEWABLE = { ExitPlanMode: 'plan', AskUserQuestion: 'question' };
 
 function turnText(ev) {
     if (ev.command) return `/${ev.command.name}${ev.command.args ? ' ' + ev.command.args : ''}`;
@@ -15353,24 +15658,64 @@ function clipLines(s, n) {
     return t.length > n ? t.slice(0, n - 1) + '…' : t;
 }
 
+/**
+ * Build the rail.
+ *
+ * Two lists come out of one walk, and keeping them apart is the point.
+ * `state.turns` is still the messages and nothing else, because "Turn 3 of 12"
+ * counts what *you said* and markActiveTurn binary-searches it — a plan in that
+ * list would renumber every turn after it and mean the search was answering a
+ * different question from the one it is asked. `marks` is everything in the
+ * rail, in document order, which is the order `state.nodes` is already in.
+ *
+ * `state.turnTicks` is the third thing and exists because of the same split:
+ * markActiveTurn used to index `dom.turns.children` by turn number, which stops
+ * being true the moment anything that is not a turn is in the column.
+ */
 function renderTurns() {
     state.turns = [];
+    state.turnTicks = [];
+    const marks = [];
     for (const entry of state.nodes.values()) {
-        if (entry.ev.kind === 'user') state.turns.push(entry);
+        const ev = entry.ev;
+        if (ev.kind === 'user') {
+            state.turns.push(entry);
+            marks.push({ entry, kind: 'turn', no: state.turns.length });
+        } else if (ev.kind === 'tool' && REVIEWABLE[ev.name]) {
+            marks.push({ entry, kind: REVIEWABLE[ev.name] });
+        }
     }
     state.activeTurn = -1;
 
     const total = state.turns.length;
-    dom.turns.replaceChildren(...state.turns.map((t, i) => el('button', {
-        class: 'turn-tick',
-        type: 'button',
-        'aria-label': `Turn ${i + 1} of ${total}: ${clip(turnText(t.ev), 60)}`,
-        onclick: () => jumpToTurn(t),
-        onmouseenter: (e) => showTurnPop(e.currentTarget, i),
-        onmouseleave: hideTurnPop,
-        onfocus: (e) => showTurnPop(e.currentTarget, i),
-        onblur: hideTurnPop,
-    })));
+    dom.turns.replaceChildren(...marks.map((m) => {
+        const ev = m.entry.ev;
+        const turn = m.kind === 'turn';
+        const tick = el('button', {
+            class: 'turn-tick',
+            type: 'button',
+            // Both only ever set for a plan or a question. A message is the
+            // rail's default and stays unmarked, so every `[data-kind]` rule in
+            // the stylesheet is about the two new kinds and cannot reach a turn
+            // tick by accident — which a `data-kind="turn"` would have let it.
+            'data-kind': turn ? null : m.kind,
+            'data-status': turn ? null : (ev.status || 'pending'),
+            'aria-label': turn
+                ? `Turn ${m.no} of ${total}: ${clip(turnText(ev), 60)}`
+                : `${m.kind === 'plan' ? 'Plan' : 'Question'}, ${markOutcome(ev)}: `
+                    + clip(toolSummary(ev) || '', 60),
+            onclick: () => (turn ? jumpToTurn(m.entry) : openReview(ev.id)),
+            onmouseenter: (e) => showTurnPop(e.currentTarget, m),
+            onmouseleave: hideTurnPop,
+            onfocus: (e) => showTurnPop(e.currentTarget, m),
+            onblur: hideTurnPop,
+        });
+        // A message's tick does what its menu would say, so it does not get one:
+        // a single-item menu offering the click you just made is noise.
+        if (!turn) tick.oncontextmenu = (e) => openMarkMenu(e, m);
+        if (turn) state.turnTicks.push(tick);
+        return tick;
+    }));
     // Now it is known whether this conversation has a rail at all, so the hold
     // from beginOpen can go: with turns the class changes nothing, and without
     // them `.turns:empty` takes the column out and the composer widens into it.
@@ -15378,19 +15723,37 @@ function renderTurns() {
     markActiveTurn();
 }
 
-function showTurnPop(tick, i) {
-    const t = state.turns[i];
-    if (!t) return;
+/** Right-clicking a plan or a question: read it here, or go to it in the log. */
+function openMarkMenu(e, m) {
+    e.preventDefault();
+    const what = m.kind === 'plan' ? 'plan' : 'question';
+    openContextMenu(e, [
+        { label: `Open the ${what}`, onClick: () => openReview(m.entry.ev.id) },
+        { label: 'Show it in the transcript', onClick: () => jumpToTurn(m.entry) },
+    ]);
+}
+
+function showTurnPop(tick, m) {
+    if (!m || !m.entry) return;
+    const ev = m.entry.ev;
     const pop = dom.turnPop;
-    const isCmd = Boolean(t.ev.command);
+    const turn = m.kind === 'turn';
+    const isCmd = turn && Boolean(ev.command);
+
+    // `toolSummary` for the two new kinds rather than a second extraction: it
+    // already reduces a plan to its first heading and a question set to its
+    // headers, and it is what the collapsed transcript row says — so the rail
+    // and the row cannot end up calling the same thing two different things.
+    const head = turn ? `Turn ${m.no} of ${state.turns.length}`
+        : `${m.kind === 'plan' ? 'Plan' : 'Question'} · ${markOutcome(ev)}`;
+    const body = turn ? turnText(ev) : (toolSummary(ev) || '');
 
     pop.replaceChildren(
         el('div', { class: 'pop-head' },
-            el('span', {}, `Turn ${i + 1} of ${state.turns.length}`),
-            el('span', { class: 'when' }, clockOf(t.ev.ts)),
+            el('span', {}, head),
+            el('span', { class: 'when' }, clockOf(ev.ts)),
         ),
-        el('div', { class: 'pop-text' + (isCmd ? ' cmd' : '') },
-            clipLines(turnText(t.ev), 460)),
+        el('div', { class: 'pop-text' + (isCmd ? ' cmd' : '') }, clipLines(body, 460)),
     );
     pop.hidden = false;
 
@@ -15523,7 +15886,9 @@ function markActiveTurn() {
     if (active === state.activeTurn) return;
     state.activeTurn = active;
 
-    const ticks = dom.turns.children;
+    // state.turnTicks and not dom.turns.children: the rail also holds plan and
+    // question markers, so the nth child stopped being the nth turn.
+    const ticks = state.turnTicks;
     for (let i = 0; i < ticks.length; i++) {
         if (i === active) ticks[i].setAttribute('aria-current', 'true');
         else ticks[i].removeAttribute('aria-current');
@@ -15673,11 +16038,23 @@ function toolText(ev) {
         out.push(i.prompt);
     } else if (ev.name === 'ExitPlanMode') {
         out.push(i.plan);
+        // Only the tail when the approved text differs — a note is a couple of
+        // lines and the plan it is appended to is routinely tens of kilobytes,
+        // so pushing `r.plan` whole would double the biggest string in the find
+        // index to add those two lines.
+        if (r.plan && r.plan !== i.plan && r.plan.startsWith(i.plan || '')) {
+            out.push(r.plan.slice((i.plan || '').length));
+        } else if (r.plan && r.plan !== i.plan) {
+            out.push(r.plan);
+        }
     } else if (ev.name === 'AskUserQuestion') {
         for (const q of i.questions || []) {
             out.push(q.header, q.question);
             for (const o of q.options || []) out.push(o.label);
         }
+        // What you chose is often the only part of a question you remember well
+        // enough to search for.
+        if (r.answers) out.push(...Object.values(r.answers));
     } else if (ev.name === 'SendMessage') {
         out.push(i.summary);
         out.push(typeof i.message === 'string' ? i.message : JSON.stringify(i.message, null, 2));
@@ -20121,6 +20498,23 @@ for (const n of dom.delScrim.querySelectorAll('[data-close-del]')) {
     n.addEventListener('click', closeDelete);
 }
 
+// ── the plan/question review ─────────────────────────────────────────────
+
+// ✕ and Close are the whole close surface — see modalUp() for why there is no
+// Escape and no click-outside here either.
+for (const n of dom.reviewScrim.querySelectorAll('[data-close-review]')) {
+    n.addEventListener('click', closeReview);
+}
+dom.reviewJump.addEventListener('click', () => {
+    // Resolved now rather than held from the open, because a result landing in
+    // between replaces the node this is aiming at.
+    const entry = state.nodes.get(state.review.evId);
+    closeReview();
+    // revealNode opens an enclosing fold on the way, which a tool call in a
+    // collapsed run always has.
+    if (entry) revealNode(entry.node);
+});
+
 // ── the diff viewer ──────────────────────────────────────────────────────
 
 for (const n of dom.diffScrim.querySelectorAll('[data-close-diff]')) {
@@ -20165,11 +20559,16 @@ document.addEventListener('pointerdown', (e) => {
     closeContextMenu({ focus: false });
 }, true);
 
-// A right-click anywhere that is not a file row dismisses this and gets the
+// A right-click anywhere that has no menu of its own dismisses this and gets the
 // browser's own menu, which is what right-clicking the transcript should do.
+//
+// The exceptions are the rows that *do* have one — a file row and a rail marker.
+// This listener runs after the element's own handler, so without them it would
+// close the menu that click had just opened, in the same event, and right-click
+// would read as doing nothing at all.
 document.addEventListener('contextmenu', (e) => {
     if (dom.ctxMenu.hidden) return;
-    if (e.target.closest && e.target.closest('.ch-row')) return;
+    if (e.target.closest && e.target.closest('.ch-row, .turn-tick')) return;
     closeContextMenu({ focus: false });
 });
 
