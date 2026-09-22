@@ -27,7 +27,7 @@ process.env.XDG_DATA_HOME = home;
 
 const {
     Schedules, STATE_FILE, RUNS_FILE, MAX_SCHEDULES, CATCHUP_MS,
-    parseCron, matches, nextSlot, dueSlot, describeCron, cronForm, fillPrompt,
+    parseCron, matches, nextSlot, isSpent, dueSlot, describeCron, cronForm, fillPrompt,
     unattended, UNATTENDED_NOTE,
     verdictOf, reviewKey, unreviewedPulls, pruneReviews, capReviews, MAX_REVIEWED,
     scheduleTitle, promptPrefix,
@@ -655,6 +655,100 @@ const FIELDS = ['id', 'enabled', 'title', 'cwd', 'prompt', 'model', 'permissionM
         assert.ok(on.lastSlotAt >= before, 'and starts from now, not from its old slot');
     }
     ok('a one-time schedule is spent by its slot, and Run now does not spend it');
+}
+
+{
+    // **`isSpent` is what separates paused from finished**, and nothing else can:
+    // a one-time schedule is disabled by the bridge itself when its slot passes,
+    // so a spent row and one you switched off by hand carry the same `enabled`
+    // and the same `nextRunAt: null`. The schedules panel stacks them into
+    // different bands on the strength of this function, so each way of reaching
+    // it gets a case.
+    const spentOf = (row) => isSpent(row, parseCron(row.cron));
+
+    // Armed and waiting for the slot it was made for. `once` on its own is not
+    // the answer — this row still has a real next run.
+    {
+        const s = fresh();
+        const row = s.create({ cwd: '/a', prompt: 'p', cron: '0 17 29 8 *', once: true });
+        assert.strictEqual(spentOf(row), false, 'a one-time schedule is not spent before its slot');
+
+        // Paused by hand, still not spent: it is waiting for you, not finished.
+        const off = s.update(row.id, { enabled: false });
+        assert.strictEqual(spentOf(off), false,
+            'pausing a one-time schedule must not read as having run for the last time');
+    }
+
+    // The two ways the bridge spends one.
+    {
+        const s = fresh();
+        const a = s.create({ cwd: '/a', prompt: 'p', cron: '0 17 29 8 *', once: true });
+        s.claim(a.id, at(2026, 8, 29, 17, 0));
+        assert.strictEqual(spentOf(s.get(a.id)), true, 'the tick taking its slot spends it');
+
+        const b = s.create({ cwd: '/a', prompt: 'p', cron: '0 17 29 8 *', once: true });
+        s.note(b.id, { slotAt: at(2026, 8, 29, 17, 0), skipReason: 'missed' });
+        assert.strictEqual(spentOf(s.get(b.id)), true, 'and so does a slot found too old to run');
+    }
+
+    // Run now leaves `lastSlotAt` alone on purpose, so trying a one-time schedule
+    // out must not file it under finished — reading `once && !enabled` instead,
+    // which is the obvious shortcut, gets this one wrong.
+    {
+        const s = fresh();
+        const row = s.create({ cwd: '/a', prompt: 'p', cron: '0 17 29 8 *', once: true });
+        s.note(row.id, { sessionId: 'sess-1', marker: 'aa' });
+        assert.strictEqual(s.get(row.id).runs, 1, 'it really did run');
+        assert.strictEqual(spentOf(s.get(row.id)), false, 'and is still armed for its own slot');
+    }
+
+    // `once` is a flag, not a shape of the expression: one sitting on a repeating
+    // cron has a next slot until it takes one, which is why `lastSlotAt` and not
+    // `once` alone is the test.
+    {
+        const s = fresh();
+        const row = s.create({ cwd: '/a', prompt: 'p', cron: '0 2 * * *', once: true });
+        assert.strictEqual(spentOf(row), false, 'a `once` on a daily expression still has a next run');
+        s.claim(row.id, at(2026, 8, 29, 2, 0));
+        assert.strictEqual(spentOf(s.get(row.id)), true, 'until it has taken one');
+    }
+
+    // A repeating schedule is never spent, however it was left.
+    {
+        const s = fresh();
+        const row = s.create({ cwd: '/a', prompt: 'p', cron: '0 2 * * *' });
+        s.claim(row.id, at(2026, 8, 29, 2, 0));
+        assert.strictEqual(spentOf(s.get(row.id)), false, 'a repeating schedule comes round again');
+        assert.strictEqual(spentOf(s.update(row.id, { enabled: false })), false,
+            'and pausing one is a decision, not an ending');
+    }
+
+    // Spent, then armed again by hand. `update()` resets the slot cursor on the
+    // off→on transition, so `lastSlotAt` is set and the row has a real next run —
+    // reading `once && lastSlotAt` without `enabled` calls this one finished while
+    // it is waiting to fire.
+    {
+        const s = fresh();
+        const row = s.create({ cwd: '/a', prompt: 'p', cron: '0 17 29 8 *', once: true });
+        s.claim(row.id, at(2026, 8, 29, 17, 0));
+        assert.strictEqual(spentOf(s.get(row.id)), true);
+        const on = s.update(row.id, { enabled: true });
+        assert.ok(on.lastSlotAt != null, 'the cursor is set, which is the trap');
+        assert.strictEqual(spentOf(on), false, 'but it is armed for a real slot again');
+    }
+
+    // The second way to be finished, and the one that has nothing to do with
+    // `once`: an expression with no future date at all. True whether or not the
+    // row is armed, because being armed cannot make February 30th arrive.
+    {
+        const s = fresh();
+        const row = s.create({ cwd: '/a', prompt: 'p', cron: '0 0 30 2 *' });
+        assert.strictEqual(row.enabled, true);
+        assert.strictEqual(spentOf(row), true, 'February 30th will never come round');
+        assert.strictEqual(spentOf(s.update(row.id, { enabled: false })), true,
+            'nor will pausing it help');
+    }
+    ok('isSpent tells a schedule that has finished from one that is paused');
 }
 
 {
