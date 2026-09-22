@@ -30,6 +30,9 @@ const { Spinner, norm: spinnerNorm } = require('./spinner');
 const { Suggestions, STATUSES: SUGGESTION_STATUSES } = require('./suggestions');
 const { Drafts, MAX_DRAFTS } = require('./drafts');
 const {
+    Later, LATE_MS, MAX_PER_SESSION: MAX_LATER_PER_SESSION, MAX_AHEAD_MS,
+} = require('./later');
+const {
     Snippets, MAX_SNIPPETS, MAX_GROUPS, MAX_PARAMS, MAX_BODY, MAX_PROJECTS, MAX_TITLE,
     INSERT_STYLES, isParamName, isAccent, scanPlaceholders,
 } = require('./snippets');
@@ -216,6 +219,10 @@ const SUGGESTION_STATES = new Set(['open', ...SUGGESTION_STATUSES]);
 // session that exists: a draft *is* a create call, held back until you press
 // Start. See bridge/drafts.js.
 const drafts = new Drafts();
+// Messages written now and delivered to a session that already exists, at a time
+// you picked. A draft is a create call held back; this is a *send* held back —
+// see bridge/later.js.
+const later = new Later();
 // Canned messages, and the groups they are drawn in. What replaced the one
 // hard-coded LGTM button on the composer — see bridge/snippets.js. Named
 // `snippetStore` rather than `snippets` so that nothing here has to wonder
@@ -257,6 +264,9 @@ index.suggestions = suggestions;
 // So a session a schedule started says so, and the rail can group them. Absent,
 // every summary carries `schedule: null` and nothing else changes.
 index.schedules = schedules;
+// So a rail row can say that a message is due here overnight. Absent, every
+// summary carries `later: null` and nothing else changes.
+index.later = later;
 
 /**
  * @type {Map<string, {
@@ -1013,6 +1023,35 @@ function draftsPayload() {
 }
 
 /**
+ * A scheduled message on the wire.
+ *
+ * `projectName` for draftOut's reason, and `late` because the window is the one
+ * thing a client cannot work out for itself: LATE_MS lives in the bridge, and a
+ * chip that said "in -20 minutes" for a row that is never going to be delivered
+ * would be worse than one that says it was missed.
+ */
+function laterOut(row) {
+    return {
+        ...row,
+        projectName: projectName(row.cwd),
+        late: row.state === 'pending' && Date.now() - row.at > LATE_MS,
+    };
+}
+
+/** The whole list, which is both the GET body and the SSE payload. */
+function laterPayload() {
+    const rows = later.list().map(laterOut);
+    return {
+        at: Date.now(),
+        messages: rows,
+        counts: {
+            total: rows.length,
+            pending: rows.filter(r => r.state === 'pending').length,
+        },
+    };
+}
+
+/**
  * Validate what a draft write is asking for, exactly as a create would.
  *
  * The point of checking at *write* time is that a draft you cannot start is
@@ -1058,6 +1097,70 @@ function draftFields(body, who, { partial }) {
     if (!partial || body.model !== undefined) fields.model = body.model || null;
     if (!partial || body.title !== undefined) fields.title = body.title || null;
     if (!partial || body.test !== undefined) fields.test = !!body.test;
+
+    return { fields };
+}
+
+/**
+ * Validate what a scheduled-message write is asking for, exactly as a send would.
+ *
+ * `draftFields`' shape, and for its reason: the create and the edit have to reach
+ * the same verdict, and a message that could be saved but never delivered is worse
+ * than a refused save.
+ *
+ * Two rules that are not `/send`'s:
+ *
+ *   * **`permissionMode` is required, not defaulted.** `/send` normalises an absent
+ *     one to `auto`, and that trap is much worse here: `auto` is the one mode that
+ *     cannot work when nobody is watching, and the mistake would only show up as a
+ *     session that stalled in the night. A client must say what it means.
+ *   * **`at` must be in the future and inside a month.** The upper bound is what
+ *     makes a typo'd year a 400 rather than a row that sits in the file forever.
+ */
+function laterFields(body, who, { partial }) {
+    const fields = {};
+
+    if (!partial || body.text !== undefined || body.attachments !== undefined) {
+        const text = body.text ? String(body.text).trim() : '';
+        const files = Array.isArray(body.attachments) ? body.attachments : [];
+        // A screenshot with nothing typed under it is a real message, which is the
+        // send route's rule and not worth having twice over.
+        if (!text && !files.length) {
+            return { error: 'text or an attachment is required', status: 400 };
+        }
+        fields.text = text;
+        fields.attachments = files;
+    }
+
+    if (!partial || body.permissionMode !== undefined) {
+        if (!body.permissionMode) {
+            return {
+                error: 'permissionMode is required — a message delivered while nobody is '
+                    + 'watching has its permission asks denied automatically, so the mode '
+                    + 'has to be a choice rather than a default',
+                status: 400,
+            };
+        }
+        const mode = normalizeMode(body.permissionMode);
+        const refusal = modeRefusal(mode, who);
+        if (refusal) return { error: refusal, status: 403, remote: true };
+        fields.permissionMode = mode;
+    }
+
+    if (!partial || body.at !== undefined) {
+        const at = Number(body.at);
+        if (!Number.isFinite(at)) return { error: 'at is required', status: 400 };
+        const now = Date.now();
+        if (at <= now) {
+            return { error: 'at is in the past — pick a time that has not happened yet', status: 400 };
+        }
+        if (at - now > MAX_AHEAD_MS) {
+            return { error: 'at is more than a month away', status: 400 };
+        }
+        fields.at = at;
+    }
+
+    if (!partial || body.model !== undefined) fields.model = body.model || null;
 
     return { fields };
 }
@@ -2337,6 +2440,279 @@ function fileScheduleNote(row, entry) {
     filed(notifications.record({ ...entry, title: scheduleTitle(row) }));
 }
 
+// ---------------------------------------------------------------------------
+// Messages on a clock
+// ---------------------------------------------------------------------------
+//
+// A scheduled message is the body `POST /api/sessions/:id/send` takes, held back
+// until a timestamp — see bridge/later.js for the store and why it is its own
+// file. This is the half that delivers one.
+//
+// **The delivery is the send route's own sequence, not a second one.** That is
+// the rule `POST /api/schedules/:id/run` established for "Run now" and the reason
+// is the same: "the clock delivers what the button delivers" should be true
+// because there is one path, not because two were kept in step. `deliverLater` is
+// what both the tick and `POST /api/later/:id/send` call.
+//
+// The thing this has to get right that `/send` does not is that **nobody is
+// watching**. Three consequences, all of them load-bearing:
+//
+//   * A permission ask raised with no SSE client attached is auto-denied on the
+//     spot, and two of those stop the turn (see `hasViewer` in bridge/runner.js).
+//     So the mode a message is delivered in is the difference between it working
+//     and it quietly giving up at 02:00. It is stored per message and never
+//     defaulted here; the composer offers `bypassPermissions` because that is the
+//     only mode that reliably runs unattended, and web/app.js makes the same
+//     argument for a scheduled *session* one dialog over.
+//   * A message that cannot be delivered has nobody to be handed back to, which
+//     is the problem `wakeFailure` was written for in bridge/handoff.js. It is
+//     reused here rather than reimplemented.
+//   * Being late is a reason not to deliver at all. LATE_MS, not CATCHUP_MS —
+//     bridge/later.js says why.
+
+/** At most this many go out per tick, so a backlog drains rather than bursts. */
+const LATER_PER_TICK = 4;
+
+/**
+ * File a notification about a scheduled message, unless it is a test one.
+ *
+ * `fileScheduleNote`'s guard, for a narrower version of its reason. There the log's
+ * own `flags`-based filter could not help because a failing schedule often has no
+ * session at all; here there is always a session, and it is the *right* session —
+ * so the filter would work. The guard is kept anyway because it is the same fact
+ * stated once instead of twice, and because a dev bridge's throwaway probe failing
+ * every two minutes has no business in the user's notification list.
+ *
+ * No `title`: `notifications.record` derives it from `sessionId` along with the
+ * project and the directory, so passing our own would be one field out of three
+ * coming from somewhere else.
+ */
+function fileLaterNote(row, entry) {
+    if (row.test) return;
+    filed(notifications.record({ ...entry, sessionId: row.sessionId }));
+}
+
+/**
+ * Deliver one scheduled message, or say why not.
+ *
+ * The caller has already claimed the row, so every exit here has to be one the
+ * caller can record — there is no path that leaves the message in limbo.
+ *
+ * `retry: true` is the one non-fatal refusal: it means nothing was attempted and
+ * the row should go back to `pending` for a later tick. It is deliberately narrow.
+ * Anything after `r.send` has reached the process and can never be retried,
+ * because `claude` writes its user entry at submission — re-sending would re-run
+ * work the transcript already shows.
+ *
+ * @returns {Promise<{ok: boolean, retry?: boolean, error?: string, status?: object,
+ *   queued?: boolean, cwd?: string, woke?: boolean}>}
+ */
+async function deliverLater(row) {
+    const summary = index.summary(row.sessionId);
+    if (!summary) {
+        return { ok: false, error: 'that session no longer exists' };
+    }
+
+    // Normalised on the way out as well as on the way in, for the reason
+    // `POST /api/drafts/:id/start` gives: the row was written through a route that
+    // checked it, but this file is hand-editable and outlives the process that
+    // wrote it, so the value reaching `--permission-mode` is not taken on trust
+    // from JSON on disk. The *remote* refusal is not repeated — it was applied
+    // when the message was written, and a tick has no caller to refuse.
+    const mode = normalizeMode(row.permissionMode);
+    const model = row.model || null;
+
+    const st = pool.statuses()[row.sessionId] || null;
+
+    // Held by a terminal, VS Code or a background agent: two writers cannot append
+    // to one transcript. Worth retrying rather than failing, which is the one place
+    // this differs from the handoff route's 409 — that route has a caller waiting
+    // for an answer, and this one has until the window closes. A terminal closed a
+    // minute from now should not cost the message.
+    if (handoffState(summary, st) === 'elsewhere') {
+        return {
+            ok: false, retry: true,
+            error: 'that session is running somewhere else',
+        };
+    }
+
+    // The self-inflicted failure this exists to prevent. `pool.ensure` with a
+    // changed model or mode *retires the process and respawns it* — the queue
+    // carries across but the turn in flight does not. Killing a 2am turn to deliver
+    // a message meant to help it is the worst thing this feature could do, so a
+    // message that would change the mode waits for the session to be idle. One that
+    // would not is simply queued behind the turn, which is correct and needs no
+    // special case.
+    const busy = st && (st.state === 'busy' || st.state === 'starting');
+    if (busy && (st.permissionMode !== mode || (st.model || null) !== model)) {
+        return {
+            ok: false, retry: true,
+            error: `that session is mid-turn and this message would change its mode to `
+                + `${mode}, which would end the turn — waiting for it to finish`,
+        };
+    }
+
+    const cwd = sessionCwd(summary);
+    let files;
+    try {
+        // Re-derived against this session's own attachments directory, exactly as
+        // `/send` re-derives them. A file tidied away since the message was written
+        // is dropped rather than failing the whole delivery.
+        files = resolveAttachments(cwd, row.attachments);
+    } catch (err) {
+        return { ok: false, error: err.message };
+    }
+
+    // Read before ensure(), which is about to change the answer.
+    const woke = wakes(st);
+
+    let r;
+    let entry;
+    try {
+        r = pool.ensure(row.sessionId, { cwd, model, permissionMode: mode });
+        entry = r.send(String(row.text || ''), files);
+    } catch (err) {
+        return { ok: false, error: err.message };
+    }
+
+    // The send is what started the process, so wait briefly to see whether it
+    // actually started — a session id still locked by a killed process refuses
+    // one or two seconds in, and without this that is recorded as delivered.
+    if (woke) {
+        const failure = await wakeFailure(r);
+        if (failure) {
+            return {
+                ok: false,
+                error: `that session could not be resumed: ${failure.message}`,
+            };
+        }
+    }
+
+    const status = r.status();
+    return {
+        ok: true, status, cwd, woke,
+        queued: status.queue.some(q => q.id === entry.id),
+    };
+}
+
+// The same re-entrancy guard the schedule tick keeps, and for its reason: a
+// delivery can wait five seconds on a wake, and two passes overlapping on one row
+// would otherwise both get as far as the send.
+let laterTicking = false;
+
+function tickLater() {
+    if (laterTicking) return Promise.resolve();
+    laterTicking = true;
+    return runLaterTick().finally(() => { laterTicking = false; });
+}
+
+/**
+ * One pass over everything due.
+ *
+ * The order inside the loop is the bug docs/plans/15-scheduling.md records under
+ * section C — an exception after the claim loses the run silently — so the claim
+ * goes down before anything that can throw, and the catch turns a throw into a
+ * recorded failure rather than a row nobody will ever look at again.
+ */
+async function runLaterTick() {
+    // A message written on a dev bridge, or from a phone, reaches the bridge that
+    // will deliver it only through the file. schedule.js's tick reloads first for
+    // the same reason.
+    later.reload();
+    const now = Date.now();
+    let changed = false;
+    let budget = LATER_PER_TICK;
+
+    for (const row of later.due(now)) {
+        // The symmetric rule the schedule tick applies: a dev bridge takes only
+        // test rows and the everyday one only the rest. Here the flag was copied
+        // off the target session rather than chosen, so this says no more than
+        // "the bridge that owns this session is the one that delivers to it".
+        if (cfg.IS_DEV !== !!row.test) continue;
+
+        // Past its window. Reported rather than sent — an instruction seven hours
+        // late is the wrong instruction, and this one arrives carrying the
+        // permission to act on itself.
+        if (now - row.at > LATE_MS) {
+            later.note(row.id, {
+                state: 'missed',
+                error: 'the bridge was not running when this was due, and it was too '
+                    + 'late to deliver by the time it came back',
+            });
+            fileLaterNote(row, {
+                type: 'later-missed',
+                summary: 'a scheduled message was not delivered',
+                detail: `The message due at ${new Date(row.at).toLocaleString()} was not `
+                    + 'sent, because by the time the bridge could send it more than an '
+                    + 'hour had passed. It is still on the session, marked missed, so '
+                    + 'you can send it yourself.',
+                loud: true,
+            });
+            changed = true;
+            continue;
+        }
+
+        if (budget <= 0) break;
+        if (!later.claim(row.id)) continue;
+        budget--;
+        changed = true;
+
+        let out;
+        try {
+            out = await deliverLater(row);
+        } catch (err) {
+            out = { ok: false, error: err.message };
+        }
+
+        if (out.ok) {
+            later.note(row.id, { state: 'sent', sentAt: Date.now() });
+        } else if (out.retry) {
+            // Nothing was attempted, so the claim can be given back. Only ever
+            // reached before the send — see deliverLater.
+            later.release(row.id);
+        } else {
+            later.note(row.id, { state: 'failed', error: out.error });
+            fileLaterNote(row, {
+                type: 'later-failed',
+                summary: 'a scheduled message could not be delivered',
+                detail: `${out.error}. The message is still on the session, marked `
+                    + 'failed, so nothing you wrote has been lost.',
+                loud: true,
+            });
+        }
+    }
+
+    if (changed) broadcast('later-changed', laterPayload());
+}
+
+/**
+ * Messages this bridge left mid-delivery when it stopped.
+ *
+ * Runs once at boot, before the first tick, exactly as `recoverInterruptedReviews`
+ * does. The store marks them failed and never retries them; this is the half that
+ * says so out loud.
+ */
+function recoverInterruptedLater() {
+    // Gated by the same symmetry the tick applies, and it has to be: every bridge
+    // shares STATE_DIR, so an ungated pass would let a dev bridge coming up mark
+    // the everyday bridge's in-flight message as failed while it is being
+    // delivered perfectly well one process over.
+    const stuck = later.recover(row => cfg.IS_DEV === !!row.test);
+    if (!stuck.length) return;
+    for (const row of stuck) {
+        fileLaterNote(row, {
+            type: 'later-failed',
+            summary: 'a scheduled message was interrupted',
+            detail: 'The bridge stopped while this message was being delivered. It was '
+                + 'not sent again, because it may already have arrived — check the '
+                + 'transcript, and send it yourself if it did not.',
+            loud: true,
+        });
+    }
+    console.log(`[claude-sessions] ${stuck.length} interrupted scheduled message(s) marked`);
+    broadcast('later-changed', laterPayload());
+}
+
 /** A bounded `?limit=`, so one caller cannot ask for the whole index. */
 function limitOf(url, fallback, max) {
     const n = Number(url.searchParams.get('limit'));
@@ -3309,6 +3685,100 @@ async function api(req, res, url, pathname, who) {
         }
     }
 
+    // ── messages on a clock ──────────────────────────────────────────────
+    //
+    // A send held back until a time you picked — see bridge/later.js. Written
+    // against a session, which is why the create lives on
+    // `POST /api/sessions/:id/later`; everything afterwards is about one message
+    // and needs no session in the path.
+    //
+    // All four in one block, beside drafts and for the reason that block gives.
+    if (seg[1] === 'later') {
+        if (!seg[2] && req.method === 'GET') {
+            return send(res, 200, laterPayload());
+        }
+
+        if (seg[2] && !seg[3] && req.method === 'PATCH') {
+            const body = await readJson(req);
+            // Validated before the message is looked up, the order the drafts PATCH
+            // uses and for the reason it gives: the refusal is about what this
+            // caller may ask for, not about what it aimed at.
+            const v = laterFields(body, who, { partial: true });
+            if (v.error) {
+                return send(res, v.status,
+                    v.remote ? { error: v.error, remote: true } : { error: v.error });
+            }
+            const out = later.update(seg[2], v.fields);
+            if (!out) return send(res, 404, { error: 'no scheduled message with that id' });
+            // Already handed to a process, or already past. Editing it now would be
+            // editing the past, and the store refuses rather than pretending.
+            if (out.conflict) {
+                return send(res, 409, {
+                    error: `that message is ${out.conflict} — it cannot be changed now`,
+                });
+            }
+            broadcast('later-changed', laterPayload());
+            return send(res, 200, { message: laterOut(out) });
+        }
+
+        if (seg[2] && !seg[3] && req.method === 'DELETE') {
+            if (!later.remove(seg[2])) {
+                return send(res, 404, { error: 'no scheduled message with that id' });
+            }
+            broadcast('later-changed', laterPayload());
+            return send(res, 200, { ok: true, id: seg[2] });
+        }
+
+        // Deliver it now, whatever its clock says.
+        //
+        // The same function the tick calls, for the reason
+        // `POST /api/schedules/:id/run` is: "the button delivers what the clock
+        // delivers" is only true if there is one path. That includes the
+        // wait-for-idle rule — pressing this must not end a turn either.
+        if (seg[2] && seg[3] === 'send' && req.method === 'POST') {
+            const row = later.get(seg[2]);
+            if (!row) return send(res, 404, { error: 'no scheduled message with that id' });
+            if (row.state !== 'pending') {
+                return send(res, 409, {
+                    error: `that message is ${row.state} — it has already been dealt with`,
+                });
+            }
+            // Re-checked here and not only at write time: the file is hand-editable
+            // and outlives the process that wrote it, and a message saved at the
+            // machine must not become a way for a phone to send bypassPermissions.
+            const refusal = modeRefusal(normalizeMode(row.permissionMode), who);
+            if (refusal) return send(res, 403, { error: refusal, remote: true });
+
+            if (!later.claim(seg[2])) {
+                return send(res, 409, { error: 'a tick is already delivering that message' });
+            }
+            let out;
+            try {
+                out = await deliverLater(row);
+            } catch (err) {
+                out = { ok: false, error: err.message };
+            }
+            if (out.ok) {
+                later.note(seg[2], { state: 'sent', sentAt: Date.now() });
+            } else if (out.retry) {
+                later.release(seg[2]);
+            } else {
+                later.note(seg[2], { state: 'failed', error: out.error });
+            }
+            broadcast('later-changed', laterPayload());
+            if (!out.ok) {
+                // 409 for the two retryable refusals — the message is untouched and
+                // pressing again later is the right thing to do — and 502 for a
+                // delivery that was attempted and did not land.
+                return send(res, out.retry ? 409 : 502, { error: out.error });
+            }
+            return send(res, 200, {
+                ok: true, message: laterOut(later.get(seg[2])),
+                status: out.status, queued: out.queued, woke: out.woke,
+            });
+        }
+    }
+
     // ── snippets ─────────────────────────────────────────────────────────
     //
     // Canned messages: a title, a body, what to ask before sending it and where
@@ -4097,6 +4567,10 @@ async function api(req, res, url, pathname, who) {
             catch (err) { return send(res, 500, { error: `could not delete: ${err.message}` }); }
             if (!removed) return send(res, 404, { error: 'session not found' });
 
+            // Nothing left to deliver them to. The same rule the changes above
+            // follow: what was about this session goes when the session does.
+            if (later.forget(sessionId)) broadcast('later-changed', laterPayload());
+
             // Two events: one for windows showing this conversation, which have
             // to leave it, and the ordinary list refresh for everybody else.
             broadcast('session-deleted', { sessionId, title: summary.title });
@@ -4393,6 +4867,46 @@ async function api(req, res, url, pathname, who) {
                 ok: true, id: entry.id, cwd, fork: !!body.fork, status,
                 queued: status.queue.some(q => q.id === entry.id),
             });
+        }
+
+        // --- the same message, later ---------------------------------------
+        // The create half of /api/later, here because a scheduled message is
+        // written *against a session* — everything after this is about one
+        // message and needs no session in the path. See bridge/later.js.
+        if (tail === 'later' && req.method === 'GET') {
+            return send(res, 200, { messages: later.forSession(sessionId).map(laterOut) });
+        }
+
+        if (tail === 'later' && req.method === 'POST') {
+            const body = await readJson(req);
+            // Before the session is looked up, so a refused mode does not depend on
+            // whether the id is real — `/send`'s order, two routes up.
+            const v = laterFields(body, who, { partial: false });
+            if (v.error) {
+                return send(res, v.status,
+                    v.remote ? { error: v.error, remote: true } : { error: v.error });
+            }
+
+            const summary = index.summary(sessionId);
+            if (!summary) return send(res, 404, { error: 'session not found' });
+
+            const row = later.create({
+                ...v.fields,
+                sessionId,
+                cwd: sessionCwd(summary),
+                // Copied off the session rather than asked for. It decides which
+                // bridge delivers this, and a test session's messages belong to the
+                // dev bridge for the same reason the session itself does.
+                test: !!summary.test,
+            });
+            if (!row) {
+                return send(res, 409, {
+                    error: `that session already has ${MAX_LATER_PER_SESSION} messages `
+                        + 'waiting — send or cancel some before scheduling another',
+                });
+            }
+            broadcast('later-changed', laterPayload());
+            return send(res, 200, { message: laterOut(row) });
         }
 
         // --- handoff -------------------------------------------------------
@@ -6305,6 +6819,10 @@ function shutdown(code = 0) {
     // losing it means the draft comes back and can be started a second time.
     // flush() merges, so writing here cannot trample another bridge either.
     try { drafts.flush(); } catch { /* nothing to save */ }
+    // Load-bearing rather than tidy: the process exits well inside the debounce
+    // window, and an unflushed `delivering` claim would come back up looking like
+    // `pending` — the one transition this store must never make.
+    try { later.flush(); } catch { /* nothing to save */ }
     // The same argument one notch quieter: a snippet lost inside the debounce is a
     // paragraph to retype rather than a session started twice. It is on this list
     // because everything with a debounce belongs on it, and because a deletion is
@@ -6478,6 +6996,36 @@ takeBackHeld().catch((err) => {
                 `[claude-sessions] schedule tick failed: ${err.message}`));
         }, SCHEDULE_MS).unref();
     }
+
+    // Messages on a clock, on the schedule tick's clock and with its shape — a
+    // catch-up pass first, then every SCHEDULE_MS, both `.unref()`ed.
+    //
+    // **Outside the block above on purpose.** That one is gated on
+    // CLAUDE_SESSIONS_SCHEDULE_ON_DEV because a schedule starts an unattended agent
+    // in the user's own checkout out of a file every bridge shares. A scheduled
+    // message can only speak to a session that already exists, and the dev/test
+    // symmetry inside the tick already decides which bridge owns which rows — so
+    // there is no blast radius for that variable to guard, and requiring it would
+    // only mean every test of this feature needed an env var.
+    //
+    // The catch-up pass is what makes a missed message reportable at all: the
+    // bridge is not up continuously, and a message due while it was down has to be
+    // found on the way back up rather than never.
+    try { recoverInterruptedLater(); } catch (err) {
+        console.error(`[claude-sessions] message recovery failed: ${err.message}`);
+    }
+    // Rows whose session is gone, and terminal ones past their week. Once at boot
+    // rather than on a clock of its own: nothing here grows fast enough to need
+    // more, and the index has just finished scanning.
+    try { later.prune(index.knownIds()); } catch (err) {
+        console.error(`[claude-sessions] message prune failed: ${err.message}`);
+    }
+    tickLater().catch(err => console.error(
+        `[claude-sessions] scheduled message catch-up failed: ${err.message}`));
+    setInterval(() => {
+        tickLater().catch(err => console.error(
+            `[claude-sessions] scheduled message tick failed: ${err.message}`));
+    }, SCHEDULE_MS).unref();
 
     // Pull request status. The only thing in this process that asks gh about a PR
     // on a clock, and the reason no route has to.

@@ -308,6 +308,50 @@ moves the focus to the row that took the dropped one's place, or to the composer
 if that was the last one, because focus falling to the body would leave the next
 `Esc` closing something else entirely.
 
+### And Send later holds one until an hour you choose
+
+Some instructions are only true in the middle of the night. The one this was built
+for: an agent taking screenshots has to modify app data to get them, and the
+go-ahead should arrive at 2am, when disturbing that data costs nothing and nobody
+is going to notice.
+
+The clock beside **Send** takes the message you have written and holds it. Pick
+*in 30 minutes*, *tonight at 02:00*, or an exact time; it leaves the box the way a
+sent message does and comes back as a chip above the queue, which reads
+bottom-to-top as what you are typing, what is attached, what goes next, and what
+goes in the night. Cancel it with the ×, or press **Send now** to stop waiting.
+A rail row carries a 🕐 badge with the time, so a session with something due
+overnight says so from the outside.
+
+**The mode is the part to get right, and it is on the face of every chip.** When
+no window is open, a session that asks for permission is denied automatically —
+twice, and then the turn stops. That is a good rule while you are asleep and a
+useless one for a message whose whole content is *you may now do the thing*, so a
+scheduled message carries its own permission mode and the popover offers
+`bypassPermissions` first. It is a real choice with a real cost: the turn it
+starts has no permission gate and nobody watching it. Making it per message, in
+front of you, and printed on the chip afterwards is the most this app can do about
+that.
+
+Three things it will not do:
+
+- **Deliver a message more than an hour late.** The bridge is not up
+  continuously — machines sleep, bridges restart — and a slot missed while it was
+  down is found on the way back up. But an instruction seven hours late is the
+  wrong instruction, so past an hour the message is marked *missed*, you get a
+  notification, and nothing is sent. The text is still on the chip.
+- **End a turn to deliver one.** If the session is mid-turn and the message would
+  change its permission mode, delivering would replace the process and kill the
+  turn. It waits for idle instead. A message that would not change anything simply
+  joins the queue behind the turn, which is what you want.
+- **Send one twice.** If the bridge stops between taking a message and hearing
+  back, the message is marked *failed* rather than retried — `claude` writes your
+  message to the transcript the moment it is submitted, so it may well have
+  arrived, and re-running work you already paid for is the more expensive mistake.
+
+A stopped session is resumed to receive one, which is the point: the agent you
+left at midnight is the agent that reads it.
+
 ### The rail is sorted on load, and then left alone
 
 The bridge returns sessions ordered by when *you* last wrote in them, and it
