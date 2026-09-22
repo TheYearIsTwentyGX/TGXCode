@@ -7865,3 +7865,266 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     .diff-seg { display: none; }
     .diff-note { display: none; }
 }
+
+/* ── project colours ───────────────────────────────────────────────────────
+   A colour somebody gave a project, worn by everything that names one.
+
+   **`--proj-accent` is set inline by script and every rule below hangs off
+   `[data-tinted]`**, never off the property alone. That is the whole trick: a
+   project with no colour, and a dialog with no project, get none of these rules
+   and so render exactly as this app has always rendered them — rather than
+   through a `color-mix` that happens to land near the blue it replaced. Two
+   states, not a spectrum with an awkward middle.
+
+   The mixing is `--snip-accent`'s idiom (see the snippets section above), and
+   for its reason: one hue turned into a ground and an edge against the surface
+   underneath, so a badly chosen colour comes out muted rather than loud. */
+
+/* The dot that says "this project", wherever a project is named in a list. It
+   is `currentColor`-sized rather than fixed so it sits on the text it precedes,
+   and it collapses to nothing without a colour — a row of empty circles for the
+   projects nobody has coloured would be noise standing in for information. */
+.pdot { display: none; }
+.picker-row[data-tinted] > .pdot,
+#new-scrim[data-tinted] .new-project > .pdot {
+    display: block;
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--proj-accent);
+}
+
+/* --- the Start-a-session dialog --------------------------------------- */
+
+/* The head reads downward: which project, then what you are doing with it. */
+.modal-head-text {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+.new-project {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+    font: 500 11.5px/1.4 var(--sans);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-3);
+}
+.new-project-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Nothing picked is a state worth reading, not an empty space: the dialog no
+   longer chooses a directory for you, so this line is where you find that out. */
+.new-project.none { color: var(--text-4); font-style: italic; text-transform: none; }
+#new-scrim[data-tinted] .new-project { color: color-mix(in srgb, var(--proj-accent) 62%, var(--text)); }
+
+/* The backdrop takes a wash of it, so the screen says which project before a
+   word of the dialog has been read. Darker than the plain #00000099 it replaces
+   rather than lighter — a tint that also lifted the backdrop would show less of
+   the window behind it while claiming to say more. */
+#new-scrim[data-tinted] {
+    background: color-mix(in srgb, var(--proj-accent) 13%, #000000c2);
+}
+/* An edge rather than a border: .modal has none today, and adding one for the
+   tinted case alone would change the dialog's shape as well as its colour. */
+#new-scrim[data-tinted] .modal {
+    box-shadow: inset 0 3px 0 var(--proj-accent), 0 24px 64px #000a;
+}
+#new-scrim[data-tinted] .modal-head {
+    background: color-mix(in srgb, var(--proj-accent) 13%, var(--s2));
+    padding-bottom: 12px;
+}
+
+/* The selection states inside this dialog, which are all hard-coded blue. Kept
+   under the tinted attribute *and* under #new-scrim, so blue goes on meaning
+   "selected" in every other panel in the app: a colour that meant "this project"
+   in one place and "you chose this" in another would be worth neither. */
+#new-scrim[data-tinted] {
+    --sel-bg: color-mix(in srgb, var(--proj-accent) 26%, var(--s2));
+    --sel-bg-hover: color-mix(in srgb, var(--proj-accent) 34%, var(--s2));
+    --sel-fg: color-mix(in srgb, var(--proj-accent) 82%, var(--text));
+}
+#new-scrim[data-tinted] .picker-row[aria-current="true"],
+#new-scrim[data-tinted] .picker-tab[aria-selected="true"],
+#new-scrim[data-tinted] .when-day:has(input:checked) {
+    background: var(--sel-bg);
+    color: var(--sel-fg);
+}
+#new-scrim[data-tinted] .picker-row[aria-current="true"]:hover {
+    background: var(--sel-bg-hover);
+}
+#new-scrim[data-tinted] .when-opt:has(input:checked) {
+    background: color-mix(in srgb, var(--proj-accent) 14%, var(--s2));
+}
+#new-scrim[data-tinted] .field textarea:focus,
+#new-scrim[data-tinted] .field input[type="text"]:focus,
+#new-scrim[data-tinted] .when-in:focus,
+#new-scrim[data-tinted] .mkdir-name:focus {
+    box-shadow: inset 0 0 0 2px var(--proj-accent);
+}
+#new-scrim[data-tinted] .when-day:focus-within {
+    box-shadow: inset 0 0 0 2px var(--proj-accent);
+}
+#new-scrim[data-tinted] .when-pick input,
+#new-scrim[data-tinted] .field label.check input {
+    accent-color: var(--proj-accent);
+}
+
+/* --- the rail's project cards ----------------------------------------- */
+
+/* A stripe down the left edge rather than a wash over the card. The rail is
+   304px of rows that are already carrying a state colour each, and a tinted card
+   under them would be a second colour competing with the first; an edge is read
+   as "which card" and never as "what is happening in it". */
+.rail-group { position: relative; }
+.rail-group[data-tinted] {
+    box-shadow: inset 3px 0 0 var(--proj-accent);
+}
+.rail-group[data-tinted] > .group-head {
+    padding-left: 15px;
+    color: color-mix(in srgb, var(--proj-accent) 55%, var(--text-2));
+}
+.rail-group[data-tinted] > .group-head .twist {
+    color: color-mix(in srgb, var(--proj-accent) 45%, var(--text-4));
+}
+
+/* ⋮ — a sibling of the heading, not a child, because the heading is a <button>.
+   Held over the card's top-right corner, with the head padded to match so the
+   count never runs under it. Hidden until the card is hovered or something in it
+   has the focus: one of these per project, always drawn, is a column of dots
+   down a narrow rail saying nothing. */
+.group-menu-btn {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    color: var(--text-4);
+    opacity: 0;
+    transition: opacity var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+}
+.rail-group:hover > .group-menu-btn,
+.rail-group:focus-within > .group-menu-btn,
+.group-menu-btn[aria-expanded="true"] { opacity: 1; }
+.group-menu-btn:hover { background: var(--s3); color: var(--text-2); }
+.group-menu-btn[aria-expanded="true"] { background: var(--s3); color: var(--text); }
+/* Room for it, so the count and the live pill stop short of the button rather
+   than sliding under it. Only where there is a button to make room for. */
+.rail-group:has(> .group-menu-btn) > .group-head { padding-right: 36px; }
+
+/* The menu itself. .new-menu's surface and rows — it is the same kind of thing,
+   one step further from the control that opened it — but fixed and placed from
+   script, because the rail scrolls and renderRail() rebuilds the button under it.
+   See showProjMenu(). */
+.proj-menu {
+    position: fixed;
+    top: auto;
+    left: auto;
+    right: auto;
+    width: 220px;
+    max-height: none;
+}
+
+/* --- the boards and the dashboard ------------------------------------- */
+
+/* Heads only, and lightly. These are wide surfaces holding cards that carry
+   colours of their own — a task's state, a PR's — so the project's colour has to
+   stay out of their way while still being the first thing read down the column. */
+.tb-col[data-tinted] > .tb-col-head,
+.dproj[data-tinted] > .dproj-head {
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
+    background: color-mix(in srgb, var(--proj-accent) 11%, transparent);
+    box-shadow: inset 0 2px 0 var(--proj-accent);
+}
+.tb-col[data-tinted] > .tb-col-head h2 {
+    color: color-mix(in srgb, var(--proj-accent) 55%, var(--text));
+}
+.dproj[data-tinted] > .dproj-head .dproj-name {
+    color: color-mix(in srgb, var(--proj-accent) 55%, var(--text));
+}
+
+/* --- the colour picker ------------------------------------------------ */
+
+.modal.pcolor { width: min(480px, 100%); }
+.pcolor-name { font: 500 15px/1.4 var(--sans); color: var(--text); }
+.pcolor-path {
+    margin-top: 2px;
+    font: 400 11.5px/1.5 var(--mono);
+    color: var(--text-4);
+    overflow-wrap: anywhere;
+}
+
+.pcolor-swatches { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* One swatch: a filled disc of the colour, ticked when it is the one in force.
+   The tick is drawn over the fill rather than beside it, so the row's height is
+   the same whichever is chosen and nothing shifts as you go along it. */
+.pcolor-swatch {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: var(--pcolor, var(--s4));
+    color: #000000b8;
+    box-shadow: inset 0 0 0 1px #0000004d;
+    transition: transform var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
+}
+.pcolor-swatch:hover { transform: scale(1.08); }
+.pcolor-swatch.on { box-shadow: 0 0 0 2px var(--s2), 0 0 0 4px var(--pcolor, var(--text-3)); }
+/* "No colour" is a swatch like the others rather than a button somewhere else,
+   because clearing is a choice among the same choices. Drawn as an empty ring so
+   it cannot be mistaken for a dark colour. */
+.pcolor-swatch.none {
+    background: transparent;
+    color: var(--text-3);
+    box-shadow: inset 0 0 0 1.5px var(--outline);
+}
+.pcolor-swatch.none.on { box-shadow: inset 0 0 0 1.5px var(--outline), 0 0 0 2px var(--s2), 0 0 0 4px var(--text-3); }
+
+.pcolor-custom { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.pcolor-custom label { font: 400 12.5px/1.4 var(--sans); color: var(--text-3); }
+.pcolor-custom input[type="color"] {
+    flex: none;
+    width: 46px;
+    height: 30px;
+    padding: 0;
+    border-radius: var(--r-sm);
+    background: var(--bg);
+    cursor: pointer;
+}
+
+/* --- the Projects group in Settings ----------------------------------- */
+
+.pcolor-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 9px 12px;
+    border-radius: var(--r);
+    background: var(--s2);
+    margin-bottom: 6px;
+}
+.pcolor-row[data-tinted] {
+    background: color-mix(in srgb, var(--proj-accent) 9%, var(--s2));
+    box-shadow: inset 2px 0 0 var(--proj-accent);
+}
+.pcolor-row-text { min-width: 0; flex: 1; }
+.pcolor-row-name { font: 500 13px/1.4 var(--sans); color: var(--text-2); }
+.pcolor-row-path {
+    font: 400 11px/1.5 var(--mono);
+    color: var(--text-4);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .pcolor-swatch:hover { transform: none; }
+}

@@ -181,17 +181,85 @@ assert.deepStrictEqual(got.spinner.weights, { Whimsical: 9 },
 ok('a project may weigh its own groups, and does so wholesale');
 fs.unlinkSync(projFile);
 
+// --- project colours are cleaned the same way -----------------------------
+// The third map-valued key, and the only one whose *keys* carry meaning: a
+// directory that is not an absolute path colours nothing, so it is rejected on
+// its own account rather than left to fail silently.
+clear();
+write(userFile, {
+    version: VERSION,
+    projects: {
+        colors: {
+            [project]: '#a8c7fa',
+            [`${home}/other`]: '#6DD58C',
+            'proj': '#fff',
+            [`${home}/third`]: 'green',
+            [`${home}/fourth`]: '#fff;}',
+            [`${home}/fifth`]: 42,
+        },
+    },
+});
+prefs.cache.clear();
+got = prefs.forCwd();
+assert.deepStrictEqual(got.projects.colors, {
+    [project]: '#a8c7fa',
+    [`${home}/other`]: '#6DD58C',
+}, 'the good entries did not survive the bad ones beside them');
+assert.ok(got.problems.some(p => /"proj" is not an absolute directory/.test(p.message)));
+for (const bad of ['"green"', '"#fff;}"', '42']) {
+    assert.ok(got.problems.some(p => p.message.startsWith(`projects.colors: ${bad} is not a colour`)),
+        `no problem reported for ${bad}`);
+}
+ok('one colour that is not a colour does not take the projects beside it');
+
+// `#fff;}` is the case the strictness is *for*: the client sets this value as a
+// CSS custom property, so anything that gets through closes a declaration and
+// opens whatever follows it.
+assert.strictEqual(SHAPE.projects.colors({ [project]: '#fff;}' }), false);
+assert.strictEqual(SHAPE.projects.colors({ [project]: 'var(--blue)' }), false);
+assert.strictEqual(SHAPE.projects.colors({ [project]: '#abc' }), true);
+assert.strictEqual(SHAPE.projects.colors({ [project]: '#AABBCC' }), true);
+assert.strictEqual(SHAPE.projects.colors([]), false, 'an array is not a map');
+assert.strictEqual(SHAPE.projects.colors({ 'proj': '#abc' }), false, 'a relative key');
+assert.strictEqual(SHAPE.projects.colors({ [`${project}/`]: '#abc' }), false,
+    'an unresolved key — cleanColors resolves, SHAPE only checks');
+ok('the shape gate refuses what would become a CSS declaration');
+
+// Two spellings of one directory must not become two entries, or the rail and
+// the dialog would disagree about which one won.
+clear();
+write(userFile, { version: VERSION,
+    projects: { colors: { [`${project}/`]: '#a8c7fa', [`${project}/sub/..`]: '#6dd58c' } } });
+prefs.cache.clear();
+assert.deepStrictEqual(prefs.forCwd().projects.colors, { [project]: '#6dd58c' },
+    'a trailing slash made a second entry for one project');
+ok('paths are resolved, so one project cannot hold two colours');
+
+// Bounded like the other two maps: a file naming ten thousand directories is a
+// mistake rather than a preference.
+clear();
+const many = {};
+for (let i = 0; i < 260; i++) many[`${home}/p${i}`] = '#a8c7fa';
+write(userFile, { version: VERSION, projects: { colors: many } });
+prefs.cache.clear();
+got = prefs.forCwd();
+assert.strictEqual(Object.keys(got.projects.colors).length, 200);
+assert.ok(got.problems.some(p => /more than 200 project colours/.test(p.message)));
+ok('the colour map is bounded, and says so when it truncates');
+
 // --- user-only sections --------------------------------------------------
 // Documented for `quota` long before anything enforced it, which held only
 // because the call sites passed no cwd. A page that prints which file wins for
 // each key cannot rely on that.
-assert.deepStrictEqual([...USER_ONLY].sort(), ['keyboard', 'quota']);
+assert.deepStrictEqual([...USER_ONLY].sort(), ['keyboard', 'projects', 'quota']);
 
+clear();
 write(userFile, { version: VERSION });
 write(projFile, {
     transcript: { groupMinCalls: 5 },
     quota: { beacon: true, beaconDir: '/tmp/somewhere' },
     keyboard: { composerSend: 'ctrl-enter', contextualTerminalCopy: true },
+    projects: { colors: { [project]: '#f28b82' } },
 });
 prefs.cache.clear();
 got = prefs.forCwd(project);
@@ -199,12 +267,15 @@ assert.strictEqual(got.transcript.groupMinCalls, 5, 'a project may still set tra
 assert.strictEqual(got.quota.beacon, DEFAULTS.quota.beacon, 'a project set quota.beacon');
 assert.strictEqual(got.keyboard.composerSend, DEFAULTS.keyboard.composerSend,
     'a project set keyboard.composerSend');
-for (const section of ['quota', 'keyboard']) {
+// The map names *other* projects' paths, so a repository setting one would be a
+// repository colouring its neighbours.
+assert.deepStrictEqual(got.projects.colors, {}, 'a project coloured itself');
+for (const section of ['quota', 'keyboard', 'projects']) {
     assert.ok(got.problems.some(p => p.file === projFile
         && p.message.includes(`"${section}" may only be set in`)),
     `no problem reported for a project's "${section}"`);
 }
-ok('a repository cannot set what directory Claude starts in, or which keys you use');
+ok('a repository cannot set the beacon directory, your keys, or anybody’s colour');
 
 // The user file still may, obviously — that is the whole point of the split.
 write(userFile, { version: VERSION, keyboard: { composerSend: 'ctrl-enter' } });
@@ -297,6 +368,24 @@ assert.deepStrictEqual(read(userFile).spinner.weights, { Whimsical: 2 },
     'spinner.weights is the other map, and goes over the same way');
 ok('a map-valued setting is replaced whole');
 
+// The path the colour UI actually takes: it holds the resolved map, sends all
+// of it, and clears one project by leaving that key out. Worth its own case
+// because the *key* is data here — a save has to spell a directory the way a
+// read of the file will spell it back, or clearing a colour would miss.
+clear();
+prefs.save({ scope: 'user', patch: { projects: { colors: {
+    [`${project}/`]: '#a8c7fa', [`${home}/other`]: '#6dd58c',
+} } } });
+assert.deepStrictEqual(read(userFile).projects.colors,
+    { [project]: '#a8c7fa', [`${home}/other`]: '#6dd58c' },
+    'the trailing slash was written to the file as typed');
+const cleared = prefs.save({ scope: 'user',
+    patch: { projects: { colors: { [`${home}/other`]: '#6dd58c' } } } });
+assert.deepStrictEqual(cleared.prefs.projects.colors, { [`${home}/other`]: '#6dd58c' });
+prefs.save({ scope: 'user', patch: { projects: { colors: null } } });
+assert.ok(!('projects' in read(userFile)), 'an emptied colour map stayed in the file');
+ok('colours are saved resolved, cleared by omission, and the section goes when it empties');
+
 // Aliases are canonicalised on the way to disk, so nothing downstream has to
 // know them.
 prefs.save({ scope: 'user', patch: { keyboard: { bindings: { 'view.live': 'cmd+shift+9' } } } });
@@ -331,6 +420,12 @@ refuses({ scope: 'project', dir: project, patch: { keyboard: { composerSend: 'en
     'readonly', 'a user-only section at a project scope');
 refuses({ scope: 'project', dir: project, patch: { quota: { beacon: true } } },
     'readonly', 'quota at a project scope');
+refuses({ scope: 'project', dir: project, patch: { projects: { colors: {} } } },
+    'readonly', 'project colours at a project scope');
+refuses({ scope: 'user', patch: { projects: { colors: { [project]: 'red' } } } },
+    'value', 'a colour that is a name rather than a hex');
+refuses({ scope: 'user', patch: { projects: { colors: { 'proj': '#abc' } } } },
+    'value', 'a colour against a relative directory');
 refuses({ scope: 'user', patch: { transcript: { groupMinCalls: 1 } } },
     'value', 'below the floor');
 refuses({ scope: 'user', patch: { transcript: { groupMinCalls: '3' } } },
