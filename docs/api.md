@@ -410,8 +410,9 @@ strings by a client that then rendered `[object Object]`:
 is not a missing key.
 
 **`tool.result`** is `{text, stdout, stderr, patch, filePath, interrupted,
-backgroundTaskId}`. `text` is the tool output flattened to a string and is the one to
-show; `stdout`/`stderr`/`filePath` are strings or null; `interrupted` is a bool.
+backgroundTaskId, answers, plan, planWasEdited}`. `text` is the tool output flattened
+to a string and is the one to show; `stdout`/`stderr`/`filePath` are strings or null;
+`interrupted` is a bool.
 
 **`tool.result.patch` is a structured diff, not a string** — the `structuredPatch`
 Claude Code records for an edit, an array of hunks:
@@ -423,6 +424,51 @@ Claude Code records for an edit, an array of hunks:
 
 Each entry in `lines` already carries its own leading `+`, `-` or space; do not add
 one. Null for a tool that produced no diff.
+
+**`tool.result.answers` is what was picked, not what was offered** — an object, or
+null for every tool but `AskUserQuestion`. Keys are the **exact** `question` strings
+from `input.questions[]`; values are strings. **There is no index anywhere**, and a
+question with no key here was not answered — the object carries only the questions
+that were. So match on the text and show nothing for a question that is absent;
+do not fall back to position, because "this key was rewritten" and "this question
+went unanswered" look identical from here, and guessing by position attributes one
+question's answer to another.
+
+**Parsing a value is not a split.** One string carries all three cases with nothing
+to tell them apart: a single choice is the option's `label` verbatim; a multi-select
+is the chosen labels joined `", "`; and an answer typed into the tool's "Other" box
+is a sentence that matches no label at all. Measured over 414 real answers on one
+machine: 83% one label, 4% several joined, 13% free text, and 1% a label followed by
+typed words. **Do not split on `", "`** — 187 of those 414 questions had an option
+label containing a comma of its own (`"Bar, count, cycling (Recommended)"`), so
+splitting shreds them. Consume whole labels off the
+**front** of the string, longest-first, for as long as the front keeps being a label
+followed by end-of-string or `,\s*`; whatever remains is what the person typed.
+Both halves of that matter. Front-anchored, because the picks are joined first and
+the typed answer pushed on the end — searching the whole string instead marks a
+label somebody quoted mid-sentence to argue against it. Longest-first, because one
+label is often a prefix of another (`"Approve"` / `"Approve with feedback"`).
+
+**One case is not recoverable, and no client should pretend otherwise.** Ticking an
+option and adding a condition in the "Other" box produces the same bytes as typing
+that whole sentence into "Other" alone. `"Hard delete, but make them confirm"` is
+therefore read as the option plus a note, which is what the real answers support —
+but it is a reading, not a fact, so show the typed words either way rather than
+letting the mark stand on its own.
+
+**`tool.result.plan` is the approved plan, not the proposed one** — a string, or null
+for every tool but `ExitPlanMode`. `input.plan` is what was put forward; this is what
+was agreed to. They differ when the plan was edited before approval, or approved with
+a note, which appends a `## Note from the user` section. `planWasEdited` is a bool
+saying which happened, and is only ever true — its absence is the ordinary case, not
+a recorded `false`.
+
+On `status: "error"` both are null and `result.text` is the reason. That is usually
+the person's own words and can be shown as such, but three canned strings are not and
+should not be presented as feedback: `"Not yet — keep planning."`, `"The question was
+dismissed unanswered. Use your own judgement and carry on."` and `"Stopped from
+Claude Sessions before this was approved."` — the last meaning the turn was stopped
+while the ask was still open, so nobody answered it at all.
 
 **`tool.agent` is a subagent descriptor, not a name** — `{agentId, agentType,
 description, model, isAsync, durationMs, tokens, toolUses}` from the result, plus
