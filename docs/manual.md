@@ -1197,12 +1197,20 @@ Both read the same `~/.claude/projects`, so a session started in one appears in
 the other — they are two views of the same transcripts. What is separate is the
 *process*, and that is the point:
 
-**Killing a bridge kills the turns running under it.** `claude` reads stdin for
-its input, so when the bridge exits and that pipe closes, it treats it as
+**Killing a bridge no longer kills the turns running under it.** `claude` reads
+stdin for its input, so when whoever holds that pipe exits, it treats it as
 end-of-input and stops mid-turn. Running it detached with its output on a file
-descriptor does not change that — both were tried and measured. There is no way
-to make a turn outlive its bridge, so the only real protection is not killing
-the bridge somebody is using. Hence two ports.
+descriptor does not change that — both were tried and measured. So the pipe is
+held by something else: the **session host**, `bridge/host.js`, a small process
+per port that starts `claude` for the bridge and relays its input and output. When
+a bridge exits, the host keeps its sessions running, and the next bridge on the
+same port picks them up, approval cards included. `/api/health` names the host
+(`sessionHost`) and counts the turns a restart *would* still end (`atRisk`): those
+started while no host could be reached.
+
+Killing the host itself does end everything it holds, and it is the one process
+that is shared by everything on its port. Hence two ports still: a dev bridge has
+its own host, and nothing done to it can reach the everyday one's.
 
 `pkill -f bridge/server.js` matches every bridge, including the everyday one.
 To stop your own, Ctrl-C the `npm run dev` that started it, or kill it by port:
@@ -1278,7 +1286,8 @@ alias restart-bridge='bash ~/src/tgxcode/scripts/restart-bridge.sh'
 ```
 
 Then `restart-bridge` from anywhere. It touches only the everyday port, refuses
-while a turn is in flight (`--force` overrides), takes `--pull` to fast-forward
+while a turn is in flight outside the session host (`--force` overrides; turns in
+the host survive the restart and are not counted), takes `--pull` to fast-forward
 from origin first, and `--status` to just report what is running. Any open
 window reconnects on its own.
 
