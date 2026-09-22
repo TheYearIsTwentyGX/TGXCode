@@ -515,7 +515,7 @@
       <div id="changes-body" class="changes-body" tabindex="-1"></div>
             </div>
           </aside>
-          <nav id="turns" class="turns" aria-label="Your messages in this session"></nav>
+          <nav id="turns" class="turns" aria-label="Your messages, plans and questions in this session"></nav>
         </div>
 
         <!-- A question is answered here rather than in the transcript: the turn
@@ -1550,6 +1550,39 @@
       <button id="diff-copy" class="btn small" type="button">Copy diff</button>
     </div>
     <div id="diff-body" class="diff-body d2h-dark-color-scheme" tabindex="0"></div>
+  </div>
+</div>
+
+<!-- A plan or a question, replayed the way it looked when it was asked.
+
+     One dialog for both, because from the rail's point of view they are the same
+     thing — a moment the conversation stopped and waited for you — and two
+     dialogs would be two places to keep the outcome wording honest.
+
+     A dialog rather than something in the transcript: the live surfaces this
+     replays (#plan-pane, #ask-dock) take the conversation over, and a plan read
+     through a card-sized porthole is the thing #plan-pane exists to prevent.
+     The width is set from the number of questions — see .review-modal in the CSS.
+
+     Read-only throughout. The options are divs rather than labels with inputs,
+     because a radio you cannot change is a control that lies about being one. -->
+<div id="review-scrim" class="scrim" hidden>
+  <div id="review-modal" class="modal review-modal" role="dialog" aria-modal="true"
+       aria-labelledby="review-title" tabindex="-1">
+    <div class="modal-head">
+      <span id="review-kind" class="perm-tool">Plan</span>
+      <span id="review-title" class="perm-title"></span>
+      <span class="spacer"></span>
+      <span id="review-when" class="review-when"></span>
+      <button class="modal-close" data-close-review type="button" aria-label="Close">✕</button>
+    </div>
+    <div id="review-outcome" class="review-outcome"></div>
+    <div id="review-body" class="modal-body" tabindex="0"></div>
+    <div class="modal-foot">
+      <span class="spacer"></span>
+      <button id="review-jump" class="btn small" type="button">Show it in the transcript</button>
+      <button class="btn" data-close-review type="button">Close</button>
+    </div>
   </div>
 </div>
 

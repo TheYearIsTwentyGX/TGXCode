@@ -2091,6 +2091,45 @@ a:hover { text-decoration: underline; }
 .turn-tick:hover::before { width: 16px; background: var(--text-2); }
 .turn-tick[aria-current="true"]::before { width: 16px; background: var(--peach); }
 
+/* A plan and a question are not turns, so they are not lines.
+ *
+ * The rail is 30px wide and everything in it is a few pixels across, which is
+ * why the distinction is *shape* rather than colour alone: shape survives being
+ * small, and it is there for people who cannot tell the colours apart. Colour
+ * then carries the second fact, which is how the thing ended.
+ *
+ * These come after the hover and aria-current rules above because they match at
+ * the same specificity, so order is what decides. The hover pair is restated
+ * below for the same reason — inheriting it would stretch a diamond into a
+ * lozenge on the way past. */
+.turn-tick[data-kind="plan"]::before,
+.turn-tick[data-kind="question"]::before {
+    width: 9px;
+    height: 9px;
+    background: currentColor;
+    transition: transform var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+}
+/* A square stood on its corner: a document, and the only angular thing here. */
+.turn-tick[data-kind="plan"]::before { border-radius: 2px; transform: rotate(45deg); }
+/* A dot: one of a set. */
+.turn-tick[data-kind="question"]::before { border-radius: 50%; }
+.turn-tick[data-kind]:hover::before { transform: scale(1.25) rotate(0deg); }
+.turn-tick[data-kind="plan"]:hover::before { transform: scale(1.25) rotate(45deg); }
+
+/* Settled the way it was put forward. */
+.turn-tick[data-kind][data-status="ok"] { color: var(--green); }
+/* Came back — sent back for more planning, or dismissed unanswered. Hollow as
+   well as grey, so it reads as "did not land" at a glance rather than only to
+   someone comparing two ticks. */
+.turn-tick[data-kind][data-status="error"] { color: var(--text-4); }
+.turn-tick[data-kind][data-status="error"]::before {
+    background: transparent;
+    box-shadow: inset 0 0 0 1.5px currentColor;
+}
+/* Still open: the live plan pane or question dock is up, and this is its place
+   in the rail. Peach is what the rail already uses for "this is where you are". */
+.turn-tick[data-kind][data-status="pending"] { color: var(--peach); }
+
 .turn-pop {
     position: fixed;
     z-index: 60;
@@ -2753,6 +2792,158 @@ select.flash { animation: flash-select 1.3s var(--ease); }
 .qview-q:first-child { margin-top: 0; }
 .qview-o { color: var(--text-3); padding-left: 4px; }
 .qview-mark { color: var(--text-4); margin-right: 8px; }
+/* The one that was picked. Colour and weight rather than a background: this
+   list sits inside an already-tinted tool block, and a second fill inside it
+   reads as a nested box rather than as emphasis. */
+.qview-o[data-chosen] { color: var(--text); }
+.qview-o[data-chosen] .qview-mark { color: var(--blue); }
+/* Typed rather than picked, through the tool's "Other" box — about one answer
+   in nine. Italic so it does not read as an option that was on offer. */
+.qview-said { font-style: italic; }
+
+/* ── the plan/question review dialog ───────────────────────────────────────
+   A plan or a set of questions, replayed read-only from the turn rail. The
+   columns below reuse .perm-q and .perm-opt so this looks like the dock it is
+   replaying; what is here is the grid, the sizing, and the marks that replace
+   the radios. */
+
+/* One dialog, four widths. A single question in a 1400px box is a sentence
+   marooned in a field, and four questions at 640px are four unreadable columns
+   — so rather than compromise for both, it is sized to the count, which is
+   known the moment it opens. The step is what a column needs to hold a label,
+   a description and a preview without every line breaking: below about 300px
+   it cannot, which is also where the stacking fallback comes in. */
+.modal.review-modal { width: min(760px, 100%); }
+.modal.review-modal[data-cols="2"] { width: min(1000px, 100%); }
+.modal.review-modal[data-cols="3"] { width: min(1260px, 100%); }
+.modal.review-modal[data-cols="4"] { width: min(1500px, 100%); }
+/* A plan is prose and takes its measure from .plan-rev, not from the count. */
+.modal.review-modal[data-kind="plan"] { width: min(880px, 100%); }
+
+/* The head is a chip, a verdict and a clock rather than the single 20px line
+   .modal-head is built for, so it sets its own type and spacing. `.spacer` is
+   scoped per container throughout this file — there is no global one — so the
+   push to the right has to be declared here too. */
+.review-modal .modal-head { gap: 10px; font: 400 14px/1.5 var(--sans); }
+.review-modal .modal-head .spacer { flex: 1; }
+.review-when { flex: none; font: 400 12px/1.5 var(--sans); color: var(--text-4); }
+
+/* The dialog takes focus on open so the keyboard is inside the scrim rather
+   than out in the rail behind it. It is a tabindex="-1" holder and never a
+   control, so it wears no ring: the scrim is what says where you are. */
+#review-modal:focus { outline: none; }
+
+/* Focusable so the arrow keys scroll a long plan, but the global
+   :focus-visible outline is offset outwards — and against a body that runs the
+   full width of the dialog that reads as two stray blue rules, top and bottom,
+   rather than as a focus ring. Drawn inside instead, the way .tasks-strip
+   solves the same thing. */
+#review-body:focus-visible { outline-offset: -3px; }
+
+/* What happened, above the thing it happened to: the outcome is the reason you
+   opened this, and putting it in the footer would mean scrolling a long plan to
+   find out it was sent back. */
+.review-outcome:empty { display: none; }
+.review-outcome {
+    margin: 4px 24px 0;
+    padding: 10px 14px;
+    background: var(--s1);
+    border-radius: var(--r-sm);
+}
+.review-said-head {
+    display: block;
+    margin-bottom: 4px;
+    font: 500 10.5px/1.5 var(--sans);
+    color: var(--text-4);
+    text-transform: lowercase;
+}
+.review-said { font: 400 12.5px/1.6 var(--sans); color: var(--text-2); }
+
+/* The same measure as .plan-doc, because prose is read at about this width —
+   but with its own padding rather than that rule's centring, which .plan-foot
+   does arithmetic against (see the calc there). Reusing it would move the live
+   pane's buttons. */
+.plan-rev { max-width: 820px; margin: 0 auto; padding: 4px 0 8px; }
+
+.qrev {
+    display: grid;
+    grid-template-columns: repeat(var(--qrev-cols, 1), minmax(0, 1fr));
+    gap: 0 20px;
+    /* A short question ends where it ends rather than being stretched to match
+       the longest column. */
+    align-items: start;
+}
+.review-modal[data-cols="2"] .qrev { --qrev-cols: 2; }
+.review-modal[data-cols="3"] .qrev { --qrev-cols: 3; }
+.review-modal[data-cols="4"] .qrev { --qrev-cols: 4; }
+
+/* The dock's separator is a rule *above* each question after the first, because
+   there they are stacked. Side by side that line is in the wrong place — it
+   belongs between the columns. */
+.qrev .perm-q + .perm-q {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: none;
+    padding-left: 20px;
+    border-left: 1px solid var(--outline-soft);
+}
+
+/* Narrower than the step above allows, so they stack instead — the columns
+   would be doing neither job at this width. */
+@media (max-width: 1100px) {
+    .qrev { grid-template-columns: 1fr; }
+    .qrev .perm-q + .perm-q {
+        margin-top: 14px;
+        padding-top: 14px;
+        padding-left: 0;
+        border-top: 1px solid var(--outline-soft);
+        border-left: none;
+    }
+}
+
+/* Nothing here is selectable, so the rows are divs and the hover and pointer
+   the dock gives its labels would both be lying. */
+.qrev .perm-opt { cursor: default; }
+.qrev .perm-opt:hover { background: var(--bg); }
+/* The dock marks its chosen option with `:has(input:checked)`; there are no
+   inputs here, so the same look hangs off the attribute instead. */
+.qrev .perm-opt[data-chosen] { border-color: var(--blue); background: var(--blue-tint); }
+.qrev-mark { flex: none; margin-top: 1px; color: var(--text-4); font-size: 12px; }
+.qrev .perm-opt[data-chosen] .qrev-mark { color: var(--blue); }
+
+/* A preview is a drawn thing as often as it is text — a mocked-up row, a table.
+   Wrapped at column width it stops being the thing it is a preview of, so here
+   it keeps its lines and scrolls sideways. The dock does not need this: an
+   option there is as wide as the composer. */
+.qrev .perm-opt-preview {
+    white-space: pre;
+    word-break: normal;
+    max-height: 200px;
+}
+
+/* Typed rather than picked, through the tool's "Other" box. Not drawn as an
+   option, because it was not one of them. */
+.qrev-said {
+    margin-top: 8px;
+    padding: 8px 11px;
+    background: var(--blue-tint);
+    border-radius: var(--r-sm);
+    font: 400 12.5px/1.6 var(--sans);
+    color: var(--text);
+}
+.qrev-said-head {
+    display: block;
+    margin-bottom: 3px;
+    font: 500 10.5px/1.5 var(--sans);
+    color: var(--text-4);
+    text-transform: lowercase;
+}
+.qrev-none {
+    margin-top: 8px;
+    font: 400 12px/1.6 var(--sans);
+    color: var(--text-4);
+    font-style: italic;
+}
 
 /* What happened to a card that is gone. The transcript carries the real
    record; this is only so the card does not vanish without a word. */
