@@ -10,6 +10,7 @@
 
 const fs = require('fs');
 const http = require('http');
+const net = require('net');
 const path = require('path');
 const os = require('os');
 const { randomUUID } = require('crypto');
@@ -19,6 +20,7 @@ const auth = require('./auth');
 const { SessionIndex, projectName } = require('./sessions');
 const { SessionRegistry } = require('./registry');
 const { RunnerPool, PERMISSION_MODES, resolveWorkdir } = require('./runner');
+const hostClient = require('./host-client');
 const { Flags } = require('./flags');
 const { Prefs } = require('./prefs');
 const { ClaudeConfig } = require('./claude-config');
@@ -2417,9 +2419,15 @@ async function api(req, res, url, pathname, who) {
             // Sessions with a process, from Claude Code's registry — including
             // every one running in a terminal, which no other count here sees.
             live: registry.liveCount, registered: registry.size,
-            // Turns in flight. Restarting would end them, so anything that
-            // restarts the bridge should look here first.
+            // Turns in flight, and of those, the ones a restart would end: a turn
+            // in the session host survives one and is adopted by the next bridge.
+            // Anything that restarts the bridge should look at `atRisk` — `busy`
+            // is what it looked at before the host, and still means what it said.
             busy: pool.busyCount,
+            atRisk: pool.atRiskCount,
+            // The session host this bridge is running turns in, or null when it
+            // is spawning them directly. Pid and protocol only; see bridge/host.js.
+            sessionHost: hostClient.status(),
             permissionModes: PERMISSION_MODES,
         });
     }
@@ -2708,7 +2716,7 @@ async function api(req, res, url, pathname, who) {
     if (pathname === '/api/restart' && req.method === 'GET') {
         return send(res, 200, {
             pid: process.pid, port: cfg.PORT, root: cfg.ROOT,
-            worktree: cfg.IS_WORKTREE, busy: pool.busyCount,
+            worktree: cfg.IS_WORKTREE, busy: pool.busyCount, atRisk: pool.atRiskCount,
             journal: restart.journal(),
         });
     }
@@ -2746,7 +2754,7 @@ async function api(req, res, url, pathname, who) {
             if (force) return null;
             const found = [
                 ...(sofar && !sofar.ok ? [{ kind: 'pull', text: sofar.error }] : []),
-                ...await restart.blockers(cfg.ROOT, { busy: pool.busyCount }),
+                ...await restart.blockers(cfg.ROOT, { busy: pool.atRiskCount }),
             ];
             return found.length ? found : null;
         };
@@ -6120,12 +6128,20 @@ function shutdown(code = 0) {
     if (shuttingDown) return;
     shuttingDown = true;
     try {
-        const { stillRunning } = pool.shutdown();
+        const { stillRunning, held } = pool.shutdown();
+        if (held) {
+            console.log(`[claude-sessions] ${held} session(s) left running in the session host; `
+                + 'the next bridge on this port picks them up.');
+        }
         if (stillRunning) {
             console.log(`[claude-sessions] ${stillRunning} turn(s) were in flight and will `
                 + 'stop with this process — their transcripts keep whatever was written.');
         }
-    } catch { /* nothing to clean */ }
+    } catch (err) {
+        // Not "nothing to clean" any more: a throw here can be the difference
+        // between a turn left running in the host and one that is lost.
+        console.error(`[claude-sessions] runner shutdown failed: ${err && err.stack || err}`);
+    }
     // Terminals run in their own process groups, so unlike turns they would
     // outlive us if we did not take them with us. A run is the same, and worse
     // if left: its stdout is a pipe nobody is reading any more, so it would fill
@@ -6227,7 +6243,46 @@ server.on('error', (err) => {
     process.exit(1);
 });
 
-server.listen(cfg.PORT, cfg.HOST, async () => {
+/**
+ * Is a bridge already answering on our port? Asked before touching the session
+ * host, because that host is *its* host: adopting from it would put a second
+ * runner on every live turn, both flushing the same queue, before our listen()
+ * failed with EADDRINUSE and left.
+ */
+function portTaken() {
+    return new Promise((resolve) => {
+        const sock = net.connect(cfg.PORT, cfg.HOST.replace(/^\[|\]$/g, ''));
+        sock.setTimeout(500);
+        sock.on('connect', () => { sock.destroy(); resolve(true); });
+        sock.on('timeout', () => { sock.destroy(); resolve(false); });
+        sock.on('error', () => resolve(false));
+    });
+}
+
+/**
+ * Connect to the session host and take back whatever the last bridge on this port
+ * left running in it. Before the socket, for `adoptHeld`'s reason: a message that
+ * arrived first would start a second `claude` on a session that already has one.
+ * Bounded, and never fatal — no host means spawning directly, as before.
+ */
+async function takeBackHeld() {
+    if (!cfg.USE_HOST) return;
+    if (await portTaken()) return;
+    const up = await hostClient.ensureHost({ socketPath: cfg.HOST_SOCKET, logFile: cfg.HOST_LOG });
+    if (!up) {
+        console.warn('[claude-sessions] no session host — turns will end if this bridge '
+            + `restarts. See ${cfg.HOST_LOG}.`);
+        return;
+    }
+    const n = await pool.adoptHeld();
+    const st = hostClient.status();
+    console.log(`[claude-sessions] session host pid ${st && st.pid}`
+        + (n ? `; picked up ${n} session(s) the last bridge left running` : ''));
+}
+
+takeBackHeld().catch((err) => {
+    console.error(`[claude-sessions] session host: ${err.message}`);
+}).then(() => server.listen(cfg.PORT, cfg.HOST, async () => {
     console.log(`[claude-sessions] bridge listening on http://${cfg.HOST}:${cfg.PORT}`);
     // Before the index, so the very first summaries it hands out already say
     // what is running rather than guessing at it for one scan.
@@ -6342,4 +6397,4 @@ server.listen(cfg.PORT, cfg.HOST, async () => {
     // another anonymous number in the rail.
     devbrowser.setTitle(cfg.PORT,
         cfg.IS_DEV ? 'Claude Sessions (dev)' : 'Claude Sessions (app)').catch(() => {});
-});
+}));

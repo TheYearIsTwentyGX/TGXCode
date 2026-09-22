@@ -253,6 +253,8 @@ Two rules worth knowing before you send a patch:
 | `bridge/attachments.js` | Files pasted into the composer — where they land, and out of git |
 | `bridge/memo.js` | Small notes the UI keeps against a session |
 | `bridge/runner.js` | `claude` processes, one per active conversation |
+| `bridge/host.js` | The session host: owns `claude`'s pipes so a turn outlives a bridge restart. A dumb relay, on purpose |
+| `bridge/host-client.js` | The bridge's side of it — a hosted `claude` dressed as a ChildProcess, or a plain spawn when there is no host |
 | `bridge/terminal.js` | The pty, out of `script(1)` — a shell to type into, or a declared command |
 | `bridge/commands.js` | What a project declares in `.tgxcode/` |
 | `bridge/runs.js` | Running those commands, and keeping the record |
@@ -308,9 +310,13 @@ relay became optional.
 - **Reasoning is usually blank.** Claude Code writes the signature of a thinking
   block but strips its text. Newer sessions keep it and those render; older ones
   show nothing because there is nothing there.
-- **Killing a bridge kills its turns.** `claude` reads stdin for input, so when
-  the bridge exits and that pipe closes it stops mid-turn. This is measured, not
-  assumed — which is why development runs on a second port.
+- **A bridge restart no longer ends a turn — as long as the session host is up.**
+  `claude` reads stdin for input, so whoever holds that pipe decides how long it
+  lives. `bridge/host.js` holds it now, and the next bridge on the same port picks
+  the session back up, approval cards and all. A turn started while no host could
+  be reached (`sessionHost: null` in `/api/health`) still stops with its bridge,
+  and killing the host itself ends everything it holds. That is why development
+  still runs on a second port.
 - **One writer at a time.** Sending from here while the same session is mid-turn
   in a terminal would have two processes appending to one transcript. The rail
   flags active sessions; it does not stop you.

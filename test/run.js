@@ -20,6 +20,7 @@ const UNIT = ['auth.test.js', 'temp.test.js', 'recent.test.js', 'pulls.test.js',
     'restart.test.js', 'handoff.test.js', 'drafts.test.js', 'snippets.test.js',
     'notifications.test.js',
     'schedule.test.js', 'usage.test.js', 'harvester.test.js', 'runner.test.js',
+    'host.test.js',
     'titles.test.js', 'tasks.test.js', 'prefs.test.js', 'paths.test.js',
     'platform.test.js',
     'claude-config.test.js', 'claude-docs.test.js'];
@@ -86,7 +87,10 @@ function run(file, port) {
     if (!given) {
         bridge = spawn(process.execPath, [path.join(ROOT, 'bridge', 'server.js')], {
             cwd: ROOT,
-            env: { ...process.env, CLAUDE_SESSIONS_PORT: String(port) },
+            // No session host: this bridge lives for seconds on a port nobody will
+            // reuse, so a host behind it would only hold sessions no bridge is
+            // coming back for. test/host.test.js covers the host on its own.
+            env: { ...process.env, CLAUDE_SESSIONS_PORT: String(port), CLAUDE_SESSIONS_NO_HOST: '1' },
             stdio: 'ignore',
         });
         if (!await waitFor(port)) {

@@ -251,8 +251,23 @@ The only unauthenticated route. Counts, a pid, and:
 { "ok": true, "version": "1.0.0", "port": 45888, "dev": false,
   "remote": false, "authRequired": true,
   "permissionModes": ["auto","acceptEdits","plan","manual","dontAsk","bypassPermissions"],
-  "sessions": 120, "clients": 1, "live": 4, "busy": 3 }
+  "sessions": 120, "clients": 1, "live": 4, "busy": 3, "atRisk": 0,
+  "sessionHost": { "pid": 5031, "protocol": 1, "startedAt": 1790098455020, "attached": 3 } }
 ```
+
+`busy` is a number: turns in flight. `atRisk` is a number, never more than `busy`:
+the turns a restart of this bridge would **end**. A turn running in the session host
+(`bridge/host.js`) survives a restart and is picked up by the next bridge on the same
+port, so it counts in `busy` and not in `atRisk`. Anything deciding whether a restart
+is safe should read `atRisk`, and fall back to `busy` when the field is absent, since
+that is an older bridge with no host.
+
+`sessionHost` is **an object or null**: `{pid, protocol, startedAt, attached}`, where
+`pid` and `startedAt` (epoch ms) belong to the host process, `protocol` is a number and
+`attached` is how many processes this bridge is relaying through it. `null` means this
+bridge starts `claude` directly, the way every bridge did before the host existed, so
+every busy turn is at risk. See §*A bridge restart does not end a turn* under *Things
+that will bite*.
 
 `root` and `home` are included only for local callers. Read `permissionModes` rather
 than hardcoding the list; a remote client should drop `bypassPermissions` and
@@ -2987,7 +3002,7 @@ array of `{kind, text, files?}`, `kind` one of:
 
 | `kind` | what it is | `files` |
 |---|---|---|
-| `busy` | turns in flight; a restart ends them | — |
+| `busy` | turns a restart would end: busy, and not in the session host. Turns in the host are not counted; they survive. | — |
 | `dirty-bridge` | uncommitted tracked files under `bridge/`, which a restart would load | repo-relative paths |
 | `pull` | `git pull --ff-only` failed; `text` is git's own stderr | — |
 | `not-a-repo` | the checkout cannot be read as one | — |
@@ -3012,7 +3027,8 @@ would be two kills racing for one port. `500` if the pull removed the script.
 
 ### `GET /api/restart`
 
-`→ {pid, port, root, worktree, busy, journal}`. **Local callers only.** `journal` is
+`→ {pid, port, root, worktree, busy, atRisk, journal}`. **Local callers only.** `busy` and
+`atRisk` are numbers with their `/api/health` meanings. `journal` is
 up to the last 20 lines of `~/.cache/claude-sessions/restart-<port>.log` as strings.
 
 This exists for the case a `POST` cannot report: a restart that refused. The script's
@@ -3414,6 +3430,29 @@ will show a permanently spinning tool. See §*A tool call resolves in one of two
 
 **`runner` on a session summary is not the `runner-status` payload.** Four fields, and
 `pendingPermission` is not among them. See §`GET /api/sessions`.
+
+**A bridge restart does not end a turn.** When `/api/health` reports a `sessionHost`,
+every `claude` this bridge started runs in that host, and a restart hands it on rather
+than killing it. A client reconnecting after the bridge went away will find:
+
+- **The same session still `busy`, or `idle` with its turn finished.** A turn that
+  ended while no bridge was up is reported with a `turn-complete` event as the new
+  bridge starts, before any client can be connected to hear it. So a client that
+  wants to know about it reads `lastResult` from the runner status rather than
+  waiting for the event.
+- **An approval card on a session nobody has looked at yet.** An ask raised while the
+  bridge was down comes back as `pendingPermission` on the runner status and is
+  answered on the usual route. It is not auto-denied for want of a window, because
+  none has had time to reconnect; it waits, like any card left open.
+- **Messages queued before the restart are still queued**, with new ids. Queue ids
+  (`q…`) are not stable across a restart, so never keep one from before it.
+- **Idle sessions keep their process.** An idle session can still be running a
+  background command or subagent, so the bridge does not stop it on the way down.
+
+A turn is still lost when there is no host (`sessionHost: null`), or when the host
+itself is killed. The runner then reports `error`, and the next send starts a fresh
+process with `--resume` as it always did. `atRisk` in `/api/health` counts exactly the
+turns a restart would end.
 
 **A `200` from `/api/fs/open` means Windows was handed the path, not that a window
 appeared.** `explorer.exe` reports exit code 1 even when it works perfectly, so its
