@@ -256,7 +256,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/host.js` | The session host: owns `claude`'s pipes so a turn outlives a bridge restart. A dumb relay, on purpose |
 | `bridge/host-client.js` | The bridge's side of it — a hosted `claude` dressed as a ChildProcess, or a plain spawn when there is no host |
 | `bridge/terminal.js` | The pty, out of `script(1)` — a shell to type into, or a declared command |
-| `bridge/commands.js` | What a project declares in `.tgxcode/` |
+| `bridge/commands.js` | What a project declares in `.tgxcode/` — the two files, the merge between them, and the editor that writes them back |
 | `bridge/runs.js` | Running those commands, and keeping the record |
 | `bridge/ports.js` | Finding a port that is free *and* unclaimed, holding it, and remembering it |
 | `bridge/devservers.js` | Port detection, ranking, and stopping a server |

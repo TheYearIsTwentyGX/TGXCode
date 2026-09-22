@@ -159,7 +159,8 @@ the thing you are about to approve is running on a machine you are sitting at.
 **Refused for remote callers** (403, with `{"error": …, "remote": true}`):
 `permissionMode` of `bypassPermissions` or `dontAsk` on create, on send, on
 **saving or starting a draft**, and on **saving a snippet**; all
-of `/api/terminals/*`; all of `/api/runs/*`; `POST /api/commands/run`;
+of `/api/terminals/*`; all of `/api/runs/*`; `POST /api/commands/run`; all of
+`/api/commands-config*`;
 `/api/shutdown`; `/api/restart` (both methods); `/api/devservers/stop`; `/api/devbrowser/*`;
 `POST /api/sessions/:id/reveal`; `POST /api/sessions/:id/open-file`;
 `POST /api/sessions/:id/handoff`; `POST /api/fs/mkdir`;
@@ -213,6 +214,12 @@ the machine — what is installed, which ports are in use, which instance not to
 touch. Being able to *write* one is the ability to change what every session on
 this machine is told before its first message, which is a larger capability
 than any single setting on the route above.
+
+`/api/commands-config` — the editor for those same files — is refused on the
+prefix instead, **both methods**. The merged read stays open because what a
+project declares is in its repository already and that payload has never carried
+`env`; the raw read serves `commands.local.json`, which is the private file where
+an environment variable with a token in it actually lives.
 
 Note the asymmetry around `/api/fs` and `/api/commands`: `GET /api/fs` and
 `GET /api/commands` stay readable remotely, so those refusals are on the exact path
@@ -2157,6 +2164,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `session-forked` | `{from, to}` — follow the new id |
 | `slash-commands` | `{cwd, at}` — that directory's slash commands changed; drop what you cached |
 | `run-changed` | `{runId, workspace, commandId, label, state, port, exit, stopped, at}` — a project command moved; state only, never output |
+| `commands-config` | `{at, scope, project, file}` — a project's `.tgxcode/` command file was written through `PUT /api/commands-config`. The fact of a change, never its content: these files carry `env` values the route classifies as local-only, and this channel reaches a paired phone. Re-read the file, and re-read `GET /api/commands` for any directory inside `project` — a renamed command's button does not change on its own. It does **not** fire for a hand edit; nothing watches these files, and the `409` on save is what catches that |
 
 `runner-status` is the full shape — the one the two narrower `runner` objects are cut
 down from:
@@ -3434,6 +3442,158 @@ both directions, `: ping` every 25s. It is a connection of its own for the reaso
 the terminal one is: a noisy build moves megabytes and has no business sharing
 with transcript tailing. **Nothing about a run's output ever appears on
 `/api/events`** — that channel carries `run-changed` and `run-changed` only.
+
+## Editing what a project declares
+
+The files behind the section above, as an editor sees them. A different question
+from `GET /api/commands` and a different audience, which is why it is a
+different route rather than a mode of that one: this answers "what does each
+file *say*", where that answers "what buttons does this directory have".
+
+| Route | Body / query | Notes |
+|---|---|---|
+| `GET /api/commands-config?cwd=` | | the two files, unmerged; **local callers only** |
+| `PUT /api/commands-config` | `{cwd, scope, stamp, commands[]}` | replace the array |
+| `PUT /api/commands-config` | `{cwd, scope, stamp, text}` | replace the document |
+
+**Both methods are refused to a remote caller, including the read** — which is
+the opposite of `GET /api/commands` one section up, and the asymmetry is
+deliberate. What a project *declares* is in its repository already and the
+merged payload has never carried `env`; these files are where somebody keeps
+`{"STRIPE_KEY": "sk_live_…"}`, in a file whose whole premise is that it is
+private. The refusal is on the prefix with no method test, so anything added
+under it later is refused by default rather than by being remembered.
+
+`cwd` may be any directory in the project. **The project root is what gets
+edited** — `projectRootOf()` is applied, and the answer's `project` is the path
+actually written, which may not be the one you asked about. A worktree has its
+own checked-in `commands.json` that takes precedence for a session running
+there, so an edit here does not reach it until the branch picks the change up.
+The local file is read from the project root for every worktree, and does.
+
+### The file format
+
+Not written down anywhere before this section, which is why it is here rather
+than behind a pointer at `bridge/commands.js`.
+
+```json
+{ "version": 1, "commands": [{
+    "id": "dev", "label": "Dev server", "run": "npm run dev -- --port=${port}",
+    "cwd": "web", "env": {"DEBUG": "1"},
+    "port": { "range": [5000, 5099], "env": "PORT" },
+    "devbrowser": "${worktree}", "disabled": false
+}]}
+```
+
+`version` must be exactly `1`; anything else and the file contributes nothing.
+
+| Field | Type | | |
+|---|---|---|---|
+| `id` | string | **required, always** | `^[a-z0-9][a-z0-9._-]{0,31}$` |
+| `label` | string | required on a first definition | 1–40 chars, no control characters |
+| `run` | string | required on a first definition | ≤ 2000 chars, no NUL |
+| `cwd` | string | optional | **relative**, and may not resolve outside the workspace |
+| `env` | `{NAME: string}` | optional | ≤ 32 keys, each `^[A-Z_][A-Z0-9_]*$`, values strings |
+| `port` | `{range: [lo, hi], env?: string}` | optional | integers 1024–65535, `lo ≤ hi`, span ≤ 1000 |
+| `devbrowser` | string | optional | empty falls back to worktree, then branch, then project |
+| `disabled` | boolean | optional | declared, but no button |
+
+Keys not in that table are **kept as written**, by both the reader and the
+editor. The reader ignores them; the editor round-trips them rather than
+dropping a field somebody added by hand.
+
+**Five placeholders, and a sixth is an error rather than an empty string:**
+`${port}`, `${cwd}`, `${project}`, `${worktree}`, `${branch}`. They are expanded
+in `run`, `cwd`, `devbrowser` and every `env` value. `${port}` additionally
+requires the command to declare a range — **checked against the *merged*
+command**, so a `run` in the shared file may use it while the local file
+supplies the range.
+
+At most 24 commands per file, and 64KB per file.
+
+**Two files, merged by `id`.** `commands.json` is checked in;
+`commands.local.json` is yours and should be excluded from the repository — the
+bridge checks and reports when it is not. A local entry whose id the shared file
+already declares is an **override** and supplies only what it changes; anything
+else is a first definition and needs `label` and `run`. Merging is shallow per
+key, except `env`, which merges key by key — so there is no way to *remove* an
+inherited variable, only to give it a different value — and `port`, which
+replaces wholesale.
+
+### What the read answers
+
+```
+{ project, projectName, context, merged[], problems[], files[], limits, placeholders[], patterns }
+```
+
+- `context` is `{cwd, project, worktree, branch, port}` — what `${…}` expands to
+  at the project root. `port` is always `null` here.
+- `files[]` is one row per scope, weakest first, each
+  `{scope, file, exists, parsed, stamp, size, writable, symlink, ignored,
+  ignoredBy, commands[], text, problem}`. `scope` is `project` or
+  `project-local`, the same two words `/api/prefs` uses.
+  **`commands[]` is verbatim** — the entries exactly as the file has them,
+  unvalidated and including keys this app does not model. That is the point: a
+  client that seeded an editor from `merged` instead would write the merged
+  answer back, and adding one local override would copy every shared command
+  into a private file.
+  `exists && !parsed` means the file is there and unreadable; `text` still
+  carries the bytes so an editor can repair it, and `problem` is
+  `{file, message}` with the parser's own sentence.
+  `ignored` is `true`/`false` on the local row and `null` on the shared one, and
+  `ignoredBy` names the matching rule as `<file>:<line>`.
+- `merged[]` is the two files folded together and validated, each carrying
+  `from` — the file that last set it. For showing inherited values, not for
+  seeding an editor.
+- `problems[]` is `{file?, id?, field?, message, informational?}`.
+- `limits` is `{maxCommands, maxFileBytes, maxRunChars, maxEnvKeys,
+  maxLabelChars}` and `patterns` is `{id, envKey}` as regular-expression source
+  strings. They ride along so a form can label its counters and refuse a bad id
+  without a second copy of the bridge's constants going stale.
+
+### What a write has to send
+
+Exactly one of `commands` (an array, replacing that file's own entries) or
+`text` (the whole document, and the only thing that can repair one which no
+longer parses). `version` is **not** in the body: the writer stamps it, because
+a client that could send `version: 7` is a client that can write a file this
+bridge then refuses to read. A structured write is serialised with two-space
+indent and a trailing newline; a `text` write is stored byte for byte.
+
+**`stamp` is required and `undefined` is a refusal**, unlike
+`PUT /api/claude-config` where a single scalar patch may omit it. Every write
+here replaces the whole array, so there is no write a read immediately
+beforehand could make safe. `null` means "this file should not exist yet", which
+is how a page that has never seen one asks to create it — so absent and null
+must stay distinguishable in the JSON.
+
+**The write is refused whole.** One bad entry and nothing is written, including
+the good entries and including the file itself when it was being created. The
+refusal reports *every* problem rather than the first.
+
+| `code` | Status | |
+|---|---|---|
+| `scope` | 400 | not `project` or `project-local` |
+| `dir` | 400 | missing, or outside the allowed roots |
+| `body` | 400 | not exactly one of `commands`/`text`; wrong type |
+| `stamp` | 400 | the precondition was left out |
+| `invalid` | 400 | the document would not load; `problems[]` |
+| `json` | 400 | `text` that does not parse, or is not an object |
+| `version` | 400 | `text` whose `version` is not 1 |
+| `stale` | 409 | changed since it was read; `stamp`, `text`, `commands` |
+| `exists` | 409 | `stamp: null` against a file that now exists; `stamp` |
+| `size` | 413 | over 64KB serialised |
+| `readonly` | 403 | a symlink, or a `.tgxcode` that is one |
+| `write` | 403 | not writable, or `.tgxcode` is a regular file |
+
+An `invalid` refusal carries `problems: [{index, id?, field?, message}]`.
+`index` is the position in the array you sent, and it is the row key rather than
+`id`: an entry with a malformed id has no usable one, and a duplicate id names
+two rows.
+
+A success answers `{file, stamp, config}`, where `config` is the same shape the
+GET returns — so a client can take the answer wholesale instead of patching its
+own copy.
 
 ## Decisions locked in for a native client
 

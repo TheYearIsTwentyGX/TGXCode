@@ -7061,6 +7061,121 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     .cfg-tab, .cfg-list-x { transition: none; }
 }
 
+/* ── the commands a project declares ──────────────────────────────────────
+   The same group furniture again — tabs, file line, stale banner, foot — so
+   what is new here is the card per command and the field inside it. A field is
+   a row rather than the label-left/control-right shape the settings rows use:
+   a command's values are long (a shell line, a range, a list of variables) and
+   there is no right-hand column wide enough for them that is not also mostly
+   empty for `cwd`. */
+
+.cmd-card {
+    padding: 12px 14px 14px;
+    margin-top: 10px;
+    background: var(--s2);
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r);
+}
+.cmd-card.bad { border-color: var(--red); }
+.cmd-card-head { display: flex; align-items: center; gap: 8px; }
+.cmd-card-spacer { flex: 1; min-width: 0; }
+.cmd-card-id { font: 400 12px var(--mono); color: var(--text-2); }
+.cmd-card-name { font-size: 12px; color: var(--text-4); }
+.cfg-tab-tag.bad { color: var(--red); }
+
+.cmd-orphan {
+    margin: 8px 0 0;
+    padding: 8px 10px;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-3);
+    background: var(--s3);
+    border-radius: var(--r-sm);
+}
+.cmd-orphan strong { color: var(--text-2); font-weight: 400; }
+
+.cmd-field { padding-top: 12px; margin-top: 12px; border-top: 1px solid var(--outline-soft); }
+/* An unset override is still readable — greyed rather than hidden, because a
+   field that vanishes when you untick it takes the inherited value with it and
+   the placeholder is the whole point. */
+.cmd-field.unset .cmd-field-label { color: var(--text-4); }
+.cmd-field-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.cmd-field-label { font-size: 12px; color: var(--text-2); }
+.cmd-field-from {
+    font-size: 11px;
+    color: var(--text-4);
+    padding: 1px 6px;
+    background: var(--s3);
+    border-radius: var(--pill);
+}
+.cmd-field-note { margin: 5px 0 0; font-size: 11px; line-height: 1.6; color: var(--text-4); }
+.cmd-field-bad { margin: 5px 0 0; font: 400 11px var(--mono); line-height: 1.6; color: var(--red); }
+.cmd-field .settings-text,
+.cmd-field .cmd-area { width: 100%; }
+.cmd-mono { font-family: var(--mono); }
+.cmd-set { flex: none; }
+
+/* A textarea rather than an input, and not for length: `validate()` refuses
+   only a NUL byte, so a newline is legal in a command — and a single-line input
+   drops one silently, which eats half of somebody's command on the first save. */
+.cmd-area {
+    display: block;
+    min-height: 26px;
+    padding: 6px 10px;
+    font: 400 12px/1.6 var(--mono);
+    color: var(--text);
+    background: var(--s3);
+    border: 1px solid transparent;
+    border-radius: var(--r-sm);
+    resize: none;
+    overflow: hidden;
+}
+.cmd-area:focus { outline: 0; border-color: var(--blue); }
+.cmd-area:disabled { color: var(--text-4); }
+
+.cmd-port { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cmd-port .settings-num { width: 88px; }
+.cmd-port-dash { color: var(--text-4); }
+.cmd-port-env { width: 160px; flex: none; }
+
+.cmd-env-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.cmd-env-name { width: 170px; flex: none; }
+.cmd-env-value { flex: 1; min-width: 0; }
+
+/* What the template comes to in this directory. Only drawn when expanding
+   actually changed something, so a command with no placeholders does not carry
+   a line repeating itself. */
+.cmd-preview {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    flex-wrap: wrap;
+    margin: 12px 0 0;
+    padding-top: 10px;
+    border-top: 1px dashed var(--outline-soft);
+    font-size: 11px;
+    color: var(--text-4);
+}
+.cmd-preview-lede { flex: none; }
+.cmd-preview code { font: 400 11px var(--mono); color: var(--text-3); word-break: break-all; }
+
+.cmd-foot {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 0 4px;
+    margin-top: 12px;
+    border-top: 1px solid var(--outline-soft);
+}
+.cmd-foot-note { font-size: 12px; color: var(--text-4); }
+.cmd-foot-note.bad { color: var(--red); }
+
+/* A file the form cannot show, and the way through to the one thing that can
+   repair it. */
+.cmd-broken { font-size: 12px; line-height: 1.6; color: var(--text-3); }
+.cmd-broken strong { color: var(--text-2); font-weight: 400; }
+.cmd-broken .btn { margin-top: 10px; }
+
 /* ── the snippet editor, in Settings ───────────────────────────────────── */
 
 .snip-settings-acts { display: flex; gap: 8px; margin: 4px 0 14px; }

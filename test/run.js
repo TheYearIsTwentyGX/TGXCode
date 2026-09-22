@@ -23,7 +23,8 @@ const UNIT = ['auth.test.js', 'temp.test.js', 'recent.test.js', 'pulls.test.js',
     'host.test.js',
     'titles.test.js', 'tasks.test.js', 'prefs.test.js', 'paths.test.js',
     'platform.test.js',
-    'claude-config.test.js', 'claude-docs.test.js', 'ask-result.test.js'];
+    'claude-config.test.js', 'claude-docs.test.js', 'ask-result.test.js',
+    'commands.test.js'];
 const LIVE = ['gate.test.js', 'browser.test.js', 'refusals.test.js', 'unpaired.test.js'];
 
 const given = Number(process.argv[2]);
