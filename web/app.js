@@ -3771,6 +3771,16 @@ function jumpFromDiff() {
 // with #new-menu's rows and key handling inside it.
 
 /**
+ * The rows that open this menu themselves — a file row, a rail marker, a snippet.
+ *
+ * The document-level `contextmenu` listener runs on the bubble, after the row's own
+ * handler has already opened the menu, so a selector missing from here is a menu that
+ * opens and shuts on the same click. Kept in one place because the listener and the
+ * handlers are 18,000 lines apart and the failure looks like the handler not firing.
+ */
+const CTX_OWNERS = '.ch-row, .turn-tick, .snip-row, .btn-pin-snip';
+
+/**
  * Open a menu at the pointer.
  *
  * @param {MouseEvent} ev the contextmenu event, already preventDefault'd
@@ -9104,8 +9114,8 @@ async function drDelete(d) {
 // **Where the caret was.** `insert: 'cursor'` needs the selection as it stood when
 // you reached for the snippet, not as it stands when the text arrives — by then
 // the popover has taken focus and the parameter dialog may have taken it again.
-// It is recorded at the gesture, and a pinned button has to record it itself
-// because it opens no popover on the way past.
+// It is recorded at the gesture, and both a pinned button and the right-click menu
+// have to record it themselves because they open no popover on the way past.
 //
 // **What auto-submit means in a dialog with no Send.** See startFromSnippet.
 
@@ -9306,6 +9316,7 @@ function drawSnips(c) {
                 'data-i': at, tabindex: at === 0 ? 0 : -1,
                 title: snipTitleFor(s, isBusy() && !state.agent, c),
                 onclick: () => chooseSnippet(c, s),
+                oncontextmenu: (e) => openSnipMenu(e, c, s),
             },
             el('span', { class: 'snip-row-title', text: s.title }),
             el('span', { class: 'snip-row-preview', text: snipPreview(s) })));
@@ -9345,7 +9356,7 @@ function showSnips(c, on) {
     // Taken before anything moves the focus. A textarea keeps its selection across
     // a blur, but only until something writes to `.value`, and "mostly" is not a
     // contract to build `insert: 'cursor'` on.
-    m.caret = { start: c.input.selectionStart, end: c.input.selectionEnd };
+    markSnipCaret(c);
     // Only ever one popover up, per composer and across them.
     closeMenus(c);
     c.closeOthers();
@@ -9411,20 +9422,71 @@ function onSnipsKey(e, c) {
 
 // ── choosing one ─────────────────────────────────────────────────────────
 
+/** Where the selection is right now, for an `insert: 'cursor'` that happens later. */
+function markSnipCaret(c) {
+    c.snips.caret = { start: c.input.selectionStart, end: c.input.selectionEnd };
+}
+
 /**
- * The one way in: a row, a pinned button, or Enter on a row.
+ * The one way in: a row, a pinned button, Enter on a row, or the right-click menu.
  *
  * The caret is captured here as well as in `showSnips` because a pinned button
  * opens no popover — it is the case that would otherwise silently insert at the
  * end of the box instead of where you were.
+ *
+ * @param {object|null} over `{insert, autoSubmit}` for this one use, from the
+ *   right-click menu. Spread over a *copy*: the rows in `state.snippets.rows` are
+ *   what the popover, the pinned strip and the editor all draw from, and a stored
+ *   decision must not move because somebody departed from it once.
  */
-function chooseSnippet(c, s) {
-    if (c.snips.node.hidden) {
-        c.snips.caret = { start: c.input.selectionStart, end: c.input.selectionEnd };
-    }
+function chooseSnippet(c, s, over = null) {
+    // Not re-taken for an override: `openSnipMenu` took it at the gesture, before
+    // the menu pulled the focus off the box, which is the only moment it is true.
+    if (!over && c.snips.node.hidden) markSnipCaret(c);
     closeSnips(c);
-    if (s.params && s.params.length) openSnipFill(c, s);
-    else applySnippet(c, s, {});
+    const use = over ? { ...s, ...over } : s;
+    if (use.params && use.params.length) openSnipFill(c, use);
+    else applySnippet(c, use, {});
+}
+
+/**
+ * Right-click: use this snippet once, some other way than the way it is set up.
+ *
+ * `insert` and `autoSubmit` are stored decisions, and until this there was no way to
+ * depart from one for a single use — an LGTM button that sends is an LGTM button that
+ * sends, and getting its text into the box to edit meant a round trip through
+ * Settings and back.
+ *
+ * Five of the six combinations. `cursor` + send is the one left out: it says "put
+ * this in the middle of what I typed and send the lot", which reads as a mistake
+ * rather than an intention. The editor can still store it and a left-click still
+ * honours it — this menu is not the definition of what a snippet may do.
+ *
+ * `permissionMode` is deliberately not offered. It is orthogonal to placement and is
+ * read only on the send path, so a snippet that says "run this in plan mode" still
+ * means it whenever it sends, and the three non-sending rows leave `#perm` alone
+ * exactly as they leave the transcript alone.
+ */
+function openSnipMenu(ev, c, s) {
+    ev.preventDefault();
+    // The pinned-button case: no popover opened, so nothing else has recorded where
+    // the caret was, and `openContextMenu` is about to take the focus.
+    if (c.snips.node.hidden) markSnipCaret(c);
+
+    const send = c === live
+        ? ['Send it now', 'Add it to the end and send']
+        : ['Start with this', 'Add it to the end and start'];
+    const items = [
+        { label: 'Replace what is in the box', over: { insert: 'overwrite', autoSubmit: false } },
+        { label: 'Add it to the end', over: { insert: 'append', autoSubmit: false } },
+        { label: 'Insert at the cursor', over: { insert: 'cursor', autoSubmit: false } },
+        { label: send[0], over: { insert: 'overwrite', autoSubmit: true } },
+        { label: send[1], over: { insert: 'append', autoSubmit: true } },
+    ];
+    openContextMenu(ev, items.map(it => ({
+        label: it.label,
+        onClick: () => chooseSnippet(c, s, it.over),
+    })));
 }
 
 function openSnipFill(c, s) {
@@ -9623,9 +9685,12 @@ function startFromSnippet(s) {
  */
 function snipTitleFor(s, busy, c = live) {
     const what = s.hint || snipPreview(s);
-    if (!s.autoSubmit) return `Put this in the message box: ${what}`;
-    if (c !== live) return `Fill the message in and press Start: ${what}`;
-    return busy ? `Queue behind the running turn: ${what}` : `Send: ${what}`;
+    const lead = !s.autoSubmit ? 'Put this in the message box'
+        : c !== live ? 'Fill the message in and press Start'
+            : busy ? 'Queue behind the running turn' : 'Send';
+    // The override menu is otherwise undiscoverable: nothing about a button that
+    // sends says the sending is a setting rather than the whole of what it is.
+    return `${lead}: ${what}\nRight-click for other ways to use it.`;
 }
 
 /**
@@ -9655,6 +9720,7 @@ function renderPins() {
             disabled: dom.btnSend.disabled || null,
             title: snipTitleFor(s, busy),
             onclick: () => chooseSnippet(live, s),
+            oncontextmenu: (e) => openSnipMenu(e, live, s),
         }, s.title);
     }));
 }
@@ -21505,13 +21571,13 @@ document.addEventListener('pointerdown', (e) => {
 // A right-click anywhere that has no menu of its own dismisses this and gets the
 // browser's own menu, which is what right-clicking the transcript should do.
 //
-// The exceptions are the rows that *do* have one — a file row and a rail marker.
-// This listener runs after the element's own handler, so without them it would
-// close the menu that click had just opened, in the same event, and right-click
-// would read as doing nothing at all.
+// The exceptions are the rows that *do* have one, named by CTX_OWNERS. This
+// listener runs after the element's own handler, so without them it would close
+// the menu that click had just opened, in the same event, and right-click would
+// read as doing nothing at all.
 document.addEventListener('contextmenu', (e) => {
     if (dom.ctxMenu.hidden) return;
-    if (e.target.closest && e.target.closest('.ch-row, .turn-tick')) return;
+    if (e.target.closest && e.target.closest(CTX_OWNERS)) return;
     closeContextMenu({ focus: false });
 });
 
