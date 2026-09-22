@@ -266,6 +266,16 @@
       </button>
     </div>
     <div id="rail" class="rail-scroll"></div>
+
+    <!-- A project card's ⋮ menu. One element for every card, outside #rail and
+         positioned from script against whichever button opened it — because
+         renderRail() replaces #rail's children whenever any session changes, and
+         a menu living inside it would be torn out from under a click. Fixed
+         rather than absolute for the same reason .slash-menu.floating is: the
+         rail scrolls, and a menu clipped by that scroller is a menu you cannot
+         read the bottom of. -->
+    <div id="proj-menu" class="new-menu proj-menu" role="menu"
+         aria-label="Project" hidden></div>
   </nav>
 
   <main class="main">
@@ -897,6 +907,23 @@
                    order SETTINGS lists them, so they are not rebuilt and not
                    pinned to the end either. -->
 
+              <!-- A colour per project, worn by the rail, the boards and the
+                   dialog that scopes a new session. Written out here rather than
+                   built by renderSettings for the reason above — its controls are
+                   wired once at load — and one group rather than a row per key,
+                   because the setting is a map and the list it draws comes from
+                   the bridge's projects rather than from the SETTINGS table. -->
+              <section id="set-g-projects" class="settings-group">
+                <h2 class="settings-group-title">Projects</h2>
+                <p class="settings-group-note">A colour per project, so a session
+                   scoped to the wrong checkout is something you see rather than
+                   something you read. <strong>Always your own settings file</strong>
+                   — whatever the picker above says. The map names other projects’
+                   paths, so a repository setting one would be a repository
+                   colouring its neighbours.</p>
+                <div id="pcolor-list"></div>
+              </section>
+
               <!-- Messages you send often, and the buttons that send them.
                    Written out here rather than built by renderSettings for the
                    reason above — its controls are wired once at load — and not
@@ -1040,8 +1067,17 @@
 <!-- New session -->
 <div id="new-scrim" class="scrim" hidden>
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="new-title">
+    <!-- The head says which project before it says what you are doing with it.
+         Two lines in a column, so the chip reads as the heading's subject rather
+         than as a control beside it; .modal-close keeps its margin-left:auto and
+         so stays on the right of both. The chip is the part that works when a
+         project has no colour — it names it either way, and says plainly when
+         nothing is picked. -->
     <div class="modal-head">
-      <span id="new-title">Start a session</span>
+      <span class="modal-head-text">
+        <span id="new-project" class="new-project"></span>
+        <span id="new-title">Start a session</span>
+      </span>
       <button class="modal-close" data-close type="button" aria-label="Close">✕</button>
     </div>
     <div class="modal-body">
@@ -1364,6 +1400,55 @@
              so the ordinary footer keeps its three buttons. -->
         <button id="new-sched-save" class="btn primary" type="button" hidden>Save schedule</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- The colour a project wears.
+
+     Its own dialog rather than a swatch in the rail, because the same picker is
+     reached from two places — the ⋮ on a project card and the Projects group in
+     Settings — and a popover that had to be two shapes would be two popovers.
+
+     Before #snip-fill-scrim in the document, which puts it *under* that one in
+     the stack: every .scrim shares a z-index, so DOM order is the order they
+     pile up in, and this dialog never opens over anything but a panel. -->
+<div id="pcolor-scrim" class="scrim" hidden>
+  <div class="modal pcolor" role="dialog" aria-modal="true" aria-labelledby="pcolor-title">
+    <div class="modal-head">
+      <span id="pcolor-title">Project colour</span>
+      <button class="modal-close" data-close-pcolor type="button" aria-label="Close">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <div id="pcolor-name" class="pcolor-name"></div>
+        <div id="pcolor-path" class="pcolor-path"></div>
+      </div>
+      <!-- The six palette hues, and then anything you like.
+
+           Presets first because they are the answer nearly every time: they are
+           the colours web/styles.css already uses against these surfaces, so a
+           row of them is a row of choices that are all going to work. The free
+           picker is underneath for the case the six do not cover — a group's
+           accent made the same call, and bridge/snippets.js:157 says why: the
+           colour is the one thing about this somebody picks for pleasure. -->
+      <div class="field">
+        <label id="pcolor-swatch-label">Colour</label>
+        <div id="pcolor-swatches" class="pcolor-swatches"
+             role="radiogroup" aria-labelledby="pcolor-swatch-label"></div>
+        <div class="pcolor-custom">
+          <label for="pcolor-input">Or pick one</label>
+          <input id="pcolor-input" type="color" value="#a8c7fa"
+                 aria-label="A colour of your own">
+        </div>
+        <div class="note">Saved as you pick — the rail behind this recolours on
+          the press. Colours live in your own settings file, never in a
+          repository’s.</div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="spacer"></span>
+      <button id="pcolor-done" class="btn primary" type="button">Done</button>
     </div>
   </div>
 </div>

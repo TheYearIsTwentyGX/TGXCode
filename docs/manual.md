@@ -568,13 +568,14 @@ in the rail for the same reason — the groups enabled by default are all short.
 ### Settings
 
 **Settings** in the bar, or `Ctrl+8`. Every key in `~/.tgxcode/settings.json`
-with a control in front of it — the reading settings above, the live board, the
-spinner, the quota beacon, and the keyboard — plus two groups that are not in
-that file: **Notifications**, which is per-browser, and **Connect a phone**,
-which is a task rather than a setting. Both used to be buttons in the top bar.
+with a control in front of it — the reading settings above, the live board,
+project colours, the spinner, the quota beacon, and the keyboard — plus two
+groups that are not in that file: **Notifications**, which is per-browser, and
+**Connect a phone**, which is a task rather than a setting. Both used to be
+buttons in the top bar.
 
 The file stayed the only interface for a long time and that was defensible while
-there were three keys in it. At twelve, across five blocks, with a precedence
+there were three keys in it. At sixteen, across six blocks, with a precedence
 chain of four files and validators that silently drop what they do not like,
 "go and read `bridge/prefs.js`" had become the answer to too many questions —
 and the one thing the file cannot tell you is which of the four files a value
@@ -606,11 +607,54 @@ and half-sentences into a file every session reads. Both keep the rule's intent
 the other way round, by saying at all times whether what you are looking at is
 what is on disk.
 
-**Two sections are yours alone** — the quota beacon and the keyboard — and a
-project file that sets one is ignored and says so. What directory this app
-starts `claude` in is not a repository's business, and a repository that could
-rebind your keys could make the window unusable with hand-editing a file as the
-only way back.
+**Three sections are yours alone** — the quota beacon, the keyboard and project
+colours — and a project file that sets one is ignored and says so. What directory
+this app starts `claude` in is not a repository's business, and a repository that
+could rebind your keys could make the window unusable with hand-editing a file as
+the only way back. Colours are yours for a different reason: the list is keyed by
+directory, so it names *other* projects, and a repository setting one would be a
+repository colouring its neighbours.
+
+#### Project colours
+
+Nearly every checkout on this machine is the same project in a different
+worktree, and the thing that decides which one a session belongs to is a
+directory typed into a box. That made scoping a session wrongly a mistake with
+no tell until it had already run.
+
+So a project can be given a colour, and everything that names a project wears
+it: the rail's project cards, the drafts board's and task board's project
+columns, the dashboard's project cards, and — where it matters most — the dialog
+that starts a session or writes a schedule, which takes it on its heading, its
+top edge, the row you picked, and the screen behind it.
+
+Two ways to set one, and they are the same picker:
+
+- the **⋮** on a project's card in the rail, which appears when you hover it;
+- the **Projects** group in Settings, which lists every project the bridge knows
+  and is where you would colour several at once.
+
+Six colours from the app's own palette, and a picker for anything else. **No
+colour** clears it, which is what almost every project is: the point of
+colouring one is to tell it apart from the rest, and a rail where every card is
+painted says no more than a rail where none is. Nothing is a draft here either —
+the swatch saves on the press, and the rail behind the dialog recolours as you
+go.
+
+**A worktree wears its checkout's colour.** The list is keyed by project root and
+a directory matches on the path above it, so anything under
+`<project>/.claude/worktrees/` is coloured without being listed, and the longest
+match wins if you colour a worktree of its own. A directory that merely starts
+with the same letters — `claude-sessions-elsewhere` against `claude-sessions` —
+does not match; the boundary is part of the rule.
+
+**The dialog no longer picks a project for you.** It used to fill the box from
+whichever session was open, and failing that from the most recently active
+project, so the commonest way to scope something wrongly was not noticing it had
+been answered. It now opens empty and says *No project selected* in its heading
+until you choose. Everything that meant a particular project still passes one —
+editing a draft or a schedule, the split button beside **New session**, the
+Start on a suggested task — so only the guessing went.
 
 #### Keys
 

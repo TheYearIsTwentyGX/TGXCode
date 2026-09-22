@@ -846,8 +846,8 @@ it opens is on this machine's desktop, which a phone cannot look at.
 
 ### `GET /api/prefs?cwd=<path>&files=1`
 
-`{ version, transcript: {…}, live: {…}, quota: {…}, spinner: {…}, keyboard: {…},
-sources: [string], problems: [{file, message}] }` — how the person using the app
+`{ version, transcript: {…}, live: {…}, projects: {…}, quota: {…}, spinner: {…},
+keyboard: {…}, sources: [string], problems: [{file, message}] }` — how the person using the app
 wants it to behave. `sources` is file paths, weakest first; each `problems` entry
 is an **object**, `{file, message}`, naming the file that carried a value the key
 does not allow and what was wrong with it.
@@ -885,13 +885,16 @@ rather than taken at face value; the default stands. Without `?cwd=` you get the
 user-level answer, which is also what every page is served in a `cs-prefs`
 `<meta>` tag (minus `sources` and `problems`).
 
-**Two sections may only be set in the user's own file**: `quota` and `keyboard`.
-A project file that carries one is ignored and says so in `problems`. What
-directory this app starts `claude` in, and which keys your hands use, are not a
-repository's business — and a repository that could rebind your keys could make
-the window unusable with hand-editing the file as the only way back. `quota` was
-documented this way before it was enforced this way; it is enforced now, so
-`?cwd=` no longer echoes a project's value back as though it counted.
+**Three sections may only be set in the user's own file**: `quota`, `keyboard`
+and `projects`. A project file that carries one is ignored and says so in
+`problems`. What directory this app starts `claude` in, and which keys your
+hands use, are not a repository's business — and a repository that could rebind
+your keys could make the window unusable with hand-editing the file as the only
+way back. `projects` is there for a third reason: the map is keyed by absolute
+path and so names *other* projects, and a repository setting one would be a
+repository colouring its neighbours. `quota` was documented this way before it
+was enforced this way; it is enforced now, so `?cwd=` no longer echoes a
+project's value back as though it counted.
 
 `transcript` today: `groupToolCalls` (fold a run of tool calls into one row once
 a message closes it), `groupMinCalls` (how long a run has to be — at least 2),
@@ -910,6 +913,40 @@ answer — the board draws sessions from every project at once, so a project's
 `<workspace>/.tgxcode/settings.json` can set `live` and will see it echoed back
 on `?cwd=`, but it does not change what the board draws. A client that builds its
 own cards has no reason to read `live` at all — the Android app does not.
+
+`projects` is one key, `colors`, and it is an **object**:
+`{"<absolute project directory>": "<#rgb or #rrggbb>"}`. It is a colour a person
+gave a project so that a session scoped to the wrong checkout is visible rather
+than only readable — the desktop wears it on the rail's project cards, the
+drafts and task boards' project columns, the dashboard's project cards, and the
+dialog that scopes a new session or a schedule. A project with no entry has no
+colour, which is most of them, and `{}` is how it ships.
+
+**A directory is matched as a prefix at a path boundary, longest first.** The map
+is keyed by *project root*, so `/home/you/proj` also answers for
+`/home/you/proj/.claude/worktrees/spike` and for any other subdirectory of it —
+which is what lets a worktree wear its checkout's colour without being listed
+separately. The boundary is part of the rule: `/home/you/proj` does **not**
+answer for `/home/you/project`. Longest wins, so a worktree given a colour of its
+own keeps it. This resolution is the client's to do; the bridge stores the map
+and validates it, and takes no view on which directory you are asking about.
+
+**The value is a literal colour, and the validation is strict for a reason.** A
+client sets it as a CSS custom property, so `red`, `var(--x)` and `#fff;}` are
+all refused — the same rule and the same argument as a snippet group's `accent`
+(see `POST /api/snippet-groups`). Keys must be absolute and are stored resolved,
+so `/home/you/proj/` and `/home/you/proj/sub/..` cannot become two entries for
+one project. At most 200 entries are kept. A bad key or a bad value is dropped
+with one `problems` line rather than costing the map, exactly as
+`keyboard.bindings` and `spinner.weights` are.
+
+Like those two, `colors` is a **map**, so a `PUT` naming it replaces the whole
+thing rather than merging into it: there is no spelling for "clear this one
+entry", because leaving the key out *is* that. Send all of it. Clearing the last
+colour is `{"projects": {"colors": null}}`, which removes the section from the
+file.
+
+User file only — see the three-section paragraph below.
 
 `spinner`: `randomize` (whether a turn in progress wears a themed verb in front
 of what it is doing, or says only what it is doing as before), `groups` (which
@@ -2079,7 +2116,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `handoff` | `{at, sessionId, from, count}` — another session handed this one work, and it was resumed to deal with it. Same shape and same reasoning as above; watched in the transcript rather than reported by the route, so it fires when the message *arrived* rather than when it was queued |
 | `suggestion-changed` | `{at, sessionId, toolUseId}` — a suggested follow-up was started, dismissed, or undone, possibly in another window |
 | `session-deleted` | `{sessionId, title}` |
-| `prefs` | the **user-level** settings, in the same shape as the `cs-prefs` `<meta>` tag: `{version, transcript, live, quota, spinner, keyboard}`, with no `sources` or `problems`. Fired on every `PUT /api/prefs` including your own, so a second window does not sit on a stale copy — two are routinely open here. A project's answer is deliberately not sent: it is the open session's business and arrives with `GET /api/sessions/:id` |
+| `prefs` | the **user-level** settings, in the same shape as the `cs-prefs` `<meta>` tag: `{version, transcript, live, projects, quota, spinner, keyboard}`, with no `sources` or `problems`. Fired on every `PUT /api/prefs` including your own, so a second window does not sit on a stale copy — two are routinely open here. A project's answer is deliberately not sent: it is the open session's business and arrives with `GET /api/sessions/:id` |
 | `claude-config` | `{at: number, scope: 'user'\|'project'\|'project-local'\|'managed', file: string}` — the *fact* that one of Claude Code's settings files changed, and deliberately **not** its content. Unlike `prefs` there is no `<meta>` copy for a page to keep in sync and nothing in this app behaves differently because of those files, so the event is a nudge to re-read; pushing the contents of a file whose route is local-only down every open channel would be a poor trade for saving a fetch. Fired on every successful `PUT /api/claude-config`, including your own — **and on a change this bridge did not make**: `claude` writes these files itself, so `theme` or `editorMode` from `/config`, `enabledPlugins` from a plugin toggle, and a rule appended to `settings.local.json` when somebody approves a permission mid-turn all arrive here too. `scope` may then be `managed`, which no `PUT` can produce. **Two caveats a client has to hold.** It is best-effort: the bridge watches directories with `fs.watch`, which throws on some filesystems and silently does nothing on others, so a change can go unannounced — keep treating `409 {code:'stale'}` from `PUT /api/claude-config` as the guarantee, and this only as the convenience that usually saves you from meeting it. And a project's two files are watched only once `GET /api/claude-config?cwd=<dir>` has been called for that directory, only for a small number of directories at a time (least-recently-read dropped first), and not after ten minutes without another read of it; the user file and the managed file are watched throughout. So poll or re-`GET` if you need certainty about a directory you have not asked about |
 | `claude-docs` | `{at, scope, file}` — the same trade for a `CLAUDE.md`: the fact one was written, never its contents. `scope` is `"user"` or `"project"`. Fired on every successful `PUT /api/claude-docs`, including your own. **A client holding an unsaved draft must not reload on this** — show a conflict and keep what the person typed; the whole draft here is somebody's prose rather than one key |
 | `notification` | a whole notification row, just filed — the same shape `GET /api/notifications` returns, `read` included — plus `unread`, the badge count after this row. So an open history view need not refetch, and need not guess whether the new row counts |
@@ -2588,6 +2625,13 @@ one" once you have said otherwise. A section left with no keys is removed too,
 rather than left as `{}` in a file people read. Unknown keys already in the file
 are preserved, and `version` is stamped.
 
+**A key whose value is a map is still one key**, so naming it replaces the whole
+map. That is true of all three — `keyboard.bindings`, `spinner.weights` and
+`projects.colors` — and it is deliberate: a client that holds the resolved map
+can say exactly what it wants by sending all of it, and there is no second
+spelling that would have to mean "drop one entry". See each one under
+`GET /api/prefs`.
+
 The response is the answer that now holds: `file` is what was written, `prefs` is
 `GET /api/prefs?cwd=` for the same directory, and `files` is its `files=1` half.
 Take those rather than assuming the write landed where it matters — a save into a
@@ -2611,7 +2655,7 @@ matching on prose:
 | 400 | `dir` | a project scope with no `cwd`, or one outside the allowed roots |
 | 400 | `section` | no `patch`, or a section or key this bridge does not have |
 | 400 | `value` | a value the key does not allow, or a binding that is not a usable combo |
-| 403 | `readonly` | `quota` or `keyboard` at a project scope |
+| 403 | `readonly` | `quota`, `keyboard` or `projects` at a project scope |
 | 403 | `unparseable` | the target file does not currently parse. Refused rather than replaced: whatever is in it is somebody's work |
 | 403 | `write` | the file or its directory could not be written |
 

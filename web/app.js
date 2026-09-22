@@ -129,6 +129,7 @@ const PREFS_FALLBACK = {
     version: 1,
     transcript: { groupToolCalls: true, groupMinCalls: 3, groupIncludesThinking: true },
     live: { compact: false, hideElsewhere: false },
+    projects: { colors: {} },
     quota: { beacon: false, beaconDir: null, beaconEveryMinutes: 20 },
     spinner: { randomize: true, groups: [], weights: {}, rerollMs: 8000 },
     keyboard: { contextualTerminalCopy: false, composerSend: 'enter', bindings: {} },
@@ -173,6 +174,43 @@ keys.apply(BOOT_PREFS.keyboard);
 
 /** The transcript settings in force — the open session's, or the user's own. */
 const grouping = () => (state.prefs || BOOT_PREFS).transcript;
+
+/**
+ * A stored hex accent, re-checked here because it is about to become a CSS rule.
+ *
+ * The bridge validates both of the places these come from — `isAccent` in
+ * bridge/snippets.js, which bridge/prefs.js borrows for project colours — and
+ * this is the second gate rather than the only one. It is cheap, and the cost of
+ * being wrong is a value that closes a declaration and opens whatever follows.
+ */
+const hexAccent = (v) => (/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(v || '') ? v : '');
+
+/**
+ * The colour somebody gave the project a directory belongs to, or ''.
+ *
+ * **Prefix at a path boundary, longest first.** The map is keyed by project
+ * root, and what gets looked up is whatever is in the Start-a-session box — a
+ * worktree under `<proj>/.claude/worktrees/`, a subdirectory, or a path that is
+ * not a project at all. Matching on the prefix is what lets a worktree wear its
+ * checkout's colour without the page needing `projectRootOf`, and it is the rule
+ * bridge/snippets.js already argues for in matchesCwd(): the boundary is spelled
+ * out so `/home/you/proj` cannot claim `/home/you/project`.
+ *
+ * Longest wins, so a worktree given a colour of its own keeps it.
+ */
+function projectColor(dir) {
+    const here = (dir || '').trim().replace(/\/+$/, '');
+    if (!here.startsWith('/')) return '';
+    let best = '';
+    let deepest = -1;
+    for (const [root, color] of Object.entries(BOOT_PREFS.projects.colors || {})) {
+        if (here !== root && !here.startsWith(`${root}/`)) continue;
+        if (root.length <= deepest) continue;
+        deepest = root.length;
+        best = hexAccent(color);
+    }
+    return best;
+}
 
 /**
  * The board's settings — the user's own, and deliberately never `state.prefs`.
@@ -492,6 +530,10 @@ const state = {
     // `editing` is the id the dialog is currently editing, or null when it is
     // about to make a new one. It is what tells Save which verb to use.
     drafts: { open: false, rows: [], at: 0, loading: false, error: null, editing: null },
+    // The project card whose ⋮ menu is open, or null. Held here rather than
+    // in the card, because renderRail() rebuilds every card and the menu has to
+    // survive that — see syncProjMenu().
+    projMenu: null,
     // Canned messages, and the groups they are drawn in. Drafts' terms for the
     // push — the whole list, unconditional, held as sent — with one difference
     // that matters: **this list is read while its panel is shut.** The pinned
@@ -623,7 +665,9 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'set-file', 'set-problems', 'set-body', 'set-shell', 'set-toc', 'composer-hint',
     'memo-scrim', 'memo-title', 'memo-big', 'memo-note', 'memo-count',
     'memo-close', 'memo-save',
-    'set-g-notify', 'set-g-pair',
+    'set-g-notify', 'set-g-pair', 'set-g-projects', 'pcolor-list',
+    'proj-menu', 'pcolor-scrim', 'pcolor-name', 'pcolor-path', 'pcolor-swatches',
+    'pcolor-input', 'pcolor-done', 'new-project',
     'new-cron', 'new-cron-row', 'new-cron-note', 'new-gate-ref', 'new-gate-row',
     'new-gate-kind', 'new-gate-note', 'new-gate-ref-row', 'new-pr-row',
     'new-pr-drafts', 'new-pr-post', 'new-sched-save', 'new-sched',
@@ -1053,6 +1097,11 @@ const ICON = {
     // editor, where a row can be dragged as well as walked with the arrow buttons.
     grip: '<path d="M9 6.5h.01M15 6.5h.01M9 12h.01M15 12h.01M9 17.5h.01M15 17.5h.01" '
         + 'stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>',
+    // Three dots stacked, which is what an overflow menu is everywhere else and
+    // so needs no label. `grip` above is the six-dot drag handle; they are
+    // different things and are drawn differently on purpose.
+    dots: '<path d="M12 6h.01M12 12h.01M12 18h.01" stroke="currentColor" '
+        + 'stroke-width="2.6" stroke-linecap="round"/>',
 };
 
 // Which glyph says each PR status. `unknown` is gh being unreachable rather than a
@@ -1123,12 +1172,25 @@ function renderRail() {
     const groups = new Map();
     for (const s of rest) {
         const key = groupKeyOf(s);
-        if (!groups.has(key)) groups.set(key, { label: s.projectName || 'unknown', list: [] });
+        // `cwd` is the group's *directory*, which the key is deliberately not:
+        // the key is the project's name, so the collapse state written against it
+        // survives a checkout being moved. A colour is keyed on the path instead
+        // — see projectColor() — so the card has to carry one, and it takes it
+        // from the first session filed under the name. Two checkouts sharing a
+        // basename therefore share a colour, which is the same collision that
+        // already puts them in one card.
+        if (!groups.has(key)) {
+            groups.set(key, {
+                label: s.projectName || 'unknown',
+                cwd: s.projectCwd || s.cwd || '',
+                list: [],
+            });
+        }
         groups.get(key).list.push(s);
     }
     const byGroupRank = [...groups].sort(
         (a, b) => (state.groupOrder.get(a[0]) ?? 0) - (state.groupOrder.get(b[0]) ?? 0));
-    for (const [key, { label, list }] of byGroupRank) {
+    for (const [key, { label, cwd, list }] of byGroupRank) {
         // Sessions a schedule started fold into their own subsection inside the
         // project card. They are the same work in the same directory — so a card
         // of their own at the foot of the rail, the way test sessions get one,
@@ -1144,6 +1206,10 @@ function renderRail() {
         const sched = shown.filter(s => s.schedule);
         const plain = shown.filter(s => !s.schedule);
         dom.rail.append(groupCard(key, label, plain, {
+            // What makes this card a *project* rather than Pinned or Archived:
+            // the ⋮ menu and the colour both hang off it, and neither belongs on
+            // a card that is not about a directory.
+            project: { key, name: label, cwd },
             // The project heading still counts what it contains, subsection
             // included: a card saying 3 above a shut section holding 11 is
             // wrong about the project, which is what the heading names. Hidden
@@ -1168,6 +1234,12 @@ function renderRail() {
             `${gone.size === 1 ? 'One session is' : `All ${gone.size} sessions are`} finished, `
             + 'and hidden. Press Hide finished to see them.'));
     }
+
+    // The ⋮ menu is fixed and lives outside this element, so a rebuild leaves it
+    // pointing at a button that no longer exists. Re-anchored rather than closed,
+    // because this runs whenever any session changes and a menu that shut itself
+    // several times a minute would be unusable.
+    syncProjMenu();
 }
 
 /**
@@ -1207,9 +1279,15 @@ function groupCard(key, label, list, opts = {}) {
     const counted = opts.all || list;
     const live = counted.filter(s => s.active || (s.runner && s.runner.state === 'busy')).length;
     const bodyId = `group-${key.replace(/[^\w-]/g, '_')}`;
+    // Only a project card has a directory, so only a project card can have a
+    // colour or a menu. Pinned, Archived, Test and the nested Scheduled
+    // subsection get neither — there is nothing for either to be about.
+    const accent = opts.project ? projectColor(opts.project.cwd) : '';
 
     return el('section', {
         class: 'rail-group' + (opts.nested ? ' nested' : ''), 'data-key': key,
+        'data-tinted': accent ? '1' : null,
+        style: accent ? `--proj-accent: ${accent}` : null,
     },
         el('button', {
             class: 'group-head',
@@ -1223,6 +1301,22 @@ function groupCard(key, label, list, opts = {}) {
             live ? el('span', { class: 'live' }, `${live} live`) : null,
             el('span', { class: 'count' }, String(counted.length)),
         ),
+        // A sibling of the head rather than a child of it, because the head is
+        // itself a <button> and a button inside a button is not a thing the
+        // browser will build. It is positioned over the card's top-right corner
+        // instead, with the head padded to keep the count out from under it.
+        opts.project
+            ? el('button', {
+                class: 'group-menu-btn', type: 'button',
+                'aria-haspopup': 'menu', 'aria-expanded': 'false',
+                'aria-label': `More for ${label}`, title: `More for ${label}`,
+                onclick: (e) => {
+                    e.stopPropagation();
+                    if (state.projMenu && state.projMenu.key === key) closeProjMenu();
+                    else showProjMenu(opts.project, e.currentTarget);
+                },
+            }, icon('dots', 15))
+            : null,
         open
             ? el('div', { class: 'group-body', id: bodyId }, opts.lead || null, list.map(strip))
             : null,
@@ -7062,7 +7156,13 @@ function dashProject(p) {
     if (p.dirty) counts.push(`${p.dirty} dirty`);
     if (p.open) counts.push(`${p.open} open PR${p.open === 1 ? '' : 's'}`);
 
-    return el('section', { class: 'dproj' },
+    const accent = projectColor(p.cwd);
+
+    return el('section', {
+        class: 'dproj',
+        'data-tinted': accent ? '1' : null,
+        style: accent ? `--proj-accent: ${accent}` : null,
+    },
         el('header', { class: 'dproj-head' },
             el('span', { class: 'dproj-name' }, p.name),
             p.repo ? el('span', { class: 'dproj-repo' }, p.repo) : null,
@@ -7956,9 +8056,20 @@ function tbFocusGroups(d) {
  * already. No `data-col`, deliberately — that attribute colours a *state*, and
  * a project is not one. The cards keep `.tb-task`'s own stripe, which still says
  * the right thing.
+ *
+ * The head takes the project's own colour where it has one, on the argument
+ * draftColumn spells out: a colour chosen for a project is not one this board
+ * invented. `Elsewhere` is the group for tasks with no session behind them, and
+ * it resolves to no directory and therefore no colour, which is right.
  */
 function tbProjectColumn(name, rows) {
-    return el('section', { class: 'tb-col tb-focus-col', 'data-project': name },
+    const from = rows[0] && rows[0].session;
+    const accent = projectColor((from && (from.projectCwd || from.cwd)) || '');
+    return el('section', {
+        class: 'tb-col tb-focus-col', 'data-project': name,
+        'data-tinted': accent ? '1' : null,
+        style: accent ? `--proj-accent: ${accent}` : null,
+    },
         el('header', { class: 'tb-col-head' },
             el('h2', { title: name }, name),
             el('span', { class: 'tb-count' }, String(rows.length)),
@@ -8462,14 +8573,25 @@ function draftGroups(rows) {
  * exists, which is the borrowing `draftCard` below already does with `tb-card`.
  *
  * What differs is what a column *means*. Over there it is a state, and the
- * colour says which one; here it is a project, and there is nothing for a colour
- * to say. So the head carries none — `.tb-col[data-col="needs"]` is keyed on an
- * attribute this section deliberately does not have — and the cards keep
+ * colour says which one; here it is a project. So no `data-col` — that attribute
+ * is what colours a state, and a project is not one — and the cards keep
  * `.dr-card`'s quiet stripe, which is still the right one: a draft is the thing
  * in this app that is explicitly not asking for anything.
+ *
+ * The head *does* carry a colour now, and the two are not in tension. The rule
+ * was never that a project has no colour; it was that this board must not invent
+ * one, because an invented colour claims a meaning it cannot deliver. A colour
+ * somebody chose for the project is not an invention, and it says the only thing
+ * a project's colour ever says: which project. Absent for every project nobody
+ * has coloured, which is most of them.
  */
 function draftColumn(name, list) {
-    return el('section', { class: 'tb-col dr-col', 'data-project': name },
+    const accent = projectColor((list[0] && list[0].cwd) || '');
+    return el('section', {
+        class: 'tb-col dr-col', 'data-project': name,
+        'data-tinted': accent ? '1' : null,
+        style: accent ? `--proj-accent: ${accent}` : null,
+    },
         el('header', { class: 'tb-col-head' },
             el('h2', { title: name }, name),
             el('span', { class: 'tb-count' }, String(list.length)),
@@ -8706,9 +8828,8 @@ function snipCwd(c) {
 /** One line of what it says, for the row under the title. */
 const snipPreview = (s) => clip(s.body, 120);
 
-/** A stored accent, re-checked here because it is about to become a CSS rule. */
-const snipAccent = (g) => (g && /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(g.accent || '')
-    ? g.accent : '');
+/** A group's stored accent, through the one gate the page has — see hexAccent. */
+const snipAccent = (g) => (g ? hexAccent(g.accent) : '');
 
 /**
  * The popover's contents: a card per group, then whatever is ungrouped.
@@ -9997,6 +10118,352 @@ async function schedDelete(s) {
     }
 }
 
+// ── project colours ──────────────────────────────────────────────────────
+//
+// A colour per project directory, and the two ways of setting one.
+//
+// **Why it exists.** Nearly every checkout on this machine is the same project
+// in a different worktree, and the control that decides which one a session
+// belongs to is a free-text box in a dialog reused for four jobs. A session
+// scoped to the wrong directory was a mistake with no visual tell until it had
+// already run. A colour gives it one.
+//
+// **Where it is stored** is `projects.colors` in `~/.tgxcode/settings.json` —
+// see the header of bridge/prefs.js for why a preference rather than a store of
+// its own, and USER_ONLY there for why a repository does not get to set it. The
+// page therefore already holds the whole map in BOOT_PREFS, refreshed by the
+// `prefs` SSE event, so resolving a directory to a colour costs no request and
+// can happen on every keystroke. See projectColor().
+//
+// **Two ways in, one picker.** The ⋮ on a project's rail card is where you
+// notice a colour is missing; the Projects group in Settings is where you set
+// several at once. Both open #pcolor-scrim, because a picker that had to be
+// both a popover and a panel row would be two pickers that drifted.
+
+// The six the stylesheet already uses against these surfaces — see the palette
+// at the top of web/styles.css. Read from the stylesheet rather than written out
+// again here, so a restyle moves them and this list cannot go stale. A name
+// beside each, because a radio group that announces "#a8c7fa" is no use to
+// anybody listening to it.
+const PCOLOR_PRESETS = [
+    ['--blue', 'Blue'],
+    ['--green', 'Green'],
+    ['--yellow', 'Yellow'],
+    ['--peach', 'Peach'],
+    ['--red', 'Red'],
+    ['--purple', 'Purple'],
+];
+
+/**
+ * A `--token` from the stylesheet as the `#rrggbb` the bridge will accept.
+ *
+ * The palette is written as hex already, so this is a read and a trim rather
+ * than a conversion — but it goes through hexAccent all the same, because what
+ * comes back is whatever the stylesheet currently says and it is about to be
+ * sent to a route that validates it.
+ */
+function paletteHex(token) {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(token).trim();
+    return hexAccent(v);
+}
+
+/** Which project the colour dialog is about. */
+let pcolorFor = null;   // {cwd, name}
+
+/**
+ * Save one project's colour, or clear it.
+ *
+ * The whole map goes up, because `projects.colors` is one key whose value
+ * happens to be a map and `PUT /api/prefs` replaces a key — the contract
+ * bridge/prefs.js's save() spells out for `keyboard.bindings`. The page holds
+ * the resolved map, so sending all of it says exactly what it means. `null` when
+ * the last colour goes, so the section leaves the file rather than sitting in it
+ * as `{}`.
+ *
+ * `scope: 'user'` always, never `state.settings.scope`: the section is
+ * user-only, so a project scope would come back 403 `readonly`, and the Settings
+ * group says as much above the list.
+ *
+ * The answer is taken as the truth rather than the value we sent — the rule
+ * saveSetting() follows, and here it also hands back the directories spelled the
+ * way the file spells them.
+ *
+ * @param {string} cwd  a project directory
+ * @param {string|null} hex  `#rrggbb`, or null to clear it
+ */
+async function saveProjectColor(cwd, hex) {
+    const next = { ...(BOOT_PREFS.projects.colors || {}) };
+    if (hex) next[cwd] = hex; else delete next[cwd];
+    try {
+        const answer = await put('/api/prefs', {
+            scope: 'user',
+            patch: { projects: { colors: Object.keys(next).length ? next : null } },
+        });
+        BOOT_PREFS.projects.colors = (answer.prefs.projects || {}).colors || {};
+    } catch (err) {
+        toast(`Could not save that colour: ${err.message}`, 'error');
+        return;
+    }
+    repaintProjectColors();
+}
+
+/**
+ * Everything that wears a project's colour, after the map changed.
+ *
+ * One function rather than each caller remembering the list, because the map
+ * changes from three directions — this window's picker, another window's, and a
+ * hand-edit of the settings file — and the third has no caller to remember
+ * anything. Each of these is a no-op when its surface is shut.
+ */
+function repaintProjectColors() {
+    renderRail();
+    paintNewProject();
+    paintPcolorDialog();
+    if (state.settings.open) renderProjectColors();
+    if (state.drafts.open) renderDrafts();
+    if (state.taskboard.open) renderTaskboard();
+    if (state.dash.open) renderDash();
+}
+
+// --- the dialog ----------------------------------------------------------
+
+/**
+ * Open the picker on one project.
+ *
+ * @param {{cwd: string, name: string}} project
+ */
+function openPcolor(project) {
+    pcolorFor = { cwd: project.cwd, name: project.name };
+    dom.pcolorScrim.hidden = false;
+    paintPcolorDialog();
+    dom.pcolorDone.focus();
+}
+
+function closePcolor() {
+    dom.pcolorScrim.hidden = true;
+    pcolorFor = null;
+}
+
+/**
+ * Draw the swatch row against what is currently stored.
+ *
+ * Redrawn rather than patched, and called again after every save, because the
+ * dialog holds no draft of its own: what is on screen is what is in the settings
+ * file, which is the rule the settings panel states at length — a picker with a
+ * Save button has a state where what you see and what is in force disagree. It
+ * also makes the second-window case free, since repaintProjectColors() runs this
+ * when the `prefs` event arrives.
+ */
+function paintPcolorDialog() {
+    if (dom.pcolorScrim.hidden || !pcolorFor) return;
+    const current = hexAccent((BOOT_PREFS.projects.colors || {})[pcolorFor.cwd]);
+
+    dom.pcolorName.textContent = pcolorFor.name;
+    dom.pcolorPath.textContent = pcolorFor.cwd;
+
+    const swatch = (hex, label, on) => el('button', {
+        class: 'pcolor-swatch' + (on ? ' on' : '') + (hex ? '' : ' none'),
+        type: 'button', role: 'radio', 'aria-checked': String(on),
+        'aria-label': label, title: label,
+        style: hex ? `--pcolor: ${hex}` : null,
+        onclick: () => saveProjectColor(pcolorFor.cwd, hex || null),
+    }, on ? icon('tick', 13) : null);
+
+    const presets = PCOLOR_PRESETS
+        .map(([token, label]) => [paletteHex(token), label])
+        .filter(([hex]) => hex);
+    // A colour that is not one of the six still gets a place in the row, so the
+    // ticked swatch is always the one in force. Otherwise picking your own would
+    // leave nothing ticked, which reads as the save not having worked.
+    const known = new Set(presets.map(([hex]) => hex.toLowerCase()));
+    if (current && !known.has(current.toLowerCase())) presets.push([current, 'Your own']);
+
+    dom.pcolorSwatches.replaceChildren(
+        swatch('', 'No colour', !current),
+        ...presets.map(([hex, label]) => swatch(hex, label,
+            !!current && hex.toLowerCase() === current.toLowerCase())),
+    );
+    // The native picker opens on what is set, and falls back to the app's blue
+    // rather than to its own black — which would make every uncoloured project
+    // look like a decision somebody had made.
+    dom.pcolorInput.value = current || paletteHex('--blue') || '#a8c7fa';
+}
+
+// --- the rail's ⋮ menu ---------------------------------------------------
+
+/**
+ * Open the one-item menu against a project card's ⋮.
+ *
+ * Fixed and placed by hand, for positionMenu()'s reason one step further on: the
+ * rail scrolls, and renderRail() rebuilds it whenever any session changes — so a
+ * menu that lived inside a card would be both clipped and torn out from under a
+ * click. `state.projMenu` remembers which card it belongs to so a rebuild can
+ * put it back; see syncProjMenu().
+ *
+ * @param {{key: string, cwd: string, name: string}} project
+ */
+function showProjMenu(project, btn) {
+    state.projMenu = { key: project.key, cwd: project.cwd, name: project.name };
+    dom.projMenu.hidden = false;
+    dom.projMenu.replaceChildren(
+        el('div', { class: 'menu-note' }, clip(project.name, 30)),
+        el('div', { class: 'sep' }),
+        el('button', {
+            class: 'picker-row', type: 'button', role: 'menuitem',
+            onclick: () => { closeProjMenu(); openPcolor(project); },
+        }, el('span', {}, 'Set project colour')),
+    );
+    placeProjMenu(btn);
+    dom.projMenu.querySelector('.picker-row').focus();
+}
+
+function closeProjMenu() {
+    if (!state.projMenu) return;
+    const btn = dom.rail.querySelector('.group-menu-btn[aria-expanded="true"]');
+    if (btn) btn.setAttribute('aria-expanded', 'false');
+    state.projMenu = null;
+    dom.projMenu.hidden = true;
+}
+
+/** Under the button, or over it when there is more room that way. */
+function placeProjMenu(btn) {
+    const r = btn.getBoundingClientRect();
+    const gap = 6;
+    const h = dom.projMenu.offsetHeight || 96;
+    const up = window.innerHeight - r.bottom - gap < h && r.top > h + gap;
+    dom.projMenu.style.left = `${Math.max(8, r.right - PROJ_MENU_W)}px`;
+    if (up) {
+        dom.projMenu.style.top = 'auto';
+        dom.projMenu.style.bottom = `${window.innerHeight - r.top + gap}px`;
+    } else {
+        dom.projMenu.style.bottom = 'auto';
+        dom.projMenu.style.top = `${r.bottom + gap}px`;
+    }
+}
+
+const PROJ_MENU_W = 220;
+
+/**
+ * Put the menu back against its button, or close it if there is nothing to put
+ * it against.
+ *
+ * Called from two places, and *reposition rather than close* is the rule in
+ * both — repositionFloatingMenus()' rule, for its reason: the button is still
+ * there and the menu is still the answer, so a menu that vanished because
+ * something moved a pixel would be the wrong reading of what happened.
+ *
+ * From renderRail(), because that runs whenever any session changes — several
+ * times a minute in a busy window — and a menu that shut itself that often would
+ * be unusable for the one thing it is for.
+ *
+ * From the rail's `scroll`, because pressing a ⋮ that is only half on screen
+ * makes the browser scroll it into view *first*, and that scroll lands after the
+ * click. Closing on it meant the menu opened and shut again in one press, which
+ * is a press that appears to do nothing.
+ *
+ * It does close when the button has gone — the card was filtered away or the
+ * project's last session was deleted — or when it has scrolled out of the rail
+ * entirely, since the menu is fixed and would otherwise be left pointing at a
+ * card nobody can see.
+ */
+function syncProjMenu() {
+    if (!state.projMenu) return;
+    const btn = dom.rail.querySelector(
+        `.rail-group[data-key="${cssEscape(state.projMenu.key)}"] .group-menu-btn`);
+    if (!btn) { closeProjMenu(); return; }
+    const b = btn.getBoundingClientRect();
+    const rail = dom.rail.getBoundingClientRect();
+    if (b.bottom < rail.top || b.top > rail.bottom) { closeProjMenu(); return; }
+    btn.setAttribute('aria-expanded', 'true');
+    placeProjMenu(btn);
+}
+
+/**
+ * A group key inside an attribute selector.
+ *
+ * The key holds a project name, which is a path segment and can hold anything a
+ * filesystem allows — a quote in it would end the selector early and throw.
+ */
+const cssEscape = (v) => (window.CSS && CSS.escape
+    ? CSS.escape(v) : String(v).replace(/["\\]/g, '\\$&'));
+
+// --- the Settings group --------------------------------------------------
+
+/**
+ * Every project the bridge knows, with its colour.
+ *
+ * Drawn from `state.settings.projects`, which loadSettings() already fetches for
+ * the scope picker, so this group costs no second request. A `render` rather
+ * than rows in the SETTINGS table because these are not controls over a settings
+ * *key* the way the rest of the panel's are: there is one key, and what varies
+ * is which directories exist.
+ */
+function renderProjectColors() {
+    const colors = BOOT_PREFS.projects.colors || {};
+    const projects = state.settings.projects || [];
+    if (!projects.length) {
+        dom.pcolorList.replaceChildren(el('div', { class: 'settings-row-note' },
+            'No projects yet — a directory appears here once a session has run in it.'));
+        return;
+    }
+    dom.pcolorList.replaceChildren(...projects.map((p) => {
+        const hex = hexAccent(colors[p.cwd]);
+        return el('div', {
+            class: 'pcolor-row', 'data-tinted': hex ? '1' : null,
+            style: hex ? `--proj-accent: ${hex}` : null,
+        },
+            el('button', {
+                class: 'pcolor-swatch' + (hex ? '' : ' none'), type: 'button',
+                style: hex ? `--pcolor: ${hex}` : null,
+                'aria-label': `Set the colour for ${p.name}`,
+                onclick: () => openPcolor({ cwd: p.cwd, name: p.name }),
+            }),
+            el('div', { class: 'pcolor-row-text' },
+                el('div', { class: 'pcolor-row-name' }, p.name),
+                el('div', { class: 'pcolor-row-path' }, p.cwd),
+            ),
+            hex
+                ? el('button', {
+                    class: 'btn small', type: 'button',
+                    onclick: () => saveProjectColor(p.cwd, null),
+                }, 'Clear')
+                : null,
+        );
+    }));
+}
+
+// --- wiring --------------------------------------------------------------
+
+for (const n of dom.pcolorScrim.querySelectorAll('[data-close-pcolor]')) {
+    n.addEventListener('click', closePcolor);
+}
+dom.pcolorDone.addEventListener('click', closePcolor);
+// `input` rather than `change`: a native colour picker fires `input` as you drag
+// and `change` only when it closes, and saving on the drag is what makes the
+// rail behind the dialog a live preview. Each one is a small file write.
+dom.pcolorInput.addEventListener('input', () => {
+    const hex = hexAccent(dom.pcolorInput.value);
+    if (hex && pcolorFor) saveProjectColor(pcolorFor.cwd, hex);
+});
+dom.pcolorScrim.addEventListener('click', (e) => {
+    if (e.target === dom.pcolorScrim) closePcolor();
+});
+
+// The menu goes on a click outside it and on Escape. A rail scroll follows it
+// instead — see syncProjMenu — because the browser scrolls a half-visible ⋮ into
+// view before delivering the click that opened the menu. Capturing, so a click on
+// some other control closes this before that control acts on it.
+document.addEventListener('click', (e) => {
+    if (!state.projMenu) return;
+    if (dom.projMenu.contains(e.target) || e.target.closest('.group-menu-btn')) return;
+    closeProjMenu();
+}, true);
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && state.projMenu) { e.stopPropagation(); closeProjMenu(); }
+}, true);
+dom.rail.addEventListener('scroll', syncProjMenu);
+window.addEventListener('resize', syncProjMenu);
+
 // ── settings ─────────────────────────────────────────────────────────────
 //
 // Every key in `~/.tgxcode/settings.json`, with a control in front of it.
@@ -10143,6 +10610,10 @@ const SETTINGS = [
     // setting. `node` names the element renderSettings moves into place, which is
     // what lets them take their turn in this order instead of being stuck wherever
     // the markup put them.
+    {
+        title: 'Projects', section: 'projects', node: 'setGProjects',
+        after: () => renderProjectColors(),
+    },
     {
         title: 'Snippets', section: 'snippets', node: 'setGSnippets',
         after: () => renderSnipSettings(),
@@ -13829,6 +14300,9 @@ function connect() {
         paintShortcutHints();
         paintComposerHint();
         if (state.live.open) renderLive();
+        // Project colours are in that payload too, and everything wearing one has
+        // to be redrawn — including the rail, which nothing else here touches.
+        repaintProjectColors();
         // The panel that did the saving already has the answer; one that is open
         // in *this* window while another saved does not.
         if (state.settings.open && !state.settings.saving) loadSettings();
@@ -16677,9 +17151,16 @@ async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     // stops at the first prompt and waits until morning. Editing an existing
     // schedule keeps whatever it already had.
     dom.newPerm.value = src ? src.permissionMode : (schedMode ? 'dontAsk' : 'plan');
-    dom.newCwd.value = (src && src.cwd) || cwd || (state.current
-        ? (state.current.worktree ? state.current.worktree.originalCwd : state.current.cwd)
-        : '');
+    // **Only what somebody said.** A draft or schedule being edited carries its
+    // own directory, and every caller that means a particular project passes
+    // one — the suggested-task dialog, the rail's split button, the conversion
+    // from a draft. What is gone is the guessing underneath that: the open
+    // session's directory, and, below, the most recently active project. Both
+    // scoped a session for you, and neither said so, which made the commonest
+    // way to get this wrong "not noticing that it had been answered". Nothing
+    // else has to change for the box to be empty: newDialogValues() has always
+    // refused a dialog with no directory in it.
+    setNewCwd((src && src.cwd) || cwd || '');
 
     // The two fields only a schedule has.
     dom.newCronRow.hidden = !schedMode;
@@ -16731,19 +17212,22 @@ async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     cancelMkdir();
     try {
         const projects = await loadProjects();
-        dom.newPicker.replaceChildren(...projects.slice(0, 40).map(p =>
-            el('button', {
+        dom.newPicker.replaceChildren(...projects.slice(0, 40).map((p) => {
+            // A dot in the project's own colour, so what the dialog is about to
+            // turn into is readable before the press rather than after it.
+            const accent = projectColor(p.cwd);
+            return el('button', {
                 class: 'picker-row', type: 'button',
-                onclick: () => { dom.newCwd.value = p.cwd; dom.newPrompt.focus(); },
+                'data-tinted': accent ? '1' : null,
+                style: accent ? `--proj-accent: ${accent}` : null,
+                onclick: () => { setNewCwd(p.cwd); dom.newPrompt.focus(); },
             },
+                el('span', { class: 'pdot' }, ''),
                 el('span', {}, p.name),
                 el('span', { class: 'path' }, clip(p.cwd, 44)),
                 p.active ? el('span', { class: 'tag' }, `${p.active} live`) : null,
-            )));
-        // Only for a dialog that opened with nothing in the box. A caller that
-        // named a directory has already answered this, and the box was filled
-        // before the await precisely so this cannot overwrite it.
-        if (!dom.newCwd.value && projects[0]) dom.newCwd.value = projects[0].cwd;
+            );
+        }));
     } catch (err) {
         toast(`Could not list projects: ${err.message}`, 'error');
     }
@@ -16753,6 +17237,49 @@ async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     // put the caret at the end of it rather than in front of the first word.
     const written = dom.newPrompt.value;
     if (written) dom.newPrompt.setSelectionRange(written.length, written.length);
+}
+
+/**
+ * Write the working-directory box, and repaint what hangs off it.
+ *
+ * The one way in, because three things used to write that input on their own —
+ * openNew(), a row in the Recent list, and every step through the Browse tree —
+ * and the dialog's colour and the project named in its head have to follow all
+ * three. The `input` listener covers the fourth writer, which is a person typing.
+ */
+function setNewCwd(value) {
+    dom.newCwd.value = value;
+    paintNewProject();
+}
+
+/**
+ * Which project the dialog is about, and the colour it wears for it.
+ *
+ * Two separate jobs, deliberately in one function: the chip names the project
+ * whether or not it has a colour, and the colour is only ever an addition to
+ * that. A dialog with no project at all says so rather than showing nothing,
+ * because an empty box is exactly the state the head exists to make visible.
+ *
+ * `data-tinted` rather than a bare custom property is what keeps the uncoloured
+ * dialog identical to the one this app has always drawn: every tint rule in
+ * web/styles.css hangs off that attribute, so without it not one of them
+ * applies — rather than all of them applying through a colour-mix that happens
+ * to land near the blue they replace.
+ */
+function paintNewProject() {
+    const cwd = dom.newCwd.value.trim();
+    const accent = projectColor(cwd);
+    const name = cwd ? (cwd.replace(/\/+$/, '').split('/').filter(Boolean).pop() || cwd) : '';
+
+    if (accent) dom.newScrim.style.setProperty('--proj-accent', accent);
+    else dom.newScrim.style.removeProperty('--proj-accent');
+    dom.newScrim.toggleAttribute('data-tinted', !!accent);
+
+    dom.newProject.replaceChildren(
+        el('span', { class: 'pdot' }, ''),
+        el('span', { class: 'new-project-name' }, name || 'No project selected'),
+    );
+    dom.newProject.classList.toggle('none', !cwd);
 }
 
 function closeNew() {
@@ -16817,9 +17344,15 @@ async function fillNewMenu({ focusFirst = false } = {}) {
 
     const rows = projects.slice(0, NEW_MENU_MAX).map((p, i) => el('button', {
         class: 'picker-row', type: 'button', role: 'menuitem', tabindex: -1,
+        // The same dot the dialog's Recent list carries, for the same reason: this
+        // menu is the short way to scope a session, so it is the place a colour
+        // has to be readable before the press.
+        'data-tinted': projectColor(p.cwd) ? '1' : null,
+        style: projectColor(p.cwd) ? `--proj-accent: ${projectColor(p.cwd)}` : null,
         onclick: () => { showNewMenu(false); openNew({ cwd: p.cwd }); },
         onkeydown: (e) => onNewMenuKey(e, i),
     },
+        el('span', { class: 'pdot' }, ''),
         el('span', {}, clip(p.name, 26)),
         // Green stays reserved for something actually running, as everywhere
         // else; the session count is the quieter fact.
@@ -16958,7 +17491,7 @@ async function browseTo(dir, { select = true, fromKeyboard = false } = {}) {
         error: data.error || null,
         focus: null,
     });
-    if (select) dom.newCwd.value = data.path;
+    if (select) setNewCwd(data.path);
     cancelMkdir();
     renderBrowse();
     if (fromKeyboard) focusRowAt(0);
@@ -19136,6 +19669,9 @@ dom.newCwd.addEventListener('keydown', (e) => {
     browseTo(dom.newCwd.value.trim());
 });
 dom.newCwd.addEventListener('input', () => {
+    // The head and the tint follow what is typed, not only what is picked — a
+    // path pasted into the box is the same decision as a row pressed in the list.
+    paintNewProject();
     if (state.browse.tab === 'browse') dom.newBrowseNote.textContent = browseNote(state.browse);
     // The commands on screen belong to the directory that was in this box when
     // `/` was pressed. Leaving them there while the directory changes underneath
