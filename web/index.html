@@ -266,6 +266,16 @@
       </button>
     </div>
     <div id="rail" class="rail-scroll"></div>
+
+    <!-- A project card's ⋮ menu. One element for every card, outside #rail and
+         positioned from script against whichever button opened it — because
+         renderRail() replaces #rail's children whenever any session changes, and
+         a menu living inside it would be torn out from under a click. Fixed
+         rather than absolute for the same reason .slash-menu.floating is: the
+         rail scrolls, and a menu clipped by that scroller is a menu you cannot
+         read the bottom of. -->
+    <div id="proj-menu" class="new-menu proj-menu" role="menu"
+         aria-label="Project" hidden></div>
   </nav>
 
   <main class="main">
@@ -515,7 +525,7 @@
       <div id="changes-body" class="changes-body" tabindex="-1"></div>
             </div>
           </aside>
-          <nav id="turns" class="turns" aria-label="Your messages in this session"></nav>
+          <nav id="turns" class="turns" aria-label="Your messages, plans and questions in this session"></nav>
         </div>
 
         <!-- A question is answered here rather than in the transcript: the turn
@@ -530,6 +540,13 @@
               <span id="status-text">Ready</span>
               <button id="btn-stop" class="btn-stop" type="button" hidden>Stop</button>
             </div>
+
+            <!-- Messages waiting on a clock rather than on the turn in flight.
+                 Above the queue, so bottom-to-top the composer reads what you are
+                 typing, then what is attached, then what goes next, then what goes
+                 in the night — furthest out, furthest up. -->
+            <div id="later" class="later" hidden
+                 aria-label="Messages waiting to be sent at a set time"></div>
 
             <!-- Messages waiting behind the turn in flight, in the order they will
                  be sent. Reads top to bottom into the composer below it. -->
@@ -606,6 +623,31 @@
                         stroke-linecap="round"/>
                 </svg>
               </button>
+              <!-- The same message, at a time you pick. Beside Attach and before
+                   Send, because it is a way of sending rather than a thing you do
+                   to the text: the hand reaches Send first, and this is one stop
+                   short of it.
+
+                   The popover is drawn upward from the input row like the two
+                   above, and positioned from script for snip-menu's reason — it is
+                   wider than the button it hangs off, so it needs a left-edge
+                   clamp an anchored popover cannot express. -->
+              <div class="later-wrap">
+                <button id="btn-later" class="btn-later" type="button" disabled
+                        aria-haspopup="listbox" aria-expanded="false"
+                        aria-controls="later-menu"
+                        title="Send this at a set time" aria-label="Send later">
+                  <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+                    <circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor"
+                            stroke-width="1.4"/>
+                    <path d="M8 4.6V8.2l2.4 1.6" fill="none" stroke="currentColor"
+                          stroke-width="1.4" stroke-linecap="round"
+                          stroke-linejoin="round"/>
+                  </svg>
+                </button>
+                <div id="later-menu" class="snip-menu later-menu" role="listbox" hidden
+                     aria-label="Send later"></div>
+              </div>
               <button id="btn-send" class="btn-send" type="button" disabled>Send</button>
               <!-- Canned messages. Each one sends a written instruction like any
                    other message, so the transcript records what was asked for
@@ -897,6 +939,23 @@
                    order SETTINGS lists them, so they are not rebuilt and not
                    pinned to the end either. -->
 
+              <!-- A colour per project, worn by the rail, the boards and the
+                   dialog that scopes a new session. Written out here rather than
+                   built by renderSettings for the reason above — its controls are
+                   wired once at load — and one group rather than a row per key,
+                   because the setting is a map and the list it draws comes from
+                   the bridge's projects rather than from the SETTINGS table. -->
+              <section id="set-g-projects" class="settings-group">
+                <h2 class="settings-group-title">Projects</h2>
+                <p class="settings-group-note">A colour per project, so a session
+                   scoped to the wrong checkout is something you see rather than
+                   something you read. <strong>Always your own settings file</strong>
+                   — whatever the picker above says. The map names other projects’
+                   paths, so a repository setting one would be a repository
+                   colouring its neighbours.</p>
+                <div id="pcolor-list"></div>
+              </section>
+
               <!-- Messages you send often, and the buttons that send them.
                    Written out here rather than built by renderSettings for the
                    reason above — its controls are wired once at load — and not
@@ -1040,8 +1099,17 @@
 <!-- New session -->
 <div id="new-scrim" class="scrim" hidden>
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="new-title">
+    <!-- The head says which project before it says what you are doing with it.
+         Two lines in a column, so the chip reads as the heading's subject rather
+         than as a control beside it; .modal-close keeps its margin-left:auto and
+         so stays on the right of both. The chip is the part that works when a
+         project has no colour — it names it either way, and says plainly when
+         nothing is picked. -->
     <div class="modal-head">
-      <span id="new-title">Start a session</span>
+      <span class="modal-head-text">
+        <span id="new-project" class="new-project"></span>
+        <span id="new-title">Start a session</span>
+      </span>
       <button class="modal-close" data-close type="button" aria-label="Close">✕</button>
     </div>
     <div class="modal-body">
@@ -1368,6 +1436,55 @@
   </div>
 </div>
 
+<!-- The colour a project wears.
+
+     Its own dialog rather than a swatch in the rail, because the same picker is
+     reached from two places — the ⋮ on a project card and the Projects group in
+     Settings — and a popover that had to be two shapes would be two popovers.
+
+     Before #snip-fill-scrim in the document, which puts it *under* that one in
+     the stack: every .scrim shares a z-index, so DOM order is the order they
+     pile up in, and this dialog never opens over anything but a panel. -->
+<div id="pcolor-scrim" class="scrim" hidden>
+  <div class="modal pcolor" role="dialog" aria-modal="true" aria-labelledby="pcolor-title">
+    <div class="modal-head">
+      <span id="pcolor-title">Project colour</span>
+      <button class="modal-close" data-close-pcolor type="button" aria-label="Close">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <div id="pcolor-name" class="pcolor-name"></div>
+        <div id="pcolor-path" class="pcolor-path"></div>
+      </div>
+      <!-- The six palette hues, and then anything you like.
+
+           Presets first because they are the answer nearly every time: they are
+           the colours web/styles.css already uses against these surfaces, so a
+           row of them is a row of choices that are all going to work. The free
+           picker is underneath for the case the six do not cover — a group's
+           accent made the same call, and bridge/snippets.js:157 says why: the
+           colour is the one thing about this somebody picks for pleasure. -->
+      <div class="field">
+        <label id="pcolor-swatch-label">Colour</label>
+        <div id="pcolor-swatches" class="pcolor-swatches"
+             role="radiogroup" aria-labelledby="pcolor-swatch-label"></div>
+        <div class="pcolor-custom">
+          <label for="pcolor-input">Or pick one</label>
+          <input id="pcolor-input" type="color" value="#a8c7fa"
+                 aria-label="A colour of your own">
+        </div>
+        <div class="note">Saved as you pick — the rail behind this recolours on
+          the press. Colours live in your own settings file, never in a
+          repository’s.</div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="spacer"></span>
+      <button id="pcolor-done" class="btn primary" type="button">Done</button>
+    </div>
+  </div>
+</div>
+
 <!-- What a snippet still needs before it is a message.
 
      Its own dialog rather than fields inside the popover: the popover is a list
@@ -1550,6 +1667,39 @@
       <button id="diff-copy" class="btn small" type="button">Copy diff</button>
     </div>
     <div id="diff-body" class="diff-body d2h-dark-color-scheme" tabindex="0"></div>
+  </div>
+</div>
+
+<!-- A plan or a question, replayed the way it looked when it was asked.
+
+     One dialog for both, because from the rail's point of view they are the same
+     thing — a moment the conversation stopped and waited for you — and two
+     dialogs would be two places to keep the outcome wording honest.
+
+     A dialog rather than something in the transcript: the live surfaces this
+     replays (#plan-pane, #ask-dock) take the conversation over, and a plan read
+     through a card-sized porthole is the thing #plan-pane exists to prevent.
+     The width is set from the number of questions — see .review-modal in the CSS.
+
+     Read-only throughout. The options are divs rather than labels with inputs,
+     because a radio you cannot change is a control that lies about being one. -->
+<div id="review-scrim" class="scrim" hidden>
+  <div id="review-modal" class="modal review-modal" role="dialog" aria-modal="true"
+       aria-labelledby="review-title" tabindex="-1">
+    <div class="modal-head">
+      <span id="review-kind" class="perm-tool">Plan</span>
+      <span id="review-title" class="perm-title"></span>
+      <span class="spacer"></span>
+      <span id="review-when" class="review-when"></span>
+      <button class="modal-close" data-close-review type="button" aria-label="Close">✕</button>
+    </div>
+    <div id="review-outcome" class="review-outcome"></div>
+    <div id="review-body" class="modal-body" tabindex="0"></div>
+    <div class="modal-foot">
+      <span class="spacer"></span>
+      <button id="review-jump" class="btn small" type="button">Show it in the transcript</button>
+      <button class="btn" data-close-review type="button">Close</button>
+    </div>
   </div>
 </div>
 

@@ -129,6 +129,7 @@ const PREFS_FALLBACK = {
     version: 1,
     transcript: { groupToolCalls: true, groupMinCalls: 3, groupIncludesThinking: true },
     live: { compact: false, hideElsewhere: false },
+    projects: { colors: {} },
     quota: { beacon: false, beaconDir: null, beaconEveryMinutes: 20 },
     spinner: { randomize: true, groups: [], weights: {}, rerollMs: 8000 },
     keyboard: { contextualTerminalCopy: false, composerSend: 'enter', bindings: {} },
@@ -173,6 +174,43 @@ keys.apply(BOOT_PREFS.keyboard);
 
 /** The transcript settings in force — the open session's, or the user's own. */
 const grouping = () => (state.prefs || BOOT_PREFS).transcript;
+
+/**
+ * A stored hex accent, re-checked here because it is about to become a CSS rule.
+ *
+ * The bridge validates both of the places these come from — `isAccent` in
+ * bridge/snippets.js, which bridge/prefs.js borrows for project colours — and
+ * this is the second gate rather than the only one. It is cheap, and the cost of
+ * being wrong is a value that closes a declaration and opens whatever follows.
+ */
+const hexAccent = (v) => (/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(v || '') ? v : '');
+
+/**
+ * The colour somebody gave the project a directory belongs to, or ''.
+ *
+ * **Prefix at a path boundary, longest first.** The map is keyed by project
+ * root, and what gets looked up is whatever is in the Start-a-session box — a
+ * worktree under `<proj>/.claude/worktrees/`, a subdirectory, or a path that is
+ * not a project at all. Matching on the prefix is what lets a worktree wear its
+ * checkout's colour without the page needing `projectRootOf`, and it is the rule
+ * bridge/snippets.js already argues for in matchesCwd(): the boundary is spelled
+ * out so `/home/you/proj` cannot claim `/home/you/project`.
+ *
+ * Longest wins, so a worktree given a colour of its own keeps it.
+ */
+function projectColor(dir) {
+    const here = (dir || '').trim().replace(/\/+$/, '');
+    if (!here.startsWith('/')) return '';
+    let best = '';
+    let deepest = -1;
+    for (const [root, color] of Object.entries(BOOT_PREFS.projects.colors || {})) {
+        if (here !== root && !here.startsWith(`${root}/`)) continue;
+        if (root.length <= deepest) continue;
+        deepest = root.length;
+        best = hexAccent(color);
+    }
+    return best;
+}
 
 /**
  * The board's settings — the user's own, and deliberately never `state.prefs`.
@@ -234,7 +272,14 @@ const state = {
     run: [],
     agentRun: [],
     turns: [],              // the user messages, in order, for the turn rail
+    // The tick element per user turn, parallel to `turns`. markActiveTurn used
+    // to index dom.turns.children, which stopped being the same list the moment
+    // plans and questions joined the rail.
+    turnTicks: [],
     activeTurn: -1,
+    // The plan or question the review dialog is showing, by event id. An id and
+    // not the event: patchTool rebuilds the object when a result lands.
+    review: { evId: null },
     agents: [],             // subagent records for this session, from the bridge
     agent: null,            // the subagent being viewed, if any
     agentOffset: 0,
@@ -312,6 +357,12 @@ const state = {
     queue: [],              // the current session's waiting messages, from the bridge
     queueDrag: null,        // id of the chip being dragged
     queueOpen: new Set(),   // ids of chips expanded to their full text
+    // Messages waiting on a clock — every session's, not just this one's, because
+    // that is the shape the `later-changed` event carries and the rail wants the
+    // whole list anyway. Filtered to the open session when the chips are drawn.
+    later: [],
+    laterOpen: new Set(),   // ids of chips expanded to their full text
+    laterPick: false,       // is the popover showing the pick-a-time fields?
     // Slash commands the composer can complete, per working directory — the
     // bridge keys them that way because that is what decides them. Held here so
     // that pressing `/` draws from memory rather than waiting on a fetch; the
@@ -492,6 +543,10 @@ const state = {
     // `editing` is the id the dialog is currently editing, or null when it is
     // about to make a new one. It is what tells Save which verb to use.
     drafts: { open: false, rows: [], at: 0, loading: false, error: null, editing: null },
+    // The project card whose ⋮ menu is open, or null. Held here rather than
+    // in the card, because renderRail() rebuilds every card and the menu has to
+    // survive that — see syncProjMenu().
+    projMenu: null,
     // Canned messages, and the groups they are drawn in. Drafts' terms for the
     // push — the whole list, unconditional, held as sent — with one difference
     // that matters: **this list is read while its panel is shut.** The pinned
@@ -554,6 +609,19 @@ const state = {
         draft: null, dirty: false, stale: null, preview: false, caret: 0,
         expanded: false,
     },
+    // And the commands a project declares, which are two files again but ours
+    // rather than Claude Code's — see the Project commands section below. Its
+    // own `scope` for the same reason the two above have one: the page's picker
+    // means "which of *our* three settings files", and these are a different
+    // pair. `draft` is an array of the selected file's own entries, and unlike
+    // everywhere else on this page the form is a draft too, not just the JSON
+    // box: a command is a record whose fields have to agree, so there is no
+    // single field whose change is a document worth writing.
+    cmdCfg: {
+        scope: 'project', tab: 'form', data: null, loading: false, error: null,
+        saving: false, draft: null, dirty: false, raw: null, rawDirty: false,
+        jsonError: null, stale: null, problems: null,
+    },
     // Sessions blocked on an answer, kept whether or not the board is open, so
     // the badge on a shut board still says how many people are waiting.
     waiting: new Set(),
@@ -589,6 +657,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'slash-menu', 'mention-menu', 'new-slash-menu', 'new-mention-menu',
     'new-attach', 'new-attach-input', 'new-attach-btn', 'new-attach-row',
     'queue', 'queue-list', 'queue-count', 'queue-clear',
+    'later', 'btn-later', 'later-menu',
     'model', 'perm', 'btn-new', 'btn-new-menu', 'new-menu', 'hide-done', 'hide-done-count',
     'db-status', 'db-label', 'toasts',
     'opt-desktop', 'opt-sound', 'notify-note', 'notify-try',
@@ -623,7 +692,9 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'set-file', 'set-problems', 'set-body', 'set-shell', 'set-toc', 'composer-hint',
     'memo-scrim', 'memo-title', 'memo-big', 'memo-note', 'memo-count',
     'memo-close', 'memo-save',
-    'set-g-notify', 'set-g-pair',
+    'set-g-notify', 'set-g-pair', 'set-g-projects', 'pcolor-list',
+    'proj-menu', 'pcolor-scrim', 'pcolor-name', 'pcolor-path', 'pcolor-swatches',
+    'pcolor-input', 'pcolor-done', 'new-project',
     'new-cron', 'new-cron-row', 'new-cron-note', 'new-gate-ref', 'new-gate-row',
     'new-gate-kind', 'new-gate-note', 'new-gate-ref-row', 'new-pr-row',
     'new-pr-drafts', 'new-pr-post', 'new-sched-save', 'new-sched',
@@ -642,6 +713,8 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'diff-scrim', 'diff-title', 'diff-stat', 'diff-unified', 'diff-split',
     'diff-words', 'diff-wrap', 'diff-source', 'diff-note', 'diff-jump',
     'diff-reload', 'diff-copy', 'diff-body', 'ctx-menu',
+    'review-scrim', 'review-modal', 'review-kind', 'review-title', 'review-when',
+    'review-outcome', 'review-body', 'review-jump',
     'pair-url', 'pair-host', 'pair-hosts', 'pair-note', 'pair-copy',
     'restart-scrim', 'restart-lede', 'restart-problems',
     'restart-fix', 'restart-go']) {
@@ -751,8 +824,11 @@ function toast(text, kind = 'info', opts = {}) {
 }
 
 /**
- * Is one of the six modal dialogs up? They are `hidden`-toggled divs rather
+ * Is one of the modal dialogs up? They are `hidden`-toggled divs rather
  * than a native `<dialog>`, so asking the DOM is the only way.
+ *
+ * Deliberately not a count — this said "six" through two additions and was
+ * wrong by the time anyone read it.
  *
  * **A modal is closed by its own ✕ or Cancel and by nothing else.** It used to
  * go on Escape and on a click landing on the scrim, and both were losing work
@@ -789,7 +865,11 @@ function modalUp() {
         // dialog the *scrim* half of that rule was written for — a diff is the
         // one thing here people drag-select, and a drag released past the edge
         // fires a click whose target is the scrim.
-        || !dom.diffScrim.hidden;
+        || !dom.diffScrim.hidden
+        // The plan/question review, which is the diff viewer's case exactly: a
+        // read-only replay holding no work, so the paragraph above is not what
+        // puts it here either. The sentence after it is.
+        || !dom.reviewScrim.hidden;
 }
 
 // ── drafts ───────────────────────────────────────────────────────────────
@@ -1053,6 +1133,11 @@ const ICON = {
     // editor, where a row can be dragged as well as walked with the arrow buttons.
     grip: '<path d="M9 6.5h.01M15 6.5h.01M9 12h.01M15 12h.01M9 17.5h.01M15 17.5h.01" '
         + 'stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>',
+    // Three dots stacked, which is what an overflow menu is everywhere else and
+    // so needs no label. `grip` above is the six-dot drag handle; they are
+    // different things and are drawn differently on purpose.
+    dots: '<path d="M12 6h.01M12 12h.01M12 18h.01" stroke="currentColor" '
+        + 'stroke-width="2.6" stroke-linecap="round"/>',
 };
 
 // Which glyph says each PR status. `unknown` is gh being unreachable rather than a
@@ -1123,12 +1208,25 @@ function renderRail() {
     const groups = new Map();
     for (const s of rest) {
         const key = groupKeyOf(s);
-        if (!groups.has(key)) groups.set(key, { label: s.projectName || 'unknown', list: [] });
+        // `cwd` is the group's *directory*, which the key is deliberately not:
+        // the key is the project's name, so the collapse state written against it
+        // survives a checkout being moved. A colour is keyed on the path instead
+        // — see projectColor() — so the card has to carry one, and it takes it
+        // from the first session filed under the name. Two checkouts sharing a
+        // basename therefore share a colour, which is the same collision that
+        // already puts them in one card.
+        if (!groups.has(key)) {
+            groups.set(key, {
+                label: s.projectName || 'unknown',
+                cwd: s.projectCwd || s.cwd || '',
+                list: [],
+            });
+        }
         groups.get(key).list.push(s);
     }
     const byGroupRank = [...groups].sort(
         (a, b) => (state.groupOrder.get(a[0]) ?? 0) - (state.groupOrder.get(b[0]) ?? 0));
-    for (const [key, { label, list }] of byGroupRank) {
+    for (const [key, { label, cwd, list }] of byGroupRank) {
         // Sessions a schedule started fold into their own subsection inside the
         // project card. They are the same work in the same directory — so a card
         // of their own at the foot of the rail, the way test sessions get one,
@@ -1144,6 +1242,10 @@ function renderRail() {
         const sched = shown.filter(s => s.schedule);
         const plain = shown.filter(s => !s.schedule);
         dom.rail.append(groupCard(key, label, plain, {
+            // What makes this card a *project* rather than Pinned or Archived:
+            // the ⋮ menu and the colour both hang off it, and neither belongs on
+            // a card that is not about a directory.
+            project: { key, name: label, cwd },
             // The project heading still counts what it contains, subsection
             // included: a card saying 3 above a shut section holding 11 is
             // wrong about the project, which is what the heading names. Hidden
@@ -1168,6 +1270,12 @@ function renderRail() {
             `${gone.size === 1 ? 'One session is' : `All ${gone.size} sessions are`} finished, `
             + 'and hidden. Press Hide finished to see them.'));
     }
+
+    // The ⋮ menu is fixed and lives outside this element, so a rebuild leaves it
+    // pointing at a button that no longer exists. Re-anchored rather than closed,
+    // because this runs whenever any session changes and a menu that shut itself
+    // several times a minute would be unusable.
+    syncProjMenu();
 }
 
 /**
@@ -1207,9 +1315,15 @@ function groupCard(key, label, list, opts = {}) {
     const counted = opts.all || list;
     const live = counted.filter(s => s.active || (s.runner && s.runner.state === 'busy')).length;
     const bodyId = `group-${key.replace(/[^\w-]/g, '_')}`;
+    // Only a project card has a directory, so only a project card can have a
+    // colour or a menu. Pinned, Archived, Test and the nested Scheduled
+    // subsection get neither — there is nothing for either to be about.
+    const accent = opts.project ? projectColor(opts.project.cwd) : '';
 
     return el('section', {
         class: 'rail-group' + (opts.nested ? ' nested' : ''), 'data-key': key,
+        'data-tinted': accent ? '1' : null,
+        style: accent ? `--proj-accent: ${accent}` : null,
     },
         el('button', {
             class: 'group-head',
@@ -1223,6 +1337,22 @@ function groupCard(key, label, list, opts = {}) {
             live ? el('span', { class: 'live' }, `${live} live`) : null,
             el('span', { class: 'count' }, String(counted.length)),
         ),
+        // A sibling of the head rather than a child of it, because the head is
+        // itself a <button> and a button inside a button is not a thing the
+        // browser will build. It is positioned over the card's top-right corner
+        // instead, with the head padded to keep the count out from under it.
+        opts.project
+            ? el('button', {
+                class: 'group-menu-btn', type: 'button',
+                'aria-haspopup': 'menu', 'aria-expanded': 'false',
+                'aria-label': `More for ${label}`, title: `More for ${label}`,
+                onclick: (e) => {
+                    e.stopPropagation();
+                    if (state.projMenu && state.projMenu.key === key) closeProjMenu();
+                    else showProjMenu(opts.project, e.currentTarget);
+                },
+            }, icon('dots', 15))
+            : null,
         open
             ? el('div', { class: 'group-body', id: bodyId }, opts.lead || null, list.map(strip))
             : null,
@@ -1312,6 +1442,7 @@ function strip(s) {
                 // the activity because the activity is the one part of the row
                 // that may be cut short — it is the least specific thing on it.
                 queued ? queuedBadge(queued) : null,
+                dueBadge(s.sessionId),
                 activityBits(running ? s.runner : null),
             ),
         ),
@@ -1517,6 +1648,31 @@ function queuedBadge(queued) {
     }, `+${queued} queued`);
 }
 
+/**
+ * Messages written for this session and waiting on a clock.
+ *
+ * Its own badge rather than folded into the one above, because the two facts do
+ * not mean the same thing to somebody scanning the rail: a queued message goes the
+ * moment the turn ends, and this one goes at the hour it says. Showing the hour is
+ * the whole point — "something arrives here at 02:00" should be answerable without
+ * opening the session, which is the one thing nobody is going to do at 02:00.
+ */
+function dueBadge(sessionId) {
+    let pending = 0;
+    let nextAt = 0;
+    for (const m of state.later) {
+        if (m.sessionId !== sessionId || m.state !== 'pending') continue;
+        pending++;
+        if (!nextAt || m.at < nextAt) nextAt = m.at;
+    }
+    if (!pending) return null;
+    return el('span', {
+        class: 'due',
+        title: `${pending} message${pending === 1 ? '' : 's'} scheduled; the next at `
+            + new Date(nextAt).toLocaleString(),
+    }, `\u{1F550} ${hhmm(nextAt)}${pending > 1 ? ` +${pending - 1}` : ''}`);
+}
+
 /** Update one row's queue count in place, rather than rebuilding the rail. */
 function patchQueuedBadge(stripEl, queued) {
     const meta = stripEl.querySelector('.strip-meta');
@@ -1645,6 +1801,7 @@ function clearCurrent() {
     state.run.length = 0;
     state.prefs = null;     // the next session's project may answer differently
     state.turns = [];
+    state.turnTicks = [];
     state.activeTurn = -1;
     state.agents = [];
     state.ask = null;
@@ -1792,6 +1949,7 @@ function beginOpen(summary, { keepDash = false } = {}) {
     state.run.length = 0;
     state.prefs = null;     // the next session's project may answer differently
     state.turns = [];
+    state.turnTicks = [];
     state.activeTurn = -1;
     state.pinned = true;
     state.agents = [];  // the previous session's agents are not this one's
@@ -1802,6 +1960,7 @@ function beginOpen(summary, { keepDash = false } = {}) {
     state.tasks.clear();        // and so do the offers themselves
     state.taskOpen.clear();
     closeTaskDialog();          // it was showing a task belonging to the old one
+    closeReview();              // and so was the plan or question review
     // Empties the aside, but keeps its place in the row until loadTasks answers
     // for the new conversation — see renderChecklist for why.
     state.tasksPending = paneUp(dom.tasks);
@@ -1814,6 +1973,12 @@ function beginOpen(summary, { keepDash = false } = {}) {
     renderChanges();            // which leaves the drawer saying it is looking
     resetChecklist();           // as was the task list — the push will refill it
     renderChecklist();
+    // The whole list is already here, so this only has to be re-filtered — but it
+    // does have to be, or the chips from the session you just left stay on the
+    // composer of the one you just opened.
+    state.laterOpen.clear();
+    renderLater();
+    closeLater();
     // A row drawn for one session is not evidence about another. The log is
     // replaced below in any case; this is what disarms the timer holding it.
     clearPendingSend();
@@ -2120,6 +2285,7 @@ function appendEvents(events, view = SESSION_VIEW, { live = false } = {}) {
         frag = document.createDocumentFragment();
     };
     let newTurn = false;
+    let newMark = false;
     let sawAgent = false;
     let newTasks = false;
     for (const ev of events) {
@@ -2158,6 +2324,8 @@ function appendEvents(events, view = SESSION_VIEW, { live = false } = {}) {
         if (ev.kind === 'tool') {
             view.tools.set(ev.id, { ev, node });
             if (view.plans && ev.name === 'ExitPlanMode') view.plans.add(ev.id);
+            // A plan or a question is a rail marker as much as a message is.
+            if (REVIEWABLE[ev.name]) newMark = true;
             if (ev.name === 'Task' || ev.name === 'Agent') sawAgent = true;
         }
         if (ev.kind === 'user') {
@@ -2189,7 +2357,10 @@ function appendEvents(events, view = SESSION_VIEW, { live = false } = {}) {
     if (!isBusy()) closeRun(view);
     if (newTasks) { renderTasks(); if (live) loadTasksSoon(); }
     if (!view.isAgent) {
-        if (newTurn) renderTurns();
+        // Waiting for the next message to redraw would leave a plan's marker
+        // missing for the whole of the work it authorised, which is the longest
+        // gap in the session.
+        if (newTurn || newMark) renderTurns();
         // A Task call that has only just appeared belongs on the strip now, not
         // after the next poll.
         if (sawAgent) { renderAgents(); loadAgents(); }
@@ -2234,6 +2405,22 @@ function patchTool(patch, view = SESSION_VIEW) {
     view.nodes.set(entry.ev.id, entry);
     // A result landing on a Task call is a subagent finishing: the strip says so.
     if (!view.isAgent && entry.ev.agent) renderAgents();
+    // A plan approved or a question answered changes what its tick says, and the
+    // tick is the only place that outcome shows without opening anything.
+    //
+    // It is also the one thing here that *must* redraw rather than merely
+    // wanting to. The swap above replaces `entry.node`, and the rail holds its
+    // own list of those nodes — so without this the marker would point at a node
+    // that is no longer in the document, markActiveTurn would measure it, and
+    // "show it in the transcript" would scroll nowhere. Rebuilding reads the
+    // fresh node back out of `view.nodes`, which is why it happens after the
+    // `set` above and not before. Gated on the name because the rail is rebuilt
+    // whole and a busy turn lands a tool result several times a second.
+    if (!view.isAgent && REVIEWABLE[entry.ev.name]) {
+        renderTurns();
+        // And if that ask is the one on screen, it is now out of date too.
+        if (state.review.evId === entry.ev.id) paintReview();
+    }
     markFindDirty();
 }
 
@@ -3584,14 +3771,14 @@ function jumpFromDiff() {
 // with #new-menu's rows and key handling inside it.
 
 /**
- * The rows that open this menu themselves.
+ * The rows that open this menu themselves — a file row, a rail marker, a snippet.
  *
  * The document-level `contextmenu` listener runs on the bubble, after the row's own
  * handler has already opened the menu, so a selector missing from here is a menu that
  * opens and shuts on the same click. Kept in one place because the listener and the
- * handlers are 15,000 lines apart and the failure looks like the handler not firing.
+ * handlers are 18,000 lines apart and the failure looks like the handler not firing.
  */
-const CTX_OWNERS = '.ch-row, .snip-row, .btn-pin-snip';
+const CTX_OWNERS = '.ch-row, .turn-tick, .snip-row, .btn-pin-snip';
 
 /**
  * Open a menu at the pointer.
@@ -5030,9 +5217,14 @@ function toolBody(ev) {
     } else if (ev.name === 'ExitPlanMode') {
         // The card is long gone by the time anyone reads this back; the plan
         // that was approved is the whole content of the call.
-        out.push(section('Plan', el('div', { class: 'prose', html: renderMarkdown(i.plan || '') })));
+        //
+        // `r.plan` in preference to `i.plan`: the input is the plan as put
+        // forward and the result is the plan as agreed to, and they differ when
+        // it was edited or approved with a note. The note exists nowhere else.
+        out.push(section('Plan',
+            el('div', { class: 'prose', html: renderMarkdown(r.plan || i.plan || '') })));
     } else if (ev.name === 'AskUserQuestion') {
-        out.push(section('Questions', questionsView(i.questions || [])));
+        out.push(section('Questions', questionsView(i.questions || [], r.answers)));
     } else if (ev.name === 'SendMessage') {
         // One half of a conversation between two sessions. Rendered as prose
         // rather than as a key-value dump because it is a message somebody
@@ -5229,24 +5421,278 @@ function todoView(items) {
 }
 
 /**
- * What was asked, read back later.
+ * Which options an answer picked, and what was typed instead.
  *
- * The answer is not here — it is in the tool result, which says what was picked
- * — so this stays a record of the question and the choices it offered.
+ * `result.answers` is one string per question, and it carries three different
+ * things with nothing to tell them apart: a single choice is the option's label
+ * verbatim, a multi-select is the chosen labels joined `", "`, and an answer
+ * typed into the tool's "Other" box is a sentence matching no label at all.
+ * Measured over 414 real answers on this machine: 83% one label, 4% several
+ * joined, 13% free text, 1% a label with typed words after it. All four are
+ * common enough to get right.
+ *
+ * **It is not a split.** 187 of those questions had an option label containing
+ * a comma of its own — `"Bar, count, cycling (Recommended)"` — so splitting on
+ * `", "` shreds the label and marks nothing. This consumes whole labels off the
+ * front instead, for as long as the front keeps being one.
+ *
+ * Longest first, and that is not a tidiness preference: one label is regularly
+ * a prefix of another ("Approve" / "Approve with feedback"), and taking the
+ * short one first leaves a fragment that then matches nothing and reads back as
+ * free text. The separator is a pattern rather than the literal `", "` the dock
+ * writes because a transcript on this machine joined with `","` and no space.
+ *
+ * **One case cannot be got right, because the data does not hold it.** Ticking
+ * an option and then adding a condition in the "Other" box produces the same
+ * string, byte for byte, as typing that whole sentence into "Other" alone — the
+ * dock joins the picks and pushes the typed answer onto the end, and nothing
+ * records which came from where. So `"Hard delete, but make them confirm"` is
+ * read as the option plus a note. That is the reading the real answers support:
+ * every mixed case on this machine is somebody agreeing with an option and
+ * qualifying it. Treating the whole thing as free text instead would be wrong
+ * about all of them to avoid being wrong about a sentence that happens to open
+ * with a label and a comma, which is the rarer mistake and the cheaper one —
+ * the typed words are shown either way, so what is at stake is one mark.
+ *
+ * Whatever is left over comes back verbatim rather than reassembled, so a typed
+ * answer reads exactly as it was typed. `docs/api.md` documents this rule, so
+ * the Android client derives it from one written contract rather than from a
+ * second implementation of this function.
  */
-function questionsView(questions) {
+function readAnswer(answer, options) {
+    const said = String(answer == null ? '' : answer).trim();
+    const labels = (options || []).map(o => (o && o.label) || '').filter(Boolean);
+    const chosen = new Set();
+    if (!said) return { chosen, said: '' };
+
+    // The common case, and the only one immune to every hazard above.
+    if (labels.includes(said)) { chosen.add(said); return { chosen, said: '' }; }
+
+    // Only from the front, and only while the front keeps being a label. That
+    // is how the dock builds the string — `picks.join(', ')` and then the typed
+    // answer pushed on the end — so labels are a prefix and free text is the
+    // tail. Searching the whole string instead would match a label quoted in the
+    // middle of a sentence ("Because of X, Wide modal, is wrong") and mark an
+    // option the person was arguing against.
+    const byLength = [...labels].sort((a, b) => b.length - a.length);
+    let rest = said;
+    while (rest) {
+        const hit = byLength.find(l => rest.startsWith(l)
+            && (rest.length === l.length || /^\s*,/.test(rest.slice(l.length))));
+        if (!hit) break;
+        chosen.add(hit);
+        rest = rest.slice(hit.length).replace(/^\s*,\s*/, '');
+    }
+    return { chosen, said: rest.trim() };
+}
+
+/**
+ * What was asked, read back later — and what was answered.
+ *
+ * The answer used to be missing here, because the bridge dropped it: every
+ * option was drawn with the same `○` and the one fact worth reading back was
+ * gone. `result.answers` carries it now, so this marks the option that was
+ * picked and prints anything typed instead.
+ *
+ * The same two marks the review dialog uses, off the same `readAnswer`, for the
+ * reason `todoView` above gives about its own list: the three places a question
+ * is now drawn cannot be allowed to disagree about what was chosen.
+ */
+function questionsView(questions, answers) {
     const list = el('div', { class: 'qview' });
     for (const q of questions) {
+        const { chosen, said } = readAnswer(answers && answers[q.question], q.options);
         list.append(el('div', { class: 'qview-q' },
             q.header ? el('span', { class: 'perm-q-chip' }, q.header) : null,
             el('span', {}, q.question || '')));
         for (const opt of q.options || []) {
-            list.append(el('div', { class: 'qview-o' },
-                el('span', { class: 'qview-mark' }, '○'),
+            const picked = chosen.has(opt.label || '');
+            list.append(el('div', { class: 'qview-o', 'data-chosen': picked ? '1' : null },
+                el('span', { class: 'qview-mark' }, picked ? '●' : '○'),
                 el('span', {}, opt.label || '')));
+        }
+        // Typed rather than picked. Shown as its own row rather than folded in
+        // with the options, because it is not one of them.
+        if (said) {
+            list.append(el('div', { class: 'qview-o qview-said', 'data-chosen': '1' },
+                el('span', { class: 'qview-mark' }, '●'), el('span', {}, said)));
         }
     }
     return list;
+}
+
+// ── reviewing a plan or a question ───────────────────────────────────────
+//
+// Both get a whole surface while they are live — #plan-pane lays a plan over
+// the transcript, #ask-dock walks you through the questions — and then they are
+// gone, collapsed into an ordinary tool row somewhere in the log. These are the
+// two moments in a session where *you* decided something, and they were the
+// hardest things in it to find again.
+//
+// So the turn rail carries a marker for each (see renderTurns), and this is
+// what a marker opens: the same thing, replayed, read-only.
+
+/** What became of an ask, in the few words a tick label and a popover have room for. */
+function markOutcome(ev) {
+    if (!ev.result) return 'still waiting';
+    const stopped = /^Stopped from Claude Sessions/.test(ev.result.text || '');
+    if (ev.name === 'ExitPlanMode') {
+        if (ev.status === 'error') return stopped ? 'stopped' : 'sent back';
+        return ev.result.planWasEdited ? 'approved with a note' : 'approved';
+    }
+    if (ev.status === 'error') return stopped ? 'stopped' : 'dismissed';
+    return 'answered';
+}
+
+/**
+ * Open the review for a plan or a question.
+ *
+ * Keyed by the event id rather than by the entry, because `patchTool` rebuilds
+ * the block and swaps `entry.node` out from under anything holding one — so a
+ * dialog opened on a plan that is still waiting, and still up when the answer
+ * lands, would otherwise repaint from a stale object and jump to a detached
+ * node. The same late lookup `jumpToFile` does, for the same reason.
+ */
+function openReview(evId) {
+    if (!state.nodes.has(evId)) return;
+    state.review.evId = evId;
+    closeContextMenu({ focus: false });
+    hideTurnPop();
+    paintReview();
+    dom.reviewScrim.hidden = false;
+    // The dialog itself, not its body: focus has to come inside the scrim or the
+    // keyboard is still out in the rail behind it, but a body that fills the
+    // dialog wears the focus ring as a border around everything, which reads as
+    // decoration rather than as focus. The body stays tabbable, so one Tab gets
+    // the arrow keys scrolling a long plan.
+    dom.reviewModal.focus({ preventScroll: true });
+}
+
+function closeReview() {
+    if (dom.reviewScrim.hidden) return;
+    state.review.evId = null;
+    dom.reviewScrim.hidden = true;
+    // A plan is tens of kilobytes of rendered markdown and a four-question
+    // review is a few hundred nodes of options and previews. Same reason
+    // closeDiff empties its body rather than leaving it attached to a hidden
+    // dialog nobody is looking at.
+    dom.reviewBody.replaceChildren();
+    dom.reviewOutcome.replaceChildren();
+}
+
+/** Fill the dialog from whatever the event says now. Safe to call again. */
+function paintReview() {
+    const entry = state.nodes.get(state.review.evId);
+    if (!entry) return closeReview();
+    const ev = entry.ev;
+    const plan = ev.name === 'ExitPlanMode';
+
+    dom.reviewKind.textContent = plan ? 'Plan' : 'Question';
+    dom.reviewTitle.textContent = markOutcome(ev);
+    dom.reviewWhen.textContent = clockOf(ev.resultTs || ev.ts);
+    dom.reviewModal.dataset.kind = plan ? 'plan' : 'question';
+    dom.reviewOutcome.replaceChildren();
+    dom.reviewBody.replaceChildren(plan ? reviewPlan(ev) : reviewQuestions(ev));
+}
+
+/**
+ * The plan, as markdown.
+ *
+ * `result.plan` in preference to `input.plan`: the input is what was put
+ * forward and the result is what was agreed to. Approving with a note appends a
+ * `## Note from the user` section to the plan the tool receives, so that note
+ * exists in the result and nowhere else — and showing the proposal instead
+ * would quietly drop the one part of the plan you wrote yourself.
+ */
+function reviewPlan(ev) {
+    const r = ev.result || {};
+    const text = r.plan || ev.input.plan || '';
+
+    if (ev.status === 'error') {
+        const stopped = /^Stopped from Claude Sessions/.test(r.text || '');
+        dom.reviewOutcome.replaceChildren(stopped
+            // Nobody turned this down — the turn ended while it was still up.
+            // Printing the canned sentence as though it were feedback would put
+            // words in the user's mouth.
+            ? el('span', { class: 'review-said' }, 'Stopped before it was answered.')
+            : el('div', {},
+                el('span', { class: 'review-said-head' }, 'Kept planning — what you said'),
+                el('div', { class: 'review-said' }, r.text || '')));
+    } else if (r.planWasEdited) {
+        dom.reviewOutcome.replaceChildren(el('span', { class: 'review-said' },
+            'Approved with a note, which is at the foot of the plan.'));
+    }
+
+    return el('div', { class: 'plan-rev prose', html: renderMarkdown(text) });
+}
+
+/**
+ * Every question at once, side by side.
+ *
+ * The live dock shows one at a time and moves you on as you answer, which is
+ * right when you are answering and wrong when you are reading back: what you
+ * want then is the shape of the whole decision, and that means seeing the
+ * questions together.
+ *
+ * The columns reuse the dock's own classes — .perm-q, .perm-opt and the rest —
+ * so this looks like the thing it is replaying rather than like a second design
+ * of it. What it does not reuse is the inputs: these are divs, because a radio
+ * you cannot change is a control that lies about being one.
+ */
+function reviewQuestions(ev) {
+    const qs = ev.input.questions || [];
+    const answers = (ev.result && ev.result.answers) || null;
+    const grid = el('div', { class: 'qrev' });
+    // The dialog is sized from the count — see .review-modal in the CSS. One
+    // question in a 1400px box is a sentence marooned in a field; four at 640
+    // are four unreadable columns, and the count is known the moment it opens.
+    dom.reviewModal.dataset.cols = String(Math.min(Math.max(qs.length, 1), 4));
+
+    if (ev.status === 'error') {
+        const stopped = /^Stopped from Claude Sessions/.test((ev.result || {}).text || '');
+        dom.reviewOutcome.replaceChildren(el('span', { class: 'review-said' }, stopped
+            ? 'Stopped before it was answered.'
+            : 'Dismissed — Claude carried on unaided.'));
+    }
+
+    for (const q of qs) {
+        const { chosen, said } = readAnswer(answers && answers[q.question], q.options);
+        const col = el('div', { class: 'perm-q', role: 'group',
+            'aria-label': q.question || q.header || 'Question' });
+        col.append(el('div', { class: 'perm-q-head' },
+            q.header ? el('span', { class: 'perm-q-chip' }, q.header) : null,
+            el('span', { class: 'perm-q-text' }, q.question || '')));
+
+        for (const opt of q.options || []) {
+            const picked = chosen.has(opt.label || '');
+            col.append(el('div', { class: 'perm-opt', 'data-chosen': picked ? '1' : null },
+                el('span', { class: 'qrev-mark' }, picked ? '●' : '○'),
+                el('span', { class: 'perm-opt-body' },
+                    el('span', { class: 'perm-opt-label' }, opt.label || ''),
+                    opt.description ? el('span', { class: 'perm-opt-desc' }, opt.description) : null,
+                    // Kept, for the reason the dock keeps it: a preview is what
+                    // you were comparing, and one you have to hover for cannot
+                    // be compared.
+                    opt.preview ? el('pre', { class: 'perm-opt-preview' }, opt.preview) : null)));
+        }
+
+        // Typed rather than picked. About one answer in nine goes through the
+        // tool's "Other" box, and a handful do both — picking an option and
+        // adding a condition to it — so this is "also" when something was
+        // chosen and stands alone when nothing was.
+        if (said) {
+            col.append(el('div', { class: 'qrev-said' },
+                el('span', { class: 'qrev-said-head' }, chosen.size ? 'You also said' : 'You said'),
+                el('span', {}, said)));
+        } else if (!chosen.size) {
+            col.append(el('div', { class: 'qrev-none' }, 'Not answered'));
+        }
+
+        grid.append(col);
+    }
+
+    if (!qs.length) grid.append(el('div', { class: 'qrev-none' }, 'No questions recorded.'));
+    return grid;
 }
 
 function kvView(obj) {
@@ -5490,7 +5936,9 @@ function applyComposerScope() {
         enableSend(false);
         dom.btnStop.hidden = true;
         renderQueue(state.runner);   // the session's queue is not the agent's business
+        renderLater();               // nor are its scheduled messages
     } else {
+        renderLater();
         enableSend(Boolean(state.current));
         applyRunner(state.runner);   // paints the lock, which owns the send buttons after this
     }
@@ -7072,7 +7520,13 @@ function dashProject(p) {
     if (p.dirty) counts.push(`${p.dirty} dirty`);
     if (p.open) counts.push(`${p.open} open PR${p.open === 1 ? '' : 's'}`);
 
-    return el('section', { class: 'dproj' },
+    const accent = projectColor(p.cwd);
+
+    return el('section', {
+        class: 'dproj',
+        'data-tinted': accent ? '1' : null,
+        style: accent ? `--proj-accent: ${accent}` : null,
+    },
         el('header', { class: 'dproj-head' },
             el('span', { class: 'dproj-name' }, p.name),
             p.repo ? el('span', { class: 'dproj-repo' }, p.repo) : null,
@@ -7221,6 +7675,11 @@ const NOTE_LABEL = {
     'schedule-findings': 'Scheduled review',
     'schedule-failed': 'Schedule failed',
     'schedule-missed': 'Schedule missed',
+    // Both always carry a sessionId, unlike two of the three above: a scheduled
+    // message is written against a session that exists, so there is always
+    // somewhere for the row to open.
+    'later-failed': 'Message not delivered',
+    'later-missed': 'Message missed',
 };
 
 // The runner's vocabulary for how an ask ended, said the way a person would.
@@ -7966,9 +8425,20 @@ function tbFocusGroups(d) {
  * already. No `data-col`, deliberately — that attribute colours a *state*, and
  * a project is not one. The cards keep `.tb-task`'s own stripe, which still says
  * the right thing.
+ *
+ * The head takes the project's own colour where it has one, on the argument
+ * draftColumn spells out: a colour chosen for a project is not one this board
+ * invented. `Elsewhere` is the group for tasks with no session behind them, and
+ * it resolves to no directory and therefore no colour, which is right.
  */
 function tbProjectColumn(name, rows) {
-    return el('section', { class: 'tb-col tb-focus-col', 'data-project': name },
+    const from = rows[0] && rows[0].session;
+    const accent = projectColor((from && (from.projectCwd || from.cwd)) || '');
+    return el('section', {
+        class: 'tb-col tb-focus-col', 'data-project': name,
+        'data-tinted': accent ? '1' : null,
+        style: accent ? `--proj-accent: ${accent}` : null,
+    },
         el('header', { class: 'tb-col-head' },
             el('h2', { title: name }, name),
             el('span', { class: 'tb-count' }, String(rows.length)),
@@ -8472,14 +8942,25 @@ function draftGroups(rows) {
  * exists, which is the borrowing `draftCard` below already does with `tb-card`.
  *
  * What differs is what a column *means*. Over there it is a state, and the
- * colour says which one; here it is a project, and there is nothing for a colour
- * to say. So the head carries none — `.tb-col[data-col="needs"]` is keyed on an
- * attribute this section deliberately does not have — and the cards keep
+ * colour says which one; here it is a project. So no `data-col` — that attribute
+ * is what colours a state, and a project is not one — and the cards keep
  * `.dr-card`'s quiet stripe, which is still the right one: a draft is the thing
  * in this app that is explicitly not asking for anything.
+ *
+ * The head *does* carry a colour now, and the two are not in tension. The rule
+ * was never that a project has no colour; it was that this board must not invent
+ * one, because an invented colour claims a meaning it cannot deliver. A colour
+ * somebody chose for the project is not an invention, and it says the only thing
+ * a project's colour ever says: which project. Absent for every project nobody
+ * has coloured, which is most of them.
  */
 function draftColumn(name, list) {
-    return el('section', { class: 'tb-col dr-col', 'data-project': name },
+    const accent = projectColor((list[0] && list[0].cwd) || '');
+    return el('section', {
+        class: 'tb-col dr-col', 'data-project': name,
+        'data-tinted': accent ? '1' : null,
+        style: accent ? `--proj-accent: ${accent}` : null,
+    },
         el('header', { class: 'tb-col-head' },
             el('h2', { title: name }, name),
             el('span', { class: 'tb-count' }, String(list.length)),
@@ -8716,9 +9197,8 @@ function snipCwd(c) {
 /** One line of what it says, for the row under the title. */
 const snipPreview = (s) => clip(s.body, 120);
 
-/** A stored accent, re-checked here because it is about to become a CSS rule. */
-const snipAccent = (g) => (g && /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(g.accent || '')
-    ? g.accent : '');
+/** A group's stored accent, through the one gate the page has — see hexAccent. */
+const snipAccent = (g) => (g ? hexAccent(g.accent) : '');
 
 /**
  * The popover's contents: a card per group, then whatever is ungrouped.
@@ -10063,6 +10543,352 @@ async function schedDelete(s) {
     }
 }
 
+// ── project colours ──────────────────────────────────────────────────────
+//
+// A colour per project directory, and the two ways of setting one.
+//
+// **Why it exists.** Nearly every checkout on this machine is the same project
+// in a different worktree, and the control that decides which one a session
+// belongs to is a free-text box in a dialog reused for four jobs. A session
+// scoped to the wrong directory was a mistake with no visual tell until it had
+// already run. A colour gives it one.
+//
+// **Where it is stored** is `projects.colors` in `~/.tgxcode/settings.json` —
+// see the header of bridge/prefs.js for why a preference rather than a store of
+// its own, and USER_ONLY there for why a repository does not get to set it. The
+// page therefore already holds the whole map in BOOT_PREFS, refreshed by the
+// `prefs` SSE event, so resolving a directory to a colour costs no request and
+// can happen on every keystroke. See projectColor().
+//
+// **Two ways in, one picker.** The ⋮ on a project's rail card is where you
+// notice a colour is missing; the Projects group in Settings is where you set
+// several at once. Both open #pcolor-scrim, because a picker that had to be
+// both a popover and a panel row would be two pickers that drifted.
+
+// The six the stylesheet already uses against these surfaces — see the palette
+// at the top of web/styles.css. Read from the stylesheet rather than written out
+// again here, so a restyle moves them and this list cannot go stale. A name
+// beside each, because a radio group that announces "#a8c7fa" is no use to
+// anybody listening to it.
+const PCOLOR_PRESETS = [
+    ['--blue', 'Blue'],
+    ['--green', 'Green'],
+    ['--yellow', 'Yellow'],
+    ['--peach', 'Peach'],
+    ['--red', 'Red'],
+    ['--purple', 'Purple'],
+];
+
+/**
+ * A `--token` from the stylesheet as the `#rrggbb` the bridge will accept.
+ *
+ * The palette is written as hex already, so this is a read and a trim rather
+ * than a conversion — but it goes through hexAccent all the same, because what
+ * comes back is whatever the stylesheet currently says and it is about to be
+ * sent to a route that validates it.
+ */
+function paletteHex(token) {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(token).trim();
+    return hexAccent(v);
+}
+
+/** Which project the colour dialog is about. */
+let pcolorFor = null;   // {cwd, name}
+
+/**
+ * Save one project's colour, or clear it.
+ *
+ * The whole map goes up, because `projects.colors` is one key whose value
+ * happens to be a map and `PUT /api/prefs` replaces a key — the contract
+ * bridge/prefs.js's save() spells out for `keyboard.bindings`. The page holds
+ * the resolved map, so sending all of it says exactly what it means. `null` when
+ * the last colour goes, so the section leaves the file rather than sitting in it
+ * as `{}`.
+ *
+ * `scope: 'user'` always, never `state.settings.scope`: the section is
+ * user-only, so a project scope would come back 403 `readonly`, and the Settings
+ * group says as much above the list.
+ *
+ * The answer is taken as the truth rather than the value we sent — the rule
+ * saveSetting() follows, and here it also hands back the directories spelled the
+ * way the file spells them.
+ *
+ * @param {string} cwd  a project directory
+ * @param {string|null} hex  `#rrggbb`, or null to clear it
+ */
+async function saveProjectColor(cwd, hex) {
+    const next = { ...(BOOT_PREFS.projects.colors || {}) };
+    if (hex) next[cwd] = hex; else delete next[cwd];
+    try {
+        const answer = await put('/api/prefs', {
+            scope: 'user',
+            patch: { projects: { colors: Object.keys(next).length ? next : null } },
+        });
+        BOOT_PREFS.projects.colors = (answer.prefs.projects || {}).colors || {};
+    } catch (err) {
+        toast(`Could not save that colour: ${err.message}`, 'error');
+        return;
+    }
+    repaintProjectColors();
+}
+
+/**
+ * Everything that wears a project's colour, after the map changed.
+ *
+ * One function rather than each caller remembering the list, because the map
+ * changes from three directions — this window's picker, another window's, and a
+ * hand-edit of the settings file — and the third has no caller to remember
+ * anything. Each of these is a no-op when its surface is shut.
+ */
+function repaintProjectColors() {
+    renderRail();
+    paintNewProject();
+    paintPcolorDialog();
+    if (state.settings.open) renderProjectColors();
+    if (state.drafts.open) renderDrafts();
+    if (state.taskboard.open) renderTaskboard();
+    if (state.dash.open) renderDash();
+}
+
+// --- the dialog ----------------------------------------------------------
+
+/**
+ * Open the picker on one project.
+ *
+ * @param {{cwd: string, name: string}} project
+ */
+function openPcolor(project) {
+    pcolorFor = { cwd: project.cwd, name: project.name };
+    dom.pcolorScrim.hidden = false;
+    paintPcolorDialog();
+    dom.pcolorDone.focus();
+}
+
+function closePcolor() {
+    dom.pcolorScrim.hidden = true;
+    pcolorFor = null;
+}
+
+/**
+ * Draw the swatch row against what is currently stored.
+ *
+ * Redrawn rather than patched, and called again after every save, because the
+ * dialog holds no draft of its own: what is on screen is what is in the settings
+ * file, which is the rule the settings panel states at length — a picker with a
+ * Save button has a state where what you see and what is in force disagree. It
+ * also makes the second-window case free, since repaintProjectColors() runs this
+ * when the `prefs` event arrives.
+ */
+function paintPcolorDialog() {
+    if (dom.pcolorScrim.hidden || !pcolorFor) return;
+    const current = hexAccent((BOOT_PREFS.projects.colors || {})[pcolorFor.cwd]);
+
+    dom.pcolorName.textContent = pcolorFor.name;
+    dom.pcolorPath.textContent = pcolorFor.cwd;
+
+    const swatch = (hex, label, on) => el('button', {
+        class: 'pcolor-swatch' + (on ? ' on' : '') + (hex ? '' : ' none'),
+        type: 'button', role: 'radio', 'aria-checked': String(on),
+        'aria-label': label, title: label,
+        style: hex ? `--pcolor: ${hex}` : null,
+        onclick: () => saveProjectColor(pcolorFor.cwd, hex || null),
+    }, on ? icon('tick', 13) : null);
+
+    const presets = PCOLOR_PRESETS
+        .map(([token, label]) => [paletteHex(token), label])
+        .filter(([hex]) => hex);
+    // A colour that is not one of the six still gets a place in the row, so the
+    // ticked swatch is always the one in force. Otherwise picking your own would
+    // leave nothing ticked, which reads as the save not having worked.
+    const known = new Set(presets.map(([hex]) => hex.toLowerCase()));
+    if (current && !known.has(current.toLowerCase())) presets.push([current, 'Your own']);
+
+    dom.pcolorSwatches.replaceChildren(
+        swatch('', 'No colour', !current),
+        ...presets.map(([hex, label]) => swatch(hex, label,
+            !!current && hex.toLowerCase() === current.toLowerCase())),
+    );
+    // The native picker opens on what is set, and falls back to the app's blue
+    // rather than to its own black — which would make every uncoloured project
+    // look like a decision somebody had made.
+    dom.pcolorInput.value = current || paletteHex('--blue') || '#a8c7fa';
+}
+
+// --- the rail's ⋮ menu ---------------------------------------------------
+
+/**
+ * Open the one-item menu against a project card's ⋮.
+ *
+ * Fixed and placed by hand, for positionMenu()'s reason one step further on: the
+ * rail scrolls, and renderRail() rebuilds it whenever any session changes — so a
+ * menu that lived inside a card would be both clipped and torn out from under a
+ * click. `state.projMenu` remembers which card it belongs to so a rebuild can
+ * put it back; see syncProjMenu().
+ *
+ * @param {{key: string, cwd: string, name: string}} project
+ */
+function showProjMenu(project, btn) {
+    state.projMenu = { key: project.key, cwd: project.cwd, name: project.name };
+    dom.projMenu.hidden = false;
+    dom.projMenu.replaceChildren(
+        el('div', { class: 'menu-note' }, clip(project.name, 30)),
+        el('div', { class: 'sep' }),
+        el('button', {
+            class: 'picker-row', type: 'button', role: 'menuitem',
+            onclick: () => { closeProjMenu(); openPcolor(project); },
+        }, el('span', {}, 'Set project colour')),
+    );
+    placeProjMenu(btn);
+    dom.projMenu.querySelector('.picker-row').focus();
+}
+
+function closeProjMenu() {
+    if (!state.projMenu) return;
+    const btn = dom.rail.querySelector('.group-menu-btn[aria-expanded="true"]');
+    if (btn) btn.setAttribute('aria-expanded', 'false');
+    state.projMenu = null;
+    dom.projMenu.hidden = true;
+}
+
+/** Under the button, or over it when there is more room that way. */
+function placeProjMenu(btn) {
+    const r = btn.getBoundingClientRect();
+    const gap = 6;
+    const h = dom.projMenu.offsetHeight || 96;
+    const up = window.innerHeight - r.bottom - gap < h && r.top > h + gap;
+    dom.projMenu.style.left = `${Math.max(8, r.right - PROJ_MENU_W)}px`;
+    if (up) {
+        dom.projMenu.style.top = 'auto';
+        dom.projMenu.style.bottom = `${window.innerHeight - r.top + gap}px`;
+    } else {
+        dom.projMenu.style.bottom = 'auto';
+        dom.projMenu.style.top = `${r.bottom + gap}px`;
+    }
+}
+
+const PROJ_MENU_W = 220;
+
+/**
+ * Put the menu back against its button, or close it if there is nothing to put
+ * it against.
+ *
+ * Called from two places, and *reposition rather than close* is the rule in
+ * both — repositionFloatingMenus()' rule, for its reason: the button is still
+ * there and the menu is still the answer, so a menu that vanished because
+ * something moved a pixel would be the wrong reading of what happened.
+ *
+ * From renderRail(), because that runs whenever any session changes — several
+ * times a minute in a busy window — and a menu that shut itself that often would
+ * be unusable for the one thing it is for.
+ *
+ * From the rail's `scroll`, because pressing a ⋮ that is only half on screen
+ * makes the browser scroll it into view *first*, and that scroll lands after the
+ * click. Closing on it meant the menu opened and shut again in one press, which
+ * is a press that appears to do nothing.
+ *
+ * It does close when the button has gone — the card was filtered away or the
+ * project's last session was deleted — or when it has scrolled out of the rail
+ * entirely, since the menu is fixed and would otherwise be left pointing at a
+ * card nobody can see.
+ */
+function syncProjMenu() {
+    if (!state.projMenu) return;
+    const btn = dom.rail.querySelector(
+        `.rail-group[data-key="${cssEscape(state.projMenu.key)}"] .group-menu-btn`);
+    if (!btn) { closeProjMenu(); return; }
+    const b = btn.getBoundingClientRect();
+    const rail = dom.rail.getBoundingClientRect();
+    if (b.bottom < rail.top || b.top > rail.bottom) { closeProjMenu(); return; }
+    btn.setAttribute('aria-expanded', 'true');
+    placeProjMenu(btn);
+}
+
+/**
+ * A group key inside an attribute selector.
+ *
+ * The key holds a project name, which is a path segment and can hold anything a
+ * filesystem allows — a quote in it would end the selector early and throw.
+ */
+const cssEscape = (v) => (window.CSS && CSS.escape
+    ? CSS.escape(v) : String(v).replace(/["\\]/g, '\\$&'));
+
+// --- the Settings group --------------------------------------------------
+
+/**
+ * Every project the bridge knows, with its colour.
+ *
+ * Drawn from `state.settings.projects`, which loadSettings() already fetches for
+ * the scope picker, so this group costs no second request. A `render` rather
+ * than rows in the SETTINGS table because these are not controls over a settings
+ * *key* the way the rest of the panel's are: there is one key, and what varies
+ * is which directories exist.
+ */
+function renderProjectColors() {
+    const colors = BOOT_PREFS.projects.colors || {};
+    const projects = state.settings.projects || [];
+    if (!projects.length) {
+        dom.pcolorList.replaceChildren(el('div', { class: 'settings-row-note' },
+            'No projects yet — a directory appears here once a session has run in it.'));
+        return;
+    }
+    dom.pcolorList.replaceChildren(...projects.map((p) => {
+        const hex = hexAccent(colors[p.cwd]);
+        return el('div', {
+            class: 'pcolor-row', 'data-tinted': hex ? '1' : null,
+            style: hex ? `--proj-accent: ${hex}` : null,
+        },
+            el('button', {
+                class: 'pcolor-swatch' + (hex ? '' : ' none'), type: 'button',
+                style: hex ? `--pcolor: ${hex}` : null,
+                'aria-label': `Set the colour for ${p.name}`,
+                onclick: () => openPcolor({ cwd: p.cwd, name: p.name }),
+            }),
+            el('div', { class: 'pcolor-row-text' },
+                el('div', { class: 'pcolor-row-name' }, p.name),
+                el('div', { class: 'pcolor-row-path' }, p.cwd),
+            ),
+            hex
+                ? el('button', {
+                    class: 'btn small', type: 'button',
+                    onclick: () => saveProjectColor(p.cwd, null),
+                }, 'Clear')
+                : null,
+        );
+    }));
+}
+
+// --- wiring --------------------------------------------------------------
+
+for (const n of dom.pcolorScrim.querySelectorAll('[data-close-pcolor]')) {
+    n.addEventListener('click', closePcolor);
+}
+dom.pcolorDone.addEventListener('click', closePcolor);
+// `input` rather than `change`: a native colour picker fires `input` as you drag
+// and `change` only when it closes, and saving on the drag is what makes the
+// rail behind the dialog a live preview. Each one is a small file write.
+dom.pcolorInput.addEventListener('input', () => {
+    const hex = hexAccent(dom.pcolorInput.value);
+    if (hex && pcolorFor) saveProjectColor(pcolorFor.cwd, hex);
+});
+dom.pcolorScrim.addEventListener('click', (e) => {
+    if (e.target === dom.pcolorScrim) closePcolor();
+});
+
+// The menu goes on a click outside it and on Escape. A rail scroll follows it
+// instead — see syncProjMenu — because the browser scrolls a half-visible ⋮ into
+// view before delivering the click that opened the menu. Capturing, so a click on
+// some other control closes this before that control acts on it.
+document.addEventListener('click', (e) => {
+    if (!state.projMenu) return;
+    if (dom.projMenu.contains(e.target) || e.target.closest('.group-menu-btn')) return;
+    closeProjMenu();
+}, true);
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && state.projMenu) { e.stopPropagation(); closeProjMenu(); }
+}, true);
+dom.rail.addEventListener('scroll', syncProjMenu);
+window.addEventListener('resize', syncProjMenu);
+
 // ── settings ─────────────────────────────────────────────────────────────
 //
 // Every key in `~/.tgxcode/settings.json`, with a control in front of it.
@@ -10203,12 +11029,24 @@ const SETTINGS = [
     {
         title: 'Claude Code · Memory', section: 'memory', render: () => renderClaudeDocs(),
     },
+    // The commands this project declares, which are the buttons in the
+    // conversation header. A `render` for the same reason the two above use
+    // one — what it draws is a pair of files only the bridge has read — and
+    // placed here, with the other things that are about a project rather than
+    // about this window, above the three that are backed by no file at all.
+    {
+        title: 'Project commands', section: 'commands', render: () => renderCmdConfig(),
+    },
     // The last three are written out in web/index.html rather than built from
     // rows, because none is backed by the settings file — one is a store of its
     // own, one is per-browser storage and the last is a task rather than a
     // setting. `node` names the element renderSettings moves into place, which is
     // what lets them take their turn in this order instead of being stuck wherever
     // the markup put them.
+    {
+        title: 'Projects', section: 'projects', node: 'setGProjects',
+        after: () => renderProjectColors(),
+    },
     {
         title: 'Snippets', section: 'snippets', node: 'setGSnippets',
         after: () => renderSnipSettings(),
@@ -10319,6 +11157,7 @@ async function loadSettings() {
         // draws fine without it, the way loadPairing() below is not awaited.
         loadClaudeConfig();
         loadClaudeDocs();
+        loadCmdConfig();
         // The weakest file in the chain is always the user's own, which is what
         // tells shortPath where home is.
         if (s.data.files && s.data.files.length) noteHome(s.data.files[0].file);
@@ -12416,6 +13255,930 @@ function paintMemoDialog() {
     dom.memoSave.textContent = row.exists ? 'Save the file' : 'Create the file';
 }
 
+// ── the commands a project declares ──────────────────────────────────────
+//
+// `.tgxcode/commands.json` is the file behind the buttons in the conversation
+// header, and until this group existed the only way to change one was a text
+// editor. The format does not forgive: `version: 1` is mandatory, five
+// placeholders are legal and a sixth is a validation error, `${port}` is
+// refused unless the command declares a range — and a file that will not parse
+// contributes *nothing*, so the symptom is a header with no buttons and a
+// tooltip nobody hovers.
+//
+// Two files, and the tabs say Shared and Local because the file names are what
+// a reader has in mind. The API says `project` and `project-local`, which is
+// what bridge/prefs.js and bridge/claude-config.js call the same distinction.
+//
+// **This group has a Save button, against the page's no-drafts rule.** That
+// rule exists so a control cannot disagree with what is in force, and it is
+// right for a preference, which is one independent key. A command is a record
+// whose fields have to agree: `run` is required, an id is a key, and `${port}`
+// is an error until a port range exists. Saving per field would mean writing a
+// document the bridge refuses on most keystrokes, into a file that is checked
+// in and that every bridge on this machine re-reads every two seconds. The JSON
+// tab and the CLAUDE.md editor are already drafts for the smaller version of
+// this reason.
+//
+// The cost is named rather than hidden: a dirty draft blocks a scope, tab or
+// project change behind a confirm, and the footer says what is unsaved.
+
+const CMD_SCOPES = { project: 'Shared', 'project-local': 'Local' };
+
+/** The fields of a command, in the order the form draws them. */
+const CMD_FIELDS = [
+    { key: 'label', kind: 'text', label: 'Label', required: true,
+        note: 'What the button says.' },
+    { key: 'run', kind: 'area', label: 'Command', required: true,
+        note: 'Run through `bash -i`, so `&&`, pipes and your shell’s PATH all work.' },
+    { key: 'cwd', kind: 'text', label: 'Directory',
+        note: 'Relative to the workspace, and may not climb out of it. Defaults to the workspace itself.' },
+    { key: 'port', kind: 'port', label: 'Port',
+        note: 'Find a free port in this range before starting, and hand it to the command as `${port}`.' },
+    { key: 'devbrowser', kind: 'text', label: 'DevBrowser tab',
+        note: 'Name the tab for this port once something answers on it. Empty falls back to the worktree, then the branch, then the project.' },
+    { key: 'env', kind: 'env', label: 'Environment',
+        note: 'Extra variables, on top of the ones a terminal here already gets.' },
+    { key: 'disabled', kind: 'bool', label: 'Visibility',
+        note: 'Hiding one keeps the declaration and takes away the button. Worth '
+            + 'setting explicitly on the local tab: a project can ship a command '
+            + 'hidden, and showing it again means writing the opposite rather than '
+            + 'leaving the key out.' },
+];
+
+const cmdCfgState = () => state.cmdCfg;
+
+/** The directory this group is about — the same one the page's selector picks. */
+const cmdCfgDir = () => settingsProject();
+
+const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o || {}, k);
+
+/**
+ * The client's half of `expand()` in bridge/commands.js.
+ *
+ * `${port}` is deliberately left alone, exactly as the bridge leaves it: there
+ * is no port until a run allocates one, and showing a number here would be
+ * showing a number that turns out not to be the one used.
+ */
+const cmdExpand = (text, ctx) => String(text == null ? '' : text)
+    .replace(/\$\{([a-z]+)\}/g, (whole, name) => (name === 'port' ? whole
+        : (ctx && ctx[name] != null && ctx[name] !== '' ? String(ctx[name]) : '')));
+
+async function loadCmdConfig() {
+    const s = cmdCfgState();
+    if (s.loading) return;
+    s.loading = true;
+    s.error = null;
+    renderSettings();
+    try {
+        const dir = cmdCfgDir();
+        s.data = dir
+            ? await get(`/api/commands-config?cwd=${encodeURIComponent(dir)}`)
+            : null;
+        // A *clean* draft is dropped so the form reseeds from what was just
+        // read; a dirty one is kept, which is the whole point of the 409
+        // handling below. Keying this off `draft === null` alone was the bug
+        // docs/plans/20-claude-config.md records: renderSettings() runs once
+        // before this fetch returns and seeds from the data then in hand, so
+        // every render afterwards finds a non-null draft and leaves it — and
+        // the form goes on showing something that is neither what anybody typed
+        // nor what is on disk.
+        if (!s.dirty) s.draft = null;
+        if (!s.rawDirty) { s.raw = null; s.jsonError = null; }
+    } catch (err) {
+        s.data = null;
+        s.error = err.message;
+    }
+    s.loading = false;
+    renderSettings();
+}
+
+/** The row for the selected scope, out of what the bridge reported. */
+const cmdCfgRow = () => {
+    const s = cmdCfgState();
+    return (s.data && s.data.files.find(f => f.scope === s.scope)) || null;
+};
+const cmdCfgSharedRow = () => {
+    const s = cmdCfgState();
+    return (s.data && s.data.files.find(f => f.scope === 'project')) || null;
+};
+
+/** What the shared file says about each id, for the Local tab's placeholders. */
+function cmdSharedById() {
+    const row = cmdCfgSharedRow();
+    const by = new Map();
+    for (const e of (row ? row.commands : [])) {
+        if (e && typeof e.id === 'string') by.set(e.id, e);
+    }
+    return by;
+}
+
+/** Whether the form may be typed into at all. */
+const cmdEditable = () => {
+    const row = cmdCfgRow();
+    return !!row && row.writable && !row.symlink;
+};
+
+// A key per draft row, so a card keeps its identity while ids are being typed
+// and rows are being removed. Stripped before the draft is sent.
+let cmdKeySeq = 0;
+const cmdKeyed = (entry) => ({ ...entry, _k: (cmdKeySeq += 1) });
+
+/**
+ * The draft for the selected scope, seeded from that file's own entries.
+ *
+ * From `row.commands` — what *this file* says — never from `data.merged`. A
+ * control seeded from the merged answer writes the merged answer back, so
+ * adding one local override would copy every shared command into a personal
+ * file. That is the bug docs/plans/20-claude-config.md records hitting twice,
+ * and it is why the bridge serves the two separately at all.
+ */
+function cmdDraft() {
+    const s = cmdCfgState();
+    if (s.draft === null) {
+        const row = cmdCfgRow();
+        s.draft = (row ? row.commands : []).map(e => cmdKeyed(
+            e && typeof e === 'object' && !Array.isArray(e) ? e : { id: '' }));
+    }
+    return s.draft;
+}
+
+const cmdDirty = () => {
+    const s = cmdCfgState();
+    s.dirty = true;
+    // The problems belong to the document that was refused, not to this one.
+    s.problems = null;
+    const foot = dom.setBody.querySelector('.cmd-foot');
+    if (foot) cmdPaintFoot(foot);
+};
+
+/** Strip the client-only key, and drop keys the form left empty. */
+const cmdForWire = () => cmdDraft().map((e) => {
+    const out = { ...e };
+    delete out._k;
+    return out;
+});
+
+// ── rendering ──────────────────────────────────────────────────────────────
+
+function renderCmdConfig() {
+    const s = cmdCfgState();
+    const head = el('section', { class: 'settings-group', id: 'set-g-commands' },
+        el('h2', { class: 'settings-group-title', text: 'Project commands' }),
+        el('p', { class: 'settings-group-note' },
+            'What this project declares in ', el('code', { text: '.tgxcode/' }),
+            ' — one button in the conversation header per command. The shared file '
+            + 'is checked in; the local one is yours and is never committed.'),
+        cmdScopeTabs(),
+        cmdFileLine(),
+        cmdReachNote());
+
+    if (s.error) {
+        head.append(el('div', { class: 'settings-error' },
+            `Could not read this project’s commands: ${s.error}`));
+        return [head];
+    }
+    if (!s.data) {
+        head.append(el('div', { class: 'settings-empty',
+            text: s.loading ? 'Reading…' : 'No project selected — pick one above.' }));
+        return [head];
+    }
+    if (s.stale) head.append(cmdStaleBanner());
+    cmdProblemNotes(head);
+
+    return [head, s.tab === 'raw' ? cmdRawCard() : cmdFormCard()];
+}
+
+/** Which file, and which of the two ways of looking at it. */
+function cmdScopeTabs() {
+    const s = cmdCfgState();
+    const rows = s.data ? s.data.files : [];
+    const go = (fn) => { if (cmdMayLeave()) { fn(); renderSettings(); } };
+    return el('div', { class: 'cfg-tabs', role: 'tablist' },
+        Object.keys(CMD_SCOPES).map((scope) => {
+            const row = rows.find(f => f.scope === scope);
+            return el('button', {
+                class: `cfg-tab${scope === s.scope ? ' on' : ''}`,
+                type: 'button', role: 'tab', disabled: !row || null,
+                'aria-selected': scope === s.scope ? 'true' : 'false',
+                title: row ? row.file : 'Pick a project above',
+                onclick: () => go(() => { s.scope = scope; cmdClearDrafts(s); }),
+            },
+            CMD_SCOPES[scope],
+            row && !row.exists ? el('span', { class: 'cfg-tab-tag', text: 'none' }) : null,
+            row && row.exists && !row.parsed
+                ? el('span', { class: 'cfg-tab-tag', text: 'broken' }) : null,
+            row && row.symlink ? el('span', { class: 'cfg-tab-tag', text: 'symlink' }) : null);
+        }),
+        el('div', { class: 'cfg-tabs-spacer' }),
+        el('button', {
+            class: `cfg-tab${s.tab === 'form' ? ' on' : ''}`, type: 'button',
+            onclick: () => go(() => { s.tab = 'form'; }),
+        }, 'Form'),
+        el('button', {
+            class: `cfg-tab${s.tab === 'raw' ? ' on' : ''}`, type: 'button',
+            onclick: () => go(() => { s.tab = 'raw'; }),
+        }, 'JSON'));
+}
+
+/** The path being written, and everything true about it worth saying. */
+function cmdFileLine() {
+    const s = cmdCfgState();
+    const row = cmdCfgRow();
+    const line = el('div', { class: 'settings-file' });
+    if (!row) {
+        line.append(el('span', { class: 'settings-file-none' },
+            'No project selected — pick one above to edit its commands.'));
+        return line;
+    }
+    line.append(...[
+        el('span', { class: 'settings-file-lede', text: 'Writing to' }),
+        el('button', {
+            class: 'settings-file-path', type: 'button', title: 'Copy this path',
+            onclick: () => copyPath(row.file),
+        }, row.file),
+        !row.exists && el('span', { class: 'settings-file-tag', text: 'will be created' }),
+        row.exists && !row.parsed
+            && el('span', { class: 'settings-file-tag bad', text: 'does not parse' }),
+        row.symlink
+            && el('span', { class: 'settings-file-tag bad', text: 'a symlink — saving is refused' }),
+        !row.writable && !row.symlink
+            && el('span', { class: 'settings-file-tag bad', text: 'not writable' }),
+        // The only thing making the local file personal is a line in
+        // .gitignore. When it is missing, a private override becomes a
+        // committed one and nobody finds out until it is in somebody else's
+        // checkout. The app is in a position to notice, so it says so.
+        row.scope === 'project-local' && row.ignored === false
+            && el('span', { class: 'settings-file-tag bad', text: 'not ignored — this would be committed' }),
+        row.scope === 'project-local' && row.ignored && row.ignoredBy
+            && el('span', { class: 'settings-file-tag', text: `ignored by ${row.ignoredBy}` }),
+        s.saving && el('span', { class: 'settings-file-tag', text: 'saving…' }),
+    ].filter(Boolean));
+    return line;
+}
+
+/**
+ * The sentence that stops "I edited it and nothing happened".
+ *
+ * A worktree is a checkout of the same repository, so it has its own
+ * `commands.json` — 66 of them do here — and readMerged() prefers the one in
+ * the directory a session is running in. So editing the project's copy changes
+ * nothing for a session in a worktree until the branch picks the change up.
+ * That is the feature working, and it looks exactly like the feature being
+ * broken, which is why it is on screen rather than in a document.
+ */
+function cmdReachNote() {
+    const s = cmdCfgState();
+    if (!s.data) return null;
+    if (s.scope === 'project-local') {
+        return el('p', { class: 'cfg-reach' },
+            el('strong', { text: 'Your local overrides follow you into every worktree.' }),
+            ' This file is read from the main checkout whichever worktree a session is in, '
+            + 'which is what it is for — and it is the tab to use when you want a change to '
+            + 'reach work already in flight.');
+    }
+    return el('p', { class: 'cfg-reach' },
+        el('strong', { text: 'A worktree carries its own copy of this file.' }),
+        ' A session running in ', el('code', { text: '.claude/worktrees/…' }),
+        ' uses that copy, so a change here does not reach it until the branch picks '
+        + 'this up. The ', el('strong', { text: 'Local' }), ' tab is read from the main '
+        + 'checkout for every worktree, and does reach them.');
+}
+
+/** What the bridge already thinks is wrong with these files, before any edit. */
+function cmdProblemNotes(head) {
+    const s = cmdCfgState();
+    const row = cmdCfgRow();
+    // A parse failure in the file you are looking at is already on screen, said
+    // better by the card that offers a way out of it. Repeating it here prints
+    // the same sentence twice, a line apart. The *other* file's is kept: that
+    // one has nothing else saying it.
+    const shown = row && row.exists && !row.parsed ? row.file : null;
+    const loud = (s.data.problems || [])
+        .filter(p => !p.informational)
+        .filter(p => !(shown && p.file === shown && !p.id));
+    if (!loud.length) return;
+    // The shape paintSettingsProblems() uses one card up: the path first, in a
+    // `code`, then the sentence. Anything else reads as a different kind of
+    // message when the two are on screen together, which they routinely are.
+    head.append(el('div', { class: 'settings-problems' },
+        loud.map(p => el('div', { class: 'settings-problem' },
+            p.file ? el('code', { text: shortPath(p.file) }) : null,
+            p.id ? el('code', { text: p.id }) : null,
+            ' ', p.message))));
+}
+
+/** A conflict, kept on screen rather than thrown at a toast. */
+function cmdStaleBanner() {
+    const s = cmdCfgState();
+    return el('div', { class: 'cfg-stale' },
+        el('div', { class: 'cfg-stale-head' }, 'This file changed on disk since the page read it.'),
+        el('p', null, 'Nothing was overwritten, and nothing you typed was lost — what is in '
+            + 'the form is still yours. Below is the file as it is now.'),
+        s.stale.text
+            ? el('details', null,
+                el('summary', { text: 'What is on disk' }),
+                el('pre', { class: 'cfg-stale-text', text: s.stale.text }))
+            : null,
+        el('button', {
+            class: 'linkish', type: 'button',
+            onclick: () => { s.stale = null; renderSettings(); },
+        }, 'Dismiss'));
+}
+
+// ── the form ───────────────────────────────────────────────────────────────
+
+function cmdFormCard() {
+    const s = cmdCfgState();
+    const row = cmdCfgRow();
+    const card = el('section', { class: 'settings-group cfg-sub', id: 'set-g-commands-form' },
+        el('h3', { class: 'settings-group-title', text: 'The commands' }));
+
+    if (!row) {
+        card.append(el('div', { class: 'cfg-list-none', text: 'No file for that scope.' }));
+        return card;
+    }
+    // A file that will not parse has no entries to draw, and drawing an empty
+    // form over it would offer to replace somebody's file with nothing.
+    if (row.exists && !row.parsed) {
+        card.append(el('div', { class: 'cfg-broken' },
+            el('p', null, el('strong', { text: 'This file does not parse, so the form cannot show it.' }),
+                ' Nothing here is lost — the JSON tab has the text exactly as it is on disk, '
+                + 'and it is the only thing in the app that can repair one.'),
+            row.problem ? el('pre', { class: 'cfg-stale-text', text: row.problem.message }) : null,
+            el('button', {
+                class: 'btn small', type: 'button',
+                onclick: () => { s.tab = 'raw'; renderSettings(); },
+            }, 'Open the JSON tab')));
+        return card;
+    }
+
+    const draft = cmdDraft();
+    const shared = s.scope === 'project-local' ? cmdSharedById() : new Map();
+    const editable = cmdEditable();
+
+    if (!draft.length) {
+        card.append(el('div', { class: 'cfg-list-none',
+            text: s.scope === 'project-local'
+                ? 'Nothing overridden. Add one to change a shared command for yourself alone.'
+                : 'No commands declared here yet.' }));
+    }
+    draft.forEach((entry, i) => card.append(cmdCard(entry, i, shared, editable)));
+
+    const limits = s.data.limits;
+    card.append(el('div', { class: 'cfg-list-add' },
+        el('button', {
+            class: 'linkish', type: 'button',
+            disabled: !editable || draft.length >= limits.maxCommands || null,
+            onclick: () => {
+                // A new row starts with the keys the file will need and nothing
+                // else, so the JSON tab shows exactly what the form says.
+                draft.push(cmdKeyed(s.scope === 'project-local'
+                    ? { id: '' } : { id: '', label: '', run: '' }));
+                cmdDirty();
+                renderSettings();
+            },
+        }, 'Add a command'),
+        draft.length >= limits.maxCommands
+            ? el('span', { class: 'settings-row-note',
+                text: `${limits.maxCommands} is as many as one file may declare.` })
+            : null));
+
+    card.append(cmdFoot());
+    return card;
+}
+
+/**
+ * One command.
+ *
+ * On the Local tab every field but the id carries a **Set here** checkbox, and
+ * it means exactly one thing: whether the key is present in *this file's*
+ * entry. Unticked, the control is disabled and the shared file's value is the
+ * placeholder. There is no third state, so the JSON tab and the form can never
+ * disagree about what is in the file — which is the only way two views of one
+ * document are worth having.
+ *
+ * On the Shared tab the same checkbox is there, forced on and hidden for the
+ * two fields a first definition must carry.
+ */
+function cmdCard(entry, i, shared, editable) {
+    const s = cmdCfgState();
+    const local = s.scope === 'project-local';
+    const base = local ? shared.get(entry.id) : null;
+    // A local entry whose id the shared file does not declare is a *first*
+    // definition, so the bridge requires a label and a run. One that has them
+    // is a command of its own; one that does not is a fragment the reader drops
+    // — and the page has to say which, because "saving does nothing" is what it
+    // looks like otherwise.
+    const orphan = local && !base && !(entry.label && entry.run);
+    const problems = (s.problems || []).filter(p => p.index === i);
+
+    const head = el('div', { class: 'cmd-card-head' },
+        el('code', { class: 'cmd-card-id', text: entry.id || 'no id yet' }),
+        el('span', { class: 'cmd-card-name',
+            text: entry.label || (base && base.label) || '' }),
+        local && base ? el('span', { class: 'cfg-tab-tag', text: 'overrides the shared file' }) : null,
+        local && !base && !orphan ? el('span', { class: 'cfg-tab-tag', text: 'local only' }) : null,
+        orphan ? el('span', { class: 'cfg-tab-tag bad', text: 'orphaned' }) : null,
+        el('div', { class: 'cmd-card-spacer' }),
+        cmdDeleteButton(i, editable));
+
+    const card = el('div', {
+        class: `cmd-card${problems.length ? ' bad' : ''}`, 'data-index': i,
+    }, head);
+
+    if (orphan) {
+        card.append(el('p', { class: 'cmd-orphan' },
+            el('strong', { text: 'The shared file no longer declares this id.' }),
+            ' So this is a new command rather than an override, and it needs a label '
+            + 'and a command of its own before anything here will save. ',
+            el('button', {
+                class: 'linkish', type: 'button', disabled: !editable || null,
+                onclick: () => {
+                    if (!hasOwn(entry, 'label')) entry.label = '';
+                    if (!hasOwn(entry, 'run')) entry.run = '';
+                    cmdDirty();
+                    renderSettings();
+                },
+            }, 'Fill those in'),
+            ' or remove it.'));
+    }
+
+    // The id is the join key rather than a field: changing it on an override is
+    // "delete this and add another", not an edit, and doing it in place would
+    // silently orphan the entry.
+    card.append(cmdIdField(entry, i, local, base, editable, problems));
+    for (const field of CMD_FIELDS) {
+        card.append(cmdField(field, entry, i, { local, base, editable, problems }));
+    }
+    // Filtered rather than passed through: `append` stringifies a null into the
+    // literal word, where el()'s own children skip it. The same trap
+    // docsFileLine() carries a comment about, and it prints "null" under a
+    // command before anybody notices.
+    const preview = cmdPreview(entry, base);
+    if (preview) card.append(preview);
+    return card;
+}
+
+function cmdIdField(entry, i, local, base, editable, problems) {
+    const s = cmdCfgState();
+    const bad = problems.find(p => p.field === 'id');
+    return el('div', { class: `cmd-field${bad ? ' bad' : ''}`, 'data-field': 'id' },
+        el('div', { class: 'cmd-field-head' }, el('span', { class: 'cmd-field-label', text: 'Id' })),
+        el('input', {
+            class: 'settings-text cmd-mono', type: 'text', spellcheck: 'false',
+            value: entry.id || '', placeholder: 'dev',
+            disabled: !editable || null,
+            oninput: (e) => { entry.id = e.target.value; cmdDirty(); },
+            // Re-drawn on blur rather than per keystroke: the id decides whether
+            // a local row is an override or an orphan, and every tag on the card
+            // moves with it.
+            onchange: () => { if (local) renderSettings(); },
+        }),
+        el('p', { class: 'cmd-field-note' },
+            local
+                ? 'The id of the shared command this changes — or a new one, for a command only you have.'
+                : 'How the file refers to this command. Lower case, digits, dot, dash or underscore.'),
+        bad ? el('p', { class: 'cmd-field-bad', text: bad.message }) : null,
+        local && base ? el('p', { class: 'cmd-field-note' },
+            'Matches ', el('code', { text: base.id }), ' in the shared file.') : null,
+        s.data.patterns ? null : null);
+}
+
+function cmdField(field, entry, i, ctx) {
+    const { local, base, editable, problems } = ctx;
+    const set = hasOwn(entry, field.key);
+    // On the shared file a first definition must carry these two, so the
+    // checkbox would be a control that cannot be used.
+    const forced = !local && field.required;
+    const bad = problems.find(p => p.field === field.key);
+    const inherited = base ? base[field.key] : undefined;
+    const disabled = !editable || (!set && !forced);
+
+    const toggle = (on) => {
+        if (on) {
+            entry[field.key] = inherited !== undefined ? clone(inherited) : cmdBlank(field);
+        } else {
+            delete entry[field.key];
+        }
+        cmdDirty();
+        renderSettings();
+    };
+
+    const head = el('div', { class: 'cmd-field-head' },
+        forced ? null : el('label', { class: 'settings-check cmd-set' },
+            el('input', {
+                type: 'checkbox', checked: set || null, disabled: !editable || null,
+                onchange: (e) => toggle(e.target.checked),
+            }),
+            el('span', { class: 'settings-box' })),
+        el('span', { class: 'cmd-field-label', text: field.label }),
+        !set && !forced && inherited !== undefined
+            ? el('span', { class: 'cmd-field-from', text: 'inherited' })
+            : null);
+
+    return el('div', {
+        class: `cmd-field${bad ? ' bad' : ''}${!set && !forced ? ' unset' : ''}`,
+        'data-field': field.key,
+    },
+    head,
+    cmdControl(field, entry, { set: set || forced, disabled, inherited, local }),
+    field.note ? el('p', { class: 'cmd-field-note', text: field.note }) : null,
+    bad ? el('p', { class: 'cmd-field-bad', text: bad.message }) : null);
+}
+
+/** What an unticked field becomes when somebody ticks it. */
+function cmdBlank(field) {
+    if (field.kind === 'port') return { range: [3000, 3009] };
+    if (field.kind === 'env') return {};
+    // Ticking "Set here" on the visibility row means "I want to decide this",
+    // and the answer somebody wants by default is the one that changes nothing.
+    if (field.kind === 'bool') return false;
+    return '';
+}
+
+const clone = (v) => (v === null || typeof v !== 'object' ? v : JSON.parse(JSON.stringify(v)));
+
+function cmdControl(field, entry, o) {
+    const value = o.set ? entry[field.key] : undefined;
+    const ph = o.inherited === undefined ? '' : cmdPlaceholderOf(field, o.inherited);
+
+    // Two named options rather than a checkbox. A checkbox beside the "Set
+    // here" one is two boxes that look identical and mean different things —
+    // and it cannot say `false` out loud, which is exactly what un-hiding a
+    // command the shared file hides requires.
+    if (field.kind === 'bool') {
+        return el('select', {
+            class: 'settings-select', disabled: o.disabled || null,
+            onchange: (e) => { entry[field.key] = e.target.value === 'hidden'; cmdDirty(); },
+        },
+        el('option', { value: 'shown', selected: value !== true || null }, 'Shown'),
+        el('option', { value: 'hidden', selected: value === true || null }, 'Hidden'));
+    }
+
+    if (field.kind === 'area') {
+        // A textarea, not an input: `validate()` refuses only a NUL, so a
+        // newline is legal in a command — and a single-line input strips one
+        // silently, eating half of somebody's command on the first save.
+        return el('textarea', {
+            class: 'cmd-area', spellcheck: 'false', rows: 1, placeholder: ph,
+            disabled: o.disabled || null,
+            onfocus: (e) => grow(e.target, 26, 240),
+            oninput: (e) => { entry[field.key] = e.target.value; grow(e.target, 26, 240); cmdDirty(); },
+        }, value == null ? '' : String(value));
+    }
+
+    if (field.kind === 'port') return cmdPortControl(entry, field, o);
+    if (field.kind === 'env') return cmdEnvControl(entry, field, o);
+
+    return el('input', {
+        class: 'settings-text is-long', type: 'text', spellcheck: 'false',
+        value: value == null ? '' : String(value), placeholder: ph,
+        disabled: o.disabled || null,
+        oninput: (e) => { entry[field.key] = e.target.value; cmdDirty(); },
+    });
+}
+
+/** The inherited value, as a placeholder reads it. */
+function cmdPlaceholderOf(field, v) {
+    if (field.kind === 'port') {
+        return v && v.range ? `${v.range[0]}–${v.range[1]}` : '';
+    }
+    if (field.kind === 'env') return '';
+    if (field.kind === 'bool') return '';
+    return v === '' ? '(empty)' : String(v);
+}
+
+function cmdPortControl(entry, field, o) {
+    const v = o.set && entry.port ? entry.port : null;
+    const range = (v && Array.isArray(v.range)) ? v.range : [null, null];
+    // The inherited block shows through the same way every other field's does.
+    // Three empty boxes over a shared command that declares 45899–45918 would be
+    // the one place on this tab where "unset" and "set to nothing" look alike.
+    const from = o.inherited && typeof o.inherited === 'object' ? o.inherited : null;
+    const fromRange = from && Array.isArray(from.range) ? from.range : [null, null];
+    const num = (at) => el('input', {
+        class: 'settings-num', type: 'number', min: 1024, max: 65535,
+        value: range[at] == null ? '' : range[at], disabled: o.disabled || null,
+        placeholder: fromRange[at] == null ? '' : String(fromRange[at]),
+        onchange: (e) => {
+            if (!entry.port) entry.port = { range: [0, 0] };
+            if (!Array.isArray(entry.port.range)) entry.port.range = [0, 0];
+            entry.port.range[at] = Number(e.target.value);
+            cmdDirty();
+        },
+    });
+    return el('div', { class: 'cmd-port' },
+        num(0), el('span', { class: 'cmd-port-dash', text: '–' }), num(1),
+        el('input', {
+            class: 'settings-text cmd-mono cmd-port-env', type: 'text', spellcheck: 'false',
+            placeholder: (from && from.env) || 'PORT (optional)', value: (v && v.env) || '',
+            disabled: o.disabled || null,
+            onchange: (e) => {
+                if (!entry.port) return;
+                const name = e.target.value.trim();
+                if (name) entry.port.env = name; else delete entry.port.env;
+                cmdDirty();
+            },
+        }));
+}
+
+/**
+ * Extra environment, one row per variable.
+ *
+ * A map, and its unit of override is a key rather than the object — `merge()`
+ * folds `{...prev.env, ...here.env}`. So the inherited keys are listed read-only
+ * beside the ones this file sets, and the note says the thing the format cannot
+ * do: there is no way to *remove* an inherited variable from the local file,
+ * only to give it another value.
+ */
+function cmdEnvControl(entry, field, o) {
+    const env = o.set && entry.env && typeof entry.env === 'object' ? entry.env : null;
+    const keys = env ? Object.keys(env) : [];
+    const inherited = o.inherited && typeof o.inherited === 'object' ? o.inherited : {};
+    const extra = Object.keys(inherited).filter(k => !keys.includes(k));
+
+    return el('div', { class: 'cfg-list cmd-env' },
+        keys.map(k => el('div', { class: 'cmd-env-row' },
+            el('input', {
+                class: 'settings-text cmd-mono cmd-env-name', type: 'text', spellcheck: 'false',
+                value: k, disabled: o.disabled || null,
+                onchange: (e) => {
+                    const next = e.target.value.trim();
+                    if (next === k) return;
+                    const was = env[k];
+                    delete env[k];
+                    if (next) env[next] = was;
+                    cmdDirty();
+                    renderSettings();
+                },
+            }),
+            el('input', {
+                class: 'settings-text cmd-env-value', type: 'text', spellcheck: 'false',
+                value: env[k], disabled: o.disabled || null,
+                oninput: (e) => { env[k] = e.target.value; cmdDirty(); },
+            }),
+            el('button', {
+                class: 'cfg-list-x', type: 'button', disabled: o.disabled || null,
+                'aria-label': `Remove ${k}`, title: 'Remove',
+                onclick: () => { delete env[k]; cmdDirty(); renderSettings(); },
+            }, '×'))),
+        el('div', { class: 'cfg-list-add' },
+            el('button', {
+                class: 'linkish', type: 'button', disabled: o.disabled || null,
+                onclick: () => {
+                    if (!entry.env || typeof entry.env !== 'object') entry.env = {};
+                    let name = 'NAME';
+                    for (let n = 2; hasOwn(entry.env, name); n += 1) name = `NAME_${n}`;
+                    entry.env[name] = '';
+                    cmdDirty();
+                    renderSettings();
+                },
+            }, 'Add a variable')),
+        extra.length
+            ? el('div', { class: 'cfg-inherit' },
+                el('div', { class: 'cfg-inherit-head' },
+                    `${extra.length} more from the shared file`),
+                extra.map(k => el('div', { class: 'cfg-inherit-row', text: `${k}=${inherited[k]}` })),
+                el('p', { class: 'cmd-field-note' },
+                    'These add to yours rather than being replaced by them. The format has no '
+                    + 'way to remove one here — only to give it a different value.'))
+            : null);
+}
+
+/** What this command will actually run, here. */
+function cmdPreview(entry, base) {
+    const s = cmdCfgState();
+    const ctx = s.data.context || {};
+    const run = hasOwn(entry, 'run') ? entry.run : (base && base.run);
+    if (!run) return null;
+    const out = cmdExpand(run, ctx);
+    if (out === String(run)) return null;
+    return el('p', { class: 'cmd-preview' },
+        el('span', { class: 'cmd-preview-lede', text: 'Here, that runs' }),
+        el('code', { text: out }));
+}
+
+/**
+ * Remove a command, with the snippets group's arm-in-place confirm.
+ *
+ * Reused rather than reimplemented, and not only for the look: that one arms
+ * itself inside the button without a re-render, where a version driven from
+ * `state` would rebuild the whole panel twice per click — and rebuilding this
+ * panel throws away the focus and the caret of whatever field was being typed
+ * into. A misclick here takes a button somebody uses out of the header.
+ */
+function cmdDeleteButton(i, editable) {
+    const b = snipDeleteButton('Remove this command', () => {
+        cmdDraft().splice(i, 1);
+        cmdDirty();
+        renderSettings();
+    });
+    if (!editable) b.disabled = true;
+    return b;
+}
+
+// ── saving ─────────────────────────────────────────────────────────────────
+
+function cmdFoot() {
+    const foot = el('div', { class: 'cmd-foot' });
+    cmdPaintFoot(foot);
+    return foot;
+}
+
+function cmdPaintFoot(foot) {
+    const s = cmdCfgState();
+    const row = cmdCfgRow();
+    const editable = cmdEditable();
+    foot.replaceChildren(
+        el('span', { class: `cmd-foot-note${s.problems ? ' bad' : ''}` },
+            s.problems
+                ? `${s.problems.length} ${s.problems.length === 1 ? 'problem' : 'problems'} — nothing was written.`
+                : (s.dirty ? 'Edited — not saved.' : 'Matches the file on disk.')),
+        el('div', { class: 'cmd-card-spacer' }),
+        el('button', {
+            class: 'btn quiet small', type: 'button', disabled: !s.dirty || null,
+            onclick: () => { cmdClearDrafts(s); renderSettings(); },
+        }, 'Revert'),
+        el('button', {
+            class: 'btn primary small', type: 'button',
+            disabled: !editable || !s.dirty || s.saving || null,
+            onclick: () => saveCmdConfig(),
+        }, row && row.exists ? 'Save' : 'Create the file'));
+}
+
+function cmdClearDrafts(s) {
+    s.draft = null;
+    s.dirty = false;
+    s.raw = null;
+    s.rawDirty = false;
+    s.jsonError = null;
+    s.problems = null;
+}
+
+/** Nothing typed, or the user said to drop it. */
+function cmdMayLeave() {
+    const s = cmdCfgState();
+    if (!s.dirty && !s.rawDirty) return true;
+    // eslint-disable-next-line no-alert
+    if (!window.confirm('Discard the changes to this file?')) return false;
+    cmdClearDrafts(s);
+    return true;
+}
+
+async function saveCmdConfig() {
+    const s = cmdCfgState();
+    const row = cmdCfgRow();
+    if (!row || !s.dirty) return;
+    s.saving = true;
+    s.problems = null;
+    renderSettings();
+    try {
+        const answer = await put('/api/commands-config', {
+            scope: s.scope,
+            cwd: cmdCfgDir(),
+            stamp: row.exists ? row.stamp : null,
+            commands: cmdForWire(),
+        });
+        s.data = answer.config;
+        cmdClearDrafts(s);
+        toast(`${shortPath(answer.file)} written.`, 'ok');
+        // The payoff, and the reason this is not just a file editor: the
+        // buttons in the header come from the same files, and a window that
+        // did not re-read them would go on showing the old label until the
+        // session was reopened.
+        loadCommands();
+    } catch (err) {
+        cmdSaveFailed(err);
+    }
+    s.saving = false;
+    renderSettings();
+}
+
+/**
+ * A refused save, sorted by what the page can do about it.
+ *
+ * The draft survives every branch. Losing what somebody typed in order to tell
+ * them why it was not written is the one unforgivable move here.
+ */
+function cmdSaveFailed(err) {
+    const s = cmdCfgState();
+    const data = err.data || {};
+    if (err.status === 409) {
+        s.stale = { text: data.text || null };
+        toast('That file changed on disk. Your edits are kept — compare and save again.', 'warn');
+        const keep = s.draft;
+        const keepRaw = s.raw;
+        return loadCmdConfig().then(() => {
+            s.draft = keep;
+            s.raw = keepRaw;
+            s.dirty = keep !== null;
+            s.rawDirty = keepRaw !== null;
+            renderSettings();
+        });
+    }
+    if (Array.isArray(data.problems) && data.problems.length) {
+        // Every problem at once, each against the row and field it is about —
+        // a form that surfaced one per round trip would make six saves out of
+        // one paste.
+        s.problems = data.problems;
+        toast(err.message, 'error');
+        return null;
+    }
+    toast(`Could not save that file: ${err.message}`, 'error');
+    return null;
+}
+
+// ── the JSON tab ───────────────────────────────────────────────────────────
+
+/**
+ * The file itself, in a text box.
+ *
+ * Not a fallback added later: it is what makes the form honest. With it here
+ * nothing in these files is beyond reach, so a key the form has not learned to
+ * draw is an inconvenience rather than a wall — and it is the only thing in the
+ * app that can repair a file which no longer parses, which is the state that
+ * takes every button out of the header at once.
+ */
+function cmdRawCard() {
+    const s = cmdCfgState();
+    const row = cmdCfgRow();
+    const card = el('section', { class: 'settings-group cfg-sub', id: 'set-g-commands-raw' },
+        el('h3', { class: 'settings-group-title', text: 'The file itself' }));
+    if (!row) {
+        card.append(el('div', { class: 'cfg-list-none', text: 'No file for that scope.' }));
+        return card;
+    }
+
+    const readonly = !cmdEditable();
+    const onDisk = row.text === null
+        ? `${JSON.stringify({ version: 1, commands: [] }, null, 2)}\n`
+        : row.text;
+    // A clean box is a *view* of the file rather than a draft of it, so it
+    // reseeds whenever the file moves. `dirty` is the thing that means somebody
+    // typed here, and it is the only thing that should stop this.
+    if (s.raw === null || !s.rawDirty) s.raw = onDisk;
+
+    const note = el('div', { class: `cfg-json-note${s.jsonError ? ' bad' : ''}` },
+        s.jsonError || (s.rawDirty ? 'Edited — not saved.' : 'Matches the file on disk.'));
+    const save = el('button', {
+        class: 'btn primary small', type: 'button',
+        disabled: readonly || !s.rawDirty || s.saving || null,
+        onclick: () => saveCmdText(),
+    }, row.exists ? 'Save' : 'Create the file');
+
+    card.append(
+        el('textarea', {
+            class: 'cfg-json', spellcheck: 'false', autocapitalize: 'off',
+            autocorrect: 'off', disabled: readonly || null,
+            // Parsed on every keystroke rather than on save: the point of the
+            // message is to be there while the mistake is still on screen.
+            oninput: (e) => {
+                s.raw = e.target.value;
+                s.rawDirty = s.raw !== onDisk;
+                s.jsonError = null;
+                if (s.raw.trim()) {
+                    try { JSON.parse(s.raw); }
+                    catch (err) { s.jsonError = err.message; }
+                }
+                note.className = `cfg-json-note${s.jsonError ? ' bad' : ''}`;
+                note.textContent = s.jsonError
+                    || (s.rawDirty ? 'Edited — not saved.' : 'Matches the file on disk.');
+                save.disabled = readonly || !s.rawDirty || !!s.jsonError;
+            },
+        }, s.raw),
+        el('div', { class: 'cmd-foot' }, note, el('div', { class: 'cmd-card-spacer' }),
+            el('button', {
+                class: 'btn quiet small', type: 'button', disabled: !s.rawDirty || null,
+                onclick: () => { cmdClearDrafts(s); renderSettings(); },
+            }, 'Revert'),
+            save));
+    return card;
+}
+
+async function saveCmdText() {
+    const s = cmdCfgState();
+    const row = cmdCfgRow();
+    if (!row || s.raw === null) return;
+    s.saving = true;
+    renderSettings();
+    try {
+        const answer = await put('/api/commands-config', {
+            scope: s.scope,
+            cwd: cmdCfgDir(),
+            stamp: row.exists ? row.stamp : null,
+            text: s.raw,
+        });
+        s.data = answer.config;
+        cmdClearDrafts(s);
+        toast(`${shortPath(answer.file)} written.`, 'ok');
+        loadCommands();
+    } catch (err) {
+        cmdSaveFailed(err);
+    }
+    s.saving = false;
+    renderSettings();
+}
+
 // ── remapping a shortcut ─────────────────────────────────────────────────
 //
 // One row per command in bridge/keymap.js. Recording rather than typing: a
@@ -13770,6 +15533,9 @@ function connect() {
         // missed push leaves a wrong button sitting in the composer rather than a
         // stale card behind a panel nobody has opened.
         loadSnippets();
+        // And the messages waiting on a clock, on the drafts' terms and for its
+        // reasons — the chips are on screen whenever the session is.
+        loadLater();
         // And the schedules, on the same terms. It matters a little more here:
         // the stream is most often down because the bridge restarted, and a
         // restart is exactly when the catch-up pass runs — so the changes this
@@ -13859,6 +15625,10 @@ function connect() {
     es.addEventListener('drafts-changed', (e) => applyDrafts(JSON.parse(e.data)));
     es.addEventListener('snippets-changed', (e) => applySnippets(JSON.parse(e.data)));
     es.addEventListener('schedules-changed', (e) => applySched(JSON.parse(e.data)));
+    // Fires without anybody having done anything, exactly as `schedules-changed`
+    // does: a delivery, a miss and a failure all move it. That is how a chip
+    // starts saying "sent 02:00" while nobody is looking at it.
+    es.addEventListener('later-changed', (e) => applyLater(JSON.parse(e.data)));
 
     es.addEventListener('sessions-changed', () => loadSessions());
 
@@ -13895,6 +15665,9 @@ function connect() {
         paintShortcutHints();
         paintComposerHint();
         if (state.live.open) renderLive();
+        // Project colours are in that payload too, and everything wearing one has
+        // to be redrawn — including the rail, which nothing else here touches.
+        repaintProjectColors();
         // The panel that did the saving already has the answer; one that is open
         // in *this* window while another saved does not.
         if (state.settings.open && !state.settings.saving) loadSettings();
@@ -13948,6 +15721,33 @@ function connect() {
             return;
         }
         loadClaudeDocs();
+    });
+
+    // A project's commands changed — another window's settings panel, or
+    // somebody's text editor. Two things react, and the second is the point.
+    es.addEventListener('commands-config', (e) => {
+        const d = JSON.parse(e.data);
+        const s = state.cmdCfg;
+        if (state.settings.open && !s.saving) {
+            // The same dirty guard the two groups above use: a draft here is a
+            // whole document somebody has been editing, and replacing it to show
+            // them somebody else's version is the one unforgivable move.
+            if (s.dirty || s.rawDirty) {
+                s.stale = { text: null };
+                renderSettings();
+            } else {
+                loadCmdConfig();
+            }
+        }
+        // And the buttons, which is the half that makes this a feature rather
+        // than a file editor. Only when the directory on screen belongs to the
+        // project that changed — `cmdDir()` is a session's own cwd, so it is
+        // usually a worktree, and a worktree path starts with its project's.
+        const here = cmdDir();
+        if (here && d.project
+            && (here === d.project || here.startsWith(`${d.project}/`))) {
+            loadCommands();
+        }
     });
 
     // Someone deleted a session — possibly in another window, possibly this one.
@@ -14431,9 +16231,14 @@ function scrollToEnd(instant) {
 }
 
 // ── turn rail ────────────────────────────────────────────────────────────
-// A tick per thing you said, down the right edge of the transcript. Hovering
-// reads the message back; clicking jumps to it. Built from the rendered log,
-// so a session streaming in a terminal grows its rail as it goes.
+// A tick per thing you said, down the right edge of the transcript, and one for
+// each plan and each question — the other two moments the conversation stopped
+// and waited for you. Hovering reads it back; clicking a message jumps to it and
+// clicking a plan or a question opens it (see openReview). Built from the
+// rendered log, so a session streaming in a terminal grows its rail as it goes.
+
+/** The two tool calls that are a moment in the conversation rather than work. */
+const REVIEWABLE = { ExitPlanMode: 'plan', AskUserQuestion: 'question' };
 
 function turnText(ev) {
     if (ev.command) return `/${ev.command.name}${ev.command.args ? ' ' + ev.command.args : ''}`;
@@ -14446,24 +16251,64 @@ function clipLines(s, n) {
     return t.length > n ? t.slice(0, n - 1) + '…' : t;
 }
 
+/**
+ * Build the rail.
+ *
+ * Two lists come out of one walk, and keeping them apart is the point.
+ * `state.turns` is still the messages and nothing else, because "Turn 3 of 12"
+ * counts what *you said* and markActiveTurn binary-searches it — a plan in that
+ * list would renumber every turn after it and mean the search was answering a
+ * different question from the one it is asked. `marks` is everything in the
+ * rail, in document order, which is the order `state.nodes` is already in.
+ *
+ * `state.turnTicks` is the third thing and exists because of the same split:
+ * markActiveTurn used to index `dom.turns.children` by turn number, which stops
+ * being true the moment anything that is not a turn is in the column.
+ */
 function renderTurns() {
     state.turns = [];
+    state.turnTicks = [];
+    const marks = [];
     for (const entry of state.nodes.values()) {
-        if (entry.ev.kind === 'user') state.turns.push(entry);
+        const ev = entry.ev;
+        if (ev.kind === 'user') {
+            state.turns.push(entry);
+            marks.push({ entry, kind: 'turn', no: state.turns.length });
+        } else if (ev.kind === 'tool' && REVIEWABLE[ev.name]) {
+            marks.push({ entry, kind: REVIEWABLE[ev.name] });
+        }
     }
     state.activeTurn = -1;
 
     const total = state.turns.length;
-    dom.turns.replaceChildren(...state.turns.map((t, i) => el('button', {
-        class: 'turn-tick',
-        type: 'button',
-        'aria-label': `Turn ${i + 1} of ${total}: ${clip(turnText(t.ev), 60)}`,
-        onclick: () => jumpToTurn(t),
-        onmouseenter: (e) => showTurnPop(e.currentTarget, i),
-        onmouseleave: hideTurnPop,
-        onfocus: (e) => showTurnPop(e.currentTarget, i),
-        onblur: hideTurnPop,
-    })));
+    dom.turns.replaceChildren(...marks.map((m) => {
+        const ev = m.entry.ev;
+        const turn = m.kind === 'turn';
+        const tick = el('button', {
+            class: 'turn-tick',
+            type: 'button',
+            // Both only ever set for a plan or a question. A message is the
+            // rail's default and stays unmarked, so every `[data-kind]` rule in
+            // the stylesheet is about the two new kinds and cannot reach a turn
+            // tick by accident — which a `data-kind="turn"` would have let it.
+            'data-kind': turn ? null : m.kind,
+            'data-status': turn ? null : (ev.status || 'pending'),
+            'aria-label': turn
+                ? `Turn ${m.no} of ${total}: ${clip(turnText(ev), 60)}`
+                : `${m.kind === 'plan' ? 'Plan' : 'Question'}, ${markOutcome(ev)}: `
+                    + clip(toolSummary(ev) || '', 60),
+            onclick: () => (turn ? jumpToTurn(m.entry) : openReview(ev.id)),
+            onmouseenter: (e) => showTurnPop(e.currentTarget, m),
+            onmouseleave: hideTurnPop,
+            onfocus: (e) => showTurnPop(e.currentTarget, m),
+            onblur: hideTurnPop,
+        });
+        // A message's tick does what its menu would say, so it does not get one:
+        // a single-item menu offering the click you just made is noise.
+        if (!turn) tick.oncontextmenu = (e) => openMarkMenu(e, m);
+        if (turn) state.turnTicks.push(tick);
+        return tick;
+    }));
     // Now it is known whether this conversation has a rail at all, so the hold
     // from beginOpen can go: with turns the class changes nothing, and without
     // them `.turns:empty` takes the column out and the composer widens into it.
@@ -14471,19 +16316,37 @@ function renderTurns() {
     markActiveTurn();
 }
 
-function showTurnPop(tick, i) {
-    const t = state.turns[i];
-    if (!t) return;
+/** Right-clicking a plan or a question: read it here, or go to it in the log. */
+function openMarkMenu(e, m) {
+    e.preventDefault();
+    const what = m.kind === 'plan' ? 'plan' : 'question';
+    openContextMenu(e, [
+        { label: `Open the ${what}`, onClick: () => openReview(m.entry.ev.id) },
+        { label: 'Show it in the transcript', onClick: () => jumpToTurn(m.entry) },
+    ]);
+}
+
+function showTurnPop(tick, m) {
+    if (!m || !m.entry) return;
+    const ev = m.entry.ev;
     const pop = dom.turnPop;
-    const isCmd = Boolean(t.ev.command);
+    const turn = m.kind === 'turn';
+    const isCmd = turn && Boolean(ev.command);
+
+    // `toolSummary` for the two new kinds rather than a second extraction: it
+    // already reduces a plan to its first heading and a question set to its
+    // headers, and it is what the collapsed transcript row says — so the rail
+    // and the row cannot end up calling the same thing two different things.
+    const head = turn ? `Turn ${m.no} of ${state.turns.length}`
+        : `${m.kind === 'plan' ? 'Plan' : 'Question'} · ${markOutcome(ev)}`;
+    const body = turn ? turnText(ev) : (toolSummary(ev) || '');
 
     pop.replaceChildren(
         el('div', { class: 'pop-head' },
-            el('span', {}, `Turn ${i + 1} of ${state.turns.length}`),
-            el('span', { class: 'when' }, clockOf(t.ev.ts)),
+            el('span', {}, head),
+            el('span', { class: 'when' }, clockOf(ev.ts)),
         ),
-        el('div', { class: 'pop-text' + (isCmd ? ' cmd' : '') },
-            clipLines(turnText(t.ev), 460)),
+        el('div', { class: 'pop-text' + (isCmd ? ' cmd' : '') }, clipLines(body, 460)),
     );
     pop.hidden = false;
 
@@ -14616,7 +16479,9 @@ function markActiveTurn() {
     if (active === state.activeTurn) return;
     state.activeTurn = active;
 
-    const ticks = dom.turns.children;
+    // state.turnTicks and not dom.turns.children: the rail also holds plan and
+    // question markers, so the nth child stopped being the nth turn.
+    const ticks = state.turnTicks;
     for (let i = 0; i < ticks.length; i++) {
         if (i === active) ticks[i].setAttribute('aria-current', 'true');
         else ticks[i].removeAttribute('aria-current');
@@ -14766,11 +16631,23 @@ function toolText(ev) {
         out.push(i.prompt);
     } else if (ev.name === 'ExitPlanMode') {
         out.push(i.plan);
+        // Only the tail when the approved text differs — a note is a couple of
+        // lines and the plan it is appended to is routinely tens of kilobytes,
+        // so pushing `r.plan` whole would double the biggest string in the find
+        // index to add those two lines.
+        if (r.plan && r.plan !== i.plan && r.plan.startsWith(i.plan || '')) {
+            out.push(r.plan.slice((i.plan || '').length));
+        } else if (r.plan && r.plan !== i.plan) {
+            out.push(r.plan);
+        }
     } else if (ev.name === 'AskUserQuestion') {
         for (const q of i.questions || []) {
             out.push(q.header, q.question);
             for (const o of q.options || []) out.push(o.label);
         }
+        // What you chose is often the only part of a question you remember well
+        // enough to search for.
+        if (r.answers) out.push(...Object.values(r.answers));
     } else if (ev.name === 'SendMessage') {
         out.push(i.summary);
         out.push(typeof i.message === 'string' ? i.message : JSON.stringify(i.message, null, 2));
@@ -15306,6 +17183,343 @@ function resetFind() {
     f.subs.clear();
     f.text.clear();
     f.subsLoading = false;
+}
+
+// ── send later ───────────────────────────────────────────────────────────
+// The same message, at a time you pick. A send held back rather than a schedule:
+// there is no cron here and there is not going to be, because the thing this is
+// for is one instruction that is only true at one hour — "you may now modify app
+// data to get the screenshots" — and a repeating version of that sentence is not
+// a thing anybody wants.
+//
+// **The mode is the feature, not a detail of it.** A permission ask raised while
+// no window is open is denied on the spot and two of those stop the turn, so a
+// message delivered at 02:00 in `auto` does not run unattended; it stalls. The
+// popover therefore asks how to deliver, in the same breath as when, and remembers
+// the answer. It is also why the mode is on the *face* of every chip: a message
+// that will wake an agent with no permission gate at 2am is not something you
+// should have to expand a row to discover.
+//
+// The whole list is held rather than this session's, because that is the shape
+// `later-changed` carries and the rail wants all of it for its badges.
+
+/**
+ * A wall clock without the seconds.
+ *
+ * `clockOf` keeps them because it timestamps events, where a second is real
+ * information. Nothing here is accurate to a second and nothing here is meant to
+ * be — you pick a time to the minute and the tick finds it within thirty — so the
+ * extra digits are noise on every chip and badge this section draws.
+ */
+const hhmm = (ts) => (ts ? `${pad(new Date(ts).getHours())}:${pad(new Date(ts).getMinutes())}` : '');
+
+/** The modes worth offering, loudest first — see the note above about `auto`. */
+const LATER_MODES = ['bypassPermissions', 'dontAsk', 'acceptEdits', 'auto', 'plan'];
+
+/** What the popover last delivered in, so the choice survives the next message. */
+let laterMode = (() => {
+    try { return localStorage.getItem('laterMode') || 'bypassPermissions'; }
+    catch { return 'bypassPermissions'; }
+})();
+
+/**
+ * Take the bridge's whole list and repaint.
+ *
+ * The rail goes with it. Its badge is drawn from *this* list rather than from the
+ * `later` field on the session summary, although that field exists and says the
+ * same thing: the rail is rebuilt only when the session list changes, and none of
+ * the things that move a scheduled message change it — so a badge read off the
+ * summary would still say "02:00" an hour after the message had gone. The summary
+ * field is for a client that fetches sessions and nothing else.
+ */
+function applyLater(payload) {
+    state.later = (payload && payload.messages) || [];
+    for (const id of state.laterOpen) {
+        if (!state.later.some(m => m.id === id)) state.laterOpen.delete(id);
+    }
+    renderLater();
+    renderRail();
+}
+
+/** Fetched once; the SSE event keeps it current from then on. */
+async function loadLater() {
+    try { applyLater(await get('/api/later')); } catch { /* the event will do it */ }
+}
+
+/**
+ * "in 6h · 02:00" for something waiting, and what happened for something that is
+ * not.
+ *
+ * Both halves on purpose. The relative one is what you actually think in when you
+ * schedule something; the absolute one is what you check when you come back and
+ * want to know whether it was before or after you went to bed.
+ */
+function laterWhen(m) {
+    if (m.state === 'sent') return `sent ${hhmm(m.sentAt || m.at)}`;
+    if (m.state === 'missed') return 'missed';
+    if (m.state === 'failed') return 'failed';
+    if (m.state === 'delivering') return 'sending…';
+    const left = m.at - Date.now();
+    if (left <= 0) return `due · ${hhmm(m.at)}`;
+    const mins = Math.round(left / 60000);
+    const rel = mins < 60 ? `in ${mins}m` : `in ${Math.round(mins / 60)}h`;
+    return `${rel} · ${hhmm(m.at)}`;
+}
+
+/** The chips above the queue: this session's messages, soonest first. */
+function renderLater() {
+    const mine = state.current
+        ? state.later.filter(m => m.sessionId === state.current.sessionId)
+        : [];
+    // While a subagent is on screen the composer belongs to nothing you can send
+    // to, so its chips are out of scope too — renderQueue's rule.
+    const show = mine.length > 0 && !state.agent;
+    dom.later.hidden = !show;
+    if (!show) return dom.later.replaceChildren();
+
+    dom.later.replaceChildren(...mine.map((m) => {
+        const open = state.laterOpen.has(m.id);
+        const done = m.state !== 'pending' && m.state !== 'delivering';
+        const bad = m.state === 'missed' || m.state === 'failed';
+        return el('div', {
+            class: `later-chip${open ? ' open' : ''}${done ? ' done' : ''}${bad ? ' bad' : ''}`,
+            'data-id': m.id,
+        },
+        el('span', { class: 'later-when', title: new Date(m.at).toLocaleString() },
+            laterWhen(m)),
+        el('span', {
+            class: `later-mode${m.permissionMode === 'bypassPermissions'
+                || m.permissionMode === 'dontAsk' ? ' loud' : ''}`,
+            title: `It will be delivered in ${m.permissionMode}`,
+        }, m.permissionMode),
+        m.attachments.length
+            ? el('span', { class: 'queue-files' }, `${m.attachments.length}📎`)
+            : null,
+        el('button', {
+            class: 'later-text', type: 'button',
+            title: open ? 'Collapse' : 'Show the whole message',
+            onclick: () => {
+                if (open) state.laterOpen.delete(m.id); else state.laterOpen.add(m.id);
+                renderLater();
+            },
+        }, open ? m.text : clip(m.text, 120)),
+        el('span', { class: 'queue-acts' },
+            // Only while it is still waiting. "Send now" on a message already sent
+            // would send it twice, and the bridge refuses that — better not to
+            // offer it.
+            m.state === 'pending'
+                ? el('button', {
+                    class: 'queue-act', type: 'button',
+                    title: 'Deliver this message now instead of waiting',
+                    onclick: (e) => sendLaterNow(m, e.currentTarget),
+                }, 'Send now')
+                : null,
+            el('button', {
+                class: 'queue-act danger', type: 'button',
+                title: m.state === 'pending' ? 'Cancel this message' : 'Clear this row',
+                'aria-label': m.state === 'pending' ? 'Cancel this message' : 'Clear this row',
+                onclick: () => cancelLater(m),
+            }, '×')));
+    }));
+}
+
+/** Deliver one now. The bridge runs the same path its clock would. */
+async function sendLaterNow(m, btn) {
+    if (btn) btn.disabled = true;
+    try {
+        await post(`/api/later/${m.id}/send`, {});
+        toast('Sent.', 'ok');
+    } catch (err) {
+        // 409 is the wait-for-idle refusal and is not a failure — the message is
+        // untouched and pressing again in a minute is the right thing to do.
+        toast(`Could not send it yet: ${err.message}`, 'warn');
+        if (btn) btn.disabled = false;
+    }
+}
+
+async function cancelLater(m) {
+    try {
+        await del(`/api/later/${m.id}`);
+    } catch (err) {
+        toast(`Could not cancel it: ${err.message}`, 'error');
+    }
+}
+
+// The presets. Absolute times are resolved here rather than sent as offsets, so
+// the row you picked and the row you get cannot disagree — the bridge's clock and
+// this one are the same clock on this machine, but the message says a time and a
+// time is what it should be stored as.
+function atInMinutes(n) { return Date.now() + n * 60_000; }
+
+/** The next time today or tomorrow that the wall clock reads `h:m`. */
+function atClock(h, m) {
+    const d = new Date();
+    d.setHours(h, m, 0, 0);
+    if (d.getTime() <= Date.now()) d.setDate(d.getDate() + 1);
+    return d.getTime();
+}
+
+function laterPresets() {
+    return [
+        { label: 'in 30 minutes', at: atInMinutes(30) },
+        { label: 'in 2 hours', at: atInMinutes(120) },
+        { label: 'tonight at 02:00', at: atClock(2, 0) },
+        { label: 'tomorrow at 09:00', at: atClock(9, 0) },
+    ];
+}
+
+/** `datetime-local` wants local wall-clock text, not an ISO instant. */
+function localInputValue(ts) {
+    const d = new Date(ts);
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+        + `T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function showLater(on) {
+    if (!on) return closeLater();
+    // Only ever one popover up — the slash menu, the mentions and the snippets all
+    // close each other, and this joins them rather than becoming the exception.
+    closeMenus(live);
+    closeSnips(live);
+    state.laterPick = false;
+    dom.laterMenu.hidden = false;
+    dom.btnLater.setAttribute('aria-expanded', 'true');
+    drawLater();
+    positionLater();
+}
+
+function closeLater({ focus = false } = {}) {
+    if (dom.laterMenu.hidden) return;
+    dom.laterMenu.hidden = true;
+    dom.laterMenu.replaceChildren();
+    dom.btnLater.setAttribute('aria-expanded', 'false');
+    if (focus) dom.btnLater.focus();
+}
+
+/** positionSnips' arithmetic, on the one popover that is not a composer's. */
+function positionLater() {
+    const r = dom.btnLater.getBoundingClientRect();
+    const gap = 6;
+    const below = window.innerHeight - r.bottom - gap * 2;
+    const above = r.top - gap * 2;
+    const up = below < 260 && above > below;
+    const width = Math.min(320, window.innerWidth - 24);
+
+    dom.laterMenu.classList.toggle('up', up);
+    dom.laterMenu.style.setProperty('--snip-max',
+        `${Math.max(180, Math.min(460, up ? above : below))}px`);
+    dom.laterMenu.style.width = `${width}px`;
+    dom.laterMenu.style.left = `${Math.max(12, Math.min(r.right - width,
+        window.innerWidth - width - 12))}px`;
+    if (up) {
+        dom.laterMenu.style.top = 'auto';
+        dom.laterMenu.style.bottom = `${window.innerHeight - r.top + gap}px`;
+    } else {
+        dom.laterMenu.style.bottom = 'auto';
+        dom.laterMenu.style.top = `${r.bottom + gap}px`;
+    }
+}
+
+function drawLater() {
+    const rows = laterPresets().map(p => el('button', {
+        class: 'later-row', type: 'button', role: 'option',
+        onclick: () => scheduleMessage(p.at),
+    }, el('span', {}, p.label), el('span', { class: 'at' }, hhmm(p.at))));
+
+    rows.push(el('button', {
+        class: `later-row${state.laterPick ? ' on' : ''}`, type: 'button', role: 'option',
+        onclick: () => { state.laterPick = !state.laterPick; drawLater(); },
+    }, el('span', {}, 'Pick a time…')));
+
+    rows.push(el('div', { class: 'later-sep' }));
+
+    const modeSel = el('select', {
+        'aria-label': 'Permission mode to deliver in',
+        onchange: (e) => {
+            laterMode = e.target.value;
+            try { localStorage.setItem('laterMode', laterMode); } catch { /* private mode */ }
+        },
+    }, ...LATER_MODES.map(m => el('option', { value: m, selected: m === laterMode }, m)));
+
+    const fields = [el('label', {}, el('span', {}, 'Deliver as'), modeSel)];
+
+    if (state.laterPick) {
+        const when = el('input', {
+            type: 'datetime-local',
+            value: localInputValue(atInMinutes(60)),
+            min: localInputValue(Date.now()),
+        });
+        fields.push(el('label', {}, el('span', {}, 'At'), when));
+        fields.push(el('button', {
+            class: 'go', type: 'button',
+            onclick: () => {
+                // `datetime-local` gives wall-clock text with no zone; `new Date`
+                // reads it as local, which is what was typed and what is meant.
+                const at = new Date(when.value).getTime();
+                if (!Number.isFinite(at)) return toast('Pick a date and a time.', 'warn');
+                if (at <= Date.now()) return toast('That time has already passed.', 'warn');
+                scheduleMessage(at);
+            },
+        }, 'Schedule'));
+    }
+    rows.push(el('div', { class: 'later-fields' }, ...fields));
+
+    dom.laterMenu.replaceChildren(...rows);
+}
+
+/**
+ * Hold the message back until `at`.
+ *
+ * sendMessage()'s body, minus the optimistic row and the unsent-text bookkeeping:
+ * nothing is going to the process, so there is no turn to draw and nothing to hand
+ * back. What it keeps is everything about *leaving the composer* — the same
+ * attachments, the same emptying of the box and the strip, the same
+ * restoreToComposer on failure — because from where you are sitting this is the
+ * send button with a time on it.
+ */
+async function scheduleMessage(at) {
+    const text = dom.input.value.trim();
+    const files = readyAttachments(live);
+    if ((!text && !files.length) || !state.current) {
+        return toast('Write a message first.', 'warn');
+    }
+
+    // The lock is a rule, not a disabled button — sendMessage's words. It matters
+    // more here: a message scheduled against a session another process is holding
+    // is one that fails at 2am, when nobody is up to read the failure.
+    if (lockedNow()) {
+        toast('This session is running elsewhere, so a message scheduled here would '
+            + 'not be delivered. Branch off a copy first.', 'warn');
+        dom.lockFork.focus();
+        return;
+    }
+
+    const sessionId = state.current.sessionId;
+    const previews = files.length
+        ? live.attach.filter(a => a.previewUrl).map(a => a.previewUrl) : [];
+
+    dom.input.value = '';
+    autoGrow();
+    saveDraft(sessionId, '');
+    clearAttach(live, { revoke: false });
+    revokePreviews(previews);      // no row is drawn, so nothing hands these back
+    closeLater();
+
+    try {
+        await post(`/api/sessions/${sessionId}/later`, {
+            text,
+            attachments: files,
+            model: dom.model.value || null,
+            permissionMode: laterMode,
+            at,
+        });
+        // The chip arrives on the `later-changed` event, which the bridge pushes
+        // before this resolves — so there is nothing to draw here.
+        toast(`Scheduled for ${new Date(at).toLocaleString()}.`, 'ok');
+    } catch (err) {
+        restoreToComposer(text, files);
+        toast(`Could not schedule it: ${err.message}`, 'error');
+    }
 }
 
 // ── send queue ───────────────────────────────────────────────────────────
@@ -16056,6 +18270,8 @@ function enableSend(on) {
     // Attaching needs a session for the same reason sending does — the file goes into
     // *that* session's checkout — so it turns on and off with them.
     dom.btnAttach.disabled = !on;
+    // And so does scheduling, which is a send with a time on it.
+    dom.btnLater.disabled = !on;
 }
 
 // ── optimistic sends ─────────────────────────────────────────────────────
@@ -16743,9 +18959,16 @@ async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     // stops at the first prompt and waits until morning. Editing an existing
     // schedule keeps whatever it already had.
     dom.newPerm.value = src ? src.permissionMode : (schedMode ? 'dontAsk' : 'plan');
-    dom.newCwd.value = (src && src.cwd) || cwd || (state.current
-        ? (state.current.worktree ? state.current.worktree.originalCwd : state.current.cwd)
-        : '');
+    // **Only what somebody said.** A draft or schedule being edited carries its
+    // own directory, and every caller that means a particular project passes
+    // one — the suggested-task dialog, the rail's split button, the conversion
+    // from a draft. What is gone is the guessing underneath that: the open
+    // session's directory, and, below, the most recently active project. Both
+    // scoped a session for you, and neither said so, which made the commonest
+    // way to get this wrong "not noticing that it had been answered". Nothing
+    // else has to change for the box to be empty: newDialogValues() has always
+    // refused a dialog with no directory in it.
+    setNewCwd((src && src.cwd) || cwd || '');
 
     // The two fields only a schedule has.
     dom.newCronRow.hidden = !schedMode;
@@ -16797,19 +19020,22 @@ async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     cancelMkdir();
     try {
         const projects = await loadProjects();
-        dom.newPicker.replaceChildren(...projects.slice(0, 40).map(p =>
-            el('button', {
+        dom.newPicker.replaceChildren(...projects.slice(0, 40).map((p) => {
+            // A dot in the project's own colour, so what the dialog is about to
+            // turn into is readable before the press rather than after it.
+            const accent = projectColor(p.cwd);
+            return el('button', {
                 class: 'picker-row', type: 'button',
-                onclick: () => { dom.newCwd.value = p.cwd; dom.newPrompt.focus(); },
+                'data-tinted': accent ? '1' : null,
+                style: accent ? `--proj-accent: ${accent}` : null,
+                onclick: () => { setNewCwd(p.cwd); dom.newPrompt.focus(); },
             },
+                el('span', { class: 'pdot' }, ''),
                 el('span', {}, p.name),
                 el('span', { class: 'path' }, clip(p.cwd, 44)),
                 p.active ? el('span', { class: 'tag' }, `${p.active} live`) : null,
-            )));
-        // Only for a dialog that opened with nothing in the box. A caller that
-        // named a directory has already answered this, and the box was filled
-        // before the await precisely so this cannot overwrite it.
-        if (!dom.newCwd.value && projects[0]) dom.newCwd.value = projects[0].cwd;
+            );
+        }));
     } catch (err) {
         toast(`Could not list projects: ${err.message}`, 'error');
     }
@@ -16819,6 +19045,49 @@ async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     // put the caret at the end of it rather than in front of the first word.
     const written = dom.newPrompt.value;
     if (written) dom.newPrompt.setSelectionRange(written.length, written.length);
+}
+
+/**
+ * Write the working-directory box, and repaint what hangs off it.
+ *
+ * The one way in, because three things used to write that input on their own —
+ * openNew(), a row in the Recent list, and every step through the Browse tree —
+ * and the dialog's colour and the project named in its head have to follow all
+ * three. The `input` listener covers the fourth writer, which is a person typing.
+ */
+function setNewCwd(value) {
+    dom.newCwd.value = value;
+    paintNewProject();
+}
+
+/**
+ * Which project the dialog is about, and the colour it wears for it.
+ *
+ * Two separate jobs, deliberately in one function: the chip names the project
+ * whether or not it has a colour, and the colour is only ever an addition to
+ * that. A dialog with no project at all says so rather than showing nothing,
+ * because an empty box is exactly the state the head exists to make visible.
+ *
+ * `data-tinted` rather than a bare custom property is what keeps the uncoloured
+ * dialog identical to the one this app has always drawn: every tint rule in
+ * web/styles.css hangs off that attribute, so without it not one of them
+ * applies — rather than all of them applying through a colour-mix that happens
+ * to land near the blue they replace.
+ */
+function paintNewProject() {
+    const cwd = dom.newCwd.value.trim();
+    const accent = projectColor(cwd);
+    const name = cwd ? (cwd.replace(/\/+$/, '').split('/').filter(Boolean).pop() || cwd) : '';
+
+    if (accent) dom.newScrim.style.setProperty('--proj-accent', accent);
+    else dom.newScrim.style.removeProperty('--proj-accent');
+    dom.newScrim.toggleAttribute('data-tinted', !!accent);
+
+    dom.newProject.replaceChildren(
+        el('span', { class: 'pdot' }, ''),
+        el('span', { class: 'new-project-name' }, name || 'No project selected'),
+    );
+    dom.newProject.classList.toggle('none', !cwd);
 }
 
 function closeNew() {
@@ -16883,9 +19152,15 @@ async function fillNewMenu({ focusFirst = false } = {}) {
 
     const rows = projects.slice(0, NEW_MENU_MAX).map((p, i) => el('button', {
         class: 'picker-row', type: 'button', role: 'menuitem', tabindex: -1,
+        // The same dot the dialog's Recent list carries, for the same reason: this
+        // menu is the short way to scope a session, so it is the place a colour
+        // has to be readable before the press.
+        'data-tinted': projectColor(p.cwd) ? '1' : null,
+        style: projectColor(p.cwd) ? `--proj-accent: ${projectColor(p.cwd)}` : null,
         onclick: () => { showNewMenu(false); openNew({ cwd: p.cwd }); },
         onkeydown: (e) => onNewMenuKey(e, i),
     },
+        el('span', { class: 'pdot' }, ''),
         el('span', {}, clip(p.name, 26)),
         // Green stays reserved for something actually running, as everywhere
         // else; the session count is the quieter fact.
@@ -17024,7 +19299,7 @@ async function browseTo(dir, { select = true, fromKeyboard = false } = {}) {
         error: data.error || null,
         focus: null,
     });
-    if (select) dom.newCwd.value = data.path;
+    if (select) setNewCwd(data.path);
     cancelMkdir();
     renderBrowse();
     if (fromKeyboard) focusRowAt(0);
@@ -17941,6 +20216,21 @@ dom.newBtnSnippets.addEventListener('click', (e) => {
 });
 dom.snipMenu.addEventListener('keydown', (e) => onSnipsKey(e, live));
 dom.newSnipMenu.addEventListener('keydown', (e) => onSnipsKey(e, newC));
+
+// Send later. Same gesture as the snippets button next to it, and the same
+// stopPropagation, so the click-outside rule below does not close what it opened.
+dom.btnLater.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showLater(dom.laterMenu.hidden);
+});
+// A click inside the popover is not a click outside it. Needed because the fields
+// at the foot of it are things you interact with for a while — picking a date,
+// changing the mode — rather than one press that closes the menu anyway.
+dom.laterMenu.addEventListener('click', (e) => e.stopPropagation());
+document.addEventListener('click', () => closeLater());
+// Repositioned rather than closed: the popover is anchored to a button that moves
+// when the composer grows, and closing on a resize would lose a half-typed time.
+window.addEventListener('resize', () => { if (!dom.laterMenu.hidden) positionLater(); });
 
 // ✕ and Cancel are the whole close surface on both — see modalUp().
 for (const n of dom.snipFillScrim.querySelectorAll('[data-close-fill]')) {
@@ -19202,6 +21492,9 @@ dom.newCwd.addEventListener('keydown', (e) => {
     browseTo(dom.newCwd.value.trim());
 });
 dom.newCwd.addEventListener('input', () => {
+    // The head and the tint follow what is typed, not only what is picked — a
+    // path pasted into the box is the same decision as a row pressed in the list.
+    paintNewProject();
     if (state.browse.tab === 'browse') dom.newBrowseNote.textContent = browseNote(state.browse);
     // The commands on screen belong to the directory that was in this box when
     // `/` was pressed. Leaving them there while the directory changes underneath
@@ -19213,6 +21506,23 @@ dom.newCwd.addEventListener('input', () => {
 for (const n of dom.delScrim.querySelectorAll('[data-close-del]')) {
     n.addEventListener('click', closeDelete);
 }
+
+// ── the plan/question review ─────────────────────────────────────────────
+
+// ✕ and Close are the whole close surface — see modalUp() for why there is no
+// Escape and no click-outside here either.
+for (const n of dom.reviewScrim.querySelectorAll('[data-close-review]')) {
+    n.addEventListener('click', closeReview);
+}
+dom.reviewJump.addEventListener('click', () => {
+    // Resolved now rather than held from the open, because a result landing in
+    // between replaces the node this is aiming at.
+    const entry = state.nodes.get(state.review.evId);
+    closeReview();
+    // revealNode opens an enclosing fold on the way, which a tool call in a
+    // collapsed run always has.
+    if (entry) revealNode(entry.node);
+});
 
 // ── the diff viewer ──────────────────────────────────────────────────────
 
@@ -19258,8 +21568,13 @@ document.addEventListener('pointerdown', (e) => {
     closeContextMenu({ focus: false });
 }, true);
 
-// A right-click anywhere that does not open one of these itself dismisses this and
-// gets the browser's own menu, which is what right-clicking the transcript should do.
+// A right-click anywhere that has no menu of its own dismisses this and gets the
+// browser's own menu, which is what right-clicking the transcript should do.
+//
+// The exceptions are the rows that *do* have one, named by CTX_OWNERS. This
+// listener runs after the element's own handler, so without them it would close
+// the menu that click had just opened, in the same event, and right-click would
+// read as doing nothing at all.
 document.addEventListener('contextmenu', (e) => {
     if (dom.ctxMenu.hidden) return;
     if (e.target.closest && e.target.closest(CTX_OWNERS)) return;
@@ -19499,11 +21814,22 @@ dom.setProject.addEventListener('change', () => {
         dom.setProject.value = settingsProject();
         return;
     }
+    // And the command form, which is the third draft on this page and the one
+    // most likely to be mid-edit: it is a form rather than a text box, so
+    // "dirty" here can be a single checkbox somebody has just ticked.
+    const cmds = state.cmdCfg;
+    if ((cmds.dirty || cmds.rawDirty)
+        && !window.confirm('Discard the changes to this project’s commands?')) {
+        dom.setProject.value = settingsProject();
+        return;
+    }
     cfg.draft = null;
     cfg.dirty = false;
     cfg.jsonError = null;
     cfg.stale = null;
     docsClearDraft(docs);
+    cmdClearDrafts(cmds);
+    cmds.stale = null;
     loadSettings();
 });
 
@@ -19557,6 +21883,8 @@ document.addEventListener('keydown', (e) => {
     // never run and Escape would be swallowed with the popover still up.
     if (e.key === 'Escape' && !dom.snipMenu.hidden) { closeSnips(live, { focus: true }); return; }
     if (e.key === 'Escape' && !dom.newSnipMenu.hidden) { closeSnips(newC, { focus: true }); return; }
+    // On the same rung, for the same reason.
+    if (e.key === 'Escape' && !dom.laterMenu.hidden) { closeLater({ focus: true }); return; }
     // Below them, a modal dialog swallows Escape rather than closing on it —
     // see modalUp(). Swallowed rather than left out of this ladder: without a
     // rung the key falls through to the panel *behind* the dialog, so a stray

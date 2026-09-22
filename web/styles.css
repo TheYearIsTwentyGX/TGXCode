@@ -912,6 +912,18 @@ a:hover { text-decoration: underline; }
     font-size: 10.5px;
 }
 
+/* Messages waiting on a clock rather than on a turn. The same badge in the amber
+   of a schedule, because the two facts are different in the one way that matters:
+   a queued message goes as soon as the turn ends, and this one goes at 2am. */
+.strip-meta .due {
+    flex: none;
+    padding: 1px 7px;
+    border-radius: var(--pill);
+    background: #3a2f16;
+    color: var(--yellow);
+    font-size: 10.5px;
+}
+
 /* Whether a session is doing anything, at the head of the line.
    It used to be green-for-active only, standing down for running rows on the
    grounds that the activity line said it better. But the activity line is last on
@@ -2091,6 +2103,45 @@ a:hover { text-decoration: underline; }
 .turn-tick:hover::before { width: 16px; background: var(--text-2); }
 .turn-tick[aria-current="true"]::before { width: 16px; background: var(--peach); }
 
+/* A plan and a question are not turns, so they are not lines.
+ *
+ * The rail is 30px wide and everything in it is a few pixels across, which is
+ * why the distinction is *shape* rather than colour alone: shape survives being
+ * small, and it is there for people who cannot tell the colours apart. Colour
+ * then carries the second fact, which is how the thing ended.
+ *
+ * These come after the hover and aria-current rules above because they match at
+ * the same specificity, so order is what decides. The hover pair is restated
+ * below for the same reason — inheriting it would stretch a diamond into a
+ * lozenge on the way past. */
+.turn-tick[data-kind="plan"]::before,
+.turn-tick[data-kind="question"]::before {
+    width: 9px;
+    height: 9px;
+    background: currentColor;
+    transition: transform var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+}
+/* A square stood on its corner: a document, and the only angular thing here. */
+.turn-tick[data-kind="plan"]::before { border-radius: 2px; transform: rotate(45deg); }
+/* A dot: one of a set. */
+.turn-tick[data-kind="question"]::before { border-radius: 50%; }
+.turn-tick[data-kind]:hover::before { transform: scale(1.25) rotate(0deg); }
+.turn-tick[data-kind="plan"]:hover::before { transform: scale(1.25) rotate(45deg); }
+
+/* Settled the way it was put forward. */
+.turn-tick[data-kind][data-status="ok"] { color: var(--green); }
+/* Came back — sent back for more planning, or dismissed unanswered. Hollow as
+   well as grey, so it reads as "did not land" at a glance rather than only to
+   someone comparing two ticks. */
+.turn-tick[data-kind][data-status="error"] { color: var(--text-4); }
+.turn-tick[data-kind][data-status="error"]::before {
+    background: transparent;
+    box-shadow: inset 0 0 0 1.5px currentColor;
+}
+/* Still open: the live plan pane or question dock is up, and this is its place
+   in the rail. Peach is what the rail already uses for "this is where you are". */
+.turn-tick[data-kind][data-status="pending"] { color: var(--peach); }
+
 .turn-pop {
     position: fixed;
     z-index: 60;
@@ -2753,6 +2804,158 @@ select.flash { animation: flash-select 1.3s var(--ease); }
 .qview-q:first-child { margin-top: 0; }
 .qview-o { color: var(--text-3); padding-left: 4px; }
 .qview-mark { color: var(--text-4); margin-right: 8px; }
+/* The one that was picked. Colour and weight rather than a background: this
+   list sits inside an already-tinted tool block, and a second fill inside it
+   reads as a nested box rather than as emphasis. */
+.qview-o[data-chosen] { color: var(--text); }
+.qview-o[data-chosen] .qview-mark { color: var(--blue); }
+/* Typed rather than picked, through the tool's "Other" box — about one answer
+   in nine. Italic so it does not read as an option that was on offer. */
+.qview-said { font-style: italic; }
+
+/* ── the plan/question review dialog ───────────────────────────────────────
+   A plan or a set of questions, replayed read-only from the turn rail. The
+   columns below reuse .perm-q and .perm-opt so this looks like the dock it is
+   replaying; what is here is the grid, the sizing, and the marks that replace
+   the radios. */
+
+/* One dialog, four widths. A single question in a 1400px box is a sentence
+   marooned in a field, and four questions at 640px are four unreadable columns
+   — so rather than compromise for both, it is sized to the count, which is
+   known the moment it opens. The step is what a column needs to hold a label,
+   a description and a preview without every line breaking: below about 300px
+   it cannot, which is also where the stacking fallback comes in. */
+.modal.review-modal { width: min(760px, 100%); }
+.modal.review-modal[data-cols="2"] { width: min(1000px, 100%); }
+.modal.review-modal[data-cols="3"] { width: min(1260px, 100%); }
+.modal.review-modal[data-cols="4"] { width: min(1500px, 100%); }
+/* A plan is prose and takes its measure from .plan-rev, not from the count. */
+.modal.review-modal[data-kind="plan"] { width: min(880px, 100%); }
+
+/* The head is a chip, a verdict and a clock rather than the single 20px line
+   .modal-head is built for, so it sets its own type and spacing. `.spacer` is
+   scoped per container throughout this file — there is no global one — so the
+   push to the right has to be declared here too. */
+.review-modal .modal-head { gap: 10px; font: 400 14px/1.5 var(--sans); }
+.review-modal .modal-head .spacer { flex: 1; }
+.review-when { flex: none; font: 400 12px/1.5 var(--sans); color: var(--text-4); }
+
+/* The dialog takes focus on open so the keyboard is inside the scrim rather
+   than out in the rail behind it. It is a tabindex="-1" holder and never a
+   control, so it wears no ring: the scrim is what says where you are. */
+#review-modal:focus { outline: none; }
+
+/* Focusable so the arrow keys scroll a long plan, but the global
+   :focus-visible outline is offset outwards — and against a body that runs the
+   full width of the dialog that reads as two stray blue rules, top and bottom,
+   rather than as a focus ring. Drawn inside instead, the way .tasks-strip
+   solves the same thing. */
+#review-body:focus-visible { outline-offset: -3px; }
+
+/* What happened, above the thing it happened to: the outcome is the reason you
+   opened this, and putting it in the footer would mean scrolling a long plan to
+   find out it was sent back. */
+.review-outcome:empty { display: none; }
+.review-outcome {
+    margin: 4px 24px 0;
+    padding: 10px 14px;
+    background: var(--s1);
+    border-radius: var(--r-sm);
+}
+.review-said-head {
+    display: block;
+    margin-bottom: 4px;
+    font: 500 10.5px/1.5 var(--sans);
+    color: var(--text-4);
+    text-transform: lowercase;
+}
+.review-said { font: 400 12.5px/1.6 var(--sans); color: var(--text-2); }
+
+/* The same measure as .plan-doc, because prose is read at about this width —
+   but with its own padding rather than that rule's centring, which .plan-foot
+   does arithmetic against (see the calc there). Reusing it would move the live
+   pane's buttons. */
+.plan-rev { max-width: 820px; margin: 0 auto; padding: 4px 0 8px; }
+
+.qrev {
+    display: grid;
+    grid-template-columns: repeat(var(--qrev-cols, 1), minmax(0, 1fr));
+    gap: 0 20px;
+    /* A short question ends where it ends rather than being stretched to match
+       the longest column. */
+    align-items: start;
+}
+.review-modal[data-cols="2"] .qrev { --qrev-cols: 2; }
+.review-modal[data-cols="3"] .qrev { --qrev-cols: 3; }
+.review-modal[data-cols="4"] .qrev { --qrev-cols: 4; }
+
+/* The dock's separator is a rule *above* each question after the first, because
+   there they are stacked. Side by side that line is in the wrong place — it
+   belongs between the columns. */
+.qrev .perm-q + .perm-q {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: none;
+    padding-left: 20px;
+    border-left: 1px solid var(--outline-soft);
+}
+
+/* Narrower than the step above allows, so they stack instead — the columns
+   would be doing neither job at this width. */
+@media (max-width: 1100px) {
+    .qrev { grid-template-columns: 1fr; }
+    .qrev .perm-q + .perm-q {
+        margin-top: 14px;
+        padding-top: 14px;
+        padding-left: 0;
+        border-top: 1px solid var(--outline-soft);
+        border-left: none;
+    }
+}
+
+/* Nothing here is selectable, so the rows are divs and the hover and pointer
+   the dock gives its labels would both be lying. */
+.qrev .perm-opt { cursor: default; }
+.qrev .perm-opt:hover { background: var(--bg); }
+/* The dock marks its chosen option with `:has(input:checked)`; there are no
+   inputs here, so the same look hangs off the attribute instead. */
+.qrev .perm-opt[data-chosen] { border-color: var(--blue); background: var(--blue-tint); }
+.qrev-mark { flex: none; margin-top: 1px; color: var(--text-4); font-size: 12px; }
+.qrev .perm-opt[data-chosen] .qrev-mark { color: var(--blue); }
+
+/* A preview is a drawn thing as often as it is text — a mocked-up row, a table.
+   Wrapped at column width it stops being the thing it is a preview of, so here
+   it keeps its lines and scrolls sideways. The dock does not need this: an
+   option there is as wide as the composer. */
+.qrev .perm-opt-preview {
+    white-space: pre;
+    word-break: normal;
+    max-height: 200px;
+}
+
+/* Typed rather than picked, through the tool's "Other" box. Not drawn as an
+   option, because it was not one of them. */
+.qrev-said {
+    margin-top: 8px;
+    padding: 8px 11px;
+    background: var(--blue-tint);
+    border-radius: var(--r-sm);
+    font: 400 12.5px/1.6 var(--sans);
+    color: var(--text);
+}
+.qrev-said-head {
+    display: block;
+    margin-bottom: 3px;
+    font: 500 10.5px/1.5 var(--sans);
+    color: var(--text-4);
+    text-transform: lowercase;
+}
+.qrev-none {
+    margin-top: 8px;
+    font: 400 12px/1.6 var(--sans);
+    color: var(--text-4);
+    font-style: italic;
+}
 
 /* What happened to a card that is gone. The transcript carries the real
    record; this is only so the card does not vanish without a word. */
@@ -3543,6 +3746,170 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     border-color: var(--outline);
 }
 .btn-attach:disabled { color: var(--text-4); border-color: var(--s3); cursor: default; }
+
+/* Send later.
+   ---------------------------------------------------------------------------
+   The button borrows .btn-attach's shape rather than .btn-snippets' — it sits in
+   the same run as Attach, on the left of Send, and the two should read as one
+   pair of ways in rather than as a bordered one and a borderless one.
+
+   A pending chip is amber throughout. The queue's chips are neutral because they
+   are about to go; these are about to go *in six hours*, in a mode that may be
+   bypassPermissions, and they should not look like the same fact. */
+
+.later-wrap { position: relative; flex: none; }
+
+.btn-later {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px; height: 38px;
+    color: var(--text-3);
+    background: transparent;
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--pill);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
+                border-color var(--t-fast) var(--ease);
+}
+.btn-later:hover:not(:disabled),
+.btn-later[aria-expanded="true"] {
+    background: var(--s3);
+    color: var(--text);
+    border-color: var(--outline);
+}
+.btn-later:disabled { color: var(--text-4); border-color: var(--s3); cursor: default; }
+
+/* The popover shares .snip-menu's box, animation and positioning; this is only
+   what differs. Written as `.snip-menu.later-menu` because .snip-menu is defined
+   further down this file and would otherwise win on order — it lays its children
+   out as side-by-side grid columns, which is right for snippet groups and wrong
+   for a list of times. */
+.snip-menu.later-menu {
+    display: block;
+    width: auto;
+    padding: 5px;
+    min-width: 236px;
+}
+.later-row {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    width: 100%;
+    padding: 6px 9px;
+    border-radius: var(--r);
+    text-align: left;
+    font: 400 12.5px/1.4 var(--sans);
+    color: var(--text-2);
+}
+.later-row:hover, .later-row.on { background: var(--s4); color: var(--text); }
+/* The absolute time, beside the relative one that names the row. Muted and in the
+   mono face, because it is the thing you check rather than the thing you read. */
+.later-row .at { margin-left: auto; font: 400 11px/1.4 var(--mono); color: var(--text-4); }
+.later-row:hover .at, .later-row.on .at { color: var(--text-3); }
+
+.later-sep { height: 1px; margin: 5px 4px; background: var(--outline-soft); }
+
+/* Picking an exact time, and the mode it will be delivered in. Not rows: both are
+   fields, and a field that looks like a row you can press is a field people press
+   and then wonder why nothing happened. */
+.later-fields { padding: 4px 9px 7px; display: flex; flex-direction: column; gap: 7px; }
+.later-fields label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font: 400 11.5px/1.4 var(--sans);
+    color: var(--text-3);
+}
+.later-fields input, .later-fields select {
+    flex: 1;
+    min-width: 0;
+    padding: 4px 6px;
+    background: var(--s2);
+    color: var(--text);
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r);
+    font: 400 11.5px/1.4 var(--sans);
+}
+.later-fields .go {
+    align-self: flex-end;
+    padding: 4px 12px;
+    border-radius: var(--pill);
+    background: var(--blue-cont);
+    color: #e6edff;
+    font: 500 11.5px/1.4 var(--sans);
+}
+.later-fields .go:hover { background: var(--blue); color: #062e6f; }
+
+/* The chips, above the queue. */
+.later[hidden] { display: none; }
+.later {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 8px;
+}
+
+.later-chip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 6px 5px 8px;
+    background: var(--s2);
+    border-left: 2px solid var(--yellow);
+    border-radius: var(--r);
+    transition: background var(--t-fast) var(--ease);
+}
+.later-chip:hover { background: var(--s3); }
+/* Delivered, missed or failed: it is a record now, not a plan, so the accent goes
+   and the row steps back. A failure keeps a colour, because it is the one you have
+   to do something about. */
+.later-chip.done { border-left-color: var(--outline-soft); opacity: 0.72; }
+.later-chip.bad { border-left-color: var(--red); }
+
+.later-when {
+    flex: none;
+    font: 400 11px/17px var(--mono);
+    color: var(--yellow);
+    white-space: nowrap;
+}
+.later-chip.done .later-when { color: var(--text-4); }
+.later-chip.bad .later-when { color: var(--red); }
+
+/* The mode is on the face of the chip and not in its expansion, because
+   bypassPermissions arriving at 2am is the single most consequential thing about
+   a scheduled message and it must not be something you have to click to find. */
+.later-mode {
+    flex: none;
+    padding: 1px 7px 2px;
+    border-radius: var(--pill);
+    background: var(--s4);
+    font: 400 10.5px/1.4 var(--mono);
+    color: var(--text-3);
+    cursor: default;
+}
+/* bypassPermissions and dontAsk, which is what this pill is really for. */
+.later-mode.loud { background: #3a2f16; color: var(--yellow); }
+
+.later-text {
+    flex: 1;
+    min-width: 0;
+    padding: 0;
+    text-align: left;
+    font: 400 12.5px/1.5 var(--sans);
+    color: var(--text-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+}
+.later-chip.open .later-text {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 132px;
+    overflow-y: auto;
+}
+.later-text:hover { color: var(--text); }
 
 /* Images a turn carried, inline. Was two inline properties on the <img> itself, which
    was enough while one image per turn was the only shape there was. */
@@ -6870,6 +7237,121 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     .cfg-tab, .cfg-list-x { transition: none; }
 }
 
+/* ── the commands a project declares ──────────────────────────────────────
+   The same group furniture again — tabs, file line, stale banner, foot — so
+   what is new here is the card per command and the field inside it. A field is
+   a row rather than the label-left/control-right shape the settings rows use:
+   a command's values are long (a shell line, a range, a list of variables) and
+   there is no right-hand column wide enough for them that is not also mostly
+   empty for `cwd`. */
+
+.cmd-card {
+    padding: 12px 14px 14px;
+    margin-top: 10px;
+    background: var(--s2);
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r);
+}
+.cmd-card.bad { border-color: var(--red); }
+.cmd-card-head { display: flex; align-items: center; gap: 8px; }
+.cmd-card-spacer { flex: 1; min-width: 0; }
+.cmd-card-id { font: 400 12px var(--mono); color: var(--text-2); }
+.cmd-card-name { font-size: 12px; color: var(--text-4); }
+.cfg-tab-tag.bad { color: var(--red); }
+
+.cmd-orphan {
+    margin: 8px 0 0;
+    padding: 8px 10px;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-3);
+    background: var(--s3);
+    border-radius: var(--r-sm);
+}
+.cmd-orphan strong { color: var(--text-2); font-weight: 400; }
+
+.cmd-field { padding-top: 12px; margin-top: 12px; border-top: 1px solid var(--outline-soft); }
+/* An unset override is still readable — greyed rather than hidden, because a
+   field that vanishes when you untick it takes the inherited value with it and
+   the placeholder is the whole point. */
+.cmd-field.unset .cmd-field-label { color: var(--text-4); }
+.cmd-field-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.cmd-field-label { font-size: 12px; color: var(--text-2); }
+.cmd-field-from {
+    font-size: 11px;
+    color: var(--text-4);
+    padding: 1px 6px;
+    background: var(--s3);
+    border-radius: var(--pill);
+}
+.cmd-field-note { margin: 5px 0 0; font-size: 11px; line-height: 1.6; color: var(--text-4); }
+.cmd-field-bad { margin: 5px 0 0; font: 400 11px var(--mono); line-height: 1.6; color: var(--red); }
+.cmd-field .settings-text,
+.cmd-field .cmd-area { width: 100%; }
+.cmd-mono { font-family: var(--mono); }
+.cmd-set { flex: none; }
+
+/* A textarea rather than an input, and not for length: `validate()` refuses
+   only a NUL byte, so a newline is legal in a command — and a single-line input
+   drops one silently, which eats half of somebody's command on the first save. */
+.cmd-area {
+    display: block;
+    min-height: 26px;
+    padding: 6px 10px;
+    font: 400 12px/1.6 var(--mono);
+    color: var(--text);
+    background: var(--s3);
+    border: 1px solid transparent;
+    border-radius: var(--r-sm);
+    resize: none;
+    overflow: hidden;
+}
+.cmd-area:focus { outline: 0; border-color: var(--blue); }
+.cmd-area:disabled { color: var(--text-4); }
+
+.cmd-port { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cmd-port .settings-num { width: 88px; }
+.cmd-port-dash { color: var(--text-4); }
+.cmd-port-env { width: 160px; flex: none; }
+
+.cmd-env-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.cmd-env-name { width: 170px; flex: none; }
+.cmd-env-value { flex: 1; min-width: 0; }
+
+/* What the template comes to in this directory. Only drawn when expanding
+   actually changed something, so a command with no placeholders does not carry
+   a line repeating itself. */
+.cmd-preview {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    flex-wrap: wrap;
+    margin: 12px 0 0;
+    padding-top: 10px;
+    border-top: 1px dashed var(--outline-soft);
+    font-size: 11px;
+    color: var(--text-4);
+}
+.cmd-preview-lede { flex: none; }
+.cmd-preview code { font: 400 11px var(--mono); color: var(--text-3); word-break: break-all; }
+
+.cmd-foot {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 0 4px;
+    margin-top: 12px;
+    border-top: 1px solid var(--outline-soft);
+}
+.cmd-foot-note { font-size: 12px; color: var(--text-4); }
+.cmd-foot-note.bad { color: var(--red); }
+
+/* A file the form cannot show, and the way through to the one thing that can
+   repair it. */
+.cmd-broken { font-size: 12px; line-height: 1.6; color: var(--text-3); }
+.cmd-broken strong { color: var(--text-2); font-weight: 400; }
+.cmd-broken .btn { margin-top: 10px; }
+
 /* ── the snippet editor, in Settings ───────────────────────────────────── */
 
 .snip-settings-acts { display: flex; gap: 8px; margin: 4px 0 14px; }
@@ -7382,4 +7864,267 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 @media (max-width: 900px) {
     .diff-seg { display: none; }
     .diff-note { display: none; }
+}
+
+/* ── project colours ───────────────────────────────────────────────────────
+   A colour somebody gave a project, worn by everything that names one.
+
+   **`--proj-accent` is set inline by script and every rule below hangs off
+   `[data-tinted]`**, never off the property alone. That is the whole trick: a
+   project with no colour, and a dialog with no project, get none of these rules
+   and so render exactly as this app has always rendered them — rather than
+   through a `color-mix` that happens to land near the blue it replaced. Two
+   states, not a spectrum with an awkward middle.
+
+   The mixing is `--snip-accent`'s idiom (see the snippets section above), and
+   for its reason: one hue turned into a ground and an edge against the surface
+   underneath, so a badly chosen colour comes out muted rather than loud. */
+
+/* The dot that says "this project", wherever a project is named in a list. It
+   is `currentColor`-sized rather than fixed so it sits on the text it precedes,
+   and it collapses to nothing without a colour — a row of empty circles for the
+   projects nobody has coloured would be noise standing in for information. */
+.pdot { display: none; }
+.picker-row[data-tinted] > .pdot,
+#new-scrim[data-tinted] .new-project > .pdot {
+    display: block;
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--proj-accent);
+}
+
+/* --- the Start-a-session dialog --------------------------------------- */
+
+/* The head reads downward: which project, then what you are doing with it. */
+.modal-head-text {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+.new-project {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+    font: 500 11.5px/1.4 var(--sans);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-3);
+}
+.new-project-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Nothing picked is a state worth reading, not an empty space: the dialog no
+   longer chooses a directory for you, so this line is where you find that out. */
+.new-project.none { color: var(--text-4); font-style: italic; text-transform: none; }
+#new-scrim[data-tinted] .new-project { color: color-mix(in srgb, var(--proj-accent) 62%, var(--text)); }
+
+/* The backdrop takes a wash of it, so the screen says which project before a
+   word of the dialog has been read. Darker than the plain #00000099 it replaces
+   rather than lighter — a tint that also lifted the backdrop would show less of
+   the window behind it while claiming to say more. */
+#new-scrim[data-tinted] {
+    background: color-mix(in srgb, var(--proj-accent) 13%, #000000c2);
+}
+/* An edge rather than a border: .modal has none today, and adding one for the
+   tinted case alone would change the dialog's shape as well as its colour. */
+#new-scrim[data-tinted] .modal {
+    box-shadow: inset 0 3px 0 var(--proj-accent), 0 24px 64px #000a;
+}
+#new-scrim[data-tinted] .modal-head {
+    background: color-mix(in srgb, var(--proj-accent) 13%, var(--s2));
+    padding-bottom: 12px;
+}
+
+/* The selection states inside this dialog, which are all hard-coded blue. Kept
+   under the tinted attribute *and* under #new-scrim, so blue goes on meaning
+   "selected" in every other panel in the app: a colour that meant "this project"
+   in one place and "you chose this" in another would be worth neither. */
+#new-scrim[data-tinted] {
+    --sel-bg: color-mix(in srgb, var(--proj-accent) 26%, var(--s2));
+    --sel-bg-hover: color-mix(in srgb, var(--proj-accent) 34%, var(--s2));
+    --sel-fg: color-mix(in srgb, var(--proj-accent) 82%, var(--text));
+}
+#new-scrim[data-tinted] .picker-row[aria-current="true"],
+#new-scrim[data-tinted] .picker-tab[aria-selected="true"],
+#new-scrim[data-tinted] .when-day:has(input:checked) {
+    background: var(--sel-bg);
+    color: var(--sel-fg);
+}
+#new-scrim[data-tinted] .picker-row[aria-current="true"]:hover {
+    background: var(--sel-bg-hover);
+}
+#new-scrim[data-tinted] .when-opt:has(input:checked) {
+    background: color-mix(in srgb, var(--proj-accent) 14%, var(--s2));
+}
+#new-scrim[data-tinted] .field textarea:focus,
+#new-scrim[data-tinted] .field input[type="text"]:focus,
+#new-scrim[data-tinted] .when-in:focus,
+#new-scrim[data-tinted] .mkdir-name:focus {
+    box-shadow: inset 0 0 0 2px var(--proj-accent);
+}
+#new-scrim[data-tinted] .when-day:focus-within {
+    box-shadow: inset 0 0 0 2px var(--proj-accent);
+}
+#new-scrim[data-tinted] .when-pick input,
+#new-scrim[data-tinted] .field label.check input {
+    accent-color: var(--proj-accent);
+}
+
+/* --- the rail's project cards ----------------------------------------- */
+
+/* A stripe down the left edge rather than a wash over the card. The rail is
+   304px of rows that are already carrying a state colour each, and a tinted card
+   under them would be a second colour competing with the first; an edge is read
+   as "which card" and never as "what is happening in it". */
+.rail-group { position: relative; }
+.rail-group[data-tinted] {
+    box-shadow: inset 3px 0 0 var(--proj-accent);
+}
+.rail-group[data-tinted] > .group-head {
+    padding-left: 15px;
+    color: color-mix(in srgb, var(--proj-accent) 55%, var(--text-2));
+}
+.rail-group[data-tinted] > .group-head .twist {
+    color: color-mix(in srgb, var(--proj-accent) 45%, var(--text-4));
+}
+
+/* ⋮ — a sibling of the heading, not a child, because the heading is a <button>.
+   Held over the card's top-right corner, with the head padded to match so the
+   count never runs under it. Hidden until the card is hovered or something in it
+   has the focus: one of these per project, always drawn, is a column of dots
+   down a narrow rail saying nothing. */
+.group-menu-btn {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    color: var(--text-4);
+    opacity: 0;
+    transition: opacity var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+}
+.rail-group:hover > .group-menu-btn,
+.rail-group:focus-within > .group-menu-btn,
+.group-menu-btn[aria-expanded="true"] { opacity: 1; }
+.group-menu-btn:hover { background: var(--s3); color: var(--text-2); }
+.group-menu-btn[aria-expanded="true"] { background: var(--s3); color: var(--text); }
+/* Room for it, so the count and the live pill stop short of the button rather
+   than sliding under it. Only where there is a button to make room for. */
+.rail-group:has(> .group-menu-btn) > .group-head { padding-right: 36px; }
+
+/* The menu itself. .new-menu's surface and rows — it is the same kind of thing,
+   one step further from the control that opened it — but fixed and placed from
+   script, because the rail scrolls and renderRail() rebuilds the button under it.
+   See showProjMenu(). */
+.proj-menu {
+    position: fixed;
+    top: auto;
+    left: auto;
+    right: auto;
+    width: 220px;
+    max-height: none;
+}
+
+/* --- the boards and the dashboard ------------------------------------- */
+
+/* Heads only, and lightly. These are wide surfaces holding cards that carry
+   colours of their own — a task's state, a PR's — so the project's colour has to
+   stay out of their way while still being the first thing read down the column. */
+.tb-col[data-tinted] > .tb-col-head,
+.dproj[data-tinted] > .dproj-head {
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
+    background: color-mix(in srgb, var(--proj-accent) 11%, transparent);
+    box-shadow: inset 0 2px 0 var(--proj-accent);
+}
+.tb-col[data-tinted] > .tb-col-head h2 {
+    color: color-mix(in srgb, var(--proj-accent) 55%, var(--text));
+}
+.dproj[data-tinted] > .dproj-head .dproj-name {
+    color: color-mix(in srgb, var(--proj-accent) 55%, var(--text));
+}
+
+/* --- the colour picker ------------------------------------------------ */
+
+.modal.pcolor { width: min(480px, 100%); }
+.pcolor-name { font: 500 15px/1.4 var(--sans); color: var(--text); }
+.pcolor-path {
+    margin-top: 2px;
+    font: 400 11.5px/1.5 var(--mono);
+    color: var(--text-4);
+    overflow-wrap: anywhere;
+}
+
+.pcolor-swatches { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* One swatch: a filled disc of the colour, ticked when it is the one in force.
+   The tick is drawn over the fill rather than beside it, so the row's height is
+   the same whichever is chosen and nothing shifts as you go along it. */
+.pcolor-swatch {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: var(--pcolor, var(--s4));
+    color: #000000b8;
+    box-shadow: inset 0 0 0 1px #0000004d;
+    transition: transform var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
+}
+.pcolor-swatch:hover { transform: scale(1.08); }
+.pcolor-swatch.on { box-shadow: 0 0 0 2px var(--s2), 0 0 0 4px var(--pcolor, var(--text-3)); }
+/* "No colour" is a swatch like the others rather than a button somewhere else,
+   because clearing is a choice among the same choices. Drawn as an empty ring so
+   it cannot be mistaken for a dark colour. */
+.pcolor-swatch.none {
+    background: transparent;
+    color: var(--text-3);
+    box-shadow: inset 0 0 0 1.5px var(--outline);
+}
+.pcolor-swatch.none.on { box-shadow: inset 0 0 0 1.5px var(--outline), 0 0 0 2px var(--s2), 0 0 0 4px var(--text-3); }
+
+.pcolor-custom { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.pcolor-custom label { font: 400 12.5px/1.4 var(--sans); color: var(--text-3); }
+.pcolor-custom input[type="color"] {
+    flex: none;
+    width: 46px;
+    height: 30px;
+    padding: 0;
+    border-radius: var(--r-sm);
+    background: var(--bg);
+    cursor: pointer;
+}
+
+/* --- the Projects group in Settings ----------------------------------- */
+
+.pcolor-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 9px 12px;
+    border-radius: var(--r);
+    background: var(--s2);
+    margin-bottom: 6px;
+}
+.pcolor-row[data-tinted] {
+    background: color-mix(in srgb, var(--proj-accent) 9%, var(--s2));
+    box-shadow: inset 2px 0 0 var(--proj-accent);
+}
+.pcolor-row-text { min-width: 0; flex: 1; }
+.pcolor-row-name { font: 500 13px/1.4 var(--sans); color: var(--text-2); }
+.pcolor-row-path {
+    font: 400 11px/1.5 var(--mono);
+    color: var(--text-4);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .pcolor-swatch:hover { transform: none; }
 }

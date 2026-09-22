@@ -159,7 +159,8 @@ the thing you are about to approve is running on a machine you are sitting at.
 **Refused for remote callers** (403, with `{"error": …, "remote": true}`):
 `permissionMode` of `bypassPermissions` or `dontAsk` on create, on send, on
 **saving or starting a draft**, and on **saving a snippet**; all
-of `/api/terminals/*`; all of `/api/runs/*`; `POST /api/commands/run`;
+of `/api/terminals/*`; all of `/api/runs/*`; `POST /api/commands/run`; all of
+`/api/commands-config*`;
 `/api/shutdown`; `/api/restart` (both methods); `/api/devservers/stop`; `/api/devbrowser/*`;
 `POST /api/sessions/:id/reveal`; `POST /api/sessions/:id/open-file`;
 `POST /api/sessions/:id/handoff`; `POST /api/fs/mkdir`;
@@ -214,6 +215,12 @@ touch. Being able to *write* one is the ability to change what every session on
 this machine is told before its first message, which is a larger capability
 than any single setting on the route above.
 
+`/api/commands-config` — the editor for those same files — is refused on the
+prefix instead, **both methods**. The merged read stays open because what a
+project declares is in its repository already and that payload has never carried
+`env`; the raw read serves `commands.local.json`, which is the private file where
+an environment variable with a token in it actually lives.
+
 Note the asymmetry around `/api/fs` and `/api/commands`: `GET /api/fs` and
 `GET /api/commands` stay readable remotely, so those refusals are on the exact path
 rather than the prefix. Reading the tree answers "where could a session start", and a phone may
@@ -251,8 +258,23 @@ The only unauthenticated route. Counts, a pid, and:
 { "ok": true, "version": "1.0.0", "port": 45888, "dev": false,
   "remote": false, "authRequired": true,
   "permissionModes": ["auto","acceptEdits","plan","manual","dontAsk","bypassPermissions"],
-  "sessions": 120, "clients": 1, "live": 4, "busy": 3 }
+  "sessions": 120, "clients": 1, "live": 4, "busy": 3, "atRisk": 0,
+  "sessionHost": { "pid": 5031, "protocol": 1, "startedAt": 1790098455020, "attached": 3 } }
 ```
+
+`busy` is a number: turns in flight. `atRisk` is a number, never more than `busy`:
+the turns a restart of this bridge would **end**. A turn running in the session host
+(`bridge/host.js`) survives a restart and is picked up by the next bridge on the same
+port, so it counts in `busy` and not in `atRisk`. Anything deciding whether a restart
+is safe should read `atRisk`, and fall back to `busy` when the field is absent, since
+that is an older bridge with no host.
+
+`sessionHost` is **an object or null**: `{pid, protocol, startedAt, attached}`, where
+`pid` and `startedAt` (epoch ms) belong to the host process, `protocol` is a number and
+`attached` is how many processes this bridge is relaying through it. `null` means this
+bridge starts `claude` directly, the way every bridge did before the host existed, so
+every busy turn is at risk. See §*A bridge restart does not end a turn* under *Things
+that will bite*.
 
 `root` and `home` are included only for local callers. Read `permissionModes` rather
 than hardcoding the list; a remote client should drop `bypassPermissions` and
@@ -286,6 +308,7 @@ project filter on `GET /api/sessions?project=`.
 | `pinned`, `archived`, `test`, `active` | bools |
 | **`worktree`** | **object or null** — `{name, branch, path, originalCwd}` |
 | **`schedule`** | **object or null** — `{id, title}`, both strings; see below |
+| **`later`** | **object or null** — `{pending, nextAt}`, both numbers; see below |
 | `prs` | array of `{number, url, repo}`, empty if none |
 | **`live`** | **object or null** — see below |
 | **`runner`** | **object or absent** — four fields only, see below |
@@ -305,6 +328,19 @@ is indistinguishable. **A title the user set by hand wins** — `custom-title` a
 `schedule` is still there. A client that wants the schedule's name without the date
 reads `schedule.title`; one that wants to group scheduled runs tests `schedule` for
 null and needs nothing else.
+
+**`later` is the count and the clock, not the messages.** `{pending, nextAt}` when this
+session has messages waiting to be delivered to it — the number still `pending`, and the
+epoch ms of the soonest — and **`null`** when it has none, which is nearly every session.
+It is here so a rail can say "something arrives here at 02:00" without a second fetch,
+since opening the session is the one thing nobody is going to do at 02:00. The messages
+themselves are `GET /api/sessions/:id/later`.
+
+Note the shape of the staleness: this is computed per request, but the session list is
+not pushed when a message is delivered — `later-changed` is. So a client that draws a
+badge from this field and never refetches will show a message that has already gone.
+`web/app.js` draws its badge from the `later-changed` payload instead and leaves this
+field for clients that fetch sessions and nothing else.
 
 `titleSource` says where `title` came from: `custom-title`, `agent-name`, `ai-title`
 (Claude Code's own entries), `schedule` (composed as above), `prompt` (the first line
@@ -410,8 +446,9 @@ strings by a client that then rendered `[object Object]`:
 is not a missing key.
 
 **`tool.result`** is `{text, stdout, stderr, patch, filePath, interrupted,
-backgroundTaskId}`. `text` is the tool output flattened to a string and is the one to
-show; `stdout`/`stderr`/`filePath` are strings or null; `interrupted` is a bool.
+backgroundTaskId, answers, plan, planWasEdited}`. `text` is the tool output flattened
+to a string and is the one to show; `stdout`/`stderr`/`filePath` are strings or null;
+`interrupted` is a bool.
 
 **`tool.result.patch` is a structured diff, not a string** — the `structuredPatch`
 Claude Code records for an edit, an array of hunks:
@@ -423,6 +460,51 @@ Claude Code records for an edit, an array of hunks:
 
 Each entry in `lines` already carries its own leading `+`, `-` or space; do not add
 one. Null for a tool that produced no diff.
+
+**`tool.result.answers` is what was picked, not what was offered** — an object, or
+null for every tool but `AskUserQuestion`. Keys are the **exact** `question` strings
+from `input.questions[]`; values are strings. **There is no index anywhere**, and a
+question with no key here was not answered — the object carries only the questions
+that were. So match on the text and show nothing for a question that is absent;
+do not fall back to position, because "this key was rewritten" and "this question
+went unanswered" look identical from here, and guessing by position attributes one
+question's answer to another.
+
+**Parsing a value is not a split.** One string carries all three cases with nothing
+to tell them apart: a single choice is the option's `label` verbatim; a multi-select
+is the chosen labels joined `", "`; and an answer typed into the tool's "Other" box
+is a sentence that matches no label at all. Measured over 414 real answers on one
+machine: 83% one label, 4% several joined, 13% free text, and 1% a label followed by
+typed words. **Do not split on `", "`** — 187 of those 414 questions had an option
+label containing a comma of its own (`"Bar, count, cycling (Recommended)"`), so
+splitting shreds them. Consume whole labels off the
+**front** of the string, longest-first, for as long as the front keeps being a label
+followed by end-of-string or `,\s*`; whatever remains is what the person typed.
+Both halves of that matter. Front-anchored, because the picks are joined first and
+the typed answer pushed on the end — searching the whole string instead marks a
+label somebody quoted mid-sentence to argue against it. Longest-first, because one
+label is often a prefix of another (`"Approve"` / `"Approve with feedback"`).
+
+**One case is not recoverable, and no client should pretend otherwise.** Ticking an
+option and adding a condition in the "Other" box produces the same bytes as typing
+that whole sentence into "Other" alone. `"Hard delete, but make them confirm"` is
+therefore read as the option plus a note, which is what the real answers support —
+but it is a reading, not a fact, so show the typed words either way rather than
+letting the mark stand on its own.
+
+**`tool.result.plan` is the approved plan, not the proposed one** — a string, or null
+for every tool but `ExitPlanMode`. `input.plan` is what was put forward; this is what
+was agreed to. They differ when the plan was edited before approval, or approved with
+a note, which appends a `## Note from the user` section. `planWasEdited` is a bool
+saying which happened, and is only ever true — its absence is the ordinary case, not
+a recorded `false`.
+
+On `status: "error"` both are null and `result.text` is the reason. That is usually
+the person's own words and can be shown as such, but three canned strings are not and
+should not be presented as feedback: `"Not yet — keep planning."`, `"The question was
+dismissed unanswered. Use your own judgement and carry on."` and `"Stopped from
+Claude Sessions before this was approved."` — the last meaning the turn was stopped
+while the ask was still open, so nobody answered it at all.
 
 **`tool.agent` is a subagent descriptor, not a name** — `{agentId, agentType,
 description, model, isAsync, durationMs, tokens, toolUses}` from the result, plus
@@ -846,8 +928,8 @@ it opens is on this machine's desktop, which a phone cannot look at.
 
 ### `GET /api/prefs?cwd=<path>&files=1`
 
-`{ version, transcript: {…}, live: {…}, quota: {…}, spinner: {…}, keyboard: {…},
-sources: [string], problems: [{file, message}] }` — how the person using the app
+`{ version, transcript: {…}, live: {…}, projects: {…}, quota: {…}, spinner: {…},
+keyboard: {…}, sources: [string], problems: [{file, message}] }` — how the person using the app
 wants it to behave. `sources` is file paths, weakest first; each `problems` entry
 is an **object**, `{file, message}`, naming the file that carried a value the key
 does not allow and what was wrong with it.
@@ -885,13 +967,16 @@ rather than taken at face value; the default stands. Without `?cwd=` you get the
 user-level answer, which is also what every page is served in a `cs-prefs`
 `<meta>` tag (minus `sources` and `problems`).
 
-**Two sections may only be set in the user's own file**: `quota` and `keyboard`.
-A project file that carries one is ignored and says so in `problems`. What
-directory this app starts `claude` in, and which keys your hands use, are not a
-repository's business — and a repository that could rebind your keys could make
-the window unusable with hand-editing the file as the only way back. `quota` was
-documented this way before it was enforced this way; it is enforced now, so
-`?cwd=` no longer echoes a project's value back as though it counted.
+**Three sections may only be set in the user's own file**: `quota`, `keyboard`
+and `projects`. A project file that carries one is ignored and says so in
+`problems`. What directory this app starts `claude` in, and which keys your
+hands use, are not a repository's business — and a repository that could rebind
+your keys could make the window unusable with hand-editing the file as the only
+way back. `projects` is there for a third reason: the map is keyed by absolute
+path and so names *other* projects, and a repository setting one would be a
+repository colouring its neighbours. `quota` was documented this way before it
+was enforced this way; it is enforced now, so `?cwd=` no longer echoes a
+project's value back as though it counted.
 
 `transcript` today: `groupToolCalls` (fold a run of tool calls into one row once
 a message closes it), `groupMinCalls` (how long a run has to be — at least 2),
@@ -910,6 +995,40 @@ answer — the board draws sessions from every project at once, so a project's
 `<workspace>/.tgxcode/settings.json` can set `live` and will see it echoed back
 on `?cwd=`, but it does not change what the board draws. A client that builds its
 own cards has no reason to read `live` at all — the Android app does not.
+
+`projects` is one key, `colors`, and it is an **object**:
+`{"<absolute project directory>": "<#rgb or #rrggbb>"}`. It is a colour a person
+gave a project so that a session scoped to the wrong checkout is visible rather
+than only readable — the desktop wears it on the rail's project cards, the
+drafts and task boards' project columns, the dashboard's project cards, and the
+dialog that scopes a new session or a schedule. A project with no entry has no
+colour, which is most of them, and `{}` is how it ships.
+
+**A directory is matched as a prefix at a path boundary, longest first.** The map
+is keyed by *project root*, so `/home/you/proj` also answers for
+`/home/you/proj/.claude/worktrees/spike` and for any other subdirectory of it —
+which is what lets a worktree wear its checkout's colour without being listed
+separately. The boundary is part of the rule: `/home/you/proj` does **not**
+answer for `/home/you/project`. Longest wins, so a worktree given a colour of its
+own keeps it. This resolution is the client's to do; the bridge stores the map
+and validates it, and takes no view on which directory you are asking about.
+
+**The value is a literal colour, and the validation is strict for a reason.** A
+client sets it as a CSS custom property, so `red`, `var(--x)` and `#fff;}` are
+all refused — the same rule and the same argument as a snippet group's `accent`
+(see `POST /api/snippet-groups`). Keys must be absolute and are stored resolved,
+so `/home/you/proj/` and `/home/you/proj/sub/..` cannot become two entries for
+one project. At most 200 entries are kept. A bad key or a bad value is dropped
+with one `problems` line rather than costing the map, exactly as
+`keyboard.bindings` and `spinner.weights` are.
+
+Like those two, `colors` is a **map**, so a `PUT` naming it replaces the whole
+thing rather than merging into it: there is no spelling for "clear this one
+entry", because leaving the key out *is* that. Send all of it. Clearing the last
+colour is `{"projects": {"colors": null}}`, which removes the section from the
+file.
+
+User file only — see the three-section paragraph below.
 
 `spinner`: `randomize` (whether a turn in progress wears a themed verb in front
 of what it is doing, or says only what it is doing as before), `groups` (which
@@ -1297,6 +1416,114 @@ had ticked would mean losing it. The flag only decides what the session becomes.
 
 Also pushed as the `drafts-changed` SSE event, which is how the UI reads it. That event
 carries this same payload, so a client never has to come back here after the first load.
+
+### `GET /api/later`
+
+Messages written now and delivered to a session that **already exists**, at a time you
+picked. Where a draft is a `POST /api/sessions` held back, one of these is a
+`POST /api/sessions/:id/send` held back.
+
+```json
+{
+  "at": 1790086932143,
+  "messages": [
+    { "id": "fcaf1abd-2c91-4648-ae9a-895916fd4de6",
+      "sessionId": "8ee90bfa-bfab-47d6-aba0-ba2482a2cc47",
+      "cwd": "/home/dylan_hays/Other/claude-sessions",
+      "projectName": "claude-sessions",
+      "text": "You may now modify app data to get the screenshots.",
+      "attachments": [],
+      "model": null, "permissionMode": "bypassPermissions",
+      "at": 1790112000000, "state": "pending", "late": false, "test": false,
+      "createdAt": 1790086931954, "updatedAt": 1790086931954,
+      "sentAt": null, "error": null }
+  ],
+  "counts": { "total": 1, "pending": 1 }
+}
+```
+
+**Read the section on `permissionMode` below before building a client for this.** It is
+the field that decides whether the feature works at all, and the obvious default is the
+one value that cannot.
+
+| Field | Type |
+|---|---|
+| `id` | string, a UUID |
+| `sessionId` | string — the session this will be delivered to. Always a session that existed when the message was written; a message whose session is later deleted is deleted with it |
+| `cwd` | string — where that session was working when this was written. **Display only**: the delivery re-resolves the directory from the session itself, so a checkout that moved is a recorded failure rather than a message sent somewhere else |
+| **`projectName`** | string — derived, not stored, exactly as on a draft |
+| `text` | string. May be `""` when `attachments` is non-empty — a screenshot with nothing typed under it is a message |
+| **`attachments`** | **array of objects**, `[{path, relPath, mediaType}]`, each of the last two a string or null; `[]` for most messages, at most 5. Files already written by the attachments route. Re-derived against the session's own directory at delivery, so one tidied away in the meantime is dropped rather than failing the message |
+| **`model`** | **string or null.** `null` is `inherit`. Not `""` |
+| **`permissionMode`** | string, one of the six in `POST /api/sessions/:id/send`, and **never absent** — see below |
+| `at` | number, epoch ms — when it is due |
+| **`state`** | string, one of `pending` · `delivering` · `sent` · `missed` · `failed`. `delivering` is a claim a tick holds and is normally seen only for a moment; a client should draw it as in-progress rather than as a state of its own |
+| **`late`** | **boolean** — derived per request, and `true` only on a `pending` row that is now past its window. The window lives on the bridge, so a client cannot compute this; without it a chip would say "in −20 minutes" about a message that is never going to be delivered |
+| `test` | boolean — **copied off the target session's own `test` flag** when the message was written, not chosen by the caller. It decides which bridge delivers the row; see below |
+| `createdAt`, `updatedAt` | numbers, epoch ms. `createdAt` never moves |
+| `sentAt` | **number or null**, epoch ms — when it was handed to the process. `null` until then |
+| `error` | **string or null** — why it is `missed` or `failed`, in a sentence fit to show |
+
+Ordered **soonest `at` first** — the order they will happen in, which is the order to
+read them in. Delivered and missed rows keep their place in that order rather than
+moving to an end.
+
+`counts.pending` counts only `state: "pending"`, so it is what a badge should draw;
+`counts.total` includes the week of history described under retention.
+
+#### `permissionMode` is the feature, not a detail of it
+
+A permission ask raised while **no client is attached to `/api/events`** is denied
+immediately, and two denials stop the turn — see *Being connected is load-bearing*. A
+message delivered at 02:00 therefore does not run unattended in `auto`; it stalls on the
+first tool call and gives up, and the only sign is a session that did nothing in the
+night.
+
+So: **the mode is stored per message, is required on create, and is never defaulted at
+delivery.** `web/app.js` offers `bypassPermissions` first and remembers the last choice.
+A client that omits the field gets a `400` rather than a silent `auto`, which is the one
+place this deliberately departs from `POST /api/sessions/:id/send`.
+
+The mode is also applied on the way in: delivering with a model or mode that differs
+from the session's current one replaces the process, exactly as a `/send` with a changed
+mode does. That is why the tick **waits for the session to be idle** in that case rather
+than delivering behind the turn — replacing the process ends the turn in flight, and
+killing a 2am turn to deliver a message meant to help it would be the worst thing this
+could do. A message whose mode already matches is simply queued behind the turn.
+
+#### Which bridge delivers, and when it gives up
+
+**One hour of grace.** A message more than an hour past its time is marked `missed` and
+**not delivered**, with a loud notification. That is far tighter than the schedule tick's
+12-hour catch-up on purpose: a *session* started seven hours late is merely late, but an
+*instruction* seven hours late is the wrong instruction, and this one arrives carrying
+the permission to act on itself.
+
+**The everyday bridge delivers real messages and a dev bridge delivers `test` ones**, the
+same symmetric rule the schedule tick applies — but here the flag is not something a
+caller sets. It is copied off the target session, so it says no more than "the bridge
+that owns this session is the one that delivers to it". Unlike schedules this needs no
+`CLAUDE_SESSIONS_SCHEDULE_ON_DEV`: a scheduled message can only speak to a session that
+already exists, so there is no unattended-agent-in-the-user's-checkout hazard for that
+variable to guard.
+
+**A message interrupted mid-delivery is marked `failed` and never retried.** If the
+bridge stops between claiming a message and hearing back, the message may already be in
+the transcript — `claude` writes its user entry at submission — so re-sending it would
+re-run work that has already happened. The `error` says so.
+
+**Retention.** `sent`, `missed` and `failed` rows are kept for **seven days** and then
+dropped, and every row for a session goes when the session is deleted. So a client must
+treat this list as something that shrinks underneath it.
+
+Also pushed as the `later-changed` SSE event, carrying this same payload.
+
+### `GET /api/sessions/:id/later`
+
+→ `{messages: [...]}`, the same rows as above filtered to one session. Nothing else
+differs; it exists so a conversation view does not have to hold the whole list.
+
+`404` for an unknown session. An empty `messages` is the normal answer.
 
 ### `GET /api/snippets?cwd=<path>`
 
@@ -1715,7 +1942,8 @@ A row is:
 ```
 
 `type` is one of `permission`, `plan`, `question`, `finished`, `failed`, `agent-done`,
-`peer-message`, `handoff`, `schedule-findings`, `schedule-failed`, `schedule-missed`.
+`peer-message`, `handoff`, `schedule-findings`, `schedule-failed`, `schedule-missed`,
+`later-failed`, `later-missed`.
 `summary` is clipped to 200 characters and `detail` to 400.
 
 **`sessionId` may be `null`, and it is on two of the three schedule types.** Every row
@@ -1726,6 +1954,15 @@ are exactly the rows worth raising. On such a row `title` is the schedule's name
 there is nothing to navigate to, so **a client that links the whole row to
 `/api/sessions/<sessionId>` must check for `null` first**. `schedule-findings` does
 carry one; the other two do not.
+
+**The two `later-` types always carry one**, and that is not an accident of this
+implementation: a scheduled message is written against a session that exists, so there
+is always somewhere for the row to open. `title` on those is the *session's* title, not
+a schedule's. `later-missed` means the bridge was not running when the message was due
+and more than an hour had passed by the time it could be; `later-failed` means a
+delivery was attempted and did not land, or was interrupted mid-flight. In every case
+the message survives in `GET /api/later` with its `error` set, so nothing anybody wrote
+is lost.
 `outcome` and `outcomeAt` are filled in later, on the row that already exists, when an
 ask is answered — so a row is mutable and a client holding one should patch it rather
 than assume it is final. `anchorId` is a `toolUseId` where there is one, so a client
@@ -2071,6 +2308,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `overview` | the board; sent only when it has actually changed |
 | `taskboard` | the task board; every ~3s while watched, and only when it has actually changed. Never carries `?idle=all` |
 | `drafts-changed` | `{at, drafts[], counts}` — the whole `GET /api/drafts` payload, so there is nothing to refetch. **Not gated by a `POST /api/subscribe` flag**, unlike `overview` and `taskboard`: a draft only changes because somebody changed it, so there is no tick to switch on and every window gets every change. Fires on create, edit, delete, and on anything that consumes one — `POST /api/drafts/:id/start`, and a `fromDraft` on `POST /api/sessions` or `POST /api/schedules` |
+| `later-changed` | `{at, messages[], counts}` — the whole `GET /api/later` payload, so there is nothing to refetch. Ungated, exactly as `drafts-changed` is. Like `schedules-changed` and unlike `drafts-changed` it also fires **without anybody having done anything**: a delivery, a message going past its window, and a failed wake all move it. That is how a chip starts saying "sent 02:00" while nobody is looking at it, and it is the only signal a client gets that a scheduled message has left — the session list is not pushed for it |
 | `snippets-changed` | `{at, snippets[], groups[], counts}` — the whole `GET /api/snippets` payload, so there is nothing to refetch. Ungated, exactly as `drafts-changed` is, and like it, it never fires without somebody having done something: a snippet or group created, edited or deleted, and a reorder **that actually moved a row** — a drag that lands where it started pushes nothing. Both arrays every time, because deleting a group re-homes its snippets and sending half the answer would leave a client drawing a card that no longer exists. **Always unfiltered by `cwd`**, so a client that fetched with `?cwd=` must apply the filter itself here or watch its list silently widen |
 | `schedules-changed` | `{at, schedules[], counts}` — the whole `GET /api/schedules` payload. Ungated, exactly as `drafts-changed` is. Unlike that one it fires **without anybody having done anything**: a schedule firing, skipping a slot, or having its outcome recorded when the turn ends all push it. So a client that assumed the payload only moves in response to a user action will be wrong here, and pleasantly so — this is how a card starts saying "ran 2h ago — BLOCK" while nobody is looking at it |
 | `sessions-changed` | `{at}` — a nudge to refetch the list |
@@ -2079,7 +2317,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `handoff` | `{at, sessionId, from, count}` — another session handed this one work, and it was resumed to deal with it. Same shape and same reasoning as above; watched in the transcript rather than reported by the route, so it fires when the message *arrived* rather than when it was queued |
 | `suggestion-changed` | `{at, sessionId, toolUseId}` — a suggested follow-up was started, dismissed, or undone, possibly in another window |
 | `session-deleted` | `{sessionId, title}` |
-| `prefs` | the **user-level** settings, in the same shape as the `cs-prefs` `<meta>` tag: `{version, transcript, live, quota, spinner, keyboard}`, with no `sources` or `problems`. Fired on every `PUT /api/prefs` including your own, so a second window does not sit on a stale copy — two are routinely open here. A project's answer is deliberately not sent: it is the open session's business and arrives with `GET /api/sessions/:id` |
+| `prefs` | the **user-level** settings, in the same shape as the `cs-prefs` `<meta>` tag: `{version, transcript, live, projects, quota, spinner, keyboard}`, with no `sources` or `problems`. Fired on every `PUT /api/prefs` including your own, so a second window does not sit on a stale copy — two are routinely open here. A project's answer is deliberately not sent: it is the open session's business and arrives with `GET /api/sessions/:id` |
 | `claude-config` | `{at: number, scope: 'user'\|'project'\|'project-local'\|'managed', file: string}` — the *fact* that one of Claude Code's settings files changed, and deliberately **not** its content. Unlike `prefs` there is no `<meta>` copy for a page to keep in sync and nothing in this app behaves differently because of those files, so the event is a nudge to re-read; pushing the contents of a file whose route is local-only down every open channel would be a poor trade for saving a fetch. Fired on every successful `PUT /api/claude-config`, including your own — **and on a change this bridge did not make**: `claude` writes these files itself, so `theme` or `editorMode` from `/config`, `enabledPlugins` from a plugin toggle, and a rule appended to `settings.local.json` when somebody approves a permission mid-turn all arrive here too. `scope` may then be `managed`, which no `PUT` can produce. **Two caveats a client has to hold.** It is best-effort: the bridge watches directories with `fs.watch`, which throws on some filesystems and silently does nothing on others, so a change can go unannounced — keep treating `409 {code:'stale'}` from `PUT /api/claude-config` as the guarantee, and this only as the convenience that usually saves you from meeting it. And a project's two files are watched only once `GET /api/claude-config?cwd=<dir>` has been called for that directory, only for a small number of directories at a time (least-recently-read dropped first), and not after ten minutes without another read of it; the user file and the managed file are watched throughout. So poll or re-`GET` if you need certainty about a directory you have not asked about |
 | `claude-docs` | `{at, scope, file}` — the same trade for a `CLAUDE.md`: the fact one was written, never its contents. `scope` is `"user"` or `"project"`. Fired on every successful `PUT /api/claude-docs`, including your own. **A client holding an unsaved draft must not reload on this** — show a conflict and keep what the person typed; the whole draft here is somebody's prose rather than one key |
 | `notification` | a whole notification row, just filed — the same shape `GET /api/notifications` returns, `read` included — plus `unread`, the badge count after this row. So an open history view need not refetch, and need not guess whether the new row counts |
@@ -2096,6 +2334,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `session-forked` | `{from, to}` — follow the new id |
 | `slash-commands` | `{cwd, at}` — that directory's slash commands changed; drop what you cached |
 | `run-changed` | `{runId, workspace, commandId, label, state, port, exit, stopped, at}` — a project command moved; state only, never output |
+| `commands-config` | `{at, scope, project, file}` — a project's `.tgxcode/` command file was written through `PUT /api/commands-config`. The fact of a change, never its content: these files carry `env` values the route classifies as local-only, and this channel reaches a paired phone. Re-read the file, and re-read `GET /api/commands` for any directory inside `project` — a renamed command's button does not change on its own. It does **not** fire for a hand edit; nothing watches these files, and the `409` on save is what catches that |
 
 `runner-status` is the full shape — the one the two narrower `runner` objects are cut
 down from:
@@ -2314,6 +2553,86 @@ that loaded a draft into its own form and then started or scheduled the edited v
 rather than saving it. Use this route when nothing was edited: it needs no body, and the
 arguments it spawns with are the ones on the file rather than ones the caller has to
 send back.
+
+### `POST /api/sessions/:id/later`
+
+`{text, attachments?, model?, permissionMode, at}` → `{message}`, the row as
+`GET /api/later` returns it.
+
+The create lives on the session because a scheduled message is written *against* one.
+Everything after this is about one message and takes no session in the path.
+
+**`permissionMode` is required**, and that is the one rule worth reading twice. `/send`
+normalises an absent one to `auto`; here an absent one is a `400`, because `auto` is the
+single mode that cannot work when nobody is watching and making it the silent default
+would mean a feature that fails only at night. See *`permissionMode` is the feature*
+under `GET /api/later`.
+
+`at` is epoch ms, must be **in the future** and **within 30 days** — the upper bound is
+what makes a typo'd year a refusal rather than a row that sits in the file forever.
+
+`text` may be empty when `attachments` is non-empty, the send route's rule. `attachments`
+is `[{path, relPath?, mediaType?}]`, at most five, naming files already uploaded through
+`POST /api/sessions/:id/attachments`.
+
+`test` is **not** a field here: it is copied off the session.
+
+`400` for a missing or past `at`, an `at` too far out, an empty message with no
+attachment, or a missing `permissionMode`; `403` for a `permissionMode` a remote caller
+may not ask for — `bypassPermissions` and `dontAsk`, the same pair refused everywhere
+else, and **checked before the session is looked up**, so a refusal is a `403` whether or
+not the id is real; `404` for an unknown session; `409` past **20 pending messages for
+one session**, which is a ceiling and not a lifetime budget — cancelling one makes room.
+
+### `PATCH /api/later/:id`
+
+Any subset of `{text, attachments, model, permissionMode, at}` → `{message}`.
+
+**A genuine partial**, `PATCH /api/drafts/:id`'s rule: a field left out is left alone, so
+rescheduling does not restate the mode and cannot silently reset it. Every field is
+validated as it is on create, and the body is checked before the id is looked up, so the
+refusals are the same plus `404`.
+
+`409` when the message is no longer `pending` — `{"error": "that message is sent — it
+cannot be changed now"}`. Editing a message already handed to a process would be editing
+the past.
+
+`createdAt` is never touched; `updatedAt` always is.
+
+### `DELETE /api/later/:id`
+
+→ `{ok: true, id}`; `404` if there is no such message.
+
+A hard delete, and it is how a message is **cancelled** — there is no `cancelled` state.
+That asymmetry is deliberate: "it was sent" and "it was missed" are things you come back
+in the morning to read, and a message you thought better of is not. Deleting a message
+that has already been delivered clears the record of it and nothing more; the turn it
+produced is in the transcript either way.
+
+### `POST /api/later/:id/send`
+
+No body → `{ok: true, message, status, queued, woke}` — deliver it now, whatever its
+clock says.
+
+**The same function the tick calls**, which is `POST /api/schedules/:id/run`'s rule and
+matters for the same reason: "the button delivers what the clock delivers" is only true
+if there is one path. That includes the wait-for-idle rule, so pressing this cannot end a
+turn either.
+
+- **`status` is a whole runner status object**, the `runner-status` payload for the
+  process the message went to — not a word describing the outcome.
+- `queued` says whether the message is still waiting behind a turn on this side, exactly
+  as `POST /api/sessions/:id/send` uses it.
+- `woke` is true when the delivery is what started the process. A woken session is
+  watched briefly before this answers, so a `claude --resume` that refuses is a `502`
+  here rather than a delivery falsely reported as made.
+
+`404` unknown id. `403` for a `permissionMode` this caller may not send — re-checked
+here and not only at write time, because the store is hand-editable and outlives the
+process that wrote it. `409` twice over, and both mean *nothing happened, try again*: the
+message is not `pending`, or the session is held in a terminal or mid-turn with a mode
+this message would change. `502` for a delivery that was attempted and did not land; the
+message is marked `failed` and its text is still in the row.
 
 ### `POST /api/snippets`
 
@@ -2588,6 +2907,13 @@ one" once you have said otherwise. A section left with no keys is removed too,
 rather than left as `{}` in a file people read. Unknown keys already in the file
 are preserved, and `version` is stamped.
 
+**A key whose value is a map is still one key**, so naming it replaces the whole
+map. That is true of all three — `keyboard.bindings`, `spinner.weights` and
+`projects.colors` — and it is deliberate: a client that holds the resolved map
+can say exactly what it wants by sending all of it, and there is no second
+spelling that would have to mean "drop one entry". See each one under
+`GET /api/prefs`.
+
 The response is the answer that now holds: `file` is what was written, `prefs` is
 `GET /api/prefs?cwd=` for the same directory, and `files` is its `files=1` half.
 Take those rather than assuming the write landed where it matters — a save into a
@@ -2611,7 +2937,7 @@ matching on prose:
 | 400 | `dir` | a project scope with no `cwd`, or one outside the allowed roots |
 | 400 | `section` | no `patch`, or a section or key this bridge does not have |
 | 400 | `value` | a value the key does not allow, or a binding that is not a usable combo |
-| 403 | `readonly` | `quota` or `keyboard` at a project scope |
+| 403 | `readonly` | `quota`, `keyboard` or `projects` at a project scope |
 | 403 | `unparseable` | the target file does not currently parse. Refused rather than replaced: whatever is in it is somebody's work |
 | 403 | `write` | the file or its directory could not be written |
 
@@ -2987,7 +3313,7 @@ array of `{kind, text, files?}`, `kind` one of:
 
 | `kind` | what it is | `files` |
 |---|---|---|
-| `busy` | turns in flight; a restart ends them | — |
+| `busy` | turns a restart would end: busy, and not in the session host. Turns in the host are not counted; they survive. | — |
 | `dirty-bridge` | uncommitted tracked files under `bridge/`, which a restart would load | repo-relative paths |
 | `pull` | `git pull --ff-only` failed; `text` is git's own stderr | — |
 | `not-a-repo` | the checkout cannot be read as one | — |
@@ -3012,7 +3338,8 @@ would be two kills racing for one port. `500` if the pull removed the script.
 
 ### `GET /api/restart`
 
-`→ {pid, port, root, worktree, busy, journal}`. **Local callers only.** `journal` is
+`→ {pid, port, root, worktree, busy, atRisk, journal}`. **Local callers only.** `busy` and
+`atRisk` are numbers with their `/api/health` meanings. `journal` is
 up to the last 20 lines of `~/.cache/claude-sessions/restart-<port>.log` as strings.
 
 This exists for the case a `POST` cannot report: a restart that refused. The script's
@@ -3373,6 +3700,158 @@ the terminal one is: a noisy build moves megabytes and has no business sharing
 with transcript tailing. **Nothing about a run's output ever appears on
 `/api/events`** — that channel carries `run-changed` and `run-changed` only.
 
+## Editing what a project declares
+
+The files behind the section above, as an editor sees them. A different question
+from `GET /api/commands` and a different audience, which is why it is a
+different route rather than a mode of that one: this answers "what does each
+file *say*", where that answers "what buttons does this directory have".
+
+| Route | Body / query | Notes |
+|---|---|---|
+| `GET /api/commands-config?cwd=` | | the two files, unmerged; **local callers only** |
+| `PUT /api/commands-config` | `{cwd, scope, stamp, commands[]}` | replace the array |
+| `PUT /api/commands-config` | `{cwd, scope, stamp, text}` | replace the document |
+
+**Both methods are refused to a remote caller, including the read** — which is
+the opposite of `GET /api/commands` one section up, and the asymmetry is
+deliberate. What a project *declares* is in its repository already and the
+merged payload has never carried `env`; these files are where somebody keeps
+`{"STRIPE_KEY": "sk_live_…"}`, in a file whose whole premise is that it is
+private. The refusal is on the prefix with no method test, so anything added
+under it later is refused by default rather than by being remembered.
+
+`cwd` may be any directory in the project. **The project root is what gets
+edited** — `projectRootOf()` is applied, and the answer's `project` is the path
+actually written, which may not be the one you asked about. A worktree has its
+own checked-in `commands.json` that takes precedence for a session running
+there, so an edit here does not reach it until the branch picks the change up.
+The local file is read from the project root for every worktree, and does.
+
+### The file format
+
+Not written down anywhere before this section, which is why it is here rather
+than behind a pointer at `bridge/commands.js`.
+
+```json
+{ "version": 1, "commands": [{
+    "id": "dev", "label": "Dev server", "run": "npm run dev -- --port=${port}",
+    "cwd": "web", "env": {"DEBUG": "1"},
+    "port": { "range": [5000, 5099], "env": "PORT" },
+    "devbrowser": "${worktree}", "disabled": false
+}]}
+```
+
+`version` must be exactly `1`; anything else and the file contributes nothing.
+
+| Field | Type | | |
+|---|---|---|---|
+| `id` | string | **required, always** | `^[a-z0-9][a-z0-9._-]{0,31}$` |
+| `label` | string | required on a first definition | 1–40 chars, no control characters |
+| `run` | string | required on a first definition | ≤ 2000 chars, no NUL |
+| `cwd` | string | optional | **relative**, and may not resolve outside the workspace |
+| `env` | `{NAME: string}` | optional | ≤ 32 keys, each `^[A-Z_][A-Z0-9_]*$`, values strings |
+| `port` | `{range: [lo, hi], env?: string}` | optional | integers 1024–65535, `lo ≤ hi`, span ≤ 1000 |
+| `devbrowser` | string | optional | empty falls back to worktree, then branch, then project |
+| `disabled` | boolean | optional | declared, but no button |
+
+Keys not in that table are **kept as written**, by both the reader and the
+editor. The reader ignores them; the editor round-trips them rather than
+dropping a field somebody added by hand.
+
+**Five placeholders, and a sixth is an error rather than an empty string:**
+`${port}`, `${cwd}`, `${project}`, `${worktree}`, `${branch}`. They are expanded
+in `run`, `cwd`, `devbrowser` and every `env` value. `${port}` additionally
+requires the command to declare a range — **checked against the *merged*
+command**, so a `run` in the shared file may use it while the local file
+supplies the range.
+
+At most 24 commands per file, and 64KB per file.
+
+**Two files, merged by `id`.** `commands.json` is checked in;
+`commands.local.json` is yours and should be excluded from the repository — the
+bridge checks and reports when it is not. A local entry whose id the shared file
+already declares is an **override** and supplies only what it changes; anything
+else is a first definition and needs `label` and `run`. Merging is shallow per
+key, except `env`, which merges key by key — so there is no way to *remove* an
+inherited variable, only to give it a different value — and `port`, which
+replaces wholesale.
+
+### What the read answers
+
+```
+{ project, projectName, context, merged[], problems[], files[], limits, placeholders[], patterns }
+```
+
+- `context` is `{cwd, project, worktree, branch, port}` — what `${…}` expands to
+  at the project root. `port` is always `null` here.
+- `files[]` is one row per scope, weakest first, each
+  `{scope, file, exists, parsed, stamp, size, writable, symlink, ignored,
+  ignoredBy, commands[], text, problem}`. `scope` is `project` or
+  `project-local`, the same two words `/api/prefs` uses.
+  **`commands[]` is verbatim** — the entries exactly as the file has them,
+  unvalidated and including keys this app does not model. That is the point: a
+  client that seeded an editor from `merged` instead would write the merged
+  answer back, and adding one local override would copy every shared command
+  into a private file.
+  `exists && !parsed` means the file is there and unreadable; `text` still
+  carries the bytes so an editor can repair it, and `problem` is
+  `{file, message}` with the parser's own sentence.
+  `ignored` is `true`/`false` on the local row and `null` on the shared one, and
+  `ignoredBy` names the matching rule as `<file>:<line>`.
+- `merged[]` is the two files folded together and validated, each carrying
+  `from` — the file that last set it. For showing inherited values, not for
+  seeding an editor.
+- `problems[]` is `{file?, id?, field?, message, informational?}`.
+- `limits` is `{maxCommands, maxFileBytes, maxRunChars, maxEnvKeys,
+  maxLabelChars}` and `patterns` is `{id, envKey}` as regular-expression source
+  strings. They ride along so a form can label its counters and refuse a bad id
+  without a second copy of the bridge's constants going stale.
+
+### What a write has to send
+
+Exactly one of `commands` (an array, replacing that file's own entries) or
+`text` (the whole document, and the only thing that can repair one which no
+longer parses). `version` is **not** in the body: the writer stamps it, because
+a client that could send `version: 7` is a client that can write a file this
+bridge then refuses to read. A structured write is serialised with two-space
+indent and a trailing newline; a `text` write is stored byte for byte.
+
+**`stamp` is required and `undefined` is a refusal**, unlike
+`PUT /api/claude-config` where a single scalar patch may omit it. Every write
+here replaces the whole array, so there is no write a read immediately
+beforehand could make safe. `null` means "this file should not exist yet", which
+is how a page that has never seen one asks to create it — so absent and null
+must stay distinguishable in the JSON.
+
+**The write is refused whole.** One bad entry and nothing is written, including
+the good entries and including the file itself when it was being created. The
+refusal reports *every* problem rather than the first.
+
+| `code` | Status | |
+|---|---|---|
+| `scope` | 400 | not `project` or `project-local` |
+| `dir` | 400 | missing, or outside the allowed roots |
+| `body` | 400 | not exactly one of `commands`/`text`; wrong type |
+| `stamp` | 400 | the precondition was left out |
+| `invalid` | 400 | the document would not load; `problems[]` |
+| `json` | 400 | `text` that does not parse, or is not an object |
+| `version` | 400 | `text` whose `version` is not 1 |
+| `stale` | 409 | changed since it was read; `stamp`, `text`, `commands` |
+| `exists` | 409 | `stamp: null` against a file that now exists; `stamp` |
+| `size` | 413 | over 64KB serialised |
+| `readonly` | 403 | a symlink, or a `.tgxcode` that is one |
+| `write` | 403 | not writable, or `.tgxcode` is a regular file |
+
+An `invalid` refusal carries `problems: [{index, id?, field?, message}]`.
+`index` is the position in the array you sent, and it is the row key rather than
+`id`: an entry with a malformed id has no usable one, and a duplicate id names
+two rows.
+
+A success answers `{file, stamp, config}`, where `config` is the same shape the
+GET returns — so a client can take the answer wholesale instead of patching its
+own copy.
+
 ## Decisions locked in for a native client
 
 These are cheap now and expensive later, so they are settled:
@@ -3414,6 +3893,29 @@ will show a permanently spinning tool. See §*A tool call resolves in one of two
 
 **`runner` on a session summary is not the `runner-status` payload.** Four fields, and
 `pendingPermission` is not among them. See §`GET /api/sessions`.
+
+**A bridge restart does not end a turn.** When `/api/health` reports a `sessionHost`,
+every `claude` this bridge started runs in that host, and a restart hands it on rather
+than killing it. A client reconnecting after the bridge went away will find:
+
+- **The same session still `busy`, or `idle` with its turn finished.** A turn that
+  ended while no bridge was up is reported with a `turn-complete` event as the new
+  bridge starts, before any client can be connected to hear it. So a client that
+  wants to know about it reads `lastResult` from the runner status rather than
+  waiting for the event.
+- **An approval card on a session nobody has looked at yet.** An ask raised while the
+  bridge was down comes back as `pendingPermission` on the runner status and is
+  answered on the usual route. It is not auto-denied for want of a window, because
+  none has had time to reconnect; it waits, like any card left open.
+- **Messages queued before the restart are still queued**, with new ids. Queue ids
+  (`q…`) are not stable across a restart, so never keep one from before it.
+- **Idle sessions keep their process.** An idle session can still be running a
+  background command or subagent, so the bridge does not stop it on the way down.
+
+A turn is still lost when there is no host (`sessionHost: null`), or when the host
+itself is killed. The runner then reports `error`, and the next send starts a fresh
+process with `--resume` as it always did. `atRisk` in `/api/health` counts exactly the
+turns a restart would end.
 
 **A `200` from `/api/fs/open` means Windows was handed the path, not that a window
 appeared.** `explorer.exe` reports exit code 1 even when it works perfectly, so its

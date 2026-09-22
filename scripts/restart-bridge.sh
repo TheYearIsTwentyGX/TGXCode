@@ -136,6 +136,15 @@ if [ "$STATUS_ONLY" = 1 ]; then
             "$(printf '%s' "$CURRENT" | field sessions)" \
             "$(printf '%s' "$CURRENT" | field clients)" \
             "${BUSY:-an unknown number of}"
+        # The session host, when there is one: the process holding those turns,
+        # which a restart does not touch. See bridge/host.js.
+        HOSTPID="$(printf '%s' "$CURRENT" | python3 -c "import json,sys
+try: print((json.load(sys.stdin).get('sessionHost') or {}).get('pid',''))
+except Exception: print('')" 2>/dev/null)"
+        if [ -n "$HOSTPID" ]; then
+            printf 'host   pid %s  %s of them would end on a restart\n' \
+                "$HOSTPID" "$(printf '%s' "$CURRENT" | field atRisk)"
+        fi
     fi
     exit 0
 fi
@@ -171,7 +180,11 @@ esac
 # --- don't throw away work -------------------------------------------------
 
 if [ -n "$CURRENT" ]; then
-    BUSY="$(printf '%s' "$CURRENT" | field busy)"
+    # `atRisk` is the turns a restart would actually end: a turn in the session
+    # host survives one and the next bridge adopts it. A bridge older than the
+    # host reports only `busy`, and there every busy turn is at risk.
+    BUSY="$(printf '%s' "$CURRENT" | field atRisk)"
+    [ -n "$BUSY" ] || BUSY="$(printf '%s' "$CURRENT" | field busy)"
     if [ -n "$BUSY" ] && [ "$BUSY" != "0" ] && [ "$FORCE" != 1 ]; then
         die 3 skipped-busy "$BUSY turn(s) still running." \
             "A restart ends them — Claude stops when its input pipe closes." \
