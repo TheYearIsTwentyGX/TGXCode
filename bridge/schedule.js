@@ -323,6 +323,44 @@ function nextSlot(spec, after = Date.now()) {
     return null;
 }
 
+/**
+ * Has this schedule run for the last time?
+ *
+ * The question a card cannot answer from `nextRunAt` alone, because that field
+ * is null for a paused row *and* for one that will never fire again — and those
+ * are opposite things to a reader. `enabled` does not separate them either: a
+ * one-time schedule is disabled by the bridge itself the moment its slot passes
+ * (`claim()` for a slot the tick took, `note()` for one it found too old), so a
+ * spent one and a paused one are the same two booleans.
+ *
+ * Two ways to be spent, and both have to be here rather than in a client:
+ *
+ *   * **An expression with no future date at all.** `0 0 30 2 *` parses and
+ *     never matches, whatever `enabled` says — so this one is asked first and
+ *     answers for an armed row as readily as a paused one.
+ *   * **A one-time row the bridge switched off.** All three conditions are
+ *     load-bearing. `once` alone is not it: cron has no year field, so a `once`
+ *     can sit on a repeating expression and still have a real next slot until it
+ *     has taken one, which is what `lastSlotAt` says. And `enabled` is what
+ *     separates the bridge's disable from a resume: `update()` resets the slot
+ *     cursor on an off→on transition, so a spent one-time that you armed again
+ *     keeps a `lastSlotAt` while having a genuine next run.
+ *
+ * Run now is safe by construction — it leaves `lastSlotAt` alone, so trying a
+ * one-time schedule out does not make it look finished.
+ *
+ * The one case this cannot see is a one-time schedule resumed by hand and then
+ * paused by hand, which reads as spent. Nothing on the row distinguishes it from
+ * the slot the bridge took, and it is a schedule that has in fact already run.
+ *
+ * Derived per request, like `nextRunAt` beside it: it moves with the clock, and
+ * `clean()` would strip it from the store anyway.
+ */
+function isSpent(row, spec) {
+    if (nextSlot(spec, Date.now()) == null) return true;
+    return !!(row.once && !row.enabled && row.lastSlotAt != null);
+}
+
 // How many slots one `dueSlot` walk will step through. A schedule that has been
 // unable to run for a long time — the bridge down, the machine off — must still
 // converge rather than walk a year of `*/5` minutes in one tick. Hitting the
@@ -1647,6 +1685,7 @@ module.exports = {
     parseCron,
     matches,
     nextSlot,
+    isSpent,
     dueSlot,
     describeCron,
     cronForm,

@@ -514,9 +514,14 @@ const state = {
     // the dialog reopens in schedule mode until the save that consumes it. It is
     // not `editing` — the schedule does not exist yet — and it is deliberately
     // not stored on the schedule either; see drToSchedule().
+    // `openDone` holds the projects whose Done band is unfolded, keyed by the
+    // same project name the columns are. A Set of the *open* ones rather than the
+    // shut ones, so the default is shut — the rail's nested Scheduled group makes
+    // the same choice for the same reason (`isOpen`). In memory only: it is a
+    // reading position within one sitting, not a preference.
     sched: {
         open: false, rows: [], at: 0, loading: false, error: null,
-        editing: null, fromDraft: null,
+        editing: null, fromDraft: null, openDone: new Set(),
     },
     // The settings panel. `data` is a `?files=1` answer — what is in force plus
     // what each file in the chain says on its own, which is what lets a control
@@ -9668,9 +9673,18 @@ async function saveSnipEditor() {
 // and the prompt is secondary — it is the one screen in this app whose job is to
 // notice that something has quietly stopped happening.
 //
-// `nextRunAt` and `cronText` are computed by the bridge, not here. Three clients
-// read this API and none of them should be reimplementing a cron parser to draw a
-// card — the one that runs the schedule is the one that should say when it runs.
+// `nextRunAt`, `cronText` and `spent` are computed by the bridge, not here. Three
+// clients read this API and none of them should be reimplementing a cron parser to
+// draw a card — the one that runs the schedule is the one that should say when it
+// runs, and whether it is ever going to again.
+//
+// **The panel is a column per project, each column stacked into Active, Paused
+// and Done.** Drafts' column shape (`renderDrafts`) for the horizontal half, for
+// the reason it gives — sub-headings inside one column read as one long list once
+// the rows come from five worktrees. The stacking is what makes that safe here:
+// the objection this panel used to carry, that splitting by directory would put
+// two dead schedules in two different columns, only holds while a dead schedule is
+// loose in a list. Under a counted heading it is the first thing the column says.
 
 function showSched(on) {
     state.sched.open = on;
@@ -9722,11 +9736,15 @@ async function loadSched() {
  * How many schedules are armed.
  *
  * Armed, not stored: a paused schedule is a decision you already made and is not
- * news. Never `urgent` — a schedule that needs attention says so through a
+ * news, and neither is one that has finished. `enabled` alone would count a row
+ * whose expression can never match again — armed, and never going to fire — so
+ * the badge and the Active band agree by asking the same question.
+ *
+ * Never `urgent` — a schedule that needs attention says so through a
  * notification, which is the surface that can reach you when this window is shut.
  */
 function paintSchedBadge() {
-    const n = state.sched.rows.filter(s => s.enabled).length;
+    const n = state.sched.rows.filter(s => s.enabled && !s.spent).length;
     dom.schedBadge.hidden = !n;
     dom.schedBadge.textContent = String(n);
     dom.btnSched.title = keys.hint(n
@@ -9738,13 +9756,19 @@ function paintSchedBadge() {
 
 function renderSched() {
     const rows = state.sched.rows;
-    const armed = rows.filter(s => s.enabled).length;
+    const groups = schedGroups(rows);
+    // Below two projects a column is a column with nothing to be told apart from,
+    // which is only a narrower list — the drafts board's threshold and its
+    // argument. The bands stay either way: they are about the schedules, not
+    // about how many directories they came out of.
+    const cols = groups.size >= 2;
 
     dom.schedSub.textContent = rows.length
-        ? `${rows.length} schedule${rows.length === 1 ? '' : 's'}, ${armed} armed.`
+        ? schedSummary(rows, cols ? groups.size : 0)
         : 'Sessions that start on a clock.';
 
     if (state.sched.error) {
+        dom.schedBody.classList.remove('cols');
         dom.schedBody.replaceChildren(el('div', { class: 'dr-note' },
             el('p', {}, `Could not read the schedules. ${state.sched.error}`)));
         return;
@@ -9753,6 +9777,7 @@ function renderSched() {
     const scroll = dom.schedBody.scrollTop;
 
     if (!rows.length) {
+        dom.schedBody.classList.remove('cols');
         dom.schedBody.replaceChildren(el('div', { class: 'dr-note' },
             el('p', {}, 'Nothing scheduled yet.'),
             el('p', { class: 'dim' }, 'A schedule is a session that starts on its own '
@@ -9766,27 +9791,175 @@ function renderSched() {
         return;
     }
 
-    dom.schedBody.replaceChildren(...schedCards(rows));
-    dom.schedBody.scrollTop = scroll;
+    if (!cols) {
+        // One project, one scrolling column — and its own scroll position held,
+        // because `schedules-changed` arrives while nobody has touched anything.
+        dom.schedBody.classList.remove('cols');
+        const [name] = [...groups.keys()];
+        dom.schedBody.replaceChildren(...schedBands(rows, name));
+        dom.schedBody.scrollTop = scroll;
+        return;
+    }
+
+    // Each column scrolls on its own and the row of them scrolls sideways, so a
+    // rebuild throws away as many positions as there are projects unless every
+    // one is carried across — `renderDrafts`'s problem and its answer, and a
+    // sharper version of it here: this payload is pushed when a run starts or an
+    // outcome lands, so the rebuild that loses your place is one nobody asked
+    // for. Keyed by project rather than by position, so a column that has just
+    // moved left keeps its own place rather than inheriting its neighbour's.
+    const scrolls = new Map();
+    for (const c of dom.schedBody.querySelectorAll('.tb-col-body')) {
+        scrolls.set(c.dataset.project, c.scrollTop);
+    }
+    const across = dom.schedBody.scrollLeft;
+
+    dom.schedBody.classList.add('cols');
+    dom.schedBody.replaceChildren(
+        ...[...groups].map(([name, list]) => schedColumn(name, list)));
+
+    for (const c of dom.schedBody.querySelectorAll('.tb-col-body')) {
+        if (scrolls.has(c.dataset.project)) c.scrollTop = scrolls.get(c.dataset.project);
+    }
+    dom.schedBody.scrollLeft = across;
 }
 
-/** Grouped by project once there is more than one, as drafts are. */
-function schedCards(rows) {
+/**
+ * The schedules, by project.
+ *
+ * **The order of the keys is the order of the columns, and it needs no sort** —
+ * `draftGroups` makes the argument at length and it holds identically here:
+ * `schedules.list()` is newest-`updatedAt` first, `updatedAt` moves on a create
+ * as well as an edit, and a Map keeps the order its keys were first seen in. So
+ * one walk lands the projects most-recently-touched first. An object keyed by
+ * name would not hold that, and neither would a second pass sorting by anything
+ * else.
+ *
+ * `projectName` comes off the payload rather than being derived here, so every
+ * client agrees about which project a directory belongs to.
+ */
+function schedGroups(rows) {
     const groups = new Map();
     for (const s of rows) {
         const name = s.projectName || 'unknown';
         if (!groups.has(name)) groups.set(name, []);
         groups.get(name).push(s);
     }
-    if (groups.size < 2) return rows.map(schedCard);
+    return groups;
+}
 
-    const out = [];
-    for (const [name, list] of groups) {
-        out.push(el('h3', { class: 'tb-sub-head' }, name,
-            el('span', {}, String(list.length))));
-        out.push(...list.map(schedCard));
-    }
-    return out;
+// The three stacks, in the order they are drawn. Active first because it is what
+// the panel is for; Done last because it is the half that only grows.
+const SCHED_BANDS = [
+    { key: 'active', label: 'Active' },
+    { key: 'paused', label: 'Paused' },
+    { key: 'done', label: 'Done' },
+];
+
+/**
+ * Which stack a schedule belongs in.
+ *
+ * `spent` before `enabled`, because a spent one-time schedule is *always*
+ * disabled — the bridge clears the flag itself when the slot passes — so reading
+ * `enabled` first would file every finished schedule under Paused and say it was
+ * waiting for you.
+ *
+ * The sweep check is first and is not a nicety. A one-time `open-prs` schedule is
+ * spent the moment its slot is taken, and then spends the next hour actually
+ * reviewing pull requests; without this the only schedule in the app that is
+ * doing something would be filed under Done and folded out of sight. `docs/api.md`
+ * calls `enabled: false` with an open window a real, transient state, and this is
+ * the client end of that.
+ */
+function schedBand(s) {
+    if (s.reviewsInFlight || (s.sweepUntil && s.sweepUntil > Date.now())) return 'active';
+    if (s.spent) return 'done';
+    if (!s.enabled) return 'paused';
+    return 'active';
+}
+
+/** The sub-line: what is in the panel, counted the way the bands count it. */
+function schedSummary(rows, projects) {
+    const n = { active: 0, paused: 0, done: 0 };
+    for (const s of rows) n[schedBand(s)]++;
+    // Only the non-zero clauses, so a healthy list reads "4 schedules — 4 active."
+    // rather than carrying two zeroes it wants you to ignore.
+    const parts = [
+        n.active ? `${n.active} active` : null,
+        n.paused ? `${n.paused} paused` : null,
+        n.done ? `${n.done} finished` : null,
+    ].filter(Boolean);
+    const head = `${rows.length} schedule${rows.length === 1 ? '' : 's'}`
+        + (projects ? ` across ${projects} projects` : '');
+    return `${head} — ${parts.join(', ')}.`;
+}
+
+/**
+ * One project, as a column.
+ *
+ * `draftColumn`'s chrome — `tb-col`, `tb-col-head`, `tb-count`, `tb-col-body` —
+ * for the same reason it borrowed it from the task board: the shape exists, and a
+ * column here means a place rather than a state, so it takes none of the board's
+ * per-column colour. What is stacked inside it is this panel's own.
+ */
+function schedColumn(name, list) {
+    return el('section', { class: 'tb-col sched-col', 'data-project': name },
+        el('header', { class: 'tb-col-head' },
+            el('h2', { title: name }, name),
+            el('span', { class: 'tb-count' }, String(list.length)),
+        ),
+        el('div', { class: 'tb-col-body', 'data-project': name },
+            ...schedBands(list, name),
+        ),
+    );
+}
+
+/**
+ * One project's schedules, stacked Active / Paused / Done.
+ *
+ * **Headings are dropped when Active is the only band with anything in it**,
+ * which is the ordinary case and the one where a heading says nothing — the same
+ * argument the column threshold makes one level up. A column of only *paused* or
+ * only *done* rows keeps its heading, because "everything here has stopped" is
+ * exactly what this panel exists to make impossible to miss.
+ *
+ * Done is a button rather than a heading, shut by default and shut again on the
+ * next render unless you opened it. It is the band that only grows: every spent
+ * one-time schedule lands there and nothing takes it out, so left open it would
+ * bury the two live rows above it within a month of use.
+ */
+function schedBands(list, project) {
+    const filled = SCHED_BANDS
+        .map(b => ({ ...b, rows: list.filter(s => schedBand(s) === b.key) }))
+        .filter(b => b.rows.length);
+    const bare = filled.length === 1 && filled[0].key === 'active';
+
+    return filled.map((b) => {
+        if (bare) return el('div', { class: 'sched-band', 'data-band': b.key }, b.rows.map(schedCard));
+        if (b.key !== 'done') {
+            return el('div', { class: 'sched-band', 'data-band': b.key },
+                el('h3', { class: 'tb-sub-head' }, b.label, el('span', {}, String(b.rows.length))),
+                b.rows.map(schedCard));
+        }
+        const open = state.sched.openDone.has(project);
+        return el('div', { class: 'sched-band', 'data-band': 'done' },
+            el('button', {
+                class: 'tb-sub-head sched-band-head', type: 'button',
+                'aria-expanded': String(open),
+                title: open ? 'Hide the schedules that have finished'
+                    : 'Show the schedules that have finished',
+                onclick: () => {
+                    state.sched.openDone[open ? 'delete' : 'add'](project);
+                    renderSched();
+                },
+            },
+                el('span', { class: 'twist' }, icon('caret', 12)),
+                b.label,
+                el('span', {}, String(b.rows.length)),
+            ),
+            open ? b.rows.map(schedCard) : null,
+        );
+    });
 }
 
 /**
@@ -9833,8 +10006,19 @@ function schedLast(s) {
     return { state: 'ok', text: `started ${when}` };
 }
 
-/** `nextRunAt` as something worth reading, or why there is nothing to read. */
+/**
+ * `nextRunAt` as something worth reading, or why there is nothing to read.
+ *
+ * `spent` is asked first and the order is the whole point: a one-time schedule
+ * that has fired is disabled by the bridge, so before this field existed the card
+ * said "paused" about something that had finished — the one word that promises it
+ * will run again when you press Resume.
+ */
 function schedNext(s) {
+    if (s.spent) {
+        return s.once ? 'no further runs — it ran its one slot'
+            : 'never — the expression matches no real date';
+    }
     if (!s.enabled) return 'paused';
     if (!s.nextRunAt) return 'never — the expression matches no real date';
     const d = new Date(s.nextRunAt);

@@ -6075,13 +6075,21 @@ body.term-resizing { user-select: none; cursor: row-resize; }
    Drafts' layout, reused rather than restated: same head, same single scrolling
    column at the same width, same card vocabulary.
 
-   Drafts has since grown a second layout — a column per project, once there are
-   two — and this panel deliberately did not follow. A schedule is not read by
-   project; it is read to find out whether the thing you set up months ago is
-   still firing, and that is one question over the whole list. Splitting it by
-   directory would put two dead schedules in two different columns.
+   Drafts' second layout too — a column per project once there are two. This
+   panel held out against that for a while, and the objection is worth keeping
+   because it is what the rest of the shape answers: a schedule is read to find
+   out whether the thing you set up months ago is still firing, and splitting the
+   list by directory would put two dead schedules in two different columns.
 
-   What is genuinely different is the *status line*. A draft's card is read to
+   So the columns arrived with a *vertical* split inside them — Active, Paused,
+   Done — and that is what makes them safe. A dead schedule is loose in a list
+   only while nothing is gathering them up; under a counted heading at the foot of
+   its own column it is the first thing that column tells you. Done is a button
+   rather than a heading because it is the band that only grows: nothing takes a
+   spent one-time schedule out of it, so left open it would bury the live rows
+   above it within a month.
+
+   What is genuinely different from drafts is the *status line*. A draft's card is read to
    decide whether to release it, so the message is the point. A schedule has
    already been released, and you come here to find out whether it is still
    working — so the card gets a row of its own for the last run, coloured, above
@@ -6103,6 +6111,77 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     gap: 8px;
     max-width: 860px;
 }
+
+/* Two projects or more and the panel becomes the drafts board's shape, which is
+   the task board's. Auto-flow because the number of columns *is* the data, and
+   the same 300px floor: a crowded week scrolls sideways rather than squeezing
+   eight cards into eight strips. Vertical scrolling moves down into each
+   `.tb-col-body`, so the body itself must stop doing it. */
+.sched-body.cols {
+    max-width: none;
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(300px, 1fr);
+    gap: 12px;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+/* A project name can be long and a column is narrow, so it gives way rather
+   than pushing its count off the end; the `title` says the whole of it. */
+.sched-col .tb-col-head h2 {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ── the bands ───────────────────────────────────────────────────────────
+   Active, Paused and Done inside each column. `.tb-sub-head` is the heading the
+   panel already used for its project sub-headings, reused here for what it is
+   actually good at — a quiet label with a count pushed to the end — now that the
+   projects have columns of their own.
+
+   The gap is the one `.sched-body` uses, because in the single-project layout
+   the band is the only thing between the body and the cards and the spacing must
+   not change when a second project appears. */
+.sched-band { display: flex; flex-direction: column; gap: 8px; }
+
+/* Done's heading is a button. Everything here is undoing what a button is, since
+   what it should look like is the two headings above it. */
+.sched-band-head {
+    width: 100%;
+    background: none;
+    border: 0;
+    cursor: pointer;
+    text-align: left;
+    padding: 0;
+    transition: color var(--t-fast) var(--ease);
+}
+.sched-band-head:hover { color: var(--text-2); }
+.sched-band-head .twist {
+    display: grid;
+    place-items: center;
+    color: var(--text-4);
+    transition: transform var(--t-fast) var(--ease);
+}
+.sched-band-head[aria-expanded="true"] .twist { transform: rotate(90deg); }
+
+/* `.tb-btn` is sized for the two buttons a task card offers; a schedule offers
+   four, which was comfortable across 860px and is not across a 300px column —
+   they all reached their `min-width: 0` and ellipsised, so the primary action
+   read "Run …". Inside a column they go two by two instead: a half of the row
+   less the gap, which is a grid rather than whatever a wrap happened to leave —
+   three across and one stranded underneath reads as a mistake. The single-column
+   layout is untouched, where four across is still comfortable. */
+.sched-col .tb-acts { flex-wrap: wrap; }
+.sched-col .tb-acts .tb-btn { flex: 1 1 calc(50% - 3px); }
+
+/* A finished schedule reads as finished whether or not the bridge also cleared
+   its `enabled` — the one that never cleared it is the expression that matches no
+   real date, which is the most finished of the lot. */
+.sched-band[data-band="done"] .sched-card { opacity: 0.6; }
+.sched-band[data-band="done"] .sched-when { text-decoration: line-through; }
 
 /* The stripe says what the last run did, which is the same question the dot
    answers — two readings of one fact, because the dot is what you see scanning
@@ -7124,6 +7203,12 @@ body.term-resizing { user-select: none; cursor: row-resize; }
        anything. */
     .dr-body.cols { grid-auto-columns: minmax(260px, 1fr); }
     .dr-col { max-height: none; }
+
+    /* The schedules panel, for the same reasons and with the same numbers. */
+    .sched-head { padding: 16px 16px 12px; }
+    .sched-body { padding: 0 16px 20px; }
+    .sched-body.cols { grid-auto-columns: minmax(260px, 1fr); }
+    .sched-col { max-height: none; }
 
     /* The two selectors drop under the title rather than squeezing beside it;
        the contents go above the groups instead of beside them, as a row that

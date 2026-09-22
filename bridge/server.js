@@ -33,7 +33,7 @@ const {
 } = require('./snippets');
 const {
     Schedules, MAX_SCHEDULES, CATCHUP_MS,
-    parseCron, nextSlot, dueSlot, describeCron, cronForm, fillPrompt, unattended,
+    parseCron, nextSlot, isSpent, dueSlot, describeCron, cronForm, fillPrompt, unattended,
     verdictOf,
     reviewKey, unreviewedPulls, scheduleTitle,
 } = require('./schedule');
@@ -1315,6 +1315,11 @@ function scheduleOut(row) {
         // — `0 0 30 2 *` is a schedule that will never fire — and one the card
         // should be able to say out loud rather than showing a blank.
         nextRunAt: row.enabled ? nextSlot(spec, Date.now()) : null,
+        // Which of `nextRunAt: null`'s two meanings this row is. Paused and
+        // finished look identical from the fields above — the bridge clears
+        // `enabled` on a one-time row itself — and they are opposite things to
+        // anyone reading a card. See isSpent in schedule.js.
+        spent: isSpent(row, spec),
     };
 }
 
