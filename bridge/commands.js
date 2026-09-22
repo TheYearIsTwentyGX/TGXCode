@@ -32,6 +32,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 
 const cfg = require('./config');
+const jsonfile = require('./jsonfile');
 const { projectRootOf, worktreeNameOf } = require('./transcript');
 
 // A config file is a handful of commands. Anything approaching this is either a
@@ -40,6 +41,15 @@ const MAX_FILE_BYTES = 64 * 1024;
 const MAX_COMMANDS = 24;
 const MAX_RUN_CHARS = 2000;
 const MAX_ENV_KEYS = 32;
+const MAX_LABEL_CHARS = 40;
+
+// The two files an editor may write, named the way the rest of the app names
+// this distinction. `bridge/prefs.js` and `bridge/claude-config.js` both say
+// project / project-local for exactly this shared-versus-private-local pair,
+// and docs/api.md documents it that way twice — a third word for one idea is
+// how a client ends up guessing. The tabs say "Shared" and "Local" on screen,
+// where the file names are what the reader has in mind.
+const SCOPES = ['project', 'project-local'];
 
 const ID_RE = /^[a-z0-9][a-z0-9._-]{0,31}$/;
 const ENV_KEY_RE = /^[A-Z_][A-Z0-9_]*$/;
@@ -63,40 +73,33 @@ const ignoreCache = new Map();    // file -> {at, value}
 /**
  * Read one config file.
  *
- * Stat before read, in the shape of persistedOutput() in sessions.js: a file of
- * unknown size never goes into memory whole.
+ * The stat-before-read, the size cap, the BOM and the parse all come from
+ * bridge/jsonfile.js — this function predated that module and was the third
+ * copy of them. What stays here is the part that is not shared: the `version`
+ * and `commands` rules, which belong to this format and to nothing else.
  *
- * @returns {{data: object|null, stamp: string|null, problem: object|null}}
+ * `text` rides along because a file that will not parse is exactly the file
+ * somebody has to look at, and an editor cannot show it without the bytes. The
+ * old version read them and threw them away, so repairing a broken file meant
+ * leaving the app for a text editor.
+ *
+ * @returns {{data: object|null, text: string|null, stamp: string|null,
+ *   size: number, problem: {file: string, message: string}|null}}
  */
 function readConfig(file) {
-    let st;
-    try { st = fs.statSync(file); } catch { return { data: null, stamp: null, problem: null }; }
-    if (!st.isFile()) return { data: null, stamp: null, problem: null };
-    const stamp = `${st.mtimeMs}:${st.size}`;
-    if (st.size > MAX_FILE_BYTES) {
-        return { data: null, stamp,
-            problem: { file, message: `larger than ${MAX_FILE_BYTES / 1024}KB — ignored` } };
-    }
-    let raw;
-    try { raw = fs.readFileSync(file, 'utf8'); }
-    catch (err) { return { data: null, stamp, problem: { file, message: err.message } }; }
+    const got = jsonfile.readJson(file, { maxBytes: MAX_FILE_BYTES });
+    const base = { data: null, text: got.text, stamp: got.stamp, size: got.size };
+    if (got.problem) return { ...base, problem: got.problem };
+    if (!got.data) return { ...base, problem: null };
 
-    let data;
-    // Tolerate a BOM the same way flags.js does: this is a file people edit.
-    try { data = JSON.parse(raw.replace(/^﻿/, '')); }
-    catch (err) { return { data: null, stamp, problem: { file, message: err.message } }; }
-
-    if (!data || typeof data !== 'object' || Array.isArray(data)) {
-        return { data: null, stamp, problem: { file, message: 'not a JSON object' } };
+    if (got.data.version !== 1) {
+        return { ...base,
+            problem: { file, message: `unknown version ${JSON.stringify(got.data.version)} — expected 1` } };
     }
-    if (data.version !== 1) {
-        return { data: null, stamp,
-            problem: { file, message: `unknown version ${JSON.stringify(data.version)} — expected 1` } };
+    if (!Array.isArray(got.data.commands)) {
+        return { ...base, problem: { file, message: '"commands" is not an array' } };
     }
-    if (!Array.isArray(data.commands)) {
-        return { data: null, stamp, problem: { file, message: '"commands" is not an array' } };
-    }
-    return { data, stamp, problem: null };
+    return { ...base, data: got.data, problem: null };
 }
 
 // ---------------------------------------------------------------------------
@@ -121,51 +124,55 @@ function readConfig(file) {
  * @returns {{command: object|null, problem: object|null}}
  */
 function validate(raw, file, override = false) {
-    const bad = (message) => ({ command: null,
-        problem: { file, id: raw && raw.id, message } });
+    // `field` is what lets a form put the message on the input that is wrong
+    // rather than at the top of the card. Omitted where the complaint is about
+    // the entry as a whole; the read path ignores the key either way.
+    const bad = (message, field) => ({ command: null,
+        problem: { file, id: raw && raw.id, message, ...(field ? { field } : {}) } });
 
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return bad('not an object');
     if (typeof raw.id !== 'string' || !ID_RE.test(raw.id)) {
-        return bad('id must be lower-case letters, digits, dot, dash or underscore');
+        return bad('id must be lower-case letters, digits, dot, dash or underscore', 'id');
     }
 
     const out = { id: raw.id };
 
     if (raw.label !== undefined || !override) {
-        if (typeof raw.label !== 'string' || !raw.label.trim() || raw.label.length > 40) {
-            return bad('label must be 1-40 characters');
+        if (typeof raw.label !== 'string' || !raw.label.trim()
+            || raw.label.length > MAX_LABEL_CHARS) {
+            return bad(`label must be 1-${MAX_LABEL_CHARS} characters`, 'label');
         }
         // A label goes on a button; an escape sequence in one is either a
         // mistake or an attempt to make the button lie about what it is.
-        if (/[\u0000-\u001f\u007f]/.test(raw.label)) return bad('label contains a control character');
+        if (/[\u0000-\u001f\u007f]/.test(raw.label)) return bad('label contains a control character', 'label');
         out.label = raw.label.trim();
     }
 
     if (raw.run !== undefined || !override) {
-        if (typeof raw.run !== 'string' || !raw.run.trim()) return bad('run must be a non-empty string');
-        if (raw.run.length > MAX_RUN_CHARS) return bad(`run is longer than ${MAX_RUN_CHARS} characters`);
+        if (typeof raw.run !== 'string' || !raw.run.trim()) return bad('run must be a non-empty string', 'run');
+        if (raw.run.length > MAX_RUN_CHARS) return bad(`run is longer than ${MAX_RUN_CHARS} characters`, 'run');
         // A NUL truncates the line at the exec, so it cannot be quoted safely
         // — see shq() in terminal.js.
-        if (raw.run.includes('\0')) return bad('run contains a NUL byte');
+        if (raw.run.includes('\0')) return bad('run contains a NUL byte', 'run');
         out.run = raw.run;
     }
 
     if (raw.cwd !== undefined) {
         if (typeof raw.cwd !== 'string' || path.isAbsolute(raw.cwd)) {
-            return bad('cwd must be a relative path');
+            return bad('cwd must be a relative path', 'cwd');
         }
         out.cwd = raw.cwd;
     }
 
     if (raw.env !== undefined) {
         if (!raw.env || typeof raw.env !== 'object' || Array.isArray(raw.env)) {
-            return bad('env must be an object');
+            return bad('env must be an object', 'env');
         }
         const keys = Object.keys(raw.env);
-        if (keys.length > MAX_ENV_KEYS) return bad(`env has more than ${MAX_ENV_KEYS} keys`);
+        if (keys.length > MAX_ENV_KEYS) return bad(`env has more than ${MAX_ENV_KEYS} keys`, 'env');
         for (const k of keys) {
-            if (!ENV_KEY_RE.test(k)) return bad(`env name ${JSON.stringify(k)} is not a shell variable name`);
-            if (typeof raw.env[k] !== 'string') return bad(`env.${k} must be a string`);
+            if (!ENV_KEY_RE.test(k)) return bad(`env name ${JSON.stringify(k)} is not a shell variable name`, 'env');
+            if (typeof raw.env[k] !== 'string') return bad(`env.${k} must be a string`, 'env');
         }
         out.env = { ...raw.env };
     }
@@ -173,27 +180,27 @@ function validate(raw, file, override = false) {
     if (raw.port !== undefined) {
         const p = raw.port;
         if (!p || typeof p !== 'object' || !Array.isArray(p.range) || p.range.length !== 2) {
-            return bad('port.range must be [low, high]');
+            return bad('port.range must be [low, high]', 'port');
         }
         const [lo, hi] = p.range.map(Number);
         if (!Number.isInteger(lo) || !Number.isInteger(hi) || lo < 1024 || hi > 65535 || lo > hi) {
-            return bad('port.range must be two integers between 1024 and 65535, low first');
+            return bad('port.range must be two integers between 1024 and 65535, low first', 'port');
         }
-        if (hi - lo > 1000) return bad('port.range spans more than 1000 ports');
+        if (hi - lo > 1000) return bad('port.range spans more than 1000 ports', 'port');
         if (p.env !== undefined && (typeof p.env !== 'string' || !ENV_KEY_RE.test(p.env))) {
-            return bad('port.env is not a shell variable name');
+            return bad('port.env is not a shell variable name', 'port');
         }
         out.port = { range: [lo, hi] };
         if (p.env) out.port.env = p.env;
     }
 
     if (raw.devbrowser !== undefined) {
-        if (typeof raw.devbrowser !== 'string') return bad('devbrowser must be a string');
+        if (typeof raw.devbrowser !== 'string') return bad('devbrowser must be a string', 'devbrowser');
         out.devbrowser = raw.devbrowser;
     }
 
     if (raw.disabled !== undefined) {
-        if (typeof raw.disabled !== 'boolean') return bad('disabled must be true or false');
+        if (typeof raw.disabled !== 'boolean') return bad('disabled must be true or false', 'disabled');
         out.disabled = raw.disabled;
     }
 
@@ -205,6 +212,13 @@ function validate(raw, file, override = false) {
  *
  * A typo shown next to the command beats an empty string in a command line
  * nobody reads before clicking.
+ *
+ * Returns `{field, message}` rather than a bare string so the editor can put
+ * the complaint on the input that carries the placeholder. `field` is the key
+ * as a form knows it — `env.FOO` collapses to the env block, which is the only
+ * control there is for it.
+ *
+ * @returns {{field: string, message: string}|null}
  */
 function checkPlaceholders(command) {
     const fields = [['run', command.run], ['cwd', command.cwd], ['devbrowser', command.devbrowser]];
@@ -213,10 +227,12 @@ function checkPlaceholders(command) {
         if (typeof text !== 'string') continue;
         for (const m of text.matchAll(PLACEHOLDER_RE)) {
             if (!KNOWN.has(m[1])) {
-                return `${field} uses unknown placeholder \${${m[1]}} — known: ${[...KNOWN].join(', ')}`;
+                return { field,
+                    message: `${field} uses unknown placeholder \${${m[1]}} — known: ${[...KNOWN].join(', ')}` };
             }
             if (m[1] === 'port' && !command.port) {
-                return `${field} uses \${port} but the command declares no port range`;
+                return { field,
+                    message: `${field} uses \${port} but the command declares no port range` };
             }
         }
     }
@@ -259,7 +275,10 @@ function merge(into, commands, file, problems) {
 function checkMerged(merged, problems) {
     for (const [id, command] of [...merged]) {
         const err = checkPlaceholders(command);
-        if (err) { merged.delete(id); problems.push({ file: command.from, id, message: err }); }
+        if (err) {
+            merged.delete(id);
+            problems.push({ file: command.from, id, field: err.field, message: err.message });
+        }
     }
 }
 
@@ -479,6 +498,407 @@ function load(dir) {
     return value;
 }
 
+// ---------------------------------------------------------------------------
+// The editor's read
+// ---------------------------------------------------------------------------
+
+/**
+ * The one place a scope becomes a path.
+ *
+ * Both files sit at the *project* root, never a worktree's. A worktree has its
+ * own checked-in copy — 66 of them do in this repository — and editing one from
+ * a settings page would write into a directory a branch merge is about to
+ * overwrite. The local file has never lived anywhere but the main checkout, by
+ * design: that is what makes an override follow you into every worktree.
+ *
+ * @returns {string|null} null for a scope that is not one of ours
+ */
+function fileFor(scope, project) {
+    if (scope === 'project') return path.join(project, cfg.TGX_DIR, cfg.COMMANDS_FILE);
+    if (scope === 'project-local') return path.join(project, cfg.TGX_DIR, cfg.COMMANDS_LOCAL_FILE);
+    return null;
+}
+
+/**
+ * What each file *says*, as against what the chain adds up to.
+ *
+ * This is the seed for an editor, and it is deliberately not load(): that
+ * answers "what is in force", with every placeholder expanded and both files
+ * folded into one list. A control seeded from it would write the merged value
+ * back into whichever file you happened to be editing — which is how a page
+ * meaning to add one local override writes a copy of every shared command into
+ * a personal file. bridge/claude-config.js hit that exact bug twice and
+ * docs/plans/20-claude-config.md records both.
+ *
+ * `commands` is therefore raw: the entries as written, unvalidated, in file
+ * order. A file being edited is a file that may not currently be valid, and the
+ * editor is the thing that fixes it — validating on the way out would hide the
+ * entry somebody is trying to repair.
+ *
+ * `merged` comes from readMerged() rather than being computed here, so the
+ * precedence an editor shows is the precedence a click obeys. With `dir` at the
+ * project root the two file lists are the same two paths; the worktree fallback
+ * in readMerged() simply has nothing to fall back to.
+ *
+ * @param {string} dir any directory in the project; the project root is used
+ * @returns {object|null} null if the directory is outside the allowed roots
+ */
+function raw(dir) {
+    if (!dir || !cfg.withinRoots(dir)) return null;
+    const workspace = path.resolve(cfg.expandHome(dir));
+    const project = projectRootOf(workspace);
+    const read = readMerged(project);
+    if (!read) return null;
+
+    const files = SCOPES.map((scope) => {
+        const file = fileFor(scope, project);
+        const got = readConfig(file);
+        // Checked on the link rather than followed — statSync follows, and
+        // following is the bug. A page that drew a writable box over a symlink
+        // would be promising something the write refuses.
+        const symlink = escapesProject(file, project);
+        return {
+            scope,
+            file,
+            exists: got.stamp !== null,
+            // Exists and could not be understood. The JSON tab is the only
+            // thing in the app that can repair one, so this is the flag that
+            // sends a reader there rather than an error that stops them.
+            parsed: got.data !== null,
+            stamp: got.stamp,
+            size: got.size,
+            writable: !symlink && jsonfile.writable(file),
+            symlink,
+            // Only the local row: the shared file is meant to be committed, so
+            // "not excluded" is not a finding about it. The route enriches this
+            // with the rule that matched; here it is the cheap synchronous copy
+            // load() already relies on.
+            ignored: scope === 'project-local'
+                ? ignored(project, path.join(cfg.TGX_DIR, cfg.COMMANDS_LOCAL_FILE))
+                : null,
+            commands: got.data ? got.data.commands : [],
+            text: got.text,
+            problem: got.problem,
+        };
+    });
+
+    return {
+        project,
+        projectName: path.basename(project),
+        // What ${…} expands to at the project root, so an editor can show a
+        // resolved preview beside the template. A worktree session's own values
+        // differ, which is the whole of the note the page carries.
+        context: read.context,
+        // Merged and validated, for the local tab's inherited placeholders.
+        merged: [...read.merged.values()],
+        problems: read.problems,
+        files,
+        // The caps and the patterns ride along so a form can label its own
+        // counters and refuse a bad id before the round trip, without a second
+        // copy of this module's constants going stale in web/app.js. It is the
+        // argument GET /api/claude-docs already makes for shipping `maxBytes`:
+        // a hardcoded number goes on being displayed long after the real one
+        // moved, and that drift is only ever found by somebody hitting it.
+        limits: {
+            maxCommands: MAX_COMMANDS,
+            maxFileBytes: MAX_FILE_BYTES,
+            maxRunChars: MAX_RUN_CHARS,
+            maxEnvKeys: MAX_ENV_KEYS,
+            maxLabelChars: MAX_LABEL_CHARS,
+        },
+        placeholders: [...KNOWN],
+        patterns: { id: ID_RE.source, envKey: ENV_KEY_RE.source },
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Writing
+// ---------------------------------------------------------------------------
+//
+// The read above has been here since plan 17; this half arrived with the
+// settings panel that edits these files. It lives in the same module rather
+// than a new one because what would have to be duplicated is the format: the
+// id pattern, every field rule, the caps, the two filenames and the precedence
+// between them. bridge/claude-config.js was split out of bridge/prefs.js for
+// three reasons and none of them holds here — that format belonged to somebody
+// else, and this one is ours.
+//
+// Two rules, and they are opposites on purpose. A file is hand-edited, so the
+// reader drops one bad command and keeps its siblings. A page is a client, so
+// the writer validates the whole document and refuses all of it — a control
+// left showing a value that was silently discarded is worse than a refusal.
+// The same reasoning is written out in docs/plans/19-settings.md.
+
+/**
+ * Is this a way out of the project — the file, or the directory holding it?
+ *
+ * Two corrections to the obvious call, and both were found by trying it.
+ *
+ * **Contained against the project root, not `<project>/.tgxcode`.** If that
+ * directory is itself a symlink then `commands.json` inside it is a perfectly
+ * ordinary file — `lstat` on it says so — and its realpath sits happily inside
+ * the realpath of `<project>/.tgxcode`, because that *is* the link's target.
+ * Rooted one level up, the same write is refused.
+ *
+ * **And the directory is checked as well as the file**, because
+ * `jsonfile.escapes` answers about a path that exists: `lstat` throws for a
+ * missing one and "absent" is correctly not an escape. But missing is the
+ * normal case here — the first save to a project creates both the file and
+ * `.tgxcode` — so the file-only check is blind in exactly the situation the
+ * guard is for.
+ */
+function escapesProject(file, project) {
+    return jsonfile.escapes(file, project) || jsonfile.escapes(path.dirname(file), project);
+}
+
+/**
+ * Write, or refuse with a sentence somebody can act on.
+ *
+ * The case worth catching is a `.tgxcode` that is a regular file, which
+ * `mkdirSync(..., {recursive: true})` reports as `EEXIST: file already exists,
+ * mkdir '<path>'` — a message naming neither what is wrong nor what to do. The
+ * condition is tested rather than the error code matched, because the code for
+ * it is EEXIST here and ENOTDIR elsewhere and neither is worth relying on.
+ */
+function writeThrough(file, text) {
+    try {
+        jsonfile.writeAtomic(file, text);
+    } catch (err) {
+        const dir = path.dirname(file);
+        let blocked = false;
+        try { blocked = !fs.lstatSync(dir).isDirectory(); } catch { /* absent, so not this */ }
+        throw jsonfile.refuse('write', blocked
+            ? `${dir} is a file, not a directory — ${path.basename(file)} cannot be written into it`
+            : `${file}: ${err.message}`);
+    }
+}
+
+/**
+ * The scope checks a write shares, and the file it settles on.
+ *
+ * @returns {{scope: string, project: string, file: string}}
+ */
+function writeTarget(scope, dir) {
+    if (!SCOPES.includes(scope)) {
+        throw jsonfile.refuse('scope', `${JSON.stringify(scope)} is not a command scope`);
+    }
+    if (!dir) throw jsonfile.refuse('dir', `scope ${scope} needs a directory`);
+    if (!cfg.withinRoots(dir)) {
+        throw jsonfile.refuse('dir', `${dir} is not a directory this bridge will write`);
+    }
+    const project = projectRootOf(path.resolve(cfg.expandHome(dir)));
+    const file = fileFor(scope, project);
+    if (escapesProject(file, project)) {
+        throw jsonfile.refuse('readonly', `${file} is a symlink — refusing to write through it`);
+    }
+    if (!jsonfile.writable(file)) throw jsonfile.refuse('write', `${file} cannot be written`);
+    return { scope, project, file };
+}
+
+/**
+ * Is the file still the one the caller read?
+ *
+ * Every write here replaces the whole `commands` array, so — unlike
+ * bridge/claude-config.js, where a single scalar patch can re-read immediately
+ * before writing — there is no write that can do without the precondition.
+ * `undefined` is therefore a refusal rather than a permission. `null` is the
+ * caller saying "this file should not exist yet", which is how a page that has
+ * never seen one asks to create it.
+ */
+function checkStamp(file, sent, current) {
+    if (sent === undefined) {
+        throw jsonfile.refuse('stamp',
+            'this replaces the whole file, so it needs the stamp it was read with');
+    }
+    if (sent === null && current !== null) {
+        const err = jsonfile.refuse('exists', `${file} exists now — it did not when this page loaded`);
+        err.detail = { stamp: current };
+        throw err;
+    }
+    if (sent !== null && sent !== current) {
+        const err = jsonfile.refuse('stale', current === null
+            ? `${file} has been deleted since this page loaded`
+            : `${file} has changed since this page loaded`);
+        // What is on disk now, so the page can show what it declined to
+        // overwrite rather than only reporting that it declined.
+        const got = readConfig(file);
+        err.detail = { stamp: current, text: got.text, commands: got.data ? got.data.commands : null };
+        throw err;
+    }
+}
+
+/**
+ * Forget what the read path remembers about a project.
+ *
+ * `load()` recomputes its composite stamp on every call, so it would notice on
+ * its own. The other two would not: `ignoreCache` holds "is the local file
+ * excluded?" for ten seconds, and a page that has just been told to add the
+ * line and has done so should not go on being told for another ten.
+ */
+function clearCaches(project) {
+    cache.delete(project);
+    for (const key of [...ignoreCache.keys()]) {
+        if (key.startsWith(project)) ignoreCache.delete(key);
+    }
+    branchCache.delete(project);
+}
+
+/**
+ * Check a whole document, and say everything that is wrong with it.
+ *
+ * Every problem rather than the first: a form that surfaces one error per round
+ * trip makes six saves out of one paste. `index` is what pins a message to a
+ * row — an entry with a malformed id has no usable id, and a duplicate id names
+ * two rows, so neither can be the key.
+ *
+ * Placeholders are checked against the **merged** command, not this file's
+ * half, because that is the rule the reader applies: a shared `${port}` whose
+ * range the local file supplies is legal, and refusing it here would refuse
+ * something a click would honour.
+ *
+ * @returns {Array<{index: number, id: string|undefined, field?: string, message: string}>}
+ */
+function checkDocument(entries, { scope, project, file }) {
+    const problems = [];
+    if (!Array.isArray(entries)) {
+        return [{ index: -1, message: 'commands must be an array' }];
+    }
+    if (entries.length > MAX_COMMANDS) {
+        problems.push({ index: -1,
+            message: `${entries.length} commands — ${MAX_COMMANDS} is as many as one file may declare` });
+    }
+
+    // What the *other* file says, so an entry that only overrides is judged the
+    // way the reader will judge it. Read rather than passed in: a save happens
+    // long after the page loaded, and the sibling may have moved.
+    const otherScope = scope === 'project' ? 'project-local' : 'project';
+    const other = readConfig(fileFor(otherScope, project));
+    const otherById = new Map();
+    for (const raw of (other.data ? other.data.commands : [])) {
+        if (raw && typeof raw.id === 'string') otherById.set(raw.id, raw);
+    }
+
+    const seen = new Set();
+    entries.forEach((raw, index) => {
+        // Only the *local* file may leave out label and run, and only for an id
+        // the shared file already declares. Everything else is a first
+        // definition and has to be whole.
+        const isOverride = scope === 'project-local' && otherById.has(raw && raw.id);
+        const { command, problem } = validate(raw, file, isOverride);
+        if (problem) {
+            problems.push({ index, id: problem.id, field: problem.field, message: problem.message });
+            return;
+        }
+        if (seen.has(command.id)) {
+            problems.push({ index, id: command.id, field: 'id', message: 'declared twice in this file' });
+            return;
+        }
+        seen.add(command.id);
+
+        // The merged reading, in the same shape merge() builds it.
+        const prev = isOverride ? validate(otherById.get(command.id), file).command : null;
+        let merged = command;
+        if (prev) {
+            const env = (prev.env || command.env) ? { ...prev.env, ...command.env } : undefined;
+            merged = { ...prev, ...command };
+            if (env) merged.env = env; else delete merged.env;
+        }
+        const err = checkPlaceholders(merged);
+        if (err) problems.push({ index, id: command.id, field: err.field, message: err.message });
+    });
+    return problems;
+}
+
+/**
+ * Replace one file's `commands` array.
+ *
+ * The entries are written **as given**, not as `validate()` cleans them.
+ * `validate()` builds a fresh object and drops every key it does not know, so
+ * saving its output would silently delete a field somebody added by hand — the
+ * editor would quietly narrow the file every time it round-tripped. Validation
+ * is a gate here, not a transform.
+ */
+function saveDoc({ scope, dir, stamp, commands }) {
+    const target = writeTarget(scope, dir);
+    if (!Array.isArray(commands)) throw jsonfile.refuse('body', 'commands must be an array');
+
+    const problems = checkDocument(commands, target);
+    if (problems.length) {
+        const err = jsonfile.refuse('invalid', problems.length === 1
+            ? problems[0].message
+            : `${problems.length} problems with those commands`);
+        err.detail = { problems };
+        throw err;
+    }
+
+    const text = jsonfile.serialize({ version: 1, commands });
+    // Every field is capped, but `validate()` ignores keys it does not know —
+    // so a megabyte parked under one of them would pass the schema and make a
+    // file the reader then refuses to open.
+    const bytes = Buffer.byteLength(text, 'utf8');
+    if (bytes > MAX_FILE_BYTES) {
+        throw jsonfile.refuse('size',
+            `that is ${bytes} bytes, and ${MAX_FILE_BYTES} is as large as one of these gets`);
+    }
+
+    checkStamp(target.file, stamp, jsonfile.stampNow(target.file));
+    writeThrough(target.file, text);
+    clearCaches(target.project);
+    return { file: target.file, stamp: jsonfile.stampNow(target.file), project: target.project };
+}
+
+/**
+ * Replace one file's whole text.
+ *
+ * The only thing in the app that can repair a file which no longer parses, and
+ * therefore the thing that makes the form honest: nothing in these files is
+ * beyond reach, so a control the form has not learned to draw is an
+ * inconvenience rather than a wall. docs/plans/20-claude-config.md argues this
+ * at length for the same reason.
+ *
+ * It is still checked — this is our format, and writing a document the reader
+ * would refuse wholesale is not a service to anybody. What it does *not* do is
+ * re-serialise: the bytes are written through, so whatever somebody typed is
+ * what the diff shows.
+ */
+function saveText({ scope, dir, stamp, text }) {
+    const target = writeTarget(scope, dir);
+    if (typeof text !== 'string') throw jsonfile.refuse('body', 'text is not a string');
+
+    const bytes = Buffer.byteLength(text, 'utf8');
+    if (bytes > MAX_FILE_BYTES) {
+        throw jsonfile.refuse('size',
+            `that is ${bytes} bytes, and ${MAX_FILE_BYTES} is as large as one of these gets`);
+    }
+
+    let data;
+    try { data = JSON.parse(text.replace(/^\ufeff/, '')); }
+    catch (err) { throw jsonfile.refuse('json', err.message); }
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+        throw jsonfile.refuse('json', 'that is not a JSON object');
+    }
+    if (data.version !== 1) {
+        throw jsonfile.refuse('version',
+            `version ${JSON.stringify(data.version)} — this reader understands 1`);
+    }
+    if (!Array.isArray(data.commands)) {
+        throw jsonfile.refuse('json', '"commands" is not an array');
+    }
+    const problems = checkDocument(data.commands, target);
+    if (problems.length) {
+        const err = jsonfile.refuse('invalid', problems.length === 1
+            ? problems[0].message
+            : `${problems.length} problems with those commands`);
+        err.detail = { problems };
+        throw err;
+    }
+
+    checkStamp(target.file, stamp, jsonfile.stampNow(target.file));
+    writeThrough(target.file, text);
+    clearCaches(target.project);
+    return { file: target.file, stamp: jsonfile.stampNow(target.file), project: target.project };
+}
+
 /**
  * One command, resolved against a port and ready for runs.js.
  *
@@ -516,4 +936,9 @@ function prepare(dir, id, port) {
     };
 }
 
-module.exports = { load, prepare, expand, resolve, devbrowserTitle, MAX_COMMANDS };
+module.exports = {
+    load, prepare, expand, resolve, devbrowserTitle,
+    raw, fileFor, saveDoc, saveText, clearCaches,
+    validate, checkPlaceholders,
+    SCOPES, MAX_COMMANDS, MAX_FILE_BYTES, MAX_RUN_CHARS, MAX_ENV_KEYS, MAX_LABEL_CHARS,
+};

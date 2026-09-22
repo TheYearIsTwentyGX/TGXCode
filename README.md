@@ -254,7 +254,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/memo.js` | Small notes the UI keeps against a session |
 | `bridge/runner.js` | `claude` processes, one per active conversation |
 | `bridge/terminal.js` | The pty, out of `script(1)` — a shell to type into, or a declared command |
-| `bridge/commands.js` | What a project declares in `.tgxcode/` |
+| `bridge/commands.js` | What a project declares in `.tgxcode/` — the two files, the merge between them, and the editor that writes them back |
 | `bridge/runs.js` | Running those commands, and keeping the record |
 | `bridge/ports.js` | Finding a port that is free *and* unclaimed, holding it, and remembering it |
 | `bridge/devservers.js` | Port detection, ranking, and stopping a server |
