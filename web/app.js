@@ -756,6 +756,38 @@ function clockOf(ts) {
     return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
+// The date a message was recorded, or '' when the clock alone places it.
+//
+// Both conditions are required. A message from earlier today needs no date
+// whatever the hour — you have been here all day. And a message from late last
+// night is still "last night" at breakfast, so the calendar rolling over is on
+// its own not enough; twelve hours is where a bare clock stops being something
+// you can place. A `ts` in the future (clock skew) fails the second test and
+// stays bare, which is the right way round: it is not a date to assert.
+//
+// Read once, when the row is drawn, and rows are never redrawn — so a message
+// sitting at eleven hours old does not sprout a date when it crosses twelve
+// while you watch. Fixing that wants a ticker over the whole log, which is a
+// lot of invalidation for a session left open half a day.
+function dateOf(ts, now = Date.now()) {
+    if (!ts) return '';
+    const d = new Date(ts);
+    const t = d.getTime();
+    if (!Number.isFinite(t)) return '';
+    const n = new Date(now);
+    const sameDay = d.getFullYear() === n.getFullYear()
+        && d.getMonth() === n.getMonth()
+        && d.getDate() === n.getDate();
+    if (sameDay || now - t <= 12 * 3600e3) return '';
+    const date = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    // A year only when it is not this one. 'Dec 3' on a session from last
+    // December reads as three weeks ago rather than a year, and that is a date
+    // a reader would act on.
+    return d.getFullYear() === n.getFullYear()
+        ? date
+        : `${date} ’${pad(d.getFullYear() % 100)}`;
+}
+
 function ago(ts) {
     if (!ts) return '';
     const s = Math.max(0, (Date.now() - new Date(ts).getTime()) / 1000);
@@ -2540,12 +2572,17 @@ function paintRunSummary(det) {
     // that one breathes.
     const status = evs.some(e => e.status === 'error' || e.isError) ? 'error' : 'ok';
 
+    const runDate = dateOf(evs[0].ts);
+
     det.querySelector(':scope > summary').replaceChildren(
         el('div', { class: 'ev ev-trun' },
             // The clock is the row's, not the reader's: a screen reader
             // announcing it inside the button's label would be reading out the
             // gutter it is already skipping everywhere else.
-            el('div', { class: 'ev-time', 'aria-hidden': 'true' }, clockOf(evs[0].ts)),
+            el('div', { class: 'ev-time', 'aria-hidden': 'true' },
+                runDate ? el('span', { class: 'ev-date' }, runDate) : null,
+                el('span', { class: 'ev-clock' }, clockOf(evs[0].ts)),
+            ),
             el('div', { class: 'ev-body' },
                 el('div', { class: 'trow', 'data-status': status },
                     el('span', { class: 'caret' }, '\u25b6'),
@@ -2690,8 +2727,14 @@ function clipboardHtml(md) {
 }
 
 function row(ev, kind, ...body) {
+    // `date ? … : null` rather than `date && …`: el skips null, but '' would go in
+    // as an empty text node.
+    const date = dateOf(ev.ts);
     return el('div', { class: `ev ev-${kind}`, 'data-error': ev.isError ? 'true' : null },
-        el('div', { class: 'ev-time' }, clockOf(ev.ts)),
+        el('div', { class: 'ev-time' },
+            date ? el('span', { class: 'ev-date' }, date) : null,
+            el('span', { class: 'ev-clock' }, clockOf(ev.ts)),
+        ),
         el('div', { class: 'ev-body' }, ...body),
     );
 }
@@ -5589,7 +5632,11 @@ function paintReview() {
 
     dom.reviewKind.textContent = plan ? 'Plan' : 'Question';
     dom.reviewTitle.textContent = markOutcome(ev);
-    dom.reviewWhen.textContent = clockOf(ev.resultTs || ev.ts);
+    // Dated on the same rule as the transcript gutter: a plan read back out of a
+    // week-old session has the same bare-clock problem, and the header line here
+    // has room for both.
+    const when = ev.resultTs || ev.ts;
+    dom.reviewWhen.textContent = `${dateOf(when)} ${clockOf(when)}`.trim();
     dom.reviewModal.dataset.kind = plan ? 'plan' : 'question';
     dom.reviewOutcome.replaceChildren();
     dom.reviewBody.replaceChildren(plan ? reviewPlan(ev) : reviewQuestions(ev));
@@ -16344,7 +16391,7 @@ function showTurnPop(tick, m) {
     pop.replaceChildren(
         el('div', { class: 'pop-head' },
             el('span', {}, head),
-            el('span', { class: 'when' }, clockOf(ev.ts)),
+            el('span', { class: 'when' }, `${dateOf(ev.ts)} ${clockOf(ev.ts)}`.trim()),
         ),
         el('div', { class: 'pop-text' + (isCmd ? ' cmd' : '') }, clipLines(body, 460)),
     );

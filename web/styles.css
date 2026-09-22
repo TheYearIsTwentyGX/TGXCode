@@ -41,7 +41,7 @@
     --r-xl: 24px;
     --pill: 999px;
 
-    --gutter: 58px;
+    --gutter: 68px;
     --rail: 304px;
     --turns: 30px;
 
@@ -1438,6 +1438,22 @@ a:hover { text-decoration: underline; }
     white-space: nowrap;
     opacity: 0.65;
     font-variant-numeric: tabular-nums;
+}
+
+/* The date above the clock, on a message old enough that the clock alone does
+   not place it — see dateOf in app.js. Smaller than the clock and dimmer again on
+   top of the gutter's own fade: the clock is what you read, the date is what stops
+   you misreading it. Font, colour, right-alignment and tabular-nums all come from
+   .ev-time.
+
+   It pushes the clock down a line, so on a dated row the date sits beside the
+   'You'/'Claude' label and the clock beside the first line of the message. That
+   is the better of the two: the clock ends up next to the text it stamps. */
+.ev-date {
+    display: block;
+    font-size: 10.5px;
+    line-height: 1.5;
+    opacity: 0.8;
 }
 
 .ev-body { min-width: 0; }
