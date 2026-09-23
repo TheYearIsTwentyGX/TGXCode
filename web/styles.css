@@ -1110,6 +1110,11 @@ a:hover { text-decoration: underline; }
        where it was, which read as the composer being crooked. */
     --pane-left: 0px;
     --pane-right: var(--turns);
+
+    /* How wide the transcript lays itself out, in pixels, written by
+       `syncLogWidth` in app.js. `100%` is what `.log` did before it existed, and
+       is what it does until the first write and if there is never one. */
+    --log-w: 100%;
 }
 
 .conv-title-row {
@@ -1464,8 +1469,28 @@ a:hover { text-decoration: underline; }
 .scroll { flex: 1; overflow-y: auto; min-height: 0; scroll-behavior: smooth; }
 @media (prefers-reduced-motion: reduce) { .scroll { scroll-behavior: auto; } }
 
+/* The width is a number this file does not know, written by `syncLogWidth` in
+   app.js, and the long comment there is why. Short version: an automatic width
+   depends on the pane around it, so every column that slides in and every window
+   that changes size re-laid-out every row in here, once per animation frame.
+   `margin: 0 auto` is untouched — the log is still centred in the real pane, it
+   just no longer resizes with it.
+
+   `100%` stays in the `min()` as a floor the variable cannot overhang: if it is
+   ever stale — not written yet, or a column still halfway out — the log narrows
+   to the pane rather than off the end of it, which is the behaviour this rule
+   had before. That is what lets every rule in app.js be a performance decision
+   and none of them a correctness one.
+
+   The 1000px is the same 1000px as `.composer-inner` and `.ask-dock-inner`, and
+   those two deliberately do *not* read the variable. Their containers are
+   already inset by 28px a side, so `100%` resolves 56px below what this does and
+   binds first — and 56 is more than LOG_STEP, so a quantized log mid-drag is
+   still the wider box and the order of the two cannot invert. Giving them
+   `--log-w` as well would read as the three being kept in step and would in fact
+   change nothing. */
 .log {
-    max-width: 1000px;
+    width: min(1000px, 100%, var(--log-w, 100%));
     margin: 0 auto;
     padding: 6px 28px 48px;
 }
