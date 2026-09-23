@@ -1132,6 +1132,11 @@ a:hover { text-decoration: underline; }
        where it was, which read as the composer being crooked. */
     --pane-left: 0px;
     --pane-right: var(--turns);
+
+    /* How wide the transcript lays itself out, in pixels, written by
+       `syncLogWidth` in app.js. `100%` is what `.log` did before it existed, and
+       is what it does until the first write and if there is never one. */
+    --log-w: 100%;
 }
 
 .conv-title-row {
@@ -1486,8 +1491,28 @@ a:hover { text-decoration: underline; }
 .scroll { flex: 1; overflow-y: auto; min-height: 0; scroll-behavior: smooth; }
 @media (prefers-reduced-motion: reduce) { .scroll { scroll-behavior: auto; } }
 
+/* The width is a number this file does not know, written by `syncLogWidth` in
+   app.js, and the long comment there is why. Short version: an automatic width
+   depends on the pane around it, so every column that slides in and every window
+   that changes size re-laid-out every row in here, once per animation frame.
+   `margin: 0 auto` is untouched — the log is still centred in the real pane, it
+   just no longer resizes with it.
+
+   `100%` stays in the `min()` as a floor the variable cannot overhang: if it is
+   ever stale — not written yet, or a column still halfway out — the log narrows
+   to the pane rather than off the end of it, which is the behaviour this rule
+   had before. That is what lets every rule in app.js be a performance decision
+   and none of them a correctness one.
+
+   The 1000px is the same 1000px as `.composer-inner` and `.ask-dock-inner`, and
+   those two deliberately do *not* read the variable. Their containers are
+   already inset by 28px a side, so `100%` resolves 56px below what this does and
+   binds first — and 56 is more than LOG_STEP, so a quantized log mid-drag is
+   still the wider box and the order of the two cannot invert. Giving them
+   `--log-w` as well would read as the three being kept in step and would in fact
+   change nothing. */
 .log {
-    max-width: 1000px;
+    width: min(1000px, 100%, var(--log-w, 100%));
     margin: 0 auto;
     padding: 6px 28px 48px;
 }
@@ -6757,13 +6782,34 @@ body.term-resizing { user-select: none; cursor: row-resize; }
    gives width back when it is not, so the aside stays put instead of vanishing
    at some particular window size. Below the narrow breakpoint the aside becomes
    a strip above and `--set-aside` goes to zero, which hands the width back. */
-.settings-shell { flex: 1; min-height: 0; overflow-y: auto; --set-aside: 172px; }
+.settings-shell {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    --set-aside: 172px;
+    /* So a contents jump lands a group under the pinned head rather than behind
+       it. --set-top-h is measured by a ResizeObserver in app.js, because the
+       head's height moves with the project picker and the file line's tags. */
+    scroll-padding-top: var(--set-top-h, 0px);
+}
 .settings-col {
     width: min(880px, calc(100% - 2 * var(--set-aside)));
     margin: 0 auto;
     padding: 0 28px;
 }
 
+/* The head and the file line, pinned. Sticky inside .settings-col, which spans
+   the whole scroll height, so it has the full length of the pane to travel. It
+   paints the pane's own surface so the groups pass underneath rather than
+   through it; the rule under it is what says "this stays". */
+.settings-top {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    background: var(--s1);
+    border-bottom: 1px solid var(--outline-soft);
+    margin-bottom: 14px;
+}
 .settings-head { padding: 22px 0 14px; }
 .settings-title { margin: 0; font: 400 21px/1.3 var(--sans); color: var(--text); }
 .settings-sub { margin: 5px 0 0; max-width: 560px; font-size: 13px; line-height: 1.6; color: var(--text-3); }
@@ -7539,6 +7585,37 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 }
 .cmd-card.bad { border-color: var(--red); }
 .cmd-card-head { display: flex; align-items: center; gap: 8px; }
+/* Collapsed by default: a file of eight commands was eight screens of fields
+   before you could see the list. The toggle is everything in the head but the
+   delete button, which stays a sibling — a button cannot hold a button. */
+.cmd-card:not(.open) { padding-bottom: 12px; }
+.cmd-card-toggle {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: none;
+    border: 0;
+    padding: 0;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.cmd-card-toggle::before {
+    content: "";
+    flex: none;
+    width: 6px;
+    height: 6px;
+    margin: 0 3px 0 1px;
+    border-right: 1.5px solid var(--text-4);
+    border-bottom: 1.5px solid var(--text-4);
+    transform: rotate(-45deg);
+    transition: transform 0.12s;
+}
+.cmd-card-toggle[aria-expanded="true"]::before { transform: rotate(45deg); }
+.cmd-card-toggle:hover .cmd-card-id { color: var(--text); }
 .cmd-card-spacer { flex: 1; min-width: 0; }
 .cmd-card-id { font: 400 12px var(--mono); color: var(--text-2); }
 .cmd-card-name { font-size: 12px; color: var(--text-4); }
@@ -8450,4 +8527,56 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 
 @media (prefers-reduced-motion: reduce) {
     .pcolor-swatch:hover { transform: none; }
+}
+
+/* --- Wispr Flow transforms ---------------------------------------------- */
+
+/* The button beside each message box. The live composer's is the snippets
+   button's shape; the dialog's is a small labelled-row button with only the mark
+   in it. Both wraps are hidden until the bridge says a chord can land, and an
+   author `display` would override the attribute. */
+.wispr-wrap { position: relative; flex: none; }
+.wispr-wrap[hidden] { display: none; }
+.btn-wispr {
+    display: grid;
+    place-items: center;
+    width: 38px;
+    height: 38px;
+    color: var(--text-3);
+    background: transparent;
+    border-radius: var(--pill);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.btn-wispr:hover,
+.btn-wispr[aria-expanded="true"] { background: var(--s4); color: var(--text); }
+.btn-wispr-small { display: inline-grid; place-items: center; }
+
+/* A row's chord, in the slot send-later puts its time. */
+.wispr-menu kbd.at { font: 400 11px/1.4 var(--mono); }
+
+/* One transform in Settings: title, shortcut, delete. */
+.wispr-set-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 150px) auto;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: var(--r);
+    background: var(--s2);
+    margin-bottom: 6px;
+}
+.wispr-set-row input[type="text"] {
+    background: var(--s1);
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-sm);
+    padding: 6px 8px;
+    color: var(--text);
+    font: 400 12.5px/1.2 var(--sans);
+    min-width: 0;
+}
+.wispr-set-row .wispr-set-combo { font-family: var(--mono); }
+.wispr-set-error {
+    grid-column: 1 / -1;
+    font: 400 11.5px/1.4 var(--sans);
+    color: var(--red);
 }
