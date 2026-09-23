@@ -488,5 +488,45 @@ for (const section of Object.keys(SHAPE)) {
 assert.strictEqual(page.version, VERSION);
 ok('the page copy carries every section and none of the diagnostics');
 
+// --- CLAUDE_SESSIONS_PREFS_DIR -------------------------------------------
+// What lets a dev bridge press Save without touching the user's file. The path
+// is computed when config.js loads, so it takes a process of its own. Unset
+// gives the old location, and this process is the proof of that.
+const cfg = require('../bridge/config.js');
+assert.strictEqual(cfg.USER_TGX_DIR, path.join(home, '.tgxcode'));
+assert.strictEqual(cfg.USER_PREFS_FILE, userFile);
+
+{
+    const childHome = fs.mkdtempSync(path.join(os.tmpdir(), 'prefs-home-'));
+    const override = fs.mkdtempSync(path.join(os.tmpdir(), 'prefs-dir-'));
+    const script = `
+        const cfg = require(${JSON.stringify(path.join(__dirname, '../bridge/config.js'))});
+        const { Prefs } = require(${JSON.stringify(path.join(__dirname, '../bridge/prefs.js'))});
+        const prefs = new Prefs();
+        prefs.save({ scope: 'user', patch: { transcript: { groupToolCalls: false } } });
+        prefs.cache.clear();
+        console.log(JSON.stringify({
+            file: cfg.USER_PREFS_FILE, verbs: cfg.USER_VERBS_DIR,
+            target: prefs.targetFile('user'), sources: prefs.forCwd('').sources,
+        }));`;
+    const env = { ...process.env, HOME: childHome, CLAUDE_SESSIONS_ROOTS: childHome,
+        CLAUDE_SESSIONS_PREFS_DIR: override };
+    const out = JSON.parse(require('child_process')
+        .execFileSync(process.execPath, ['-e', script], { env, encoding: 'utf8' }).trim().split('\n').pop());
+
+    const want = path.join(override, 'settings.json');
+    assert.strictEqual(out.file, want);
+    assert.strictEqual(out.target, want);
+    assert.strictEqual(out.sources[0], want);
+    assert.strictEqual(out.verbs, path.join(override, 'verbs'));
+    assert.strictEqual(read(want).transcript.groupToolCalls, false);
+    assert.ok(!fs.existsSync(path.join(childHome, '.tgxcode')),
+        'a bridge with CLAUDE_SESSIONS_PREFS_DIR wrote to ~/.tgxcode anyway');
+
+    fs.rmSync(childHome, { recursive: true, force: true });
+    fs.rmSync(override, { recursive: true, force: true });
+}
+ok('CLAUDE_SESSIONS_PREFS_DIR takes the user file and its saves somewhere else');
+
 fs.rmSync(home, { recursive: true, force: true });
 console.log(`\n${pass} prefs checks passed`);
