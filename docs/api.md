@@ -429,7 +429,7 @@ strings by a client that then rendered `[object Object]`:
 
 | kind | Carries |
 |---|---|
-| `user` | `text` string · `images[]` `{mediaType, dataUri}` · `files[]` `{relPath, name, size}` · **`command` object or null** — `{name, args}` · `origin` string or absent — Claude Code's own `origin.kind`, passed through: `"human"`, `"peer"`, or an agent type. Not a closed set the bridge controls, so treat anything other than `"human"` as "not the person" rather than switching on it |
+| `user` | `text` string · `images[]` `{mediaType, dataUri}` · `files[]` `{relPath, name, size}` · **`command` object or null** — `{name, args}` · `origin` string or absent — Claude Code's own `origin.kind`, passed through: `"human"`, `"peer"`, or an agent type. Not a closed set the bridge controls, so treat anything other than `"human"` as "not the person" rather than switching on it. A message **folded into a running turn** is a `user` event too, even though on disk it is a `queued_command` attachment with no `user` entry. It sits between the tool calls where the turn read it, its `ts` is when it was *sent* (so it can be earlier than the tool block before it), and its `origin` is `"human"` or absent |
 | `assistant` | `text` string (markdown) · `model` string or null |
 | `thinking` | `text` string |
 | `tool` | `name` string · `input` object · `status` — see below · `result` object or null · **`agent` object or null** · `persistedPath` string or null · `durationMs` number or null · `resultTs` ISO string once resolved |
@@ -2348,8 +2348,26 @@ down from:
 | `state` | `"stopped"`, `"starting"`, `"idle"`, `"busy"` or `"error"` |
 | `activity`, `verb`, `detail` | strings or null — see below |
 | `error`, `errorKind` | strings or null |
-| `queued` | number — how many messages are waiting |
-| **`queue[]`** | **array of objects** — `{id, text, at, attachments[]}`, the messages themselves, because the composer draws a chip per entry and needs the `id` to cancel or reorder it. `attachments` is metadata only; the base64 is read at flush time and never travels here |
+| `queued` | number — how many messages are waiting, handed-over ones included |
+| **`queue[]`** | **array of objects** — `{id, text, at, attachments[], handed}`, the messages themselves, because the composer draws a chip per entry and needs the `id` to cancel or reorder it. `attachments` is metadata only; the base64 is read at flush time and never travels here. **`handed`** bool — see below |
+
+**A queued message can land inside the running turn.** While a tool call is running,
+the bridge hands everything waiting to the CLI (`handed: true`), and the CLI folds it
+into that turn once the tool round ends. The model reads it next to the tool result,
+the way a message typed in a terminal mid-turn is read. A message sent while the turn
+is only writing text, or while nothing runs, waits for the turn to end as before. Three
+things follow for a client:
+
+- **One `turn-complete` can answer several messages.** Do not pair them one to one.
+- **A handed message sits at the front of `queue[]` and keeps its place there.**
+  `reorder` ignores its id. It can still be dropped (`DELETE …/queue/:qid`), because
+  the bridge asks the CLI for it back, but that can lose the race and return `409`.
+- **It leaves `queue[]` when the turn reads it**, and turns up in the transcript as an
+  ordinary `user` event (see below). There is no separate event for the fold.
+
+Handing over happens only when the process has shown it supports it. Builds without the
+CLI's command queue keep the old one-turn-at-a-time behaviour, and `handed` is then
+always false.
 | **`pendingPermission`** | **object or null** — the whole ask, same shape as `permission-request` |
 | `canPrompt` | bool — whether this process supports permission prompts at all |
 | `busySince` | number or null — epoch ms, and null unless `state` is `busy` |
@@ -3584,7 +3602,7 @@ nobody to ask.
 | Route | Body | Notes |
 |---|---|---|
 | `POST /api/sessions/:id/stop` | `{hard?}` | `{ok, how, dropped[]}` — see below |
-| `GET/DELETE /api/sessions/:id/queue[/:qid]` | | inspect, drop one, clear |
+| `GET/DELETE /api/sessions/:id/queue[/:qid]` | | inspect, drop one, clear. Dropping one answers `{ok, removed, status}`, or `409` if the message has already been sent — including a `handed` one the running turn read first. Clearing answers `{ok, dropped[]}` with only what was actually dropped, so a handed message that lost that race stays out of the list |
 | `POST /api/sessions/:id/queue/reorder` | `{ids}` | |
 | `POST /api/sessions/:id/flags` | `{pinned?, archived?, test?}` | |
 | `GET /api/sessions/:id/suggestions` | | `{sessionId, suggestions}` — the decisions alone. `GET /api/suggestions?session=` is the offers *and* the decisions |

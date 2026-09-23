@@ -53,13 +53,66 @@ const LOG = process.env.FAKE_CLAUDE_LOG;
 out({ type: 'system', subtype: 'init', session_id: sessionId, cwd: process.cwd(),
       model: 'stub', tools: [], slash_commands: [] });
 
+// The command queue, for the cases about handing messages to a running turn. Off
+// until a TOOLS turn arrives — so every case before those drives a build with no
+// queue, which is the fallback — and sticky for the process after that, as a real
+// build's is from its first line. A TOOLS turn is one tool call lasting the given
+// milliseconds; whatever arrived while it ran is folded in when it ends, exactly
+// as 2.1.280 does, and logged with \`folded: true\` so a case can tell a fold from a
+// turn of its own.
+let lc = false, running = false;
+const held = [];
+const life = (uuid, state) => lc && uuid && out({ type: 'command_lifecycle',
+    command_uuid: uuid, state, uuid: 'lc-' + Math.random(), session_id: sessionId });
+const textOf = (m) => (m.message.content || [])
+    .filter(b => b.type === 'text').map(b => b.text).join('\\n');
+const log = (m, extra = {}) => LOG && fs.appendFileSync(LOG,
+    JSON.stringify({ text: textOf(m), pid: process.pid, ...extra }) + '\\n');
+
+function toolTurn(m, ms) {
+    running = true;
+    life(m.uuid, 'queued');
+    life(m.uuid, 'started');
+    log(m);
+    out({ type: 'assistant', message: { role: 'assistant',
+        content: [{ type: 'tool_use', id: 'tu-' + m.uuid, name: 'Bash', input: { command: 'sleep' } }] } });
+    setTimeout(() => {
+        const folded = held.splice(0);
+        for (const f of folded) { life(f.uuid, 'started'); log(f, { folded: true }); }
+        out({ type: 'user', message: { role: 'user',
+            content: [{ type: 'tool_result', tool_use_id: 'tu-' + m.uuid, content: 'ok' }] } });
+        setTimeout(() => {
+            for (const f of folded) life(f.uuid, 'completed');
+            out({ type: 'result', subtype: 'success', is_error: false,
+                result: folded.length ? 'folded:' + folded.map(textOf).join('|') : textOf(m),
+                duration_ms: 1, num_turns: 1, total_cost_usd: 0, session_id: sessionId });
+            life(m.uuid, 'completed');
+            running = false;
+            // Anything that came in after the fold is the next turn, on its own.
+            const next = held.shift();
+            if (next) onUser(next);
+        }, 50);
+    }, ms);
+}
+
 readline.createInterface({ input: process.stdin }).on('line', (line) => {
     let m;
     try { m = JSON.parse(line); } catch { return; }
     if (m.type === 'control_request') {
+        const req = m.request || {};
+        let response = {};
+        if (req.subtype === 'cancel_async_message') {
+            const i = held.findIndex(h => h.uuid === req.message_uuid);
+            if (i >= 0) { held.splice(i, 1); life(req.message_uuid, 'cancelled'); }
+            response = { cancelled: i >= 0 };
+        }
         return out({ type: 'control_response',
-            response: { subtype: 'success', request_id: m.request_id, response: {} } });
+            response: { subtype: 'success', request_id: m.request_id, response } });
     }
+    onUser(m, line);
+}).on('close', () => process.exit(0));
+
+function onUser(m) {
     // The answer to an ASK below. The result follows after a pause, so a case can
     // restart the bridge between the answer and the end of the turn.
     if (m.type === 'control_response' && m.response && m.response.request_id === 'ask1') {
@@ -69,9 +122,14 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
             session_id: sessionId }), 300);
     }
     if (m.type !== 'user') return;
-    const text = (m.message.content || [])
-        .filter(b => b.type === 'text').map(b => b.text).join('\\n');
-    if (LOG) fs.appendFileSync(LOG, JSON.stringify({ text, pid: process.pid }) + '\\n');
+    const text = textOf(m);
+    const tools = /\\bTOOLS(\\d+)\\b/.exec(text);
+    if (tools) lc = true;
+    if (running) { held.push(m); life(m.uuid, 'queued'); return; }
+    if (tools) return toolTurn(m, Number(tools[1]));
+    life(m.uuid, 'queued');
+    life(m.uuid, 'started');
+    log(m);
     if (/\\bHANG\\b/.test(text)) {
         return out({ type: 'assistant',
             message: { role: 'assistant', content: [{ type: 'text', text: 'working' }] } });
@@ -92,7 +150,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     }
     out({ type: 'result', subtype: 'success', is_error: false, result: text,
           duration_ms: 1, num_turns: 1, total_cost_usd: 0, session_id: sessionId });
-}).on('close', () => process.exit(0));
+}
 `;
 
 fs.writeFileSync(stub, STUB, { mode: 0o755 });
@@ -274,6 +332,101 @@ function runner() {
         ok('Stop with no process returns the queue instead of keeping it');
     }
 
+    // --- a message sent mid-tool reaches the running turn -----------------
+    // What a terminal does, and the reason _handOver exists. The same three
+    // assertions as above, plus the one that is the feature: it is read by the
+    // turn that was running — one result, not two — rather than after it.
+    {
+        reset();
+        const r = runner();
+        let results = 0;
+        r.on('turn-complete', () => results++);
+        r.send('TOOLS500 work');
+        await until(() => r._pendingTools.size, 5000, 'the tool call to start');
+        r.send('also this');
+        assert.strictEqual(r.status().queue[0].handed, true,
+            'a message sent while a tool runs goes to the turn straight away');
+        await until(() => r.lastResultText === 'folded:also this', 5000, 'the fold');
+        assert.strictEqual(results, 1, 'read inside the running turn, not as a turn of its own');
+        assert.strictEqual(r.inFlight.length, 0);
+        assert.strictEqual(r.queue.length, 0);
+        assert.strictEqual(r.state, 'idle');
+        ok('a message sent during a tool call is folded into the running turn');
+
+        r.send('next');
+        await until(() => r.lastResultText === 'next', 5000, 'the message after the fold');
+        assert.deepStrictEqual(turns().map(t => [t.text, !!t.folded]),
+            [['TOOLS500 work', false], ['also this', true], ['next', false]],
+            'each message delivered once, and only the mid-tool one folded');
+        ok('and the next message after it is delivered, once');
+    }
+
+    // Sent while the turn is only writing, it waits, as it always did: there is no
+    // tool round for it to be folded into, so handing it over would only make it
+    // uneditable sooner.
+    {
+        reset();
+        const r = runner();
+        r.send('TOOLS20 warm');
+        await until(() => r.lastResultText === 'TOOLS20 warm', 5000, 'the warm-up');
+        r.send('SLOW300 prose');
+        await until(() => r.state === 'busy' && turns().length === 2, 5000, 'the text turn');
+        r.send('later');
+        assert.strictEqual(r.status().queue[0].handed, false, 'no tool running, so it waits');
+        await until(() => r.lastResultText === 'later', 5000, 'the waiting message');
+        assert.deepStrictEqual(turns().map(t => t.text), ['TOOLS20 warm', 'SLOW300 prose', 'later']);
+        ok('a message sent while no tool runs waits for the turn to end');
+    }
+
+    // Dropping a handed message takes it back from the CLI. Only what the CLI
+    // agrees to give back is dropped; the rest stays on screen.
+    {
+        reset();
+        const r = runner();
+        r.send('TOOLS600 w');
+        await until(() => r._pendingTools.size, 5000, 'the tool call');
+        const e = r.send('drop me');
+        assert.ok(r.queue[0].handed);
+        const removed = await r.dequeue(e.id);
+        assert.ok(removed && removed.text === 'drop me', 'the CLI gave it back');
+        assert.strictEqual(r.queue.length, 0);
+        await until(() => r.lastResultText === 'TOOLS600 w', 5000, 'the turn, with nothing folded');
+        assert.ok(!turns().some(t => t.text === 'drop me'), 'a withdrawn message never reaches the model');
+        ok('dropping a handed message withdraws it from the running turn');
+
+        // One the CLI no longer holds: it answers `cancelled: false`, and the chip
+        // must stay rather than claim a message was taken back when it was not.
+        r.queue.push({ id: 'q-gone', uuid: randomUUID(), text: 'too late', at: Date.now(),
+            attachments: [], handed: true });
+        assert.strictEqual(await r.dequeue('q-gone'), null, 'too late is reported as too late');
+        assert.strictEqual(r.queue.length, 1, 'and nothing pretends otherwise');
+        r.queue.length = 0;
+        ok('a message the CLI will not give back is not reported as dropped');
+    }
+
+    // A hard stop with a message handed over. It went down with the process's
+    // queue, so it comes back in `dropped`, never reaches the model, and leaves
+    // nothing behind that would gate the next send.
+    {
+        reset();
+        const r = runner();
+        r.send('TOOLS1500 z');
+        await until(() => r._pendingTools.size, 5000, 'the tool call');
+        r.send('pending');
+        assert.ok(r.queue[0].handed);
+        const out = await r.stop({ hard: true });
+        await once(r, 'exit');
+        assert.deepStrictEqual(out.dropped.map(q => q.text), ['pending'],
+            'a handed message comes back with the rest of the queue');
+        assert.strictEqual(r.inFlight.length, 0);
+        assert.strictEqual(r.queue.length, 0);
+        r.send('after');
+        await until(() => r.lastResultText === 'after', 8000, 'the message after the stop');
+        assert.deepStrictEqual(turns().map(t => t.text), ['TOOLS1500 z', 'after'],
+            'the handed message is not delivered, and the stopped turn is not re-sent');
+        ok('a hard stop hands back a handed message and does not wedge the next send');
+    }
+
     // --- the session host: a bridge restart in the middle of a turn -------
     // The reason bridge/host.js exists. Each case restarts the "bridge" at a
     // different point in a turn and asserts the same three things the cases above
@@ -413,6 +566,32 @@ function runner() {
         assert.strictEqual(r2.state, 'busy', 'but the turn is still going');
         await until(() => r2.lastResultText === 'answered:allow', 5000, 'the turn to end');
         ok('an ask answered before the restart is not asked again');
+    }
+
+    // A message handed over just before the restart. The process has it, so the
+    // next bridge must not write it again — it is matched by the uuid in the note
+    // and settled by the lifecycle frames, whether they came before or after.
+    {
+        reset();
+        const id = randomUUID();
+        const b1 = bridge();
+        const r1 = b1.ensure(id, { cwd: root, isNew: true });
+        r1.send('TOOLS700 across');
+        await until(() => r1._pendingTools.size, 5000, 'the tool call');
+        r1.send('mid');
+        assert.ok(r1.queue[0].handed);
+        b1.shutdown();
+
+        const b2 = bridge();
+        await b2.adoptHeld();
+        const r2 = b2.get(id);
+        assert.strictEqual(r2.state, 'busy');
+        await until(() => r2.lastResultText === 'folded:mid', 5000, 'the fold, after the restart');
+        assert.strictEqual(r2.inFlight.length, 0);
+        assert.strictEqual(r2.queue.length, 0);
+        assert.deepStrictEqual(turns().map(t => t.text), ['TOOLS700 across', 'mid'],
+            'the handed message is delivered once, by the process that held it');
+        ok('a message handed over before a restart is not sent again after it');
     }
 })().then(() => finish(0)).catch((err) => {
     console.error(err && err.stack || err);
