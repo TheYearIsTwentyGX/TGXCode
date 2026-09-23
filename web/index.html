@@ -169,6 +169,29 @@
          terminal — so it can be older than the window you are looking at, and
          the pill says how old rather than passing an old number off as current.
          Everything the panel needs to explain that is in bridge/usage.js. -->
+    <!-- Claude Code is behind the registry, or some session is still running a
+         binary older than the installed one. Absent whenever neither is true:
+         a badge that is always there says nothing. Borrows the quota pill's
+         classes for its shape; renderCv() in web/app.js draws it and
+         bridge/claude-version.js is where the answer comes from. -->
+    <div class="quota-wrap cv-wrap" id="cv-wrap" hidden>
+      <button id="cv-pill" class="quota-pill cv-pill" type="button"
+              aria-haspopup="dialog" aria-expanded="false" aria-controls="cv-menu"></button>
+      <div id="cv-menu" class="quota-menu" role="dialog" aria-label="Claude Code version" hidden>
+        <div class="quota-head">
+          <span>Claude Code</span>
+          <button id="cv-check" class="quota-refresh" type="button">Check again</button>
+        </div>
+        <div id="cv-body"></div>
+        <button id="cv-update" class="quota-restart" type="button">
+          <span class="qr-text">
+            <span class="qr-label" id="cv-update-label">Update now</span>
+            <span class="qr-sub">Runs <code>claude update</code>. Sessions already running keep their binary until they restart.</span>
+          </span>
+        </button>
+      </div>
+    </div>
+
     <div class="quota-wrap" id="quota-wrap" hidden>
       <button id="quota-pill" class="quota-pill" type="button"
               aria-haspopup="dialog" aria-expanded="false" aria-controls="quota-menu"

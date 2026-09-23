@@ -695,6 +695,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'quota-wrap', 'quota-pill', 'quota-pill-body', 'quota-menu', 'quota-windows',
     'quota-events', 'quota-note', 'quota-refresh', 'quota-live',
     'quota-restart', 'quota-restart-label', 'quota-restart-sub',
+    'cv-wrap', 'cv-pill', 'cv-menu', 'cv-check', 'cv-body', 'cv-update', 'cv-update-label',
     'btn-pin', 'btn-changes', 'btn-folder', 'btn-term', 'btn-archive', 'btn-delete',
     'turns', 'turn-pop',
     'find', 'find-input', 'find-count', 'find-prev', 'find-next',
@@ -2212,6 +2213,15 @@ function renderHeader() {
     if (s.model) {
         bits.push(el('span', { class: 'sep' }, '·'));
         bits.push(el('span', {}, shortModel(s.model)));
+    }
+    // Only when this session's process predates the installed binary, which is
+    // the case where a feature somebody just read about is not here yet.
+    const oldClaude = cvStaleFor(s.sessionId);
+    if (oldClaude) {
+        bits.push(el('span', { class: 'sep' }, '·'));
+        bits.push(el('span', { class: 'cv-old', title: `This session's process is Claude Code `
+            + `${oldClaude.version}; ${state.cv.installed} is installed. It moves over when the process restarts.` },
+        `Claude ${oldClaude.version} (older)`));
     }
     bits.push(el('span', { class: 'sep' }, '·'));
     bits.push(el('span', {}, `${s.userMessages} turns`));
@@ -12486,6 +12496,8 @@ function claudeRow(row) {
             row.label,
             el('code', { class: 'cfg-path', text: row.path })),
         row.note ? el('div', { class: 'settings-row-note', text: row.note }) : null,
+        // What the channel is currently delivering. See paintCvSettingsNote().
+        row.path === 'autoUpdatesChannel' ? cvSettingsNote() : null,
         row.hint === 'user' && s.scope !== 'user'
             ? el('div', { class: 'settings-row-note' },
                 'Normally set for you alone rather than checked into a repository.')
@@ -15459,6 +15471,11 @@ function paintToolbar() {
             else node.setAttribute('aria-label', def.name);
         }
     }
+    // The version badge is not in the catalogue: it is an indicator that is
+    // absent unless something is behind, not a button anybody places. It rides
+    // beside the quota pill, which is always on the bar, rather than being left
+    // wherever the moves above happened to strand it.
+    bar.insertBefore(dom.cvWrap, dom.quotaWrap);
     paintBarMore();
 }
 
@@ -15497,7 +15514,7 @@ function showBarMore(on) {
     if (on && dom.barMoreWrap.hidden) return;
     dom.barMoreMenu.hidden = !on;
     dom.barMore.setAttribute('aria-expanded', String(on));
-    if (on) { showQuota(false); showNewMenu(false); }
+    if (on) { showQuota(false); showNewMenu(false); showCv(false); }
 }
 
 function barMoreRows() {
@@ -16930,7 +16947,7 @@ function showQuota(on) {
     // pill does not draw — the pill only clocks a window that has a percentage
     // or a status — so opening it is one of the ways a first reset time reaches
     // the screen, and closing it is one of the ways the last one leaves.
-    if (on) { renderQuotaPanel(); showNewMenu(false); showBarMore(false); }
+    if (on) { renderQuotaPanel(); showNewMenu(false); showBarMore(false); showCv(false); }
     syncQuotaClock();
 }
 
@@ -16965,7 +16982,181 @@ dom.quotaPill.addEventListener('click', (e) => {
 });
 
 document.addEventListener('click', (e) => {
-    if (!dom.quotaMenu.hidden && !e.target.closest('.quota-wrap')) showQuota(false);
+    if (!dom.quotaMenu.hidden && !e.target.closest('#quota-wrap')) showQuota(false);
+    if (!dom.cvMenu.hidden && !e.target.closest('#cv-wrap')) showCv(false);
+});
+
+// ---------------------------------------------------------------------------
+// Claude Code version
+// ---------------------------------------------------------------------------
+//
+// The summary is the bridge's (bridge/claude-version.js): installed, newest on
+// the configured channel, and which live sessions are on an older binary than
+// the one installed. Three surfaces draw it — the bar badge, the Update channel
+// row in settings, and the conversation header of a session that is itself on
+// an old binary — and all three read `state.cv` and nothing else.
+
+state.cv = null;
+state.cvBusy = false;
+
+const cvStale = () => (state.cv && state.cv.staleSessions) || [];
+
+/** The stale-session entry for this id, or null. */
+const cvStaleFor = (id) => cvStale().find(x => x.id === id) || null;
+
+function applyCv(summary) {
+    if (!summary || typeof summary !== 'object') return;
+    state.cv = summary;
+    renderCv();
+}
+
+async function loadCv({ fresh = false } = {}) {
+    try {
+        applyCv(await get(`/api/claude-version${fresh ? '?refresh=1' : ''}`));
+    } catch {
+        // A bridge without the route. Nothing appears, which is the right answer.
+    }
+}
+
+function renderCv() {
+    const cv = state.cv;
+    const stale = cvStale();
+    const show = !!cv && !state.remote && (cv.behind || stale.length > 0 || cv.updating || state.cvBusy);
+    dom.cvWrap.hidden = !show;
+    if (!show) showCv(false);
+    if (cv) {
+        const text = cv.behind
+            ? `Claude ↑ ${cv.latest}`
+            : `${stale.length} on old Claude`;
+        dom.cvPill.textContent = text;
+        dom.cvPill.dataset.kind = cv.behind ? 'behind' : 'stale';
+        dom.cvPill.title = cv.behind
+            ? `Claude Code ${cv.installed} is installed; ${cv.latest} is the newest on ${cv.channel}`
+            : `${stale.length} running ${stale.length === 1 ? 'session is' : 'sessions are'} `
+                + `on an older binary than the installed ${cv.installed}`;
+    }
+    if (!dom.cvMenu.hidden) renderCvPanel();
+    paintCvSettingsNote();
+    if (state.current) renderHeader();
+}
+
+function renderCvPanel() {
+    const cv = state.cv;
+    if (!cv) return;
+    const rows = [];
+    rows.push(el('div', { class: 'q-row cv-row' },
+        el('span', {}, 'Installed'), el('b', {}, cv.installed || 'unknown')));
+    rows.push(el('div', { class: 'q-row cv-row' },
+        el('span', {}, `Newest on ${cv.channel}`),
+        el('b', {}, cv.latest || '—')));
+    if (cv.error) {
+        rows.push(el('div', { class: 'quota-note' },
+            el('div', { class: 'warn' }, `Could not ask the registry: ${cv.error}`)));
+    }
+    const stale = cvStale();
+    if (stale.length) {
+        const byId = new Map(state.sessions.map(s => [s.sessionId, s]));
+        rows.push(el('div', { class: 'q-row' },
+            el('div', { class: 'cv-stale-head' },
+                `Running an older binary (${stale.length})`),
+            ...stale.map(x => {
+                const s = byId.get(x.id);
+                return el('button', {
+                    class: 'cv-stale', type: 'button', title: 'Open this session',
+                    onclick: (e) => { e.stopPropagation(); showCv(false); openSession(x.id); },
+                }, el('span', { class: 'cv-stale-title' }, s ? s.title : x.id.slice(0, 8)),
+                el('span', { class: 'cv-stale-ver' }, x.version));
+            }),
+            el('div', { class: 'quota-note' },
+                'Each keeps the binary it started on until its process ends. '
+                + 'Stop one and send it a message to move it to the installed version.')));
+    }
+    if (cv.lastUpdate && !cv.lastUpdate.ok) {
+        rows.push(el('div', { class: 'quota-note' },
+            el('div', { class: 'warn' }, 'The last update failed:'),
+            el('code', {}, cv.lastUpdate.output || 'no output')));
+    }
+    dom.cvBody.replaceChildren(...rows);
+
+    const busy = state.cvBusy || cv.updating;
+    dom.cvUpdate.hidden = !cv.behind && !busy;
+    dom.cvUpdate.disabled = busy;
+    dom.cvUpdate.classList.toggle('busy', busy);
+    dom.cvUpdateLabel.textContent = busy ? 'Updating…'
+        : cv.latest ? `Update to ${cv.latest}` : 'Update now';
+}
+
+function showCv(on) {
+    if (on === !dom.cvMenu.hidden) return;
+    dom.cvMenu.hidden = !on;
+    dom.cvPill.setAttribute('aria-expanded', String(on));
+    if (on) { renderCvPanel(); showQuota(false); showNewMenu(false); showBarMore(false); }
+}
+
+async function updateClaudeNow() {
+    if (state.cvBusy) return;
+    state.cvBusy = true;
+    renderCv();
+    try {
+        const out = await post('/api/claude-version/update');
+        applyCv(out.summary);
+        if (out.ok) {
+            const cv = out.summary || {};
+            toast(cv.behind ? 'claude update ran, but the installed version did not move'
+                : `Claude Code ${cv.installed} is installed`, cv.behind ? 'warn' : 'info');
+        } else {
+            toast('Claude Code could not be updated — see the version panel', 'warn');
+        }
+    } catch (err) {
+        if (err.data && err.data.summary) applyCv(err.data.summary);
+        toast(err.message || 'Claude Code could not be updated', 'warn');
+    } finally {
+        state.cvBusy = false;
+        renderCv();
+    }
+}
+
+/**
+ * The Update channel row in Claude settings, which is where somebody looking for
+ * "what version am I on" goes. Patched in place rather than by re-rendering the
+ * settings page, which would throw away whatever is being typed there.
+ */
+function paintCvSettingsNote() {
+    const row = document.querySelector('.settings-row[data-path="autoUpdatesChannel"] .settings-row-text');
+    if (!row) return;
+    const old = row.querySelector('.cv-note');
+    const note = cvSettingsNote();
+    if (old) old.replaceWith(note || '');
+    else if (note) row.append(note);
+}
+
+function cvSettingsNote() {
+    const cv = state.cv;
+    if (!cv || !cv.installed) return null;
+    const busy = state.cvBusy || cv.updating;
+    return el('div', { class: 'settings-row-note cv-note' },
+        `Installed ${cv.installed}`,
+        cv.latest ? ` · newest on this channel ${cv.latest}` : '',
+        cv.behind && !state.remote
+            ? el('button', {
+                class: 'linkish', type: 'button', disabled: busy || null,
+                onclick: updateClaudeNow,
+            }, busy ? ' Updating…' : ' Update now')
+            : '');
+}
+
+dom.cvPill.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showCv(dom.cvMenu.hidden);
+});
+dom.cvCheck.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    dom.cvCheck.disabled = true;
+    try { await loadCv({ fresh: true }); } finally { dom.cvCheck.disabled = false; }
+});
+dom.cvUpdate.addEventListener('click', (e) => {
+    e.stopPropagation();
+    updateClaudeNow();
 });
 
 // Ages move on their own, so the pill is repainted on a clock rather than only
@@ -17033,6 +17224,9 @@ function connect() {
         // the pill has been quietly ageing the whole time. A reconnect is the
         // one moment it can be brought back to the truth for free.
         loadQuota();
+        // The version check has the same missed-push problem, and this is also
+        // how the first answer arrives at all.
+        loadCv();
         // Same reasoning for the status line, which onerror left reading
         // "Reconnecting to the bridge…". applyRunner derives it from what we
         // already know, so an idle session says Ready again and a busy one is
@@ -17314,6 +17508,12 @@ function connect() {
     // bridge only sends it when a reading actually moved.
     es.addEventListener('quota', (e) => {
         applyQuotaSnapshot(JSON.parse(e.data));
+    });
+
+    // The whole summary. Sent when it moved: an hourly registry check, an
+    // update, or a process starting or ending on some other version.
+    es.addEventListener('claude-version', (e) => {
+        applyCv(JSON.parse(e.data));
     });
 
     // A process reported a command list that differs from the one we hold —
@@ -23390,6 +23590,7 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !dom.ctxMenu.hidden) { closeContextMenu({ focus: true }); return; }
     // A popover can sit over a modal dialog, so it answers Escape first.
     if (e.key === 'Escape' && !dom.quotaMenu.hidden) { showQuota(false); dom.quotaPill.focus(); return; }
+    if (e.key === 'Escape' && !dom.cvMenu.hidden) { showCv(false); dom.cvPill.focus(); return; }
     if (e.key === 'Escape' && !dom.newMenu.hidden) { showNewMenu(false); dom.btnNewMenu.focus(); return; }
     if (e.key === 'Escape' && !dom.barMoreMenu.hidden) { showBarMore(false); dom.barMore.focus(); return; }
     // Both snippet popovers, and above the modal rung rather than below it — the

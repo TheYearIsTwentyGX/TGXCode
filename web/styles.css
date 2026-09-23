@@ -576,6 +576,28 @@ a:hover { text-decoration: underline; }
 
 @media (prefers-reduced-motion: reduce) { .quota-menu { animation: none; } }
 
+/* The Claude Code version badge — the quota pill's shape, and only drawn when
+   something is behind, so it carries the one tint that says so. See renderCv()
+   in web/app.js. */
+.cv-wrap { flex: none; }
+.cv-pill { color: var(--yellow); white-space: nowrap; }
+.cv-pill:hover, .cv-pill[aria-expanded="true"] { color: var(--yellow); }
+.cv-row { display: flex; justify-content: space-between; gap: 12px;
+    font: 400 12.5px/1.4 var(--sans); color: var(--text-3); }
+.cv-row b { font: 500 12.5px/1.4 var(--mono); color: var(--text); }
+.cv-stale-head { font: 400 12.5px/1.4 var(--sans); color: var(--text-3); margin-bottom: 4px; }
+.cv-stale {
+    display: flex; justify-content: space-between; gap: 10px;
+    width: 100%; padding: 4px 6px; margin: 0 -6px;
+    border: 0; border-radius: var(--r-xs);
+    background: none; color: var(--text-2); text-align: left; cursor: pointer;
+    font: 400 12px/1.4 var(--sans);
+}
+.cv-stale:hover { background: var(--s4); color: var(--text); }
+.cv-stale-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cv-stale-ver { flex: none; font: 400 11px/1.6 var(--mono); color: var(--text-4); }
+.cv-old { color: var(--yellow); }
+
 
 /* ── rail ────────────────────────────────────────────────────────────── */
 
