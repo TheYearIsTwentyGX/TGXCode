@@ -962,6 +962,11 @@ commands: the workspace's checked-in file (falling back to the main checkout's),
 then `settings.local.json` from the main checkout, then one in the workspace.
 `sources` lists the files that were actually read, weakest first.
 
+A bridge started with `CLAUDE_SESSIONS_PREFS_DIR` set uses that directory in place
+of `~/.tgxcode`, for reads and saves alike, so the user file's path in `sources`
+and `target` is under it. This exists so a development bridge can test a save
+without touching the real file; no field changes because of it.
+
 A value that is not what the key allows is dropped and reported in `problems`
 rather than taken at face value; the default stands. Without `?cwd=` you get the
 user-level answer, which is also what every page is served in a `cs-prefs`
@@ -1065,12 +1070,13 @@ short-lived `claude` runs; nothing happens until it names somewhere you have
 already trusted), `beaconEveryMinutes` (int, 5–1440). See `GET /api/quota` for
 what the refresh itself reports. User file only.
 
-`keyboard` is about keys, and is three keys of its own:
+`keyboard` is about keys, and is four keys of its own:
 
 | Key | Type | |
 |---|---|---|
 | `contextualTerminalCopy` | bool, default `false` | in the integrated terminal, `Ctrl+C` copies the selection and clears it when there is one and interrupts when there is not, and plain `Ctrl+V` pastes instead of `Ctrl+Shift+V`. Only while the terminal has the focus. |
 | `composerSend` | `"enter"` (default) or `"ctrl-enter"` | what Enter does in a composer. `"enter"`: Enter sends, Shift+Enter is a newline. `"ctrl-enter"`: the reverse. `Ctrl+Enter` sends under both. |
+| `cycleOrder` | `"default"` (default) or `"alphabetical"` | the order `composer.permissionMode` / `composer.model` (and their `…Prev` twins) step the composer's pickers in. `"default"`: the order the dropdown lists them. `"alphabetical"`: sorted by the option's label, case-insensitive, with an empty value (the model's "inherit") kept first. The dropdowns themselves are not reordered. |
 | `bindings` | **object**, `{[commandId]: string \| null}` | which chord reaches which command. A missing id means the default; `null` means deliberately unbound. Keys must be ids `GET /api/keymap` lists, and values must be canonical combos it would accept — anything else is one entry dropped with one `problems` line, not the whole map. At most 100 entries. |
 
 User file only, and `bindings` is a **map**, so a `PUT` naming it replaces the
@@ -2924,7 +2930,7 @@ exactly one file:
 
 | `scope` | file |
 |---|---|
-| `user` | `~/.tgxcode/settings.json` — `cwd` ignored |
+| `user` | `~/.tgxcode/settings.json` — `cwd` ignored (under `CLAUDE_SESSIONS_PREFS_DIR` instead when the bridge was started with it) |
 | `project` | `<cwd>/.tgxcode/settings.json`, which git tracks |
 | `project-local` | `<cwd>/.tgxcode/settings.local.json`, which is meant to be ignored — **check the repository actually ignores it**; this one does, since the Settings panel landed, but that is a line in a `.gitignore` and not something the bridge can promise |
 
@@ -3000,10 +3006,13 @@ Claude Code's own settings, as opposed to this app's. `/api/prefs` is
   }],
   effective:   {dottedPath: {value, scope, file} | {value, merged: true, from: […]}},
   unknown:     [{path, kind, type, preview, scope, file}],
-  hooks:       [{event, matcher, type, command, script}],
+  hooks:       [{scope, file, event, matcher, index, type, command, target, timeout, script}],
   statusLine:  {value, scope, file, ours, command} or null,
   installedPlugins: [string],
   catalogue:   [{title, key, note, rows: […]}],
+  hookEvents:  [{name, matcher, values?, blurb}],
+  hookTypes:   [{type, required, label}],
+  toolNames:   [string],
   catalogueAgainst: string,
   scopes:      [string],
   running:     int,
@@ -3046,12 +3055,34 @@ else has to go through `text`. `preview` is one clipped line of JSON.
 `catalogueAgainst` is the Claude Code version the catalogue was read against, so
 "there is no control for that" and "this app is out of date" can be told apart.
 
-`hooks` is a flattened summary of the strongest `hooks` block, one entry per
-hook: `event`, `matcher` (string or `null`, meaning every tool), `type`,
-`command` with `$HOME` folded back, and `script` — `{file, exists}` when a path
-could be picked out of the command, `null` otherwise. `exists: false` is the
-useful part: a hook whose script has been deleted fails silently and nothing in
-Claude Code says so.
+`hooks` is a flattened summary of **every file's** `hooks` block, weakest file
+first, one entry per hook. Claude Code runs the hooks of every scope — a project
+hook does not replace a user one, both fire — so this is every hook in force,
+not the strongest file's. (Until the hooks editor landed it *was* the strongest
+file's alone, which under-reported exactly the case that matters.) Each entry:
+
+| field | type | |
+|---|---|---|
+| `scope`, `file` | string | the file the hook is in |
+| `event` | string | the key under `hooks`, e.g. `PreToolUse` |
+| `matcher` | string or null | `null` means no matcher — every tool, or an event that takes none |
+| `index` | `{group: int, hook: int}` | the hook's position in that file's `hooks[event]` — group, then hook within it |
+| `type` | string or null | `command`, `http`, `prompt`, `agent`, `mcp_tool`, or whatever the file says |
+| `command` | string or null | a `command` hook's command, `$HOME` folded back; `null` for every other type |
+| `target` | string or null | what the hook does, whatever its type — the command, the URL, the prompt, or `server / tool` — whitespace collapsed, clipped to 200 characters |
+| `timeout` | int or null | seconds, when the hook sets one |
+| `script` | `{file, exists}` or null | when a path could be picked out of the command |
+
+`script.exists: false` is the useful part: a hook whose script has been deleted
+fails silently and nothing in Claude Code says so.
+
+`hookEvents`, `hookTypes` and `toolNames` are the catalogue for the hooks
+editor, and like the rest of the catalogue they are hints with no authority.
+`hookEvents[].matcher` is what the event's matcher is matched against — `"tool"`
+(a tool name or regex), `"values"` (one of `values`), `"free"` (a name nobody
+can list), or `null` for an event that reads no matcher. `hookTypes[].required`
+is the fields a hook of that type is refused without. An event or type not in
+these lists is still accepted on a write.
 
 `statusLine.ours` is true when the command names `quota-statusline.py`, i.e.
 when `scripts/install-quota-statusline.js` is what put it there.
@@ -3104,6 +3135,30 @@ in, so a worktree's own file is the one in force.
 touched, `null` removes a key so it falls back down the chain, and a section
 left with no keys is removed rather than written out as `{}`. Existing key order
 is preserved and a new key is appended, so a one-key change is one line of diff.
+
+**`hooks` is written whole.** `patch: {hooks: {…}}` replaces the file's entire
+`hooks` block and `patch: {hooks: null}` removes it; there is no dotted path into
+it (`hooks.Stop` is refused as uncatalogued). Being an object, it always needs
+the `stamp`. The block is checked for shape, not wisdom — a hook command is an
+arbitrary shell string by design — and refused with `400 {code: "value"}` when:
+
+- it is not an object, has more than 64 events, or an event name is not
+  `^[A-Z][A-Za-z]{1,63}$`;
+- an event's value is not a non-empty array of at most 64 groups;
+- a group is not an object, has a `matcher` that is not a string (≤1024
+  characters), or has no non-empty `hooks` array (≤64);
+- a hook has no string `type`, or lacks the field its type requires as a
+  non-empty string (≤16384 characters): `command` for `command`, `url` for
+  `http`, `prompt` for `prompt` and `agent`, `server` and `tool` for `mcp_tool`;
+- an optional field is present with the wrong type: `timeout` an integer 1–86400;
+  `async`, `asyncRewake`, `once` booleans; `statusMessage`, `if`, `shell`,
+  `model` non-empty strings; `args`, `allowedEnvVars` string arrays; `headers` an
+  object of strings; `input` an object.
+
+Any other field, any unrecognised `type` and any unrecognised event are kept
+exactly as sent. The whole block is refused on the first problem, and the
+message does not say which hook — a client that wants to point at the row
+should check the same rules itself before sending.
 
 A path is accepted when the catalogue models it, **or** when it already holds a
 scalar somewhere in the chain and the new value is the same JSON type — which is

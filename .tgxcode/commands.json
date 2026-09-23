@@ -7,6 +7,11 @@
       "run": "npm run dev -- --port=${port}",
       "port": { "range": [45899, 45918] },
       "devbrowser": "${worktree}"
+    },
+    {
+      "id": "land",
+      "label": "Land",
+      "run": "npm run land"
     }
   ]
 }

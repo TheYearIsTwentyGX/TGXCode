@@ -1461,8 +1461,10 @@ several agents are committing to main.
 When the work is finished, `npm run land` from the worktree merges its PR and
 fast-forwards this checkout, which is otherwise a step agents cannot take: a
 worktree-isolated session is refused `git -C` against a directory outside its own
-tree. It pulls and stops there — restarting the bridge to pick the change up
-stays a human decision, because it ends whatever turns are running.
+tree. If the merge changed `bridge/`, it then restarts the everyday bridge so the
+new code is what is running. Turns in the session host survive that; if any turn
+would not, the restart is refused and land says so rather than forcing it.
+`--no-restart` stops after the pull.
 
 Two other things that trip agents up here:
 

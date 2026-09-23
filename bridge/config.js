@@ -49,7 +49,18 @@ const SETTINGS_LOCAL_FILE = 'settings.local.json';
 // not STATE_DIR: what lives there is state the app owns and nobody opens, and
 // this is a file a person edits by hand — and the start of a directory meant to
 // outlive this app's share of it.
-const USER_TGX_DIR = path.join(HOME, TGX_DIR);
+//
+// CLAUDE_SESSIONS_PREFS_DIR stands in for the whole of `~/.tgxcode` — settings
+// and `verbs/` alike — and exists so a dev bridge can press Save on the settings
+// page without rewriting the user's real file. Every bridge shares this
+// directory otherwise, and the obvious isolation, a different HOME, is refused
+// by the worktree guard because it also moves git's config. Not XDG_CONFIG_HOME:
+// the default was never under it, so honouring it would move the file for
+// anyone who already has it set. Unset, nothing changes. A project's own
+// `.tgxcode/` is relative to the workspace and is not affected.
+const USER_TGX_DIR = process.env.CLAUDE_SESSIONS_PREFS_DIR
+    ? path.resolve(expandHome(process.env.CLAUDE_SESSIONS_PREFS_DIR))
+    : path.join(HOME, TGX_DIR);
 const USER_PREFS_FILE = path.join(USER_TGX_DIR, SETTINGS_FILE);
 
 // Claude Code's own configuration, as opposed to this app's. Everything above

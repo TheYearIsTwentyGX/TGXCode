@@ -322,9 +322,63 @@ write(userFile, { permissions: { allow: ['Bash(one)'] } });
     assert.strictEqual(codeOf(() => fresh().save({
         scope: 'user', stamp, patch: { 'permissions.allow': ['Bash(a)', 'Bash(a)'] },
     })), 'value', 'a duplicate rule is always a mistake');
-    assert.strictEqual(codeOf(() => fresh().save({ scope: 'user', stamp, patch: { hooks: {} } })),
-        'value', 'the form has no control that produces a hooks block');
+    assert.strictEqual(codeOf(() => fresh().save({ scope: 'user', stamp, patch: { statusLine: {} } })),
+        'value', 'the form has no control that produces a status line');
     ok('the form’s own bad values are refused loudly');
+}
+
+// ── the hooks editor writes the whole block, and only a well-formed one ─────
+
+{
+    reset();
+    write(userFile, { theme: 'dark', hooks: { Stop: [{ hooks: [{ type: 'command', command: 'old' }] }] } });
+    const stamp = () => fresh().read('').files[0].stamp;
+    const block = {
+        PreToolUse: [{
+            matcher: 'Bash',
+            hooks: [
+                { type: 'command', command: '$HOME/bin/guard.sh', timeout: 5, somethingNew: { a: 1 } },
+                { type: 'http', url: 'http://127.0.0.1:9/h', headers: { A: '$T' }, allowedEnvVars: ['T'] },
+            ],
+        }],
+        // An event this catalogue has never heard of, and a type likewise:
+        // both are Claude Code's to define, so both pass through.
+        SomeFutureEvent: [{ hooks: [{ type: 'brand_new', whatever: true }] }],
+        Stop: [{ hooks: [{ type: 'prompt', prompt: 'Done?' }, { type: 'mcp_tool', server: 's', tool: 't' }] }],
+    };
+    assert.strictEqual(codeOf(() => fresh().save({ scope: 'user', patch: { hooks: block } })),
+        'stamp', 'the hooks block is a collection, so a write without a stamp is refused');
+    fresh().save({ scope: 'user', stamp: stamp(), patch: { hooks: block } });
+    const after = read(userFile);
+    assert.deepStrictEqual(after.hooks, block, 'unknown fields, events and types round-trip');
+    assert.strictEqual(after.theme, 'dark', 'the keys beside hooks are left alone');
+
+    const bad = [
+        [{ Stop: {} }, 'an event that is not a list'],
+        [{ Stop: [] }, 'an event with no groups'],
+        [{ Stop: [{ hooks: [] }] }, 'a group with no hooks'],
+        [{ Stop: [{ matcher: 3, hooks: [{ type: 'command', command: 'x' }] }] }, 'a matcher that is not a string'],
+        [{ Stop: [{ hooks: [{ command: 'x' }] }] }, 'a hook with no type'],
+        [{ Stop: [{ hooks: [{ type: 'command' }] }] }, 'a command hook with no command'],
+        [{ Stop: [{ hooks: [{ type: 'command', command: 7 }] }] }, 'a command that is not a string'],
+        [{ Stop: [{ hooks: [{ type: 'mcp_tool', server: 's' }] }] }, 'an mcp_tool hook with no tool'],
+        [{ Stop: [{ hooks: [{ type: 'command', command: 'x', timeout: 0 }] }] }, 'a timeout below one second'],
+        [{ Stop: [{ hooks: [{ type: 'command', command: 'x', async: 'yes' }] }] }, 'async as a string'],
+        [{ 'not an event': [{ hooks: [{ type: 'command', command: 'x' }] }] }, 'an event name with a space'],
+        [{ Stop: [{ hooks: [{ type: 'command', command: 'x'.repeat(20000) }] }] }, 'a runaway command'],
+        [Object.fromEntries(Array.from({ length: 65 }, (_, i) => [
+            `Ev${String.fromCharCode(65 + Math.floor(i / 26))}${String.fromCharCode(97 + (i % 26))}`,
+            [{ hooks: [{ type: 'command', command: 'x' }] }]])), 'more events than the bound'],
+    ];
+    for (const [value, why] of bad) {
+        assert.strictEqual(codeOf(() => fresh().save({ scope: 'user', stamp: stamp(), patch: { hooks: value } })),
+            'value', why);
+    }
+    assert.deepStrictEqual(read(userFile).hooks, block, 'a refused block writes nothing');
+
+    fresh().save({ scope: 'user', stamp: stamp(), patch: { hooks: null } });
+    assert.strictEqual(read(userFile).hooks, undefined, 'null removes the block');
+    ok('a hooks block is written whole, with a stamp, and only when well-formed');
 }
 
 {
@@ -425,7 +479,30 @@ write(userFile, { permissions: { allow: ['Bash(one)'] } });
     assert.strictEqual(summary[2].script, null,
         'a command that names no script is not reported as missing');
     assert.ok(!summary[0].command.includes(home), 'the home directory is shortened away');
+    assert.deepStrictEqual(summary[0].index, { group: 0, hook: 0 });
     ok('the hooks summary names each hook and whether its script is still there');
+}
+
+{
+    // Every scope's hooks run, so every scope's hooks are reported.
+    reset();
+    write(userFile, { hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo user' }] }] } });
+    write(localFile, {
+        hooks: {
+            Stop: [{ hooks: [{ type: 'http', url: 'http://127.0.0.1:9/h', timeout: 3 }] }],
+            PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'agent', prompt: 'Check   this\ncarefully' }] }],
+        },
+    });
+    const { hooks } = fresh().read(project);
+    assert.deepStrictEqual(hooks.map(h => h.scope), ['user', 'project-local', 'project-local'],
+        'a project hook does not hide the user one — both fire');
+    const http = hooks.find(h => h.type === 'http');
+    assert.strictEqual(http.target, 'http://127.0.0.1:9/h');
+    assert.strictEqual(http.timeout, 3);
+    assert.strictEqual(http.command, null);
+    assert.strictEqual(hooks.find(h => h.type === 'agent').target, 'Check this carefully');
+    assert.strictEqual(hooks[0].file, userFile);
+    ok('the summary reports hooks from every scope, whatever their type');
 }
 
 // ── the status line this app installed ─────────────────────────────────────

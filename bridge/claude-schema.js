@@ -71,6 +71,151 @@ function checkMap(v, valueOk) {
     return keys.every(k => isStr(k, 256) && valueOk(v[k]));
 }
 
+// ── hooks ─────────────────────────────────────────────────────────────────
+//
+// The events, as the hooks reference documents them. Like the rest of this
+// file it is a rendering hint: an event name not in this list is still
+// accepted by checkHooks() — Claude Code adds events faster than this list
+// will be updated, and refusing one would be us being stricter than the
+// program that reads the file. The page marks an unlisted event instead.
+//
+// `matcher` says what the matcher is matched against, which decides what the
+// page offers: `tool` a tool name (a regex — `Edit|Write`, `mcp__.*`), `values`
+// one of a fixed set of literals, `free` a name nobody can enumerate, and
+// `null` an event that takes no matcher at all. A matcher on one of those is
+// ignored by Claude Code, so the page does not draw the field.
+const TOOL_NAMES = ['Bash', 'Edit', 'Write', 'Read', 'Glob', 'Grep', 'WebFetch',
+    'WebSearch', 'Agent', 'NotebookEdit', 'Edit|Write', 'mcp__.*'];
+
+const HOOK_EVENTS = [
+    { name: 'PreToolUse', matcher: 'tool',
+        blurb: 'Before a tool runs. Exit 2, or a `deny` decision, stops it.' },
+    { name: 'PostToolUse', matcher: 'tool', blurb: 'After a tool succeeds.' },
+    { name: 'PostToolUseFailure', matcher: 'tool', blurb: 'After a tool fails.' },
+    { name: 'PostToolBatch', matcher: null, blurb: 'After a batch of parallel tool calls finishes.' },
+    { name: 'PermissionRequest', matcher: 'tool', blurb: 'When a permission prompt is about to be shown.' },
+    { name: 'PermissionDenied', matcher: 'tool', blurb: 'When a tool call is refused.' },
+    { name: 'UserPromptSubmit', matcher: null, blurb: 'When a prompt is sent, before Claude sees it.' },
+    { name: 'UserPromptExpansion', matcher: 'free',
+        blurb: 'When a slash command expands. Matches the command name.' },
+    { name: 'Notification', matcher: 'values',
+        values: ['permission_prompt', 'idle_prompt', 'auth_success', 'elicitation_dialog'],
+        blurb: 'When `claude` would notify you.' },
+    { name: 'MessageDisplay', matcher: null, blurb: 'When a message is shown.' },
+    { name: 'Stop', matcher: null, blurb: 'When the turn ends. Exit 2 makes Claude keep going.' },
+    { name: 'StopFailure', matcher: 'values',
+        values: ['rate_limit', 'overloaded', 'authentication_failed', 'billing_error',
+            'invalid_request', 'model_not_found', 'server_error', 'max_output_tokens', 'unknown'],
+        blurb: 'When a turn ends on an API error.' },
+    { name: 'SubagentStart', matcher: 'free', blurb: 'When a subagent starts. Matches the agent type.' },
+    { name: 'SubagentStop', matcher: 'free', blurb: 'When a subagent finishes. Matches the agent type.' },
+    { name: 'TaskCreated', matcher: null, blurb: 'When a task is created.' },
+    { name: 'TaskCompleted', matcher: null, blurb: 'When a task is completed.' },
+    { name: 'TeammateIdle', matcher: null, blurb: 'When a teammate goes idle.' },
+    { name: 'PreCompact', matcher: 'values', values: ['manual', 'auto'],
+        blurb: 'Before the conversation is compacted.' },
+    { name: 'PostCompact', matcher: 'values', values: ['manual', 'auto'],
+        blurb: 'After the conversation is compacted.' },
+    { name: 'PreModelSwitch', matcher: 'free', blurb: 'Before the model changes. Matches the model name.' },
+    { name: 'PostModelSwitch', matcher: 'free', blurb: 'After the model changes. Matches the model name.' },
+    { name: 'SessionStart', matcher: 'values', values: ['startup', 'resume', 'clear', 'compact', 'fork'],
+        blurb: 'When a session starts or resumes. What it prints is added to the context.' },
+    { name: 'SessionEnd', matcher: 'values',
+        values: ['clear', 'resume', 'logout', 'prompt_input_exit', 'other'],
+        blurb: 'When a session ends. It gets a very short time budget.' },
+    { name: 'Setup', matcher: 'values', values: ['init', 'maintenance'],
+        blurb: 'On `claude --init`, or maintenance.' },
+    { name: 'InstructionsLoaded', matcher: 'values',
+        values: ['session_start', 'nested_traversal', 'path_glob_match', 'include', 'compact'],
+        blurb: 'When a CLAUDE.md or rules file is loaded.' },
+    { name: 'ConfigChange', matcher: 'values',
+        values: ['user_settings', 'project_settings', 'local_settings', 'policy_settings', 'skills'],
+        blurb: 'When a settings file changes during a session.' },
+    { name: 'CwdChanged', matcher: null, blurb: 'When the working directory changes.' },
+    { name: 'DirectoryAdded', matcher: 'values', values: ['slash_command', 'register_repo_root'],
+        blurb: 'When a directory is added to the session.' },
+    { name: 'FileChanged', matcher: 'free', blurb: 'When a watched file changes. Matches literal file names.' },
+    { name: 'WorktreeCreate', matcher: null, blurb: 'When a worktree is needed. Replaces the git one.' },
+    { name: 'WorktreeRemove', matcher: null, blurb: 'When a worktree is removed.' },
+    { name: 'Elicitation', matcher: 'free',
+        blurb: 'When an MCP server asks for input. Matches the server name.' },
+    { name: 'ElicitationResult', matcher: 'free',
+        blurb: 'When that input is answered. Matches the server name.' },
+];
+
+// The five kinds of hook, and the fields each cannot do without. Everything
+// else on a hook is optional and passed through as it is.
+const HOOK_TYPES = [
+    { type: 'command', required: ['command'], label: 'Shell command' },
+    { type: 'http', required: ['url'], label: 'HTTP request' },
+    { type: 'prompt', required: ['prompt'], label: 'Ask a model' },
+    { type: 'agent', required: ['prompt'], label: 'Run an agent' },
+    { type: 'mcp_tool', required: ['server', 'tool'], label: 'Call an MCP tool' },
+];
+const HOOK_REQUIRED = new Map(HOOK_TYPES.map(t => [t.type, t.required]));
+
+const MAX_HOOK_EVENTS = 64;
+const MAX_HOOK_GROUPS = 64;
+const MAX_HOOKS_PER_GROUP = 64;
+const MAX_HOOK_TEXT = MAX_STRING * 4;
+const HOOK_EVENT_RE = /^[A-Z][A-Za-z]{1,63}$/;
+
+// Optional fields with a type the page's controls produce. Checked only when
+// present; a field not listed here is somebody else's and passes untouched.
+const HOOK_OPTIONAL = {
+    timeout: (v) => Number.isInteger(v) && v >= 1 && v <= 86400,
+    async: (v) => typeof v === 'boolean',
+    asyncRewake: (v) => typeof v === 'boolean',
+    once: (v) => typeof v === 'boolean',
+    statusMessage: (v) => isStr(v, 256),
+    if: (v) => isStr(v, MAX_RULE_CHARS),
+    shell: (v) => isStr(v, 64),
+    model: (v) => isStr(v, 256),
+    args: (v) => checkList(v, { max: 64, chars: MAX_STRING }),
+    allowedEnvVars: (v) => checkList(v, { max: 64, chars: 256 }),
+    headers: (v) => checkMap(v, (h) => typeof h === 'string' && h.length <= MAX_STRING),
+    input: (v) => isPlainObject(v),
+};
+
+/**
+ * Is this a `hooks` block the editor may write?
+ *
+ * Structural, not semantic: the shape Claude Code reads, with bounds. It does
+ * not ask whether a command is wise — a hook command is an arbitrary shell
+ * string by design, and the page's review step before a save is where a person
+ * reads it. What it refuses is a shape Claude Code would skip or trip over: a
+ * matcher group with no hooks in it, a hook with no `type`, a `command` hook
+ * with no command.
+ */
+function checkHooks(v) {
+    if (!isPlainObject(v)) return false;
+    const events = Object.entries(v);
+    if (events.length > MAX_HOOK_EVENTS) return false;
+    for (const [event, groups] of events) {
+        if (!HOOK_EVENT_RE.test(event)) return false;
+        if (!Array.isArray(groups) || !groups.length || groups.length > MAX_HOOK_GROUPS) return false;
+        for (const g of groups) {
+            if (!isPlainObject(g)) return false;
+            if (g.matcher !== undefined
+                && (typeof g.matcher !== 'string' || g.matcher.length > MAX_RULE_CHARS)) return false;
+            if (!Array.isArray(g.hooks) || !g.hooks.length || g.hooks.length > MAX_HOOKS_PER_GROUP) return false;
+            if (!g.hooks.every(checkHook)) return false;
+        }
+    }
+    return true;
+}
+
+function checkHook(h) {
+    if (!isPlainObject(h) || !isStr(h.type, 64)) return false;
+    for (const field of HOOK_REQUIRED.get(h.type) || []) {
+        if (!isStr(h[field], MAX_HOOK_TEXT)) return false;
+    }
+    for (const [field, ok] of Object.entries(HOOK_OPTIONAL)) {
+        if (h[field] !== undefined && !ok(h[field])) return false;
+    }
+    return true;
+}
+
 /**
  * The groups, in the order the page draws them.
  *
@@ -217,12 +362,15 @@ const GROUPS = [
     },
     {
         title: 'Hooks', key: 'hooks',
-        note: 'Commands that run around a session’s work. Read-only here, and '
-            + 'deliberately: a hook `command` is an arbitrary shell string run on '
-            + 'every matching tool call, which makes it the highest-privilege '
-            + 'field in the file. What this shows instead is the one thing a text '
-            + 'editor cannot — whether the script each hook points at still exists.',
+        note: 'Commands that run around a session’s work. A hook `command` is an '
+            + 'arbitrary shell string run on every matching event — the highest-'
+            + 'privilege field in the file — so this editor saves only when you ask, '
+            + 'and shows you what will run before it does. Hooks from every scope '
+            + 'run; none overrides another.',
         rows: [
+            { path: 'disableAllHooks', kind: 'bool', label: 'Turn every hook off',
+                note: 'The status line goes with them. A quick way to find out whether '
+                    + 'a hook is what is misbehaving.' },
             { path: 'hooks', kind: 'hooks', wide: true, label: 'Hooks' },
         ],
     },
@@ -263,10 +411,11 @@ function check(path, value) {
         case 'strings': return checkList(value);
         case 'map-bool': return checkMap(value, (v) => typeof v === 'boolean');
         case 'map-string': return checkMap(value, (v) => typeof v === 'string' && v.length <= MAX_STRING);
-        // Read-only kinds. The form has no control that produces one, so a
-        // patch naming them is a bug rather than a preference, and it is
-        // refused here rather than trusted. The raw tab reaches them.
-        case 'hooks': case 'statusline': return false;
+        case 'hooks': return checkHooks(value);
+        // Read-only. The form has no control that produces one, so a patch
+        // naming it is a bug rather than a preference, and it is refused here
+        // rather than trusted. The raw tab reaches it.
+        case 'statusline': return false;
         default: return false;
     }
 }
@@ -286,12 +435,16 @@ function describe(path) {
         case 'strings': return `up to ${MAX_LIST} strings`;
         case 'map-bool': return 'a set of names, each true or false';
         case 'map-string': return 'a set of name and value pairs';
-        case 'hooks': case 'statusline': return 'read-only on this page — use Edit as JSON';
+        case 'hooks': return 'an object of event names, each a non-empty list of '
+            + '`{matcher, hooks: [{type, …}]}` groups — every hook with a `type` and '
+            + `the field that type needs, at most ${MAX_HOOK_EVENTS} events`;
+        case 'statusline': return 'read-only on this page — use Edit as JSON';
         default: return 'a value this page cannot produce';
     }
 }
 
 module.exports = {
     AGAINST_VERSION, GROUPS, CATALOG, check, describe, isPlainObject,
+    HOOK_EVENTS, HOOK_TYPES, TOOL_NAMES, checkHooks,
     MAX_RULES, MAX_RULE_CHARS, MAX_LIST, MAX_MAP_KEYS, MAX_STRING,
 };
