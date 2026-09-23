@@ -299,17 +299,32 @@
            standing question and the reason a week-old row of landed work is in
            the way. The glyph is the merged badge it filters, at the size the
            badge is drawn. -->
-      <button id="hide-done" class="rail-filter" type="button" aria-pressed="false"
-              title="Hide sessions whose pull requests are all merged or closed">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M18.8 4.6v14.8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-          <path d="M4.4 12h9.8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-          <path d="m10.6 8.3 3.9 3.7-3.9 3.7" stroke="currentColor" stroke-width="1.8"
-                stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-        <span class="rail-filter-label">Hide finished</span>
-        <span id="hide-done-count" class="rail-filter-count" hidden></span>
-      </button>
+      <div class="rail-filters">
+        <button id="hide-done" class="rail-filter" type="button" aria-pressed="false"
+                title="Hide sessions whose pull requests are all merged or closed">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M18.8 4.6v14.8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <path d="M4.4 12h9.8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            <path d="m10.6 8.3 3.9 3.7-3.9 3.7" stroke="currentColor" stroke-width="1.8"
+                  stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span class="rail-filter-label">Hide finished</span>
+          <span id="hide-done-count" class="rail-filter-count" hidden></span>
+        </button>
+        <!-- How the project cards are ordered. Icon-only beside the filter, since
+             the rail is narrow and the mode is in the tooltip and the menu; it
+             lights when the order is anything but the default. -->
+        <button id="rail-sort" class="rail-sort" type="button"
+                aria-haspopup="menu" aria-expanded="false" aria-controls="sort-menu"
+                aria-label="Project order" title="Project order">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M7 4.5v15M7 19.5 3.8 16.3M7 19.5l3.2-3.2" stroke="currentColor"
+                  stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M14 6h6.5M14 12h4.5M14 18h2.5" stroke="currentColor"
+                  stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
     </div>
     <div id="rail" class="rail-scroll"></div>
 
@@ -322,6 +337,9 @@
          read the bottom of. -->
     <div id="proj-menu" class="new-menu proj-menu" role="menu"
          aria-label="Project" hidden></div>
+    <!-- The rail head's order menu. Fixed for the ⋮ menu's reason. -->
+    <div id="sort-menu" class="new-menu proj-menu" role="menu"
+         aria-label="Project order" hidden></div>
   </nav>
 
   <main class="main">
@@ -993,12 +1011,14 @@
                    the bridge's projects rather than from the SETTINGS table. -->
               <section id="set-g-projects" class="settings-group">
                 <h2 class="settings-group-title">Projects</h2>
-                <p class="settings-group-note">A colour per project, so a session
-                   scoped to the wrong checkout is something you see rather than
-                   something you read. <strong>Always your own settings file</strong>
-                   — whatever the picker above says. The map names other projects’
-                   paths, so a repository setting one would be a repository
+                <p class="settings-group-note">The order of the project cards in the
+                   rail, and a colour per project, so a session scoped to the wrong
+                   checkout is something you see rather than something you read.
+                   <strong>Always your own settings file</strong> — whatever the
+                   picker above says. Both name other projects’ paths, so a
+                   repository setting them would be a repository arranging and
                    colouring its neighbours.</p>
+                <div id="pcolor-order"></div>
                 <div id="pcolor-backdrop"></div>
                 <div id="pcolor-list"></div>
               </section>

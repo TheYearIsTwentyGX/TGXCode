@@ -100,6 +100,11 @@ const CACHE_MS = 2000;
 // does has stopped being able to tell them apart by colour anyway.
 const MAX_COLORS = 200;
 
+// How many projects a custom rail order may name. Higher than MAX_COLORS
+// because every project that has ever been dragged lands in the list, coloured
+// or not, but bounded for the same reason.
+const MAX_ORDER = 500;
+
 // What the top bar is made of, in the order it has always been drawn. The page
 // holds the same list — see TOOLBAR in web/app.js — and this copy exists so a
 // file naming a button that does not exist is told so rather than kept.
@@ -170,6 +175,27 @@ const DEFAULTS = {
         // dim every other dialog has; the dialog's own head keeps its colour.
         backdropTint: true,
         backdropStrength: 13,
+        // How the rail orders its project cards. `recent` is what it has always
+        // done: newest first as of the moment the window opened, and then held
+        // still, because a card that moves under the cursor is a misclick.
+        // `dynamic` starts the same and lifts a card to the top when one of the
+        // `bumpOn*` events below happens in it. `alpha` is by name. `custom` is
+        // `order`, arranged by dragging cards in the rail.
+        sort: 'recent',
+        // What lifts a card in `dynamic`. Five switches rather than a list so
+        // each is one plain row in Settings. `bumpOnAny` is off by default for
+        // a reason: every line any session in the project writes counts, and
+        // with an agent running that is a card moving every few seconds.
+        bumpOnCreate: true,
+        bumpOnUser: true,
+        bumpOnAny: false,
+        bumpOnTurn: false,
+        bumpOnPr: false,
+        // `custom`: project directories, top first. Keyed by path for the
+        // reason `colors` is. A card not listed goes to the top or the bottom
+        // by `newAt`, and joins the list the next time anything is dragged.
+        order: [],
+        newAt: 'top',
     },
     quota: {
         // Refresh the quota percentages by starting a short-lived `claude`,
@@ -306,6 +332,17 @@ const SHAPE = {
         // behind the dialog turns into a coloured sheet, which says no more
         // about which project than a lighter wash does.
         backdropStrength: (v) => Number.isInteger(v) && v >= 0 && v <= 40,
+        sort: (v) => v === 'recent' || v === 'dynamic' || v === 'alpha' || v === 'custom',
+        bumpOnCreate: (v) => typeof v === 'boolean',
+        bumpOnUser: (v) => typeof v === 'boolean',
+        bumpOnAny: (v) => typeof v === 'boolean',
+        bumpOnTurn: (v) => typeof v === 'boolean',
+        bumpOnPr: (v) => typeof v === 'boolean',
+        // The last gate; cleanOrder() has already dropped the entries that fail.
+        order: (v) => Array.isArray(v) && v.length <= MAX_ORDER
+            && v.every(d => typeof d === 'string' && d.startsWith('/') && d === path.resolve(d))
+            && new Set(v).size === v.length,
+        newAt: (v) => v === 'top' || v === 'bottom',
     },
     quota: {
         beacon: (v) => typeof v === 'boolean',
@@ -480,6 +517,39 @@ function cleanColors(value, note) {
 }
 
 /**
+ * `projects.order`, entry by entry — cleanColors()'s argument again, for a list:
+ * one hand-typed relative path must not throw away the order of every project
+ * around it. Paths are resolved so two spellings of one directory cannot hold
+ * two places, and the first place a directory is listed is the one it keeps.
+ *
+ * @returns {string[]|undefined} the cleaned list, or undefined to leave the
+ *   default alone — which is what a value that is not a list at all gets.
+ */
+function cleanOrder(value, note) {
+    if (!Array.isArray(value)) return undefined;
+    const out = [];
+    const seen = new Set();
+    for (const dir of value) {
+        if (typeof dir !== 'string' || !dir.startsWith('/') || dir.length > 4096) {
+            note(`${JSON.stringify(dir)} is not an absolute directory`);
+            continue;
+        }
+        const resolved = path.resolve(dir);
+        if (seen.has(resolved)) {
+            note(`${JSON.stringify(dir)} is listed twice — the first stands`);
+            continue;
+        }
+        if (out.length >= MAX_ORDER) {
+            note(`more than ${MAX_ORDER} projects in the order — the rest dropped`);
+            break;
+        }
+        seen.add(resolved);
+        out.push(resolved);
+    }
+    return out;
+}
+
+/**
  * `toolbar.items`, entry by entry.
  *
  * A list rather than a map, but the argument is cleanBindings()'s: one button
@@ -529,13 +599,13 @@ function cleanToolbar(value, note) {
     return out;
 }
 
-// Section keys whose value is a map and so gets the treatment above, before
-// SHAPE sees it. Four entries; the table exists so the next one does not have
+// Section keys whose value is a map or list and so gets the treatment above, before
+// SHAPE sees it. Five entries; the table exists so the next one does not have
 // to special-case merge().
 const SANITIZE = {
     keyboard: { bindings: cleanBindings },
     spinner: { weights: cleanWeights },
-    projects: { colors: cleanColors },
+    projects: { colors: cleanColors, order: cleanOrder },
     toolbar: { items: cleanToolbar },
 };
 

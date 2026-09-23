@@ -129,7 +129,11 @@ const PREFS_FALLBACK = {
     version: 1,
     transcript: { groupToolCalls: true, groupMinCalls: 3, groupIncludesThinking: true },
     live: { compact: false, hideElsewhere: false },
-    projects: { colors: {}, backdropTint: true, backdropStrength: 13 },
+    projects: {
+        colors: {}, backdropTint: true, backdropStrength: 13,
+        sort: 'recent', bumpOnCreate: true, bumpOnUser: true, bumpOnAny: false,
+        bumpOnTurn: false, bumpOnPr: false, order: [], newAt: 'top',
+    },
     quota: { beacon: false, beaconDir: null, beaconEveryMinutes: 20 },
     spinner: { randomize: true, groups: [], weights: {}, rerollMs: 8000 },
     keyboard: { contextualTerminalCopy: false, composerSend: 'enter', cycleOrder: 'default', bindings: {} },
@@ -328,6 +332,7 @@ const state = {
     // boot and kept current by the `prs-changed` event; empty until the first of
     // those, and rows draw a colourless glyph in the meantime.
     railPrs: new Map(),
+    prsLoaded: false,       // the first /api/prs has been applied; see applyRailPrs
     // Why GitHub could not be reached, from the same payload. Grey glyphs with no
     // explanation is what an expired `gh` token used to look like on every surface
     // but the board.
@@ -366,6 +371,11 @@ const state = {
     order: new Map(),       // sessionId -> rank
     groupOrder: new Map(),  // group key -> rank
     freshRank: 0,           // ranks for what turns up after the first load
+    // What each session's timestamps were on the last load, so `dynamic` can tell
+    // a message arriving from a list merely being re-sent. See rememberOrder.
+    seenTs: new Map(),      // sessionId -> {user, last}
+    railDrag: null,         // cwd of the project card being dragged, in `custom`
+    sortMenu: false,        // the rail head's order menu is open
     unsent: new Map(),      // sessionId -> text written to a process but not yet in a transcript
     // The one message drawn in the log before the transcript has it:
     // {sessionId, node, timer}. Kept out of state.nodes on purpose — renderTurns
@@ -610,6 +620,7 @@ const state = {
         open: false, scope: 'user', project: '', projects: [],
         data: null, spinner: null, loading: false, error: null,
         saving: false, recording: null,
+        jumpTo: null,       // a group to scroll to once loaded; see openSettingsAt
         // The order the verb groups are drawn in, fixed on the way in. See
         // settingGroups().
         groupOrder: null,
@@ -690,6 +701,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'queue', 'queue-list', 'queue-count', 'queue-clear',
     'later', 'btn-later', 'later-menu',
     'model', 'perm', 'btn-new', 'btn-new-menu', 'new-menu', 'hide-done', 'hide-done-count',
+    'rail-sort', 'sort-menu',
     'db-status', 'db-label', 'toasts',
     'opt-desktop', 'opt-sound', 'notify-note', 'notify-try',
     'quota-wrap', 'quota-pill', 'quota-pill-body', 'quota-menu', 'quota-windows',
@@ -725,7 +737,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'memo-scrim', 'memo-title', 'memo-big', 'memo-note', 'memo-count',
     'memo-close', 'memo-save',
     'set-g-notify', 'set-g-pair', 'set-g-projects', 'pcolor-list', 'pcolor-backdrop',
-    'proj-menu', 'pcolor-scrim', 'pcolor-name', 'pcolor-path', 'pcolor-swatches',
+    'proj-menu', 'pcolor-order', 'pcolor-scrim', 'pcolor-name', 'pcolor-path', 'pcolor-swatches',
     'pcolor-input', 'pcolor-done', 'new-project',
     'new-cron', 'new-cron-row', 'new-cron-note', 'new-gate-ref', 'new-gate-row',
     'new-gate-kind', 'new-gate-note', 'new-gate-ref-row', 'new-pr-row',
@@ -1059,8 +1071,22 @@ async function loadSessions() {
  * needs somewhere to start, because the next push may be twenty minutes away.
  */
 function applyRailPrs(payload) {
+    const before = state.railPrs;
     state.railPrs = new Map(Object.entries((payload && payload.sessions) || {}));
     state.prsError = (payload && payload.gh && payload.gh.error) || null;
+
+    // `dynamic` with PR updates switched on: a session whose answer moved lifts
+    // its card. Not on the boot fetch, which is a window catching up rather than
+    // anything having happened.
+    let moved = false;
+    if (state.prsLoaded) {
+        for (const [id, now] of state.railPrs) {
+            if (JSON.stringify(now) === JSON.stringify(before.get(id))) continue;
+            moved = bumpGroup(state.sessions.find(s => s.sessionId === id), 'pr') || moved;
+        }
+    }
+    state.prsLoaded = true;
+    if (moved) { renderRail(); return; }
 
     // With `hideDone` on this payload decides which rows exist, not just what
     // colour they are — a PR landing has to take its row with it — so the whole
@@ -1115,7 +1141,8 @@ const inProjectCard = (s) => !s.pinned && !s.archived && !s.test;
 function rememberOrder(sessions) {
     const firstLoad = state.order.size === 0;
     for (const s of sessions) {
-        if (!state.order.has(s.sessionId)) {
+        const isNew = !state.order.has(s.sessionId);
+        if (isNew) {
             state.order.set(s.sessionId, firstLoad ? state.order.size : --state.freshRank);
         }
         // Recorded for every session, pinned or not: unpinning one later has to
@@ -1124,7 +1151,62 @@ function rememberOrder(sessions) {
         if (!state.groupOrder.has(key)) {
             state.groupOrder.set(key, firstLoad ? state.groupOrder.size : --state.freshRank);
         }
+
+        // `dynamic` only, and only against what this window has already seen: a
+        // first load has nothing to compare with, and is the static order.
+        const seen = state.seenTs.get(s.sessionId);
+        state.seenTs.set(s.sessionId, { user: s.lastUserTs || null, last: s.lastTs || null });
+        if (firstLoad) continue;
+        if (isNew) {
+            // The search box re-lists too, and a session it turns up from last
+            // month is new to this window without being new. Only one that began
+            // a moment ago counts as created — and its first line is a message
+            // from you, so either switch is enough.
+            const born = Date.parse(s.firstTs || '') || s.mtimeMs || 0;
+            if (Date.now() - born < FRESH_SESSION_MS) bumpGroup(s, 'create', 'user', 'any');
+        } else if (seen) {
+            if (tsAdvanced(s.lastUserTs, seen.user)) bumpGroup(s, 'user');
+            if (tsAdvanced(s.lastTs, seen.last)) bumpGroup(s, 'any');
+        }
     }
+}
+
+// How young a session first seen on a later load has to be to count as created
+// rather than as found — see rememberOrder.
+const FRESH_SESSION_MS = 5 * 60_000;
+
+const tsAdvanced = (now, before) => !!now && (!before || Date.parse(now) > Date.parse(before));
+
+// Which `projects.bumpOn*` switch each reason answers to.
+const BUMP_PREF = {
+    create: 'bumpOnCreate', user: 'bumpOnUser', any: 'bumpOnAny',
+    turn: 'bumpOnTurn', pr: 'bumpOnPr',
+};
+
+/**
+ * Lift a session's project card to the top of the rail, if the order is
+ * `dynamic` and any of `reasons` is switched on.
+ *
+ * It is the fresh-rank rule rememberOrder already uses for a project nobody had
+ * seen — take the next negative rank — so there is no second ordering to keep in
+ * step with the first. Only a session drawn in its project card moves the card:
+ * one that is pinned, archived or a test is shown somewhere else, and the card
+ * jumping for it would be a card moving for no visible reason.
+ *
+ * Does not render. The callers do, once, after however many bumps they made.
+ *
+ * @returns {boolean} whether anything moved
+ */
+function bumpGroup(s, ...reasons) {
+    const p = BOOT_PREFS.projects;
+    if (p.sort !== 'dynamic' || !s || !inProjectCard(s)) return false;
+    if (!reasons.some(r => p[BUMP_PREF[r]])) return false;
+    const key = groupKeyOf(s);
+    // Already on top: taking another rank would change nothing on screen.
+    const top = Math.min(...state.groupOrder.values());
+    if (state.groupOrder.get(key) === top) return false;
+    state.groupOrder.set(key, --state.freshRank);
+    return true;
 }
 
 const rankOf = (s) => state.order.get(s.sessionId) ?? 0;
@@ -1250,6 +1332,8 @@ function icon(name, size = 15) {
 }
 
 function renderRail() {
+    // A card is being carried; rebuilding would drop it. The drag's end renders.
+    if (state.railDrag) return;
     dom.rail.replaceChildren();
 
     if (!state.sessions.length) {
@@ -1310,9 +1394,8 @@ function renderRail() {
         }
         groups.get(key).list.push(s);
     }
-    const byGroupRank = [...groups].sort(
-        (a, b) => (state.groupOrder.get(a[0]) ?? 0) - (state.groupOrder.get(b[0]) ?? 0));
-    for (const [key, { label, cwd, list }] of byGroupRank) {
+    const custom = BOOT_PREFS.projects.sort === 'custom';
+    for (const [key, { label, cwd, list }] of orderGroups([...groups])) {
         // Sessions a schedule started fold into their own subsection inside the
         // project card. They are the same work in the same directory — so a card
         // of their own at the foot of the rail, the way test sessions get one,
@@ -1332,6 +1415,7 @@ function renderRail() {
             // the ⋮ menu and the colour both hang off it, and neither belongs on
             // a card that is not about a directory.
             project: { key, name: label, cwd },
+            draggable: custom,
             // The project heading still counts what it contains, subsection
             // included: a card saying 3 above a shut section holding 11 is
             // wrong about the project, which is what the heading names. Hidden
@@ -1362,6 +1446,34 @@ function renderRail() {
     // because this runs whenever any session changes and a menu that shut itself
     // several times a minute would be unusable.
     syncProjMenu();
+}
+
+/**
+ * The project cards in the order `projects.sort` asks for.
+ *
+ * `recent` and `dynamic` are the held ranks — the same list; the difference is
+ * only whether bumpGroup is allowed to change them. `custom` places each card
+ * by its directory's index in `projects.order`, and a card the list does not
+ * name yet goes above or below all of those by `newAt`, keeping its held rank
+ * among the other unnamed ones so that several new projects still arrive in a
+ * sensible order.
+ *
+ * @param {Array<[string, {label: string, cwd: string}]>} groups
+ */
+function orderGroups(groups) {
+    const p = BOOT_PREFS.projects;
+    const rank = ([key]) => state.groupOrder.get(key) ?? 0;
+    if (p.sort === 'alpha') {
+        return groups.sort((a, b) => a[1].label.localeCompare(b[1].label, undefined,
+            { sensitivity: 'base', numeric: true }) || rank(a) - rank(b));
+    }
+    if (p.sort === 'custom') {
+        const at = new Map((p.order || []).map((d, i) => [d, i]));
+        const unlisted = p.newAt === 'bottom' ? Infinity : -Infinity;
+        const pos = (g) => at.has(g[1].cwd) ? at.get(g[1].cwd) : unlisted;
+        return groups.sort((a, b) => (pos(a) - pos(b)) || rank(a) - rank(b));
+    }
+    return groups.sort((a, b) => rank(a) - rank(b));
 }
 
 /**
@@ -1406,8 +1518,15 @@ function groupCard(key, label, list, opts = {}) {
     // subsection get neither — there is nothing for either to be about.
     const accent = opts.project ? projectColor(opts.project.cwd) : '';
 
+    // `custom` order: the heading is the handle. Only the heading, so a row
+    // dragged out of the card is still nothing — rows are not reordered here.
+    // A card with no directory (`unknown`) has nothing to be keyed by in
+    // `projects.order`, so it cannot be placed.
+    const drag = opts.project && opts.draggable && !!opts.project.cwd;
+
     return el('section', {
         class: 'rail-group' + (opts.nested ? ' nested' : ''), 'data-key': key,
+        'data-cwd': opts.project ? opts.project.cwd : null,
         'data-tinted': accent ? '1' : null,
         style: accent ? `--proj-accent: ${accent}` : null,
     },
@@ -1416,8 +1535,13 @@ function groupCard(key, label, list, opts = {}) {
             type: 'button',
             'aria-expanded': String(open),
             'aria-controls': bodyId,
+            draggable: drag ? 'true' : null,
+            title: drag ? 'Drag to reorder projects' : null,
             onclick: () => { toggleGroup(key, open, opts.nested); renderRail(); },
+            ondragstart: drag ? (e) => onRailDragStart(e, opts.project.cwd) : null,
+            ondragend: drag ? (e) => onRailDragEnd(e) : null,
         },
+            drag ? el('span', { class: 'group-grip' }, icon('grip', 13)) : null,
             el('span', { class: 'twist' }, icon('caret', 13)),
             el('span', { class: 'group-label' }, label),
             live ? el('span', { class: 'live' }, `${live} live`) : null,
@@ -1443,6 +1567,110 @@ function groupCard(key, label, list, opts = {}) {
             ? el('div', { class: 'group-body', id: bodyId }, opts.lead || null, list.map(strip))
             : null,
     );
+}
+
+// --- `custom` order: dragging project cards ------------------------------
+//
+// The toolbar editor's idiom (onBarDragOver, commitBarOrder): the card under the
+// cursor moves as the drag goes, and the order is read back off the DOM when it
+// ends. renderRail() is held off meanwhile — a session writing mid-drag would
+// otherwise rebuild the rail and drop the card being carried.
+
+function onRailDragStart(e, cwd) {
+    state.railDrag = cwd;
+    closeProjMenu();
+    e.dataTransfer.effectAllowed = 'move';
+    // Firefox starts no drag without data.
+    e.dataTransfer.setData('text/plain', cwd);
+    e.currentTarget.closest('.rail-group').classList.add('dragging');
+}
+
+function onRailDragEnd(e) {
+    const card = e.currentTarget.closest('.rail-group');
+    if (card) card.classList.remove('dragging');
+    state.railDrag = null;
+    commitRailOrder(railCardOrder());
+}
+
+function onRailDragOver(e) {
+    if (!state.railDrag) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const cards = [...dom.rail.querySelectorAll(':scope > .rail-group[data-cwd]')];
+    const moving = cards.find(n => n.dataset.cwd === state.railDrag);
+    if (!moving) return;
+    const others = cards.filter(n => n !== moving);
+    if (!others.length) return;
+    const before = others.find((n) => {
+        const box = n.getBoundingClientRect();
+        return e.clientY < box.top + box.height / 2;
+    });
+    // Kept among the project cards: past the last one is still above Test and
+    // Archived, which never move.
+    if (before) dom.rail.insertBefore(moving, before);
+    else others[others.length - 1].after(moving);
+}
+
+/** The directories of the project cards on screen, top first. */
+const railCardOrder = () => [...dom.rail.querySelectorAll(':scope > .rail-group[data-cwd]')]
+    .map(n => n.dataset.cwd).filter(Boolean);
+
+/**
+ * Save `visible` — the project cards on screen, in their new order — into
+ * `projects.order`.
+ *
+ * The saved list names more than the rail shows: a search narrows the rail, and
+ * a project with no sessions left draws no card. Those keep their places; the
+ * visible run goes back in where its first member was, so dragging in a filtered
+ * rail rearranges what you can see and nothing else.
+ */
+function commitRailOrder(visible) {
+    const p = BOOT_PREFS.projects;
+    const saved = p.order || [];
+    const vis = new Set(visible);
+    const rest = saved.filter(d => !vis.has(d));
+    const first = saved.findIndex(d => vis.has(d));
+    const at = first < 0
+        ? (p.newAt === 'bottom' ? rest.length : 0)
+        : saved.slice(0, first).filter(d => !vis.has(d)).length;
+    const next = [...rest.slice(0, at), ...visible, ...rest.slice(at)].slice(0, 500);
+    if (next.join('\n') === saved.join('\n')) { renderRail(); return; }
+    // Applied here rather than waiting for the `prefs` push, so the card does
+    // not snap back for the length of a round trip.
+    p.order = next;
+    renderRail();
+    saveRailPref('order', next);
+}
+
+/**
+ * Save one `projects` key from the rail rather than from the Settings panel.
+ *
+ * Not saveSetting(): that writes to whichever scope the panel is showing, and
+ * `projects` is user-only, so a panel left on a project would turn a drag into
+ * a refusal. The `prefs` push that follows brings every other window — and an
+ * open Settings panel — up to date.
+ */
+async function saveRailPref(key, value) {
+    try {
+        const answer = await put('/api/prefs', { scope: 'user', patch: { projects: { [key]: value } } });
+        if (answer && answer.prefs && answer.prefs.projects) {
+            Object.assign(BOOT_PREFS.projects, answer.prefs.projects);
+        }
+    } catch (err) {
+        toast(`Could not save the project order: ${err.message}`, 'error');
+    }
+    renderRail();
+}
+
+/** The ⋮ menu's Move items: the keyboard way to do what dragging does. */
+function moveRailCard(cwd, where) {
+    const list = railCardOrder();
+    const i = list.indexOf(cwd);
+    if (i < 0) return;
+    list.splice(i, 1);
+    const j = where === 'top' ? 0 : Math.max(0, Math.min(list.length, i + where));
+    list.splice(j, 0, cwd);
+    commitRailOrder(list);
 }
 
 /**
@@ -11037,13 +11265,23 @@ function paintPcolorDialog() {
 function showProjMenu(project, btn) {
     state.projMenu = { key: project.key, cwd: project.cwd, name: project.name };
     dom.projMenu.hidden = false;
+    const row = (label, act, disabled) => el('button', {
+        class: 'picker-row', type: 'button', role: 'menuitem', disabled: disabled || null,
+        onclick: () => { closeProjMenu(); act(); },
+    }, el('span', {}, label));
+    // `custom` order only: the keyboard way to do what dragging the heading does.
+    const cards = BOOT_PREFS.projects.sort === 'custom' ? railCardOrder() : [];
+    const at = cards.indexOf(project.cwd);
     dom.projMenu.replaceChildren(
         el('div', { class: 'menu-note' }, clip(project.name, 30)),
         el('div', { class: 'sep' }),
-        el('button', {
-            class: 'picker-row', type: 'button', role: 'menuitem',
-            onclick: () => { closeProjMenu(); openPcolor(project); },
-        }, el('span', {}, 'Set project colour')),
+        row('Set project colour', () => openPcolor(project)),
+        ...(at < 0 ? [] : [
+            el('div', { class: 'sep' }),
+            row('Move to top', () => moveRailCard(project.cwd, 'top'), at === 0),
+            row('Move up', () => moveRailCard(project.cwd, -1), at === 0),
+            row('Move down', () => moveRailCard(project.cwd, 1), at === cards.length - 1),
+        ]),
     );
     placeProjMenu(btn);
     dom.projMenu.querySelector('.picker-row').focus();
@@ -11172,6 +11410,31 @@ function renderProjectColors() {
  * scope like the rest of `projects` — the section is user-only in
  * bridge/prefs.js, and a control that saved would only earn a problem line.
  */
+function renderProjectOrder() {
+    const group = SETTINGS.find(g => g.section === 'projects');
+    const locked = state.settings.scope !== 'user';
+    const data = state.settings.data;
+    if (!data) { dom.pcolorOrder.replaceChildren(); return; }
+    const mode = (data.projects && data.projects.sort) || 'recent';
+    const custom = (data.projects && data.projects.order) || [];
+    dom.pcolorOrder.replaceChildren(
+        ...group.orderRows.map(row =>
+            settingRow(group, row, locked || (row.mode && row.mode !== mode))),
+        mode === 'custom' && custom.length
+            ? el('div', { class: 'settings-row' },
+                el('div', { class: 'settings-row-text' },
+                    el('div', { class: 'settings-row-label', text: 'Custom order' }),
+                    el('div', { class: 'settings-row-note',
+                        text: `${custom.length} project${custom.length === 1 ? '' : 's'} placed by hand.` })),
+                el('div', { class: 'settings-row-ctl' },
+                    el('button', {
+                        class: 'linkish', type: 'button', disabled: locked || null,
+                        onclick: () => saveSetting('projects', 'order', []),
+                    }, 'Reset custom order')))
+            : null,
+    );
+}
+
 function renderProjectBackdrop() {
     const group = SETTINGS.find(g => g.section === 'projects');
     const locked = state.settings.scope !== 'user';
@@ -11208,6 +11471,83 @@ document.addEventListener('keydown', (e) => {
 }, true);
 dom.rail.addEventListener('scroll', syncProjMenu);
 window.addEventListener('resize', syncProjMenu);
+dom.rail.addEventListener('dragover', onRailDragOver);
+dom.rail.addEventListener('drop', (e) => { if (state.railDrag) e.preventDefault(); });
+
+// --- the rail head's order menu -------------------------------------------
+
+// The four ways `projects.sort` can order the project cards, in the menu's order.
+const RAIL_SORTS = [
+    ['recent', 'Most recent — static', 'Newest first as of when the window opened, then held still'],
+    ['dynamic', 'Most recent — dynamic', 'Newest first, and a project moves up when something happens in it'],
+    ['alpha', 'Alphabetical', 'By project name'],
+    ['custom', 'Custom', 'Drag a project’s heading to place it'],
+];
+const RAIL_SORT_OPTIONS = RAIL_SORTS.map(([v, label]) => [v, label]);
+
+function paintRailSort() {
+    const mode = RAIL_SORTS.find(([v]) => v === BOOT_PREFS.projects.sort) || RAIL_SORTS[0];
+    dom.railSort.title = `Project order: ${mode[1]}`;
+    dom.railSort.setAttribute('aria-label', `Project order: ${mode[1]}`);
+    dom.railSort.setAttribute('aria-expanded', String(state.sortMenu));
+    dom.railSort.classList.toggle('on', mode[0] !== 'recent');
+}
+
+function openSortMenu() {
+    state.sortMenu = true;
+    const current = BOOT_PREFS.projects.sort;
+    dom.sortMenu.hidden = false;
+    dom.sortMenu.replaceChildren(
+        el('div', { class: 'menu-note' }, 'Order projects by'),
+        el('div', { class: 'sep' }),
+        ...RAIL_SORTS.map(([v, label, note]) => el('button', {
+            class: 'picker-row sort-row', type: 'button', role: 'menuitemradio',
+            'aria-checked': String(v === current), title: note,
+            onclick: () => {
+                closeSortMenu();
+                if (v === current) return;
+                BOOT_PREFS.projects.sort = v;
+                renderRail();
+                paintRailSort();
+                saveRailPref('sort', v);
+            },
+        }, el('span', { class: 'sort-tick' }, v === current ? icon('tick', 13) : null),
+            el('span', {}, label))),
+        el('div', { class: 'sep' }),
+        el('button', {
+            class: 'picker-row', type: 'button', role: 'menuitem',
+            onclick: () => { closeSortMenu(); openSettingsAt('projects'); },
+        }, el('span', {}, 'More in Settings…')),
+    );
+    const r = dom.railSort.getBoundingClientRect();
+    dom.sortMenu.style.top = `${r.bottom + 6}px`;
+    dom.sortMenu.style.left = `${Math.max(8, r.right - PROJ_MENU_W)}px`;
+    paintRailSort();
+    const on = dom.sortMenu.querySelector('[aria-checked="true"]');
+    if (on) on.focus();
+}
+
+function closeSortMenu() {
+    if (!state.sortMenu) return;
+    state.sortMenu = false;
+    dom.sortMenu.hidden = true;
+    paintRailSort();
+}
+
+dom.railSort.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (state.sortMenu) closeSortMenu(); else openSortMenu();
+});
+document.addEventListener('click', (e) => {
+    if (!state.sortMenu) return;
+    if (dom.sortMenu.contains(e.target) || e.target.closest('#rail-sort')) return;
+    closeSortMenu();
+}, true);
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && state.sortMenu) { e.stopPropagation(); closeSortMenu(); dom.railSort.focus(); }
+}, true);
+window.addEventListener('resize', closeSortMenu);
+paintRailSort();
 
 // ── settings ─────────────────────────────────────────────────────────────
 //
@@ -11381,6 +11721,40 @@ const SETTINGS = [
     {
         title: 'Projects', section: 'projects', node: 'setGProjects',
         userOnly: true,
+        // The rail's project order, drawn above the colours — see
+        // renderProjectOrder(). Separate from `rows` because some of these are
+        // only live in one mode, which the plain row list has no way to say.
+        orderRows: [
+            { key: 'sort', type: 'choice',
+                label: 'Project order in the rail',
+                options: RAIL_SORT_OPTIONS,
+                note: 'Static keeps the order the window opened with. Dynamic starts '
+                    + 'the same and moves a project to the top when one of the events '
+                    + 'below happens in it. Custom is yours: drag a project’s heading '
+                    + 'in the rail, or use Move in its ⋮ menu.' },
+            { key: 'bumpOnCreate', type: 'bool', mode: 'dynamic',
+                label: 'Move up when a session starts',
+                note: 'A new session in the project.' },
+            { key: 'bumpOnUser', type: 'bool', mode: 'dynamic',
+                label: 'Move up on a message from you',
+                note: 'Anything you send in any of its sessions.' },
+            { key: 'bumpOnAny', type: 'bool', mode: 'dynamic',
+                label: 'Move up on any message',
+                note: 'Every line any session in the project writes, Claude’s included. '
+                    + 'Expect the rail to jump around a lot while agents are working.' },
+            { key: 'bumpOnTurn', type: 'bool', mode: 'dynamic',
+                label: 'Move up when an agent finishes',
+                note: 'A turn completing in any of its sessions.' },
+            { key: 'bumpOnPr', type: 'bool', mode: 'dynamic',
+                label: 'Move up when a pull request changes',
+                note: 'A review, a build, a merge — anything that changes a PR’s state '
+                    + 'in the rail.' },
+            { key: 'newAt', type: 'choice', mode: 'custom',
+                label: 'Where new projects go',
+                options: [['top', 'Top'], ['bottom', 'Bottom']],
+                note: 'A project you have not placed yet. It keeps that place once '
+                    + 'you drag anything.' },
+        ],
         // Ordinary rows, drawn into the markup group because the group is not
         // built from `rows` — see renderProjectBackdrop().
         rows: [
@@ -11394,7 +11768,7 @@ const SETTINGS = [
                 note: 'How much of the colour goes into the dim.',
                 preview: (n) => paintBackdropTint(n) },
         ],
-        after: () => { renderProjectBackdrop(); renderProjectColors(); },
+        after: () => { renderProjectOrder(); renderProjectBackdrop(); renderProjectColors(); },
     },
     {
         title: 'Snippets', section: 'snippets', node: 'setGSnippets',
@@ -11523,6 +11897,23 @@ async function loadSettings() {
     }
     s.loading = false;
     renderSettings();
+    // Somewhere outside the panel asked for one group — see openSettingsAt.
+    if (s.jumpTo) {
+        const card = document.getElementById(`set-g-${s.jumpTo}`);
+        s.jumpTo = null;
+        if (card) card.scrollIntoView({ block: 'start' });
+    }
+}
+
+/**
+ * Open Settings scrolled to one group. On the User scope, because the groups
+ * anything links to from outside the panel are the user-only ones, and a
+ * project scope would show them locked.
+ */
+function openSettingsAt(section) {
+    state.settings.jumpTo = section;
+    state.settings.scope = 'user';
+    showSettings(true);
 }
 
 /**
@@ -11584,6 +11975,7 @@ function applyPrefsLive(prefs, section) {
     paintBackdropTint();
     if (state.live.open) renderLive();
     if (section === 'keyboard') paintComposerHint();
+    if (section === 'projects') { renderRail(); paintRailSort(); }
     if (section === 'transcript' && state.current) {
         // Re-read the conversation so the new folding rule applies to what is
         // already on screen. keepDash so going and looking does not close this.
@@ -17350,6 +17742,7 @@ function connect() {
         // Project colours are in that payload too, and everything wearing one has
         // to be redrawn — including the rail, which nothing else here touches.
         repaintProjectColors();
+        paintRailSort();
         // The panel that did the saving already has the answer; one that is open
         // in *this* window while another saved does not.
         if (state.settings.open && !state.settings.saving) loadSettings();
@@ -17617,6 +18010,7 @@ function connect() {
         // Ahead of the early return below, which drops every session but the
         // open one — and those are precisely the ones worth being told about.
         announceTurn(r);
+        if (bumpGroup(state.sessions.find(s => s.sessionId === r.sessionId), 'turn')) renderRail();
         if (!state.current || r.sessionId !== state.current.sessionId) return;
         // The dev servers a turn started only become visible once it finishes.
         loadChannels();

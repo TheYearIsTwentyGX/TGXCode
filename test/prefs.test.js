@@ -277,6 +277,52 @@ assert.strictEqual(got.projects.backdropStrength, 0, '0 is a strength, not a mis
 assert.deepStrictEqual(got.projects.colors, { [project]: '#abc' });
 ok('the backdrop tint defaults to what it was, and refuses what is not a strength');
 
+// --- the rail's project order -----------------------------------------------
+// `sort` and `newAt` are closed sets; the bumpOn* switches are booleans; and
+// `order` is the list twin of `colors`: absolute, resolved, one entry per
+// directory, and one bad entry costs only itself.
+assert.strictEqual(DEFAULTS.projects.sort, 'recent', 'the default order is the one the rail always had');
+for (const v of ['recent', 'dynamic', 'alpha', 'custom']) assert.ok(SHAPE.projects.sort(v), v);
+for (const v of ['Recent', 'az', '', null, 1]) assert.ok(!SHAPE.projects.sort(v), JSON.stringify(v));
+assert.ok(SHAPE.projects.newAt('top') && SHAPE.projects.newAt('bottom'));
+assert.ok(!SHAPE.projects.newAt('middle') && !SHAPE.projects.newAt(true));
+for (const k of ['bumpOnCreate', 'bumpOnUser', 'bumpOnAny', 'bumpOnTurn', 'bumpOnPr']) {
+    assert.ok(SHAPE.projects[k](true) && SHAPE.projects[k](false), k);
+    assert.ok(!SHAPE.projects[k]('true'), `${k} took a string`);
+}
+assert.strictEqual(DEFAULTS.projects.bumpOnAny, false, 'the noisy one is off by default');
+assert.ok(SHAPE.projects.order([]));
+assert.ok(SHAPE.projects.order([project, `${home}/other`]));
+assert.ok(!SHAPE.projects.order(['proj']), 'a relative entry');
+assert.ok(!SHAPE.projects.order([`${project}/`]), 'an unresolved entry — cleanOrder resolves');
+assert.ok(!SHAPE.projects.order([project, project]), 'a duplicate');
+assert.ok(!SHAPE.projects.order({ [project]: 1 }), 'a map is not a list');
+ok('the order keys take their closed sets and nothing else');
+
+clear();
+write(userFile, { version: VERSION, projects: { sort: 'custom', newAt: 'bottom',
+    order: [`${project}/`, 'proj', `${home}/other`, `${project}/sub/..`, 42] } });
+prefs.cache.clear();
+got = prefs.forCwd();
+assert.strictEqual(got.projects.sort, 'custom');
+assert.strictEqual(got.projects.newAt, 'bottom');
+assert.deepStrictEqual(got.projects.order, [project, `${home}/other`],
+    'the good entries did not survive the bad ones beside them');
+assert.ok(got.problems.some(p => /"proj" is not an absolute directory/.test(p.message)));
+assert.ok(got.problems.some(p => /listed twice/.test(p.message)));
+ok('a custom order is cleaned entry by entry, resolved, and first place wins');
+
+clear();
+const orderSaved = prefs.save({ scope: 'user', patch: { projects: { order: [`${project}/`, `${home}/other`] } } });
+assert.deepStrictEqual(read(userFile).projects.order, [project, `${home}/other`],
+    'the order was written as typed rather than resolved');
+assert.deepStrictEqual(orderSaved.prefs.projects.order, [project, `${home}/other`]);
+assert.throws(() => prefs.save({ scope: 'user', patch: { projects: { order: ['proj'] } } }),
+    (e) => e.code === 'value');
+assert.throws(() => prefs.save({ scope: 'project', dir: project, patch: { projects: { sort: 'alpha' } } }),
+    (e) => e.code === 'readonly');
+ok('an order saves resolved, refuses a bad entry, and is user-only');
+
 // --- user-only sections --------------------------------------------------
 // Documented for `quota` long before anything enforced it, which held only
 // because the call sites passed no cwd. A page that prints which file wins for
