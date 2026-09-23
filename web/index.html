@@ -156,6 +156,9 @@
         <path d="M12 2.9l1.5 2.2 2.6-.6.6 2.6 2.2 1.5-1.2 2.4 1.2 2.4-2.2 1.5-.6 2.6-2.6-.6L12 21.1l-1.5-2.2-2.6.6-.6-2.6-2.2-1.5 1.2-2.4-1.2-2.4 2.2-1.5.6-2.6 2.6.6L12 2.9Z"
               stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
       </svg>
+      <!-- Hidden by default through .icon-only, which paintToolbar() sets from
+           the Toolbar settings; there so the label can be turned on. -->
+      <span>Settings</span>
     </button>
 
     <!-- How much of the 5-hour window and the week are gone. Beside DevBrowser
@@ -216,6 +219,26 @@
             title="DevBrowser connection">
       <span class="led"></span><span id="db-label">DevBrowser</span>
     </button>
+
+    <!-- What the Toolbar settings put away rather than hid. Everything above,
+         from Tasks to DevBrowser, is moved by paintToolbar() rather than drawn
+         by it — into this menu, back onto the bar in the order you chose, or
+         out of sight — so each button keeps its listeners, its badge and its
+         id wherever it ends up. Last in the bar and hidden while it holds
+         nothing; its own badge adds up the counts it is hiding. -->
+    <div class="bar-more-wrap" id="bar-more-wrap" hidden>
+      <button id="bar-more" class="bar-btn icon-only" type="button"
+              aria-expanded="false" aria-controls="bar-more-menu"
+              aria-label="More" title="More">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle cx="5.5" cy="12" r="1.7" fill="currentColor"/>
+          <circle cx="12" cy="12" r="1.7" fill="currentColor"/>
+          <circle cx="18.5" cy="12" r="1.7" fill="currentColor"/>
+        </svg>
+        <span id="bar-more-badge" class="bar-badge" hidden></span>
+      </button>
+      <div id="bar-more-menu" class="bar-more-menu" role="group" aria-label="More" hidden></div>
+    </div>
   </header>
 
   <nav class="rail" aria-label="Sessions">
