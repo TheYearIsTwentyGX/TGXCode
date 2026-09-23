@@ -95,6 +95,7 @@ const HOME = os.homedir();
     check('terminals stream', (await call('GET', '/api/terminals/x/stream', { headers: PHONE })).status, 403);
     check('terminals input', (await call('POST', '/api/terminals/x/input', { headers: PHONE, body: {} })).status, 403);
     check('shutdown', (await call('POST', '/api/shutdown', { headers: PHONE })).status, 403);
+    check('claude update', (await call('POST', '/api/claude-version/update', { headers: PHONE })).status, 403);
     // Both methods. The refusal has to land before the body is read, or a phone
     // could pull a checkout it is refused the restart of.
     check('restart', (await call('POST', '/api/restart', { headers: PHONE, body: {} })).status, 403);

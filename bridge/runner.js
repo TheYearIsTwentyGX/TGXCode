@@ -272,6 +272,11 @@ class Runner extends EventEmitter {
         this._reroll = null;           // the timer moving the verb along
 
         this.proc = null;
+        // What `claude --version` the running process is, from its init line.
+        // Not the transcript's `version`, which is the first one that ever wrote
+        // to it: a session outlives the binary it started on, and the question
+        // claude-version.js asks is whether *this process* predates an update.
+        this.claudeVersion = null;
         this.state = 'stopped';        // stopped | starting | idle | busy | error
         this.activity = null;          // human-readable "what is it doing right now"
         this.lastError = null;
@@ -509,6 +514,7 @@ class Runner extends EventEmitter {
 
         proc.on('close', (code) => {
             this.proc = null;
+            this.claudeVersion = null;
             this._pendingTools.clear();
             this._abandonControl('the Claude process exited');
             // The turn this process was answering, taken before any branch below
@@ -727,6 +733,7 @@ class Runner extends EventEmitter {
             cwd: this.cwd,
             model: this.model,
             permissionMode: this.permissionMode,
+            claudeVersion: this.claudeVersion,
             inFlight: this.inFlight.map(entry),
             queue: this.queue.map(entry),
             answered: this._answered,
@@ -1285,6 +1292,7 @@ class Runner extends EventEmitter {
         this.inFlight = (note.inFlight || []).map(entry);
         this._answered = (note.answered || []).slice(-20);
         this._sessionAllow = new Set(note.sessionAllow || []);
+        this.claudeVersion = note.claudeVersion || null;
         this.lastUsedAt = Date.now();
 
         let ask = null;
@@ -1312,11 +1320,11 @@ class Runner extends EventEmitter {
                 ask = null;
                 tools.clear();
                 if (r.seq > noteSeq) finished = msg;
-            } else if (msg.type === 'system' && msg.subtype === 'init'
-                && msg.session_id && msg.session_id !== this.sessionId) {
+            } else if (msg.type === 'system' && msg.subtype === 'init') {
+                if (msg.claude_code_version) this.claudeVersion = msg.claude_code_version;
                 // A fork the previous bridge had already followed is in the note;
                 // this catches one it did not live to see.
-                this.sessionId = msg.session_id;
+                if (msg.session_id && msg.session_id !== this.sessionId) this.sessionId = msg.session_id;
             }
         }
         if (ask && this._answered.includes(ask.request_id)) ask = null;
@@ -1410,6 +1418,7 @@ class Runner extends EventEmitter {
 
             case 'system':
                 if (msg.subtype === 'init') {
+                    this.claudeVersion = msg.claude_code_version || null;
                     // A resumed session keeps its id; a fork gets a new one, and
                     // the UI has to follow it or the user is left watching a
                     // transcript that will never move again.
@@ -1419,6 +1428,11 @@ class Runner extends EventEmitter {
                         this.emit('forked', { from, to: msg.session_id });
                     }
                     this.emit('init', msg);
+                    // Once per process, and the only moment the version is known:
+                    // the note so an adopting bridge has it, the status so every
+                    // window's stale-binary hint can clear.
+                    this._saveNote();
+                    this.emit('status', this.status());
                 } else if (msg.subtype === 'permission_denied') {
                     this.emit('notice', {
                         level: 'warn', kind: 'permission_denied',
@@ -1687,6 +1701,10 @@ class Runner extends EventEmitter {
             detail: this._detail,
             model: this.model,
             permissionMode: this.permissionMode,
+            // Null whenever there is no process, so a session sitting idle with
+            // nothing running is never reported as on an old binary: its next
+            // message starts whatever is installed then.
+            claudeVersion: this.claudeVersion,
             cwd: this.cwd,
             error: this.lastError,
             errorKind: this.errorKind,

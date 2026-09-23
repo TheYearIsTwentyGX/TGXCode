@@ -24,6 +24,7 @@ const hostClient = require('./host-client');
 const { Flags } = require('./flags');
 const { Prefs } = require('./prefs');
 const { ClaudeConfig } = require('./claude-config');
+const { ClaudeVersion } = require('./claude-version');
 const { ClaudeDocs, MAX_DOC_BYTES } = require('./claude-docs');
 const keymap = require('./keymap');
 const { Spinner, norm: spinnerNorm } = require('./spinner');
@@ -235,6 +236,15 @@ const schedules = new Schedules();
 const index = new SessionIndex(flags);
 const registry = new SessionRegistry();
 const pool = new RunnerPool();
+// Installed Claude Code against the registry, and which live processes predate
+// the installed one. See bridge/claude-version.js.
+const claudeVersion = new ClaudeVersion({
+    channel: () => {
+        const e = claudeConfig.read(null).effective['autoUpdatesChannel'];
+        return e ? e.value : null;
+    },
+    runners: () => pool.statuses(),
+});
 const terminals = new TerminalPool();
 const slashCommands = new SlashCommandCache();
 // State only, never bytes: a run's output goes down its own stream. This is what
@@ -852,6 +862,11 @@ function remoteRefusal(pathname, method) {
     }
     if (pathname === '/api/shutdown') {
         return 'the bridge can only be shut down from the machine it runs on';
+    }
+    // The GET stays open: which version is installed is harmless, and a phone
+    // is a reasonable place to notice sessions on an old binary.
+    if (pathname === '/api/claude-version/update') {
+        return 'Claude Code can only be updated on the machine it runs on';
     }
     // Both methods: the GET is the journal, which names the checkout and what a
     // restart decided about it, and there is nothing a phone does with that.
@@ -3444,7 +3459,7 @@ async function api(req, res, url, pathname, who) {
             // row too narrow for the whole label can show the half that matters.
             if (st) {
                 s.runner = { state: st.state, activity: st.activity,
-                    detail: st.detail, queued: st.queued };
+                    detail: st.detail, queued: st.queued, claudeVersion: st.claudeVersion };
             }
         }
         return send(res, 200, { sessions, ready: index.ready });
@@ -4306,7 +4321,7 @@ async function api(req, res, url, pathname, who) {
                     const st = statuses[s.sessionId];
                     if (st) {
                         s.runner = { state: st.state, activity: st.activity,
-                            detail: st.detail, queued: st.queued };
+                            detail: st.detail, queued: st.queued, claudeVersion: st.claudeVersion };
                     }
                 }
             }
@@ -4321,6 +4336,30 @@ async function api(req, res, url, pathname, who) {
     // else is in memory — so it needs no caching beyond the one in usage.js.
     if (pathname === '/api/quota' && req.method === 'GET') {
         return send(res, 200, quotaPayload());
+    }
+
+    // Installed Claude Code, the newest on the configured channel, and the live
+    // sessions still running something older than what is installed. The
+    // registry is asked at most hourly; `?refresh=1` asks now, and is what a
+    // person pressing "check again" means.
+    if (pathname === '/api/claude-version' && req.method === 'GET') {
+        return send(res, 200, await claudeVersion.summary({ fresh: url.searchParams.get('refresh') === '1' }));
+    }
+
+    // `claude update`, on the machine. It replaces the binary new processes start
+    // from and leaves every running one alone — restarting sessions is the
+    // user's call, and the summary's `staleSessions` is how they find which.
+    // Local only: see remoteRefusal().
+    if (pathname === '/api/claude-version/update' && req.method === 'POST') {
+        if (claudeVersion.updating) {
+            return send(res, 409, { error: 'an update is already running', running: true,
+                summary: claudeVersion.summaryNow() });
+        }
+        const out = await claudeVersion.update();
+        const summary = await claudeVersion.summary({ fresh: true });
+        claudeVersionSent = JSON.stringify(summary);
+        broadcast('claude-version', summary);
+        return send(res, 200, { ok: out.ok === true, output: out.output || '', summary });
     }
 
     // Refresh the percentage now, because the automatic clock is twenty minutes
@@ -6498,6 +6537,24 @@ async function tickBeacon() {
 // composer can offer them without a process of its own, and broadcast only when
 // the list actually moved — otherwise each session start would push an identical
 // list to every open window for nothing.
+// Pushed only when it moved. Runner statuses fire on every change of activity,
+// and almost none of them change which sessions are on an old binary, so this
+// is debounced and compared rather than sent each time.
+let claudeVersionSent = '';
+let claudeVersionTimer = null;
+function pushClaudeVersion() {
+    if (claudeVersionTimer) return;
+    claudeVersionTimer = setTimeout(() => {
+        claudeVersionTimer = null;
+        const now = claudeVersion.summaryNow();
+        const text = JSON.stringify(now);
+        if (text === claudeVersionSent) return;
+        claudeVersionSent = text;
+        broadcast('claude-version', now);
+    }, 1000);
+    claudeVersionTimer.unref();
+}
+pool.on('status', pushClaudeVersion);
 pool.on('init', ({ cwd, init }) => {
     const entry = slashCommands.note(cwd, init);
     if (entry) broadcast('slash-commands', { cwd, at: entry.at });
@@ -7059,6 +7116,14 @@ takeBackHeld().catch((err) => {
     // `~/.tgxcode/settings.json` takes effect without a restart — the same
     // property every other preference in that file has.
     setInterval(() => { tickBeacon(); }, BEACON_TICK_MS).unref();
+
+    // Warm the version check so the first window to open has an answer, then
+    // ask the registry hourly. Read-only on every bridge, dev included.
+    const checkClaudeVersion = () => claudeVersion.summary({ fresh: true })
+        .then(pushClaudeVersion)
+        .catch(err => console.error(`[claude-sessions] version check failed: ${err.message}`));
+    checkClaudeVersion();
+    setInterval(checkClaudeVersion, 60 * 60 * 1000).unref();
 
     // Reap before anything else, and on *every* bridge including a dev one that
     // will never run a beacon of its own. A leaked beacon is machine-wide

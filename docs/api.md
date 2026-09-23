@@ -161,7 +161,7 @@ the thing you are about to approve is running on a machine you are sitting at.
 **saving or starting a draft**, and on **saving a snippet**; all
 of `/api/terminals/*`; all of `/api/runs/*`; `POST /api/commands/run`; all of
 `/api/commands-config*`;
-`/api/shutdown`; `/api/restart` (both methods); `/api/devservers/stop`; `/api/devbrowser/*`;
+`/api/shutdown`; `/api/restart` (both methods); `POST /api/claude-version/update`; `/api/devservers/stop`; `/api/devbrowser/*`;
 `POST /api/sessions/:id/reveal`; `POST /api/sessions/:id/open-file`;
 `POST /api/sessions/:id/handoff`; `POST /api/fs/mkdir`;
 `POST /api/fs/open`;
@@ -311,7 +311,7 @@ project filter on `GET /api/sessions?project=`.
 | **`later`** | **object or null** — `{pending, nextAt}`, both numbers; see below |
 | `prs` | array of `{number, url, repo}`, empty if none |
 | **`live`** | **object or null** — see below |
-| **`runner`** | **object or absent** — four fields only, see below |
+| **`runner`** | **object or absent** — five fields only, see below |
 
 **`schedule` is an object, not an id**, and its presence changes `title`. It is
 `{id, title}` when a schedule started this session and `null` for everything else,
@@ -373,7 +373,7 @@ read it off. Nothing errors when you read a field that is not there; you get
 | Where | `runner` is |
 |---|---|
 | `GET /api/sessions/:id` · `runner-status` event · the `status` a write returns | **the whole thing** — every field in §*`runner-status`* below |
-| `GET /api/sessions` · `GET /api/dashboard` | **four fields**: `{state, activity, detail, queued}` |
+| `GET /api/sessions` · `GET /api/dashboard` | **five fields**: `{state, activity, detail, queued, claudeVersion}` |
 | a `GET /api/overview` / `taskboard` card | **seven fields**: `{state, activity, queued, busySince, retry, error, errorKind}` |
 | absent entirely | there is no process of ours for that session |
 
@@ -1905,7 +1905,7 @@ the field to check before concluding anything from an empty `prs`.
 
 `sessions[]` are chips — `{sessionId, title, lastTs, userMessages,
 active}` — capped at six per workspace with `moreSessions` counting the rest, and
-carrying the same narrow four-field `runner` as `GET /api/sessions` where one is live.
+carrying the same narrow five-field `runner` as `GET /api/sessions` where one is live.
 A chip carries **no `schedule`**, so a client cannot tell a scheduled run from any
 other here; its `title` is still the composed one, so the schedule's name and the date
 it ran are in the text even though the field is not there to group on.
@@ -2249,6 +2249,60 @@ repository declares, and this runs one fixed operation, in a directory the user
 named and trusted, that the bridge already performs unattended on a timer. Only
 one can be in flight at a time, so it cannot be turned into a fan of processes.
 
+### `GET /api/claude-version[?refresh=1]`
+
+Whether Claude Code is current, in both senses that matter: is the installed binary
+behind the registry, and are any live sessions still running a binary older than the
+installed one. Claude Code updates itself, and a process keeps the binary it started
+on — so after an auto-update the second is common and the first is not.
+
+```
+200 {
+  installed: string | null,     // `claude --version`, e.g. "2.1.280"; null if it could not be run
+  latest: string | null,        // the newest on `channel`, from the npm registry; null if never reached
+  channel: 'stable' | 'latest' | 'rc',   // autoUpdatesChannel in force; unset reads as 'latest'
+  tag: 'stable' | 'latest' | 'next',     // the npm dist-tag `channel` was compared against
+  behind: boolean,              // installed < latest. False when either is unknown
+  staleSessions: [{ id: string, version: string }],  // live processes older than `installed`
+  checkedAt: number | null,     // epoch ms of the last registry attempt
+  error: string | null,         // why the last registry attempt failed; `latest` is then the last good answer
+  updating: boolean,            // a POST .../update is running
+  lastUpdate: { ok: boolean, at: number, output: string } | null
+}
+```
+
+**`behind: false` does not mean current** when `latest` is null or `error` is set: it
+means the bridge could not tell. Draw "cannot check" rather than "up to date" then.
+
+The registry is asked at most hourly (at startup, then on a timer) and
+`installed` is cached for five minutes; `?refresh=1` asks both again now. The
+`rc` → `next` mapping is our reading of the registry, not something the CLI
+reports; a channel whose tag the registry lacks falls back to `latest`.
+
+`staleSessions` is derived from `runner.claudeVersion`, so it only ever names sessions
+with a live process. **Open to remote callers** — which version is installed is not
+sensitive, and a phone is a reasonable place to notice that sessions are on an old
+binary.
+
+### `POST /api/claude-version/update`
+
+Runs `claude update` on the machine. Body is ignored; needs `X-Claude-Sessions-Client: 1`.
+
+```
+200 { ok: boolean, output: string, summary: <the GET /api/claude-version payload, freshly checked> }
+409 { error: 'an update is already running', running: true, summary: <same> }
+403 { error, remote: true }    // remote caller
+```
+
+`ok: false` is the update's own failure (its output is in `output` and in
+`summary.lastUpdate`), not an HTTP error. It can take up to three minutes; a
+`claude-version` event carries the result to every other window.
+
+**It changes the binary new processes start from and nothing else.** Running sessions
+keep theirs — they appear in `summary.staleSessions` afterwards, and move over when
+their process next starts. The bridge restarts nothing. **Refused to remote callers**:
+it replaces an executable on this machine.
+
 ## The live channel
 
 **SSE is best-effort. Polling is the guaranteed path.** Some transports buffer
@@ -2330,6 +2384,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `permission-request` | `{sessionId, ...ask}` |
 | `permission-resolved` | `{sessionId, requestId, outcome}` |
 | `notice` | `{sessionId: string, level: 'warn', kind: string, text: string}` — something worth telling the user that is not a permission ask. Every notice the bridge sends today is `level: 'warn'`; treat any other level as informational. `kind` is one of `no_permission_prompt`, `permission_uninteractive`, `mode_change_failed`, `permission_auto_denied`, `permission_denied`, `api_retry`, `turn_failed`, `rate_limit` — and an unrecognised kind is a plain warning, not an error. **`rate_limit` is not one per limit: it repeats on every turn for as long as the limit holds**, because the CLI sends an identical `rate_limit_event` each time and this one is not deduplicated the way the `quota` event below is. A client that toasts it unconditionally therefore stacks the same warning over and over for an afternoon. `web/app.js` drops this kind entirely and flashes the header quota pill off the `quota` event instead; a client with nowhere to put a persistent indicator should throttle the toast itself. Everything the notice says is also in `GET /api/quota` — `windows[].status` for the current state and `events` for the history |
+| `claude-version` | **the whole `GET /api/claude-version` payload**, so there is nothing to refetch. Ungated, no `sessionId`. Sent when the summary moved: the hourly registry check found a newer version, an update finished, or a process started or ended on a version that changes `staleSessions`. Debounced by about a second |
 | `quota` | **the whole `GET /api/quota` payload**, so there is nothing to refetch. Ungated, like `drafts-changed`. Fires only when a reading actually moved — the CLI sends an identical `rate_limit_event` on every turn and those are dropped rather than pushed. Note it carries **no `sessionId`**: quota is account-wide, and which session happened to observe it says nothing. A window that has been near a limit for an hour will therefore push nothing at all, which is why `usedPercentAt` matters more than the arrival time of this event |
 | `turn-complete` | `{sessionId, isError, detail, retries, costUsd, durationMs, numTurns, stopReason}` — the runner's `lastResult` with the session id on it. `detail` is null unless `isError` |
 | `send-failed` | `{sessionId, kind, message, unsent: [text]}` — a send that never became a turn; hand the text back to the user. `unsent` is an array of **strings**, in send order, and may be empty — the event still means the send failed, and `message` is then the whole of it. `kind` is one of `busy-elsewhere` (the session is running somewhere else; offer to branch), `no-claude`, `missing`, `unknown`, `exited` (the process ended without answering) or `retired` (the bridge shut the process down with messages still queued). Treat an unrecognised kind as `unknown`. Attachments are **not** carried: a message that had files comes back as its text alone |
@@ -2352,6 +2407,7 @@ down from:
 | **`pendingPermission`** | **object or null** — the whole ask, same shape as `permission-request` |
 | `canPrompt` | bool — whether this process supports permission prompts at all |
 | `busySince` | number or null — epoch ms, and null unless `state` is `busy` |
+| `claudeVersion` | string or null — the Claude Code version **of the running process**, from its `system/init` line (e.g. `"2.1.280"`). Null until the process has started and whenever there is none, so an idle session with no process is never "on an old binary": its next message starts whatever is installed then. This is not the summary's `version`, which is the first binary that ever wrote the transcript. Carried over when a bridge adopts a process from the session host. See `GET /api/claude-version` |
 | **`retry`** | **object or null** — `{attempt, max, status, at}` while the CLI is retrying a failing API call, which can run for minutes. Cleared when the turn lands |
 | **`lastResult`** | **object or null** — `{isError, detail, retries, costUsd, durationMs, numTurns, stopReason}` for the turn that most recently finished |
 
