@@ -99,6 +99,8 @@ assert.ok(kb.contextualTerminalCopy(true) && kb.contextualTerminalCopy(false));
 assert.ok(!kb.contextualTerminalCopy('yes') && !kb.contextualTerminalCopy(1));
 assert.ok(kb.composerSend('enter') && kb.composerSend('ctrl-enter'));
 assert.ok(!kb.composerSend('Enter') && !kb.composerSend(true) && !kb.composerSend(''));
+assert.ok(kb.cycleOrder('default') && kb.cycleOrder('alphabetical'));
+assert.ok(!kb.cycleOrder('Alphabetical') && !kb.cycleOrder(true) && !kb.cycleOrder(''));
 assert.ok(kb.bindings({}) && kb.bindings({ 'view.live': 'Ctrl+9' }) && kb.bindings({ 'find.next': null }));
 assert.ok(!kb.bindings({ 'view.nope': 'Ctrl+9' }), 'an unknown command id must not pass');
 assert.ok(!kb.bindings({ 'view.live': 'k' }), 'a bare letter must not pass');

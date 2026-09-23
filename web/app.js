@@ -132,7 +132,7 @@ const PREFS_FALLBACK = {
     projects: { colors: {} },
     quota: { beacon: false, beaconDir: null, beaconEveryMinutes: 20 },
     spinner: { randomize: true, groups: [], weights: {}, rerollMs: 8000 },
-    keyboard: { contextualTerminalCopy: false, composerSend: 'enter', bindings: {} },
+    keyboard: { contextualTerminalCopy: false, composerSend: 'enter', cycleOrder: 'default', bindings: {} },
 };
 
 /** One block of settings folded over its fallback, with the shape guaranteed. */
@@ -9654,7 +9654,8 @@ function setPermMode(mode) {
     if (state.current) state.permChoice.set(state.current.sessionId, mode);
 }
 
-// The modes Ctrl+P will land you on, in the order the dropdown lists them.
+// The modes Ctrl+P (and Ctrl+Shift+P, backwards) will land you on, in the
+// order the dropdown lists them.
 // `dontAsk` and `bypassPermissions` are deliberately not in it: both hand the
 // agent something back, and a chord pressed one time too many is not a decision
 // to do that. Neither is hidden — they are still in the dropdown, and a session
@@ -9667,6 +9668,8 @@ const CYCLE_PERM = ['acceptEdits', 'auto', 'manual', 'plan'];
  *
  * @param {HTMLSelectElement} sel
  * @param {string[]|null} allow the values a cycle may stop on, or null for all
+ * @param {1|-1} [step] which way to walk: 1 for the next value, -1 for the
+ *   previous, which is what the Shift variant of each chord asks for
  *
  * Walks from where the select is now rather than from an index kept alongside
  * it, so the chord and the dropdown can never disagree about what "next" means
@@ -9683,12 +9686,26 @@ const CYCLE_PERM = ['acceptEdits', 'auto', 'manual', 'plan'];
  * the listeners above are what remember a choice against a session, and a chord
  * that skipped them would be a second way to set these controls that forgets
  * what the first one records.
+ *
+ * `keyboard.cycleOrder` decides what "next" means. Alphabetical sorts by the
+ * label rather than the value, since the label is what you are reading, and
+ * keeps an empty value — the model's "inherit" — first, because it is the
+ * absence of a choice rather than one more name to file among the others.
  */
-function cycleSelect(sel, allow) {
+function cycleSelect(sel, allow, step = 1) {
     const opts = [...sel.options];
-    const at = opts.findIndex(o => o.value === sel.value);
-    for (let i = 1; i <= opts.length; i++) {
-        const o = opts[(at + i) % opts.length];
+    if (BOOT_PREFS.keyboard.cycleOrder === 'alphabetical') {
+        const label = o => o.textContent.trim();
+        opts.sort((a, b) => (b.value === '') - (a.value === '')
+            || label(a).localeCompare(label(b), undefined, { sensitivity: 'base' }));
+    }
+    const n = opts.length;
+    // A value the select does not list has no index; walking back from -1 would
+    // skip the last option, so start that walk just past the end instead.
+    let at = opts.findIndex(o => o.value === sel.value);
+    if (at < 0 && step < 0) at = n;
+    for (let i = 1; i <= n; i++) {
+        const o = opts[((at + i * step) % n + n) % n];
         if (allow && !allow.includes(o.value)) continue;
         if (o.value === sel.value) break;    // nothing else to move to
         sel.value = o.value;
@@ -11226,7 +11243,7 @@ const SETTINGS = [
     },
     {
         title: 'Keyboard', section: 'keyboard', userOnly: true, keymap: true,
-        note: 'Two keys that switch in pairs, and then every shortcut this window '
+        note: 'How a few keys behave, and then every shortcut this window '
             + 'answers to.',
         rows: [
             { key: 'contextualTerminalCopy', type: 'bool',
@@ -11242,6 +11259,14 @@ const SETTINGS = [
                     ['ctrl-enter', 'Enter for a newline · Ctrl+Enter sends'],
                 ],
                 note: 'Ctrl+Enter sends either way.' },
+            { key: 'cycleOrder', type: 'choice',
+                label: 'Picker cycle order',
+                options: [
+                    ['default', 'As the dropdown lists them'],
+                    ['alphabetical', 'Alphabetical'],
+                ],
+                note: 'The order Ctrl+P and Ctrl+M step through Permissions and Model, '
+                    + 'and Shift walks it backwards. The dropdowns keep their own order.' },
         ],
     },
     // Claude Code's own settings — a different owner's files, and the one group
@@ -22158,8 +22183,8 @@ document.addEventListener('keydown', (e) => {
     // everything but its own copy chord straight through and it bubbles here as
     // well, so `inTerm` is the only thing stopping a shell from losing a Ctrl+F
     // it was meant to keep. Only the commands whose chord a shell has a use of
-    // its own for yield — the two find ones, and the two composer cycles, whose
-    // Ctrl+P is readline's previous-history and the tmux prefix. A view shortcut
+    // its own for yield — the two find ones, and the composer cycles in both
+    // directions, whose Ctrl+P is readline's previous-history and the tmux prefix. A view shortcut
     // is not something a shell wants, and having Ctrl+3 stop working because the
     // cursor is in a terminal would be worse than the collision it avoids.
     // `terminal.toggle` reads `inTerm` for a third thing again — see there.
@@ -22239,13 +22264,21 @@ document.addEventListener('keydown', (e) => {
     // Ctrl+P is readline's previous-history and the default tmux prefix, so a
     // shell that has the focus keeps it — returning without preventDefault is
     // what leaves the keystroke to xterm.
-    if (command === 'composer.permissionMode' || command === 'composer.model') {
+    //
+    // Each has a `…Prev` twin (Ctrl+Shift+P, Ctrl+Shift+M by default) that walks
+    // the same list the other way, for the chord pressed one time too many.
+    const cycles = {
+        'composer.permissionMode': ['perm', 1], 'composer.permissionModePrev': ['perm', -1],
+        'composer.model': ['model', 1], 'composer.modelPrev': ['model', -1],
+    };
+    if (cycles[command]) {
         if (inTerm) return;
+        const [which, step] = cycles[command];
         const c = composers.find(x => x.input === document.activeElement) || live;
-        const sel = command === 'composer.model' ? c.model : c.perm;
+        const sel = c[which];
         if (!sel) return;
         e.preventDefault();
-        cycleSelect(sel, command === 'composer.model' ? null : CYCLE_PERM);
+        cycleSelect(sel, which === 'model' ? null : CYCLE_PERM, step);
         return;
     }
     if (command === 'session.new') { e.preventDefault(); openNew(); }
