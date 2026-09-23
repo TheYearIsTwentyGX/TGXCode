@@ -397,7 +397,7 @@ async function refreshDevServers(index, ids) {
                 // also returns a few recently-dead ones, which are useful
                 // context in the conversation view and noise on a card.
                 return found.ports.filter(d => d.listening)
-                    .map(d => ({ port: d.port, title: d.title, owned: d.owned }));
+                    .map(d => ({ port: d.port, title: d.title, owned: d.owned, http: d.http === true }));
             });
             devLast.set(sessionId, next || null);
             if (JSON.stringify(next || null) !== before) moved = true;

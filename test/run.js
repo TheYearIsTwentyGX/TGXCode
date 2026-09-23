@@ -24,7 +24,7 @@ const UNIT = ['auth.test.js', 'temp.test.js', 'recent.test.js', 'pulls.test.js',
     'host.test.js',
     'titles.test.js', 'tasks.test.js', 'prefs.test.js', 'paths.test.js',
     'logwidth.test.js',
-    'platform.test.js',
+    'platform.test.js', 'preview.test.js',
     'claude-config.test.js', 'claude-docs.test.js', 'ask-result.test.js',
     'commands.test.js', 'message-date.test.js', 'folded.test.js',
     'claude-version.test.js', 'wispr.test.js', 'legacy.test.js'];

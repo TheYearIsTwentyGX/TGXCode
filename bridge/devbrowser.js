@@ -310,12 +310,17 @@ async function setTitle(port, title) {
  * Focus (or create) the tab for `port`, starting DevBrowser first if it isn't
  * running. The app restores and raises its window when it handles this, which is
  * the whole point of the button in the conversation view.
+ *
+ * `launch: false` is the Settings choice "when DevBrowser is closed, don't open
+ * it": nothing is spawned, and `{running: false}` tells the caller to fall back
+ * (to the in-app preview, or to nothing) rather than read it as a failure.
  */
-async function openTab(port, pagePath) {
+async function openTab(port, pagePath, { launch: mayLaunch = true } = {}) {
     let h = await health();
     let launched = false;
 
     if (!h.running) {
+        if (!mayLaunch) return { ok: false, running: false, launched: false };
         const l = await launch();
         if (!l.ok) return { ok: false, error: l.error, launched: false };
         launched = true;

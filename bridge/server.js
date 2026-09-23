@@ -5510,7 +5510,12 @@ async function api(req, res, url, pathname, who) {
         if (body.title) {
             try { await devbrowser.setTitle(port, String(body.title).slice(0, 64)); } catch { /* best effort */ }
         }
-        const out = await devbrowser.openTab(port, body.path || null);
+        // `ifClosed: 'none'` asks for no launch. Not running is then an answer,
+        // not an error — 200 with `running: false` — so the client can fall
+        // back to its own preview without parsing a 502.
+        const launch = body.ifClosed !== 'none';
+        const out = await devbrowser.openTab(port, body.path || null, { launch });
+        if (out.running === false) return send(res, 200, out);
         return send(res, out.ok ? 200 : 502, out);
     }
 

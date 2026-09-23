@@ -995,8 +995,8 @@ rather than taken at face value; the default stands. Without `?cwd=` you get the
 user-level answer, which is also what every page is served in a `cs-prefs`
 `<meta>` tag (minus `sources` and `problems`).
 
-**Five sections may only be set in the user's own file**: `quota`, `keyboard`,
-`projects`, `toolbar` and `wispr`. A project file that carries one is ignored and says so in
+**Seven sections may only be set in the user's own file**: `quota`, `keyboard`,
+`projects`, `toolbar`, `wispr`, `preview` and `devbrowser`. A project file that carries one is ignored and says so in
 `problems`. What directory this app starts `claude` in, and which keys your
 hands use, are not a repository's business — and a repository that could rebind
 your keys could make the window unusable with hand-editing the file as the only
@@ -1008,7 +1008,9 @@ window. `quota` was documented this way before it
 was enforced this way; it is enforced now, so `?cwd=` no longer echoes a
 project's value back as though it counted. `wispr` is there because the bridge
 presses its chords on the desktop, and a repository choosing which keys get
-pressed on your machine is not a preference.
+pressed on your machine is not a preference. `preview` and `devbrowser` decide
+which browser on this machine you look at pages in and whether a click launches
+one, which is the same class of thing.
 
 `transcript` today: `groupToolCalls` (fold a run of tool calls into one row once
 a message closes it), `groupMinCalls` (how long a run has to be — at least 2),
@@ -1176,6 +1178,27 @@ User file only. In a file a bad entry is dropped alone with one `problems` line;
 `PUT` it refuses the whole call, as every value does. The array is one key, so a
 `PUT` naming it replaces the list whole — send all of it, and `null` to empty it.
 
+`preview` is the desktop page's in-window browser preview, and is two keys:
+
+| Key | Type | |
+|---|---|---|
+| `keepAliveMinutes` | **integer 0–240**, default `10` | how long a preview page stays loaded after you leave it. Coming back inside that finds it as you left it; after it the page is discarded and the next open loads it fresh. `0` discards it as soon as you leave. |
+| `overLive` | **bool**, default `true` | a port clicked on a Live card opens its preview over the Live board. `false` opens that card's session and previews over it, leaving a docked board beside it. |
+
+`devbrowser` is whether DevBrowser is part of the app, and where a "show me this
+port" click goes. Three keys:
+
+| Key | Type | |
+|---|---|---|
+| `show` | **bool**, default `true` | `false` removes every mention of DevBrowser from the desktop page — the status pill, the preview's "Open in DevBrowser", the DevBrowser tab field in the command editor — and every port opens in the in-window preview. It does **not** stop the bridge naming a task's port in DevBrowser when it comes up (`devbrowser` on a project command); that is a no-op with DevBrowser closed. |
+| `openIn` | **`"devbrowser"` or `"inline"`**, default `"devbrowser"` | where a click on a port or a running task shows its page. Only consulted when `show` is `true`. |
+| `whenClosed` | **`"launch"`, `"inline"` or `"nothing"`**, default `"launch"` | with `openIn: "devbrowser"`, what happens when DevBrowser is not running: start it (what a click always did), preview in the window instead, or nothing but a note that it is closed. The client passes `ifClosed: "none"` to `POST /api/devbrowser/open` for the last two. |
+
+Both sections are **user file only**, and both are read only by the desktop page —
+a client with no browser of its own has nothing to consult them for. The defaults
+are the behaviour from before either existed: a click goes to DevBrowser, and
+launches it if need be.
+
 ### `GET /api/wispr`
 
 `{available: boolean}` — whether a Wispr Flow chord pressed through this bridge can
@@ -1280,6 +1303,13 @@ Each port carries `port`, `title`, `listening`, `stopped`, `evidence`, plus the
 attribution: `workspace` (where its process runs, or null), `ours`, `foreign`
 (held by another workspace), `unverified`, `protectedBy` and `titledElsewhere`.
 
+`http` (**bool**) says whether the port answers HTTP — a `GET /` on 127.0.0.1 that
+got any status line back, `404` and `500` included, within about 600 ms. It is what
+decides whether a browser preview can show the port: `listening` is only a TCP
+connect, and a database or a language server accepts connections too. Always
+`false` for a port that is not listening. Answers are cached per port for about
+ten seconds, so a server that has just started can read `false` briefly.
+
 Two cases the kernel cannot settle:
 
 - **No Linux process holds it.** WSL mirrored networking means a Windows-side
@@ -1297,6 +1327,24 @@ the app it is being displayed in.
 
 `elsewhere` counts the live ports this session mentioned that another workspace
 is holding. The UI says so rather than leaving the strip looking empty.
+
+### `POST /api/devbrowser/open`
+
+`{port, title?, path?, ifClosed?}` → switches DevBrowser to a tab for `port`,
+creating it if need be, and raises its window. `title` names the tab on the way in
+(capped at 64 characters); `path` is the page within the port. Local callers only,
+like every `/api/devbrowser/*` route.
+
+`ifClosed` is `"launch"` (the default) or `"none"`. With `"launch"`, a DevBrowser
+that is not running is started first, and the answer carries `launched: true`.
+With `"none"`, nothing is started: the answer is **`200 {ok: false, running: false,
+launched: false}`** — not an error, but the signal to fall back (the desktop page
+previews in its own window, or does nothing, by `devbrowser.whenClosed`). Any other
+value is read as `"launch"`.
+
+Otherwise `200 {ok: true, launched, status}` on success and `502 {ok: false,
+launched, status, error}` when DevBrowser refused or could not be reached. An
+invalid `port` is `400`.
 
 
 ### `GET /api/peers`
@@ -1367,7 +1415,7 @@ waiting, running }`, already ordered needs-you-first. A card is:
 | **`ask`** | **object or null** — the *whole* ask (`runner.pendingPermission`), so a tool ask is answerable from the card. Same shape as `permission-request` |
 | **`headlines[]`** | **array of objects**, not strings — `{text, ts}`, oldest first, up to three |
 | `tasks` | object or null — **five fields, and no items**: `{done: number, total: number, current: string\|null, idle: boolean, ts: string\|null}`. `current` is the in-progress task's `activeForm`. `idle` is true when work is left and *nothing* is in progress — a list that has stopped, not one between steps. `ts` is ISO 8601 and non-null only when the answer came from a `TodoWrite` in the transcript rather than from `~/.claude/tasks`. **The items are not here** — `GET /api/sessions/:id/tasks` has them. (Previously documented as `{done, total, current, ts}`, which was true of only one of the two sources: the directory returned `idle` and no `ts`, the transcript the reverse.) |
-| **`devservers`** | **array of objects or null** — `{port, title, owned}`, listening ports only; `null` until the first probe has run |
+| **`devservers`** | **array of objects or null** — `{port, title, owned, http}`, listening ports only (`http` as on `/api/sessions/:id/devservers`); `null` until the first probe has run |
 | `sig` | string — see below |
 
 Every card also carries `sig`, a short hash of the rest of the card. The board is pushed
@@ -2499,7 +2547,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `send-failed` | `{sessionId, kind, message, unsent: [text]}` — a send that never became a turn; hand the text back to the user. `unsent` is an array of **strings**, in send order, and may be empty — the event still means the send failed, and `message` is then the whole of it. `kind` is one of `busy-elsewhere` (the session is running somewhere else; offer to branch), `no-claude`, `missing`, `unknown`, `exited` (the process ended without answering) or `retired` (the bridge shut the process down with messages still queued). Treat an unrecognised kind as `unknown`. Attachments are **not** carried: a message that had files comes back as its text alone |
 | `session-forked` | `{from, to}` — follow the new id |
 | `slash-commands` | `{cwd, at}` — that directory's slash commands changed; drop what you cached |
-| `run-changed` | `{runId, workspace, commandId, label, state, port, exit, stopped, at}` — a project command moved; state only, never output |
+| `run-changed` | `{runId, workspace, commandId, label, state, port, http, exit, stopped, at}` — a project command moved; state only, never output. `http` (bool) as in the run record; it can turn `true` in an event of its own, a second or so after the one that said `listening` |
 | `commands-config` | `{at, scope, project, file}` — a project's `.tgxcode/` command file was written through `PUT /api/commands-config`. The fact of a change, never its content: these files carry `env` values the route classifies as local-only, and this channel reaches a paired phone. Re-read the file, and re-read `GET /api/commands` for any directory inside `project` — a renamed command's button does not change on its own. It does **not** fire for a hand edit; nothing watches these files, and the `409` on save is what catches that |
 
 `runner-status` is the full shape — the one the two narrower `runner` objects are cut
@@ -3924,9 +3972,14 @@ parse contributes nothing and reports once; a single bad command is dropped and
 its siblings survive. Both are worth showing: silently offering fewer buttons
 than the file asks for is how a typo goes unnoticed for a week.
 
-A run record is `{id, workspace, commandId, label, command, cwd, port,
+A run record is `{id, workspace, commandId, label, command, cwd, port, http,
 devbrowser, state, pid, startedAt, listeningAt, exitedAt, exit, stopped,
 terminalId}` with `state ∈ starting | listening | running | stopping | exited`.
+`http` (**bool**) is whether the port answers HTTP, so whether a browser preview
+can show it. It is probed after the run reaches `listening`, a few times over about
+six seconds because plenty of dev servers bind before their first compile answers,
+so a run can be `listening` with `http: false` for a moment and then flip — watch
+`run-changed` for it. Always `false` once the run has exited.
 `stopped` says somebody pressed Stop, as against the process ending on its own —
 worth distinguishing, because SIGHUP escalates to SIGKILL for anything that
 shrugs it off, so the signal a run died of says nothing about whether it was

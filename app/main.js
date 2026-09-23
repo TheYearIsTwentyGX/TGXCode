@@ -20,7 +20,7 @@
 // port-reclaim logic, the window, the single-instance lock — is the same on
 // both and does not know which it is on.
 
-const { app, BrowserWindow, shell, Menu, screen, ipcMain } = require('electron');
+const { app, BrowserWindow, shell, Menu, screen, ipcMain, clipboard, webContents } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -458,7 +458,25 @@ function createWindow() {
             // One channel, so a clicked notification can raise this window —
             // the only thing the page cannot do for itself. See preload.js.
             preload: path.join(__dirname, 'preload.js'),
+            // The in-app browser preview (web/preview.js). A <webview> rather
+            // than an iframe because an iframe of another origin cannot be sent
+            // back, screenshotted or inspected — which is most of the toolbar.
+            // What a guest may be is decided in will-attach-webview below.
+            webviewTag: true,
         },
+    });
+
+    // Every guest is a loopback page in its own partition, with no preload and
+    // no Node. The page asks for this already; this is where it is enforced,
+    // because a page that can create a <webview> can also set its attributes.
+    mainWindow.webContents.on('will-attach-webview', (event, webPreferences, params) => {
+        delete webPreferences.preload;
+        webPreferences.nodeIntegration = false;
+        webPreferences.nodeIntegrationInSubFrames = false;
+        webPreferences.contextIsolation = true;
+        webPreferences.webSecurity = true;
+        params.partition = PREVIEW_PARTITION;
+        if (!isLoopbackUrl(params.src) && params.src !== 'about:blank') event.preventDefault();
     });
 
     Menu.setApplicationMenu(null);
@@ -608,6 +626,85 @@ function raise(win) {
 
 ipcMain.on('reveal-window', (event) => {
     raise(BrowserWindow.fromWebContents(event.sender) || mainWindow);
+});
+
+// ---------------------------------------------------------------------------
+// The browser preview's guests
+// ---------------------------------------------------------------------------
+// Borrowed from DevBrowser (~/Other/dev-browser/main.js), which has shipped
+// the same three things: DevTools on a key, a screenshot to the clipboard, and
+// text from the element picker to the clipboard.
+
+// Its own cookie jar. A guest sharing the shell's session would be handed the
+// bridge's HttpOnly token cookie by any request to the bridge's origin.
+const PREVIEW_PARTITION = 'persist:preview';
+const MAX_COPY_TEXT = 8 * 1024;
+
+function isLoopbackUrl(url) {
+    try {
+        const u = new URL(url);
+        return (u.protocol === 'http:' || u.protocol === 'https:')
+            && (u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '[::1]');
+    } catch {
+        return false;
+    }
+}
+
+app.on('web-contents-created', (_event, contents) => {
+    if (contents.getType() !== 'webview') return;
+
+    // A link that leaves loopback is somewhere else on the internet, and that
+    // belongs in the real browser, exactly as it does for the shell itself.
+    contents.setWindowOpenHandler(({ url }) => {
+        if (/^https?:/.test(url)) shell.openExternal(url);
+        return { action: 'deny' };
+    });
+    contents.on('will-navigate', (event, url) => {
+        if (isLoopbackUrl(url)) return;
+        event.preventDefault();
+        if (/^https?:/.test(url)) shell.openExternal(url);
+    });
+
+    // F12 / Ctrl+Shift+I inspect the page being previewed, not the app around
+    // it. The shell's own F12 is handled on its webContents above and does not
+    // see keys typed into a guest.
+    contents.on('before-input-event', (event, input) => {
+        if (input.type !== 'keyDown') return;
+        const key = typeof input.key === 'string' ? input.key : '';
+        const inspect = key === 'F12' || (input.control && input.shift && key.toLowerCase() === 'i');
+        if (!inspect) return;
+        if (contents.isDevToolsOpened()) contents.closeDevTools();
+        else contents.openDevTools();
+        event.preventDefault();
+    });
+});
+
+// Only the shell's own page may ask, and only about a guest: webContents ids are
+// small integers, and without the type check this would screenshot anything.
+const fromShell = (event) => mainWindow && !mainWindow.isDestroyed()
+    && event.sender === mainWindow.webContents;
+
+ipcMain.handle('preview-capture', async (event, id) => {
+    if (!fromShell(event) || !Number.isInteger(id)) return { ok: false, error: 'refused' };
+    const target = webContents.fromId(id);
+    if (!target || target.isDestroyed() || target.getType() !== 'webview') {
+        return { ok: false, error: 'no-preview' };
+    }
+    try {
+        const image = await target.capturePage();
+        if (image.isEmpty()) return { ok: false, error: 'empty' };
+        clipboard.writeImage(image);
+        const { width, height } = image.getSize();
+        return { ok: true, width, height };
+    } catch (e) {
+        return { ok: false, error: e.message };
+    }
+});
+
+ipcMain.handle('preview-copy-text', (event, text) => {
+    if (!fromShell(event) || typeof text !== 'string' || !text) return { ok: false, error: 'refused' };
+    clipboard.writeText(text.slice(0, MAX_COPY_TEXT));
+    return { ok: true };
 });
 
 app.whenReady().then(async () => {

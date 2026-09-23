@@ -293,10 +293,13 @@ Two rules worth knowing before you send a patch:
 | `scripts/install-quota-statusline.js` | Points `~/.claude/settings.json` at that script, and refuses to clobber one you already have |
 | `web/` | The UI. No build step: edit a file and refresh |
 | `web/terminal.js` | The terminal pane — a shell, or a run's output |
+| `web/preview.js` | The browser preview — a dev server's page in the window, with DevBrowser's toolbar |
+| `web/preview-picker.js` | The preview's element picker, copied from DevBrowser; runs inside the previewed page |
 | `web/keys.js` | Which chord means which command, and the one function that decides it |
 | `web/rail.js` | The sessions rail, drawn with Preact — keyed by session and by group, so an update keeps the rows it did not change. The first surface moved off `app.js`'s rebuild-everything rendering, and the pattern for the next |
 | `web/vendor/` | The libraries worth not writing — xterm; diff2html for the diff viewer; and `preact.js`, htm's standalone build (Preact 10 + hooks + htm in one ESM file) for components written without JSX. Checked-in prebuilt bundles, not a `node_modules` |
-| `app/main.js` | The Electron shell |
+| `app/main.js` | The Electron shell, and the rules for what a preview `<webview>` may load |
+| `app/preload.js` | The page's only doors into the shell: raise the window, and the preview's two clipboard writes |
 | `app/make-icon.js` | Generates the packaged shell's icon |
 
 `launch.sh` exists because the shell starts the bridge with `bash -lc` — a
