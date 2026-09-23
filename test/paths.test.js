@@ -42,7 +42,7 @@ process.removeAllListeners('warning');
 
     // --- off until the page says otherwise -------------------------------
     // This is the remote contract, not a default worth being casual about: a
-    // browser off this machine is served no cs-host meta, and a path it cannot
+    // browser off this machine is served no tgx-host meta, and a path it cannot
     // reach must render as text rather than as a link that fails.
     assert.ok(!renderMarkdown('see /home/x/y.md').includes('fs-path'));
     assert.ok(!renderMarkdown('see `/home/x/y.md`').includes('fs-path'));
@@ -174,15 +174,15 @@ process.removeAllListeners('warning');
     // stays a pure function and cannot be wrong about which host it is on. That
     // is a decision, not an accident, and this is what pins it: the answer must
     // not move when the host does.
-    const wasKind = process.env.CLAUDE_SESSIONS_HOST_KIND;
+    const wasKind = process.env.TGXCODE_HOST_KIND;
     for (const kind of ['wsl', 'linux']) {
-        process.env.CLAUDE_SESSIONS_HOST_KIND = kind;
+        process.env.TGXCODE_HOST_KIND = kind;
         assert.strictEqual(isLaunchable('/home/x/a.ps1'), true, `${kind}: .ps1`);
         assert.strictEqual(isLaunchable('/home/x/a.desktop'), true, `${kind}: .desktop`);
         assert.strictEqual(isLaunchable('/home/x/app.js'), false, `${kind}: .js`);
     }
-    if (wasKind === undefined) delete process.env.CLAUDE_SESSIONS_HOST_KIND;
-    else process.env.CLAUDE_SESSIONS_HOST_KIND = wasKind;
+    if (wasKind === undefined) delete process.env.TGXCODE_HOST_KIND;
+    else process.env.TGXCODE_HOST_KIND = wasKind;
     ok('isLaunchable gives the same answer on either host');
 
     console.log(`\n${pass} path checks passed`);

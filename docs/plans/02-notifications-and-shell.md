@@ -19,7 +19,7 @@
 >
 > §5 is not built, but its URL shape is: `#/session/<id>` is read on load, so
 > a worker that has to open a window lands on the right session — and a
-> `claude-sessions://` handler, when it exists, has a vocabulary to route into
+> `tgxcode://` handler, when it exists, has a vocabulary to route into
 > rather than inventing a second one.
 >
 > Two departures from §2, both from building it: a turn finishing in a focused
@@ -82,7 +82,7 @@ Rules:
 
 ```js
 tray = new Tray(icon)
-tray.setToolTip('Claude Sessions — 2 running')
+tray.setToolTip('TGXCode — 2 running')
 tray.setContextMenu(Menu.buildFromTemplate([...]))
 ```
 
@@ -125,10 +125,10 @@ quit. First time it happens, show a balloon saying so.
 
 ### 5. Deep links
 
-Register `claude-sessions://` in the shell:
+Register `tgxcode://` in the shell:
 
 ```js
-app.setAsDefaultProtocolClient('claude-sessions')
+app.setAsDefaultProtocolClient('tgxcode')
 ```
 
 `install.ps1` writes the registry keys as part of packaging. Handle
@@ -136,9 +136,9 @@ app.setAsDefaultProtocolClient('claude-sessions')
 
 | URL | Effect |
 |---|---|
-| `claude-sessions://session/<uuid>` | focus window, open that session |
-| `claude-sessions://session/<uuid>/turn/<n>` | …and jump to that turn |
-| `claude-sessions://new?cwd=<path>&prompt=<text>` | open the new-session dialog prefilled |
+| `tgxcode://session/<uuid>` | focus window, open that session |
+| `tgxcode://session/<uuid>/turn/<n>` | …and jump to that turn |
+| `tgxcode://new?cwd=<path>&prompt=<text>` | open the new-session dialog prefilled |
 
 Routing into the renderer: append a hash to the loaded URL
 (`${ORIGIN}/#/session/<id>`) and have `web/app.js` read `location.hash` on load
@@ -168,7 +168,7 @@ session it just started, and DevBrowser can link back.
 - Window closed, agent finishes a 2-minute turn → notification appears, clicking
   it opens the window on that session.
 - Tray shows a running count that matches the rail.
-- `start claude-sessions://session/<uuid>` from PowerShell focuses the app on
+- `start tgxcode://session/<uuid>` from PowerShell focuses the app on
   that session, launching it if needed.
 - Quitting from the tray shuts the bridge down when idle, and leaves it up when
   a turn is running (the existing 409 path in `/api/shutdown`).

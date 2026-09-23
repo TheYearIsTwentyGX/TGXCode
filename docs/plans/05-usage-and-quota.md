@@ -146,7 +146,7 @@ update`. There is no `claude usage`. The `/usage` view is interactive-only.
 ### Tier A — window state (exact, free, no hacks)
 
 `bridge/usage.js` keeps the last `rate_limit_event` per `rateLimitType`,
-persisted to `~/.local/share/claude-sessions/quota.json` so it survives a bridge
+persisted to `~/.local/share/tgxcode/quota.json` so it survives a bridge
 restart and is available before the first turn of the day.
 
 ```js

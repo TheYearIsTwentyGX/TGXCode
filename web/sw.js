@@ -48,7 +48,7 @@ async function answer(data, decision) {
         await fetch(`/api/sessions/${encodeURIComponent(data.sessionId)}/permission`, {
             method: 'POST',
             headers: {
-                'X-Claude-Sessions-Client': '1',
+                'X-TGXCode-Client': '1', 'X-Claude-Sessions-Client': '1',
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({ requestId: data.requestId, decision }),

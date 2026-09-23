@@ -32,7 +32,7 @@ const { spawnSync } = require('child_process');
 // The roots are read when config.js loads, and this repository lives in a temp
 // directory rather than under $HOME — so without this every containment case
 // below would be refused by the roots check instead of the one being tested.
-process.env.CLAUDE_SESSIONS_ROOTS = os.tmpdir();
+process.env.TGXCODE_ROOTS = os.tmpdir();
 
 const changes = require('../bridge/changes.js');
 const cfg = require('../bridge/config.js');

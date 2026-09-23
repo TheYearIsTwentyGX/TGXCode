@@ -36,7 +36,7 @@ if (probe.error || probe.status !== 0) {
 }
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-harvester-'));
-const STATE = path.join(home, 'claude-sessions');
+const STATE = path.join(home, 'tgxcode');
 const FILE = path.join(STATE, 'quota-statusline.json');
 
 let pass = 0;

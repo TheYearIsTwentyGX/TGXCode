@@ -66,7 +66,7 @@ class Suggestions {
                 if (Object.keys(clean).length) this.bySession.set(sessionId, clean);
             }
         } catch (err) {
-            console.error(`[claude-sessions] ignoring unreadable ${STATE_FILE}: ${err.message}`);
+            console.error(`[tgxcode] ignoring unreadable ${STATE_FILE}: ${err.message}`);
         }
     }
 
@@ -84,7 +84,7 @@ class Suggestions {
                 }, null, 2));
                 fs.renameSync(tmp, STATE_FILE);
             } catch (err) {
-                console.error(`[claude-sessions] could not save suggestions: ${err.message}`);
+                console.error(`[tgxcode] could not save suggestions: ${err.message}`);
             }
         }, 400);
         this._saveTimer.unref();

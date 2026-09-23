@@ -38,7 +38,7 @@ set -uo pipefail
 # Where the user actually runs the app from. Overridable, but this is the
 # answer on this machine and the default is what makes the script callable
 # from a worktree that cannot know it.
-MAIN="${CLAUDE_SESSIONS_MAIN:-$HOME/Other/claude-sessions}"
+MAIN="${TGXCODE_MAIN:-${CLAUDE_SESSIONS_MAIN:-$HOME/Other/claude-sessions}}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 METHOD=--merge
@@ -169,7 +169,7 @@ if [ "$PULL" != 1 ]; then
 fi
 
 [ -d "$MAIN/.git" ] || die "no main checkout at $MAIN." \
-    "Set CLAUDE_SESSIONS_MAIN if it lives somewhere else." \
+    "Set TGXCODE_MAIN if it lives somewhere else." \
     "The merge is done; only the pull was skipped."
 
 MAIN_BRANCH="$(git -C "$MAIN" rev-parse --abbrev-ref HEAD 2>/dev/null)"
@@ -268,13 +268,13 @@ say "Restarting the everyday bridge…"
 # dirty-checkout prompt cannot fire, because a dirty main was refused above.
 #
 # env -u because landing always means the everyday instance. A session can
-# still carry a CLAUDE_SESSIONS_PORT it never chose, and letting that aim the
+# still carry a TGXCODE_PORT it never chose, and letting that aim the
 # restart somewhere else is the trap CLAUDE.md spends a section on.
 #
 # Its status is worth reading. It exits 3 when it deliberately did not restart,
 # and swallowing that would leave you thinking the merge you just landed is
 # running when it is not.
-( cd "$MAIN" && env -u CLAUDE_SESSIONS_PORT bash scripts/restart-bridge.sh )
+( cd "$MAIN" && env -u TGXCODE_PORT -u CLAUDE_SESSIONS_PORT bash scripts/restart-bridge.sh )
 RC=$?
 if [ "$RC" != 0 ]; then
     say ""

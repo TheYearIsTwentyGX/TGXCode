@@ -1,5 +1,5 @@
 {
-  "name": "claude-sessions",
+  "name": "tgxcode",
   "version": "1.0.0",
   "description": "Manage Claude Code sessions from a desktop app — on Linux, or on Windows with the bridge in WSL2",
   "main": "app/main.js",
@@ -23,8 +23,8 @@
     "electron-builder": "^24.13.3"
   },
   "build": {
-    "appId": "com.claudesessions.desktop",
-    "productName": "ClaudeSessions",
+    "appId": "com.tgxcode.desktop",
+    "productName": "TGXCode",
     "files": [
       "app/**/*",
       "package.json"
@@ -50,7 +50,7 @@
       "category": "Development",
       "synopsis": "Manage Claude Code sessions",
       "desktop": {
-        "StartupWMClass": "ClaudeSessions"
+        "StartupWMClass": "TGXCode"
       }
     }
   }

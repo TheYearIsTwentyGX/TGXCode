@@ -128,7 +128,7 @@ function reservedNow(port, now) {
  * this bridge is serving. A caller picking a port for something that is *not* a
  * project's dev server passes null — scripts/dev.js does, because the denylist
  * contains the bridge's own port and asking for that port explicitly is exactly
- * what `CLAUDE_SESSIONS_PORT=45899 npm run dev` means.
+ * what `TGXCODE_PORT=45899 npm run dev` means.
  *
  * @returns {Promise<number|null>} null if the whole range is taken
  */
@@ -223,7 +223,7 @@ function readMemoryFile() {
             if (Number.isInteger(port) && port > 0 && port < 65536) out.set(key, port);
         }
     } catch (err) {
-        console.error(`[claude-sessions] ignoring unreadable ${MEMORY_FILE}: ${err.message}`);
+        console.error(`[tgxcode] ignoring unreadable ${MEMORY_FILE}: ${err.message}`);
     }
     return out;
 }
@@ -294,7 +294,7 @@ function saveMemory() {
             }, null, 2));
             fs.renameSync(tmp, MEMORY_FILE);
         } catch (err) {
-            console.error(`[claude-sessions] could not save ports: ${err.message}`);
+            console.error(`[tgxcode] could not save ports: ${err.message}`);
         }
     }, 400);
     saveTimer.unref();

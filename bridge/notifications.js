@@ -149,7 +149,7 @@ class NotificationLog {
             // being told about it on every notification.
             if (!this._broken) {
                 this._broken = true;
-                console.error(`[claude-sessions] could not write ${LOG_FILE}: ${err.message}`);
+                console.error(`[tgxcode] could not write ${LOG_FILE}: ${err.message}`);
             }
         }
     }
@@ -169,7 +169,7 @@ class NotificationLog {
             fs.renameSync(tmp, LOG_FILE);
             this._lines = this.rows.length;
         } catch (err) {
-            console.error(`[claude-sessions] could not compact ${LOG_FILE}: ${err.message}`);
+            console.error(`[tgxcode] could not compact ${LOG_FILE}: ${err.message}`);
             this._lines = 0;   // do not retry on every single append
         }
     }
@@ -438,7 +438,7 @@ class NotificationLog {
             fs.mkdirSync(STATE_DIR, { recursive: true });
             fs.writeFileSync(LOG_FILE, '');
         } catch (err) {
-            console.error(`[claude-sessions] could not clear ${LOG_FILE}: ${err.message}`);
+            console.error(`[tgxcode] could not clear ${LOG_FILE}: ${err.message}`);
         }
     }
 }
@@ -485,7 +485,7 @@ class ReadState {
             this.sessions = new Map(Object.entries(data.sessions || {})
                 .map(([id, at]) => [id, Number(at) || 0]));
         } catch (err) {
-            console.error(`[claude-sessions] ignoring unreadable ${READ_FILE}: ${err.message}`);
+            console.error(`[tgxcode] ignoring unreadable ${READ_FILE}: ${err.message}`);
             return;
         }
         this._prune();
@@ -567,7 +567,7 @@ class ReadState {
                 }, null, 2));
                 fs.renameSync(tmp, READ_FILE);
             } catch (err) {
-                console.error(`[claude-sessions] could not write ${READ_FILE}: ${err.message}`);
+                console.error(`[tgxcode] could not write ${READ_FILE}: ${err.message}`);
             }
         }, SAVE_DEBOUNCE_MS);
     }

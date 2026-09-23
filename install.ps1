@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Build and install the Claude Sessions Windows app.
+    Build and install the TGXCode Windows app.
 
 .DESCRIPTION
     Only the Electron shell is packaged -- the bridge and the UI stay in WSL and
@@ -37,8 +37,8 @@ $ErrorActionPreference = 'Stop'
 function Say($msg, $color = 'Cyan') { Write-Host $msg -ForegroundColor $color }
 
 Say ''
-Say '  Claude Sessions -- build and install'
-Say '  -----------------------------------'
+Say '  TGXCode -- build and install'
+Say '  ---------------------------'
 Say ''
 
 # -- work out where the bridge lives inside WSL -------------------------------
@@ -81,18 +81,25 @@ Say "      node found in WSL: $check" Green
 
 # -- stage the shell somewhere Windows-local ----------------------------------
 
-# A running copy holds a lock on ClaudeSessions.exe and packaging fails with a
-# bare "Access is denied", so close it first.
-$running = Get-Process ClaudeSessions -ErrorAction SilentlyContinue
+# A running copy holds a lock on TGXCode.exe and packaging fails with a bare
+# "Access is denied", so close it first. ClaudeSessions is the same app from
+# before the rename: it holds the everyday port, and the new build cannot adopt
+# a window that is still open.
+$names = 'TGXCode', 'ClaudeSessions'
+$running = Get-Process $names -ErrorAction SilentlyContinue
 if ($running) {
-    Say '      ClaudeSessions is running; closing it so the build can replace it.' Yellow
+    Say "      $(($running | Select-Object -ExpandProperty ProcessName -Unique) -join ', ') is running; closing it so the build can replace it." Yellow
     $running | ForEach-Object { $_.CloseMainWindow() | Out-Null }
     Start-Sleep -Seconds 2
-    Get-Process ClaudeSessions -ErrorAction SilentlyContinue | Stop-Process -Force
+    Get-Process $names -ErrorAction SilentlyContinue | Stop-Process -Force
     Start-Sleep -Seconds 1
 }
 
-$stage = Join-Path $env:LOCALAPPDATA 'ClaudeSessions-build'
+# The staging directory from before the rename is dead weight now.
+$oldStage = Join-Path $env:LOCALAPPDATA 'ClaudeSessions-build'
+if (Test-Path $oldStage) { Remove-Item $oldStage -Recurse -Force -ErrorAction SilentlyContinue }
+
+$stage = Join-Path $env:LOCALAPPDATA 'TGXCode-build'
 Say "[2/5] Staging the shell in $stage..." Yellow
 
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue }
@@ -141,6 +148,13 @@ if ($NoInstall) {
 }
 
 Say ''
-Say 'Done. After installing, launch "ClaudeSessions" from the Start menu.' Cyan
+Say 'Done. After installing, launch "TGXCode" from the Start menu.' Cyan
+if (Test-Path (Join-Path $env:LOCALAPPDATA 'Programs\ClaudeSessions')) {
+    # A new appId is a new application to Windows, so the old one is not
+    # replaced. Its settings were copied across on first launch; the app itself
+    # is safe to remove.
+    Say 'The old "ClaudeSessions" app is still installed alongside it. Once TGXCode' Yellow
+    Say 'has opened once, uninstall ClaudeSessions from Settings > Apps.' Yellow
+}
 Say 'Changes to bridge/ or web/ do not need a rebuild -- just restart the app.' Cyan
 Say ''

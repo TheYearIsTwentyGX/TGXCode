@@ -44,7 +44,11 @@ const path = require('path');
 
 const cfg = require('./config');
 
-const COOKIE = 'cs_token';
+const COOKIE = 'tgx_token';
+// What the cookie was called before the rename. Still read — a phone paired
+// before it holds this one for up to a year, and pairing again to pick up a new
+// name is a chore with no benefit — but never set, and expired on unpair.
+const LEGACY_COOKIE = 'cs_token';
 
 // A year. The point of pairing is that you do it once, from a device you keep.
 const COOKIE_MAX_AGE = 365 * 24 * 60 * 60;
@@ -89,12 +93,12 @@ function ensureToken() {
         const tmp = `${cfg.TOKEN_FILE}.tmp`;
         fs.writeFileSync(tmp, token, { mode: 0o600 });
         fs.renameSync(tmp, cfg.TOKEN_FILE);
-        console.log(`[claude-sessions] created an access token at ${cfg.TOKEN_FILE}`);
+        console.log(`[tgxcode] created an access token at ${cfg.TOKEN_FILE}`);
     } catch (err) {
         // Keep the in-memory token so this bridge still works; say plainly that it
         // will not survive a restart, because a phone paired against it will stop
         // working for no visible reason.
-        console.error(`[claude-sessions] could not save the access token: ${err.message}`);
+        console.error(`[tgxcode] could not save the access token: ${err.message}`);
         console.error('  This bridge will accept the token it generated, but it is '
             + 'not on disk, so restarting invalidates any paired device.');
     }
@@ -159,6 +163,7 @@ function credentials(req, url) {
     if (q) out.push(q);
     const jar = cookies(req);
     if (jar[COOKIE]) out.push(jar[COOKIE]);
+    if (jar[LEGACY_COOKIE]) out.push(jar[LEGACY_COOKIE]);
     return out;
 }
 
@@ -329,13 +334,13 @@ function injectMeta(html, name, content) {
  * Only ever called for a request that passed localPageRequest().
  */
 function injectToken(html) {
-    return injectMeta(html, 'cs-token', ensureToken());
+    return injectMeta(html, 'tgx-token', ensureToken());
 }
 
 /** Set-Cookie value that pairs a device, and the one that unpairs it. */
-function pairCookie(value, { secure }) {
+function pairCookie(value, { secure }, name = COOKIE) {
     const bits = [
-        `${COOKIE}=${encodeURIComponent(value)}`,
+        `${name}=${encodeURIComponent(value)}`,
         'Path=/',
         'HttpOnly',
         // Lax, not Strict: the pairing redirect is a top-level navigation and
@@ -348,11 +353,16 @@ function pairCookie(value, { secure }) {
     return bits.join('; ');
 }
 
+/** Both Set-Cookie values an unpair sends — the current name and the old one. */
+function forgetCookies({ secure }) {
+    return [pairCookie('', { secure }), pairCookie('', { secure }, LEGACY_COOKIE)];
+}
+
 module.exports = {
-    COOKIE,
+    COOKIE, LEGACY_COOKIE,
     ensureToken, current, tokenMatches,
     credentials, authenticate, cookies,
     isLoopback, forwarded, isSecure, effectiveHost, hostIsLocal, peer,
     classify, localPageRequest,
-    injectToken, injectMeta, pairCookie,
+    injectToken, injectMeta, pairCookie, forgetCookies,
 };

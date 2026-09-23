@@ -248,7 +248,7 @@ function ensureExcluded(root) {
         fs.mkdirSync(path.dirname(exclude), { recursive: true });
         const gap = current && !current.endsWith('\n') ? '\n' : '';
         fs.appendFileSync(exclude,
-            `${gap}\n# Files pasted into a Claude Sessions composer.\n${DIR_NAME}/\n`);
+            `${gap}\n# Files pasted into a TGXCode composer.\n${DIR_NAME}/\n`);
         return true;
     } catch {
         return false;

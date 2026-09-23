@@ -130,7 +130,7 @@ a pending plan already is. A second copy would only be something to drift.
 
 What *is* the app's is what you did about it. Started or dismissed is a decision
 you made rather than something the agent said, so it lives in
-`~/.local/share/claude-sessions/suggestions.json` beside `flags.json`, and it is
+`~/.local/share/tgxcode/suggestions.json` beside `flags.json`, and it is
 pruned when the transcript goes. Both are undoable: dismiss is the easy one to
 hit by accident, and the suggestion is still sitting in the transcript either way.
 
@@ -396,7 +396,7 @@ stop it first.
 
 These flags are the only state this app owns *about a conversation*; everything
 else it shows is derived from Claude Code's own files, which it never writes to.
-They live in `~/.local/share/claude-sessions/flags.json`, and flags for
+They live in `~/.local/share/tgxcode/flags.json`, and flags for
 transcripts that no longer exist are pruned automatically. Settings — how you
 want the app itself to behave — are a separate file you are meant to open; see
 *Folded tool calls*.
@@ -888,16 +888,16 @@ The **Test session — dev only** checkbox in the Start a session dialog appears
 only on a dev bridge. Over the API it is a field on create, or a flag afterwards:
 
 ```bash
-TOKEN=$(cat ~/.local/share/claude-sessions/token)
+TOKEN=$(cat ~/.local/share/tgxcode/token)
 
 curl -sX POST http://127.0.0.1:45899/api/sessions \
   -H "Authorization: Bearer $TOKEN" \
-  -H 'X-Claude-Sessions-Client: 1' -H 'Content-Type: application/json' \
+  -H 'X-TGXCode-Client: 1' -H 'Content-Type: application/json' \
   -d '{"cwd":"/home/you/project","prompt":"…","test":true}'
 
 curl -sX POST http://127.0.0.1:45899/api/sessions/$ID/flags \
   -H "Authorization: Bearer $TOKEN" \
-  -H 'X-Claude-Sessions-Client: 1' -H 'Content-Type: application/json' \
+  -H 'X-TGXCode-Client: 1' -H 'Content-Type: application/json' \
   -d '{"test":true}'
 ```
 
@@ -1249,7 +1249,7 @@ way they used to.
 newer models are not given `TaskCreate`/`TaskUpdate` or `TodoWrite` unless
 `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` is set — so this panel, and the progress bars on
 the boards, were drawing a list nothing had written since the day that landed. The
-bridge therefore sets it for the sessions it starts. `CLAUDE_SESSIONS_TODO_TOOLS=0`
+bridge therefore sets it for the sessions it starts. `TGXCODE_TODO_TOOLS=0`
 in front of the bridge opts out, and `/api/health` reports which way it went.
 
 Two limits worth knowing: it reaches only sessions **this app starts**, so one you
@@ -1335,7 +1335,7 @@ apart — and the way that failed is worth writing down, because every step of i
 looked reasonable.
 
 The bridge handed its own environment to every session it started, so an agent
-working on this codebase inherited `CLAUDE_SESSIONS_PORT=45888`. Nothing then had
+working on this codebase inherited `TGXCODE_PORT=45888`. Nothing then had
 to mention a port for the mistake to happen: `bash bridge/launch.sh` in a worktree
 bound the everyday one. It came up reporting `dev: false`, because that flag is
 derived from the port. And the desktop shell, which starts a bridge only when
@@ -1358,7 +1358,7 @@ Four guards, arranged so that no single one has to hold:
 | Where | What |
 | --- | --- |
 | `bridge/server.js` | Refuses to bind 45888 when running out of `.claude/worktrees/` — exit 4, before the socket, so no way of starting a bridge gets around it. |
-| `bridge/runner.js`, `bridge/terminal.js` | Sessions and terminal panes no longer inherit `CLAUDE_SESSIONS_PORT`. The variable is the bridge's own business. |
+| `bridge/runner.js`, `bridge/terminal.js` | Sessions and terminal panes no longer inherit `TGXCODE_PORT`. The variable is the bridge's own business. |
 | `scripts/restart-bridge.sh` | Refuses the everyday port from a worktree, *before* killing anything — otherwise the guard above turns a takeover into an outage. `--status` still works anywhere. |
 | `app/main.js` | Verifies `root` against its configured `bridgeDir` before adopting a bridge on 45888, and takes the port back if it does not match. |
 
@@ -1420,7 +1420,7 @@ usually gone. The script therefore keeps its own, appended, next to the bridge's
 log:
 
 ```bash
-tail ~/.cache/claude-sessions/restart-45888.log
+tail ~/.cache/tgxcode/restart-45888.log
 ```
 
 One line per event: a `start` line, then one word for the outcome —

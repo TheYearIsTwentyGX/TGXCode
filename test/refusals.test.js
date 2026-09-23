@@ -11,7 +11,7 @@ const path = require('path');
 
 const PORT = Number(process.argv[2] || 45901);
 const TOKEN = fs.readFileSync(
-    path.join(os.homedir(), '.local/share/claude-sessions/token'), 'utf8').trim();
+    path.join(os.homedir(), '.local/share/tgxcode/token'), 'utf8').trim();
 
 const LOCAL = { authorization: `Bearer ${TOKEN}`, 'X-Claude-Sessions-Client': '1' };
 // A phone behind `tailscale serve`.
@@ -124,10 +124,10 @@ const HOME = os.homedir();
     // And the page is told not to draw the button, so the refusal is never met.
     check('and a phone is told there is no Wispr to reach',
         (await call('GET', '/api/wispr', { headers: PHONE })).body.available, false);
-    // The client-side half of the same rule: with no cs-host tag the page cannot
+    // The client-side half of the same rule: with no tgx-host tag the page cannot
     // draw the link whose click that route would refuse.
     check('and a phone is not told where the filesystem is',
-        /name="cs-host"/.test((await call('GET', '/', { headers: PHONE })).text), false);
+        /name="tgx-host"/.test((await call('GET', '/', { headers: PHONE })).text), false);
     // Saving settings is the mkdir clause with a longer reach: it writes a file
     // in the user's home directory, and one of the keys in it names a directory
     // this app then starts `claude` in. The *read* stays open, two lines down —

@@ -48,7 +48,7 @@ class Flags {
             // would have thrown away everybody's pins to gain nothing.
             this.test = new Set(Array.isArray(data.test) ? data.test : []);
         } catch (err) {
-            console.error(`[claude-sessions] ignoring unreadable ${STATE_FILE}: ${err.message}`);
+            console.error(`[tgxcode] ignoring unreadable ${STATE_FILE}: ${err.message}`);
         }
     }
 
@@ -68,7 +68,7 @@ class Flags {
                 }, null, 2));
                 fs.renameSync(tmp, STATE_FILE);
             } catch (err) {
-                console.error(`[claude-sessions] could not save flags: ${err.message}`);
+                console.error(`[tgxcode] could not save flags: ${err.message}`);
             }
         }, 400);
         this._saveTimer.unref();

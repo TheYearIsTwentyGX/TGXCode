@@ -27,7 +27,7 @@
 // can have an effect outside this process.
 //
 // The bridge's port arrives in `--port`, because bridge/runner.js strips
-// CLAUDE_SESSIONS_PORT from a session's environment on purpose (see the header
+// TGXCODE_PORT from a session's environment on purpose (see the header
 // there). The **token is read from disk here** rather than passed in: argv is
 // readable through `ps`, and the whole `--mcp-config` blob sits on the `claude`
 // command line.
@@ -42,6 +42,7 @@
 // is not about to grow one for three methods. See bridge/runner.js, which passes
 // this file to `claude --mcp-config`.
 
+require('./legacy-env');
 const fs = require('fs');
 const http = require('http');
 const readline = require('readline');
@@ -86,7 +87,7 @@ function api(method, route, body) {
         if (!PORT) {
             resolve({
                 ok: false, status: 0, body: null,
-                error: 'no bridge port was passed to this tool, so it cannot reach Claude Sessions',
+                error: 'no bridge port was passed to this tool, so it cannot reach TGXCode',
             });
             return;
         }
@@ -109,7 +110,7 @@ function api(method, route, body) {
             path: route,
             headers: {
                 Authorization: `Bearer ${token}`,
-                'X-Claude-Sessions-Client': '1',
+                'X-TGXCode-Client': '1', 'X-Claude-Sessions-Client': '1',
                 ...(payload
                     ? { 'Content-Type': 'application/json', 'Content-Length': payload.length }
                     : {}),
@@ -131,7 +132,7 @@ function api(method, route, body) {
         });
         req.on('error', (err) => resolve({
             ok: false, status: 0, body: null,
-            error: `could not reach Claude Sessions on port ${PORT}: ${err.message}`,
+            error: `could not reach TGXCode on port ${PORT}: ${err.message}`,
         }));
         if (payload) req.write(payload);
         req.end();
@@ -196,7 +197,7 @@ const LIST = {
     name: 'list_sessions',
     title: 'List the other sessions',
     description: [
-        'Every session Claude Sessions knows about — including ones that are not',
+        'Every session TGXCode knows about — including ones that are not',
         'running. Use it to find who owns a piece of code before handing them',
         'something with message_session.',
         '',
@@ -289,7 +290,7 @@ const TOOLS = [SUGGEST, LIST, MESSAGE];
 // reasonably concludes it should now start the work itself, which is the
 // opposite of suggesting it.
 const ACCEPTED =
-    'Recorded. This is now offered to the user in Claude Sessions as a follow-up '
+    'Recorded. This is now offered to the user in TGXCode as a follow-up '
     + 'they can start in one click. Do not start it yourself, and do not do the '
     + 'work now — mention it in your reply and move on.';
 
@@ -322,7 +323,7 @@ function toolError(id, body) {
 /** What the bridge said went wrong. Its refusals are already written to be read. */
 function msgOf(r) {
     if (r.body && typeof r.body.error === 'string') return r.body.error;
-    return `Claude Sessions answered ${r.status || 'nothing'}`;
+    return `TGXCode answered ${r.status || 'nothing'}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -422,7 +423,7 @@ async function handle(msg) {
         return reply(id, {
             protocolVersion: SPOKEN.has(asked) ? asked : PROTOCOL_VERSION,
             capabilities: { tools: {} },
-            serverInfo: { name: 'claude-sessions', version: '1.0.0' },
+            serverInfo: { name: 'tgxcode', version: '1.0.0' },
         });
     }
 

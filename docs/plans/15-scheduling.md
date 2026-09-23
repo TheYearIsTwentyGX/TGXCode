@@ -87,7 +87,7 @@ produces" is only true if there is one code path.
 
 What was predicted here, and what it actually took:
 
-- **Storage.** `~/.local/share/claude-sessions/schedules.json`. As written. It
+- **Storage.** `~/.local/share/tgxcode/schedules.json`. As written. It
   also needed drafts.js's *merge-on-write*, which this note did not anticipate:
   several bridges share the file, and a whole-file rewrite loses the others' rows.
 - **Trigger.** The warning was right and the prescription was not. An in-bridge
