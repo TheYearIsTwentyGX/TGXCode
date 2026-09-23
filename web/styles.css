@@ -7197,28 +7197,73 @@ body.term-resizing { user-select: none; cursor: row-resize; }
    Flexing into what is left is what that class means here. */
 .cfg-kv-newvalue { width: auto; flex: 1 1 160px; min-width: 0; }
 
-/* Every hook, and whether the script it names is still there — the one
-   question a text editor cannot answer, which is why this table exists in
-   place of a form. */
-.cfg-hooks { width: 100%; overflow-x: auto; }
-.cfg-hooks-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.cfg-hooks-table th {
-    text-align: left;
-    padding: 0 12px 6px 0;
+/* The hooks editor. An event is a card (the command editor's), a matcher group
+   an indented block inside it, and a hook a lighter card inside that — three
+   levels because the file has three, and flattening them would hide which
+   hooks share a matcher and so run together, in order. */
+.hk { width: 100%; }
+.hk-off {
+    margin-bottom: 10px;
+    padding: 8px 10px;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-3);
+    background: var(--s3);
+    border-left: 2px solid var(--yellow);
+    border-radius: var(--r-sm);
+}
+.hk-off strong { color: var(--text-2); font-weight: 400; }
+.hk-event .cmd-card-name { flex: 0 1 auto; min-width: 0; }
+.hk-group {
+    margin-top: 12px;
+    padding: 10px 0 0 12px;
+    border-left: 1px solid var(--outline);
+}
+.hk-group-head { display: flex; align-items: center; gap: 8px; }
+.hk-matcher { display: flex; align-items: center; gap: 8px; flex: 1 1 260px; min-width: 0; }
+.hk-matcher .settings-text { flex: 1; min-width: 0; }
+.hk-hook {
+    margin-top: 8px;
+    padding: 10px 12px 12px;
+    background: var(--s3);
+    border: 1px solid transparent;
+    border-radius: var(--r-sm);
+}
+.hk-hook.bad { border-color: var(--red); }
+.hk-hook-head { display: flex; align-items: center; gap: 8px; }
+.hk-hook-head .settings-select { width: auto; flex: none; }
+.hk-hook-head .cfg-script { flex: 0 1 auto; min-width: 0; }
+.hk-hook .cmd-area, .hk-hook .settings-text { background: var(--s2); }
+.hk-field { padding-top: 8px; margin-top: 8px; border-top: 0; }
+.hk-inline { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+.hk-inline > .hk-field { flex: 1 1 160px; min-width: 0; }
+.hk-check { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.hk-mini { font-size: 12px; }
+.hk-mini:disabled { opacity: 0.35; cursor: default; }
+.hk-more { margin-top: 10px; }
+.hk-more > summary { font-size: 11px; color: var(--text-4); cursor: pointer; }
+.hk-json { min-height: 40px; }
+.hk-add { margin-top: 12px; }
+.hk-inherit-scope { color: var(--text-3); }
+.hk-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+
+/* The review. It replaces the footer rather than opening a dialog, so what is
+   about to run sits under the hooks it came from. */
+.hk-foot.is-review { display: block; }
+.hk-review ul { margin: 4px 0 8px; padding-left: 18px; }
+.hk-review li { margin: 2px 0; font-size: 12px; line-height: 1.6; color: var(--text-3); }
+.hk-review code { font: 400 11px var(--mono); color: var(--text-2); overflow-wrap: anywhere; }
+.hk-review-lede {
+    margin-top: 8px;
     font: 400 11px var(--sans);
     text-transform: uppercase;
     letter-spacing: 0.04em;
     color: var(--text-4);
 }
-.cfg-hooks-table td {
-    padding: 6px 12px 6px 0;
-    border-top: 1px solid var(--outline-soft);
-    vertical-align: top;
-}
-.cfg-hooks-table code { font: 400 11px var(--mono); color: var(--text-2); }
-.cfg-hook-cmd { overflow-wrap: anywhere; }
-.cfg-any { color: var(--text-4); }
-.cfg-script { font-size: 11px; color: var(--green); white-space: nowrap; }
+
+/* Whether the script a hook names is still there — the one question a text
+   editor cannot answer. */
+.cfg-script { font-size: 11px; color: var(--green); overflow-wrap: anywhere; }
 .cfg-script.bad { color: var(--red); }
 
 .cfg-statusline { width: 100%; }
@@ -7742,15 +7787,15 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     /* The Claude Code group's own controls. The four file tabs plus the two
        view tabs do not fit on one line here, so the row wraps and the spacer
        that pushed the lens toggle to the far end has to stop reserving width —
-       otherwise it pushes the toggle onto a line of its own. `env` and the
-       hooks table both lose their fixed left columns for the same reason the
+       otherwise it pushes the toggle onto a line of its own. `env` loses its
+       fixed left column, and a hook group its indent, for the same reason the
        shortcut table above does: at this width a name and its value cannot
        both keep a lane. */
     .cfg-tabs-spacer { flex-basis: 100%; min-width: 0; }
     .cfg-sub { padding: 14px 14px 4px; }
     .cfg-kv-row { flex-wrap: wrap; }
     .cfg-kv-name, .cfg-kv-newname { width: auto; flex: 1 1 100%; }
-    .cfg-hooks-table { font-size: 11px; }
+    .hk-group { padding-left: 8px; }
     .cfg-json { min-height: 200px; }
     .cfg-md { min-height: 180px; }
     /* The dialog is the whole window at this width, so the wrapper's padding

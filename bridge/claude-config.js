@@ -224,27 +224,64 @@ function shortHome(text) {
  * token out of the command and stat-ing it is approximate — a command may be a
  * pipeline, and `$HOME` has to be expanded by hand — but approximate and
  * usually right beats a text editor, which cannot answer at all.
+ *
+ * `where` is the file the block came from, stamped onto every row, and `index`
+ * is the hook's position in it — so the editor can put a row's script check on
+ * the hook it belongs to, rather than on whichever hook has the same command.
  */
-function hookSummary(hooks) {
+function hookSummary(hooks, where = {}) {
     if (!isPlainObject(hooks)) return [];
     const out = [];
     for (const [event, matchers] of Object.entries(hooks)) {
         if (!Array.isArray(matchers)) continue;
-        for (const m of matchers) {
+        matchers.forEach((m, group) => {
             const entries = m && Array.isArray(m.hooks) ? m.hooks : [];
-            for (const h of entries) {
+            entries.forEach((h, hook) => {
                 const command = h && typeof h.command === 'string' ? h.command : null;
                 out.push({
+                    scope: where.scope || null,
+                    file: where.file || null,
                     event,
                     matcher: m && typeof m.matcher === 'string' ? m.matcher : null,
+                    index: { group, hook },
                     type: h && typeof h.type === 'string' ? h.type : null,
                     command: shortHome(command),
+                    target: shortHome(hookTarget(h)),
+                    timeout: h && Number.isInteger(h.timeout) ? h.timeout : null,
                     script: scriptState(command || (h && h.file) || null),
                 });
-            }
-        }
+            });
+        });
     }
     return out;
+}
+
+/** The one field that says what a hook does, whatever its type — clipped. */
+function hookTarget(h) {
+    if (!isPlainObject(h)) return null;
+    let text = null;
+    if (typeof h.command === 'string') text = h.command;
+    else if (typeof h.url === 'string') text = h.url;
+    else if (typeof h.server === 'string' || typeof h.tool === 'string') text = `${h.server || '?'} / ${h.tool || '?'}`;
+    else if (typeof h.prompt === 'string') text = h.prompt;
+    if (text === null) return null;
+    text = text.replace(/\s+/g, ' ').trim();
+    return text.length > 200 ? `${text.slice(0, 199)}…` : text;
+}
+
+/**
+ * Every hook in force, from every file in the chain, weakest first.
+ *
+ * Not the strongest block: Claude Code runs the hooks of every scope, so a
+ * project hook does not replace the user's — both fire. An earlier version of
+ * this summary kept only the strongest file's block, and under-reported
+ * exactly the case where it mattered most, a user-level hook still firing in a
+ * project that had its own.
+ */
+function hooksInForce(files) {
+    return files.flatMap(f => (f.parsed
+        ? hookSummary(f.values.hooks, { scope: f.scope, file: f.file })
+        : []));
 }
 
 /**
@@ -556,10 +593,13 @@ class ClaudeConfig {
             files,
             effective: effectiveOf(files),
             unknown: unknownOf(files),
-            hooks: hookSummary(mergedHooks(files)),
+            hooks: hooksInForce(files),
             statusLine: statusLineOf(files),
             installedPlugins: installedPlugins(),
             catalogue: schema.GROUPS,
+            hookEvents: schema.HOOK_EVENTS,
+            hookTypes: schema.HOOK_TYPES,
+            toolNames: schema.TOOL_NAMES,
             catalogueAgainst: schema.AGAINST_VERSION,
             scopes: SCOPES,
             problems: files.flatMap(f => f.problems.map(message => ({ file: f.file, message }))),
@@ -847,15 +887,6 @@ function preview(value) {
     return text.length > 160 ? `${text.slice(0, 159)}…` : text;
 }
 
-/** The strongest `hooks` block, for the summary. */
-function mergedHooks(files) {
-    let found = null;
-    for (const f of files) {
-        if (f.parsed && isPlainObject(f.values.hooks)) found = f.values.hooks;
-    }
-    return found;
-}
-
 /** The strongest `statusLine`, and whether this app is the one that set it. */
 function statusLineOf(files) {
     let found = null;
@@ -878,5 +909,5 @@ function statusLineOf(files) {
 
 module.exports = {
     ClaudeConfig, SCOPES, chainFor, leaves, setPath, getPath,
-    hookSummary, ourStatusLine, effectiveOf, unknownOf, installedPlugins,
+    hookSummary, hooksInForce, ourStatusLine, effectiveOf, unknownOf, installedPlugins,
 };
