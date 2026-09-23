@@ -459,6 +459,37 @@ UMD and needs the script tag; if it ends in an `export`, import it. Both cases
 carry a comment saying which and why, because the UMD one reads like something to
 tidy up and tidying it up is an immediate crash on page load.
 
+### Preact, for UI that updates under the cursor
+
+`web/vendor/preact.js` is htm 3.1.1's `preact/standalone.module.js`: Preact 10,
+its hooks and htm in one ESM file. It ends in `export{…}`, so it is imported like
+xterm (`import { html, render } from './vendor/preact.js'`), and it has no eval, so
+the CSP accepts it. It carries no version string of its own; `web/rail.js`'s header
+records what is known. Licences are in `LICENSE.preact` — **htm is Apache-2.0, not
+MIT**, so both texts are there.
+
+`web/rail.js` is the pattern for moving a surface over, and the rest of `app.js`
+still builds DOM by hand with `el()`. What it settled:
+
+- **No JSX, no build step.** Components are `` html`<div class=${…}>…</div>` ``,
+  which htm turns into `h()` calls at runtime. Attributes are written the DOM's
+  way (`class`, `aria-*`, `data-*`); events are `onClick`, `onDragStart`.
+- **State stays in `app.js`'s `state`.** A render is a plain synchronous call
+  (`render(tree, container)`) from the existing entry point, so callers do not
+  change. Builders are ordinary functions returning vnodes; use hooks only for
+  state a piece genuinely owns.
+- **Key every list child** by something stable (`sessionId`, a group key). The
+  keys are the whole point: they are what keeps a node, and its hover, focus,
+  animation and in-flight click, across an update. Chromium 126 has no
+  `moveBefore`, so a node that actually *moves* can still lose focus.
+- **Do not touch rendered DOM by hand.** No `setAttribute`, `classList` or
+  `insertBefore` on nodes Preact owns: it diffs against its last vnode, not the
+  DOM, so a hand edit is either undone later or never. Put the fact in `state` and
+  re-render. The rail's drag-to-reorder does exactly that (`state.railDrag.order`).
+- A `null` prop is written as an empty DOM property, so you will see `title=""`
+  and `draggable="false"` where `el()` left the attribute off. Harmless, but do not
+  write CSS that selects on those attributes being absent.
+
 ## Never rebuild without asking
 
 `install.ps1` force-closes any running ClaudeSessions and replaces the

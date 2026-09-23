@@ -222,8 +222,8 @@ are easier to read than to infer.
 Two rules worth knowing before you send a patch:
 
 - **`dependencies` is empty and stays empty.** The bridge uses Node built-ins
-  only. `web/vendor/` holds prebuilt, committed bundles (xterm, diff2html)
-  fetched with `npm pack` — never an `npm install`. A bundler would turn
+  only. `web/vendor/` holds prebuilt, committed bundles (xterm, diff2html,
+  Preact) fetched with `npm pack` — never an `npm install`. A bundler would turn
   `web/app.js` into a build artifact and put a build step between every UI edit
   and a refresh, which is the loop worth protecting.
 - **`docs/api.md` is a contract.** A second client — the Android app — reads it
@@ -294,7 +294,8 @@ Two rules worth knowing before you send a patch:
 | `web/` | The UI. No build step: edit a file and refresh |
 | `web/terminal.js` | The terminal pane — a shell, or a run's output |
 | `web/keys.js` | Which chord means which command, and the one function that decides it |
-| `web/vendor/` | The two libraries worth not writing — xterm, and diff2html for the diff viewer. Checked-in prebuilt bundles, not a `node_modules` |
+| `web/rail.js` | The sessions rail, drawn with Preact — keyed by session and by group, so an update keeps the rows it did not change. The first surface moved off `app.js`'s rebuild-everything rendering, and the pattern for the next |
+| `web/vendor/` | The libraries worth not writing — xterm; diff2html for the diff viewer; and `preact.js`, htm's standalone build (Preact 10 + hooks + htm in one ESM file) for components written without JSX. Checked-in prebuilt bundles, not a `node_modules` |
 | `app/main.js` | The Electron shell |
 | `app/make-icon.js` | Generates the packaged shell's icon |
 

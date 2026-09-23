@@ -187,6 +187,14 @@ function check(name, got, want) {
     for (const asset of ['/app.js', '/styles.css', '/markdown.js', '/highlight.js', '/sw.js']) {
         check(`GET ${asset}`, (await call(asset)).status, 200);
     }
+    // The rail's module and the Preact bundle it imports. The type matters as much
+    // as the status: a module script served as anything but JavaScript is refused,
+    // and the page then loads with no rail and one console line saying why.
+    for (const asset of ['/rail.js', '/vendor/preact.js']) {
+        const r = await call(asset);
+        check(`GET ${asset}`, r.status, 200);
+        check(`${asset} is served as JavaScript`, /javascript/.test(r.headers['content-type'] || ''), true);
+    }
 
     // The phone web view is gone — the phone is the native Android app now, and it
     // is a client of /api/ only. Pinned because a stale PAGES entry or a manifest

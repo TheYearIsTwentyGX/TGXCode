@@ -8,6 +8,7 @@ import { renderMarkdown, inline, configurePaths } from './markdown.js';
 import { highlight, escapeHtml } from './highlight.js';
 import { TerminalPane } from './terminal.js';
 import * as keys from './keys.js';
+import { drawRail } from './rail.js';
 
 // ── api ──────────────────────────────────────────────────────────────────
 
@@ -157,7 +158,7 @@ const mergePrefs = (d) => {
     return out;
 };
 
-const BOOT_PREFS = (() => {
+export const BOOT_PREFS = (() => {
     try {
         const m = document.querySelector('meta[name="cs-prefs"]');
         if (!m) return mergePrefs(null);
@@ -210,7 +211,7 @@ const hexAccent = (v) => (/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(v || '') ? v : 
  *
  * Longest wins, so a worktree given a colour of its own keeps it.
  */
-function projectColor(dir) {
+export function projectColor(dir) {
     const here = (dir || '').trim().replace(/\/+$/, '');
     if (!here.startsWith('/')) return '';
     let best = '';
@@ -255,7 +256,7 @@ paintBackdropTint();
 const liveCompact = () => BOOT_PREFS.live.compact;
 const liveHideElsewhere = () => BOOT_PREFS.live.hideElsewhere;
 
-const state = {
+export const state = {
     clientId: null,
     dev: false,             // talking to a development bridge
     remote: false,          // this window reached the bridge from off-machine
@@ -381,7 +382,7 @@ const state = {
     // What each session's timestamps were on the last load, so `dynamic` can tell
     // a message arriving from a list merely being re-sent. See rememberOrder.
     seenTs: new Map(),      // sessionId -> {user, last}
-    railDrag: null,         // cwd of the project card being dragged, in `custom`
+    railDrag: null,         // {cwd, order} while a project card is dragged, in `custom`
     sortMenu: false,        // the rail head's order menu is open
     unsent: new Map(),      // sessionId -> text written to a process but not yet in a transcript
     // The one message drawn in the log before the transcript has it:
@@ -580,9 +581,9 @@ const state = {
     // `editing` is the id the dialog is currently editing, or null when it is
     // about to make a new one. It is what tells Save which verb to use.
     drafts: { open: false, rows: [], at: 0, loading: false, error: null, editing: null },
-    // The project card whose ⋮ menu is open, or null. Held here rather than
-    // in the card, because renderRail() rebuilds every card and the menu has to
-    // survive that — see syncProjMenu().
+    // The project card whose ⋮ menu is open, or null. The menu is fixed and
+    // outside the rail, so this is how the card's ⋮ knows to draw itself
+    // expanded, and how syncProjMenu() finds the button to follow.
     projMenu: null,
     // Canned messages, and the groups they are drawn in. Drafts' terms for the
     // push — the whole list, unconditional, held as sent — with one difference
@@ -699,7 +700,7 @@ const state = {
 };
 
 const $ = (id) => document.getElementById(id);
-const dom = {};
+export const dom = {};
 for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-sub',
     'channels', 'scroll', 'log', 'status-line', 'status-text', 'btn-stop', 'input',
     'btn-send', 'btn-attach', 'attach', 'attach-input', 'composer',
@@ -849,7 +850,7 @@ function dateOf(ts, now = Date.now()) {
         : `${date} ’${pad(d.getFullYear() % 100)}`;
 }
 
-function ago(ts) {
+export function ago(ts) {
     if (!ts) return '';
     const s = Math.max(0, (Date.now() - new Date(ts).getTime()) / 1000);
     if (s < 60) return 'now';
@@ -886,7 +887,7 @@ const shortPath = (p) => {
 };
 const shortModel = (m) => (m ? String(m).replace(/^claude-/, '').replace(/-\d{8}$/, '') : '');
 
-function clip(s, n) {
+export function clip(s, n) {
     const t = String(s || '').replace(/\s+/g, ' ').trim();
     return t.length > n ? t.slice(0, n - 1) + '…' : t;
 }
@@ -1079,8 +1080,10 @@ async function loadSessions() {
 /**
  * Take one word per session's pull requests and recolour the rail.
  *
- * Rows are patched in place rather than rebuilt: a `renderRail()` on every update
- * would throw away hover and focus for a glyph that usually has not changed.
+ * A plain `renderRail()`: web/rail.js reconciles, so rows whose glyph did not
+ * change keep their nodes, and hover and focus with them. It is also what moves
+ * the Hide finished count, and with `hideDone` on what takes a landed PR's row
+ * away.
  *
  * Called with the `prs-changed` payload the bridge pushes, and once at boot with
  * the body of `/api/prs`, which is the same shape — a window that has just opened
@@ -1094,30 +1097,14 @@ function applyRailPrs(payload) {
     // `dynamic` with PR updates switched on: a session whose answer moved lifts
     // its card. Not on the boot fetch, which is a window catching up rather than
     // anything having happened.
-    let moved = false;
     if (state.prsLoaded) {
         for (const [id, now] of state.railPrs) {
             if (JSON.stringify(now) === JSON.stringify(before.get(id))) continue;
-            moved = bumpGroup(state.sessions.find(s => s.sessionId === id), 'pr') || moved;
+            bumpGroup(state.sessions.find(s => s.sessionId === id), 'pr');
         }
     }
     state.prsLoaded = true;
-    if (moved) { renderRail(); return; }
-
-    // With `hideDone` on this payload decides which rows exist, not just what
-    // colour they are — a PR landing has to take its row with it — so the whole
-    // rail is rebuilt and the patching below is skipped. Hover and focus are what
-    // that costs, and only on the update that changes the answer.
-    if (state.hideDone) { renderRail(); return; }
-
-    for (const s of state.sessions) {
-        if (!s.prs || !s.prs.length) continue;
-        const strip = dom.rail.querySelector(`[data-id="${CSS.escape(s.sessionId)}"]`);
-        if (strip) patchPrBadge(strip, s);
-    }
-    // The button counts finished sessions whether or not it is hiding them — that
-    // count is the reason to press it, and this is the only thing that moves it.
-    paintHideDone(state.sessions.filter(s => inProjectCard(s) && prDone(s)).length);
+    renderRail();
 }
 
 /** The one fetch of `/api/prs` a window makes: its first paint. */
@@ -1130,13 +1117,13 @@ async function loadRailPrs() {
     }
 }
 
-const groupKeyOf = (s) => `project:${s.projectName || 'unknown'}`;
+export const groupKeyOf = (s) => `project:${s.projectName || 'unknown'}`;
 
 // The sessions that land in a project card, which are the only ones `hideDone`
-// filters. Shared with `applyRailPrs`, which counts them for the button without
-// rebuilding the rail — two copies of this is how the count and the rows would
-// come to disagree.
-const inProjectCard = (s) => !s.pinned && !s.archived && !s.test;
+// filters and the only ones a `dynamic` bump moves the card for. Shared with
+// web/rail.js — two copies of this is how the rows and the ordering would come to
+// disagree.
+export const inProjectCard = (s) => !s.pinned && !s.archived && !s.test;
 
 /**
  * Decide where each row and each group card sits, once.
@@ -1225,9 +1212,9 @@ function bumpGroup(s, ...reasons) {
     return true;
 }
 
-const rankOf = (s) => state.order.get(s.sessionId) ?? 0;
+export const rankOf = (s) => state.order.get(s.sessionId) ?? 0;
 
-const ICON = {
+export const ICON = {
     pin: '<path d="M9 3h6l-.7 5.2 3 2.6V13H6.7v-2.2l3-2.6L9 3Z" stroke="currentColor" '
         + 'stroke-width="1.8" stroke-linejoin="round"/><path d="M12 13v8" stroke="currentColor" '
         + 'stroke-width="1.8" stroke-linecap="round"/>',
@@ -1332,7 +1319,7 @@ const ICON = {
 // Which glyph says each PR status. `unknown` is gh being unreachable rather than a
 // state a PR can be in, so it borrows the plain branch and the CSS leaves it grey:
 // a header that cannot reach GitHub says no less than it used to, and claims no more.
-const PR_ICON = {
+export const PR_ICON = {
     open: 'pr',
     unknown: 'pr',
     draft: 'prDraft',
@@ -1352,149 +1339,19 @@ function icon(name, size = 15) {
     });
 }
 
-function renderRail() {
-    // A card is being carried; rebuilding would drop it. The drag's end renders.
-    if (state.railDrag) return;
-    dom.rail.replaceChildren();
-
-    if (!state.sessions.length) {
-        paintHideDone(0);
-        dom.rail.append(el('div', { class: 'rail-empty' },
-            state.query ? 'Nothing matches that filter.' : 'No sessions on disk yet.'));
-        return;
-    }
-
-    // Held order, not the order the bridge sent. See rememberOrder.
-    const ordered = [...state.sessions].sort((a, b) => rankOf(a) - rankOf(b));
-
-    const pinned = ordered.filter(s => s.pinned);
-    const archived = ordered.filter(s => s.archived && !s.pinned);
-    // Scratch sessions gathered in one place, because the point of labelling one
-    // is to be able to find it again and delete it. Only a development bridge
-    // sends any, so the everyday window never grows this card.
-    const test = ordered.filter(s => s.test && !s.pinned && !s.archived);
-    const rest = ordered.filter(inProjectCard);
-
-    // `hideDone`: drop the rows whose work has landed. Only from the project
-    // cards — pinning is something you did on purpose, archived is already out of
-    // the way, and the test card exists to be emptied by hand.
-    //
-    // Two things are never hidden. The session on screen, because a row leaving
-    // from under the conversation you are reading is the rail disagreeing with the
-    // main pane about where you are. And nothing at all while a search is running,
-    // for the reason `isOpen` gives for forcing groups open: a filter must not hide
-    // its own results, and somebody typing the title of a merged session is looking
-    // for exactly that.
-    const hiding = state.hideDone && !state.query;
-    const finished = rest.filter(prDone);
-    const gone = new Set(hiding
-        ? finished.filter(s => !state.current || state.current.sessionId !== s.sessionId)
-            .map(s => s.sessionId)
-        : []);
-    paintHideDone(finished.length);
-
-    // Pinned first, across every project — that is the point of pinning.
-    if (pinned.length) dom.rail.append(groupCard('pinned', 'Pinned', pinned));
-
-    const groups = new Map();
-    for (const s of rest) {
-        const key = groupKeyOf(s);
-        // `cwd` is the group's *directory*, which the key is deliberately not:
-        // the key is the project's name, so the collapse state written against it
-        // survives a checkout being moved. A colour is keyed on the path instead
-        // — see projectColor() — so the card has to carry one, and it takes it
-        // from the first session filed under the name. Two checkouts sharing a
-        // basename therefore share a colour, which is the same collision that
-        // already puts them in one card.
-        if (!groups.has(key)) {
-            groups.set(key, {
-                label: s.projectName || 'unknown',
-                cwd: s.projectCwd || s.cwd || '',
-                list: [],
-            });
-        }
-        groups.get(key).list.push(s);
-    }
-    const custom = BOOT_PREFS.projects.sort === 'custom';
-    for (const [key, { label, cwd, list }] of orderGroups([...groups])) {
-        // Sessions a schedule started fold into their own subsection inside the
-        // project card. They are the same work in the same directory — so a card
-        // of their own at the foot of the rail, the way test sessions get one,
-        // would file them away from the project they are about — but there can
-        // be a great many of them and they are all alike, and a fortnight of
-        // nightly reviews between you and the conversation you are looking for
-        // is what the rail exists to prevent.
-        const shown = list.filter(s => !gone.has(s.sessionId));
-        // A project with nothing left to show goes with its rows. An empty card
-        // is a heading claiming a count it is not drawing, which is the one thing
-        // `all` below is there to avoid.
-        if (!shown.length) continue;
-        const sched = shown.filter(s => s.schedule);
-        const plain = shown.filter(s => !s.schedule);
-        dom.rail.append(groupCard(key, label, plain, {
-            // What makes this card a *project* rather than Pinned or Archived:
-            // the ⋮ menu and the colour both hang off it, and neither belongs on
-            // a card that is not about a directory.
-            project: { key, name: label, cwd },
-            draggable: custom,
-            // The project heading still counts what it contains, subsection
-            // included: a card saying 3 above a shut section holding 11 is
-            // wrong about the project, which is what the heading names. Hidden
-            // rows are counted for the same reason — the project has them, and
-            // the button in the rail head is where the hiding is accounted for.
-            all: list,
-            lead: sched.length
-                ? groupCard(`sched:${key}`, 'Scheduled', sched, { nested: true })
-                : null,
-        }));
-    }
-
-    if (test.length) dom.rail.append(groupCard('test', 'Test sessions', test));
-    if (archived.length) dom.rail.append(groupCard('archived', 'Archived', archived));
-
-    // Said out loud rather than left to look like a rail that has lost its
-    // sessions — the same promise the live board makes when `hideElsewhere`
-    // empties it. The button above is still lit, but an empty column is read
-    // before the control that caused it.
-    if (!dom.rail.childElementCount && gone.size) {
-        dom.rail.append(el('div', { class: 'rail-empty' },
-            `${gone.size === 1 ? 'One session is' : `All ${gone.size} sessions are`} finished, `
-            + 'and hidden. Press Hide finished to see them.'));
-    }
-
-    // The ⋮ menu is fixed and lives outside this element, so a rebuild leaves it
-    // pointing at a button that no longer exists. Re-anchored rather than closed,
-    // because this runs whenever any session changes and a menu that shut itself
-    // several times a minute would be unusable.
-    syncProjMenu();
-}
-
 /**
- * The project cards in the order `projects.sort` asks for.
+ * Draw the rail, and the two things outside it that follow what it drew.
  *
- * `recent` and `dynamic` are the held ranks — the same list; the difference is
- * only whether bumpGroup is allowed to change them. `custom` places each card
- * by its directory's index in `projects.order`, and a card the list does not
- * name yet goes above or below all of those by `newAt`, keeping its held rank
- * among the other unnamed ones so that several new projects still arrive in a
- * sensible order.
- *
- * @param {Array<[string, {label: string, cwd: string}]>} groups
+ * The drawing is web/rail.js's, which reconciles against the last render rather
+ * than rebuilding — so this is cheap to call, and the ~two dozen callers call it
+ * whenever anything the rail shows may have changed, without patching rows by
+ * hand. Synchronous: a caller can read the rail's DOM as soon as it returns.
  */
-function orderGroups(groups) {
-    const p = BOOT_PREFS.projects;
-    const rank = ([key]) => state.groupOrder.get(key) ?? 0;
-    if (p.sort === 'alpha') {
-        return groups.sort((a, b) => a[1].label.localeCompare(b[1].label, undefined,
-            { sensitivity: 'base', numeric: true }) || rank(a) - rank(b));
-    }
-    if (p.sort === 'custom') {
-        const at = new Map((p.order || []).map((d, i) => [d, i]));
-        const unlisted = p.newAt === 'bottom' ? Infinity : -Infinity;
-        const pos = (g) => at.has(g[1].cwd) ? at.get(g[1].cwd) : unlisted;
-        return groups.sort((a, b) => (pos(a) - pos(b)) || rank(a) - rank(b));
-    }
-    return groups.sort((a, b) => rank(a) - rank(b));
+export function renderRail() {
+    paintHideDone(drawRail());
+    // The ⋮ menu is fixed and lives outside the rail, so a card that moved leaves
+    // it pointing at where the button used to be.
+    syncProjMenu();
 }
 
 /**
@@ -1505,8 +1362,7 @@ function orderGroups(groups) {
  * hidden" after it. Suppressed at zero rather than shown as 0, because nothing to
  * hide is not a quantity worth a glyph in a rail this narrow.
  *
- * Called from `renderRail`, which knows the number, and from `applyRailPrs`, which
- * is when the number moves without the rail being rebuilt.
+ * Called from `renderRail`, with the number web/rail.js counted while drawing.
  */
 function paintHideDone(count) {
     dom.hideDone.setAttribute('aria-pressed', String(state.hideDone));
@@ -1519,98 +1375,32 @@ function paintHideDone(count) {
         : 'Hide sessions whose pull requests are all merged or closed';
 }
 
-/**
- * A rail group: a card whose heading shuts it. `key` is what the open/shut
- * state is remembered under, so it has to outlive a re-render.
- *
- * `opts.lead` is a node rendered above the rows — a nested card, in the one case
- * there is. `opts.all` is the list the *heading* counts, when that is wider than
- * the rows beneath it. `opts.nested` marks a card that sits inside another, which
- * changes both how it is drawn and where its open/shut state lives: see
- * `isOpen`.
- */
-function groupCard(key, label, list, opts = {}) {
-    const open = isOpen(key, opts.nested);
-    const counted = opts.all || list;
-    const live = counted.filter(s => s.active || (s.runner && s.runner.state === 'busy')).length;
-    const bodyId = `group-${key.replace(/[^\w-]/g, '_')}`;
-    // Only a project card has a directory, so only a project card can have a
-    // colour or a menu. Pinned, Archived, Test and the nested Scheduled
-    // subsection get neither — there is nothing for either to be about.
-    const accent = opts.project ? projectColor(opts.project.cwd) : '';
-
-    // `custom` order: the heading is the handle. Only the heading, so a row
-    // dragged out of the card is still nothing — rows are not reordered here.
-    // A card with no directory (`unknown`) has nothing to be keyed by in
-    // `projects.order`, so it cannot be placed.
-    const drag = opts.project && opts.draggable && !!opts.project.cwd;
-
-    return el('section', {
-        class: 'rail-group' + (opts.nested ? ' nested' : ''), 'data-key': key,
-        'data-cwd': opts.project ? opts.project.cwd : null,
-        'data-tinted': accent ? '1' : null,
-        style: accent ? `--proj-accent: ${accent}` : null,
-    },
-        el('button', {
-            class: 'group-head',
-            type: 'button',
-            'aria-expanded': String(open),
-            'aria-controls': bodyId,
-            draggable: drag ? 'true' : null,
-            title: drag ? 'Drag to reorder projects' : null,
-            onclick: () => { toggleGroup(key, open, opts.nested); renderRail(); },
-            ondragstart: drag ? (e) => onRailDragStart(e, opts.project.cwd) : null,
-            ondragend: drag ? (e) => onRailDragEnd(e) : null,
-        },
-            drag ? el('span', { class: 'group-grip' }, icon('grip', 13)) : null,
-            el('span', { class: 'twist' }, icon('caret', 13)),
-            el('span', { class: 'group-label' }, label),
-            live ? el('span', { class: 'live' }, `${live} live`) : null,
-            el('span', { class: 'count' }, String(counted.length)),
-        ),
-        // A sibling of the head rather than a child of it, because the head is
-        // itself a <button> and a button inside a button is not a thing the
-        // browser will build. It is positioned over the card's top-right corner
-        // instead, with the head padded to keep the count out from under it.
-        opts.project
-            ? el('button', {
-                class: 'group-menu-btn', type: 'button',
-                'aria-haspopup': 'menu', 'aria-expanded': 'false',
-                'aria-label': `More for ${label}`, title: `More for ${label}`,
-                onclick: (e) => {
-                    e.stopPropagation();
-                    if (state.projMenu && state.projMenu.key === key) closeProjMenu();
-                    else showProjMenu(opts.project, e.currentTarget);
-                },
-            }, icon('dots', 15))
-            : null,
-        open
-            ? el('div', { class: 'group-body', id: bodyId }, opts.lead || null, list.map(strip))
-            : null,
-    );
-}
-
 // --- `custom` order: dragging project cards ------------------------------
 //
 // The toolbar editor's idiom (onBarDragOver, commitBarOrder): the card under the
-// cursor moves as the drag goes, and the order is read back off the DOM when it
-// ends. renderRail() is held off meanwhile — a session writing mid-drag would
-// otherwise rebuild the rail and drop the card being carried.
+// cursor moves as the drag goes, and the order it reached is saved when it ends.
+//
+// The move goes through the render, not round it. `state.railDrag.order` is the
+// order the drag has reached, orderGroups() in web/rail.js prefers it to the
+// saved one, and each change re-renders — so a session writing mid-drag redraws
+// the rail with the card still where the cursor put it, and the carried node is
+// the same node throughout, which is what keeps the browser's drag alive. Moving
+// the cards by hand here would leave the DOM disagreeing with what Preact last
+// rendered.
 
-function onRailDragStart(e, cwd) {
-    state.railDrag = cwd;
+export function onRailDragStart(e, cwd) {
+    state.railDrag = { cwd, order: null };
     closeProjMenu();
     e.dataTransfer.effectAllowed = 'move';
     // Firefox starts no drag without data.
     e.dataTransfer.setData('text/plain', cwd);
-    e.currentTarget.closest('.rail-group').classList.add('dragging');
+    renderRail();   // the card takes `.dragging`
 }
 
-function onRailDragEnd(e) {
-    const card = e.currentTarget.closest('.rail-group');
-    if (card) card.classList.remove('dragging');
+export function onRailDragEnd() {
+    const drag = state.railDrag;
     state.railDrag = null;
-    commitRailOrder(railCardOrder());
+    commitRailOrder(((drag && drag.order) || railCardOrder()).filter(Boolean));
 }
 
 function onRailDragOver(e) {
@@ -1618,7 +1408,7 @@ function onRailDragOver(e) {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     const cards = [...dom.rail.querySelectorAll(':scope > .rail-group[data-cwd]')];
-    const moving = cards.find(n => n.dataset.cwd === state.railDrag);
+    const moving = cards.find(n => n.dataset.cwd === state.railDrag.cwd);
     if (!moving) return;
     const others = cards.filter(n => n !== moving);
     if (!others.length) return;
@@ -1628,8 +1418,11 @@ function onRailDragOver(e) {
     });
     // Kept among the project cards: past the last one is still above Test and
     // Archived, which never move.
-    if (before) dom.rail.insertBefore(moving, before);
-    else others[others.length - 1].after(moving);
+    const order = others.map(n => n.dataset.cwd);
+    order.splice(before ? others.indexOf(before) : order.length, 0, moving.dataset.cwd);
+    if (order.join('\n') === cards.map(n => n.dataset.cwd).join('\n')) return;
+    state.railDrag.order = order;
+    renderRail();
 }
 
 /** The directories of the project cards on screen, top first. */
@@ -1694,31 +1487,7 @@ function moveRailCard(cwd, where) {
     commitRailOrder(list);
 }
 
-/**
- * Is a rail group open?
- *
- * Two sets, because the two kinds of group want opposite defaults and one set
- * cannot express both. `state.collapsed` holds the *shut* keys, so a project
- * seen for the first time defaults open — which is right for a project and
- * wrong for the Scheduled subsection, whose whole point is to be out of the way
- * until you go looking. `state.schedOpen` holds the *open* ones instead, so a
- * project that starts running a schedule tomorrow does not silently grow eleven
- * rows in the rail.
- *
- * Inverting per-kind rather than seeding a default at first sight, because
- * seeding writes to storage during a render and gets the answer wrong exactly
- * once — on the render where the key first appears.
- *
- * A filter that matches inside a shut group must not hide its own results, so a
- * live query forces every group open. The heading still toggles while filtering;
- * it takes effect once the filter clears.
- */
-function isOpen(key, nested) {
-    if (state.query) return true;
-    return nested ? state.schedOpen.has(key) : !state.collapsed.has(key);
-}
-
-function toggleGroup(key, open, nested) {
+export function toggleGroup(key, open, nested) {
     if (nested) {
         state.schedOpen[open ? 'delete' : 'add'](key);
         saveCollapsed();
@@ -1726,80 +1495,6 @@ function toggleGroup(key, open, nested) {
     }
     state.collapsed[open ? 'add' : 'delete'](key);
     saveCollapsed();
-}
-
-function strip(s) {
-    const running = s.runner && (s.runner.state === 'busy' || s.runner.state === 'starting');
-    const current = state.current && state.current.sessionId === s.sessionId;
-    const queued = (s.runner && s.runner.queued) || 0;
-    const away = elsewhere(s);
-
-    // A row, not a button: it holds its own pin and archive controls, and
-    // nesting buttons is not allowed.
-    return el('div', {
-        class: 'strip',
-        'data-id': s.sessionId,
-        'data-state': stripState(s),
-        title: away ? awayWords(away) : null,
-        'data-pinned': String(!!s.pinned),
-        'data-archived': String(!!s.archived),
-        'aria-current': current ? 'true' : null,
-    },
-        el('button', {
-            class: 'strip-main', type: 'button',
-            onclick: () => openSession(s.sessionId),
-        },
-            el('span', { class: 'strip-title' }, s.title),
-            el('span', { class: 'strip-meta' },
-                // Pinning is a state worth seeing without hovering, and this is
-                // where it goes now that the buttons are hover-only.
-                s.pinned ? el('span', { class: 'tag-pin', title: 'Pinned' },
-                    icon('pin', 11)) : null,
-                // Only ever set on a development bridge, and worth saying on the
-                // row: a labelled session is one somebody meant to throw away.
-                s.test ? el('span', { class: 'tag-test' }, 'test') : null,
-                // A background agent is a different sort of thing from a session
-                // somebody is sitting in front of, and only the registry knows.
-                (s.live && s.live.kind === 'bg')
-                    ? el('span', { class: 'tag-bg', title: 'A background agent' }, 'bg') : null,
-                // What the session left on GitHub, at its worst. Ahead of the
-                // worktree name and the activity, which are the two things this
-                // line is allowed to squeeze out.
-                prBadge(s),
-                s.worktree ? el('span', { class: 'wt' }, s.worktree.name) : null,
-                s.worktree ? el('span', { class: 'dot' }, '·') : null,
-                // The time the list is ordered by, so the order reads as sorted.
-                el('span', { title: `You last wrote here ${ago(s.lastUserTs || s.lastTs)} ago` },
-                    ago(s.lastUserTs || s.lastTs)),
-                el('span', { class: 'dot' }, '·'),
-                el('span', {}, `${s.userMessages} ${s.userMessages === 1 ? 'turn' : 'turns'}`),
-                // Something you queued here and then walked away from. Ahead of
-                // the activity because the activity is the one part of the row
-                // that may be cut short — it is the least specific thing on it.
-                queued ? queuedBadge(queued) : null,
-                dueBadge(s.sessionId),
-                activityBits(running ? s.runner : null),
-            ),
-        ),
-        el('div', { class: 'strip-actions' },
-            el('button', {
-                class: 'mini' + (s.pinned ? ' on' : ''), type: 'button',
-                title: s.pinned ? 'Unpin' : 'Pin to the top',
-                'aria-pressed': String(!!s.pinned),
-                onclick: (e) => { e.stopPropagation(); setFlags(s, { pinned: !s.pinned }); },
-            }, icon('pin')),
-            el('button', {
-                class: 'mini', type: 'button',
-                title: s.archived ? 'Restore from archive' : 'Archive',
-                onclick: (e) => { e.stopPropagation(); setFlags(s, { archived: !s.archived }); },
-            }, icon(s.archived ? 'unarchive' : 'archive')),
-            el('button', {
-                class: 'mini danger', type: 'button',
-                title: 'Delete permanently',
-                onclick: (e) => { e.stopPropagation(); askDelete(s); },
-            }, icon('trash')),
-        ),
-    );
 }
 
 /**
@@ -1810,20 +1505,13 @@ function strip(s) {
  * started itself, so a session with a live registry entry and no runner is one
  * this window cannot send into without two processes appending to one file.
  */
-function elsewhere(s) {
+export function elsewhere(s) {
     if (!s || !s.live || !s.live.running) return null;
     return s.runner ? null : s.live;
 }
 
-/** Three states where there used to be two. `active` is the mtime fallback. */
-function stripState(s) {
-    if (s.runner && (s.runner.state === 'busy' || s.runner.state === 'starting')) return 'running';
-    if (elsewhere(s)) return 'elsewhere';
-    return s.active ? 'active' : 'idle';
-}
-
 /** How to describe a session running outside this app, in a sentence. */
-function awayWords(live) {
+export function awayWords(live) {
     const where = WHERE[live.entrypoint] || (live.kind === 'bg' ? 'as a background agent' : null);
     return `Running ${where || `under ${live.entrypoint || 'another client'}`}`
         + ` (pid ${live.pid})`;
@@ -1835,72 +1523,6 @@ const WHERE = {
     'sdk-cli': 'under the SDK',
     'claude-sessions': 'in another Claude Sessions window',
 };
-
-/**
- * What a row says about the turn it is running: its separator and the activity
- * line, as a pair, so a status update can swap them as one.
- *
- * Only the words. That a session is working at all is said by the dot at the head
- * of the meta line, which is the part that has to survive a narrow rail — this
- * text is last in a row that does not wrap, so it is the first thing to go.
- *
- * `detail` before `activity`, and that is the one place in the app that unpicks
- * the label. Everywhere else has room for `Percolating… Reading runner.js`;
- * twenty-odd characters does not, and clipping it there would spend them all on
- * the spinner verb and cut the tool name off the end — the decorative half
- * surviving at the expense of the informative one. `detail` is that label
- * without its verb, and it is null exactly when the verb is all there is to
- * say, so the rail still shows a verb whenever nothing more specific is
- * happening.
- */
-function activityBits(runner) {
-    if (!runner) return [];
-    return [
-        el('span', { class: 'dot dot-act' }, '·'),
-        el('span', { class: 'pulse' },
-            el('span', { class: 'pulse-t' },
-                clip(runner.detail || runner.activity || 'Working', 22))),
-    ];
-}
-
-/**
- * Is there nothing left open on this session's pull requests?
- *
- * `merged` and `closed` are the last two in the bridge's `ATTENTION_ORDER`, below
- * every live state, so a session reduces to one of those two words only when none
- * of its PRs is still going. The single word is therefore already the "all of
- * them" test and the counts do not need consulting — which is the same reason the
- * ranking lives on the bridge and is not copied here.
- *
- * A session with no PRs is not finished, it is unmeasured, and has no entry here
- * at all; nor is one whose PRs could not be reached, which is `unknown`. Both keep
- * their rows, which is the distinction `prBadge` already draws in colour.
- */
-const prDone = (s) => {
-    const agg = state.railPrs.get(s.sessionId);
-    return !!agg && (agg.status === 'merged' || agg.status === 'closed');
-};
-
-/**
- * What a session's pull requests have come to, as one glyph.
- *
- * The same glyph set and the same colour table as the header chip, at 11px — one
- * PR vocabulary, learned once. Which of several PRs it draws is the bridge's call
- * (`ATTENTION_ORDER` in `pulls.js`); having a second copy of that ranking here is
- * how the two would drift.
- *
- * Drawn from `prs` on the summary, which is free, so the glyph appears with the
- * rail and gains its colour when `/api/prs` answers — exactly what `prLink` does
- * in the header. A session with no PRs draws nothing at all, which is not the same
- * as one whose PRs could not be reached: that one is grey.
- */
-function prBadge(s) {
-    if (!s.prs || !s.prs.length) return null;
-    const agg = state.railPrs.get(s.sessionId) || null;
-    const status = (agg && agg.status) || 'unknown';
-    return el('span', { class: 'tag-pr', 'data-status': status, title: prBadgeTip(s, agg) },
-        icon(PR_ICON[status] || 'pr', 11));
-}
 
 // A status in the few words a breakdown line wants — `resolveStatus`'s own labels,
 // shortened where a count reads badly in front of them ("1 changes requested").
@@ -1914,7 +1536,7 @@ const PR_WORDS = {
     'checks-pending': 'still checking',
     unknown: 'unreachable',
 };
-const prWords = (status) => PR_WORDS[status] || status.replace(/-/g, ' ');
+export const prWords = (status) => PR_WORDS[status] || status.replace(/-/g, ' ');
 
 /**
  * Why a PR has no status, which is two different things.
@@ -1926,55 +1548,7 @@ const prWords = (status) => PR_WORDS[status] || status.replace(/-/g, ' ');
  * actually was. Saying so when it is merely early is the kind of wrong that sends
  * somebody to check their token.
  */
-const prUnknownWhy = () => state.prsError || 'not looked up yet';
-
-/**
- * The glyph is recognisable without being read; the words are here.
- *
- * Same three-part shape as the header's tooltip — what it is, what the one word
- * left out, then which PRs are being talked about. The breakdown is skipped for a
- * session with one PR, where it would only say the headline twice.
- */
-function prBadgeTip(s, agg) {
-    const numbers = s.prs.map(p => `#${p.number}`).join(' · ');
-    const plural = `${s.prs.length} pull request${s.prs.length === 1 ? '' : 's'}`;
-
-    // Before the first payload lands, and after one that could not answer: the row
-    // knows how many PRs there are and nothing about them, and says exactly that.
-    if (!agg) return `${plural}\nAsking GitHub…\n${numbers}`;
-    if (agg.status === 'unknown') return `${plural}\n${prUnknownWhy()}\n${numbers}`;
-
-    const breakdown = Object.entries(agg.counts)
-        .sort((a, b) => b[1] - a[1])
-        .map(([status, n]) => `${n} ${prWords(status)}`)
-        .join(' · ');
-
-    return [
-        agg.label || prWords(agg.status),
-        agg.total > 1 ? `${plural} — ${breakdown}` : null,
-        numbers,
-    ].filter(Boolean).join('\n');
-}
-
-/** Recolour one row's PR glyph in place, rather than rebuilding the whole rail. */
-function patchPrBadge(stripEl, s) {
-    const meta = stripEl.querySelector('.strip-meta');
-    if (!meta) return;
-    const existing = meta.querySelector('.tag-pr');
-    const fresh = prBadge(s);
-    if (existing && fresh) { existing.replaceWith(fresh); return; }
-    if (existing) { existing.remove(); return; }
-    if (!fresh) return;
-
-    // A session that raised its first PR mid-conversation has no glyph to replace,
-    // so this has to land where strip() would have put it: after the leading tags
-    // and before everything that is allowed to be squeezed out. Anchoring off the
-    // tags rather than off `.wt` because a session with no worktree has no `.wt`,
-    // and `insertBefore(…, null)` would append it past the activity line.
-    const lead = [...meta.children]
-        .filter(n => n.matches('.tag-pin, .tag-test, .tag-bg')).pop();
-    meta.insertBefore(fresh, lead ? lead.nextSibling : meta.firstChild);
-}
+export const prUnknownWhy = () => state.prsError || 'not looked up yet';
 
 function queuedBadge(queued) {
     return el('span', {
@@ -1983,65 +1557,8 @@ function queuedBadge(queued) {
     }, `+${queued} queued`);
 }
 
-/**
- * Messages written for this session and waiting on a clock.
- *
- * Its own badge rather than folded into the one above, because the two facts do
- * not mean the same thing to somebody scanning the rail: a queued message goes the
- * moment the turn ends, and this one goes at the hour it says. Showing the hour is
- * the whole point — "something arrives here at 02:00" should be answerable without
- * opening the session, which is the one thing nobody is going to do at 02:00.
- */
-function dueBadge(sessionId) {
-    let pending = 0;
-    let nextAt = 0;
-    for (const m of state.later) {
-        if (m.sessionId !== sessionId || m.state !== 'pending') continue;
-        pending++;
-        if (!nextAt || m.at < nextAt) nextAt = m.at;
-    }
-    if (!pending) return null;
-    return el('span', {
-        class: 'due',
-        title: `${pending} message${pending === 1 ? '' : 's'} scheduled; the next at `
-            + new Date(nextAt).toLocaleString(),
-    }, `\u{1F550} ${hhmm(nextAt)}${pending > 1 ? ` +${pending - 1}` : ''}`);
-}
-
-/** Update one row's queue count in place, rather than rebuilding the rail. */
-function patchQueuedBadge(stripEl, queued) {
-    const meta = stripEl.querySelector('.strip-meta');
-    if (!meta) return;
-    const existing = meta.querySelector('.wait');
-    if (!queued) { if (existing) existing.remove(); return; }
-    const fresh = queuedBadge(queued);
-    if (existing) existing.replaceWith(fresh);
-    // Ahead of the activity, in the place strip() would have built it.
-    else meta.insertBefore(fresh, meta.querySelector('.pulse')?.previousSibling || null);
-}
-
-/**
- * Bring one row's state, queue count and activity line up to date in place.
- *
- * The rail is rebuilt only when the session list changes, and none of the things
- * that move while a turn runs change it: not the tool being called, not the queue
- * behind it, not the turn ending. So a row kept whatever the last list happened to
- * say — an activity line minutes stale, and a finished turn still breathing.
- */
-function patchStripStatus(stripEl, s) {
-    const meta = stripEl.querySelector('.strip-meta');
-    if (!meta) return;
-    const runner = s.runner;
-    const running = runner && (runner.state === 'busy' || runner.state === 'starting');
-    stripEl.dataset.state = stripState(s);
-    // Cleared before the queue badge is placed, so it lands where strip() puts it.
-    for (const node of meta.querySelectorAll('.dot-act, .pulse')) node.remove();
-    patchQueuedBadge(stripEl, (runner && runner.queued) || 0);
-    for (const node of activityBits(running ? runner : null)) meta.append(node);
-}
-
 /** Toggle pin/archive, updating in place so the rail doesn't jump under the cursor. */
-async function setFlags(summary, change) {
+export async function setFlags(summary, change) {
     try {
         const r = await post(`/api/sessions/${summary.sessionId}/flags`, change);
         Object.assign(summary, { pinned: r.pinned, archived: r.archived, test: r.test });
@@ -2066,7 +1583,7 @@ function saveCollapsed() {
 // Archiving is the reversible one and is a click. This is not reversible, so it
 // is a click plus an answer to a question that names what is about to go.
 
-function askDelete(summary) {
+export function askDelete(summary) {
     state.pendingDelete = summary;
     dom.delWhat.textContent = summary.title;
     // replaceChildren has no opinion about nulls the way el() does — it would
@@ -2176,7 +1693,7 @@ function clearCurrent() {
 
 // ── conversation ─────────────────────────────────────────────────────────
 
-async function openSession(id, { quiet = false, keepDash = false } = {}) {
+export async function openSession(id, { quiet = false, keepDash = false } = {}) {
     // Going to a conversation is what "I have dealt with this" looks like, so it
     // is what clears its notifications. Above the early return below rather than
     // after it: a history row for the chat you are already sitting in still has
@@ -7516,8 +7033,9 @@ function liveGroup(key, label, list, hidden, strip) {
 /**
  * One session, as a card.
  *
- * Deliberately built from the same pieces as the rail row — activityBits,
- * queuedBadge, ago, clip — rather than a second vocabulary for the same facts.
+ * Deliberately built from the same pieces as the rail row — queuedBadge, ago,
+ * clip (web/rail.js keeps a vnode twin of the badge) — rather than a second
+ * vocabulary for the same facts.
  * The risk with a view like this is two renderers of one state drifting apart,
  * and sharing the small parts is what keeps them honest.
  */
@@ -11454,16 +10972,16 @@ function paintPcolorDialog() {
  * Open the one-item menu against a project card's ⋮.
  *
  * Fixed and placed by hand, for positionMenu()'s reason one step further on: the
- * rail scrolls, and renderRail() rebuilds it whenever any session changes — so a
- * menu that lived inside a card would be both clipped and torn out from under a
- * click. `state.projMenu` remembers which card it belongs to so a rebuild can
- * put it back; see syncProjMenu().
+ * rail scrolls and clips, and cards move when the order does. `state.projMenu`
+ * remembers which card it belongs to, so a render can draw that card's ⋮ as
+ * expanded and syncProjMenu() can follow it.
  *
  * @param {{key: string, cwd: string, name: string}} project
  */
-function showProjMenu(project, btn) {
+export function showProjMenu(project, btn) {
     state.projMenu = { key: project.key, cwd: project.cwd, name: project.name };
     dom.projMenu.hidden = false;
+    renderRail();   // the ⋮ draws itself expanded
     const row = (label, act, disabled) => el('button', {
         class: 'picker-row', type: 'button', role: 'menuitem', disabled: disabled || null,
         onclick: () => { closeProjMenu(); act(); },
@@ -11486,12 +11004,11 @@ function showProjMenu(project, btn) {
     dom.projMenu.querySelector('.picker-row').focus();
 }
 
-function closeProjMenu() {
+export function closeProjMenu() {
     if (!state.projMenu) return;
-    const btn = dom.rail.querySelector('.group-menu-btn[aria-expanded="true"]');
-    if (btn) btn.setAttribute('aria-expanded', 'false');
     state.projMenu = null;
     dom.projMenu.hidden = true;
+    renderRail();
 }
 
 /** Under the button, or over it when there is more room that way. */
@@ -11522,8 +11039,9 @@ const PROJ_MENU_W = 220;
  * something moved a pixel would be the wrong reading of what happened.
  *
  * From renderRail(), because that runs whenever any session changes — several
- * times a minute in a busy window — and a menu that shut itself that often would
- * be unusable for the one thing it is for.
+ * times a minute in a busy window — and can move the card the menu belongs to;
+ * a menu that shut itself that often would be unusable for the one thing it is
+ * for.
  *
  * From the rail's `scroll`, because pressing a ⋮ that is only half on screen
  * makes the browser scroll it into view *first*, and that scroll lands after the
@@ -11543,7 +11061,6 @@ function syncProjMenu() {
     const b = btn.getBoundingClientRect();
     const rail = dom.rail.getBoundingClientRect();
     if (b.bottom < rail.top || b.top > rail.bottom) { closeProjMenu(); return; }
-    btn.setAttribute('aria-expanded', 'true');
     placeProjMenu(btn);
 }
 
@@ -18086,15 +17603,17 @@ function connect() {
         const s = JSON.parse(e.data);
         noteRunner(s);   // when this turn started, for the notification rules
         if (state.current && s.sessionId === state.current.sessionId) applyRunner(s);
-        // The rail's own copy, so a rebuild from the held order draws what the
-        // patch below already put on screen rather than reverting it.
+        // The rail's own copy. The session list is only re-sent when the list
+        // changes, and none of what moves while a turn runs changes it — the tool
+        // being called, the queue behind it, the turn ending — so without this a
+        // row would keep an activity line minutes stale and a finished turn still
+        // breathing.
         const row = state.sessions.find(x => x.sessionId === s.sessionId);
         if (row) {
             row.runner = { state: s.state, activity: s.activity,
                 detail: s.detail, queued: s.queued };
+            renderRail();
         }
-        const strip = dom.rail.querySelector(`[data-id="${CSS.escape(s.sessionId)}"]`);
-        if (strip && row) patchStripStatus(strip, row);
     });
 
     es.addEventListener('permission-request', (e) => {
@@ -19535,7 +19054,7 @@ function resetFind() {
  * be — you pick a time to the minute and the tick finds it within thirty — so the
  * extra digits are noise on every chip and badge this section draws.
  */
-const hhmm = (ts) => (ts ? `${pad(new Date(ts).getHours())}:${pad(new Date(ts).getMinutes())}` : '');
+export const hhmm = (ts) => (ts ? `${pad(new Date(ts).getHours())}:${pad(new Date(ts).getMinutes())}` : '');
 
 /** The modes worth offering, loudest first — see the note above about `auto`. */
 const LATER_MODES = ['bypassPermissions', 'dontAsk', 'acceptEdits', 'auto', 'plan'];
