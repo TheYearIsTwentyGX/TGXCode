@@ -644,6 +644,28 @@ a:hover { text-decoration: underline; }
 .rail-filter[aria-pressed="true"] .rail-filter-count { color: #b9cdf0; }
 .rail-filter-count[hidden] { display: none; }
 
+/* Hide finished and the order button share a row: the filter takes the width,
+   the order button is a round pill of the same height at its end. */
+.rail-filters { display: flex; gap: 6px; }
+.rail-filters .rail-filter { flex: 1; min-width: 0; }
+.rail-sort {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    background: var(--s2);
+    color: var(--text-4);
+    border-radius: var(--pill);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.rail-sort:hover,
+.rail-sort[aria-expanded="true"] { background: var(--s3); color: var(--text); }
+/* Anything but the default order is a choice somebody made, and says so. */
+.rail-sort.on { color: var(--blue); }
+.sort-row { gap: 8px; }
+.sort-tick { display: inline-grid; place-items: center; width: 13px; flex: none; color: var(--blue); }
+
 /* Two buttons that read as one control: one height, one outer radius, and a
    hairline of the rail showing between them. Each half lights on its own, so the
    thing about to be hit is the thing that highlights. The pair fills the rail —
@@ -8368,6 +8390,20 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 /* Room for it, so the count and the live pill stop short of the button rather
    than sliding under it. Only where there is a button to make room for. */
 .rail-group:has(> .group-menu-btn) > .group-head { padding-right: 36px; }
+
+/* `custom` order: the heading is the drag handle, and the grip says so. Drawn
+   faint until the card is hovered, for the ⋮ button's reason. */
+.group-head[draggable="true"] { cursor: grab; }
+.group-grip {
+    display: grid;
+    place-items: center;
+    margin: 0 -4px 0 -6px;
+    color: var(--text-4);
+    opacity: 0.35;
+    transition: opacity var(--t-fast) var(--ease);
+}
+.rail-group:hover > .group-head .group-grip { opacity: 1; }
+.rail-group.dragging { opacity: 0.55; outline: 1px dashed var(--text-4); outline-offset: -1px; }
 
 /* The menu itself. .new-menu's surface and rows — it is the same kind of thing,
    one step further from the control that opened it — but fixed and placed from

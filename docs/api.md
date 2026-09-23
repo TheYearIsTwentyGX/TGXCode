@@ -1006,7 +1006,8 @@ answer — the board draws sessions from every project at once, so a project's
 on `?cwd=`, but it does not change what the board draws. A client that builds its
 own cards has no reason to read `live` at all — the Android app does not.
 
-`projects` is three keys: `colors`, a map described below, and two plain ones
+`projects` is eleven keys: `colors`, a map described below; seven about the
+order of the rail's project cards, described after it; and two plain ones
 about how the desktop wears a colour — `backdropTint {boolean}`, default `true`,
 and `backdropStrength {integer 0–40}`, default `13`, a percentage of the
 project's colour mixed into the dim behind the Start-a-session dialog. `false`
@@ -1041,6 +1042,26 @@ so `/home/you/proj/` and `/home/you/proj/sub/..` cannot become two entries for
 one project. At most 200 entries are kept. A bad key or a bad value is dropped
 with one `problems` line rather than costing the map, exactly as
 `keyboard.bindings` and `spinner.weights` are.
+
+**The rail's project order** is seven keys. They are how the desktop orders its
+project cards; the bridge orders nothing by them, and `GET /api/sessions` is
+still newest-first whatever they say. A client with a project list of its own
+may honour them or not.
+
+| key | type | default | meaning |
+|---|---|---|---|
+| `sort` | `"recent"` \| `"dynamic"` \| `"alpha"` \| `"custom"` | `"recent"` | `recent`: newest first as of when the window opened, then held still. `dynamic`: the same start, and a card moves to the top when one of the `bumpOn*` events happens in it. `alpha`: by project name. `custom`: by `order` |
+| `bumpOnCreate` | boolean | `true` | `dynamic`: a session starts in the project |
+| `bumpOnUser` | boolean | `true` | `dynamic`: a user message in any of its sessions (`lastUserTs` advancing) |
+| `bumpOnAny` | boolean | `false` | `dynamic`: any line written in any of its sessions (`lastTs` advancing) — moves cards constantly while agents run |
+| `bumpOnTurn` | boolean | `false` | `dynamic`: a `turn-complete` in any of its sessions |
+| `bumpOnPr` | boolean | `false` | `dynamic`: a session's entry in `prs-changed` differs from the last one |
+| `order` | array of strings — absolute project directories, top first | `[]` | `custom`: the hand-arranged order. Keyed by path like `colors`, and by the *project root* (`projectCwd`), not a worktree. Stored resolved; a relative path or a duplicate is dropped with one `problems` line and the rest kept (a `PUT` carrying one is refused with `400 value`). At most 500 |
+| `newAt` | `"top"` \| `"bottom"` | `"top"` | `custom`: where a project `order` does not name yet is drawn. The desktop writes it into `order` the next time anything is dragged |
+
+`order` is one key like the maps are, so a `PUT` naming it replaces the whole
+list. The desktop sends the whole list after every drag, including projects
+that were not on screen at the time, which keep their places.
 
 Like those two, `colors` is a **map**, so a `PUT` naming it replaces the whole
 thing rather than merging into it: there is no spelling for "clear this one
@@ -3051,7 +3072,8 @@ are preserved, and `version` is stamped.
 
 **A key whose value is a map is still one key**, so naming it replaces the whole
 map. That is true of all three — `keyboard.bindings`, `spinner.weights` and
-`projects.colors` — and of the one list, `toolbar.items`, and it is deliberate: a client that holds the resolved map
+`projects.colors` — and of the two lists, `toolbar.items` and
+`projects.order`, and it is deliberate: a client that holds the resolved map
 can say exactly what it wants by sending all of it, and there is no second
 spelling that would have to mean "drop one entry". See each one under
 `GET /api/prefs`.
