@@ -237,6 +237,20 @@ function userContent(entry) {
     return content;
 }
 
+/**
+ * The stdin line for one user turn. The uuid is ours, and the CLI reports what
+ * became of the message under it — `command_lifecycle` frames, see _onLifecycle —
+ * which is the only way to tell a message folded into a running turn from one
+ * still waiting in the CLI's queue.
+ */
+function userLine(entry) {
+    return {
+        type: 'user',
+        uuid: entry.uuid,
+        message: { role: 'user', content: userContent(entry) },
+    };
+}
+
 class Runner extends EventEmitter {
     /**
      * @param {object} opts
@@ -289,6 +303,13 @@ class Runner extends EventEmitter {
         // and the next flush wrote a turn with `text: undefined` in it. Entries
         // throughout, so the two arrays are one shape.
         this.inFlight = [];            // written to the process, not yet answered
+        // Has this process shown us its command queue? Every message written to a
+        // build that has one comes back as `command_lifecycle` frames — our own
+        // first send included, well before any tool runs — so seeing one is proof
+        // enough that a message handed over mid-turn will be folded in rather than
+        // misread. Per process, not pool-wide like `caps`: it is learned for free
+        // on every start, and a build without it simply never sets it. See _handOver.
+        this._lifecycle = false;
         this._buf = '';
         this._stderr = '';
         this._pendingTools = new Map();
@@ -523,6 +544,11 @@ class Runner extends EventEmitter {
             // What happens to the *text* is each branch's decision. Whether it is
             // still held here is not.
             const flight = this.inFlight.splice(0);
+            // Whatever was handed over and never started went down with the
+            // process's own queue. It is ours again — waiting, and unsent as far
+            // as anything after this is concerned, including the next process.
+            for (const q of this.queue) q.handed = false;
+            this._lifecycle = false;
             if (this._stopping) {
                 this._stopping = false;
                 // Stopping means stopping. `flight` is the turn the user asked to
@@ -611,21 +637,24 @@ class Runner extends EventEmitter {
         // entry — the queue chips, the hand-back on death, dequeue, reorder, the
         // `dropped` a stop reports — reads `.text`, and all of it keeps working
         // untouched. Only _flushQueue knows these are here.
-        const entry = { id: `q${++queueSeq}`, text, at: Date.now(), attachments };
+        const entry = { id: `q${++queueSeq}`, uuid: randomUUID(), text, at: Date.now(), attachments };
         this.queue.push(entry);
         if (!this.proc) this.start();
-        else this._flushQueue();
+        else { this._flushQueue(); this._handOver(); }
         if (this.queue.includes(entry)) this._queueChanged();
         return entry;
     }
 
     /**
-     * Hand the next message to the process, one turn at a time.
+     * Hand the next message to an idle process.
      *
      * The CLI would happily take several lines at once, but then they are gone:
      * nothing can be reordered or taken back, and there is no queue left for the
-     * UI to show. So only one message is in flight at a time and the rest wait
-     * here, where they can still be edited, reordered or dropped.
+     * UI to show. So while nothing is running, one message goes at a time and the
+     * rest wait here, where they can still be edited, reordered or dropped.
+     *
+     * While a turn *is* running, a tool call starting is what moves them on — see
+     * _handOver, which is the other way out of this queue.
      */
     _flushQueue() {
         if (!this.proc || !this.proc.stdin.writable) return;
@@ -636,6 +665,9 @@ class Runner extends EventEmitter {
         // again. Every path that nulls `this.proc` therefore has to empty it; see
         // the close handler, `detach`, and the top of `start`.
         if (this.state === 'busy' || this.inFlight.length) return;
+        // A message already handed over is the process's next turn, and it will
+        // start it on its own. Writing another would put this one ahead of it.
+        if (this.queue.some(q => q.handed)) return;
         const entry = this.queue.shift();
         if (!entry) return;
         // Held until a result arrives: if the process dies first, this text
@@ -650,10 +682,7 @@ class Runner extends EventEmitter {
         this._saveNote();
         // A rejected write means the process is going away. The message is still
         // ours at that point, so put it back rather than dropping it on the floor.
-        if (!this._write({
-            type: 'user',
-            message: { role: 'user', content: userContent(entry) },
-        })) {
+        if (!this._write(userLine(entry))) {
             this.inFlight.pop();
             this.queue.unshift(entry);
             return;
@@ -664,22 +693,145 @@ class Runner extends EventEmitter {
         this._queueChanged();
     }
 
-    /** Drop one waiting message. Returns it, or null if it already went out. */
-    dequeue(id) {
-        const i = this.queue.findIndex(q => q.id === id);
-        if (i < 0) return null;
-        const [entry] = this.queue.splice(i, 1);
+    /**
+     * Give everything waiting to the running turn, to be read at its next step.
+     *
+     * This is what a terminal does with a message typed while Claude works: the
+     * CLI keeps its own queue, and a user message written to it mid-turn is folded
+     * into that turn when the current tool round ends — the model gets it beside
+     * the tool result, as "the user sent a new message while you were working",
+     * and can change course there rather than after all of the work it was about.
+     * Waiting for `result` instead, which is what this app used to do, meant a
+     * "stop, wrong file" was read only once every wrong file had been edited.
+     *
+     * **Only while a tool is running.** The fold happens between tool rounds, so
+     * a message handed over while the model is only writing text would simply be
+     * the next turn — which is what staying here makes it anyway, and staying here
+     * keeps it editable for longer. Both halves measured against 2.1.280.
+     *
+     * A handed message stays on `queue`, flagged, rather than moving somewhere
+     * else. It is still the user's until the CLI says it started: the chip stays,
+     * dequeue can still take it back (`cancel_async_message`), and every path that
+     * hands the queue back on a failure keeps covering it without knowing about
+     * this. It leaves the queue on the `command_lifecycle` frame that says what
+     * became of it — see _onLifecycle.
+     */
+    _handOver() {
+        if (!this._lifecycle || !this._pendingTools.size) return;
+        if (!this.proc || !this.proc.stdin.writable) return;
+        const waiting = this.queue.filter(q => !q.handed);
+        if (!waiting.length) return;
+        for (const entry of waiting) {
+            // Before the write, for _flushQueue's reason: a bridge that dies
+            // between the two must leave a note saying the process has it.
+            entry.handed = true;
+            this._saveNote();
+            if (!this._write(userLine(entry))) { entry.handed = false; break; }
+        }
         this._queueChanged();
+    }
+
+    /**
+     * What the CLI did with a message we wrote, by the uuid we wrote it with.
+     *
+     *   queued     it is in the CLI's queue. Nothing to do; to us it already was.
+     *   started    it reached the model, and its user entry (or, folded into a
+     *              running turn, its `queued_command` attachment) is in the
+     *              transcript. Off the queue and in flight, like a flushed turn.
+     *   completed  the turn that took it ended; `result` accounts for that.
+     *   cancelled  taken back — by cancel_async_message, or swept by an interrupt.
+     *   discarded  the session ended with it still queued.
+     */
+    _onLifecycle(msg) {
+        this._lifecycle = true;
+        const i = this.queue.findIndex(q => q.handed && q.uuid === msg.command_uuid);
+        if (i < 0) return;
+        if (msg.state === 'started') {
+            const [entry] = this.queue.splice(i, 1);
+            this.inFlight.push(entry);
+            // Folded into the running turn, or starting the next one after a
+            // `result` that went by first. Either way it is working.
+            if (this.state !== 'busy') this._work();
+            this._queueChanged();
+        } else if (msg.state === 'cancelled' || msg.state === 'discarded') {
+            this.queue.splice(i, 1);
+            this._queueChanged();
+            this._settleIfDone();
+        }
+    }
+
+    /**
+     * Go idle once a `result` has gone by and nothing handed over is still coming.
+     * The `result` handler stays busy while the CLI holds one of ours, since it
+     * will start it as the next turn; this is how that ends when it does not.
+     */
+    _settleIfDone() {
+        if (this.state !== 'busy' || this.inFlight.length || this._pendingTools.size) return;
+        if (this.pendingPermission || this.queue.some(q => q.handed)) return;
+        this._setState('idle', null);
+        this._flushQueue();
+    }
+
+    /**
+     * Drop one waiting message. Resolves to it, or to null if it already went out.
+     *
+     * A message handed over to the running turn is taken back from the CLI's own
+     * queue first, and only dropped here if the CLI agrees it had not started it:
+     * a chip that vanished for a message Claude then read anyway would be the one
+     * lie this list must not tell.
+     */
+    async dequeue(id) {
+        const entry = this.queue.find(q => q.id === id);
+        if (!entry) return null;
+        if (entry.handed && !(await this._withdraw(entry))) return null;
+        // Possibly gone already. The CLI announces the cancel with a lifecycle
+        // frame *before* its answer to the request — measured, both on 2.1.280 —
+        // so _onLifecycle has usually taken it off by now. It was still withdrawn.
+        const i = this.queue.indexOf(entry);
+        if (i >= 0) {
+            this.queue.splice(i, 1);
+            this._queueChanged();
+        }
+        if (entry.handed) this._settleIfDone();
         return entry;
     }
 
-    /** Drop everything still waiting. Returns what was dropped. */
-    clearQueue() {
-        if (!this.queue.length) return [];
-        const dropped = this.queue.slice();
-        this.queue.length = 0;
-        this._queueChanged();
+    /** Drop everything still waiting. Resolves to what was actually dropped. */
+    async clearQueue() {
+        const dropped = [];
+        for (const entry of this.queue.slice()) {
+            const gone = await this.dequeue(entry.id);
+            if (gone) dropped.push(gone);
+        }
         return dropped;
+    }
+
+    /**
+     * Take the queue for another process, synchronously. Only for a runner that is
+     * not busy, which is when nothing can have been handed over — the `result`
+     * handler stays busy while anything is — and an entry carried to a new process
+     * must never also be sitting in this one's CLI queue.
+     */
+    takeQueue() {
+        const taken = this.queue.filter(q => !q.handed);
+        if (!taken.length) return [];
+        this.queue = this.queue.filter(q => q.handed);
+        this._queueChanged();
+        return taken;
+    }
+
+    /**
+     * Ask the CLI to give back a message handed over mid-turn. True only when it
+     * says it did; a build or a moment that cannot answer counts as "too late",
+     * which leaves the chip up rather than pretending.
+     */
+    async _withdraw(entry) {
+        try {
+            const r = await this._control('cancel_async_message', { message_uuid: entry.uuid });
+            return !!(r && r.cancelled);
+        } catch {
+            return false;
+        }
     }
 
     /**
@@ -689,8 +841,10 @@ class Runner extends EventEmitter {
      * take the rest of the queue with it.
      */
     reorder(ids) {
-        const byId = new Map(this.queue.map(q => [q.id, q]));
-        const next = [];
+        // Handed-over messages are in the CLI's queue in the order they were
+        // written, so they keep their place at the front whatever the drag said.
+        const byId = new Map(this.queue.filter(q => !q.handed).map(q => [q.id, q]));
+        const next = this.queue.filter(q => q.handed);
         for (const id of ids) {
             const entry = byId.get(id);
             if (entry && !next.includes(entry)) next.push(entry);
@@ -720,7 +874,8 @@ class Runner extends EventEmitter {
      */
     _saveNote() {
         if (!this.proc || !this.proc.hosted) return;
-        const entry = (q) => ({ text: q.text, at: q.at, attachments: q.attachments || [] });
+        const entry = (q) => ({ uuid: q.uuid, text: q.text, at: q.at,
+            attachments: q.attachments || [], ...(q.handed && { handed: true }) });
         this.proc.note({
             v: 1,
             sessionId: this.sessionId,
@@ -729,6 +884,7 @@ class Runner extends EventEmitter {
             permissionMode: this.permissionMode,
             inFlight: this.inFlight.map(entry),
             queue: this.queue.map(entry),
+            lifecycle: this._lifecycle,
             answered: this._answered,
             sessionAllow: [...this._sessionAllow],
         });
@@ -1279,10 +1435,14 @@ class Runner extends EventEmitter {
         this.fork = false;
         // Fresh ids: the old bridge's counter restarted with this one, and a
         // carried-over `q3` would answer to a new `q3`'s dequeue.
-        const entry = (q) => ({ id: `q${++queueSeq}`, text: q.text, at: q.at,
-            attachments: q.attachments || [] });
+        // The uuid is kept, not reissued: a handed-over message is known to the
+        // process by it, and it is what the lifecycle frames below are matched on.
+        const entry = (q) => ({ id: `q${++queueSeq}`, uuid: q.uuid || randomUUID(),
+            text: q.text, at: q.at, attachments: q.attachments || [],
+            ...(q.handed && { handed: true }) });
         this.queue = (note.queue || []).map(entry);
         this.inFlight = (note.inFlight || []).map(entry);
+        this._lifecycle = !!note.lifecycle;
         this._answered = (note.answered || []).slice(-20);
         this._sessionAllow = new Set(note.sessionAllow || []);
         this.lastUsedAt = Date.now();
@@ -1308,6 +1468,15 @@ class Runner extends EventEmitter {
                 for (const b of (msg.message && msg.message.content) || []) {
                     if (b.type === 'tool_result') tools.delete(b.tool_use_id);
                 }
+            } else if (msg.type === 'command_lifecycle') {
+                // What became of a message handed over before the last bridge
+                // went. Replayed without _onLifecycle's side effects: the state
+                // is decided once, below, from everything at once.
+                this._lifecycle = true;
+                const i = this.queue.findIndex(q => q.handed && q.uuid === msg.command_uuid);
+                if (i < 0) continue;
+                if (msg.state === 'started') this.inFlight.push(this.queue.splice(i, 1)[0]);
+                else if (msg.state === 'cancelled' || msg.state === 'discarded') this.queue.splice(i, 1);
             } else if (msg.type === 'result') {
                 ask = null;
                 tools.clear();
@@ -1338,7 +1507,7 @@ class Runner extends EventEmitter {
             this._setState('busy', a.kind === 'plan' ? 'Waiting for you: a plan to approve'
                 : a.kind === 'question' ? 'Waiting for you: a question'
                 : `Waiting for you: ${a.displayName}`);
-        } else if (this.inFlight.length || tools.size) {
+        } else if (this.inFlight.length || tools.size || this.queue.some(q => q.handed)) {
             const last = [...tools.values()].pop();
             this._work(last ? describeTool(last) : null);
         } else {
@@ -1396,6 +1565,10 @@ class Runner extends EventEmitter {
                 else p.resolve(r.response || {});
                 break;
             }
+
+            case 'command_lifecycle':
+                this._onLifecycle(msg);
+                break;
 
             case 'control_cancel_request': {
                 // The CLI withdrew an ask — usually because the turn it belonged
@@ -1473,6 +1646,9 @@ class Runner extends EventEmitter {
                     if (b.type === 'tool_use') {
                         this._pendingTools.set(b.id, b.name);
                         this._work(describeTool(b));
+                        // The round this tool belongs to is where anything waiting
+                        // gets read, so hand it over now, while there is time.
+                        this._handOver();
                     } else if (b.type === 'text' && b.text.trim()) {
                         this._work('Writing…');
                     } else if (b.type === 'thinking') {
@@ -1501,7 +1677,13 @@ class Runner extends EventEmitter {
                 this._saveNote();
                 this.retry = null;
                 this._autoDenies = 0;       // a finished turn is not a spin
-                this._setState('idle', null);
+                // Something handed over that the turn did not fold in is the
+                // process's next turn, and it starts it by itself. Staying busy
+                // keeps everything that waits on `idle` — the queue, the pool's
+                // eviction, a model change — from acting in between; its
+                // lifecycle frame moves things on either way.
+                if (this.queue.some(q => q.handed)) this._work();
+                else this._setState('idle', null);
                 // The turn that was holding the queue back has landed.
                 this._flushQueue();
                 if (failed) {
@@ -1702,8 +1884,11 @@ class Runner extends EventEmitter {
             // and so editing one puts them back on the composer rather than dropping
             // them on the floor. Metadata only — the base64 is read at flush time and
             // never travels on a status event.
+            // `handed` marks one given to the running turn to be read at its next
+            // step: still cancellable, no longer reorderable. See _handOver.
             queue: this.queue.map(q => ({
                 id: q.id, text: q.text, at: q.at, attachments: q.attachments || [],
+                handed: !!q.handed,
             })),
             // A window opening onto a session that is already blocked on an ask
             // has to be able to draw the card without having seen the event.
@@ -1898,7 +2083,7 @@ class RunnerPool extends EventEmitter {
                 // A model or mode change replaces the process. Messages still
                 // waiting belong to the user, not to the process, so they move
                 // across rather than disappearing.
-                carried = r.clearQueue();
+                carried = r.takeQueue();
                 r.retire();
                 this.runners.delete(sessionId);
                 r = null;

@@ -32,6 +32,9 @@
 // in the Electron window and in a tab — and it is **user-only** for a reason of
 // its own, spelled out at USER_ONLY below: the map names other projects' paths,
 // so a repository setting one would be a repository colouring its neighbours.
+// Beside the map sit two plain keys about how strongly one piece of that is
+// worn — the wash over a dialog's backdrop — which are here rather than in a
+// section of their own because they mean nothing without the map.
 //
 // `keyboard` is the fifth, and it is the one section that is not about a view
 // at all: which chord reaches which command, what Enter does in the composer,
@@ -160,6 +163,13 @@ const DEFAULTS = {
         // lives in the client — see projectColor() in web/app.js — because it
         // is asked on every keystroke in the Start-a-session dialog.
         colors: {},
+        // Whether the backdrop behind a project-scoped dialog takes a wash of
+        // the project's colour, and how much of it — a percentage mixed into
+        // the dim. 13 is what the dialog drew before either was a setting, so
+        // nobody who never opens it sees anything change. Off leaves the plain
+        // dim every other dialog has; the dialog's own head keeps its colour.
+        backdropTint: true,
+        backdropStrength: 13,
     },
     quota: {
         // Refresh the quota percentages by starting a short-lived `claude`,
@@ -291,6 +301,11 @@ const SHAPE = {
             if (dirs.length > MAX_COLORS) return false;
             return dirs.every(d => d.startsWith('/') && d === path.resolve(d) && isAccent(v[d]));
         },
+        backdropTint: (v) => typeof v === 'boolean',
+        // Capped at 40 because past that the dim stops being a dim: the window
+        // behind the dialog turns into a coloured sheet, which says no more
+        // about which project than a lighter wash does.
+        backdropStrength: (v) => Number.isInteger(v) && v >= 0 && v <= 40,
     },
     quota: {
         beacon: (v) => typeof v === 'boolean',
