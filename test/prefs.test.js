@@ -99,6 +99,8 @@ assert.ok(kb.contextualTerminalCopy(true) && kb.contextualTerminalCopy(false));
 assert.ok(!kb.contextualTerminalCopy('yes') && !kb.contextualTerminalCopy(1));
 assert.ok(kb.composerSend('enter') && kb.composerSend('ctrl-enter'));
 assert.ok(!kb.composerSend('Enter') && !kb.composerSend(true) && !kb.composerSend(''));
+assert.ok(kb.cycleOrder('default') && kb.cycleOrder('alphabetical'));
+assert.ok(!kb.cycleOrder('Alphabetical') && !kb.cycleOrder(true) && !kb.cycleOrder(''));
 assert.ok(kb.bindings({}) && kb.bindings({ 'view.live': 'Ctrl+9' }) && kb.bindings({ 'find.next': null }));
 assert.ok(!kb.bindings({ 'view.nope': 'Ctrl+9' }), 'an unknown command id must not pass');
 assert.ok(!kb.bindings({ 'view.live': 'k' }), 'a bare letter must not pass');
@@ -247,11 +249,39 @@ assert.strictEqual(Object.keys(got.projects.colors).length, 200);
 assert.ok(got.problems.some(p => /more than 200 project colours/.test(p.message)));
 ok('the colour map is bounded, and says so when it truncates');
 
+// The backdrop wash: two plain keys beside the map. The default is the 13% the
+// dialog drew before it was a setting, and a bad value falls back to it rather
+// than turning the wash off or into a coloured sheet.
+clear();
+write(userFile, { version: VERSION });
+prefs.cache.clear();
+got = prefs.forCwd();
+assert.strictEqual(got.projects.backdropTint, true);
+assert.strictEqual(got.projects.backdropStrength, 13);
+for (const bad of ['20', 41, -1, 12.5]) {
+    clear();
+    write(userFile, { version: VERSION,
+        projects: { backdropTint: 'no', backdropStrength: bad } });
+    prefs.cache.clear();
+    got = prefs.forCwd();
+    assert.strictEqual(got.projects.backdropStrength, 13, `${JSON.stringify(bad)} was taken`);
+    assert.strictEqual(got.projects.backdropTint, true, 'a string was taken as a boolean');
+}
+clear();
+write(userFile, { version: VERSION,
+    projects: { backdropTint: false, backdropStrength: 0, colors: { [project]: '#abc' } } });
+prefs.cache.clear();
+got = prefs.forCwd();
+assert.strictEqual(got.projects.backdropTint, false);
+assert.strictEqual(got.projects.backdropStrength, 0, '0 is a strength, not a missing one');
+assert.deepStrictEqual(got.projects.colors, { [project]: '#abc' });
+ok('the backdrop tint defaults to what it was, and refuses what is not a strength');
+
 // --- user-only sections --------------------------------------------------
 // Documented for `quota` long before anything enforced it, which held only
 // because the call sites passed no cwd. A page that prints which file wins for
 // each key cannot rely on that.
-assert.deepStrictEqual([...USER_ONLY].sort(), ['keyboard', 'projects', 'quota', 'wispr']);
+assert.deepStrictEqual([...USER_ONLY].sort(), ['keyboard', 'projects', 'quota', 'toolbar', 'wispr']);
 
 clear();
 write(userFile, { version: VERSION });
@@ -479,6 +509,75 @@ prefs.save({ scope: 'user', patch: { live: { compact: true } } });
 assert.strictEqual(prefs.forCwd().live.compact, true, 'a stale cache survived a save');
 ok('a save invalidates the cache it would otherwise be read through');
 
+// --- the toolbar -------------------------------------------------------
+// A list somebody edits by hand, cleaned entry by entry like the bindings — and
+// the one setting with rules about what may not be done at all: Settings is
+// never hidden, and the quota pill never leaves the bar.
+clear();
+write(userFile, {
+    version: VERSION,
+    toolbar: {
+        items: [
+            { id: 'dashboard', place: 'more', label: false },
+            { id: 'nope', place: 'bar' },                 // not a button
+            { id: 'dashboard', place: 'hidden' },         // listed twice
+            { id: 'drafts', place: 'somewhere' },         // not a place
+            { id: 'history', place: 'bar', label: 'no' }, // not a bool
+            { id: 'settings', place: 'hidden' },          // may not be hidden
+            { id: 'quota', place: 'more' },               // stays on the bar
+            { id: 'live', place: 'hidden' },              // label defaults on
+        ],
+    },
+});
+prefs.cache.clear();
+got = prefs.forCwd();
+assert.deepStrictEqual(got.toolbar.items, [
+    { id: 'dashboard', place: 'more', label: false },
+    { id: 'settings', place: 'bar', label: true },
+    { id: 'quota', place: 'bar', label: true },
+    { id: 'live', place: 'hidden', label: true },
+]);
+assert.strictEqual(got.problems.length, 6, JSON.stringify(got.problems));
+assert.ok(got.problems.some(p => /"nope" is not a toolbar button/.test(p.message)));
+assert.ok(got.problems.some(p => /listed twice/.test(p.message)));
+assert.ok(got.problems.some(p => /settings cannot be hidden/.test(p.message)));
+assert.ok(got.problems.some(p => /quota cannot be put in "more"/.test(p.message)));
+ok('toolbar entries are cleaned one by one, and Settings and Quota cannot be put away');
+
+write(userFile, { version: VERSION, toolbar: { items: { live: 'more' } } });
+prefs.cache.clear();
+got = prefs.forCwd();
+assert.deepStrictEqual(got.toolbar.items, []);
+assert.ok(got.problems.some(p => /toolbar\.items/.test(p.message)));
+ok('a toolbar that is not a list falls back to the built-in layout');
+
+// A page sending a pinned button somewhere it may not go is a bug in the page,
+// so the save refuses rather than quietly moving it.
+write(userFile, { version: VERSION });
+prefs.cache.clear();
+refuses({ scope: 'user', patch: { toolbar: { items: [{ id: 'settings', place: 'hidden', label: false }] } } },
+    'value', 'hiding Settings');
+const saved = prefs.save({ scope: 'user', patch: { toolbar: { items: [
+    { id: 'schedules', place: 'bar', label: false }, { id: 'tasks', place: 'more', label: true },
+] } } });
+assert.deepStrictEqual(saved.prefs.toolbar.items.map(e => e.id), ['schedules', 'tasks']);
+prefs.save({ scope: 'user', patch: { toolbar: { items: null } } });
+assert.deepStrictEqual(prefs.forCwd().toolbar.items, [], 'null did not put the default back');
+assert.ok(!('toolbar' in read(userFile)), 'an emptied section should leave the file');
+ok('a toolbar save refuses what the file would coerce, and null resets it');
+
+// A repository does not get to rearrange your window.
+write(projFile, { toolbar: { items: [{ id: 'live', place: 'hidden', label: true }] } });
+prefs.cache.clear();
+got = prefs.forCwd(project);
+assert.deepStrictEqual(got.toolbar.items, []);
+assert.ok(got.problems.some(p => p.file === projFile && /"toolbar" may only be set/.test(p.message)));
+assert.ok(USER_ONLY.has('toolbar'));
+refuses({ scope: 'project', dir: project, patch: { toolbar: { items: [] } } },
+    'readonly', 'a project toolbar');
+clear();
+ok('a project file cannot set the toolbar');
+
 // --- the page copy -------------------------------------------------------
 // `sources` names files in somebody's home directory and nothing in the page
 // reads it, so the <meta> copy leaves it out along with the diagnostics.
@@ -489,6 +588,46 @@ for (const section of Object.keys(SHAPE)) {
 }
 assert.strictEqual(page.version, VERSION);
 ok('the page copy carries every section and none of the diagnostics');
+
+// --- CLAUDE_SESSIONS_PREFS_DIR -------------------------------------------
+// What lets a dev bridge press Save without touching the user's file. The path
+// is computed when config.js loads, so it takes a process of its own. Unset
+// gives the old location, and this process is the proof of that.
+const cfg = require('../bridge/config.js');
+assert.strictEqual(cfg.USER_TGX_DIR, path.join(home, '.tgxcode'));
+assert.strictEqual(cfg.USER_PREFS_FILE, userFile);
+
+{
+    const childHome = fs.mkdtempSync(path.join(os.tmpdir(), 'prefs-home-'));
+    const override = fs.mkdtempSync(path.join(os.tmpdir(), 'prefs-dir-'));
+    const script = `
+        const cfg = require(${JSON.stringify(path.join(__dirname, '../bridge/config.js'))});
+        const { Prefs } = require(${JSON.stringify(path.join(__dirname, '../bridge/prefs.js'))});
+        const prefs = new Prefs();
+        prefs.save({ scope: 'user', patch: { transcript: { groupToolCalls: false } } });
+        prefs.cache.clear();
+        console.log(JSON.stringify({
+            file: cfg.USER_PREFS_FILE, verbs: cfg.USER_VERBS_DIR,
+            target: prefs.targetFile('user'), sources: prefs.forCwd('').sources,
+        }));`;
+    const env = { ...process.env, HOME: childHome, CLAUDE_SESSIONS_ROOTS: childHome,
+        CLAUDE_SESSIONS_PREFS_DIR: override };
+    const out = JSON.parse(require('child_process')
+        .execFileSync(process.execPath, ['-e', script], { env, encoding: 'utf8' }).trim().split('\n').pop());
+
+    const want = path.join(override, 'settings.json');
+    assert.strictEqual(out.file, want);
+    assert.strictEqual(out.target, want);
+    assert.strictEqual(out.sources[0], want);
+    assert.strictEqual(out.verbs, path.join(override, 'verbs'));
+    assert.strictEqual(read(want).transcript.groupToolCalls, false);
+    assert.ok(!fs.existsSync(path.join(childHome, '.tgxcode')),
+        'a bridge with CLAUDE_SESSIONS_PREFS_DIR wrote to ~/.tgxcode anyway');
+
+    fs.rmSync(childHome, { recursive: true, force: true });
+    fs.rmSync(override, { recursive: true, force: true });
+}
+ok('CLAUDE_SESSIONS_PREFS_DIR takes the user file and its saves somewhere else');
 
 fs.rmSync(home, { recursive: true, force: true });
 console.log(`\n${pass} prefs checks passed`);

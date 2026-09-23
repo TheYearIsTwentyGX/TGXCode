@@ -268,6 +268,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/flags.js` | Pinned, archived and test state |
 | `bridge/prefs.js` | Settings from `~/.tgxcode/` and from the project — which file each one came from, and which one a save goes to |
 | `bridge/claude-config.js` | Claude Code's *own* settings files — the chain, what each one says, and the preconditions on writing somebody else's format |
+| `bridge/claude-version.js` | Installed Claude Code against the registry, and which live sessions are on an older binary |
 | `bridge/claude-schema.js` | Which of Claude Code's keys this app has a control for, and what happens to the ones it does not |
 | `bridge/claude-docs.js` | Claude Code's memory files — which `CLAUDE.md` a scope means, and reading and writing one whole |
 | `bridge/jsonfile.js` | Reading and writing one small JSON file: the size cap, the BOM, the atomic write, the stamp |

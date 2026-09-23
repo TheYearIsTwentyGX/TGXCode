@@ -156,6 +156,9 @@
         <path d="M12 2.9l1.5 2.2 2.6-.6.6 2.6 2.2 1.5-1.2 2.4 1.2 2.4-2.2 1.5-.6 2.6-2.6-.6L12 21.1l-1.5-2.2-2.6.6-.6-2.6-2.2-1.5 1.2-2.4-1.2-2.4 2.2-1.5.6-2.6 2.6.6L12 2.9Z"
               stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
       </svg>
+      <!-- Hidden by default through .icon-only, which paintToolbar() sets from
+           the Toolbar settings; there so the label can be turned on. -->
+      <span>Settings</span>
     </button>
 
     <!-- How much of the 5-hour window and the week are gone. Beside DevBrowser
@@ -166,6 +169,29 @@
          terminal — so it can be older than the window you are looking at, and
          the pill says how old rather than passing an old number off as current.
          Everything the panel needs to explain that is in bridge/usage.js. -->
+    <!-- Claude Code is behind the registry, or some session is still running a
+         binary older than the installed one. Absent whenever neither is true:
+         a badge that is always there says nothing. Borrows the quota pill's
+         classes for its shape; renderCv() in web/app.js draws it and
+         bridge/claude-version.js is where the answer comes from. -->
+    <div class="quota-wrap cv-wrap" id="cv-wrap" hidden>
+      <button id="cv-pill" class="quota-pill cv-pill" type="button"
+              aria-haspopup="dialog" aria-expanded="false" aria-controls="cv-menu"></button>
+      <div id="cv-menu" class="quota-menu" role="dialog" aria-label="Claude Code version" hidden>
+        <div class="quota-head">
+          <span>Claude Code</span>
+          <button id="cv-check" class="quota-refresh" type="button">Check again</button>
+        </div>
+        <div id="cv-body"></div>
+        <button id="cv-update" class="quota-restart" type="button">
+          <span class="qr-text">
+            <span class="qr-label" id="cv-update-label">Update now</span>
+            <span class="qr-sub">Runs <code>claude update</code>. Sessions already running keep their binary until they restart.</span>
+          </span>
+        </button>
+      </div>
+    </div>
+
     <div class="quota-wrap" id="quota-wrap" hidden>
       <button id="quota-pill" class="quota-pill" type="button"
               aria-haspopup="dialog" aria-expanded="false" aria-controls="quota-menu"
@@ -216,6 +242,26 @@
             title="DevBrowser connection">
       <span class="led"></span><span id="db-label">DevBrowser</span>
     </button>
+
+    <!-- What the Toolbar settings put away rather than hid. Everything above,
+         from Tasks to DevBrowser, is moved by paintToolbar() rather than drawn
+         by it — into this menu, back onto the bar in the order you chose, or
+         out of sight — so each button keeps its listeners, its badge and its
+         id wherever it ends up. Last in the bar and hidden while it holds
+         nothing; its own badge adds up the counts it is hiding. -->
+    <div class="bar-more-wrap" id="bar-more-wrap" hidden>
+      <button id="bar-more" class="bar-btn icon-only" type="button"
+              aria-expanded="false" aria-controls="bar-more-menu"
+              aria-label="More" title="More">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle cx="5.5" cy="12" r="1.7" fill="currentColor"/>
+          <circle cx="12" cy="12" r="1.7" fill="currentColor"/>
+          <circle cx="18.5" cy="12" r="1.7" fill="currentColor"/>
+        </svg>
+        <span id="bar-more-badge" class="bar-badge" hidden></span>
+      </button>
+      <div id="bar-more-menu" class="bar-more-menu" role="group" aria-label="More" hidden></div>
+    </div>
   </header>
 
   <nav class="rail" aria-label="Sessions">
@@ -904,6 +950,12 @@
            statement about what you are editing. -->
       <div id="set-shell" class="settings-shell">
         <div class="settings-col">
+          <!-- Pinned to the top of the scroll: the scope and the file it names
+               are what every control below is about, and they used to scroll
+               away the moment you went looking for one. #set-problems stays
+               out of it — it can run to several lines, and a sticky block that
+               tall would eat the pane. -->
+          <div id="set-top" class="settings-top">
           <header class="settings-head">
             <h1 class="settings-title">Settings</h1>
             <!-- "Most" rather than "every": the last two groups are not in that
@@ -931,6 +983,7 @@
             </div>
           </header>
           <div id="set-file" class="settings-file"></div>
+          </div>
           <div id="set-problems" class="settings-problems" hidden></div>
           <!-- Contents to the left, sticky, because the panel is long enough
                that finding a group means scrolling past three others.
@@ -966,6 +1019,7 @@
                    — whatever the picker above says. The map names other projects’
                    paths, so a repository setting one would be a repository
                    colouring its neighbours.</p>
+                <div id="pcolor-backdrop"></div>
                 <div id="pcolor-list"></div>
               </section>
 

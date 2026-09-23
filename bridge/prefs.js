@@ -32,6 +32,9 @@
 // in the Electron window and in a tab — and it is **user-only** for a reason of
 // its own, spelled out at USER_ONLY below: the map names other projects' paths,
 // so a repository setting one would be a repository colouring its neighbours.
+// Beside the map sit two plain keys about how strongly one piece of that is
+// worn — the wash over a dialog's backdrop — which are here rather than in a
+// section of their own because they mean nothing without the map.
 //
 // `keyboard` is the fifth, and it is the one section that is not about a view
 // at all: which chord reaches which command, what Enter does in the composer,
@@ -40,7 +43,12 @@
 // catalogue of what may be bound — see the header there for why the list is not
 // in `web/`.
 //
-// `wispr` is the sixth: the Wispr Flow transforms the composer's Wispr button
+// `toolbar` is the sixth: which buttons the top bar carries, in what order,
+// which of them are folded into its More menu, and which show their text. A
+// view rather than a behaviour, and here for `live`'s reason — the bar you
+// arranged should be the same bar in every window.
+//
+// `wispr` is the seventh: the Wispr Flow transforms the composer's Wispr button
 // lists, each a title and the chord Wispr Flow has it on. The bridge presses
 // that chord on the desktop (see bridge/wispr.js), so it is **user-only** for
 // `keyboard`'s reason made sharper — a repository choosing which keys get
@@ -54,7 +62,9 @@
 // project may override any key from `<workspace>/.tgxcode/settings.json`, which
 // is the same directory a project already declares its commands in — see
 // bridge/commands.js, whose precedence this mirrors so the two cannot disagree
-// about what "the local file" means.
+// about what "the local file" means. `CLAUDE_SESSIONS_PREFS_DIR` moves the
+// user's half somewhere else (see bridge/config.js). It is there so a dev
+// bridge can test a save, not to give the file a second home.
 //
 // Unlike Flags, the defaults are written out on first read. A settings file
 // with no UI in front of it has to be discoverable to be editable at all, and
@@ -96,6 +106,24 @@ const CACHE_MS = 2000;
 // the bridge do unbounded work. Nobody has two hundred projects; anybody who
 // does has stopped being able to tell them apart by colour anyway.
 const MAX_COLORS = 200;
+
+// What the top bar is made of, in the order it has always been drawn. The page
+// holds the same list — see TOOLBAR in web/app.js — and this copy exists so a
+// file naming a button that does not exist is told so rather than kept.
+//
+// Two of them have rules the rest do not, and they are enforced here rather
+// than only in the page, because the page is not the only thing that writes
+// this file:
+//
+//  - `settings` may go into the More menu but never be hidden. It is the one
+//    place a hidden button can be brought back from, so hiding it would leave
+//    hand-editing the file as the only way home.
+//  - `quota` stays on the bar. Its popover is anchored to the pill and holds
+//    Restart bridge, and neither works from inside another popover.
+const TOOLBAR_IDS = ['tasks', 'live', 'dashboard', 'history', 'drafts', 'schedules',
+    'settings', 'quota', 'devbrowser'];
+const TOOLBAR_PLACES = new Set(['bar', 'more', 'hidden']);
+const TOOLBAR_PINNED = { settings: new Set(['bar', 'more']), quota: new Set(['bar']) };
 
 const DEFAULTS = {
     version: VERSION,
@@ -142,6 +170,13 @@ const DEFAULTS = {
         // lives in the client — see projectColor() in web/app.js — because it
         // is asked on every keystroke in the Start-a-session dialog.
         colors: {},
+        // Whether the backdrop behind a project-scoped dialog takes a wash of
+        // the project's colour, and how much of it — a percentage mixed into
+        // the dim. 13 is what the dialog drew before either was a setting, so
+        // nobody who never opens it sees anything change. Off leaves the plain
+        // dim every other dialog has; the dialog's own head keeps its colour.
+        backdropTint: true,
+        backdropStrength: 13,
     },
     quota: {
         // Refresh the quota percentages by starting a short-lived `claude`,
@@ -205,10 +240,28 @@ const DEFAULTS = {
         // them, for anyone who writes several paragraphs before sending one.
         // Ctrl+Enter sends either way, which it already did.
         composerSend: 'enter',
+        // The order Ctrl+P / Ctrl+M (and their Shift twins) walk the composer's
+        // Permissions and Model pickers in. 'default' is the order the dropdown
+        // lists them; 'alphabetical' sorts by the label you see, with an empty
+        // "inherit" choice kept first because it is the absence of a pick rather
+        // than one more name. Only the cycle — the dropdown itself is unchanged.
+        cycleOrder: 'default',
         // Command id -> combo, or null to leave a command unbound. Absent means
         // the default in bridge/keymap.js, so this holds only what you changed
         // and a command added later arrives already bound.
         bindings: {},
+    },
+    toolbar: {
+        // The top bar, one entry per button: `{id, place, label}`, in the order
+        // they are drawn. `place` is `bar`, `more` (the overflow menu) or
+        // `hidden`; `label` is whether the text shows beside the icon. Empty
+        // means the built-in layout, and an id the list leaves out is drawn in
+        // its default place — so a button added later arrives without anybody
+        // having to say so, the way an unmentioned binding keeps its default.
+        //
+        // Hiding a view removes its button and nothing else: its shortcut still
+        // opens it, so a button hidden by mistake is not a view lost.
+        items: [],
     },
     wispr: {
         // {id, title, combo}, in the order the popover lists them. `combo` is
@@ -232,7 +285,10 @@ const DEFAULTS = {
 // quotaPrefs) — which held, but left `GET /api/prefs?cwd=…` echoing a project's
 // value back as though it counted. That was harmless while nothing read the
 // answer and is not once a settings page prints which file wins for each key.
-const USER_ONLY = new Set(['quota', 'keyboard', 'projects', 'wispr']);
+//
+// `toolbar` is the keyboard argument applied to the bar: a checked-in file that
+// could move or hide your buttons would be a repository rearranging your window.
+const USER_ONLY = new Set(['quota', 'keyboard', 'projects', 'toolbar', 'wispr']);
 
 // What each key is allowed to be. A file is a thing people edit, so a bad value
 // is dropped and the default kept rather than taken at face value — a
@@ -258,6 +314,11 @@ const SHAPE = {
             if (dirs.length > MAX_COLORS) return false;
             return dirs.every(d => d.startsWith('/') && d === path.resolve(d) && isAccent(v[d]));
         },
+        backdropTint: (v) => typeof v === 'boolean',
+        // Capped at 40 because past that the dim stops being a dim: the window
+        // behind the dialog turns into a coloured sheet, which says no more
+        // about which project than a lighter wash does.
+        backdropStrength: (v) => Number.isInteger(v) && v >= 0 && v <= 40,
     },
     quota: {
         beacon: (v) => typeof v === 'boolean',
@@ -284,6 +345,7 @@ const SHAPE = {
     keyboard: {
         contextualTerminalCopy: (v) => typeof v === 'boolean',
         composerSend: (v) => v === 'enter' || v === 'ctrl-enter',
+        cycleOrder: (v) => v === 'default' || v === 'alphabetical',
         // The last gate rather than the only one: cleanBindings() below has
         // already thrown out the entries that fail, one problem each, so
         // anything reaching here is a map of known command ids to `null` or a
@@ -295,6 +357,15 @@ const SHAPE = {
             return ids.every(id => keymap.COMMAND_IDS.has(id)
                 && (v[id] === null || keymap.normalize(v[id]) === v[id]));
         },
+    },
+    toolbar: {
+        // The last gate again: cleanToolbar() below has already dropped what
+        // fails and moved a pinned button back where it is allowed to be.
+        items: (v) => Array.isArray(v) && v.length <= TOOLBAR_IDS.length
+            && new Set(v.map(e => e && e.id)).size === v.length
+            && v.every(e => e && TOOLBAR_IDS.includes(e.id) && TOOLBAR_PLACES.has(e.place)
+                && typeof e.label === 'boolean'
+                && (!TOOLBAR_PINNED[e.id] || TOOLBAR_PINNED[e.id].has(e.place))),
     },
     wispr: {
         // The last gate again: cleanTransforms() has dropped the bad entries.
@@ -425,13 +496,64 @@ function cleanColors(value, note) {
     return out;
 }
 
+/**
+ * `toolbar.items`, entry by entry.
+ *
+ * A list rather than a map, but the argument is cleanBindings()'s: one button
+ * misspelled must not put every other button back where it started. An entry
+ * with no `label` takes true, which is what a hand-written `{"id": "live",
+ * "place": "more"}` obviously means.
+ *
+ * A pinned button asked to go somewhere it may not is *moved* rather than
+ * dropped, and reported. Dropping it would put it back in its default place,
+ * which for `settings` is also the bar — but the entry's position in the list is
+ * the other half of what it said, and that part is still worth keeping.
+ *
+ * @returns {Array|undefined} the cleaned list, or undefined to leave the
+ *   default alone — which is what a value that is not a list at all gets.
+ */
+function cleanToolbar(value, note) {
+    if (!Array.isArray(value)) return undefined;
+    const out = [];
+    const seen = new Set();
+    for (const raw of value) {
+        const id = raw && typeof raw === 'object' ? raw.id : raw;
+        if (typeof id !== 'string' || !TOOLBAR_IDS.includes(id)) {
+            note(`${JSON.stringify(id)} is not a toolbar button`);
+            continue;
+        }
+        if (seen.has(id)) {
+            note(`${JSON.stringify(id)} is listed twice — the first stands`);
+            continue;
+        }
+        let place = raw.place === undefined ? 'bar' : raw.place;
+        if (!TOOLBAR_PLACES.has(place)) {
+            note(`${JSON.stringify(place)} is not a place for ${id} — bar, more or hidden`);
+            continue;
+        }
+        const label = raw.label === undefined ? true : raw.label;
+        if (typeof label !== 'boolean') {
+            note(`${JSON.stringify(label)} is not a label setting for ${id} — true or false`);
+            continue;
+        }
+        if (TOOLBAR_PINNED[id] && !TOOLBAR_PINNED[id].has(place)) {
+            note(`${id} cannot be ${place === 'hidden' ? 'hidden' : `put in "${place}"`} — kept on the bar`);
+            place = 'bar';
+        }
+        seen.add(id);
+        out.push({ id, place, label });
+    }
+    return out;
+}
+
 // Section keys whose value is a map and so gets the treatment above, before
-// SHAPE sees it. Four entries; the table exists so the next one does not have
+// SHAPE sees it. Five entries; the table exists so the next one does not have
 // to special-case merge().
 const SANITIZE = {
     keyboard: { bindings: cleanBindings },
     spinner: { weights: cleanWeights },
     projects: { colors: cleanColors },
+    toolbar: { items: cleanToolbar },
     wispr: { transforms: wispr.cleanTransforms },
 };
 
@@ -612,6 +734,7 @@ class Prefs {
             quota: { ...DEFAULTS.quota },
             spinner: { ...DEFAULTS.spinner, weights: { ...DEFAULTS.spinner.weights } },
             keyboard: { ...DEFAULTS.keyboard, bindings: { ...DEFAULTS.keyboard.bindings } },
+            toolbar: { ...DEFAULTS.toolbar, items: [...DEFAULTS.toolbar.items] },
             wispr: { transforms: [...DEFAULTS.wispr.transforms] },
             sources: [],
             problems: [],
@@ -808,4 +931,4 @@ class Prefs {
     }
 }
 
-module.exports = { Prefs, DEFAULTS, SHAPE, SANITIZE, USER_ONLY, VERSION };
+module.exports = { Prefs, DEFAULTS, SHAPE, SANITIZE, USER_ONLY, VERSION, TOOLBAR_IDS };

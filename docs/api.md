@@ -161,7 +161,7 @@ the thing you are about to approve is running on a machine you are sitting at.
 **saving or starting a draft**, and on **saving a snippet**; all
 of `/api/terminals/*`; all of `/api/runs/*`; `POST /api/commands/run`; all of
 `/api/commands-config*`;
-`/api/shutdown`; `/api/restart` (both methods); `/api/devservers/stop`; `/api/devbrowser/*`;
+`/api/shutdown`; `/api/restart` (both methods); `POST /api/claude-version/update`; `/api/devservers/stop`; `/api/devbrowser/*`;
 `POST /api/sessions/:id/reveal`; `POST /api/sessions/:id/open-file`;
 `POST /api/sessions/:id/handoff`; `POST /api/fs/mkdir`;
 `POST /api/fs/open`;
@@ -312,7 +312,7 @@ project filter on `GET /api/sessions?project=`.
 | **`later`** | **object or null** — `{pending, nextAt}`, both numbers; see below |
 | `prs` | array of `{number, url, repo}`, empty if none |
 | **`live`** | **object or null** — see below |
-| **`runner`** | **object or absent** — four fields only, see below |
+| **`runner`** | **object or absent** — five fields only, see below |
 
 **`schedule` is an object, not an id**, and its presence changes `title`. It is
 `{id, title}` when a schedule started this session and `null` for everything else,
@@ -374,7 +374,7 @@ read it off. Nothing errors when you read a field that is not there; you get
 | Where | `runner` is |
 |---|---|
 | `GET /api/sessions/:id` · `runner-status` event · the `status` a write returns | **the whole thing** — every field in §*`runner-status`* below |
-| `GET /api/sessions` · `GET /api/dashboard` | **four fields**: `{state, activity, detail, queued}` |
+| `GET /api/sessions` · `GET /api/dashboard` | **five fields**: `{state, activity, detail, queued, claudeVersion}` |
 | a `GET /api/overview` / `taskboard` card | **seven fields**: `{state, activity, queued, busySince, retry, error, errorKind}` |
 | absent entirely | there is no process of ours for that session |
 
@@ -430,7 +430,7 @@ strings by a client that then rendered `[object Object]`:
 
 | kind | Carries |
 |---|---|
-| `user` | `text` string · `images[]` `{mediaType, dataUri}` · `files[]` `{relPath, name, size}` · **`command` object or null** — `{name, args}` · `origin` string or absent — Claude Code's own `origin.kind`, passed through: `"human"`, `"peer"`, or an agent type. Not a closed set the bridge controls, so treat anything other than `"human"` as "not the person" rather than switching on it |
+| `user` | `text` string · `images[]` `{mediaType, dataUri}` · `files[]` `{relPath, name, size}` · **`command` object or null** — `{name, args}` · `origin` string or absent — Claude Code's own `origin.kind`, passed through: `"human"`, `"peer"`, or an agent type. Not a closed set the bridge controls, so treat anything other than `"human"` as "not the person" rather than switching on it. A message **folded into a running turn** is a `user` event too, even though on disk it is a `queued_command` attachment with no `user` entry. It sits between the tool calls where the turn read it, its `ts` is when it was *sent* (so it can be earlier than the tool block before it), and its `origin` is `"human"` or absent |
 | `assistant` | `text` string (markdown) · `model` string or null |
 | `thinking` | `text` string |
 | `tool` | `name` string · `input` object · `status` — see below · `result` object or null · **`agent` object or null** · `persistedPath` string or null · `durationMs` number or null · `resultTs` ISO string once resolved |
@@ -930,7 +930,7 @@ it opens is on this machine's desktop, which a phone cannot look at.
 ### `GET /api/prefs?cwd=<path>&files=1`
 
 `{ version, transcript: {…}, live: {…}, projects: {…}, quota: {…}, spinner: {…},
-keyboard: {…}, wispr: {…}, sources: [string], problems: [{file, message}] }` — how the person using the app
+keyboard: {…}, toolbar: {…}, wispr: {…}, sources: [string], problems: [{file, message}] }` — how the person using the app
 wants it to behave. `sources` is file paths, weakest first; each `problems` entry
 is an **object**, `{file, message}`, naming the file that carried a value the key
 does not allow and what was wrong with it.
@@ -963,19 +963,26 @@ commands: the workspace's checked-in file (falling back to the main checkout's),
 then `settings.local.json` from the main checkout, then one in the workspace.
 `sources` lists the files that were actually read, weakest first.
 
+A bridge started with `CLAUDE_SESSIONS_PREFS_DIR` set uses that directory in place
+of `~/.tgxcode`, for reads and saves alike, so the user file's path in `sources`
+and `target` is under it. This exists so a development bridge can test a save
+without touching the real file; no field changes because of it.
+
 A value that is not what the key allows is dropped and reported in `problems`
 rather than taken at face value; the default stands. Without `?cwd=` you get the
 user-level answer, which is also what every page is served in a `cs-prefs`
 `<meta>` tag (minus `sources` and `problems`).
 
-**Four sections may only be set in the user's own file**: `quota`, `keyboard`,
-`projects` and `wispr`. A project file that carries one is ignored and says so in
+**Five sections may only be set in the user's own file**: `quota`, `keyboard`,
+`projects`, `toolbar` and `wispr`. A project file that carries one is ignored and says so in
 `problems`. What directory this app starts `claude` in, and which keys your
 hands use, are not a repository's business — and a repository that could rebind
 your keys could make the window unusable with hand-editing the file as the only
 way back. `projects` is there for a third reason: the map is keyed by absolute
 path and so names *other* projects, and a repository setting one would be a
-repository colouring its neighbours. `quota` was documented this way before it
+repository colouring its neighbours. `toolbar` is the `keyboard` argument
+applied to the top bar: a checked-in file should not be able to rearrange your
+window. `quota` was documented this way before it
 was enforced this way; it is enforced now, so `?cwd=` no longer echoes a
 project's value back as though it counted. `wispr` is there because the bridge
 presses its chords on the desktop, and a repository choosing which keys get
@@ -999,7 +1006,17 @@ answer — the board draws sessions from every project at once, so a project's
 on `?cwd=`, but it does not change what the board draws. A client that builds its
 own cards has no reason to read `live` at all — the Android app does not.
 
-`projects` is one key, `colors`, and it is an **object**:
+`projects` is three keys: `colors`, a map described below, and two plain ones
+about how the desktop wears a colour — `backdropTint {boolean}`, default `true`,
+and `backdropStrength {integer 0–40}`, default `13`, a percentage of the
+project's colour mixed into the dim behind the Start-a-session dialog. `false`
+gives that dialog the plain dim every other dialog has. Both are presentation in
+the desktop window alone, so a client with no such backdrop has no reason to
+read them; a value out of range, a string, or a fraction is dropped with one
+`problems` line and the default holds. They are user-only like the rest of the
+section.
+
+`colors` is an **object**:
 `{"<absolute project directory>": "<#rgb or #rrggbb>"}`. It is a colour a person
 gave a project so that a session scoped to the wrong checkout is visible rather
 than only readable — the desktop wears it on the rail's project cards, the
@@ -1028,8 +1045,8 @@ with one `problems` line rather than costing the map, exactly as
 Like those two, `colors` is a **map**, so a `PUT` naming it replaces the whole
 thing rather than merging into it: there is no spelling for "clear this one
 entry", because leaving the key out *is* that. Send all of it. Clearing the last
-colour is `{"projects": {"colors": null}}`, which removes the section from the
-file.
+colour is `{"projects": {"colors": null}}`, which removes the key from the file —
+and the section with it, when neither backdrop key is set there either.
 
 User file only — see the three-section paragraph below.
 
@@ -1066,18 +1083,44 @@ short-lived `claude` runs; nothing happens until it names somewhere you have
 already trusted), `beaconEveryMinutes` (int, 5–1440). See `GET /api/quota` for
 what the refresh itself reports. User file only.
 
-`keyboard` is about keys, and is three keys of its own:
+`keyboard` is about keys, and is four keys of its own:
 
 | Key | Type | |
 |---|---|---|
 | `contextualTerminalCopy` | bool, default `false` | in the integrated terminal, `Ctrl+C` copies the selection and clears it when there is one and interrupts when there is not, and plain `Ctrl+V` pastes instead of `Ctrl+Shift+V`. Only while the terminal has the focus. |
 | `composerSend` | `"enter"` (default) or `"ctrl-enter"` | what Enter does in a composer. `"enter"`: Enter sends, Shift+Enter is a newline. `"ctrl-enter"`: the reverse. `Ctrl+Enter` sends under both. |
+| `cycleOrder` | `"default"` (default) or `"alphabetical"` | the order `composer.permissionMode` / `composer.model` (and their `…Prev` twins) step the composer's pickers in. `"default"`: the order the dropdown lists them. `"alphabetical"`: sorted by the option's label, case-insensitive, with an empty value (the model's "inherit") kept first. The dropdowns themselves are not reordered. |
 | `bindings` | **object**, `{[commandId]: string \| null}` | which chord reaches which command. A missing id means the default; `null` means deliberately unbound. Keys must be ids `GET /api/keymap` lists, and values must be canonical combos it would accept — anything else is one entry dropped with one `problems` line, not the whole map. At most 100 entries. |
 
 User file only, and `bindings` is a **map**, so a `PUT` naming it replaces the
 whole thing rather than merging into it — inside the map `null` already means
 "unbound on purpose", so there is no spare spelling for "drop this one entry
 back to its default". Send all of it.
+
+`toolbar` is how the desktop page lays out its top bar. It has one key, `items`,
+an **array of objects** `[{id, place, label}]` in the order the bar draws them:
+
+| Field | Type | |
+|---|---|---|
+| `id` | string | one of `tasks`, `live`, `dashboard`, `history`, `drafts`, `schedules`, `settings`, `quota`, `devbrowser` |
+| `place` | `"bar"`, `"more"` or `"hidden"` | on the bar, in its More menu, or not drawn. Missing means `"bar"` |
+| `label` | bool | whether the name shows beside the icon. Missing means `true`. Only the seven views have an icon, so it means nothing on `quota` or `devbrowser` |
+
+The default is `[]`, which means the built-in layout. An id the list leaves out
+is drawn in its default place, so a button added later shows up without anyone
+having to list it. Entries are cleaned one at a time, as `keyboard.bindings`
+is: an unknown or repeated id, a `place` outside the three, or a `label` that is
+not a bool costs that entry and adds one `problems` line. Two buttons are
+**pinned**. `settings` may be `"bar"` or `"more"` but never `"hidden"`, because
+it is where hidden buttons are brought back from. `quota` is always `"bar"`,
+because its popover holds Restart bridge. A file that asks otherwise is
+**moved** back to `"bar"` with a `problems` line. A `PUT` that asks otherwise is
+refused with `400`, the way any value the file would have had to correct is.
+
+Hiding a view removes its button and nothing else: its shortcut in
+`keyboard.bindings` still opens it. User file only, and `items` is one key, so
+a `PUT` sends the whole list. The Android app draws no such bar and can ignore
+this section.
 
 `wispr` is the Wispr Flow transforms the composers' Wispr button lists, and is one
 key:
@@ -1928,7 +1971,7 @@ the field to check before concluding anything from an empty `prs`.
 
 `sessions[]` are chips — `{sessionId, title, lastTs, userMessages,
 active}` — capped at six per workspace with `moreSessions` counting the rest, and
-carrying the same narrow four-field `runner` as `GET /api/sessions` where one is live.
+carrying the same narrow five-field `runner` as `GET /api/sessions` where one is live.
 A chip carries **no `schedule`**, so a client cannot tell a scheduled run from any
 other here; its `title` is still the composed one, so the schedule's name and the date
 it ran are in the text even though the field is not there to group on.
@@ -2272,6 +2315,60 @@ repository declares, and this runs one fixed operation, in a directory the user
 named and trusted, that the bridge already performs unattended on a timer. Only
 one can be in flight at a time, so it cannot be turned into a fan of processes.
 
+### `GET /api/claude-version[?refresh=1]`
+
+Whether Claude Code is current, in both senses that matter: is the installed binary
+behind the registry, and are any live sessions still running a binary older than the
+installed one. Claude Code updates itself, and a process keeps the binary it started
+on — so after an auto-update the second is common and the first is not.
+
+```
+200 {
+  installed: string | null,     // `claude --version`, e.g. "2.1.280"; null if it could not be run
+  latest: string | null,        // the newest on `channel`, from the npm registry; null if never reached
+  channel: 'stable' | 'latest' | 'rc',   // autoUpdatesChannel in force; unset reads as 'latest'
+  tag: 'stable' | 'latest' | 'next',     // the npm dist-tag `channel` was compared against
+  behind: boolean,              // installed < latest. False when either is unknown
+  staleSessions: [{ id: string, version: string }],  // live processes older than `installed`
+  checkedAt: number | null,     // epoch ms of the last registry attempt
+  error: string | null,         // why the last registry attempt failed; `latest` is then the last good answer
+  updating: boolean,            // a POST .../update is running
+  lastUpdate: { ok: boolean, at: number, output: string } | null
+}
+```
+
+**`behind: false` does not mean current** when `latest` is null or `error` is set: it
+means the bridge could not tell. Draw "cannot check" rather than "up to date" then.
+
+The registry is asked at most hourly (at startup, then on a timer) and
+`installed` is cached for five minutes; `?refresh=1` asks both again now. The
+`rc` → `next` mapping is our reading of the registry, not something the CLI
+reports; a channel whose tag the registry lacks falls back to `latest`.
+
+`staleSessions` is derived from `runner.claudeVersion`, so it only ever names sessions
+with a live process. **Open to remote callers** — which version is installed is not
+sensitive, and a phone is a reasonable place to notice that sessions are on an old
+binary.
+
+### `POST /api/claude-version/update`
+
+Runs `claude update` on the machine. Body is ignored; needs `X-Claude-Sessions-Client: 1`.
+
+```
+200 { ok: boolean, output: string, summary: <the GET /api/claude-version payload, freshly checked> }
+409 { error: 'an update is already running', running: true, summary: <same> }
+403 { error, remote: true }    // remote caller
+```
+
+`ok: false` is the update's own failure (its output is in `output` and in
+`summary.lastUpdate`), not an HTTP error. It can take up to three minutes; a
+`claude-version` event carries the result to every other window.
+
+**It changes the binary new processes start from and nothing else.** Running sessions
+keep theirs — they appear in `summary.staleSessions` afterwards, and move over when
+their process next starts. The bridge restarts nothing. **Refused to remote callers**:
+it replaces an executable on this machine.
+
 ## The live channel
 
 **SSE is best-effort. Polling is the guaranteed path.** Some transports buffer
@@ -2342,7 +2439,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `handoff` | `{at, sessionId, from, count}` — another session handed this one work, and it was resumed to deal with it. Same shape and same reasoning as above; watched in the transcript rather than reported by the route, so it fires when the message *arrived* rather than when it was queued |
 | `suggestion-changed` | `{at, sessionId, toolUseId}` — a suggested follow-up was started, dismissed, or undone, possibly in another window |
 | `session-deleted` | `{sessionId, title}` |
-| `prefs` | the **user-level** settings, in the same shape as the `cs-prefs` `<meta>` tag: `{version, transcript, live, projects, quota, spinner, keyboard, wispr}`, with no `sources` or `problems`. Fired on every `PUT /api/prefs` including your own, so a second window does not sit on a stale copy — two are routinely open here. A project's answer is deliberately not sent: it is the open session's business and arrives with `GET /api/sessions/:id` |
+| `prefs` | the **user-level** settings, in the same shape as the `cs-prefs` `<meta>` tag: `{version, transcript, live, projects, quota, spinner, keyboard, toolbar, wispr}`, with no `sources` or `problems`. Fired on every `PUT /api/prefs` including your own, so a second window does not sit on a stale copy — two are routinely open here. A project's answer is deliberately not sent: it is the open session's business and arrives with `GET /api/sessions/:id` |
 | `claude-config` | `{at: number, scope: 'user'\|'project'\|'project-local'\|'managed', file: string}` — the *fact* that one of Claude Code's settings files changed, and deliberately **not** its content. Unlike `prefs` there is no `<meta>` copy for a page to keep in sync and nothing in this app behaves differently because of those files, so the event is a nudge to re-read; pushing the contents of a file whose route is local-only down every open channel would be a poor trade for saving a fetch. Fired on every successful `PUT /api/claude-config`, including your own — **and on a change this bridge did not make**: `claude` writes these files itself, so `theme` or `editorMode` from `/config`, `enabledPlugins` from a plugin toggle, and a rule appended to `settings.local.json` when somebody approves a permission mid-turn all arrive here too. `scope` may then be `managed`, which no `PUT` can produce. **Two caveats a client has to hold.** It is best-effort: the bridge watches directories with `fs.watch`, which throws on some filesystems and silently does nothing on others, so a change can go unannounced — keep treating `409 {code:'stale'}` from `PUT /api/claude-config` as the guarantee, and this only as the convenience that usually saves you from meeting it. And a project's two files are watched only once `GET /api/claude-config?cwd=<dir>` has been called for that directory, only for a small number of directories at a time (least-recently-read dropped first), and not after ten minutes without another read of it; the user file and the managed file are watched throughout. So poll or re-`GET` if you need certainty about a directory you have not asked about |
 | `claude-docs` | `{at, scope, file}` — the same trade for a `CLAUDE.md`: the fact one was written, never its contents. `scope` is `"user"` or `"project"`. Fired on every successful `PUT /api/claude-docs`, including your own. **A client holding an unsaved draft must not reload on this** — show a conflict and keep what the person typed; the whole draft here is somebody's prose rather than one key |
 | `notification` | a whole notification row, just filed — the same shape `GET /api/notifications` returns, `read` included — plus `unread`, the badge count after this row. So an open history view need not refetch, and need not guess whether the new row counts |
@@ -2353,6 +2450,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `permission-request` | `{sessionId, ...ask}` |
 | `permission-resolved` | `{sessionId, requestId, outcome}` |
 | `notice` | `{sessionId: string, level: 'warn', kind: string, text: string}` — something worth telling the user that is not a permission ask. Every notice the bridge sends today is `level: 'warn'`; treat any other level as informational. `kind` is one of `no_permission_prompt`, `permission_uninteractive`, `mode_change_failed`, `permission_auto_denied`, `permission_denied`, `api_retry`, `turn_failed`, `rate_limit` — and an unrecognised kind is a plain warning, not an error. **`rate_limit` is not one per limit: it repeats on every turn for as long as the limit holds**, because the CLI sends an identical `rate_limit_event` each time and this one is not deduplicated the way the `quota` event below is. A client that toasts it unconditionally therefore stacks the same warning over and over for an afternoon. `web/app.js` drops this kind entirely and flashes the header quota pill off the `quota` event instead; a client with nowhere to put a persistent indicator should throttle the toast itself. Everything the notice says is also in `GET /api/quota` — `windows[].status` for the current state and `events` for the history |
+| `claude-version` | **the whole `GET /api/claude-version` payload**, so there is nothing to refetch. Ungated, no `sessionId`. Sent when the summary moved: the hourly registry check found a newer version, an update finished, or a process started or ended on a version that changes `staleSessions`. Debounced by about a second |
 | `quota` | **the whole `GET /api/quota` payload**, so there is nothing to refetch. Ungated, like `drafts-changed`. Fires only when a reading actually moved — the CLI sends an identical `rate_limit_event` on every turn and those are dropped rather than pushed. Note it carries **no `sessionId`**: quota is account-wide, and which session happened to observe it says nothing. A window that has been near a limit for an hour will therefore push nothing at all, which is why `usedPercentAt` matters more than the arrival time of this event |
 | `turn-complete` | `{sessionId, isError, detail, retries, costUsd, durationMs, numTurns, stopReason}` — the runner's `lastResult` with the session id on it. `detail` is null unless `isError` |
 | `send-failed` | `{sessionId, kind, message, unsent: [text]}` — a send that never became a turn; hand the text back to the user. `unsent` is an array of **strings**, in send order, and may be empty — the event still means the send failed, and `message` is then the whole of it. `kind` is one of `busy-elsewhere` (the session is running somewhere else; offer to branch), `no-claude`, `missing`, `unknown`, `exited` (the process ended without answering) or `retired` (the bridge shut the process down with messages still queued). Treat an unrecognised kind as `unknown`. Attachments are **not** carried: a message that had files comes back as its text alone |
@@ -2370,11 +2468,30 @@ down from:
 | `state` | `"stopped"`, `"starting"`, `"idle"`, `"busy"` or `"error"` |
 | `activity`, `verb`, `detail` | strings or null — see below |
 | `error`, `errorKind` | strings or null |
-| `queued` | number — how many messages are waiting |
-| **`queue[]`** | **array of objects** — `{id, text, at, attachments[]}`, the messages themselves, because the composer draws a chip per entry and needs the `id` to cancel or reorder it. `attachments` is metadata only; the base64 is read at flush time and never travels here |
+| `queued` | number — how many messages are waiting, handed-over ones included |
+| **`queue[]`** | **array of objects** — `{id, text, at, attachments[], handed}`, the messages themselves, because the composer draws a chip per entry and needs the `id` to cancel or reorder it. `attachments` is metadata only; the base64 is read at flush time and never travels here. **`handed`** bool — see below |
+
+**A queued message can land inside the running turn.** While a tool call is running,
+the bridge hands everything waiting to the CLI (`handed: true`), and the CLI folds it
+into that turn once the tool round ends. The model reads it next to the tool result,
+the way a message typed in a terminal mid-turn is read. A message sent while the turn
+is only writing text, or while nothing runs, waits for the turn to end as before. Three
+things follow for a client:
+
+- **One `turn-complete` can answer several messages.** Do not pair them one to one.
+- **A handed message sits at the front of `queue[]` and keeps its place there.**
+  `reorder` ignores its id. It can still be dropped (`DELETE …/queue/:qid`), because
+  the bridge asks the CLI for it back, but that can lose the race and return `409`.
+- **It leaves `queue[]` when the turn reads it**, and turns up in the transcript as an
+  ordinary `user` event (see below). There is no separate event for the fold.
+
+Handing over happens only when the process has shown it supports it. Builds without the
+CLI's command queue keep the old one-turn-at-a-time behaviour, and `handed` is then
+always false.
 | **`pendingPermission`** | **object or null** — the whole ask, same shape as `permission-request` |
 | `canPrompt` | bool — whether this process supports permission prompts at all |
 | `busySince` | number or null — epoch ms, and null unless `state` is `busy` |
+| `claudeVersion` | string or null — the Claude Code version **of the running process**, from its `system/init` line (e.g. `"2.1.280"`). Null until the process has started and whenever there is none, so an idle session with no process is never "on an old binary": its next message starts whatever is installed then. This is not the summary's `version`, which is the first binary that ever wrote the transcript. Carried over when a bridge adopts a process from the session host. See `GET /api/claude-version` |
 | **`retry`** | **object or null** — `{attempt, max, status, at}` while the CLI is retrying a failing API call, which can run for minutes. Cleared when the turn lands |
 | **`lastResult`** | **object or null** — `{isError, detail, retries, costUsd, durationMs, numTurns, stopReason}` for the turn that most recently finished |
 
@@ -2920,7 +3037,7 @@ exactly one file:
 
 | `scope` | file |
 |---|---|
-| `user` | `~/.tgxcode/settings.json` — `cwd` ignored |
+| `user` | `~/.tgxcode/settings.json` — `cwd` ignored (under `CLAUDE_SESSIONS_PREFS_DIR` instead when the bridge was started with it) |
 | `project` | `<cwd>/.tgxcode/settings.json`, which git tracks |
 | `project-local` | `<cwd>/.tgxcode/settings.local.json`, which is meant to be ignored — **check the repository actually ignores it**; this one does, since the Settings panel landed, but that is a line in a `.gitignore` and not something the bridge can promise |
 
@@ -2934,7 +3051,7 @@ are preserved, and `version` is stamped.
 
 **A key whose value is a map is still one key**, so naming it replaces the whole
 map. That is true of all three — `keyboard.bindings`, `spinner.weights` and
-`projects.colors` — and it is deliberate: a client that holds the resolved map
+`projects.colors` — and of the one list, `toolbar.items`, and it is deliberate: a client that holds the resolved map
 can say exactly what it wants by sending all of it, and there is no second
 spelling that would have to mean "drop one entry". See each one under
 `GET /api/prefs`.
@@ -2996,10 +3113,13 @@ Claude Code's own settings, as opposed to this app's. `/api/prefs` is
   }],
   effective:   {dottedPath: {value, scope, file} | {value, merged: true, from: […]}},
   unknown:     [{path, kind, type, preview, scope, file}],
-  hooks:       [{event, matcher, type, command, script}],
+  hooks:       [{scope, file, event, matcher, index, type, command, target, timeout, script}],
   statusLine:  {value, scope, file, ours, command} or null,
   installedPlugins: [string],
   catalogue:   [{title, key, note, rows: […]}],
+  hookEvents:  [{name, matcher, values?, blurb}],
+  hookTypes:   [{type, required, label}],
+  toolNames:   [string],
   catalogueAgainst: string,
   scopes:      [string],
   running:     int,
@@ -3042,12 +3162,34 @@ else has to go through `text`. `preview` is one clipped line of JSON.
 `catalogueAgainst` is the Claude Code version the catalogue was read against, so
 "there is no control for that" and "this app is out of date" can be told apart.
 
-`hooks` is a flattened summary of the strongest `hooks` block, one entry per
-hook: `event`, `matcher` (string or `null`, meaning every tool), `type`,
-`command` with `$HOME` folded back, and `script` — `{file, exists}` when a path
-could be picked out of the command, `null` otherwise. `exists: false` is the
-useful part: a hook whose script has been deleted fails silently and nothing in
-Claude Code says so.
+`hooks` is a flattened summary of **every file's** `hooks` block, weakest file
+first, one entry per hook. Claude Code runs the hooks of every scope — a project
+hook does not replace a user one, both fire — so this is every hook in force,
+not the strongest file's. (Until the hooks editor landed it *was* the strongest
+file's alone, which under-reported exactly the case that matters.) Each entry:
+
+| field | type | |
+|---|---|---|
+| `scope`, `file` | string | the file the hook is in |
+| `event` | string | the key under `hooks`, e.g. `PreToolUse` |
+| `matcher` | string or null | `null` means no matcher — every tool, or an event that takes none |
+| `index` | `{group: int, hook: int}` | the hook's position in that file's `hooks[event]` — group, then hook within it |
+| `type` | string or null | `command`, `http`, `prompt`, `agent`, `mcp_tool`, or whatever the file says |
+| `command` | string or null | a `command` hook's command, `$HOME` folded back; `null` for every other type |
+| `target` | string or null | what the hook does, whatever its type — the command, the URL, the prompt, or `server / tool` — whitespace collapsed, clipped to 200 characters |
+| `timeout` | int or null | seconds, when the hook sets one |
+| `script` | `{file, exists}` or null | when a path could be picked out of the command |
+
+`script.exists: false` is the useful part: a hook whose script has been deleted
+fails silently and nothing in Claude Code says so.
+
+`hookEvents`, `hookTypes` and `toolNames` are the catalogue for the hooks
+editor, and like the rest of the catalogue they are hints with no authority.
+`hookEvents[].matcher` is what the event's matcher is matched against — `"tool"`
+(a tool name or regex), `"values"` (one of `values`), `"free"` (a name nobody
+can list), or `null` for an event that reads no matcher. `hookTypes[].required`
+is the fields a hook of that type is refused without. An event or type not in
+these lists is still accepted on a write.
 
 `statusLine.ours` is true when the command names `quota-statusline.py`, i.e.
 when `scripts/install-quota-statusline.js` is what put it there.
@@ -3100,6 +3242,30 @@ in, so a worktree's own file is the one in force.
 touched, `null` removes a key so it falls back down the chain, and a section
 left with no keys is removed rather than written out as `{}`. Existing key order
 is preserved and a new key is appended, so a one-key change is one line of diff.
+
+**`hooks` is written whole.** `patch: {hooks: {…}}` replaces the file's entire
+`hooks` block and `patch: {hooks: null}` removes it; there is no dotted path into
+it (`hooks.Stop` is refused as uncatalogued). Being an object, it always needs
+the `stamp`. The block is checked for shape, not wisdom — a hook command is an
+arbitrary shell string by design — and refused with `400 {code: "value"}` when:
+
+- it is not an object, has more than 64 events, or an event name is not
+  `^[A-Z][A-Za-z]{1,63}$`;
+- an event's value is not a non-empty array of at most 64 groups;
+- a group is not an object, has a `matcher` that is not a string (≤1024
+  characters), or has no non-empty `hooks` array (≤64);
+- a hook has no string `type`, or lacks the field its type requires as a
+  non-empty string (≤16384 characters): `command` for `command`, `url` for
+  `http`, `prompt` for `prompt` and `agent`, `server` and `tool` for `mcp_tool`;
+- an optional field is present with the wrong type: `timeout` an integer 1–86400;
+  `async`, `asyncRewake`, `once` booleans; `statusMessage`, `if`, `shell`,
+  `model` non-empty strings; `args`, `allowedEnvVars` string arrays; `headers` an
+  object of strings; `input` an object.
+
+Any other field, any unrecognised `type` and any unrecognised event are kept
+exactly as sent. The whole block is refused on the first problem, and the
+message does not say which hook — a client that wants to point at the row
+should check the same rules itself before sending.
 
 A path is accepted when the catalogue models it, **or** when it already holds a
 scalar somewhere in the chain and the new value is the same JSON type — which is
@@ -3631,7 +3797,7 @@ nobody to ask.
 | Route | Body | Notes |
 |---|---|---|
 | `POST /api/sessions/:id/stop` | `{hard?}` | `{ok, how, dropped[]}` — see below |
-| `GET/DELETE /api/sessions/:id/queue[/:qid]` | | inspect, drop one, clear |
+| `GET/DELETE /api/sessions/:id/queue[/:qid]` | | inspect, drop one, clear. Dropping one answers `{ok, removed, status}`, or `409` if the message has already been sent — including a `handed` one the running turn read first. Clearing answers `{ok, dropped[]}` with only what was actually dropped, so a handed message that lost that race stays out of the list |
 | `POST /api/sessions/:id/queue/reorder` | `{ids}` | |
 | `POST /api/sessions/:id/flags` | `{pinned?, archived?, test?}` | |
 | `GET /api/sessions/:id/suggestions` | | `{sessionId, suggestions}` — the decisions alone. `GET /api/suggestions?session=` is the offers *and* the decisions |

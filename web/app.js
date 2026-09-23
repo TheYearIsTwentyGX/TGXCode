@@ -129,10 +129,11 @@ const PREFS_FALLBACK = {
     version: 1,
     transcript: { groupToolCalls: true, groupMinCalls: 3, groupIncludesThinking: true },
     live: { compact: false, hideElsewhere: false },
-    projects: { colors: {} },
+    projects: { colors: {}, backdropTint: true, backdropStrength: 13 },
     quota: { beacon: false, beaconDir: null, beaconEveryMinutes: 20 },
     spinner: { randomize: true, groups: [], weights: {}, rerollMs: 8000 },
-    keyboard: { contextualTerminalCopy: false, composerSend: 'enter', bindings: {} },
+    keyboard: { contextualTerminalCopy: false, composerSend: 'enter', cycleOrder: 'default', bindings: {} },
+    toolbar: { items: [] },
     wispr: { transforms: [] },
 };
 
@@ -218,6 +219,25 @@ function projectColor(dir) {
     }
     return best;
 }
+
+/**
+ * The wash a project-scoped dialog's backdrop takes, from the user's settings.
+ *
+ * On the root rather than on #new-scrim, so a second dialog that ever wears a
+ * project's colour gets the same answer without being told. Off is an attribute
+ * rather than a strength of 0: a 0% mix still lands on the tinted rule's darker
+ * `#000000c2`, and "no tint" should mean the plain dim every other dialog has.
+ *
+ * @param {number} [preview] a strength being dragged, not yet saved
+ */
+function paintBackdropTint(preview) {
+    const p = BOOT_PREFS.projects;
+    const n = preview ?? p.backdropStrength;
+    const root = document.documentElement;
+    root.style.setProperty('--backdrop-tint', `${Number.isInteger(n) ? n : 13}%`);
+    root.toggleAttribute('data-plain-backdrop', p.backdropTint === false);
+}
+paintBackdropTint();
 
 /**
  * The board's settings — the user's own, and deliberately never `state.prefs`.
@@ -609,6 +629,12 @@ const state = {
         scope: 'user', tab: 'form', data: null, loading: false, error: null,
         saving: false, draft: null, dirty: false, jsonError: null,
         stale: null, jumpTo: null,
+        // The hooks editor's draft, which is the second one here: hooks are
+        // written whole, on Save, after a review — see claudeHooksRow().
+        // `hooksSeed` is the block the draft started from, as JSON, so a change
+        // on disk can be told apart from the page's own saves of other keys.
+        hooksDraft: null, hooksDirty: false, hooksReview: false,
+        hooksProblems: null, hooksSeed: null,
     },
     // And Claude Code's memory files, which are two rather than four and are
     // additive rather than a chain — see the Memory section below. All of it is
@@ -633,6 +659,13 @@ const state = {
         scope: 'project', tab: 'form', data: null, loading: false, error: null,
         saving: false, draft: null, dirty: false, raw: null, rawDirty: false,
         jsonError: null, stale: null, problems: null,
+        // Which command cards are expanded. Cards start shut, and this has to
+        // live here because renderSettings() redraws the whole form on nearly
+        // every edit. Held twice over: by the client-only `_k`, which is the
+        // only name a card has while its id is blank or being typed, and by
+        // id, because a save or a re-read reseeds the draft with new keys and
+        // would otherwise fold up everything you had open.
+        open: new Set(), openIds: new Set(),
     },
     // Sessions blocked on an answer, kept whether or not the board is open, so
     // the badge on a shut board still says how many people are waiting.
@@ -678,6 +711,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'quota-wrap', 'quota-pill', 'quota-pill-body', 'quota-menu', 'quota-windows',
     'quota-events', 'quota-note', 'quota-refresh', 'quota-live',
     'quota-restart', 'quota-restart-label', 'quota-restart-sub',
+    'cv-wrap', 'cv-pill', 'cv-menu', 'cv-check', 'cv-body', 'cv-update', 'cv-update-label',
     'btn-pin', 'btn-changes', 'btn-folder', 'btn-term', 'btn-archive', 'btn-delete',
     'turns', 'turn-pop',
     'find', 'find-input', 'find-count', 'find-prev', 'find-next',
@@ -703,10 +737,10 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'btn-drafts', 'dr-badge', 'drafts', 'dr-sub', 'dr-body', 'dr-new',
     'btn-sched', 'sched-badge', 'sched', 'sched-sub', 'sched-body', 'sched-new',
     'btn-settings', 'settings', 'set-scope', 'set-project', 'set-project-wrap',
-    'set-file', 'set-problems', 'set-body', 'set-shell', 'set-toc', 'composer-hint',
+    'set-file', 'set-problems', 'set-body', 'set-shell', 'set-toc', 'set-top', 'composer-hint',
     'memo-scrim', 'memo-title', 'memo-big', 'memo-note', 'memo-count',
     'memo-close', 'memo-save',
-    'set-g-notify', 'set-g-pair', 'set-g-projects', 'pcolor-list',
+    'set-g-notify', 'set-g-pair', 'set-g-projects', 'pcolor-list', 'pcolor-backdrop',
     'proj-menu', 'pcolor-scrim', 'pcolor-name', 'pcolor-path', 'pcolor-swatches',
     'pcolor-input', 'pcolor-done', 'new-project',
     'new-cron', 'new-cron-row', 'new-cron-note', 'new-gate-ref', 'new-gate-row',
@@ -727,6 +761,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'diff-scrim', 'diff-title', 'diff-stat', 'diff-unified', 'diff-split',
     'diff-words', 'diff-wrap', 'diff-source', 'diff-note', 'diff-jump',
     'diff-reload', 'diff-copy', 'diff-body', 'ctx-menu',
+    'bar-more-wrap', 'bar-more', 'bar-more-badge', 'bar-more-menu',
     'review-scrim', 'review-modal', 'review-kind', 'review-title', 'review-when',
     'review-outcome', 'review-body', 'review-jump',
     'pair-url', 'pair-host', 'pair-hosts', 'pair-note', 'pair-copy',
@@ -876,17 +911,14 @@ function toast(text, kind = 'info', opts = {}) {
  * Deliberately not a count — this said "six" through two additions and was
  * wrong by the time anyone read it.
  *
- * **A modal is closed by its own ✕ or Cancel and by nothing else.** It used to
- * go on Escape and on a click landing on the scrim, and both were losing work
- * that only exists in the page: Start-a-session holds a written prompt, a
- * directory and attachments that were never uploaded, and closing it discards
- * all three. Escape reaches this app while a dictation tool is cancelling a
- * phrase — Wispr Flow binds it — and the scrim click was never really a click
- * outside: drag-selecting text in the box and releasing past its edge fires one
- * whose target is the common ancestor, which is the scrim.
- *
- * Comparing the mousedown target to the mouseup target would have saved the
- * drag alone and left Escape as it was, so both paths went instead.
+ * **A modal is closed by its own ✕ or Cancel, or by a whole click outside it —
+ * never by Escape.** It used to go on Escape and on any click landing on the
+ * scrim, and both were losing work that only exists in the page:
+ * Start-a-session holds a written prompt, a directory and attachments that were
+ * never uploaded, and closing it discards the attachments. Escape reaches this
+ * app while a dictation tool is cancelling a phrase — Wispr Flow binds it — so
+ * it stays swallowed. The scrim click came back once it could be told apart
+ * from a drag; see closeOnClickOutside().
  */
 function modalUp() {
     return !dom.newScrim.hidden || !dom.delScrim.hidden
@@ -907,15 +939,39 @@ function modalUp() {
         // is a read-only view and closing it loses nothing, so the paragraph
         // above is not what puts it here. The sentence after it is: six dialogs
         // swallow the key and a seventh that answered it would be exactly the
-        // special case this function exists to stop. It also happens to be the
-        // dialog the *scrim* half of that rule was written for — a diff is the
-        // one thing here people drag-select, and a drag released past the edge
-        // fires a click whose target is the scrim.
+        // special case this function exists to stop.
         || !dom.diffScrim.hidden
         // The plan/question review, which is the diff viewer's case exactly: a
         // read-only replay holding no work, so the paragraph above is not what
         // puts it here either. The sentence after it is.
         || !dom.reviewScrim.hidden;
+}
+
+/**
+ * Close a modal on a click that both starts and ends on its scrim.
+ *
+ * A `click` alone cannot say that. Drag-selecting in the First message box and
+ * releasing past the dialog's edge fires one whose target is the common
+ * ancestor of the press and the release — the scrim — and so does the mirror
+ * image, a press on the scrim released inside the dialog. So the press and the
+ * release are each checked against the scrim itself, and the `click` that
+ * follows only closes when both were outside. `=== scrim` rather than
+ * `contains`: the scrim contains the dialog, and anything in the dialog is in.
+ */
+function closeOnClickOutside(scrim, close) {
+    let down = false, up = false;
+    scrim.addEventListener('mousedown', (e) => {
+        down = e.button === 0 && e.target === scrim;
+        up = false;
+    });
+    scrim.addEventListener('mouseup', (e) => {
+        up = down && e.button === 0 && e.target === scrim;
+    });
+    scrim.addEventListener('click', () => {
+        const go = down && up;
+        down = up = false;
+        if (go) close();
+    });
 }
 
 // ── drafts ───────────────────────────────────────────────────────────────
@@ -2178,6 +2234,15 @@ function renderHeader() {
     if (s.model) {
         bits.push(el('span', { class: 'sep' }, '·'));
         bits.push(el('span', {}, shortModel(s.model)));
+    }
+    // Only when this session's process predates the installed binary, which is
+    // the case where a feature somebody just read about is not here yet.
+    const oldClaude = cvStaleFor(s.sessionId);
+    if (oldClaude) {
+        bits.push(el('span', { class: 'sep' }, '·'));
+        bits.push(el('span', { class: 'cv-old', title: `This session's process is Claude Code `
+            + `${oldClaude.version}; ${state.cv.installed} is installed. It moves over when the process restarts.` },
+        `Claude ${oldClaude.version} (older)`));
     }
     bits.push(el('span', { class: 'sep' }, '·'));
     bits.push(el('span', {}, `${s.userMessages} turns`));
@@ -9669,7 +9734,8 @@ function setPermMode(mode) {
     if (state.current) state.permChoice.set(state.current.sessionId, mode);
 }
 
-// The modes Ctrl+P will land you on, in the order the dropdown lists them.
+// The modes Ctrl+P (and Ctrl+Shift+P, backwards) will land you on, in the
+// order the dropdown lists them.
 // `dontAsk` and `bypassPermissions` are deliberately not in it: both hand the
 // agent something back, and a chord pressed one time too many is not a decision
 // to do that. Neither is hidden — they are still in the dropdown, and a session
@@ -9682,6 +9748,8 @@ const CYCLE_PERM = ['acceptEdits', 'auto', 'manual', 'plan'];
  *
  * @param {HTMLSelectElement} sel
  * @param {string[]|null} allow the values a cycle may stop on, or null for all
+ * @param {1|-1} [step] which way to walk: 1 for the next value, -1 for the
+ *   previous, which is what the Shift variant of each chord asks for
  *
  * Walks from where the select is now rather than from an index kept alongside
  * it, so the chord and the dropdown can never disagree about what "next" means
@@ -9698,12 +9766,26 @@ const CYCLE_PERM = ['acceptEdits', 'auto', 'manual', 'plan'];
  * the listeners above are what remember a choice against a session, and a chord
  * that skipped them would be a second way to set these controls that forgets
  * what the first one records.
+ *
+ * `keyboard.cycleOrder` decides what "next" means. Alphabetical sorts by the
+ * label rather than the value, since the label is what you are reading, and
+ * keeps an empty value — the model's "inherit" — first, because it is the
+ * absence of a choice rather than one more name to file among the others.
  */
-function cycleSelect(sel, allow) {
+function cycleSelect(sel, allow, step = 1) {
     const opts = [...sel.options];
-    const at = opts.findIndex(o => o.value === sel.value);
-    for (let i = 1; i <= opts.length; i++) {
-        const o = opts[(at + i) % opts.length];
+    if (BOOT_PREFS.keyboard.cycleOrder === 'alphabetical') {
+        const label = o => o.textContent.trim();
+        opts.sort((a, b) => (b.value === '') - (a.value === '')
+            || label(a).localeCompare(label(b), undefined, { sensitivity: 'base' }));
+    }
+    const n = opts.length;
+    // A value the select does not list has no index; walking back from -1 would
+    // skip the last option, so start that walk just past the end instead.
+    let at = opts.findIndex(o => o.value === sel.value);
+    if (at < 0 && step < 0) at = n;
+    for (let i = 1; i <= n; i++) {
+        const o = opts[((at + i * step) % n + n) % n];
         if (allow && !allow.includes(o.value)) continue;
         if (o.value === sel.value) break;    // nothing else to move to
         sel.value = o.value;
@@ -10887,6 +10969,7 @@ async function saveProjectColor(cwd, hex) {
  * anything. Each of these is a no-op when its surface is shut.
  */
 function repaintProjectColors() {
+    paintBackdropTint();
     renderRail();
     paintNewProject();
     paintPcolorDialog();
@@ -11103,6 +11186,21 @@ function renderProjectColors() {
     }));
 }
 
+/**
+ * The two backdrop rows above the colour list.
+ *
+ * settingRow() rather than hand-built controls, so they get the Clear, the
+ * "default" and the override line every other setting has. Locked at a project
+ * scope like the rest of `projects` — the section is user-only in
+ * bridge/prefs.js, and a control that saved would only earn a problem line.
+ */
+function renderProjectBackdrop() {
+    const group = SETTINGS.find(g => g.section === 'projects');
+    const locked = state.settings.scope !== 'user';
+    if (!state.settings.data) { dom.pcolorBackdrop.replaceChildren(); return; }
+    dom.pcolorBackdrop.replaceChildren(...group.rows.map(row => settingRow(group, row, locked)));
+}
+
 // --- wiring --------------------------------------------------------------
 
 for (const n of dom.pcolorScrim.querySelectorAll('[data-close-pcolor]')) {
@@ -11116,9 +11214,7 @@ dom.pcolorInput.addEventListener('input', () => {
     const hex = hexAccent(dom.pcolorInput.value);
     if (hex && pcolorFor) saveProjectColor(pcolorFor.cwd, hex);
 });
-dom.pcolorScrim.addEventListener('click', (e) => {
-    if (e.target === dom.pcolorScrim) closePcolor();
-});
+closeOnClickOutside(dom.pcolorScrim, closePcolor);
 
 // The menu goes on a click outside it and on Escape. A rail scroll follows it
 // instead — see syncProjMenu — because the browser scrolls a half-visible ⋮ into
@@ -11241,7 +11337,7 @@ const SETTINGS = [
     },
     {
         title: 'Keyboard', section: 'keyboard', userOnly: true, keymap: true,
-        note: 'Two keys that switch in pairs, and then every shortcut this window '
+        note: 'How a few keys behave, and then every shortcut this window '
             + 'answers to.',
         rows: [
             { key: 'contextualTerminalCopy', type: 'bool',
@@ -11257,7 +11353,22 @@ const SETTINGS = [
                     ['ctrl-enter', 'Enter for a newline · Ctrl+Enter sends'],
                 ],
                 note: 'Ctrl+Enter sends either way.' },
+            { key: 'cycleOrder', type: 'choice',
+                label: 'Picker cycle order',
+                options: [
+                    ['default', 'As the dropdown lists them'],
+                    ['alphabetical', 'Alphabetical'],
+                ],
+                note: 'The order Ctrl+P and Ctrl+M step through Permissions and Model, '
+                    + 'and Shift walks it backwards. The dropdowns keep their own order.' },
         ],
+    },
+    {
+        title: 'Toolbar', section: 'toolbar', userOnly: true, toolbar: true,
+        note: 'The buttons along the top: their order, which of them fold into the '
+            + 'More menu, and which show their name beside the icon. A hidden view '
+            + 'still opens from its shortcut.',
+        rows: [],
     },
     // Claude Code's own settings — a different owner's files, and the one group
     // built by a `render` rather than from `rows` or from markup. It has to be:
@@ -11291,7 +11402,21 @@ const SETTINGS = [
     // the markup put them.
     {
         title: 'Projects', section: 'projects', node: 'setGProjects',
-        after: () => renderProjectColors(),
+        userOnly: true,
+        // Ordinary rows, drawn into the markup group because the group is not
+        // built from `rows` — see renderProjectBackdrop().
+        rows: [
+            { key: 'backdropTint', type: 'bool',
+                label: 'Tint the backdrop behind a dialog',
+                note: 'Start a session and a schedule wash the screen behind them in '
+                    + 'the project’s colour. Off gives the plain dim every other dialog '
+                    + 'has; the dialog’s own head keeps its colour either way.' },
+            { key: 'backdropStrength', type: 'range', min: 0, max: 40, unit: '%',
+                label: 'Backdrop tint strength',
+                note: 'How much of the colour goes into the dim.',
+                preview: (n) => paintBackdropTint(n) },
+        ],
+        after: () => { renderProjectBackdrop(); renderProjectColors(); },
     },
     {
         title: 'Snippets', section: 'snippets', node: 'setGSnippets',
@@ -11484,6 +11609,8 @@ function applyPrefsLive(prefs, section) {
     }
     keys.apply(BOOT_PREFS.keyboard);
     paintShortcutHints();
+    paintToolbar();
+    paintBackdropTint();
     if (state.live.open) renderLive();
     if (section === 'keyboard') paintComposerHint();
     if (section === 'transcript' && state.current) {
@@ -11574,6 +11701,7 @@ function renderSettings() {
 
         for (const row of group.rows) card.append(settingRow(group, row, locked));
         if (group.keymap) card.append(renderKeymap(locked));
+        if (group.toolbar) card.append(renderToolbarSettings(locked));
         dom.setBody.append(card);
     }
     renderSettingsToc();
@@ -11607,7 +11735,9 @@ function renderSettingsToc() {
  */
 function markSettingsToc() {
     if (!state.settings.open) return;
-    const top = dom.setShell.getBoundingClientRect().top;
+    // The foot of the pinned head, not the top of the pane: a card scrolled
+    // under the head is out of sight, so it is not the one being read.
+    const top = dom.setTop.getBoundingClientRect().bottom;
     let active = SETTINGS[0] && SETTINGS[0].section;
     for (const group of SETTINGS) {
         const card = document.getElementById(`set-g-${group.section}`);
@@ -11773,6 +11903,24 @@ function settingControl(row, value, disabled, save, saveKey) {
         }, row.options.map(([v, text]) => el('option', {
             value: v, selected: v === value || null,
         }, text)));
+    }
+    if (row.type === 'range') {
+        const out = el('output', { text: `${value ?? row.min}${row.unit || ''}` });
+        return el('label', { class: 'settings-range' },
+            el('input', {
+                type: 'range', min: row.min, max: row.max, step: row.step || 1,
+                value: value ?? row.min, disabled: disabled || null,
+                'aria-label': row.label,
+                // Dragging shows the number and, where the row has one, what it
+                // does — but saves only on release, so a drag across the track
+                // is one write and not forty.
+                oninput: (e) => {
+                    out.textContent = `${e.target.value}${row.unit || ''}`;
+                    if (row.preview) row.preview(Number(e.target.value));
+                },
+                onchange: (e) => save(Number(e.target.value)),
+            }),
+            out);
     }
     if (row.type === 'groups') return settingGroups(value, disabled, save, saveKey);
     return el('span', { text: String(value) });
@@ -12026,6 +12174,10 @@ async function loadClaudeConfig({ flash = false } = {}) {
     try {
         const dir = claudeDir();
         s.data = await get(`/api/claude-config${dir ? `?cwd=${encodeURIComponent(dir)}` : ''}`);
+        // A clean hooks draft reseeds from what was just read; a dirty one is
+        // kept, and draws its own banner if the file moved under it. The same
+        // rule loadCmdConfig() spells out, for the same bug.
+        if (!s.hooksDirty) hkClearDraft(s);
         // A scope the current directory does not offer — Project with no
         // project — would leave every control disabled with no way back, so
         // fall to the one row that always exists.
@@ -12194,12 +12346,13 @@ function claudeScopeTabs() {
             // read-only rather than absent.
             title: f.readonly ? 'An administrator’s file — read-only' : f.file,
             onclick: () => {
-                if (s.dirty && !window.confirm('Discard the JSON you have edited?')) return;
+                if (f.scope === s.scope || !claudeMayLeave()) return;
                 s.scope = f.scope;
-                s.draft = null;
-                s.dirty = false;
-                s.jsonError = null;
                 s.stale = null;
+                // A clean draft too: it was seeded from the other file, and
+                // drawing it here would show that file's hooks under this tab.
+                s.draft = null;
+                hkClearDraft(s);
                 renderSettings();
             },
         },
@@ -12330,6 +12483,7 @@ function claudeStaleBanner() {
  * those add up — so it says what this scope sets and what it inherits instead.
  */
 function claudeRow(row) {
+    if (row.kind === 'hooks') return claudeHooksRow(row);
     const s = claudeState();
     const target = claudeTargetRow();
     const readonlyRow = !target;
@@ -12374,6 +12528,8 @@ function claudeRow(row) {
             row.label,
             el('code', { class: 'cfg-path', text: row.path })),
         row.note ? el('div', { class: 'settings-row-note', text: row.note }) : null,
+        // What the channel is currently delivering. See paintCvSettingsNote().
+        row.path === 'autoUpdatesChannel' ? cvSettingsNote() : null,
         row.hint === 'user' && s.scope !== 'user'
             ? el('div', { class: 'settings-row-note' },
                 'Normally set for you alone rather than checked into a repository.')
@@ -12472,9 +12628,6 @@ function claudeControl(row, value, disabled, save, explicit, inherited, merged) 
 
         case 'map-string':
             return claudeMapString(row, value, disabled, save, merged);
-
-        case 'hooks':
-            return claudeHooks();
 
         case 'statusline':
             return claudeStatusLine();
@@ -12686,40 +12839,866 @@ function claudeMapString(row, own, disabled, save, merged) {
             }, 'Add')));
 }
 
+// ── the hooks editor ───────────────────────────────────────────────────────
+//
+// The one control in this group that is a draft rather than save-on-change,
+// and for the reason the group note gives: a hook `command` is an arbitrary
+// shell string run on every matching event. A half-typed one reaching disk is
+// a hook that fires, so nothing is written until Save — and Save shows what
+// will run before it writes it. That review step is what reversed the old
+// decision to keep this read-only (docs/plans/20-claude-config.md): the JSON
+// tab could always write hooks, so a form adds no capability, only a better
+// place to read one before arming it.
+//
+// Seeded from the target file's own `hooks` and never from anything merged.
+// That one is not the list lesson claudeRow() carries so much as its sharper
+// cousin: hooks from every scope all run, so copying the user's hooks into a
+// project file would make each of them fire twice.
+
+let hkKeySeq = 0;
+const hkKey = () => (hkKeySeq += 1);
+
+/** The file whose hooks the editor is showing — the target, or Managed read-only. */
+function hkFileRow() {
+    const s = claudeState();
+    return claudeTargetRow() || (s.data && s.data.files.find(f => f.scope === s.scope)) || null;
+}
+
+/** The hooks block as the file has it, or undefined. */
+const hkOnDisk = () => {
+    const row = hkFileRow();
+    return row && row.values ? row.values.hooks : undefined;
+};
+
 /**
- * Every hook, and whether the script it names is still there.
- *
- * Read-only, and the group note says why: a hook `command` is an arbitrary
- * shell string run on every matching tool call, which makes it the
- * highest-privilege field in the file and a poor thing to have a casual text
- * box over. What is offered instead is the one question a text editor cannot
- * answer — a hook pointing at a deleted script fails silently, and nothing in
- * Claude Code tells you.
+ * The draft: events in file order, each with its groups and hooks keyed so a
+ * card keeps its identity while rows move. Every field the file has is carried
+ * on the object as it is — including ones this page has no control for — and
+ * only `_k` and `_script` are ours, stripped by hkForWire().
  */
-function claudeHooks() {
-    const hooks = claudeState().data.hooks || [];
-    if (!hooks.length) {
-        return el('div', { class: 'cfg-list-none' },
-            'No hooks in force. ', claudeJsonLink('hooks', 'Add some as JSON'));
+function hkDraft() {
+    const s = claudeState();
+    if (s.hooksDraft === null) {
+        const block = hkOnDisk();
+        const scripts = new Map();
+        for (const h of (s.data.hooks || [])) {
+            if (h.scope === s.scope) scripts.set(`${h.event}|${h.index.group}|${h.index.hook}`, h.script);
+        }
+        s.hooksSeed = JSON.stringify(block === undefined ? null : block);
+        s.hooksDraft = isPlainObj(block)
+            ? Object.entries(block).map(([event, groups]) => ({
+                _k: hkKey(),
+                event,
+                groups: (Array.isArray(groups) ? groups : []).map((g, gi) => ({
+                    ...(isPlainObj(g) ? g : {}),
+                    _k: hkKey(),
+                    hooks: (isPlainObj(g) && Array.isArray(g.hooks) ? g.hooks : []).map((h, hi) => ({
+                        ...(isPlainObj(h) ? h : {}),
+                        _k: hkKey(),
+                        _script: scripts.get(`${event}|${gi}|${hi}`) || null,
+                    })),
+                })),
+            }))
+            : [];
     }
-    return el('div', { class: 'cfg-hooks' },
-        el('table', { class: 'cfg-hooks-table' },
-            el('thead', null, el('tr', null,
-                el('th', { text: 'Event' }), el('th', { text: 'Tool' }),
-                el('th', { text: 'Runs' }), el('th', { text: 'Script' }))),
-            el('tbody', null, hooks.map(h => el('tr', null,
-                el('td', null, el('code', { text: h.event })),
-                el('td', null, h.matcher
-                    ? el('code', { text: h.matcher })
-                    : el('span', { class: 'cfg-any', text: 'any' })),
-                el('td', null, el('code', { class: 'cfg-hook-cmd', text: h.command || h.type || '—' })),
-                el('td', null, h.script
-                    ? el('span', {
-                        class: `cfg-script${h.script.exists ? '' : ' bad'}`,
-                        title: h.script.file,
-                    }, h.script.exists ? 'present' : 'missing')
-                    : el('span', { class: 'cfg-any', text: '—' })))))),
-        el('div', { class: 'cfg-list-add' }, claudeJsonLink('hooks', 'Edit as JSON')));
+    return s.hooksDraft;
+}
+
+const isPlainObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+
+/** The draft as the file will hold it, or `null` for "no hooks here at all". */
+function hkForWire() {
+    const out = {};
+    for (const ev of hkDraft()) {
+        const groups = ev.groups.map((g) => {
+            const { _k, ...rest } = g;
+            return {
+                ...rest,
+                hooks: g.hooks.map(({ _k: _a, _script: _b, ...h }) => h),
+            };
+        }).filter(g => g.hooks.length);
+        if (groups.length) out[ev.event] = groups;
+    }
+    return Object.keys(out).length ? out : null;
+}
+
+/** Mark the draft edited, and repaint only the footer — see cmdDirty(). */
+function hkDirtied() {
+    const s = claudeState();
+    s.hooksDirty = true;
+    s.hooksReview = false;
+    // The problems belong to the draft that was checked, not this one. Their
+    // marks come off in place rather than by a redraw, which would take the
+    // caret out of the box being typed into.
+    if (s.hooksProblems) {
+        s.hooksProblems = null;
+        const row = dom.setBody && dom.setBody.querySelector('.settings-row[data-path="hooks"]');
+        if (row) {
+            row.querySelectorAll('.hk-problem').forEach(n => n.remove());
+            row.querySelectorAll('.hk-hook.bad, .hk-event.bad').forEach(n => n.classList.remove('bad'));
+        }
+    }
+    const foot = dom.setBody && dom.setBody.querySelector('.hk-foot');
+    if (foot) hkPaintFoot(foot);
+}
+
+/** Structural change: the draft moved, so the panel is redrawn. */
+function hkChanged() {
+    hkDirtied();
+    renderSettings();
+}
+
+function hkClearDraft(s) {
+    s.hooksDraft = null;
+    s.hooksDirty = false;
+    s.hooksReview = false;
+    s.hooksProblems = null;
+    s.hooksSeed = null;
+}
+
+/** Has this file's hooks block moved since the draft was seeded from it? */
+function hkIsStale() {
+    const s = claudeState();
+    if (!s.hooksDirty || s.hooksSeed === null) return false;
+    const onDisk = hkOnDisk();
+    return JSON.stringify(onDisk === undefined ? null : onDisk) !== s.hooksSeed;
+}
+
+const hkEventInfo = (name) => (claudeState().data.hookEvents || []).find(e => e.name === name) || null;
+const hkTypeInfo = (type) => (claudeState().data.hookTypes || []).find(t => t.type === type) || null;
+
+/** What a hook does, in one line — the same field the bridge's summary picks. */
+function hkTarget(h) {
+    let text = '';
+    if (typeof h.command === 'string') text = h.command;
+    else if (typeof h.url === 'string') text = h.url;
+    else if (h.type === 'mcp_tool') text = `${h.server || '?'} / ${h.tool || '?'}`;
+    else if (typeof h.prompt === 'string') text = h.prompt;
+    text = text.replace(/\s+/g, ' ').trim();
+    return text.length > 160 ? `${text.slice(0, 159)}…` : (text || '(empty)');
+}
+
+/**
+ * What is wrong with the draft before it goes anywhere.
+ *
+ * The bridge checks the same shape and refuses the lot with one sentence; this
+ * says which hook, so the row can be pointed at rather than the reader sent
+ * hunting. It is a convenience, not the check — checkHooks() is.
+ */
+function hkProblems() {
+    const out = [];
+    for (const ev of hkDraft()) {
+        if (!/^[A-Z][A-Za-z]{1,63}$/.test(ev.event)) {
+            out.push({ k: ev._k, message: `${ev.event || 'An event'} is not an event name.` });
+        }
+        for (const g of ev.groups) {
+            for (const h of g.hooks) {
+                const where = `${ev.event}${g.matcher ? ` · ${g.matcher}` : ''}`;
+                if (h._jsonError) { out.push({ k: h._k, message: `${where}: ${h._jsonError}` }); continue; }
+                if (typeof h.type !== 'string' || !h.type) {
+                    out.push({ k: h._k, message: `${where}: a hook needs a type.` });
+                    continue;
+                }
+                const info = hkTypeInfo(h.type);
+                for (const field of (info ? info.required : [])) {
+                    if (typeof h[field] !== 'string' || !h[field].trim()) {
+                        out.push({ k: h._k, message: `${where}: ${field} is empty.` });
+                    }
+                }
+            }
+        }
+    }
+    return out;
+}
+
+/**
+ * What Save is about to change, hook by hook.
+ *
+ * A multiset compare on `event · matcher · hook`, so a hook that only moved is
+ * neither added nor removed — and a reorder with nothing else is still said,
+ * because order is what decides which of two PreToolUse hooks answers first.
+ */
+function hkChanges() {
+    const flat = (block) => {
+        const rows = [];
+        if (!isPlainObj(block)) return rows;
+        for (const [event, groups] of Object.entries(block)) {
+            for (const g of (Array.isArray(groups) ? groups : [])) {
+                for (const h of (isPlainObj(g) && Array.isArray(g.hooks) ? g.hooks : [])) {
+                    rows.push({
+                        key: JSON.stringify([event, g.matcher ?? null, h]),
+                        event, matcher: g.matcher ?? null, hook: h,
+                    });
+                }
+            }
+        }
+        return rows;
+    };
+    const before = flat(JSON.parse(claudeState().hooksSeed || 'null'));
+    const after = flat(hkForWire());
+    const take = (from, key) => {
+        const i = from.findIndex(r => r.key === key);
+        if (i === -1) return false;
+        from.splice(i, 1);
+        return true;
+    };
+    const left = [...before];
+    const added = after.filter(r => !take(left, r.key));
+    const removed = left;
+    const reordered = !added.length && !removed.length
+        && JSON.stringify(before.map(r => r.key)) !== JSON.stringify(after.map(r => r.key));
+    return { added, removed, reordered };
+}
+
+/**
+ * The Hooks row — the editor, with the facts around it.
+ *
+ * Not claudeRow()'s shape: that row has a Clear button in its side column that
+ * saves on click, and a one-click "remove every hook in this file" is exactly
+ * the save-without-looking this editor exists not to have. Clearing is
+ * deleting the events and saving, through the same review as everything else.
+ */
+function claudeHooksRow(row) {
+    const s = claudeState();
+    const fileRow = hkFileRow();
+    const target = claudeTargetRow();
+    const editable = !!target && target.writable && !target.symlink && !(target.exists && !target.parsed);
+    const off = s.data.effective.disableAllHooks;
+
+    const text = el('div', { class: 'settings-row-text' },
+        el('div', { class: 'settings-row-label' },
+            row.label, el('code', { class: 'cfg-path', text: row.path })),
+        el('div', { class: 'settings-row-note' },
+            'Each event holds groups; a group’s matcher picks what it fires for, and '
+            + 'its hooks run in order. Nothing here is written until you save.'));
+
+    const body = el('div', { class: 'hk' });
+    if (off && off.value === true) {
+        body.append(el('div', { class: 'hk-off' },
+            el('strong', { text: 'Every hook is turned off' }),
+            ` by disableAllHooks in ${CLAUDE_SCOPES[off.scope] || 'another file'}. `
+            + 'You can still edit them; none of them runs until that is cleared.'));
+    }
+
+    const onDisk = hkOnDisk();
+    if (fileRow && fileRow.exists && !fileRow.parsed) {
+        body.append(el('div', { class: 'cfg-broken' },
+            el('p', null, el('strong', { text: 'This file does not parse, so its hooks cannot be shown.' }),
+                ' The JSON tab has it exactly as it is on disk.'),
+            claudeJsonLink('hooks', 'Open the JSON tab')));
+        return hkWrap(row, text, body);
+    }
+    if (onDisk !== undefined && !isPlainObj(onDisk)) {
+        body.append(el('div', { class: 'cfg-broken' },
+            el('p', null, el('strong', { text: 'hooks here is not an object.' }),
+                ' Claude Code will ignore it, and the editor will not guess what it meant.'),
+            claudeJsonLink('hooks', 'Fix it as JSON')));
+        return hkWrap(row, text, body);
+    }
+
+    const draft = hkDraft();
+    // The file moved under a draft. The draft is kept — see claudeStaleBanner()
+    // for why — and Save stays refused until the reader has looked.
+    const now = JSON.stringify(onDisk === undefined ? null : onDisk);
+    if (hkIsStale()) {
+        body.append(el('div', { class: 'cfg-stale' },
+            el('div', { class: 'cfg-stale-head' }, 'The hooks in this file changed on disk since you started.'),
+            el('p', null, 'Nothing was overwritten, and your edits are kept. Saving would replace '
+                + 'what is there now, so the page wants you to choose.'),
+            el('details', null, el('summary', { text: 'What is on disk' }),
+                el('pre', { class: 'cfg-stale-text', text: JSON.stringify(onDisk ?? null, null, 2) })),
+            el('div', { class: 'hk-actions' },
+                el('button', {
+                    class: 'btn small', type: 'button',
+                    onclick: () => { s.hooksSeed = now; s.hooksReview = false; renderSettings(); },
+                }, 'Keep my edits'),
+                el('button', {
+                    class: 'btn quiet small', type: 'button',
+                    onclick: () => { hkClearDraft(s); renderSettings(); },
+                }, 'Take what is on disk'))));
+    }
+
+    if (!draft.length) {
+        body.append(el('div', { class: 'cfg-list-none', text: 'No hooks in this file.' }));
+    }
+    const problems = s.hooksProblems || [];
+    for (const [i, ev] of draft.entries()) body.append(hkEventCard(ev, i, editable, problems));
+    if (editable) body.append(hkAddEvent(draft));
+    body.append(hkElsewhere());
+    if (editable || s.hooksDirty) {
+        const foot = el('div', { class: 'cmd-foot hk-foot' });
+        hkPaintFoot(foot);
+        body.append(foot);
+    }
+    body.append(el('div', { class: 'cfg-list-add' }, claudeJsonLink('hooks', 'Edit as JSON')));
+    return hkWrap(row, text, body);
+}
+
+function hkWrap(row, text, body) {
+    return el('div', { class: 'settings-row is-wide', 'data-path': row.path },
+        el('div', { class: 'settings-row-head' }, text),
+        el('div', { class: 'settings-row-wide' }, body));
+}
+
+/** A small text button — ↑, ↓, duplicate — in the style of the list's ×. */
+const hkMini = (label, title, disabled, go) => el('button', {
+    class: 'cfg-list-x hk-mini', type: 'button', title, 'aria-label': title,
+    disabled: disabled || null, onclick: go,
+}, label);
+
+/** Swap two neighbours, if there is one in that direction. */
+function hkMove(list, i, by) {
+    const j = i + by;
+    if (j < 0 || j >= list.length) return;
+    [list[i], list[j]] = [list[j], list[i]];
+    hkChanged();
+}
+
+function hkEventCard(ev, i, editable, problems) {
+    const info = hkEventInfo(ev.event);
+    const draft = hkDraft();
+    const bad = problems.filter(p => p.k === ev._k);
+    const card = el('div', { class: `cmd-card hk-event${bad.length ? ' bad' : ''}` },
+        el('div', { class: 'cmd-card-head' },
+            el('code', { class: 'cmd-card-id', text: ev.event }),
+            info ? el('span', { class: 'cmd-card-name', text: info.blurb.replace(/`/g, '') })
+                : el('span', { class: 'cfg-tab-tag', title: 'Kept as it is — Claude Code may know it even if this page does not' },
+                    'an event this page does not know'),
+            el('div', { class: 'cmd-card-spacer' }),
+            editable ? snipDeleteButton(`Remove every ${ev.event} hook`, () => {
+                draft.splice(i, 1);
+                hkChanged();
+            }) : null));
+    for (const p of bad) card.append(el('p', { class: 'cmd-field-bad hk-problem', text: p.message }));
+    ev.groups.forEach((g, gi) => card.append(hkGroup(ev, g, gi, info, editable, problems)));
+    if (editable) {
+        card.append(el('div', { class: 'cfg-list-add' },
+            el('button', {
+                class: 'linkish', type: 'button',
+                onclick: () => {
+                    ev.groups.push(hkNewGroup());
+                    hkChanged();
+                },
+            }, info && info.matcher === null ? 'Add another group' : 'Add a matcher')));
+    }
+    return card;
+}
+
+const hkNewHook = () => ({ _k: hkKey(), _script: null, type: 'command', command: '' });
+const hkNewGroup = () => ({ _k: hkKey(), hooks: [hkNewHook()] });
+
+/**
+ * One matcher group.
+ *
+ * The matcher is drawn only for an event that reads one, or when the file
+ * already has one on an event that does not — it is theirs, and hiding it
+ * would make the JSON tab and the form disagree.
+ */
+function hkGroup(ev, g, gi, info, editable, problems) {
+    const takesMatcher = !info || info.matcher !== null || typeof g.matcher === 'string';
+    const listId = `hk-m-${g._k}`;
+    const options = !info ? [] : info.matcher === 'tool'
+        ? (claudeState().data.toolNames || [])
+        : (info.values || []);
+    const removeGroup = () => {
+        ev.groups.splice(gi, 1);
+        if (!ev.groups.length) hkDraft().splice(hkDraft().indexOf(ev), 1);
+        hkChanged();
+    };
+    const wrap = el('div', { class: 'hk-group' },
+        el('div', { class: 'hk-group-head' },
+            takesMatcher
+                ? el('label', { class: 'hk-matcher' },
+                    el('span', { class: 'cmd-field-label', text: info && info.matcher === 'tool' ? 'Tool' : 'Matches' }),
+                    el('input', {
+                        class: 'settings-text cmd-mono', type: 'text', spellcheck: 'false',
+                        list: options.length ? listId : null,
+                        value: typeof g.matcher === 'string' ? g.matcher : '',
+                        placeholder: 'any', disabled: !editable || null,
+                        oninput: (e) => {
+                            if (e.target.value) g.matcher = e.target.value;
+                            else delete g.matcher;
+                            hkDirtied();
+                        },
+                    }),
+                    options.length
+                        ? el('datalist', { id: listId }, options.map(v => el('option', { value: v })))
+                        : null)
+                : el('span', { class: 'cmd-field-label', text: 'Runs every time' }),
+            el('div', { class: 'cmd-card-spacer' }),
+            editable && ev.groups.length > 1 ? hkMini('↑', 'Move this group up', gi === 0, () => hkMove(ev.groups, gi, -1)) : null,
+            editable && ev.groups.length > 1 ? hkMini('↓', 'Move this group down', gi === ev.groups.length - 1,
+                () => hkMove(ev.groups, gi, 1)) : null,
+            editable ? snipDeleteButton('Remove this group', removeGroup) : null),
+        takesMatcher && info && info.matcher === 'tool'
+            ? el('p', { class: 'cmd-field-note' },
+                'A tool name or a regular expression — ', el('code', { text: 'Edit|Write' }), ', ',
+                el('code', { text: 'mcp__.*' }), '. Empty matches every tool.')
+            : null);
+    g.hooks.forEach((h, hi) => wrap.append(hkHook(ev, g, h, hi, editable, problems, removeGroup)));
+    if (editable) {
+        wrap.append(el('div', { class: 'cfg-list-add' },
+            el('button', {
+                class: 'linkish', type: 'button',
+                onclick: () => { g.hooks.push(hkNewHook()); hkChanged(); },
+            }, 'Add a hook to this group')));
+    }
+    return wrap;
+}
+
+/**
+ * One hook: its type, the field that type needs, and the rest folded away.
+ *
+ * Changing the type keeps the fields every type shares and adds the one the new
+ * type needs; the old type's own field goes, because a `prompt` hook carrying a
+ * leftover `command` is a file that says two things.
+ */
+function hkHook(ev, g, h, hi, editable, problems, removeGroup) {
+    const types = claudeState().data.hookTypes || [];
+    const known = !!hkTypeInfo(h.type);
+    const bad = problems.filter(p => p.k === h._k);
+    const tool = (hkEventInfo(ev.event) || {}).matcher === 'tool';
+    const dis = !editable || null;
+
+    const setType = (type) => {
+        const keep = {};
+        for (const k of ['timeout', 'statusMessage', 'if', 'once']) if (k in h) keep[k] = h[k];
+        const info = hkTypeInfo(type);
+        const next = { _k: h._k, _script: null, type, ...keep };
+        for (const f of (info ? info.required : [])) next[f] = '';
+        g.hooks[hi] = next;
+        hkChanged();
+    };
+
+    const head = el('div', { class: 'hk-hook-head' },
+        el('select', {
+            class: 'settings-select', disabled: dis,
+            onchange: (e) => setType(e.target.value),
+        },
+        types.map(t => el('option', { value: t.type, selected: t.type === h.type || null }, t.label)),
+        !known ? el('option', { value: h.type || '', selected: true }, `${h.type || 'no type'} (unknown)`) : null),
+        h._script
+            ? el('span', {
+                class: `cfg-script${h._script.exists ? '' : ' bad'}`, title: h._script.file,
+            }, h._script.exists ? 'script present' : `script missing — ${h._script.file}`)
+            : null,
+        el('div', { class: 'cmd-card-spacer' }),
+        editable && g.hooks.length > 1 ? hkMini('↑', 'Run this one earlier', hi === 0, () => hkMove(g.hooks, hi, -1)) : null,
+        editable && g.hooks.length > 1 ? hkMini('↓', 'Run this one later', hi === g.hooks.length - 1, () => hkMove(g.hooks, hi, 1)) : null,
+        editable ? hkMini(icon('copy', 13), 'Duplicate this hook', false, () => {
+            g.hooks.splice(hi + 1, 0, { ...clone(h), _k: hkKey(), _script: null });
+            hkChanged();
+        }) : null,
+        editable ? snipDeleteButton('Remove this hook', () => {
+            g.hooks.splice(hi, 1);
+            if (!g.hooks.length) { removeGroup(); return; }
+            hkChanged();
+        }) : null);
+
+    const card = el('div', { class: `hk-hook${bad.length ? ' bad' : ''}` }, head);
+    for (const p of bad) card.append(el('p', { class: 'cmd-field-bad hk-problem', text: p.message }));
+
+    if (!known) {
+        card.append(hkJsonField(h, g, hi, dis));
+        return card;
+    }
+
+    // Fields by type. `str` edits one string key and deletes it when emptied,
+    // so the file never collects `"statusMessage": ""`.
+    const str = (key, label, o = {}) => hkField(label, o.note, o.area
+        ? el('textarea', {
+            class: 'cmd-area', spellcheck: 'false', rows: 1, placeholder: o.ph || '', disabled: dis,
+            onfocus: (e) => grow(e.target, 26, 240),
+            oninput: (e) => { hkSet(h, key, e.target.value, o.required); if (key === 'command') h._script = null; grow(e.target, 26, 240); hkDirtied(); },
+        }, typeof h[key] === 'string' ? h[key] : '')
+        : el('input', {
+            class: `settings-text is-long${o.mono === false ? '' : ' cmd-mono'}`, type: 'text', spellcheck: 'false',
+            value: typeof h[key] === 'string' ? h[key] : '', placeholder: o.ph || '', disabled: dis,
+            oninput: (e) => { hkSet(h, key, e.target.value, o.required); hkDirtied(); },
+        }));
+    const timeout = () => hkField('Timeout (seconds)', null, el('input', {
+        class: 'settings-num', type: 'number', min: 1, max: 86400, disabled: dis,
+        value: Number.isInteger(h.timeout) ? h.timeout : '', placeholder: 'default',
+        oninput: (e) => {
+            const n = Number(e.target.value);
+            if (e.target.value === '' || !Number.isInteger(n) || n < 1) delete h.timeout;
+            else h.timeout = n;
+            hkDirtied();
+        },
+    }));
+    const bool = (key, label, note) => hkField(null, note, el('label', { class: 'hk-check' },
+        el('span', { class: 'settings-check' },
+            el('input', {
+                type: 'checkbox', checked: h[key] === true || null, disabled: dis,
+                onchange: (e) => { if (e.target.checked) h[key] = true; else delete h[key]; hkDirtied(); },
+            }),
+            el('span', { class: 'settings-box' })),
+        el('span', { class: 'cmd-field-label', text: label })));
+
+    const more = [];
+    more.push(str('statusMessage', 'Status message', { mono: false, ph: 'shown on the spinner while it runs' }));
+    if (tool) {
+        more.push(str('if', 'Only if', {
+            ph: 'Bash(git *)', note: 'A permission rule. The hook runs only for calls it matches.' }));
+    }
+
+    switch (h.type) {
+        case 'command':
+            card.append(str('command', 'Command', { area: true, required: true, ph: '$CLAUDE_PROJECT_DIR/.claude/hooks/check.sh',
+                note: 'Run by the shell. The event arrives as JSON on stdin; exit 2 blocks where the event allows it.' }));
+            card.append(el('div', { class: 'hk-inline' }, timeout(),
+                bool('async', 'Run in the background', null)));
+            more.push(str('shell', 'Shell', { ph: 'bash' }));
+            more.push(bool('asyncRewake', 'In the background, but wake Claude if it exits 2', null));
+            break;
+        case 'http':
+            card.append(str('url', 'URL', { required: true, ph: 'http://127.0.0.1:8080/hook',
+                note: 'The event is POSTed as JSON; the response body is read as the hook’s output.' }));
+            card.append(timeout());
+            card.append(hkHeaders(h, dis));
+            more.push(hkField('Variables headers may use', 'Comma-separated. Only these are substituted into a header.',
+                el('input', {
+                    class: 'settings-text is-long cmd-mono', type: 'text', spellcheck: 'false', disabled: dis,
+                    value: Array.isArray(h.allowedEnvVars) ? h.allowedEnvVars.join(', ') : '',
+                    placeholder: 'API_TOKEN',
+                    oninput: (e) => {
+                        const list = e.target.value.split(',').map(x => x.trim()).filter(Boolean);
+                        if (list.length) h.allowedEnvVars = list; else delete h.allowedEnvVars;
+                        hkDirtied();
+                    },
+                })));
+            break;
+        case 'prompt':
+        case 'agent':
+            card.append(str('prompt', 'Prompt', { area: true, required: true, mono: false,
+                ph: 'Is this safe to run? $ARGUMENTS',
+                note: h.type === 'agent'
+                    ? 'A subagent with tools answers it. $ARGUMENTS is the event’s JSON.'
+                    : 'One model call answers it. $ARGUMENTS is the event’s JSON.' }));
+            card.append(el('div', { class: 'hk-inline' }, timeout(),
+                str('model', 'Model', { ph: 'default' })));
+            break;
+        case 'mcp_tool':
+            card.append(el('div', { class: 'hk-inline' },
+                str('server', 'Server', { required: true, ph: 'memory' }),
+                str('tool', 'Tool', { required: true, ph: 'store' })));
+            card.append(hkInputField(h, dis));
+            card.append(timeout());
+            break;
+        default:
+            break;
+    }
+    more.push(bool('once', 'Only once', 'Removed after it first succeeds. Meant for skills.'));
+    // Opened by default when anything under it is set, so a field the file has
+    // is never hidden behind a fold nobody knows to open.
+    const anyMore = ['statusMessage', 'if', 'shell', 'asyncRewake', 'once', 'allowedEnvVars'].some(k => k in h);
+    card.append(el('details', { class: 'hk-more', open: anyMore || null },
+        el('summary', { text: 'More' }), ...more));
+    const extra = hkExtraKeys(h);
+    if (extra.length) {
+        card.append(el('p', { class: 'cmd-field-note' },
+            'Also in the file, kept as it is: ', ...extra.flatMap((k, n) => [n ? ', ' : '', el('code', { text: k })])));
+    }
+    return card;
+}
+
+/** Keys on a hook this editor draws no control for — carried, and said. */
+function hkExtraKeys(h) {
+    const drawn = new Set(['_k', '_script', '_jsonError', 'type', 'command', 'url', 'prompt', 'server', 'tool',
+        'input', 'timeout', 'async', 'asyncRewake', 'shell', 'statusMessage', 'if', 'once', 'model',
+        'headers', 'allowedEnvVars']);
+    return Object.keys(h).filter(k => !drawn.has(k));
+}
+
+function hkSet(h, key, value, required) {
+    if (value === '' && !required) delete h[key];
+    else h[key] = value;
+}
+
+function hkField(label, note, control) {
+    return el('div', { class: 'cmd-field hk-field' },
+        label ? el('div', { class: 'cmd-field-head' }, el('span', { class: 'cmd-field-label', text: label })) : null,
+        control,
+        note ? el('p', { class: 'cmd-field-note', text: note }) : null);
+}
+
+/** HTTP headers, name and value — the env editor's rows, on a hook. */
+function hkHeaders(h, dis) {
+    const headers = isPlainObj(h.headers) ? h.headers : {};
+    const names = Object.keys(headers);
+    return hkField('Headers', 'A value may name a variable as $NAME, if it is listed under More.',
+        el('div', { class: 'cfg-list cmd-env' },
+            names.map(k => el('div', { class: 'cmd-env-row' },
+                el('input', {
+                    class: 'settings-text cmd-mono cmd-env-name', type: 'text', spellcheck: 'false',
+                    value: k, disabled: dis,
+                    onchange: (e) => {
+                        const next = e.target.value.trim();
+                        if (next === k) return;
+                        const was = headers[k];
+                        delete headers[k];
+                        if (next) headers[next] = was;
+                        hkChanged();
+                    },
+                }),
+                el('input', {
+                    class: 'settings-text cmd-env-value cmd-mono', type: 'text', spellcheck: 'false',
+                    value: headers[k], disabled: dis,
+                    oninput: (e) => { headers[k] = e.target.value; hkDirtied(); },
+                }),
+                el('button', {
+                    class: 'cfg-list-x', type: 'button', disabled: dis, title: 'Remove', 'aria-label': `Remove ${k}`,
+                    onclick: () => {
+                        delete headers[k];
+                        if (!Object.keys(headers).length) delete h.headers;
+                        hkChanged();
+                    },
+                }, '×'))),
+            dis ? null : el('div', { class: 'cfg-list-add' },
+                el('button', {
+                    class: 'linkish', type: 'button',
+                    onclick: () => {
+                        if (!isPlainObj(h.headers)) h.headers = {};
+                        let name = 'Authorization';
+                        for (let n = 2; hasOwn(h.headers, name); n += 1) name = `X-Header-${n}`;
+                        h.headers[name] = '';
+                        hkChanged();
+                    },
+                }, 'Add a header'))));
+}
+
+/**
+ * A JSON box that only takes effect when it parses.
+ *
+ * `_jsonError` is how a half-typed object stops Save rather than being lost:
+ * the last good value stays on the hook, and hkProblems() refuses to send it
+ * while the box says something else.
+ */
+function hkJsonBox(text, dis, apply, h, minRows = 2) {
+    const note = el('p', { class: 'cmd-field-bad', hidden: true });
+    const ta = el('textarea', {
+        class: 'cmd-area hk-json', spellcheck: 'false', rows: minRows, disabled: dis,
+        onfocus: (e) => grow(e.target, 40, 320),
+        oninput: (e) => {
+            grow(e.target, 40, 320);
+            try {
+                apply(JSON.parse(e.target.value || 'null'));
+                delete h._jsonError;
+                note.hidden = true;
+            } catch (err) {
+                h._jsonError = `not valid JSON — ${err.message}`;
+                note.textContent = h._jsonError;
+                note.hidden = false;
+            }
+            hkDirtied();
+        },
+    }, text);
+    return [ta, note];
+}
+
+function hkInputField(h, dis) {
+    const [ta, note] = hkJsonBox(h.input === undefined ? '' : JSON.stringify(h.input, null, 2), dis, (v) => {
+        if (v === null) { delete h.input; return; }
+        if (!isPlainObj(v)) throw new Error('the input has to be an object');
+        h.input = v;
+    }, h);
+    return hkField('Input', 'The tool’s arguments as a JSON object. ${tool_input.file_path} and the like are filled in from the event.',
+        el('div', null, ta, note));
+}
+
+/** A hook of a type this page does not know: the whole thing, as JSON. */
+function hkJsonField(h, g, hi, dis) {
+    const { _k, _script, _jsonError, ...plain } = h;
+    const [ta, note] = hkJsonBox(JSON.stringify(plain, null, 2), dis, (v) => {
+        if (!isPlainObj(v)) throw new Error('a hook has to be an object');
+        for (const k of Object.keys(h)) if (k !== '_k') delete h[k];
+        Object.assign(h, v, { _script: null });
+    }, h, 4);
+    return hkField('As JSON', 'A type this page has no form for. It is kept exactly as written.',
+        el('div', null, ta, note));
+}
+
+/** Add an event: the ones not in this file yet, and a free name for the rest. */
+function hkAddEvent(draft) {
+    const have = new Set(draft.map(e => e.event));
+    const events = (claudeState().data.hookEvents || []).filter(e => !have.has(e.name));
+    const add = (name) => {
+        if (!name) return;
+        if (have.has(name)) { toast(`${name} is already here — add a matcher to it instead.`, 'warn'); return; }
+        draft.push({ _k: hkKey(), event: name, groups: [hkNewGroup()] });
+        hkChanged();
+    };
+    return el('div', { class: 'cfg-list-add hk-add' },
+        el('select', {
+            class: 'settings-select',
+            onchange: (e) => {
+                const v = e.target.value;
+                if (v === '__other') {
+                    // eslint-disable-next-line no-alert
+                    const name = (window.prompt('The event’s name, exactly as Claude Code spells it:') || '').trim();
+                    add(name);
+                } else add(v);
+            },
+        },
+        el('option', { value: '', text: 'Add a hook on…', selected: true }),
+        events.map(e => el('option', { value: e.name, text: `${e.name} — ${e.blurb.replace(/`/g, '')}` })),
+        el('option', { value: '__other', text: 'Another event…' })));
+}
+
+/**
+ * The hooks the other files contribute — which all run too.
+ *
+ * Read-only, and said plainly, because "I removed that hook and it still
+ * fires" is what the old one-scope summary made likely: it showed the
+ * strongest file's hooks and nothing else.
+ */
+function hkElsewhere() {
+    const s = claudeState();
+    const rows = (s.data.hooks || []).filter(h => h.scope !== s.scope);
+    if (!rows.length) return el('span', { hidden: true });
+    return el('div', { class: 'cfg-inherit' },
+        el('div', { class: 'cfg-inherit-head' },
+            `${rows.length} more ${rows.length === 1 ? 'hook runs' : 'hooks run'} from other files — these add to yours`),
+        rows.map(h => el('div', { class: 'cfg-inherit-row hk-inherit-row' },
+            el('span', { class: 'hk-inherit-scope', text: CLAUDE_SCOPES[h.scope] || h.scope }),
+            ` ${h.event}${h.matcher ? ` · ${h.matcher}` : ''} → ${h.target || h.type || '—'}`,
+            h.script && !h.script.exists
+                ? el('span', { class: 'cfg-script bad', title: h.script.file }, ' script missing')
+                : null)));
+}
+
+function hkPaintFoot(foot) {
+    const s = claudeState();
+    const target = claudeTargetRow();
+    const editable = !!target && target.writable && !target.symlink;
+    const problems = s.hooksProblems;
+    const nodes = [];
+
+    if (s.hooksReview && !problems) {
+        const { added, removed, reordered } = hkChanges();
+        const line = (r) => el('li', null,
+            el('code', { text: `${r.event}${r.matcher ? ` · ${r.matcher}` : ''}` }),
+            ' → ', el('code', { class: 'hk-review-target', text: hkTarget(r.hook) }));
+        nodes.push(el('div', { class: 'hk-review' },
+            el('div', { class: 'cfg-stale-head' },
+                `Write these to ${shortPath(target.file)}?`),
+            added.length
+                ? el('div', null, el('div', { class: 'hk-review-lede', text: 'Will run' }),
+                    el('ul', null, added.map(line)))
+                : null,
+            removed.length
+                ? el('div', null, el('div', { class: 'hk-review-lede', text: 'Will stop running' }),
+                    el('ul', null, removed.map(line)))
+                : null,
+            reordered ? el('p', { class: 'cmd-field-note', text: 'Only the order changes.' }) : null,
+            !added.length && !removed.length && !reordered
+                ? el('p', { class: 'cmd-field-note', text: 'Nothing that runs changes.' })
+                : null,
+            el('p', { class: 'cmd-field-note' }, claudeReachLine()),
+            el('div', { class: 'hk-actions' },
+                el('button', {
+                    class: 'btn primary small', type: 'button', disabled: s.saving || null,
+                    onclick: () => saveClaudeHooks(),
+                }, 'Write the hooks'),
+                el('button', {
+                    class: 'btn quiet small', type: 'button',
+                    onclick: () => { s.hooksReview = false; hkPaintFoot(foot); },
+                }, 'Back to editing'))));
+        foot.classList.add('is-review');
+        foot.replaceChildren(...nodes);
+        return;
+    }
+
+    foot.classList.remove('is-review');
+    foot.replaceChildren(
+        el('span', { class: `cmd-foot-note${problems ? ' bad' : ''}` },
+            problems
+                ? `${problems.length} ${problems.length === 1 ? 'problem' : 'problems'} — fix ${problems.length === 1 ? 'it' : 'them'} to save.`
+                : (s.hooksDirty ? 'Edited — not saved.' : 'Matches the file on disk.')),
+        el('div', { class: 'cmd-card-spacer' }),
+        el('button', {
+            class: 'btn quiet small', type: 'button', disabled: !s.hooksDirty || null,
+            onclick: () => { hkClearDraft(s); renderSettings(); },
+        }, 'Revert'),
+        el('button', {
+            class: 'btn primary small', type: 'button',
+            disabled: !editable || !s.hooksDirty || s.saving || null,
+            onclick: () => {
+                if (hkIsStale()) {
+                    toast('The hooks changed on disk — choose above which to keep first.', 'warn');
+                    return;
+                }
+                const found = hkProblems();
+                if (found.length) {
+                    s.hooksProblems = found;
+                    renderSettings();
+                    return;
+                }
+                s.hooksReview = true;
+                hkPaintFoot(foot);
+            },
+        }, 'Review and save'));
+}
+
+/** The sentence claudeReachNote() says, for the review. */
+function claudeReachLine() {
+    const running = claudeState().data.running || 0;
+    return running
+        ? `New sessions pick these up. The ${running} already running will not.`
+        : 'New sessions pick these up.';
+}
+
+/**
+ * Write the draft.
+ *
+ * Stamped, like every collection write, but the stamp is not the whole guard:
+ * a save of another key on this page moves the file's stamp without touching
+ * its hooks, so the draft is also compared against the block it was seeded
+ * from, and a change there is a conflict even when the stamp would pass.
+ */
+async function saveClaudeHooks() {
+    const s = claudeState();
+    const row = claudeTargetRow();
+    if (!row) return;
+    s.saving = true;
+    renderSettings();
+    try {
+        const answer = await put('/api/claude-config', {
+            scope: s.scope, cwd: claudeDir(), stamp: row.stamp, patch: { hooks: hkForWire() },
+        });
+        s.data = answer.config;
+        hkClearDraft(s);
+        s.stale = null;
+        toast(claudeSavedNote('hooks'), 'ok');
+    } catch (err) {
+        s.hooksReview = false;
+        if (err.status === 409) {
+            // The draft is kept: loadClaudeConfig() leaves a dirty one alone,
+            // and the editor draws its own banner once the file it now holds
+            // differs from the one the draft started from.
+            toast('That file changed on disk. Your edits are kept — look, then save again.', 'warn');
+            await loadClaudeConfig();
+        } else {
+            toast(`Could not save the hooks: ${err.message}`, 'error');
+        }
+    }
+    s.saving = false;
+    renderSettings();
+}
+
+/** Nothing typed on this group, or the user said to drop it. */
+function claudeMayLeave() {
+    const s = claudeState();
+    if (!s.dirty && !s.hooksDirty) return true;
+    const what = s.hooksDirty && s.dirty ? 'the JSON and the hooks you have edited'
+        : (s.hooksDirty ? 'the hooks you have edited' : 'the JSON you have edited');
+    // eslint-disable-next-line no-alert
+    if (!window.confirm(`Discard ${what}?`)) return false;
+    s.draft = null;
+    s.dirty = false;
+    s.jsonError = null;
+    hkClearDraft(s);
+    return true;
 }
 
 /**
@@ -13886,8 +14865,11 @@ function cmdFormCard() {
             onclick: () => {
                 // A new row starts with the keys the file will need and nothing
                 // else, so the JSON tab shows exactly what the form says.
-                draft.push(cmdKeyed(s.scope === 'project-local'
-                    ? { id: '' } : { id: '', label: '', run: '' }));
+                const added = cmdKeyed(s.scope === 'project-local'
+                    ? { id: '' } : { id: '', label: '', run: '' });
+                draft.push(added);
+                // Open, since the only thing to do with a blank one is fill it in.
+                s.open.add(added._k);
                 cmdDirty();
                 renderSettings();
             },
@@ -13926,22 +14908,52 @@ function cmdCard(entry, i, shared, editable) {
     const orphan = local && !base && !(entry.label && entry.run);
     const problems = (s.problems || []).filter(p => p.index === i);
 
-    const head = el('div', { class: 'cmd-card-head' },
-        el('code', { class: 'cmd-card-id', text: entry.id || 'no id yet' }),
-        el('span', { class: 'cmd-card-name',
-            text: entry.label || (base && base.label) || '' }),
-        local && base ? el('span', { class: 'cfg-tab-tag', text: 'overrides the shared file' }) : null,
-        local && !base && !orphan ? el('span', { class: 'cfg-tab-tag', text: 'local only' }) : null,
-        orphan ? el('span', { class: 'cfg-tab-tag bad', text: 'orphaned' }) : null,
-        el('div', { class: 'cmd-card-spacer' }),
-        cmdDeleteButton(i, editable));
+    // A card the bridge refused is open whatever you last did with it: the
+    // reason it was refused is a field inside, and a folded card hides it.
+    const open = problems.length > 0 || s.open.has(entry._k)
+        || (!!entry.id && s.openIds.has(entry.id));
+    // Kept in step on every draw, so an id typed into an open card is the one
+    // remembered when a save reseeds the draft.
+    if (open) {
+        s.open.add(entry._k);
+        if (entry.id) s.openIds.add(entry.id);
+    }
+
+    const body = el('div', { class: 'cmd-card-body', hidden: !open || null });
+    const toggle = el('button', {
+        class: 'cmd-card-toggle', type: 'button',
+        'aria-expanded': open ? 'true' : 'false',
+        onclick: () => {
+            const now = toggle.getAttribute('aria-expanded') !== 'true';
+            // Flipped in place rather than through renderSettings(): nothing
+            // else on the page depends on it, and a redraw would take focus.
+            toggle.setAttribute('aria-expanded', now ? 'true' : 'false');
+            body.hidden = !now;
+            card.classList.toggle('open', now);
+            if (now) {
+                s.open.add(entry._k);
+                if (entry.id) s.openIds.add(entry.id);
+            } else {
+                s.open.delete(entry._k);
+                s.openIds.delete(entry.id);
+            }
+        },
+    },
+    el('code', { class: 'cmd-card-id', text: entry.id || 'no id yet' }),
+    el('span', { class: 'cmd-card-name',
+        text: entry.label || (base && base.label) || '' }),
+    local && base ? el('span', { class: 'cfg-tab-tag', text: 'overrides the shared file' }) : null,
+    local && !base && !orphan ? el('span', { class: 'cfg-tab-tag', text: 'local only' }) : null,
+    orphan ? el('span', { class: 'cfg-tab-tag bad', text: 'orphaned' }) : null);
+
+    const head = el('div', { class: 'cmd-card-head' }, toggle, cmdDeleteButton(i, editable));
 
     const card = el('div', {
-        class: `cmd-card${problems.length ? ' bad' : ''}`, 'data-index': i,
-    }, head);
+        class: `cmd-card${problems.length ? ' bad' : ''}${open ? ' open' : ''}`, 'data-index': i,
+    }, head, body);
 
     if (orphan) {
-        card.append(el('p', { class: 'cmd-orphan' },
+        body.append(el('p', { class: 'cmd-orphan' },
             el('strong', { text: 'The shared file no longer declares this id.' }),
             ' So this is a new command rather than an override, and it needs a label '
             + 'and a command of its own before anything here will save. ',
@@ -13960,16 +14972,16 @@ function cmdCard(entry, i, shared, editable) {
     // The id is the join key rather than a field: changing it on an override is
     // "delete this and add another", not an edit, and doing it in place would
     // silently orphan the entry.
-    card.append(cmdIdField(entry, i, local, base, editable, problems));
+    body.append(cmdIdField(entry, i, local, base, editable, problems));
     for (const field of CMD_FIELDS) {
-        card.append(cmdField(field, entry, i, { local, base, editable, problems }));
+        body.append(cmdField(field, entry, i, { local, base, editable, problems }));
     }
     // Filtered rather than passed through: `append` stringifies a null into the
     // literal word, where el()'s own children skip it. The same trap
     // docsFileLine() carries a comment about, and it prints "null" under a
     // command before anybody notices.
     const preview = cmdPreview(entry, base);
-    if (preview) card.append(preview);
+    if (preview) body.append(preview);
     return card;
 }
 
@@ -14431,6 +15443,309 @@ async function saveCmdText() {
     }
     s.saving = false;
     renderSettings();
+}
+
+// ── the top bar's layout ─────────────────────────────────────────────────
+//
+// Which buttons the bar carries, in what order, which of them live in its More
+// menu and which show their text — `toolbar.items` in the settings file, see
+// bridge/prefs.js. The page draws none of these buttons: they are all in
+// web/index.html with their listeners and badges already attached, and
+// paintToolbar() only *moves* them. That is the whole trick, and the reason it
+// is safe — a button in the More menu is the same node with the same id, so
+// paintPanels() still lights it, its badge still counts, and the focus-mode CSS
+// that hides `#btn-dash` by id still finds it.
+//
+// `places` is the rule bridge/prefs.js enforces as TOOLBAR_PINNED, repeated
+// because a hand-edited file reaches this page before anybody has saved it:
+// Settings is the way back from everything else here, so it is never hidden,
+// and the quota pill is a popover anchor with Restart bridge in it, so it never
+// leaves the bar. Hiding a view removes its button and nothing else — the
+// shortcut on the Ctrl ladder still opens it.
+const TOOLBAR = [
+    { id: 'tasks', node: 'btnTaskboard', name: 'Tasks', icon: true },
+    { id: 'live', node: 'btnLive', name: 'Live', icon: true },
+    { id: 'dashboard', node: 'btnDash', name: 'Dashboard', icon: true },
+    { id: 'history', node: 'btnNotes', name: 'History', icon: true },
+    { id: 'drafts', node: 'btnDrafts', name: 'Drafts', icon: true },
+    { id: 'schedules', node: 'btnSched', name: 'Schedules', icon: true },
+    // Icon-only until somebody says otherwise, which is how it has always been
+    // drawn: the one view that is not about work earns a place and not a word.
+    { id: 'settings', node: 'btnSettings', name: 'Settings', icon: true, label: false,
+        places: ['bar', 'more'],
+        why: 'Settings can go in More, but not away — it is where hidden buttons come back from.' },
+    { id: 'quota', node: 'quotaWrap', name: 'Quota',
+        places: ['bar'], why: 'Always on the bar — its popover holds Restart bridge.' },
+    { id: 'devbrowser', node: 'dbStatus', name: 'DevBrowser' },
+];
+const TOOLBAR_PLACES = [['bar', 'Bar'], ['more', 'More menu'], ['hidden', 'Hidden']];
+
+/**
+ * The saved list, resolved against the catalogue.
+ *
+ * What was saved comes first and in its own order; anything it does not mention
+ * — everything, on a file that never touched this, or a button added since —
+ * goes back in after the button it follows by default, so a new one lands where
+ * it would have been rather than at the end.
+ *
+ * @returns {Array<{def, place, label}>}
+ */
+function toolbarLayout() {
+    const byId = new Map(TOOLBAR.map(d => [d.id, d]));
+    const out = [];
+    const saved = (BOOT_PREFS.toolbar && BOOT_PREFS.toolbar.items) || [];
+    for (const e of Array.isArray(saved) ? saved : []) {
+        const def = e && byId.get(e.id);
+        if (!def || out.some(o => o.def === def)) continue;
+        const places = def.places || ['bar', 'more', 'hidden'];
+        out.push({
+            def,
+            place: places.includes(e.place) ? e.place : 'bar',
+            label: typeof e.label === 'boolean' ? e.label : def.label !== false,
+        });
+    }
+    TOOLBAR.forEach((def, i) => {
+        if (out.some(o => o.def === def)) return;
+        let at = 0;
+        for (let j = i - 1; j >= 0; j--) {
+            const k = out.findIndex(o => o.def === TOOLBAR[j]);
+            if (k >= 0) { at = k + 1; break; }
+        }
+        out.splice(at, 0, { def, place: 'bar', label: def.label !== false });
+    });
+    return out;
+}
+
+/** The layout as the settings file spells it. */
+const toolbarItems = (layout) => layout.map(o => ({ id: o.def.id, place: o.place, label: o.label }));
+
+function paintToolbar() {
+    const bar = dom.barMoreWrap.parentElement;
+    for (const { def, place, label } of toolbarLayout()) {
+        const node = dom[def.node];
+        if (place === 'more') dom.barMoreMenu.append(node);
+        else bar.insertBefore(node, dom.barMoreWrap);
+        // An attribute of our own rather than `hidden`, which the quota pill
+        // already uses to mean "no data yet" and must keep meaning.
+        node.toggleAttribute('data-bar-hidden', place === 'hidden');
+        if (def.icon) {
+            node.classList.toggle('icon-only', !label);
+            // With the text gone the title is all that is left of a name, and a
+            // title is not one a screen reader reliably reads.
+            if (label) node.removeAttribute('aria-label');
+            else node.setAttribute('aria-label', def.name);
+        }
+    }
+    // The version badge is not in the catalogue: it is an indicator that is
+    // absent unless something is behind, not a button anybody places. It rides
+    // beside the quota pill, which is always on the bar, rather than being left
+    // wherever the moves above happened to strand it.
+    bar.insertBefore(dom.cvWrap, dom.quotaWrap);
+    paintBarMore();
+}
+
+/**
+ * The More button's own state, read off what is inside it.
+ *
+ * Its badge adds up the counts it is hiding, so putting Dashboard away does not
+ * also put away the fact that something is waiting there — and it is urgent if
+ * any of them is. It is lit when the open view is one of its own.
+ */
+function paintBarMore() {
+    const inside = barMoreRows();
+    dom.barMoreWrap.hidden = !inside.length;
+    if (!inside.length && !dom.barMoreMenu.hidden) showBarMore(false);
+
+    let sum = 0;
+    let urgent = false;
+    const parts = [];
+    for (const node of inside) {
+        const badge = node.querySelector('.bar-badge');
+        if (!badge || badge.hidden) continue;
+        const n = Number(badge.textContent) || 0;
+        sum += n;
+        urgent = urgent || badge.classList.contains('urgent');
+        const def = TOOLBAR.find(d => dom[d.node] === node);
+        if (n && def) parts.push(`${n} in ${def.name}`);
+    }
+    dom.barMoreBadge.hidden = !sum;
+    dom.barMoreBadge.textContent = String(sum);
+    dom.barMoreBadge.classList.toggle('urgent', urgent);
+    dom.barMore.title = parts.length ? `More — ${parts.join(', ')}` : 'More';
+    dom.barMore.classList.toggle('on', inside.some(n => n.classList.contains('on')));
+}
+
+function showBarMore(on) {
+    if (on && dom.barMoreWrap.hidden) return;
+    dom.barMoreMenu.hidden = !on;
+    dom.barMore.setAttribute('aria-expanded', String(on));
+    if (on) { showQuota(false); showNewMenu(false); showCv(false); }
+}
+
+function barMoreRows() {
+    return [...dom.barMoreMenu.children].filter(n => !n.hasAttribute('data-bar-hidden'));
+}
+
+dom.barMore.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showBarMore(dom.barMoreMenu.hidden);
+});
+
+dom.barMore.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    showBarMore(true);
+    const rows = barMoreRows();
+    (e.key === 'ArrowDown' ? rows[0] : rows[rows.length - 1])?.focus();
+});
+
+// A ring, like #new-menu. Escape is on the central ladder with the others.
+dom.barMoreMenu.addEventListener('keydown', (e) => {
+    const rows = barMoreRows();
+    if (!rows.length) return;
+    const i = rows.indexOf(document.activeElement);
+    const go = (n) => { e.preventDefault(); rows[((n % rows.length) + rows.length) % rows.length].focus(); };
+    if (e.key === 'ArrowDown') go(i + 1);
+    else if (e.key === 'ArrowUp') go(i - 1);
+    else if (e.key === 'Home') go(0);
+    else if (e.key === 'End') go(-1);
+    else if (e.key === 'Tab') showBarMore(false);
+});
+
+// Choosing something closes the menu. The button's own listener has already run
+// by the time this bubbles here, so the view it opened is up underneath.
+dom.barMoreMenu.addEventListener('click', () => showBarMore(false));
+
+document.addEventListener('click', (e) => {
+    if (!dom.barMoreMenu.hidden && !e.target.closest('.bar-more-wrap')) showBarMore(false);
+});
+
+// Every badge and every `.on` inside the menu is set by code that has never heard
+// of it — renderLive, paintPanels and the rest write to their own button — so
+// the menu watches its contents rather than asking six painters to call it.
+new MutationObserver(paintBarMore).observe(dom.barMoreMenu, {
+    subtree: true, childList: true, characterData: true,
+    attributes: true, attributeFilter: ['hidden', 'class', 'data-bar-hidden'],
+});
+
+paintToolbar();
+
+// ── the Toolbar settings group ───────────────────────────────────────────
+//
+// One row per button, in bar order: dragged or stepped into place, sent to the
+// bar, the More menu or nowhere, and with its text on or off. Every change
+// saves the whole list, because `toolbar.items` is one key — see the note on
+// saveBinding() for why a map, or here a list, goes over whole.
+
+let barDrag = null;
+
+function renderToolbarSettings(locked) {
+    const layout = toolbarLayout();
+    const list = el('div', {
+        class: 'settings-bar',
+        ondragover: (e) => onBarDragOver(e, list),
+        ondrop: (e) => e.preventDefault(),
+    }, layout.map((o, i) => toolbarRow(o, i, layout, locked)));
+    const saved = (BOOT_PREFS.toolbar.items || []).length > 0;
+    return el('div', {},
+        list,
+        saved ? el('div', { class: 'settings-bar-foot' },
+            el('button', {
+                class: 'linkish', type: 'button', disabled: locked || null,
+                onclick: () => saveSetting('toolbar', 'items', null),
+            }, 'Reset to default')) : null);
+}
+
+function toolbarRow(o, i, layout, locked) {
+    const { def } = o;
+    const places = def.places || TOOLBAR_PLACES.map(([v]) => v);
+    const glyph = dom[def.node].querySelector('svg');
+    const edit = (change) => {
+        const next = layout.map(x => ({ ...x }));
+        Object.assign(next[i], change);
+        saveSetting('toolbar', 'items', toolbarItems(next));
+    };
+    const move = (step) => {
+        const j = i + step;
+        if (j < 0 || j >= layout.length) return;
+        const next = layout.slice();
+        [next[i], next[j]] = [next[j], next[i]];
+        saveSetting('toolbar', 'items', toolbarItems(next));
+    };
+
+    return el('div', {
+        class: 'settings-bar-row', 'data-id': def.id, 'data-place': o.place,
+        draggable: locked ? null : 'true',
+        ondragstart: (e) => {
+            barDrag = def.id;
+            e.currentTarget.classList.add('dragging');
+            e.dataTransfer.effectAllowed = 'move';
+            // Firefox will not start a drag without something on the transfer.
+            e.dataTransfer.setData('text/plain', def.id);
+        },
+        ondragend: (e) => {
+            e.currentTarget.classList.remove('dragging');
+            commitBarOrder(e.currentTarget.parentElement, layout);
+        },
+    },
+        el('span', { class: 'snip-grip', title: 'Drag to reorder' }, icon('grip', 14)),
+        el('span', { class: 'settings-bar-name' },
+            // DevBrowser's pill carries a light rather than an icon; the blank
+            // keeps its name in the same column as the rest.
+            glyph ? glyph.cloneNode(true) : el('span', { class: 'settings-bar-noglyph' }),
+            el('span', { text: def.name })),
+        def.icon
+            ? el('label', { class: 'settings-check settings-bar-label' },
+                el('input', {
+                    type: 'checkbox', checked: o.label || null, disabled: locked || null,
+                    onchange: (e) => edit({ label: e.target.checked }),
+                }),
+                el('span', { class: 'settings-box' }),
+                el('span', { text: 'Show label' }))
+            : el('span', { class: 'settings-bar-label' }),
+        places.length > 1
+            ? el('select', {
+                class: 'settings-select settings-bar-place', disabled: locked || null,
+                'aria-label': `Where ${def.name} goes`,
+                title: def.why || null,
+                onchange: (e) => edit({ place: e.target.value }),
+            }, TOOLBAR_PLACES.filter(([v]) => places.includes(v)).map(([v, text]) =>
+                el('option', { value: v, selected: v === o.place || null }, text)))
+            : el('span', { class: 'settings-bar-fixed', title: def.why || null, text: 'Always on the bar' }),
+        [-1, 1].map(step => el('button', {
+            class: 'snip-move', type: 'button',
+            disabled: locked || (step < 0 ? i === 0 : i === layout.length - 1) || null,
+            'aria-label': `Move ${def.name} ${step < 0 ? 'earlier' : 'later'}`,
+            title: step < 0 ? 'Earlier in the bar' : 'Later in the bar',
+            onclick: () => move(step),
+        }, step < 0 ? '↑' : '↓')));
+}
+
+/** The row under the cursor moves as the drag goes — the snippet list's idiom. */
+function onBarDragOver(e, list) {
+    if (!barDrag) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const moving = list.querySelector(`.settings-bar-row[data-id="${CSS.escape(barDrag)}"]`);
+    if (!moving) return;
+    const after = [...list.querySelectorAll('.settings-bar-row')]
+        .filter(n => n !== moving)
+        .find((n) => {
+            const box = n.getBoundingClientRect();
+            return e.clientY < box.top + box.height / 2;
+        });
+    if (after) list.insertBefore(moving, after);
+    else list.append(moving);
+}
+
+/** Read back the order the DOM now shows, and save it if it changed. */
+function commitBarOrder(list, layout) {
+    barDrag = null;
+    if (!list) return;
+    const ids = [...list.querySelectorAll('.settings-bar-row')].map(n => n.dataset.id);
+    if (ids.join() === layout.map(o => o.def.id).join()) return;
+    const next = ids.map(id => layout.find(o => o.def.id === id)).filter(Boolean);
+    saveSetting('toolbar', 'items', toolbarItems(next));
 }
 
 // ── remapping a shortcut ─────────────────────────────────────────────────
@@ -15697,7 +17012,7 @@ function showQuota(on) {
     // pill does not draw — the pill only clocks a window that has a percentage
     // or a status — so opening it is one of the ways a first reset time reaches
     // the screen, and closing it is one of the ways the last one leaves.
-    if (on) { renderQuotaPanel(); showNewMenu(false); }
+    if (on) { renderQuotaPanel(); showNewMenu(false); showBarMore(false); showCv(false); }
     syncQuotaClock();
 }
 
@@ -15732,7 +17047,181 @@ dom.quotaPill.addEventListener('click', (e) => {
 });
 
 document.addEventListener('click', (e) => {
-    if (!dom.quotaMenu.hidden && !e.target.closest('.quota-wrap')) showQuota(false);
+    if (!dom.quotaMenu.hidden && !e.target.closest('#quota-wrap')) showQuota(false);
+    if (!dom.cvMenu.hidden && !e.target.closest('#cv-wrap')) showCv(false);
+});
+
+// ---------------------------------------------------------------------------
+// Claude Code version
+// ---------------------------------------------------------------------------
+//
+// The summary is the bridge's (bridge/claude-version.js): installed, newest on
+// the configured channel, and which live sessions are on an older binary than
+// the one installed. Three surfaces draw it — the bar badge, the Update channel
+// row in settings, and the conversation header of a session that is itself on
+// an old binary — and all three read `state.cv` and nothing else.
+
+state.cv = null;
+state.cvBusy = false;
+
+const cvStale = () => (state.cv && state.cv.staleSessions) || [];
+
+/** The stale-session entry for this id, or null. */
+const cvStaleFor = (id) => cvStale().find(x => x.id === id) || null;
+
+function applyCv(summary) {
+    if (!summary || typeof summary !== 'object') return;
+    state.cv = summary;
+    renderCv();
+}
+
+async function loadCv({ fresh = false } = {}) {
+    try {
+        applyCv(await get(`/api/claude-version${fresh ? '?refresh=1' : ''}`));
+    } catch {
+        // A bridge without the route. Nothing appears, which is the right answer.
+    }
+}
+
+function renderCv() {
+    const cv = state.cv;
+    const stale = cvStale();
+    const show = !!cv && !state.remote && (cv.behind || stale.length > 0 || cv.updating || state.cvBusy);
+    dom.cvWrap.hidden = !show;
+    if (!show) showCv(false);
+    if (cv) {
+        const text = cv.behind
+            ? `Claude ↑ ${cv.latest}`
+            : `${stale.length} on old Claude`;
+        dom.cvPill.textContent = text;
+        dom.cvPill.dataset.kind = cv.behind ? 'behind' : 'stale';
+        dom.cvPill.title = cv.behind
+            ? `Claude Code ${cv.installed} is installed; ${cv.latest} is the newest on ${cv.channel}`
+            : `${stale.length} running ${stale.length === 1 ? 'session is' : 'sessions are'} `
+                + `on an older binary than the installed ${cv.installed}`;
+    }
+    if (!dom.cvMenu.hidden) renderCvPanel();
+    paintCvSettingsNote();
+    if (state.current) renderHeader();
+}
+
+function renderCvPanel() {
+    const cv = state.cv;
+    if (!cv) return;
+    const rows = [];
+    rows.push(el('div', { class: 'q-row cv-row' },
+        el('span', {}, 'Installed'), el('b', {}, cv.installed || 'unknown')));
+    rows.push(el('div', { class: 'q-row cv-row' },
+        el('span', {}, `Newest on ${cv.channel}`),
+        el('b', {}, cv.latest || '—')));
+    if (cv.error) {
+        rows.push(el('div', { class: 'quota-note' },
+            el('div', { class: 'warn' }, `Could not ask the registry: ${cv.error}`)));
+    }
+    const stale = cvStale();
+    if (stale.length) {
+        const byId = new Map(state.sessions.map(s => [s.sessionId, s]));
+        rows.push(el('div', { class: 'q-row' },
+            el('div', { class: 'cv-stale-head' },
+                `Running an older binary (${stale.length})`),
+            ...stale.map(x => {
+                const s = byId.get(x.id);
+                return el('button', {
+                    class: 'cv-stale', type: 'button', title: 'Open this session',
+                    onclick: (e) => { e.stopPropagation(); showCv(false); openSession(x.id); },
+                }, el('span', { class: 'cv-stale-title' }, s ? s.title : x.id.slice(0, 8)),
+                el('span', { class: 'cv-stale-ver' }, x.version));
+            }),
+            el('div', { class: 'quota-note' },
+                'Each keeps the binary it started on until its process ends. '
+                + 'Stop one and send it a message to move it to the installed version.')));
+    }
+    if (cv.lastUpdate && !cv.lastUpdate.ok) {
+        rows.push(el('div', { class: 'quota-note' },
+            el('div', { class: 'warn' }, 'The last update failed:'),
+            el('code', {}, cv.lastUpdate.output || 'no output')));
+    }
+    dom.cvBody.replaceChildren(...rows);
+
+    const busy = state.cvBusy || cv.updating;
+    dom.cvUpdate.hidden = !cv.behind && !busy;
+    dom.cvUpdate.disabled = busy;
+    dom.cvUpdate.classList.toggle('busy', busy);
+    dom.cvUpdateLabel.textContent = busy ? 'Updating…'
+        : cv.latest ? `Update to ${cv.latest}` : 'Update now';
+}
+
+function showCv(on) {
+    if (on === !dom.cvMenu.hidden) return;
+    dom.cvMenu.hidden = !on;
+    dom.cvPill.setAttribute('aria-expanded', String(on));
+    if (on) { renderCvPanel(); showQuota(false); showNewMenu(false); showBarMore(false); }
+}
+
+async function updateClaudeNow() {
+    if (state.cvBusy) return;
+    state.cvBusy = true;
+    renderCv();
+    try {
+        const out = await post('/api/claude-version/update');
+        applyCv(out.summary);
+        if (out.ok) {
+            const cv = out.summary || {};
+            toast(cv.behind ? 'claude update ran, but the installed version did not move'
+                : `Claude Code ${cv.installed} is installed`, cv.behind ? 'warn' : 'info');
+        } else {
+            toast('Claude Code could not be updated — see the version panel', 'warn');
+        }
+    } catch (err) {
+        if (err.data && err.data.summary) applyCv(err.data.summary);
+        toast(err.message || 'Claude Code could not be updated', 'warn');
+    } finally {
+        state.cvBusy = false;
+        renderCv();
+    }
+}
+
+/**
+ * The Update channel row in Claude settings, which is where somebody looking for
+ * "what version am I on" goes. Patched in place rather than by re-rendering the
+ * settings page, which would throw away whatever is being typed there.
+ */
+function paintCvSettingsNote() {
+    const row = document.querySelector('.settings-row[data-path="autoUpdatesChannel"] .settings-row-text');
+    if (!row) return;
+    const old = row.querySelector('.cv-note');
+    const note = cvSettingsNote();
+    if (old) old.replaceWith(note || '');
+    else if (note) row.append(note);
+}
+
+function cvSettingsNote() {
+    const cv = state.cv;
+    if (!cv || !cv.installed) return null;
+    const busy = state.cvBusy || cv.updating;
+    return el('div', { class: 'settings-row-note cv-note' },
+        `Installed ${cv.installed}`,
+        cv.latest ? ` · newest on this channel ${cv.latest}` : '',
+        cv.behind && !state.remote
+            ? el('button', {
+                class: 'linkish', type: 'button', disabled: busy || null,
+                onclick: updateClaudeNow,
+            }, busy ? ' Updating…' : ' Update now')
+            : '');
+}
+
+dom.cvPill.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showCv(dom.cvMenu.hidden);
+});
+dom.cvCheck.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    dom.cvCheck.disabled = true;
+    try { await loadCv({ fresh: true }); } finally { dom.cvCheck.disabled = false; }
+});
+dom.cvUpdate.addEventListener('click', (e) => {
+    e.stopPropagation();
+    updateClaudeNow();
 });
 
 // Ages move on their own, so the pill is repainted on a clock rather than only
@@ -15800,6 +17289,9 @@ function connect() {
         // the pill has been quietly ageing the whole time. A reconnect is the
         // one moment it can be brought back to the truth for free.
         loadQuota();
+        // The version check has the same missed-push problem, and this is also
+        // how the first answer arrives at all.
+        loadCv();
         // Same reasoning for the status line, which onerror left reading
         // "Reconnecting to the bridge…". applyRunner derives it from what we
         // already know, so an idle session says Ready again and a busy one is
@@ -15918,6 +17410,7 @@ function connect() {
         keys.apply(BOOT_PREFS.keyboard);
         paintShortcutHints();
         paintComposerHint();
+        paintToolbar();
         if (state.live.open) renderLive();
         // Project colours are in that payload too, and everything wearing one has
         // to be redrawn — including the rail, which nothing else here touches.
@@ -16080,6 +17573,12 @@ function connect() {
     // bridge only sends it when a reading actually moved.
     es.addEventListener('quota', (e) => {
         applyQuotaSnapshot(JSON.parse(e.data));
+    });
+
+    // The whole summary. Sent when it moved: an hourly registry check, an
+    // update, or a process starting or ending on some other version.
+    es.addEventListener('claude-version', (e) => {
+        applyCv(JSON.parse(e.data));
     });
 
     // A process reported a command list that differs from the one we hold —
@@ -17778,12 +19277,15 @@ async function scheduleMessage(at) {
 }
 
 // ── send queue ───────────────────────────────────────────────────────────
-// One turn runs at a time, so anything you write while an agent is working
-// waits. The bridge holds those messages instead of pushing them straight down
-// stdin, which is what makes them showable here: still yours, still editable,
-// still droppable. Once a message has gone to the process it is on its way to
-// the transcript and it leaves this list — nothing here pretends to cancel
-// something that has already been sent.
+// Anything you write while an agent is working waits. The bridge holds those
+// messages instead of pushing them straight down stdin, which is what makes them
+// showable here: still yours, still editable, still droppable. When the agent
+// starts a tool call the bridge hands them to the running turn, which reads them
+// after that step, the way a terminal does. A chip marked `handed` is one of
+// those: it can still be dropped (the bridge asks for it back, and a 409 means
+// the turn got there first) but no longer reordered. Once the turn has read a
+// message it leaves this list — nothing here pretends to cancel something that
+// has already been sent.
 
 /** Take the bridge's view of the queue and repaint. */
 function applyQueue(s) {
@@ -17807,9 +19309,15 @@ function renderQueue(s) {
     }
 
     const busy = s && (s.state === 'busy' || s.state === 'starting');
-    dom.queueCount.textContent = q.length === 1
-        ? (busy ? '1 message waiting for this turn to finish' : '1 message waiting')
-        : `${q.length} messages waiting${busy ? ', in this order' : ''}`;
+    // Once anything is handed over, the honest thing to say is when it will be
+    // read, which is sooner than "when this turn finishes".
+    const handed = q.some(x => x.handed);
+    dom.queueCount.textContent = handed
+        ? (q.length === 1 ? '1 message, read after the current step'
+            : `${q.length} messages, read after the current step`)
+        : q.length === 1
+            ? (busy ? '1 message waiting for Claude\'s next step' : '1 message waiting')
+            : `${q.length} messages waiting${busy ? ', in this order' : ''}`;
     dom.queueClear.textContent = q.length === 1 ? 'Drop it' : 'Drop all';
 
     // Runner status arrives every time the activity line moves, several times a
@@ -17817,7 +19325,8 @@ function renderQueue(s) {
     // message and any drag in progress, so only rebuild when the queue itself
     // actually changed.
     if (state.queueDrag) return;   // the drag owns the DOM until it ends
-    const sig = q.map(x => x.id).join(',') + '|' + [...state.queueOpen].sort().join(',');
+    const sig = q.map(x => x.id + (x.handed ? '*' : '')).join(',')
+        + '|' + [...state.queueOpen].sort().join(',');
     if (sig === state.queueSig && dom.queueList.children.length === q.length) return;
     state.queueSig = sig;
 
@@ -17887,16 +19396,21 @@ function queueItem(entry, i, roving) {
         renderQueue(state.runner);
     };
 
+    // Handed to the running turn: its place is fixed, so there is nothing to drag.
+    const handed = !!entry.handed;
     const li = el('li', {
-        class: 'queue-item' + (open ? ' open' : ''),
+        class: 'queue-item' + (open ? ' open' : '') + (handed ? ' handed' : ''),
         'data-id': entry.id,
-        draggable: 'true',
+        draggable: handed ? 'false' : 'true',
         tabindex: entry.id === roving ? '0' : '-1',
-        'aria-label': `Waiting message ${i + 1} of ${state.queue.length}: ${clip(entry.text, 80)}`,
+        'aria-label': `${handed ? 'Message for the next step' : 'Waiting message'} `
+            + `${i + 1} of ${state.queue.length}: ${clip(entry.text, 80)}`,
         onfocus: () => { state.queueFocus = entry.id; setRovingTab(); },
         onkeydown: (e) => onChipKey(e, entry, i, toggleOpen),
     },
-        el('span', { class: 'queue-grip', title: 'Drag to reorder', 'aria-hidden': 'true' }, '⠿'),
+        handed
+            ? el('span', { class: 'queue-grip', title: 'Claude reads this after the current step' }, '↳')
+            : el('span', { class: 'queue-grip', title: 'Drag to reorder', 'aria-hidden': 'true' }, '⠿'),
         el('span', { class: 'queue-n' }, String(i + 1)),
         // A count, not the names. The chip is one line and the message is what it is
         // for; the point is only that Edit will bring files back with it, so dropping
@@ -17925,6 +19439,7 @@ function queueItem(entry, i, roving) {
     );
 
     li.addEventListener('dragstart', (e) => {
+        if (handed) { e.preventDefault(); return; }
         state.queueDrag = entry.id;
         li.classList.add('dragging');
         e.dataTransfer.effectAllowed = 'move';
@@ -19376,7 +20891,7 @@ let newMenuSeq = 0;
 function showNewMenu(on, { focusFirst = false } = {}) {
     dom.newMenu.hidden = !on;
     dom.btnNewMenu.setAttribute('aria-expanded', String(on));
-    if (on) { showQuota(false); fillNewMenu({ focusFirst }); }
+    if (on) { showQuota(false); showBarMore(false); fillNewMenu({ focusFirst }); }
 }
 
 /**
@@ -20487,10 +22002,11 @@ document.addEventListener('click', () => closeLater());
 // when the composer grows, and closing on a resize would lose a half-typed time.
 window.addEventListener('resize', () => { if (!dom.laterMenu.hidden) positionLater(); });
 
-// ✕ and Cancel are the whole close surface on both — see modalUp().
+// ✕, Cancel and a whole click outside, on both — no Escape; see modalUp().
 for (const n of dom.snipFillScrim.querySelectorAll('[data-close-fill]')) {
     n.addEventListener('click', closeSnipFill);
 }
+closeOnClickOutside(dom.snipFillScrim, closeSnipFill);
 dom.snipFillGo.addEventListener('click', confirmSnipFill);
 // Enter in a one-line box confirms. There is no textarea parameter type, so
 // nothing in this form wants the key for itself.
@@ -20503,6 +22019,7 @@ dom.btnSnippets.append(icon('snippets', 17));
 for (const n of dom.snipEditScrim.querySelectorAll('[data-close-snip]')) {
     n.addEventListener('click', closeSnipEditor);
 }
+closeOnClickOutside(dom.snipEditScrim, closeSnipEditor);
 dom.snipSave.addEventListener('click', saveSnipEditor);
 dom.snipAuto.addEventListener('change', paintSnipPerm);
 dom.snipBody.addEventListener('input', paintSnipPlaceholders);
@@ -20535,22 +22052,24 @@ dom.checklistStrip.addEventListener('click', () => collapseChecklist(false));
 // because you clicked here. See git.clearCache.
 dom.changesRefresh.addEventListener('click', () => loadChanges({ refresh: true }));
 
-// ✕ and Cancel are the whole close surface — see modalUp().
+// ✕, Cancel and a whole click outside — no Escape; see modalUp().
 for (const n of dom.taskScrim.querySelectorAll('[data-close-task]')) {
     n.addEventListener('click', closeTaskDialog);
 }
+closeOnClickOutside(dom.taskScrim, closeTaskDialog);
 
 // The full-height CLAUDE.md editor. Wired once, here, because the markup is in
 // web/index.html rather than built by a render — see the "same file, full
 // height" section above.
 //
-// The ✕ and Close are the only ways out, and Escape is swallowed rather than
-// answered: that is the rule modalUp() holds for every dialog on this page, and
-// this one is the clearest case for it — what it holds is a whole CLAUDE.md
-// somebody is part-way through writing.
+// The ✕, Close and a whole click outside are the ways out, and Escape is
+// swallowed rather than answered: that is the rule modalUp() holds for every
+// dialog on this page, and this one is the clearest case for it — what it holds
+// is a whole CLAUDE.md somebody is part-way through writing.
 for (const n of dom.memoScrim.querySelectorAll('[data-close-memo]')) {
     n.addEventListener('click', closeMemoDialog);
 }
+closeOnClickOutside(dom.memoScrim, closeMemoDialog);
 dom.memoClose.addEventListener('click', closeMemoDialog);
 dom.memoBig.addEventListener('input', () => {
     const s = state.claudeDocs;
@@ -20842,7 +22361,7 @@ const live = makeComposer({
         : null),
     // Main-window furniture that would otherwise sit over the popover. A
     // composer inside a modal has none of it, and passes nothing.
-    closeOthers: () => { showQuota(false); showNewMenu(false); },
+    closeOthers: () => { showQuota(false); showNewMenu(false); showBarMore(false); },
 
     // Attachments. The strip is above the input row and the drop zone is the whole
     // composer, so a file can be let go anywhere near the box rather than exactly on
@@ -22005,10 +23524,11 @@ loadWisprAvailable();
 dom.newScrim.querySelector('.modal-body')
     .addEventListener('scroll', repositionFloatingMenus);
 
-// ✕ and Cancel are the whole close surface — see modalUp().
+// ✕, Cancel and a whole click outside — no Escape; see modalUp().
 for (const n of dom.newScrim.querySelectorAll('[data-close]')) {
     n.addEventListener('click', closeNew);
 }
+closeOnClickOutside(dom.newScrim, closeNew);
 
 dom.newTabRecent.addEventListener('click', () => setPickerTab('recent'));
 dom.newTabBrowse.addEventListener('click', () => setPickerTab('browse', { load: true }));
@@ -22055,18 +23575,20 @@ dom.newCwd.addEventListener('input', () => {
     if (menuOpen(newC.slash)) updateSlashMenu(newC);
 });
 
-// ✕ and Cancel are the whole close surface — see modalUp().
+// ✕, Cancel and a whole click outside — no Escape; see modalUp().
 for (const n of dom.delScrim.querySelectorAll('[data-close-del]')) {
     n.addEventListener('click', closeDelete);
 }
+closeOnClickOutside(dom.delScrim, closeDelete);
 
 // ── the plan/question review ─────────────────────────────────────────────
 
-// ✕ and Close are the whole close surface — see modalUp() for why there is no
-// Escape and no click-outside here either.
+// ✕, Close and a whole click outside — see modalUp() for why there is no
+// Escape here either.
 for (const n of dom.reviewScrim.querySelectorAll('[data-close-review]')) {
     n.addEventListener('click', closeReview);
 }
+closeOnClickOutside(dom.reviewScrim, closeReview);
 dom.reviewJump.addEventListener('click', () => {
     // Resolved now rather than held from the open, because a result landing in
     // between replaces the node this is aiming at.
@@ -22082,10 +23604,10 @@ dom.reviewJump.addEventListener('click', () => {
 for (const n of dom.diffScrim.querySelectorAll('[data-close-diff]')) {
     n.addEventListener('click', closeDiff);
 }
-// No close-on-backdrop, and no Escape rung either — see modalUp(). This dialog is
-// why half of that rule exists: a diff is the one thing here people drag-select,
-// and a drag released past the edge fires a click whose target is the scrim, so
-// "click outside to close" reads as "lose your place for no reason".
+// No Escape rung — see modalUp(). The click outside is the full-click kind for
+// this dialog above all: a diff is the one thing here people drag-select, and a
+// plain scrim click would close it on a drag released past the edge.
+closeOnClickOutside(dom.diffScrim, closeDiff);
 
 dom.diffUnified.addEventListener('click', () => setDiffOpt('split', false));
 dom.diffSplit.addEventListener('click', () => setDiffOpt('split', true));
@@ -22278,10 +23800,11 @@ dom.pairCopy.addEventListener('click', async () => {
         toast('Could not copy — the link is selected, press Ctrl+C');
     }
 });
-// ✕ and Cancel are the whole close surface — see modalUp().
+// ✕, Cancel and a whole click outside — no Escape; see modalUp().
 for (const n of dom.restartScrim.querySelectorAll('[data-close-restart]')) {
     n.addEventListener('click', closeRestart);
 }
+closeOnClickOutside(dom.restartScrim, closeRestart);
 dom.restartFix.addEventListener('click', startFixSession);
 dom.restartGo.addEventListener('click', () => {
     // Skip the pull only if one was attempted and failed — watching it fail
@@ -22337,6 +23860,13 @@ dom.setShell.addEventListener('scroll', () => {
     if (tocFrame) return;
     tocFrame = requestAnimationFrame(() => { tocFrame = 0; markSettingsToc(); });
 }, { passive: true });
+// The pinned head's height, for the shell's scroll-padding: it grows when the
+// file line picks up tags or wraps, and shrinks when the project picker hides.
+if (typeof ResizeObserver === 'function') {
+    new ResizeObserver(() => {
+        dom.setShell.style.setProperty('--set-top-h', `${dom.setTop.offsetHeight}px`);
+    }).observe(dom.setTop);
+}
 // Changing scope redraws off the answer already in hand — the chain came back
 // whole, so there is nothing to fetch. Changing project does need a fetch,
 // because it is a different chain.
@@ -22355,7 +23885,8 @@ dom.setProject.addEventListener('change', () => {
     // A JSON draft is about a file in the *old* project, so it goes — with a
     // confirm, because it is somebody's typing.
     const cfg = state.claudeCfg;
-    if (cfg.dirty && !window.confirm('Discard the JSON you have edited?')) {
+    // The hooks draft too, which is the one that most needs asking about.
+    if (!claudeMayLeave()) {
         dom.setProject.value = settingsProject();
         return;
     }
@@ -22430,7 +23961,9 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !dom.ctxMenu.hidden) { closeContextMenu({ focus: true }); return; }
     // A popover can sit over a modal dialog, so it answers Escape first.
     if (e.key === 'Escape' && !dom.quotaMenu.hidden) { showQuota(false); dom.quotaPill.focus(); return; }
+    if (e.key === 'Escape' && !dom.cvMenu.hidden) { showCv(false); dom.cvPill.focus(); return; }
     if (e.key === 'Escape' && !dom.newMenu.hidden) { showNewMenu(false); dom.btnNewMenu.focus(); return; }
+    if (e.key === 'Escape' && !dom.barMoreMenu.hidden) { showBarMore(false); dom.barMore.focus(); return; }
     // Both snippet popovers, and above the modal rung rather than below it — the
     // dialog's sits over #new-scrim while it is open, so a rung underneath would
     // never run and Escape would be swallowed with the popover still up.
@@ -22482,8 +24015,8 @@ document.addEventListener('keydown', (e) => {
     // everything but its own copy chord straight through and it bubbles here as
     // well, so `inTerm` is the only thing stopping a shell from losing a Ctrl+F
     // it was meant to keep. Only the commands whose chord a shell has a use of
-    // its own for yield — the two find ones, and the two composer cycles, whose
-    // Ctrl+P is readline's previous-history and the tmux prefix. A view shortcut
+    // its own for yield — the two find ones, and the composer cycles in both
+    // directions, whose Ctrl+P is readline's previous-history and the tmux prefix. A view shortcut
     // is not something a shell wants, and having Ctrl+3 stop working because the
     // cursor is in a terminal would be worse than the collision it avoids.
     // `terminal.toggle` reads `inTerm` for a third thing again — see there.
@@ -22563,13 +24096,21 @@ document.addEventListener('keydown', (e) => {
     // Ctrl+P is readline's previous-history and the default tmux prefix, so a
     // shell that has the focus keeps it — returning without preventDefault is
     // what leaves the keystroke to xterm.
-    if (command === 'composer.permissionMode' || command === 'composer.model') {
+    //
+    // Each has a `…Prev` twin (Ctrl+Shift+P, Ctrl+Shift+M by default) that walks
+    // the same list the other way, for the chord pressed one time too many.
+    const cycles = {
+        'composer.permissionMode': ['perm', 1], 'composer.permissionModePrev': ['perm', -1],
+        'composer.model': ['model', 1], 'composer.modelPrev': ['model', -1],
+    };
+    if (cycles[command]) {
         if (inTerm) return;
+        const [which, step] = cycles[command];
         const c = composers.find(x => x.input === document.activeElement) || live;
-        const sel = command === 'composer.model' ? c.model : c.perm;
+        const sel = c[which];
         if (!sel) return;
         e.preventDefault();
-        cycleSelect(sel, command === 'composer.model' ? null : CYCLE_PERM);
+        cycleSelect(sel, which === 'model' ? null : CYCLE_PERM, step);
         return;
     }
     if (command === 'session.new') { e.preventDefault(); openNew(); }
