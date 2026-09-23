@@ -8492,3 +8492,55 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 @media (prefers-reduced-motion: reduce) {
     .pcolor-swatch:hover { transform: none; }
 }
+
+/* --- Wispr Flow transforms ---------------------------------------------- */
+
+/* The button beside each message box. The live composer's is the snippets
+   button's shape; the dialog's is a small labelled-row button with only the mark
+   in it. Both wraps are hidden until the bridge says a chord can land, and an
+   author `display` would override the attribute. */
+.wispr-wrap { position: relative; flex: none; }
+.wispr-wrap[hidden] { display: none; }
+.btn-wispr {
+    display: grid;
+    place-items: center;
+    width: 38px;
+    height: 38px;
+    color: var(--text-3);
+    background: transparent;
+    border-radius: var(--pill);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.btn-wispr:hover,
+.btn-wispr[aria-expanded="true"] { background: var(--s4); color: var(--text); }
+.btn-wispr-small { display: inline-grid; place-items: center; }
+
+/* A row's chord, in the slot send-later puts its time. */
+.wispr-menu kbd.at { font: 400 11px/1.4 var(--mono); }
+
+/* One transform in Settings: title, shortcut, delete. */
+.wispr-set-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 150px) auto;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: var(--r);
+    background: var(--s2);
+    margin-bottom: 6px;
+}
+.wispr-set-row input[type="text"] {
+    background: var(--s1);
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-sm);
+    padding: 6px 8px;
+    color: var(--text);
+    font: 400 12.5px/1.2 var(--sans);
+    min-width: 0;
+}
+.wispr-set-row .wispr-set-combo { font-family: var(--mono); }
+.wispr-set-error {
+    grid-column: 1 / -1;
+    font: 400 11.5px/1.4 var(--sans);
+    color: var(--red);
+}

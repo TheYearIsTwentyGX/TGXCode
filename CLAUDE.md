@@ -293,12 +293,12 @@ the accident the rest of this file is about.
 The suite is `auth`, `temp`, `recent`, `pulls`, `taskboard`, `ports`, `spinner`,
 `changes`, `restart`, `handoff`, `drafts`, `snippets`, `notifications`, `schedule`,
 `usage`, `titles`, `tasks`, `prefs`, `paths`, `logwidth`, `claude-config`,
-`claude-docs`, `ask-result` and `runner` on their own — no bridge needed — plus
-four that want a live one: `gate`, `browser`, `refusals`, `unpaired`. Between them
-they cover the token, what a remote caller is refused, what an unpaired remote
-device sees before and after pairing, and what the nightly restart does when there
-is nobody to ask. If you touch `bridge/auth.js` or any route's local/remote rule,
-run it: that is the part of this codebase with tests around it.
+`claude-docs`, `ask-result`, `runner` and `wispr` on their own — no bridge needed
+— plus four that want a live one: `gate`, `browser`, `refusals`, `unpaired`.
+Between them they cover the token, what a remote caller is refused, what an
+unpaired remote device sees before and after pairing, and what the nightly restart
+does when there is nobody to ask. If you touch `bridge/auth.js` or any route's
+local/remote rule, run it: that is the part of this codebase with tests around it.
 
 **`runner` is the one to run when you touch `bridge/runner.js`**, and for the same
 reason `schedule` exists: its bugs do not announce themselves. `inFlight` is both the
