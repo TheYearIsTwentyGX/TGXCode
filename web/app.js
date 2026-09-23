@@ -873,17 +873,14 @@ function toast(text, kind = 'info', opts = {}) {
  * Deliberately not a count — this said "six" through two additions and was
  * wrong by the time anyone read it.
  *
- * **A modal is closed by its own ✕ or Cancel and by nothing else.** It used to
- * go on Escape and on a click landing on the scrim, and both were losing work
- * that only exists in the page: Start-a-session holds a written prompt, a
- * directory and attachments that were never uploaded, and closing it discards
- * all three. Escape reaches this app while a dictation tool is cancelling a
- * phrase — Wispr Flow binds it — and the scrim click was never really a click
- * outside: drag-selecting text in the box and releasing past its edge fires one
- * whose target is the common ancestor, which is the scrim.
- *
- * Comparing the mousedown target to the mouseup target would have saved the
- * drag alone and left Escape as it was, so both paths went instead.
+ * **A modal is closed by its own ✕ or Cancel, or by a whole click outside it —
+ * never by Escape.** It used to go on Escape and on any click landing on the
+ * scrim, and both were losing work that only exists in the page:
+ * Start-a-session holds a written prompt, a directory and attachments that were
+ * never uploaded, and closing it discards the attachments. Escape reaches this
+ * app while a dictation tool is cancelling a phrase — Wispr Flow binds it — so
+ * it stays swallowed. The scrim click came back once it could be told apart
+ * from a drag; see closeOnClickOutside().
  */
 function modalUp() {
     return !dom.newScrim.hidden || !dom.delScrim.hidden
@@ -904,15 +901,39 @@ function modalUp() {
         // is a read-only view and closing it loses nothing, so the paragraph
         // above is not what puts it here. The sentence after it is: six dialogs
         // swallow the key and a seventh that answered it would be exactly the
-        // special case this function exists to stop. It also happens to be the
-        // dialog the *scrim* half of that rule was written for — a diff is the
-        // one thing here people drag-select, and a drag released past the edge
-        // fires a click whose target is the scrim.
+        // special case this function exists to stop.
         || !dom.diffScrim.hidden
         // The plan/question review, which is the diff viewer's case exactly: a
         // read-only replay holding no work, so the paragraph above is not what
         // puts it here either. The sentence after it is.
         || !dom.reviewScrim.hidden;
+}
+
+/**
+ * Close a modal on a click that both starts and ends on its scrim.
+ *
+ * A `click` alone cannot say that. Drag-selecting in the First message box and
+ * releasing past the dialog's edge fires one whose target is the common
+ * ancestor of the press and the release — the scrim — and so does the mirror
+ * image, a press on the scrim released inside the dialog. So the press and the
+ * release are each checked against the scrim itself, and the `click` that
+ * follows only closes when both were outside. `=== scrim` rather than
+ * `contains`: the scrim contains the dialog, and anything in the dialog is in.
+ */
+function closeOnClickOutside(scrim, close) {
+    let down = false, up = false;
+    scrim.addEventListener('mousedown', (e) => {
+        down = e.button === 0 && e.target === scrim;
+        up = false;
+    });
+    scrim.addEventListener('mouseup', (e) => {
+        up = down && e.button === 0 && e.target === scrim;
+    });
+    scrim.addEventListener('click', () => {
+        const go = down && up;
+        down = up = false;
+        if (go) close();
+    });
 }
 
 // ── drafts ───────────────────────────────────────────────────────────────
@@ -11124,9 +11145,7 @@ dom.pcolorInput.addEventListener('input', () => {
     const hex = hexAccent(dom.pcolorInput.value);
     if (hex && pcolorFor) saveProjectColor(pcolorFor.cwd, hex);
 });
-dom.pcolorScrim.addEventListener('click', (e) => {
-    if (e.target === dom.pcolorScrim) closePcolor();
-});
+closeOnClickOutside(dom.pcolorScrim, closePcolor);
 
 // The menu goes on a click outside it and on Escape. A rail scroll follows it
 // instead — see syncProjMenu — because the browser scrolls a half-visible ⋮ into
@@ -21323,10 +21342,11 @@ document.addEventListener('click', () => closeLater());
 // when the composer grows, and closing on a resize would lose a half-typed time.
 window.addEventListener('resize', () => { if (!dom.laterMenu.hidden) positionLater(); });
 
-// ✕ and Cancel are the whole close surface on both — see modalUp().
+// ✕, Cancel and a whole click outside, on both — no Escape; see modalUp().
 for (const n of dom.snipFillScrim.querySelectorAll('[data-close-fill]')) {
     n.addEventListener('click', closeSnipFill);
 }
+closeOnClickOutside(dom.snipFillScrim, closeSnipFill);
 dom.snipFillGo.addEventListener('click', confirmSnipFill);
 // Enter in a one-line box confirms. There is no textarea parameter type, so
 // nothing in this form wants the key for itself.
@@ -21339,6 +21359,7 @@ dom.btnSnippets.append(icon('snippets', 17));
 for (const n of dom.snipEditScrim.querySelectorAll('[data-close-snip]')) {
     n.addEventListener('click', closeSnipEditor);
 }
+closeOnClickOutside(dom.snipEditScrim, closeSnipEditor);
 dom.snipSave.addEventListener('click', saveSnipEditor);
 dom.snipAuto.addEventListener('change', paintSnipPerm);
 dom.snipBody.addEventListener('input', paintSnipPlaceholders);
@@ -21371,22 +21392,24 @@ dom.checklistStrip.addEventListener('click', () => collapseChecklist(false));
 // because you clicked here. See git.clearCache.
 dom.changesRefresh.addEventListener('click', () => loadChanges({ refresh: true }));
 
-// ✕ and Cancel are the whole close surface — see modalUp().
+// ✕, Cancel and a whole click outside — no Escape; see modalUp().
 for (const n of dom.taskScrim.querySelectorAll('[data-close-task]')) {
     n.addEventListener('click', closeTaskDialog);
 }
+closeOnClickOutside(dom.taskScrim, closeTaskDialog);
 
 // The full-height CLAUDE.md editor. Wired once, here, because the markup is in
 // web/index.html rather than built by a render — see the "same file, full
 // height" section above.
 //
-// The ✕ and Close are the only ways out, and Escape is swallowed rather than
-// answered: that is the rule modalUp() holds for every dialog on this page, and
-// this one is the clearest case for it — what it holds is a whole CLAUDE.md
-// somebody is part-way through writing.
+// The ✕, Close and a whole click outside are the ways out, and Escape is
+// swallowed rather than answered: that is the rule modalUp() holds for every
+// dialog on this page, and this one is the clearest case for it — what it holds
+// is a whole CLAUDE.md somebody is part-way through writing.
 for (const n of dom.memoScrim.querySelectorAll('[data-close-memo]')) {
     n.addEventListener('click', closeMemoDialog);
 }
+closeOnClickOutside(dom.memoScrim, closeMemoDialog);
 dom.memoClose.addEventListener('click', closeMemoDialog);
 dom.memoBig.addEventListener('input', () => {
     const s = state.claudeDocs;
@@ -22543,10 +22566,11 @@ wireAttachments(newC);
 dom.newScrim.querySelector('.modal-body')
     .addEventListener('scroll', repositionFloatingMenus);
 
-// ✕ and Cancel are the whole close surface — see modalUp().
+// ✕, Cancel and a whole click outside — no Escape; see modalUp().
 for (const n of dom.newScrim.querySelectorAll('[data-close]')) {
     n.addEventListener('click', closeNew);
 }
+closeOnClickOutside(dom.newScrim, closeNew);
 
 dom.newTabRecent.addEventListener('click', () => setPickerTab('recent'));
 dom.newTabBrowse.addEventListener('click', () => setPickerTab('browse', { load: true }));
@@ -22593,18 +22617,20 @@ dom.newCwd.addEventListener('input', () => {
     if (menuOpen(newC.slash)) updateSlashMenu(newC);
 });
 
-// ✕ and Cancel are the whole close surface — see modalUp().
+// ✕, Cancel and a whole click outside — no Escape; see modalUp().
 for (const n of dom.delScrim.querySelectorAll('[data-close-del]')) {
     n.addEventListener('click', closeDelete);
 }
+closeOnClickOutside(dom.delScrim, closeDelete);
 
 // ── the plan/question review ─────────────────────────────────────────────
 
-// ✕ and Close are the whole close surface — see modalUp() for why there is no
-// Escape and no click-outside here either.
+// ✕, Close and a whole click outside — see modalUp() for why there is no
+// Escape here either.
 for (const n of dom.reviewScrim.querySelectorAll('[data-close-review]')) {
     n.addEventListener('click', closeReview);
 }
+closeOnClickOutside(dom.reviewScrim, closeReview);
 dom.reviewJump.addEventListener('click', () => {
     // Resolved now rather than held from the open, because a result landing in
     // between replaces the node this is aiming at.
@@ -22620,10 +22646,10 @@ dom.reviewJump.addEventListener('click', () => {
 for (const n of dom.diffScrim.querySelectorAll('[data-close-diff]')) {
     n.addEventListener('click', closeDiff);
 }
-// No close-on-backdrop, and no Escape rung either — see modalUp(). This dialog is
-// why half of that rule exists: a diff is the one thing here people drag-select,
-// and a drag released past the edge fires a click whose target is the scrim, so
-// "click outside to close" reads as "lose your place for no reason".
+// No Escape rung — see modalUp(). The click outside is the full-click kind for
+// this dialog above all: a diff is the one thing here people drag-select, and a
+// plain scrim click would close it on a drag released past the edge.
+closeOnClickOutside(dom.diffScrim, closeDiff);
 
 dom.diffUnified.addEventListener('click', () => setDiffOpt('split', false));
 dom.diffSplit.addEventListener('click', () => setDiffOpt('split', true));
@@ -22816,10 +22842,11 @@ dom.pairCopy.addEventListener('click', async () => {
         toast('Could not copy — the link is selected, press Ctrl+C');
     }
 });
-// ✕ and Cancel are the whole close surface — see modalUp().
+// ✕, Cancel and a whole click outside — no Escape; see modalUp().
 for (const n of dom.restartScrim.querySelectorAll('[data-close-restart]')) {
     n.addEventListener('click', closeRestart);
 }
+closeOnClickOutside(dom.restartScrim, closeRestart);
 dom.restartFix.addEventListener('click', startFixSession);
 dom.restartGo.addEventListener('click', () => {
     // Skip the pull only if one was attempted and failed — watching it fail
