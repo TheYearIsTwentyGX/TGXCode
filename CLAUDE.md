@@ -1,4 +1,4 @@
-# Working on Claude Sessions
+# Working on TGXCode
 
 This app is used while it is being worked on. Dylan keeps a window open with
 live sessions in it, and those sessions are real work in progress. The rules
@@ -7,7 +7,8 @@ below exist because breaking them destroys that work.
 ## Never touch the everyday instance
 
 **Port 45888 belongs to the user.** Do not start a bridge on it, do not
-`pkill -f bridge/server.js`, and do not `Stop-Process` ClaudeSessions.
+`pkill -f bridge/server.js`, and do not `Stop-Process` TGXCode (or ClaudeSessions,
+the same app as installed before the rename).
 
 Use your own instance instead:
 
@@ -22,7 +23,7 @@ agents can each have one. The window it opens is titled `dev :45899` and carries
 an amber badge, so it is never confused with the everyday one.
 
 `--port` is refused for 45888 exactly like the environment variable is, and it
-wins over it. Prefer it when you want a specific port: `CLAUDE_SESSIONS_PORT=…`
+wins over it. Prefer it when you want a specific port: `TGXCODE_PORT=…`
 in front of a command reads like the thing the section below is about, and it is
 also the variable a run started from the app never receives.
 
@@ -38,7 +39,7 @@ must stop your own, Ctrl-C the `npm run dev` you started, or kill it by port:
 kill "$(ss -ltnp 2>/dev/null | grep :45899 | grep -oP 'pid=\K\d+' | head -1)"
 ```
 
-**`CLAUDE_SESSIONS_PORT` in your environment is not a port you chose.** A session
+**`TGXCODE_PORT` in your environment is not a port you chose.** A session
 started from the app inherits the bridge's environment, so for a long time that
 variable arrived pre-set to `45888` — and `bash bridge/launch.sh` or
 `node bridge/server.js` from a worktree then bound the user's port without a port
@@ -51,7 +52,7 @@ Three things stop it now, and none of them is you remembering:
 - `bridge/server.js` refuses to bind 45888 when it is running out of
   `.claude/worktrees/` — exit 4, before the socket. `npm run dev` still refuses
   the port outright.
-- The bridge no longer passes `CLAUDE_SESSIONS_PORT` to the sessions or terminals
+- The bridge no longer passes `TGXCODE_PORT` to the sessions or terminals
   it starts, so a fresh session inherits nothing to trip over.
 - `scripts/restart-bridge.sh` refuses the everyday port from a worktree. Without
   that it would kill the user's bridge and then fail to replace it, which is worse
@@ -153,7 +154,7 @@ Four fields were documented by name alone and turned out to be
 objects — `user.command`, `tool.result.patch` and `tool.agent` in the event table,
 and the `status` a send returns. A whole event kind, `tool-result`, was never listed, so a phone client
 left every tool spinning while you watched a live turn. And
-`X-Claude-Sessions-Client: 1` has been mandatory on every non-GET `/api/` route
+`X-TGXCode-Client: 1` (then `X-Claude-Sessions-Client`) has been mandatory on every non-GET `/api/` route
 since the CSRF guard landed, without appearing in the document at all — so the
 first thing a new client does is 403 on its entire write surface.
 
@@ -225,8 +226,8 @@ through. **Do not leave them there.** Either:
 
   ```bash
   curl -sX POST http://127.0.0.1:45899/api/sessions \
-    -H "Authorization: Bearer $(cat ~/.local/share/claude-sessions/token)" \
-    -H 'X-Claude-Sessions-Client: 1' -H 'Content-Type: application/json' \
+    -H "Authorization: Bearer $(cat ~/.local/share/tgxcode/token)" \
+    -H 'X-TGXCode-Client: 1' -H 'Content-Type: application/json' \
     -d '{"cwd":"'"$PWD"'","prompt":"…","test":true}'
   ```
 
@@ -238,8 +239,8 @@ through. **Do not leave them there.** Either:
 
   ```bash
   curl -sX DELETE http://127.0.0.1:45899/api/sessions/$ID \
-    -H "Authorization: Bearer $(cat ~/.local/share/claude-sessions/token)" \
-    -H 'X-Claude-Sessions-Client: 1'
+    -H "Authorization: Bearer $(cat ~/.local/share/tgxcode/token)" \
+    -H 'X-TGXCode-Client: 1'
   ```
 
   This is a hard delete — the transcript and its sidecar directory. Do it to
@@ -254,18 +255,18 @@ Best is both: label it on the way in, delete it on the way out.
 ## The API needs a token now
 
 Every `/api/` route but `/api/health` requires the token at
-`~/.local/share/claude-sessions/token`, created on first run with mode `0600`. So
+`~/.local/share/tgxcode/token`, created on first run with mode `0600`. So
 any `curl` against the bridge needs:
 
 ```bash
--H "Authorization: Bearer $(cat ~/.local/share/claude-sessions/token)"
+-H "Authorization: Bearer $(cat ~/.local/share/tgxcode/token)"
 ```
 
 Without it you get `401 {"error":"unauthorized"}`, which is easy to misread as a
 broken bridge.
 
 **Nothing in `web/` had to change for this, and nor should yours.** A page fetched
-over loopback is served with the token in a `<meta name="cs-token">` tag *and* with
+over loopback is served with the token in a `<meta name="tgx-token">` tag *and* with
 an `HttpOnly` cookie set; `fetch` and `EventSource` both send same-origin cookies
 on their own. So the browser and the Electron shell need no login step, and the
 service worker keeps working. Loopback is not otherwise trusted — "any process on
@@ -275,7 +276,7 @@ this machine" is the hole the token closes.
 token. It reports `remote`, which is what raises the banner in the UI.
 
 The bridge also refuses to bind a non-loopback interface without
-`CLAUDE_SESSIONS_ALLOW_REMOTE_BIND=1`, and refuses several routes outright to
+`TGXCODE_ALLOW_REMOTE_BIND=1`, and refuses several routes outright to
 remote callers. See `docs/remote.md` for the reasoning and `docs/api.md` for the
 contract.
 
@@ -292,8 +293,8 @@ the accident the rest of this file is about.
 
 The suite is `auth`, `temp`, `recent`, `pulls`, `taskboard`, `ports`, `spinner`,
 `changes`, `restart`, `handoff`, `drafts`, `snippets`, `notifications`, `schedule`,
-`usage`, `titles`, `tasks`, `prefs`, `paths`, `logwidth`, `claude-config`,
-`claude-docs`, `ask-result`, `runner` and `wispr` on their own — no bridge needed
+`usage`, `titles`, `tasks`, `prefs`, `paths`, `logwidth`, `legacy`, `claude-config`,
+`claude-docs`, `ask-result`, `runner`, `wispr` and `preview` on their own — no bridge needed
 — plus four that want a live one: `gate`, `browser`, `refusals`, `unpaired`.
 Between them they cover the token, what a remote caller is refused, what an
 unpaired remote device sees before and after pairing, and what the nightly restart
@@ -307,7 +308,7 @@ forgets to empty it does not throw or log — it leaves a session that accepts a
 message, draws a chip for it, reports `idle`, and never sends it. That is
 indistinguishable from a slow turn from every surface the app has, and it is what a
 hard stop did for months. The test drives a real `Runner` against a stub `claude`
-(`CLAUDE_SESSIONS_CLAUDE_BIN`, set before the require — the constant is destructured
+(`TGXCODE_CLAUDE_BIN`, set before the require — the constant is destructured
 at load), and asserts three things per case rather than one: that nothing is left in
 flight, that the next message is actually delivered, and that the *stopped* turn is
 not delivered again. The third is not padding. The obvious fix for this bug is to
@@ -337,12 +338,12 @@ dev bridge alone, and a probe schedule created while 45888 was up got run by 458
 in the user's own checkout. So:
 
 ```bash
-XDG_DATA_HOME=$(mktemp -d) CLAUDE_SESSIONS_SCHEDULE_ON_DEV=1 \
-  CLAUDE_SESSIONS_PORT=45921 node bridge/server.js
+XDG_DATA_HOME=$(mktemp -d) TGXCODE_SCHEDULE_ON_DEV=1 \
+  TGXCODE_PORT=45921 node bridge/server.js
 ```
 
 That gets its own store *and* its own token, which is the point: nothing you do
-there can reach the user's schedules. `CLAUDE_SESSIONS_SCHEDULE_ON_DEV=1` is what
+there can reach the user's schedules. `TGXCODE_SCHEDULE_ON_DEV=1` is what
 lets a dev bridge fire at all, and it fires only `test` rows.
 
 **Testing a Settings save needs its own `~/.tgxcode`, for the same reason.**
@@ -352,7 +353,7 @@ is refused by the worktree guard, because it also moves git's config. Use the
 variable instead:
 
 ```bash
-CLAUDE_SESSIONS_PREFS_DIR=$(mktemp -d) npm run dev:headless
+TGXCODE_PREFS_DIR=$(mktemp -d) npm run dev:headless
 ```
 
 It stands in for the whole directory, so the spinner's `verbs/` is seeded there
@@ -459,9 +460,40 @@ UMD and needs the script tag; if it ends in an `export`, import it. Both cases
 carry a comment saying which and why, because the UMD one reads like something to
 tidy up and tidying it up is an immediate crash on page load.
 
+### Preact, for UI that updates under the cursor
+
+`web/vendor/preact.js` is htm 3.1.1's `preact/standalone.module.js`: Preact 10,
+its hooks and htm in one ESM file. It ends in `export{…}`, so it is imported like
+xterm (`import { html, render } from './vendor/preact.js'`), and it has no eval, so
+the CSP accepts it. It carries no version string of its own; `web/rail.js`'s header
+records what is known. Licences are in `LICENSE.preact` — **htm is Apache-2.0, not
+MIT**, so both texts are there.
+
+`web/rail.js` is the pattern for moving a surface over, and the rest of `app.js`
+still builds DOM by hand with `el()`. What it settled:
+
+- **No JSX, no build step.** Components are `` html`<div class=${…}>…</div>` ``,
+  which htm turns into `h()` calls at runtime. Attributes are written the DOM's
+  way (`class`, `aria-*`, `data-*`); events are `onClick`, `onDragStart`.
+- **State stays in `app.js`'s `state`.** A render is a plain synchronous call
+  (`render(tree, container)`) from the existing entry point, so callers do not
+  change. Builders are ordinary functions returning vnodes; use hooks only for
+  state a piece genuinely owns.
+- **Key every list child** by something stable (`sessionId`, a group key). The
+  keys are the whole point: they are what keeps a node, and its hover, focus,
+  animation and in-flight click, across an update. Chromium 126 has no
+  `moveBefore`, so a node that actually *moves* can still lose focus.
+- **Do not touch rendered DOM by hand.** No `setAttribute`, `classList` or
+  `insertBefore` on nodes Preact owns: it diffs against its last vnode, not the
+  DOM, so a hand edit is either undone later or never. Put the fact in `state` and
+  re-render. The rail's drag-to-reorder does exactly that (`state.railDrag.order`).
+- A `null` prop is written as an empty DOM property, so you will see `title=""`
+  and `draggable="false"` where `el()` left the attribute off. Harmless, but do not
+  write CSS that selects on those attributes being absent.
+
 ## Never rebuild without asking
 
-`install.ps1` force-closes any running ClaudeSessions and replaces the
+`install.ps1` force-closes any running TGXCode (and the pre-rename ClaudeSessions) and replaces the
 executable, which shuts the user's window. You almost never need it: **changes
 to `bridge/` and `web/` need no rebuild at all** — restart your dev bridge, or
 just refresh for UI-only edits. Only `app/main.js` and `package.json` are
@@ -487,6 +519,30 @@ at an `app/main.js` change without packaging anything.
   dependency*.
 - Reading transcripts: both instances read the same `~/.claude/projects`, so a
   session you start in dev is visible in the everyday window and vice versa.
+
+## The old name is still wired in, on purpose
+
+The app was **Claude Sessions** before it was TGXCode, and every identifier that
+carried the name changed with it — but the old spelling of each is still accepted,
+because a bridge, a packaged shell, a phone build or a paired browser from before
+the rename has to keep working until it is replaced:
+
+- `CLAUDE_SESSIONS_<X>` fills in for an unset `TGXCODE_<X>` (`bridge/legacy-env.js`,
+  and the same loop at the top of `app/main.js`). Stripping the port from a
+  session's environment strips both names.
+- `X-Claude-Sessions-Client` passes the CSRF guard beside `X-TGXCode-Client`, and
+  `web/`, `bridge/mcp.js` and `app/main.js` send both — `web/` goes live before the
+  bridge serving it restarts.
+- `cs_token` is read beside `tgx_token`; the `cs-*` `<meta>` names beside `tgx-*`.
+- `~/.local/share/claude-sessions` and `~/.cache/claude-sessions` are moved to
+  `…/tgxcode` by the first bridge module to load `bridge/config.js`, and left as
+  symlinks (`bridge/legacy-dirs.js` says why). Scripts that find those directories
+  themselves use "new if it exists, else old" and never create the new one.
+
+So a `claude-sessions` you find in the code is either the checkout path — which
+kept its name — or one of these, and neither is a leftover to tidy. The checkout
+is still `~/Other/claude-sessions`, and so is every `.claude/projects` directory
+derived from it.
 
 ## Finding your way around
 
@@ -526,7 +582,7 @@ sectioned by comment headers, so search for the section name rather than scrolli
 - **The bridge knows which host it is on in exactly one place.**
   `bridge/platform.js` — `isWsl()`, from `WSL_DISTRO_NAME` or
   `/proc/sys/fs/binfmt_misc/WSLInterop`, overridable with
-  `CLAUDE_SESSIONS_HOST_KIND` so tests can drive both branches from either
+  `TGXCODE_HOST_KIND` so tests can drive both branches from either
   machine. Two modules read it: `bridge/explorer.js` (`explorer.exe` vs
   `xdg-open`) and `bridge/devbrowser.js` (where the control-server file lives).
   If you are about to add a third `process.platform` check somewhere, use this
@@ -541,7 +597,7 @@ sectioned by comment headers, so search for the section name rather than scrolli
   `claude` reads stdin for input, so when whoever holds that pipe exits, `claude`
   treats it as end-of-input and stops, mid-turn. That is measured, not assumed, and
   running it detached changes nothing. What changed is who holds the pipe:
-  `bridge/host.js`, one per port, at `~/.local/share/claude-sessions/host-<port>.sock`.
+  `bridge/host.js`, one per port, at `~/.local/share/tgxcode/host-<port>.sock`.
   A bridge that exits releases its sessions to the host, and the next bridge on the
   same port adopts them. A turn started while no host could be reached still dies
   with its bridge; `atRisk` in `/api/health` is the count of those.
@@ -556,7 +612,7 @@ sectioned by comment headers, so search for the section name rather than scrolli
   does can reach the everyday one's.
 - **"Why is the bridge still on old code?" has a log.** A midnight cron entry
   restarts the everyday bridge, and every run that could change something appends
-  a line to `~/.cache/claude-sessions/restart-45888.log` — a `start` line and then
+  a line to `~/.cache/tgxcode/restart-45888.log` — a `start` line and then
   one word for the outcome. `grep skipped-dirty` is the usual answer: uncommitted
   changes **under `bridge/`** stop the nightly run, because there is no terminal
   to confirm them at. So a worktree is not the only reason to keep the main

@@ -29,7 +29,7 @@ const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-restart-'));
 const REPO = path.join(TMP, 'repo');
 const CACHE = path.join(TMP, 'cache');
 const SCRIPT = path.join(REPO, 'scripts', 'restart-bridge.sh');
-const journalFile = (port) => path.join(CACHE, 'claude-sessions', `restart-${port}.log`);
+const journalFile = (port) => path.join(CACHE, 'tgxcode', `restart-${port}.log`);
 
 /** git with none of this machine's config, signing, hooks or identity. */
 function git(...args) {
@@ -98,7 +98,7 @@ function run(argv, port) {
             cwd: os.tmpdir(),          // irrelevant on purpose: $REPO comes from BASH_SOURCE
             detached: true,
             stdio: ['ignore', 'pipe', 'pipe'],
-            env: { ...process.env, CLAUDE_SESSIONS_PORT: String(port), XDG_CACHE_HOME: CACHE },
+            env: { ...process.env, TGXCODE_PORT: String(port), XDG_CACHE_HOME: CACHE },
         });
         let out = '', err = '';
         child.stdout.on('data', (d) => { out += d; });
@@ -127,7 +127,7 @@ const http = require("http");
 http.createServer((q, s) => {
   s.writeHead(200, { "content-type": "application/json" });
   s.end(JSON.stringify({ ok: true, pid: process.pid, sessions: 7, clients: 0, busy: 0 }));
-}).listen(Number(process.env.CLAUDE_SESSIONS_PORT), "127.0.0.1");
+}).listen(Number(process.env.TGXCODE_PORT), "127.0.0.1");
 '
 `;
 

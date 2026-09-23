@@ -5,7 +5,7 @@
 // spelled slightly differently. That was fine while none of them could change.
 // Once they can, the condition has to come from somewhere, so it comes from
 // here: the catalogue arrives from the bridge (bridge/keymap.js, via the
-// `cs-keymap` <meta> tag), `keyboard.bindings` from settings folds over the
+// `tgx-keymap` <meta> tag), `keyboard.bindings` from settings folds over the
 // defaults, and `match()` turns a KeyboardEvent into a command id or null.
 //
 // **The matcher is strict, which is a change of behaviour.** The old
@@ -50,7 +50,7 @@ const FALLBACK = {
 // the same reason: a keystroke can land before any fetch could answer.
 const KEYMAP = (() => {
     try {
-        const m = document.querySelector('meta[name="cs-keymap"]');
+        const m = document.querySelector('meta[name="tgx-keymap"], meta[name="cs-keymap"]');
         if (!m) return FALLBACK;
         const d = JSON.parse(decodeURIComponent(m.content));
         if (!d || !Array.isArray(d.commands) || !d.commands.length) return FALLBACK;

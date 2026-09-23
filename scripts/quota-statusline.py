@@ -41,9 +41,13 @@ import time
 # The one Claude Code emits, and the one bridge/config.js derives. Kept in step
 # with STATE_DIR there by hand — it is two lines, and the alternative is asking
 # a python script to parse a node module.
-STATE_DIR = os.path.join(
-    os.environ.get('XDG_DATA_HOME') or os.path.join(os.path.expanduser('~'), '.local', 'share'),
-    'claude-sessions')
+# `claude-sessions` is the name from before the rename; the new one is used
+# once it exists, and never created here while the old one holds the data (see
+# bridge/legacy-dirs.js).
+_DATA = os.environ.get('XDG_DATA_HOME') or os.path.join(os.path.expanduser('~'), '.local', 'share')
+STATE_DIR = os.path.join(_DATA, 'tgxcode')
+if not os.path.lexists(STATE_DIR) and os.path.lexists(os.path.join(_DATA, 'claude-sessions')):
+    STATE_DIR = os.path.join(_DATA, 'claude-sessions')
 
 QUOTA_FILE = os.path.join(STATE_DIR, 'quota-statusline.json')
 

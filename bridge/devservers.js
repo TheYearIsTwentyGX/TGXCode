@@ -1,7 +1,8 @@
 'use strict';
 
 // Works out which localhost ports a session's agent brought up, so the
-// conversation view can offer a "show this in DevBrowser" button.
+// conversation view can offer a button that shows each one — in DevBrowser or in
+// the window's own preview — and says whether it is a web page at all (isHttp).
 //
 // Evidence comes from the transcript's Bash traffic. The strongest signal is the
 // agent naming a port through the devbrowser CLI, which this machine's
@@ -39,6 +40,7 @@
 // to its strong end — a startup banner or a devbrowser call, never a mention.
 
 const fs = require('fs');
+const http = require('http');
 const net = require('net');
 const { execFile } = require('child_process');
 const { PORT_DENYLIST } = require('./config');
@@ -204,6 +206,46 @@ function isListening(port, timeout = 300, host = '127.0.0.1') {
     });
 }
 
+/**
+ * Does this port answer HTTP — is it something a browser preview can show?
+ *
+ * A TCP connect is not enough: a database, a debugger or a language server
+ * accepts connections too, and a preview of one is a blank page with a spinner.
+ * Any status line counts, 404 and 500 included — a dev server with no route at
+ * `/` is still a dev server, and the address bar is right there to fix the path.
+ *
+ * Cached briefly per port, because the channel strip polls every 25 seconds per
+ * open session and a GET to a busy dev server is not free the way a connect is.
+ */
+const HTTP_CACHE_MS = 10 * 1000;
+const httpCache = new Map();   // port -> {at, value}
+
+function isHttp(port, timeout = 600, { fresh = false } = {}) {
+    const hit = !fresh && httpCache.get(port);
+    if (hit && Date.now() - hit.at < HTTP_CACHE_MS) return Promise.resolve(hit.value);
+    return new Promise((resolve) => {
+        let done = false;
+        const finish = (v) => {
+            if (done) return;
+            done = true;
+            httpCache.set(port, { at: Date.now(), value: v });
+            resolve(v);
+        };
+        // GET rather than HEAD: plenty of dev servers answer HEAD with nothing
+        // or hang on it. The body is thrown away unread.
+        const req = http.request({
+            host: '127.0.0.1', port, path: '/', method: 'GET',
+            headers: { Accept: 'text/html,*/*' }, timeout,
+        }, (res) => {
+            finish(Number.isInteger(res.statusCode) && res.statusCode > 0);
+            res.destroy();
+        });
+        req.on('timeout', () => { req.destroy(); finish(false); });
+        req.on('error', () => finish(false));
+        req.end();
+    });
+}
+
 // Evidence at or above this is a session saying it *started* something: a
 // startup banner it printed, a --port it passed, a devbrowser call it made.
 // Below it are mentions and stray URLs, which say only that a port was talked
@@ -326,6 +368,12 @@ async function enrich(candidates, titles = {}, session = {}) {
             && p.score >= STARTED_IT)
         .slice(0, liveOnes.length ? 2 : 4);
 
+    // Only the ports that survive get an HTTP probe; the ranking above may look
+    // at dozens. A dead port cannot be previewed, so it is simply false.
+    const probed = await Promise.all(liveOnes.map(p => isHttp(p.port)));
+    liveOnes.forEach((p, i) => { p.http = probed[i]; });
+    deadOnes.forEach((p) => { p.http = false; });
+
     return { ports: liveOnes.concat(deadOnes), total: ranked.length, elsewhere };
 }
 
@@ -339,7 +387,7 @@ async function enrich(candidates, titles = {}, session = {}) {
 /**
  * Processes that are never a dev server, however they got hold of a port.
  *
- * A bridge is a Claude Sessions instance like this one, and killing it takes its
+ * A bridge is a TGXCode instance like this one, and killing it takes its
  * turns down with it — `claude` reads stdin, so the closed pipe reads as
  * end-of-input and the turn stops mid-flight. A `claude` process *is* a turn.
  * Neither is something a button in this UI should be able to end by accident.
@@ -348,7 +396,7 @@ function protectedAs(cmdline) {
     const argv = cmdline.split('\0').filter(Boolean);
     const joined = argv.join(' ');
     const argv0 = (argv[0] || '').split('/').pop();
-    if (/bridge\/server\.js/.test(joined)) return 'a Claude Sessions bridge';
+    if (/bridge\/server\.js/.test(joined)) return 'a TGXCode bridge';
     if (argv0 === 'claude' || /claude-code\/cli\.js|\.claude\/local\/claude/.test(joined)) {
         return 'a claude agent process';
     }
@@ -509,4 +557,4 @@ async function stop(port, { graceMs = 2500, hardMs = 1500 } = {}) {
     };
 }
 
-module.exports = { detect, enrich, isListening, owners, heldPorts, stop };
+module.exports = { detect, enrich, isListening, isHttp, owners, heldPorts, stop };

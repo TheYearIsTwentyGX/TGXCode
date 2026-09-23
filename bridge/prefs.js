@@ -63,7 +63,7 @@
 // project may override any key from `<workspace>/.tgxcode/settings.json`, which
 // is the same directory a project already declares its commands in — see
 // bridge/commands.js, whose precedence this mirrors so the two cannot disagree
-// about what "the local file" means. `CLAUDE_SESSIONS_PREFS_DIR` moves the
+// about what "the local file" means. `TGXCODE_PREFS_DIR` moves the
 // user's half somewhere else (see bridge/config.js). It is there so a dev
 // bridge can test a save, not to give the file a second home.
 //
@@ -153,7 +153,7 @@ const DEFAULTS = {
         // beats any one of them being actionable in place.
         compact: false,
         // Leave out sessions running under something that is not this bridge —
-        // a terminal, VS Code, another Claude Sessions window. They are the
+        // a terminal, VS Code, another TGXCode window. They are the
         // cards the board cannot do anything with: no send, no stop, no answer,
         // because a second process on one transcript is two writers on one file.
         // Off by default, because a session you cannot drive from here is still
@@ -310,6 +310,32 @@ const DEFAULTS = {
         // bridge/wispr.js spells it — `Win+Alt+2`.
         transforms: [],
     },
+    preview: {
+        // How long a page you left stays loaded, in minutes. Coming back inside
+        // that finds it exactly as you left it — scroll, form state, a dev
+        // server's HMR socket still connected. Past it the page is thrown away
+        // and the next open loads it fresh. 0 throws it away on the way out.
+        keepAliveMinutes: 10,
+        // A preview opened from a Live card goes over the Live board, and Home
+        // brings the board back. Off opens it over that session instead, as
+        // though you had opened the session and clicked the chip there.
+        overLive: true,
+    },
+    devbrowser: {
+        // Whether the app mentions DevBrowser at all: the status pill, "open in
+        // DevBrowser", the DevBrowser tab field on a project command. Off is
+        // for a machine without it. It is about what is *shown* — naming a
+        // task's port in DevBrowser when it comes up is harmless when nothing
+        // is listening, and still happens.
+        show: true,
+        // Where a preview opens when DevBrowser is shown. 'devbrowser' is what
+        // clicking a port has always done.
+        openIn: 'devbrowser',
+        // With openIn 'devbrowser', what to do when DevBrowser is not running:
+        // start it (what it has always done), preview inline instead, or
+        // nothing.
+        whenClosed: 'launch',
+    },
 };
 
 // Sections a project may not set, however the precedence would otherwise fall.
@@ -329,7 +355,11 @@ const DEFAULTS = {
 //
 // `toolbar` is the keyboard argument applied to the bar: a checked-in file that
 // could move or hide your buttons would be a repository rearranging your window.
-const USER_ONLY = new Set(['quota', 'keyboard', 'projects', 'toolbar', 'wispr']);
+//
+// `preview` and `devbrowser` are about which browser on this machine you look at
+// pages in, and whether one of them launches on a click — the same class of thing.
+const USER_ONLY = new Set(['quota', 'keyboard', 'projects', 'toolbar', 'wispr',
+    'preview', 'devbrowser']);
 
 // What each key is allowed to be. A file is a thing people edit, so a bad value
 // is dropped and the default kept rather than taken at face value — a
@@ -432,6 +462,17 @@ const SHAPE = {
     wispr: {
         // The last gate again: cleanTransforms() has dropped the bad entries.
         transforms: wispr.validTransforms,
+    },
+    preview: {
+        // Four hours is plenty: a page kept alive is a renderer process and
+        // whatever its dev server's HMR socket is holding.
+        keepAliveMinutes: (v) => Number.isInteger(v) && v >= 0 && v <= 240,
+        overLive: (v) => typeof v === 'boolean',
+    },
+    devbrowser: {
+        show: (v) => typeof v === 'boolean',
+        openIn: (v) => v === 'inline' || v === 'devbrowser',
+        whenClosed: (v) => v === 'launch' || v === 'inline' || v === 'nothing',
     },
 };
 
@@ -735,7 +776,7 @@ class Prefs {
             if (fs.existsSync(cfg.USER_PREFS_FILE)) return;
             writeAtomic(cfg.USER_PREFS_FILE, serialize(DEFAULTS));
         } catch (err) {
-            console.error(`[claude-sessions] could not create ${cfg.USER_PREFS_FILE}: ${err.message}`);
+            console.error(`[tgxcode] could not create ${cfg.USER_PREFS_FILE}: ${err.message}`);
         }
     }
 
@@ -800,7 +841,7 @@ class Prefs {
      *   user-level answer, which is what the page is served before it knows
      *   which conversation it is about to show.
      * @returns {{version, transcript, live, projects, quota, spinner, keyboard,
-     *   wispr, sources: string[], problems: object[]}}
+     *   wispr, preview, devbrowser, sources: string[], problems: object[]}}
      */
     forCwd(dir) {
         const key = dir || '';
@@ -831,6 +872,8 @@ class Prefs {
             keyboard: { ...DEFAULTS.keyboard, bindings: { ...DEFAULTS.keyboard.bindings } },
             toolbar: { ...DEFAULTS.toolbar, items: [...DEFAULTS.toolbar.items] },
             wispr: { transforms: [...DEFAULTS.wispr.transforms] },
+            preview: { ...DEFAULTS.preview },
+            devbrowser: { ...DEFAULTS.devbrowser },
             sources: [],
             problems: [],
         };

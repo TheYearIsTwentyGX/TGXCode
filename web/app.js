@@ -1,4 +1,4 @@
-// Claude Sessions — renderer.
+// TGXCode — renderer.
 //
 // All state lives in the bridge; this file is a view over it. Transcript content
 // arrives from one place only (the file tail, pushed over SSE), so a session
@@ -7,11 +7,18 @@
 import { renderMarkdown, inline, configurePaths } from './markdown.js';
 import { highlight, escapeHtml } from './highlight.js';
 import { TerminalPane } from './terminal.js';
+import { PreviewPane } from './preview.js';
 import * as keys from './keys.js';
+import { drawRail } from './rail.js';
 
 // ── api ──────────────────────────────────────────────────────────────────
 
-const HEADERS = { 'X-Claude-Sessions-Client': '1', 'Content-Type': 'application/json' };
+// The CSRF header under both names. web/ is live the moment it lands, but the
+// bridge serving it keeps its old code until it restarts, and a bridge from
+// before the rename only knows X-Claude-Sessions-Client. The same goes for the
+// `cs-*` <meta> names read below beside their `tgx-*` ones. Drop the old names
+// once no bridge that predates the rename can be running.
+const HEADERS = { 'X-TGXCode-Client': '1', 'X-Claude-Sessions-Client': '1', 'Content-Type': 'application/json' };
 
 /**
  * The Error a failed call throws, carrying the status and the body with it.
@@ -31,7 +38,7 @@ function httpError(status, data) {
 }
 
 async function get(path) {
-    const r = await fetch(path, { headers: { 'X-Claude-Sessions-Client': '1' } });
+    const r = await fetch(path, { headers: { 'X-TGXCode-Client': '1', 'X-Claude-Sessions-Client': '1' } });
     if (!r.ok) throw httpError(r.status, await r.json().catch(() => ({})));
     return r.json();
 }
@@ -58,7 +65,7 @@ async function postFile(path, file) {
     const r = await fetch(path, {
         method: 'POST',
         headers: {
-            'X-Claude-Sessions-Client': '1',
+            'X-TGXCode-Client': '1', 'X-Claude-Sessions-Client': '1',
             // The bridge sniffs the real type from the bytes; this is a hint, and the
             // fallback matters because a File dragged from some places has no type.
             'Content-Type': file.type || 'application/octet-stream',
@@ -143,6 +150,8 @@ const PREFS_FALLBACK = {
     keyboard: { contextualTerminalCopy: false, composerSend: 'enter', cycleOrder: 'default', bindings: {} },
     toolbar: { items: [] },
     wispr: { transforms: [] },
+    preview: { keepAliveMinutes: 10, overLive: true },
+    devbrowser: { show: true, openIn: 'devbrowser', whenClosed: 'launch' },
 };
 
 // Whether a Wispr Flow chord can reach anything from here: the bridge is on the
@@ -161,9 +170,9 @@ const mergePrefs = (d) => {
     return out;
 };
 
-const BOOT_PREFS = (() => {
+export const BOOT_PREFS = (() => {
     try {
-        const m = document.querySelector('meta[name="cs-prefs"]');
+        const m = document.querySelector('meta[name="tgx-prefs"], meta[name="cs-prefs"]');
         if (!m) return mergePrefs(null);
         return mergePrefs(JSON.parse(decodeURIComponent(m.content)));
     } catch { return mergePrefs(null); }
@@ -176,7 +185,7 @@ const BOOT_PREFS = (() => {
 // Absent means markdown.js leaves paths as plain text — see configurePaths.
 const BOOT_HOST = (() => {
     try {
-        const m = document.querySelector('meta[name="cs-host"]');
+        const m = document.querySelector('meta[name="tgx-host"], meta[name="cs-host"]');
         return m ? JSON.parse(decodeURIComponent(m.content)) : null;
     } catch { return null; }
 })();
@@ -214,7 +223,7 @@ const hexAccent = (v) => (/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(v || '') ? v : 
  *
  * Longest wins, so a worktree given a colour of its own keeps it.
  */
-function projectColor(dir) {
+export function projectColor(dir) {
     const here = (dir || '').trim().replace(/\/+$/, '');
     if (!here.startsWith('/')) return '';
     let best = '';
@@ -259,7 +268,7 @@ paintBackdropTint();
 const liveCompact = () => BOOT_PREFS.live.compact;
 const liveHideElsewhere = () => BOOT_PREFS.live.hideElsewhere;
 
-const state = {
+export const state = {
     clientId: null,
     dev: false,             // talking to a development bridge
     remote: false,          // this window reached the bridge from off-machine
@@ -385,7 +394,7 @@ const state = {
     // What each session's timestamps were on the last load, so `dynamic` can tell
     // a message arriving from a list merely being re-sent. See rememberOrder.
     seenTs: new Map(),      // sessionId -> {user, last}
-    railDrag: null,         // cwd of the project card being dragged, in `custom`
+    railDrag: null,         // {cwd, order} while a project card is dragged, in `custom`
     sortMenu: false,        // the rail head's order menu is open
     unsent: new Map(),      // sessionId -> text written to a process but not yet in a transcript
     // The one message drawn in the log before the transcript has it:
@@ -521,6 +530,14 @@ const state = {
     // The board of unfinished work. `at` is when the bridge last answered, so
     // opening it again does not re-run git over every worktree on the machine.
     dash: { open: false, data: null, at: 0, loading: false, error: null, files: new Set() },
+    // The browser preview (web/preview.js). Not one of PANELS: those cover it the
+    // way they cover the conversation, and it comes back when they close.
+    // `overLive` is decided at open — whether this preview covers a docked Live
+    // board or sits beside it — and `max` is the toolbar's Maximize.
+    preview: { open: false, overLive: true, max: false },
+    // A run id whose page should open once it answers HTTP — set by clicking a
+    // task that is still starting. See applyRunChange.
+    previewWhenUp: null,
     // The notification log. `read` is the bridge's watermarks — a floor moved by
     // opening this panel, and one per conversation moved by going to it — and
     // `unread` is the badge, counted over the whole log rather than over the
@@ -584,9 +601,9 @@ const state = {
     // `editing` is the id the dialog is currently editing, or null when it is
     // about to make a new one. It is what tells Save which verb to use.
     drafts: { open: false, rows: [], at: 0, loading: false, error: null, editing: null },
-    // The project card whose ⋮ menu is open, or null. Held here rather than
-    // in the card, because renderRail() rebuilds every card and the menu has to
-    // survive that — see syncProjMenu().
+    // The project card whose ⋮ menu is open, or null. The menu is fixed and
+    // outside the rail, so this is how the card's ⋮ knows to draw itself
+    // expanded, and how syncProjMenu() finds the button to follow.
     projMenu: null,
     // Canned messages, and the groups they are drawn in. Drafts' terms for the
     // push — the whole list, unconditional, held as sent — with one difference
@@ -703,7 +720,7 @@ const state = {
 };
 
 const $ = (id) => document.getElementById(id);
-const dom = {};
+export const dom = {};
 for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-sub',
     'channels', 'scroll', 'log', 'status-line', 'status-text', 'btn-stop', 'input',
     'btn-send', 'btn-attach', 'attach', 'attach-input', 'composer',
@@ -782,13 +799,27 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'review-outcome', 'review-body', 'review-jump',
     'pair-url', 'pair-host', 'pair-hosts', 'pair-note', 'pair-copy',
     'restart-scrim', 'restart-lede', 'restart-problems',
-    'restart-fix', 'restart-go']) {
+    'restart-fix', 'restart-go', 'preview']) {
     dom[id.replace(/-(\w)/g, (_, c) => c.toUpperCase())] = $(id);
 }
 // The two containers that carry layout state as data attributes rather than
 // holding content of their own, so they have classes instead of ids.
 dom.main = document.querySelector('.main');
 dom.app = document.querySelector('.app');
+
+// Here rather than beside its callers because paintPanels() asks it about
+// visibility, and paintPanels runs during boot, well before the section that
+// handles the preview's buttons would have been reached.
+const previewPane = new PreviewPane({
+    root: dom.preview,
+    keepAliveMinutes: () => BOOT_PREFS.preview.keepAliveMinutes,
+    toast: (text, kind) => toast(text, kind),
+    onHome: () => showPreview(false),
+    onOutput: (entry) => previewOutput(entry),
+    onDevBrowser: (entry) => handToDevBrowser({ port: entry.port, title: entry.title }),
+    showDevBrowser: () => devBrowserShown(),
+    onMaximize: (on) => { state.preview.max = on; paintPanels(); },
+});
 
 // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -853,7 +884,7 @@ function dateOf(ts, now = Date.now()) {
         : `${date} ’${pad(d.getFullYear() % 100)}`;
 }
 
-function ago(ts) {
+export function ago(ts) {
     if (!ts) return '';
     const s = Math.max(0, (Date.now() - new Date(ts).getTime()) / 1000);
     if (s < 60) return 'now';
@@ -890,7 +921,7 @@ const shortPath = (p) => {
 };
 const shortModel = (m) => (m ? String(m).replace(/^claude-/, '').replace(/-\d{8}$/, '') : '');
 
-function clip(s, n) {
+export function clip(s, n) {
     const t = String(s || '').replace(/\s+/g, ' ').trim();
     return t.length > n ? t.slice(0, n - 1) + '…' : t;
 }
@@ -1083,8 +1114,10 @@ async function loadSessions() {
 /**
  * Take one word per session's pull requests and recolour the rail.
  *
- * Rows are patched in place rather than rebuilt: a `renderRail()` on every update
- * would throw away hover and focus for a glyph that usually has not changed.
+ * A plain `renderRail()`: web/rail.js reconciles, so rows whose glyph did not
+ * change keep their nodes, and hover and focus with them. It is also what moves
+ * the Hide finished count, and with `hideDone` on what takes a landed PR's row
+ * away.
  *
  * Called with the `prs-changed` payload the bridge pushes, and once at boot with
  * the body of `/api/prs`, which is the same shape — a window that has just opened
@@ -1098,30 +1131,14 @@ function applyRailPrs(payload) {
     // `dynamic` with PR updates switched on: a session whose answer moved lifts
     // its card. Not on the boot fetch, which is a window catching up rather than
     // anything having happened.
-    let moved = false;
     if (state.prsLoaded) {
         for (const [id, now] of state.railPrs) {
             if (JSON.stringify(now) === JSON.stringify(before.get(id))) continue;
-            moved = bumpGroup(state.sessions.find(s => s.sessionId === id), 'pr') || moved;
+            bumpGroup(state.sessions.find(s => s.sessionId === id), 'pr');
         }
     }
     state.prsLoaded = true;
-    if (moved) { renderRail(); return; }
-
-    // With `hideDone` on this payload decides which rows exist, not just what
-    // colour they are — a PR landing has to take its row with it — so the whole
-    // rail is rebuilt and the patching below is skipped. Hover and focus are what
-    // that costs, and only on the update that changes the answer.
-    if (state.hideDone) { renderRail(); return; }
-
-    for (const s of state.sessions) {
-        if (!s.prs || !s.prs.length) continue;
-        const strip = dom.rail.querySelector(`[data-id="${CSS.escape(s.sessionId)}"]`);
-        if (strip) patchPrBadge(strip, s);
-    }
-    // The button counts finished sessions whether or not it is hiding them — that
-    // count is the reason to press it, and this is the only thing that moves it.
-    paintHideDone(state.sessions.filter(s => inProjectCard(s) && prDone(s)).length);
+    renderRail();
 }
 
 /** The one fetch of `/api/prs` a window makes: its first paint. */
@@ -1134,13 +1151,13 @@ async function loadRailPrs() {
     }
 }
 
-const groupKeyOf = (s) => `project:${s.projectName || 'unknown'}`;
+export const groupKeyOf = (s) => `project:${s.projectName || 'unknown'}`;
 
 // The sessions that land in a project card, which are the only ones `hideDone`
-// filters. Shared with `applyRailPrs`, which counts them for the button without
-// rebuilding the rail — two copies of this is how the count and the rows would
-// come to disagree.
-const inProjectCard = (s) => !s.pinned && !s.archived && !s.test;
+// filters and the only ones a `dynamic` bump moves the card for. Shared with
+// web/rail.js — two copies of this is how the rows and the ordering would come to
+// disagree.
+export const inProjectCard = (s) => !s.pinned && !s.archived && !s.test;
 
 /**
  * Decide where each row and each group card sits, once.
@@ -1229,9 +1246,9 @@ function bumpGroup(s, ...reasons) {
     return true;
 }
 
-const rankOf = (s) => state.order.get(s.sessionId) ?? 0;
+export const rankOf = (s) => state.order.get(s.sessionId) ?? 0;
 
-const ICON = {
+export const ICON = {
     pin: '<path d="M9 3h6l-.7 5.2 3 2.6V13H6.7v-2.2l3-2.6L9 3Z" stroke="currentColor" '
         + 'stroke-width="1.8" stroke-linejoin="round"/><path d="M12 13v8" stroke="currentColor" '
         + 'stroke-width="1.8" stroke-linecap="round"/>',
@@ -1336,7 +1353,7 @@ const ICON = {
 // Which glyph says each PR status. `unknown` is gh being unreachable rather than a
 // state a PR can be in, so it borrows the plain branch and the CSS leaves it grey:
 // a header that cannot reach GitHub says no less than it used to, and claims no more.
-const PR_ICON = {
+export const PR_ICON = {
     open: 'pr',
     unknown: 'pr',
     draft: 'prDraft',
@@ -1356,149 +1373,19 @@ function icon(name, size = 15) {
     });
 }
 
-function renderRail() {
-    // A card is being carried; rebuilding would drop it. The drag's end renders.
-    if (state.railDrag) return;
-    dom.rail.replaceChildren();
-
-    if (!state.sessions.length) {
-        paintHideDone(0);
-        dom.rail.append(el('div', { class: 'rail-empty' },
-            state.query ? 'Nothing matches that filter.' : 'No sessions on disk yet.'));
-        return;
-    }
-
-    // Held order, not the order the bridge sent. See rememberOrder.
-    const ordered = [...state.sessions].sort((a, b) => rankOf(a) - rankOf(b));
-
-    const pinned = ordered.filter(s => s.pinned);
-    const archived = ordered.filter(s => s.archived && !s.pinned);
-    // Scratch sessions gathered in one place, because the point of labelling one
-    // is to be able to find it again and delete it. Only a development bridge
-    // sends any, so the everyday window never grows this card.
-    const test = ordered.filter(s => s.test && !s.pinned && !s.archived);
-    const rest = ordered.filter(inProjectCard);
-
-    // `hideDone`: drop the rows whose work has landed. Only from the project
-    // cards — pinning is something you did on purpose, archived is already out of
-    // the way, and the test card exists to be emptied by hand.
-    //
-    // Two things are never hidden. The session on screen, because a row leaving
-    // from under the conversation you are reading is the rail disagreeing with the
-    // main pane about where you are. And nothing at all while a search is running,
-    // for the reason `isOpen` gives for forcing groups open: a filter must not hide
-    // its own results, and somebody typing the title of a merged session is looking
-    // for exactly that.
-    const hiding = state.hideDone && !state.query;
-    const finished = rest.filter(prDone);
-    const gone = new Set(hiding
-        ? finished.filter(s => !state.current || state.current.sessionId !== s.sessionId)
-            .map(s => s.sessionId)
-        : []);
-    paintHideDone(finished.length);
-
-    // Pinned first, across every project — that is the point of pinning.
-    if (pinned.length) dom.rail.append(groupCard('pinned', 'Pinned', pinned));
-
-    const groups = new Map();
-    for (const s of rest) {
-        const key = groupKeyOf(s);
-        // `cwd` is the group's *directory*, which the key is deliberately not:
-        // the key is the project's name, so the collapse state written against it
-        // survives a checkout being moved. A colour is keyed on the path instead
-        // — see projectColor() — so the card has to carry one, and it takes it
-        // from the first session filed under the name. Two checkouts sharing a
-        // basename therefore share a colour, which is the same collision that
-        // already puts them in one card.
-        if (!groups.has(key)) {
-            groups.set(key, {
-                label: s.projectName || 'unknown',
-                cwd: s.projectCwd || s.cwd || '',
-                list: [],
-            });
-        }
-        groups.get(key).list.push(s);
-    }
-    const custom = BOOT_PREFS.projects.sort === 'custom';
-    for (const [key, { label, cwd, list }] of orderGroups([...groups])) {
-        // Sessions a schedule started fold into their own subsection inside the
-        // project card. They are the same work in the same directory — so a card
-        // of their own at the foot of the rail, the way test sessions get one,
-        // would file them away from the project they are about — but there can
-        // be a great many of them and they are all alike, and a fortnight of
-        // nightly reviews between you and the conversation you are looking for
-        // is what the rail exists to prevent.
-        const shown = list.filter(s => !gone.has(s.sessionId));
-        // A project with nothing left to show goes with its rows. An empty card
-        // is a heading claiming a count it is not drawing, which is the one thing
-        // `all` below is there to avoid.
-        if (!shown.length) continue;
-        const sched = shown.filter(s => s.schedule);
-        const plain = shown.filter(s => !s.schedule);
-        dom.rail.append(groupCard(key, label, plain, {
-            // What makes this card a *project* rather than Pinned or Archived:
-            // the ⋮ menu and the colour both hang off it, and neither belongs on
-            // a card that is not about a directory.
-            project: { key, name: label, cwd },
-            draggable: custom,
-            // The project heading still counts what it contains, subsection
-            // included: a card saying 3 above a shut section holding 11 is
-            // wrong about the project, which is what the heading names. Hidden
-            // rows are counted for the same reason — the project has them, and
-            // the button in the rail head is where the hiding is accounted for.
-            all: list,
-            lead: sched.length
-                ? groupCard(`sched:${key}`, 'Scheduled', sched, { nested: true })
-                : null,
-        }));
-    }
-
-    if (test.length) dom.rail.append(groupCard('test', 'Test sessions', test));
-    if (archived.length) dom.rail.append(groupCard('archived', 'Archived', archived));
-
-    // Said out loud rather than left to look like a rail that has lost its
-    // sessions — the same promise the live board makes when `hideElsewhere`
-    // empties it. The button above is still lit, but an empty column is read
-    // before the control that caused it.
-    if (!dom.rail.childElementCount && gone.size) {
-        dom.rail.append(el('div', { class: 'rail-empty' },
-            `${gone.size === 1 ? 'One session is' : `All ${gone.size} sessions are`} finished, `
-            + 'and hidden. Press Hide finished to see them.'));
-    }
-
-    // The ⋮ menu is fixed and lives outside this element, so a rebuild leaves it
-    // pointing at a button that no longer exists. Re-anchored rather than closed,
-    // because this runs whenever any session changes and a menu that shut itself
-    // several times a minute would be unusable.
-    syncProjMenu();
-}
-
 /**
- * The project cards in the order `projects.sort` asks for.
+ * Draw the rail, and the two things outside it that follow what it drew.
  *
- * `recent` and `dynamic` are the held ranks — the same list; the difference is
- * only whether bumpGroup is allowed to change them. `custom` places each card
- * by its directory's index in `projects.order`, and a card the list does not
- * name yet goes above or below all of those by `newAt`, keeping its held rank
- * among the other unnamed ones so that several new projects still arrive in a
- * sensible order.
- *
- * @param {Array<[string, {label: string, cwd: string}]>} groups
+ * The drawing is web/rail.js's, which reconciles against the last render rather
+ * than rebuilding — so this is cheap to call, and the ~two dozen callers call it
+ * whenever anything the rail shows may have changed, without patching rows by
+ * hand. Synchronous: a caller can read the rail's DOM as soon as it returns.
  */
-function orderGroups(groups) {
-    const p = BOOT_PREFS.projects;
-    const rank = ([key]) => state.groupOrder.get(key) ?? 0;
-    if (p.sort === 'alpha') {
-        return groups.sort((a, b) => a[1].label.localeCompare(b[1].label, undefined,
-            { sensitivity: 'base', numeric: true }) || rank(a) - rank(b));
-    }
-    if (p.sort === 'custom') {
-        const at = new Map((p.order || []).map((d, i) => [d, i]));
-        const unlisted = p.newAt === 'bottom' ? Infinity : -Infinity;
-        const pos = (g) => at.has(g[1].cwd) ? at.get(g[1].cwd) : unlisted;
-        return groups.sort((a, b) => (pos(a) - pos(b)) || rank(a) - rank(b));
-    }
-    return groups.sort((a, b) => rank(a) - rank(b));
+export function renderRail() {
+    paintHideDone(drawRail());
+    // The ⋮ menu is fixed and lives outside the rail, so a card that moved leaves
+    // it pointing at where the button used to be.
+    syncProjMenu();
 }
 
 /**
@@ -1509,8 +1396,7 @@ function orderGroups(groups) {
  * hidden" after it. Suppressed at zero rather than shown as 0, because nothing to
  * hide is not a quantity worth a glyph in a rail this narrow.
  *
- * Called from `renderRail`, which knows the number, and from `applyRailPrs`, which
- * is when the number moves without the rail being rebuilt.
+ * Called from `renderRail`, with the number web/rail.js counted while drawing.
  */
 function paintHideDone(count) {
     dom.hideDone.setAttribute('aria-pressed', String(state.hideDone));
@@ -1523,98 +1409,32 @@ function paintHideDone(count) {
         : 'Hide sessions whose pull requests are all merged or closed';
 }
 
-/**
- * A rail group: a card whose heading shuts it. `key` is what the open/shut
- * state is remembered under, so it has to outlive a re-render.
- *
- * `opts.lead` is a node rendered above the rows — a nested card, in the one case
- * there is. `opts.all` is the list the *heading* counts, when that is wider than
- * the rows beneath it. `opts.nested` marks a card that sits inside another, which
- * changes both how it is drawn and where its open/shut state lives: see
- * `isOpen`.
- */
-function groupCard(key, label, list, opts = {}) {
-    const open = isOpen(key, opts.nested);
-    const counted = opts.all || list;
-    const live = counted.filter(s => s.active || (s.runner && s.runner.state === 'busy')).length;
-    const bodyId = `group-${key.replace(/[^\w-]/g, '_')}`;
-    // Only a project card has a directory, so only a project card can have a
-    // colour or a menu. Pinned, Archived, Test and the nested Scheduled
-    // subsection get neither — there is nothing for either to be about.
-    const accent = opts.project ? projectColor(opts.project.cwd) : '';
-
-    // `custom` order: the heading is the handle. Only the heading, so a row
-    // dragged out of the card is still nothing — rows are not reordered here.
-    // A card with no directory (`unknown`) has nothing to be keyed by in
-    // `projects.order`, so it cannot be placed.
-    const drag = opts.project && opts.draggable && !!opts.project.cwd;
-
-    return el('section', {
-        class: 'rail-group' + (opts.nested ? ' nested' : ''), 'data-key': key,
-        'data-cwd': opts.project ? opts.project.cwd : null,
-        'data-tinted': accent ? '1' : null,
-        style: accent ? `--proj-accent: ${accent}` : null,
-    },
-        el('button', {
-            class: 'group-head',
-            type: 'button',
-            'aria-expanded': String(open),
-            'aria-controls': bodyId,
-            draggable: drag ? 'true' : null,
-            title: drag ? 'Drag to reorder projects' : null,
-            onclick: () => { toggleGroup(key, open, opts.nested); renderRail(); },
-            ondragstart: drag ? (e) => onRailDragStart(e, opts.project.cwd) : null,
-            ondragend: drag ? (e) => onRailDragEnd(e) : null,
-        },
-            drag ? el('span', { class: 'group-grip' }, icon('grip', 13)) : null,
-            el('span', { class: 'twist' }, icon('caret', 13)),
-            el('span', { class: 'group-label' }, label),
-            live ? el('span', { class: 'live' }, `${live} live`) : null,
-            el('span', { class: 'count' }, String(counted.length)),
-        ),
-        // A sibling of the head rather than a child of it, because the head is
-        // itself a <button> and a button inside a button is not a thing the
-        // browser will build. It is positioned over the card's top-right corner
-        // instead, with the head padded to keep the count out from under it.
-        opts.project
-            ? el('button', {
-                class: 'group-menu-btn', type: 'button',
-                'aria-haspopup': 'menu', 'aria-expanded': 'false',
-                'aria-label': `More for ${label}`, title: `More for ${label}`,
-                onclick: (e) => {
-                    e.stopPropagation();
-                    if (state.projMenu && state.projMenu.key === key) closeProjMenu();
-                    else showProjMenu(opts.project, e.currentTarget);
-                },
-            }, icon('dots', 15))
-            : null,
-        open
-            ? el('div', { class: 'group-body', id: bodyId }, opts.lead || null, list.map(strip))
-            : null,
-    );
-}
-
 // --- `custom` order: dragging project cards ------------------------------
 //
 // The toolbar editor's idiom (onBarDragOver, commitBarOrder): the card under the
-// cursor moves as the drag goes, and the order is read back off the DOM when it
-// ends. renderRail() is held off meanwhile — a session writing mid-drag would
-// otherwise rebuild the rail and drop the card being carried.
+// cursor moves as the drag goes, and the order it reached is saved when it ends.
+//
+// The move goes through the render, not round it. `state.railDrag.order` is the
+// order the drag has reached, orderGroups() in web/rail.js prefers it to the
+// saved one, and each change re-renders — so a session writing mid-drag redraws
+// the rail with the card still where the cursor put it, and the carried node is
+// the same node throughout, which is what keeps the browser's drag alive. Moving
+// the cards by hand here would leave the DOM disagreeing with what Preact last
+// rendered.
 
-function onRailDragStart(e, cwd) {
-    state.railDrag = cwd;
+export function onRailDragStart(e, cwd) {
+    state.railDrag = { cwd, order: null };
     closeProjMenu();
     e.dataTransfer.effectAllowed = 'move';
     // Firefox starts no drag without data.
     e.dataTransfer.setData('text/plain', cwd);
-    e.currentTarget.closest('.rail-group').classList.add('dragging');
+    renderRail();   // the card takes `.dragging`
 }
 
-function onRailDragEnd(e) {
-    const card = e.currentTarget.closest('.rail-group');
-    if (card) card.classList.remove('dragging');
+export function onRailDragEnd() {
+    const drag = state.railDrag;
     state.railDrag = null;
-    commitRailOrder(railCardOrder());
+    commitRailOrder(((drag && drag.order) || railCardOrder()).filter(Boolean));
 }
 
 function onRailDragOver(e) {
@@ -1622,7 +1442,7 @@ function onRailDragOver(e) {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     const cards = [...dom.rail.querySelectorAll(':scope > .rail-group[data-cwd]')];
-    const moving = cards.find(n => n.dataset.cwd === state.railDrag);
+    const moving = cards.find(n => n.dataset.cwd === state.railDrag.cwd);
     if (!moving) return;
     const others = cards.filter(n => n !== moving);
     if (!others.length) return;
@@ -1632,8 +1452,11 @@ function onRailDragOver(e) {
     });
     // Kept among the project cards: past the last one is still above Test and
     // Archived, which never move.
-    if (before) dom.rail.insertBefore(moving, before);
-    else others[others.length - 1].after(moving);
+    const order = others.map(n => n.dataset.cwd);
+    order.splice(before ? others.indexOf(before) : order.length, 0, moving.dataset.cwd);
+    if (order.join('\n') === cards.map(n => n.dataset.cwd).join('\n')) return;
+    state.railDrag.order = order;
+    renderRail();
 }
 
 /** The directories of the project cards on screen, top first. */
@@ -1698,31 +1521,7 @@ function moveRailCard(cwd, where) {
     commitRailOrder(list);
 }
 
-/**
- * Is a rail group open?
- *
- * Two sets, because the two kinds of group want opposite defaults and one set
- * cannot express both. `state.collapsed` holds the *shut* keys, so a project
- * seen for the first time defaults open — which is right for a project and
- * wrong for the Scheduled subsection, whose whole point is to be out of the way
- * until you go looking. `state.schedOpen` holds the *open* ones instead, so a
- * project that starts running a schedule tomorrow does not silently grow eleven
- * rows in the rail.
- *
- * Inverting per-kind rather than seeding a default at first sight, because
- * seeding writes to storage during a render and gets the answer wrong exactly
- * once — on the render where the key first appears.
- *
- * A filter that matches inside a shut group must not hide its own results, so a
- * live query forces every group open. The heading still toggles while filtering;
- * it takes effect once the filter clears.
- */
-function isOpen(key, nested) {
-    if (state.query) return true;
-    return nested ? state.schedOpen.has(key) : !state.collapsed.has(key);
-}
-
-function toggleGroup(key, open, nested) {
+export function toggleGroup(key, open, nested) {
     if (nested) {
         state.schedOpen[open ? 'delete' : 'add'](key);
         saveCollapsed();
@@ -1730,80 +1529,6 @@ function toggleGroup(key, open, nested) {
     }
     state.collapsed[open ? 'add' : 'delete'](key);
     saveCollapsed();
-}
-
-function strip(s) {
-    const running = s.runner && (s.runner.state === 'busy' || s.runner.state === 'starting');
-    const current = state.current && state.current.sessionId === s.sessionId;
-    const queued = (s.runner && s.runner.queued) || 0;
-    const away = elsewhere(s);
-
-    // A row, not a button: it holds its own pin and archive controls, and
-    // nesting buttons is not allowed.
-    return el('div', {
-        class: 'strip',
-        'data-id': s.sessionId,
-        'data-state': stripState(s),
-        title: away ? awayWords(away) : null,
-        'data-pinned': String(!!s.pinned),
-        'data-archived': String(!!s.archived),
-        'aria-current': current ? 'true' : null,
-    },
-        el('button', {
-            class: 'strip-main', type: 'button',
-            onclick: () => openSession(s.sessionId),
-        },
-            el('span', { class: 'strip-title' }, s.title),
-            el('span', { class: 'strip-meta' },
-                // Pinning is a state worth seeing without hovering, and this is
-                // where it goes now that the buttons are hover-only.
-                s.pinned ? el('span', { class: 'tag-pin', title: 'Pinned' },
-                    icon('pin', 11)) : null,
-                // Only ever set on a development bridge, and worth saying on the
-                // row: a labelled session is one somebody meant to throw away.
-                s.test ? el('span', { class: 'tag-test' }, 'test') : null,
-                // A background agent is a different sort of thing from a session
-                // somebody is sitting in front of, and only the registry knows.
-                (s.live && s.live.kind === 'bg')
-                    ? el('span', { class: 'tag-bg', title: 'A background agent' }, 'bg') : null,
-                // What the session left on GitHub, at its worst. Ahead of the
-                // worktree name and the activity, which are the two things this
-                // line is allowed to squeeze out.
-                prBadge(s),
-                s.worktree ? el('span', { class: 'wt' }, s.worktree.name) : null,
-                s.worktree ? el('span', { class: 'dot' }, '·') : null,
-                // The time the list is ordered by, so the order reads as sorted.
-                el('span', { title: `You last wrote here ${ago(s.lastUserTs || s.lastTs)} ago` },
-                    ago(s.lastUserTs || s.lastTs)),
-                el('span', { class: 'dot' }, '·'),
-                el('span', {}, `${s.userMessages} ${s.userMessages === 1 ? 'turn' : 'turns'}`),
-                // Something you queued here and then walked away from. Ahead of
-                // the activity because the activity is the one part of the row
-                // that may be cut short — it is the least specific thing on it.
-                queued ? queuedBadge(queued) : null,
-                dueBadge(s.sessionId),
-                activityBits(running ? s.runner : null),
-            ),
-        ),
-        el('div', { class: 'strip-actions' },
-            el('button', {
-                class: 'mini' + (s.pinned ? ' on' : ''), type: 'button',
-                title: s.pinned ? 'Unpin' : 'Pin to the top',
-                'aria-pressed': String(!!s.pinned),
-                onclick: (e) => { e.stopPropagation(); setFlags(s, { pinned: !s.pinned }); },
-            }, icon('pin')),
-            el('button', {
-                class: 'mini', type: 'button',
-                title: s.archived ? 'Restore from archive' : 'Archive',
-                onclick: (e) => { e.stopPropagation(); setFlags(s, { archived: !s.archived }); },
-            }, icon(s.archived ? 'unarchive' : 'archive')),
-            el('button', {
-                class: 'mini danger', type: 'button',
-                title: 'Delete permanently',
-                onclick: (e) => { e.stopPropagation(); askDelete(s); },
-            }, icon('trash')),
-        ),
-    );
 }
 
 /**
@@ -1814,20 +1539,13 @@ function strip(s) {
  * started itself, so a session with a live registry entry and no runner is one
  * this window cannot send into without two processes appending to one file.
  */
-function elsewhere(s) {
+export function elsewhere(s) {
     if (!s || !s.live || !s.live.running) return null;
     return s.runner ? null : s.live;
 }
 
-/** Three states where there used to be two. `active` is the mtime fallback. */
-function stripState(s) {
-    if (s.runner && (s.runner.state === 'busy' || s.runner.state === 'starting')) return 'running';
-    if (elsewhere(s)) return 'elsewhere';
-    return s.active ? 'active' : 'idle';
-}
-
 /** How to describe a session running outside this app, in a sentence. */
-function awayWords(live) {
+export function awayWords(live) {
     const where = WHERE[live.entrypoint] || (live.kind === 'bg' ? 'as a background agent' : null);
     return `Running ${where || `under ${live.entrypoint || 'another client'}`}`
         + ` (pid ${live.pid})`;
@@ -1837,74 +1555,10 @@ const WHERE = {
     cli: 'in a terminal',
     vscode: 'in VS Code',
     'sdk-cli': 'under the SDK',
-    'claude-sessions': 'in another Claude Sessions window',
+    tgxcode: 'in another TGXCode window',
+    // Sessions started before the rename still carry the old entrypoint.
+    'claude-sessions': 'in another TGXCode window',
 };
-
-/**
- * What a row says about the turn it is running: its separator and the activity
- * line, as a pair, so a status update can swap them as one.
- *
- * Only the words. That a session is working at all is said by the dot at the head
- * of the meta line, which is the part that has to survive a narrow rail — this
- * text is last in a row that does not wrap, so it is the first thing to go.
- *
- * `detail` before `activity`, and that is the one place in the app that unpicks
- * the label. Everywhere else has room for `Percolating… Reading runner.js`;
- * twenty-odd characters does not, and clipping it there would spend them all on
- * the spinner verb and cut the tool name off the end — the decorative half
- * surviving at the expense of the informative one. `detail` is that label
- * without its verb, and it is null exactly when the verb is all there is to
- * say, so the rail still shows a verb whenever nothing more specific is
- * happening.
- */
-function activityBits(runner) {
-    if (!runner) return [];
-    return [
-        el('span', { class: 'dot dot-act' }, '·'),
-        el('span', { class: 'pulse' },
-            el('span', { class: 'pulse-t' },
-                clip(runner.detail || runner.activity || 'Working', 22))),
-    ];
-}
-
-/**
- * Is there nothing left open on this session's pull requests?
- *
- * `merged` and `closed` are the last two in the bridge's `ATTENTION_ORDER`, below
- * every live state, so a session reduces to one of those two words only when none
- * of its PRs is still going. The single word is therefore already the "all of
- * them" test and the counts do not need consulting — which is the same reason the
- * ranking lives on the bridge and is not copied here.
- *
- * A session with no PRs is not finished, it is unmeasured, and has no entry here
- * at all; nor is one whose PRs could not be reached, which is `unknown`. Both keep
- * their rows, which is the distinction `prBadge` already draws in colour.
- */
-const prDone = (s) => {
-    const agg = state.railPrs.get(s.sessionId);
-    return !!agg && (agg.status === 'merged' || agg.status === 'closed');
-};
-
-/**
- * What a session's pull requests have come to, as one glyph.
- *
- * The same glyph set and the same colour table as the header chip, at 11px — one
- * PR vocabulary, learned once. Which of several PRs it draws is the bridge's call
- * (`ATTENTION_ORDER` in `pulls.js`); having a second copy of that ranking here is
- * how the two would drift.
- *
- * Drawn from `prs` on the summary, which is free, so the glyph appears with the
- * rail and gains its colour when `/api/prs` answers — exactly what `prLink` does
- * in the header. A session with no PRs draws nothing at all, which is not the same
- * as one whose PRs could not be reached: that one is grey.
- */
-function prBadge(s) {
-    if (!s.prs || !s.prs.length) return null;
-    const agg = state.railPrs.get(s.sessionId) || null;
-    const status = (agg && agg.status) || 'unknown';
-    return el('span', { class: 'tag-pr', 'data-status': status, title: prBadgeTip(s, agg) },
-        icon(PR_ICON[status] || 'pr', 11));
-}
 
 // A status in the few words a breakdown line wants — `resolveStatus`'s own labels,
 // shortened where a count reads badly in front of them ("1 changes requested").
@@ -1918,7 +1572,7 @@ const PR_WORDS = {
     'checks-pending': 'still checking',
     unknown: 'unreachable',
 };
-const prWords = (status) => PR_WORDS[status] || status.replace(/-/g, ' ');
+export const prWords = (status) => PR_WORDS[status] || status.replace(/-/g, ' ');
 
 /**
  * Why a PR has no status, which is two different things.
@@ -1930,55 +1584,7 @@ const prWords = (status) => PR_WORDS[status] || status.replace(/-/g, ' ');
  * actually was. Saying so when it is merely early is the kind of wrong that sends
  * somebody to check their token.
  */
-const prUnknownWhy = () => state.prsError || 'not looked up yet';
-
-/**
- * The glyph is recognisable without being read; the words are here.
- *
- * Same three-part shape as the header's tooltip — what it is, what the one word
- * left out, then which PRs are being talked about. The breakdown is skipped for a
- * session with one PR, where it would only say the headline twice.
- */
-function prBadgeTip(s, agg) {
-    const numbers = s.prs.map(p => `#${p.number}`).join(' · ');
-    const plural = `${s.prs.length} pull request${s.prs.length === 1 ? '' : 's'}`;
-
-    // Before the first payload lands, and after one that could not answer: the row
-    // knows how many PRs there are and nothing about them, and says exactly that.
-    if (!agg) return `${plural}\nAsking GitHub…\n${numbers}`;
-    if (agg.status === 'unknown') return `${plural}\n${prUnknownWhy()}\n${numbers}`;
-
-    const breakdown = Object.entries(agg.counts)
-        .sort((a, b) => b[1] - a[1])
-        .map(([status, n]) => `${n} ${prWords(status)}`)
-        .join(' · ');
-
-    return [
-        agg.label || prWords(agg.status),
-        agg.total > 1 ? `${plural} — ${breakdown}` : null,
-        numbers,
-    ].filter(Boolean).join('\n');
-}
-
-/** Recolour one row's PR glyph in place, rather than rebuilding the whole rail. */
-function patchPrBadge(stripEl, s) {
-    const meta = stripEl.querySelector('.strip-meta');
-    if (!meta) return;
-    const existing = meta.querySelector('.tag-pr');
-    const fresh = prBadge(s);
-    if (existing && fresh) { existing.replaceWith(fresh); return; }
-    if (existing) { existing.remove(); return; }
-    if (!fresh) return;
-
-    // A session that raised its first PR mid-conversation has no glyph to replace,
-    // so this has to land where strip() would have put it: after the leading tags
-    // and before everything that is allowed to be squeezed out. Anchoring off the
-    // tags rather than off `.wt` because a session with no worktree has no `.wt`,
-    // and `insertBefore(…, null)` would append it past the activity line.
-    const lead = [...meta.children]
-        .filter(n => n.matches('.tag-pin, .tag-test, .tag-bg')).pop();
-    meta.insertBefore(fresh, lead ? lead.nextSibling : meta.firstChild);
-}
+export const prUnknownWhy = () => state.prsError || 'not looked up yet';
 
 function queuedBadge(queued) {
     return el('span', {
@@ -1987,65 +1593,8 @@ function queuedBadge(queued) {
     }, `+${queued} queued`);
 }
 
-/**
- * Messages written for this session and waiting on a clock.
- *
- * Its own badge rather than folded into the one above, because the two facts do
- * not mean the same thing to somebody scanning the rail: a queued message goes the
- * moment the turn ends, and this one goes at the hour it says. Showing the hour is
- * the whole point — "something arrives here at 02:00" should be answerable without
- * opening the session, which is the one thing nobody is going to do at 02:00.
- */
-function dueBadge(sessionId) {
-    let pending = 0;
-    let nextAt = 0;
-    for (const m of state.later) {
-        if (m.sessionId !== sessionId || m.state !== 'pending') continue;
-        pending++;
-        if (!nextAt || m.at < nextAt) nextAt = m.at;
-    }
-    if (!pending) return null;
-    return el('span', {
-        class: 'due',
-        title: `${pending} message${pending === 1 ? '' : 's'} scheduled; the next at `
-            + new Date(nextAt).toLocaleString(),
-    }, `\u{1F550} ${hhmm(nextAt)}${pending > 1 ? ` +${pending - 1}` : ''}`);
-}
-
-/** Update one row's queue count in place, rather than rebuilding the rail. */
-function patchQueuedBadge(stripEl, queued) {
-    const meta = stripEl.querySelector('.strip-meta');
-    if (!meta) return;
-    const existing = meta.querySelector('.wait');
-    if (!queued) { if (existing) existing.remove(); return; }
-    const fresh = queuedBadge(queued);
-    if (existing) existing.replaceWith(fresh);
-    // Ahead of the activity, in the place strip() would have built it.
-    else meta.insertBefore(fresh, meta.querySelector('.pulse')?.previousSibling || null);
-}
-
-/**
- * Bring one row's state, queue count and activity line up to date in place.
- *
- * The rail is rebuilt only when the session list changes, and none of the things
- * that move while a turn runs change it: not the tool being called, not the queue
- * behind it, not the turn ending. So a row kept whatever the last list happened to
- * say — an activity line minutes stale, and a finished turn still breathing.
- */
-function patchStripStatus(stripEl, s) {
-    const meta = stripEl.querySelector('.strip-meta');
-    if (!meta) return;
-    const runner = s.runner;
-    const running = runner && (runner.state === 'busy' || runner.state === 'starting');
-    stripEl.dataset.state = stripState(s);
-    // Cleared before the queue badge is placed, so it lands where strip() puts it.
-    for (const node of meta.querySelectorAll('.dot-act, .pulse')) node.remove();
-    patchQueuedBadge(stripEl, (runner && runner.queued) || 0);
-    for (const node of activityBits(running ? runner : null)) meta.append(node);
-}
-
 /** Toggle pin/archive, updating in place so the rail doesn't jump under the cursor. */
-async function setFlags(summary, change) {
+export async function setFlags(summary, change) {
     try {
         const r = await post(`/api/sessions/${summary.sessionId}/flags`, change);
         Object.assign(summary, { pinned: r.pinned, archived: r.archived, test: r.test });
@@ -2070,7 +1619,7 @@ function saveCollapsed() {
 // Archiving is the reversible one and is a click. This is not reversible, so it
 // is a click plus an answer to a question that names what is about to go.
 
-function askDelete(summary) {
+export function askDelete(summary) {
     state.pendingDelete = summary;
     dom.delWhat.textContent = summary.title;
     // replaceChildren has no opinion about nulls the way el() does — it would
@@ -2180,7 +1729,7 @@ function clearCurrent() {
 
 // ── conversation ─────────────────────────────────────────────────────────
 
-async function openSession(id, { quiet = false, keepDash = false } = {}) {
+export async function openSession(id, { quiet = false, keepDash = false } = {}) {
     // Going to a conversation is what "I have dealt with this" looks like, so it
     // is what clears its notifications. Above the early return below rather than
     // after it: a history row for the chat you are already sitting in still has
@@ -2300,6 +1849,9 @@ function beginOpen(summary, { keepDash = false } = {}) {
     state.taskOpen.clear();
     closeTaskDialog();          // it was showing a task belonging to the old one
     closeReview();              // and so was the plan or question review
+    // Going to a conversation is going to the conversation: a preview left up
+    // would cover the one you just asked for. Its page stays loaded.
+    if (state.preview.open) showPreview(false);
     // Empties the aside, but keeps its place in the row until loadTasks answers
     // for the new conversation — see renderChecklist for why.
     state.tasksPending = paneUp(dom.tasks);
@@ -5641,7 +5193,7 @@ function toolSummary(ev) {
     const i = ev.input || {};
 
     // Handing work to another session. Before the switch because the CLI prefixes
-    // an MCP tool with its server — `mcp__claude-sessions__message_session` — and
+    // an MCP tool with its server — `mcp__tgxcode__message_session` — and
     // the suffix is the part worth matching, for the same reason
     // SUGGEST_TOOL_SUFFIX is matched that way in bridge/transcript.js.
     //
@@ -6071,7 +5623,7 @@ function questionsView(questions, answers) {
 /** What became of an ask, in the few words a tick label and a popover have room for. */
 function markOutcome(ev) {
     if (!ev.result) return 'still waiting';
-    const stopped = /^Stopped from Claude Sessions/.test(ev.result.text || '');
+    const stopped = /^Stopped from (TGXCode|Claude Sessions)/.test(ev.result.text || '');
     if (ev.name === 'ExitPlanMode') {
         if (ev.status === 'error') return stopped ? 'stopped' : 'sent back';
         return ev.result.planWasEdited ? 'approved with a note' : 'approved';
@@ -6149,7 +5701,7 @@ function reviewPlan(ev) {
     const text = r.plan || ev.input.plan || '';
 
     if (ev.status === 'error') {
-        const stopped = /^Stopped from Claude Sessions/.test(r.text || '');
+        const stopped = /^Stopped from (TGXCode|Claude Sessions)/.test(r.text || '');
         dom.reviewOutcome.replaceChildren(stopped
             // Nobody turned this down — the turn ended while it was still up.
             // Printing the canned sentence as though it were feedback would put
@@ -6189,7 +5741,7 @@ function reviewQuestions(ev) {
     dom.reviewModal.dataset.cols = String(Math.min(Math.max(qs.length, 1), 4));
 
     if (ev.status === 'error') {
-        const stopped = /^Stopped from Claude Sessions/.test((ev.result || {}).text || '');
+        const stopped = /^Stopped from (TGXCode|Claude Sessions)/.test((ev.result || {}).text || '');
         dom.reviewOutcome.replaceChildren(el('span', { class: 'review-said' }, stopped
             ? 'Stopped before it was answered.'
             : 'Dismissed — Claude carried on unaided.'));
@@ -6590,7 +6142,7 @@ function channelChip(p) {
     },
         el('button', {
             class: 'chan-open', type: 'button',
-            title: `Switch DevBrowser to :${p.port}`,
+            title: openTitle(p),
             onclick: () => openInDevBrowser(p, chip, go),
         },
             el('span', { class: 'led' }),
@@ -6673,19 +6225,153 @@ async function openInDevBrowser(p, chip, go) {
     const was = go.textContent;
     go.textContent = 'Opening';
     try {
-        const r = await post('/api/devbrowser/open', {
+        await openPreview({
             port: p.port,
+            title: p.title || null,
             // Give the tab a name if the transcript knew one and DevBrowser did not.
-            title: !p.titled && p.title ? p.title : undefined,
+            devbrowserTitle: !p.titled && p.title ? p.title : undefined,
+            http: p.http,
         });
         go.textContent = 'Open';
-        if (r.launched) toast(`Started DevBrowser and switched to :${p.port}.`, 'ok');
     } catch (err) {
         go.textContent = was;
-        toast(`Could not switch to :${p.port}. ${err.message}`, 'error');
+        toast(`Could not open :${p.port}. ${err.message}`, 'error');
     } finally {
         chip.classList.remove('busy');
     }
+}
+
+// ── browser preview ──────────────────────────────────────────────────────
+// Every "show me that port" in the app comes through openPreview(), which is
+// where Settings → DevBrowser decides whether it means DevBrowser or the
+// preview in this window. Before this there was only DevBrowser, and each chip
+// posted to it on its own.
+
+/** Whether DevBrowser is part of this app at all — Settings → DevBrowser → Show. */
+const devBrowserShown = () => BOOT_PREFS.devbrowser.show !== false;
+
+/** Whether a click on a port means DevBrowser rather than the preview here. */
+const opensInDevBrowser = () => devBrowserShown() && BOOT_PREFS.devbrowser.openIn === 'devbrowser';
+
+/** What clicking a port chip will do, for its tooltip. */
+function openTitle(p) {
+    const what = `:${p.port}${p.title ? ` (${p.title})` : ''}`;
+    if (opensInDevBrowser()) return `Show ${what} in DevBrowser`;
+    if (p.http === false) return `${what} does not answer HTTP — nothing to preview`;
+    return `Preview ${what}`;
+}
+
+/**
+ * Whether a port can be previewed here. The page's `localhost` is this
+ * machine's only when the page is served over loopback; a remote browser
+ * pointed at the bridge would preview a port on *its* own machine, which is
+ * nothing, or worse, something else. DevBrowser is on the bridge's host and
+ * would still be right, but the bridge refuses remote callers its routes.
+ */
+const previewAvailable = () => !state.remote;
+
+/**
+ * Show a port — in DevBrowser or here, by Settings.
+ *
+ * `http: false` is the bridge having asked the port and got no HTTP back; that
+ * is a port with nothing a browser can show, so it goes to DevBrowser if
+ * DevBrowser is how you look at things (it was always offered there) and
+ * otherwise says so rather than opening a blank page.
+ *
+ * @param {{port:number, title?:string, path?:string, runId?:string,
+ *   from?:'live'|'session', http?:boolean, devbrowserTitle?:string}} o
+ */
+async function openPreview(o) {
+    const db = BOOT_PREFS.devbrowser;
+    if (opensInDevBrowser()) {
+        const r = await handToDevBrowser({
+            port: o.port, path: o.path,
+            title: o.devbrowserTitle,
+            ifClosed: db.whenClosed === 'launch' ? 'launch' : 'none',
+        });
+        if (r && r.running === false) {
+            if (db.whenClosed === 'inline') return showPortInline(o);
+            toast('DevBrowser is not running.', 'info');
+        }
+        return;
+    }
+    return showPortInline(o);
+}
+
+function showPortInline(o) {
+    if (!previewAvailable()) {
+        toast('Previews work only in a window on this machine.', 'info');
+        return;
+    }
+    if (o.http === false) {
+        toast(`:${o.port} is listening but does not answer HTTP, so there is nothing to preview.`, 'info');
+        return;
+    }
+    previewPane.open({ port: o.port, title: o.title || null, path: o.path || null, runId: o.runId || null });
+    showPreview(true, { from: o.from || 'session' });
+}
+
+/**
+ * Put the preview on screen, or take it off. Off keeps the page loaded for
+ * `preview.keepAliveMinutes` — that clock is web/preview.js's.
+ */
+function showPreview(on, { from = 'session' } = {}) {
+    if (on) {
+        closeOtherPanels(null);
+        // Decided now and kept: a preview opened from a session and one opened
+        // from the board behave the same while you look at them, whatever the
+        // setting is changed to underneath.
+        state.preview.overLive = from === 'live' ? BOOT_PREFS.preview.overLive !== false : true;
+    } else if (state.preview.max) {
+        previewPane.setMaximized(false);
+    }
+    state.preview.open = on;
+    paintPanels();
+    syncBoardWatch();
+    if (!on && liveVisible()) renderLive();
+}
+
+/** The task behind a preview, in its terminal tab. */
+function previewOutput(entry) {
+    if (!entry.runId) return;
+    showPreview(false);
+    showTerm(true);
+    setTermTab(entry.runId);
+}
+
+/**
+ * DevBrowser's half. Resolves with the bridge's answer, `{running: false}`
+ * included, and toasts only what the caller will not.
+ */
+async function handToDevBrowser({ port, path, title, ifClosed = 'launch' }) {
+    try {
+        const r = await post('/api/devbrowser/open', {
+            port, path: path || undefined, title: title || undefined, ifClosed,
+        });
+        if (r.launched) toast(`Started DevBrowser and switched to :${port}.`, 'ok');
+        return r;
+    } catch (err) {
+        toast(`Could not switch DevBrowser to :${port}. ${err.message}`, 'error');
+        return null;
+    }
+}
+
+/**
+ * Everything that says "DevBrowser" in the window, shown or not by Settings.
+ * The pill's 20-second poll stops with it: asking after an app you said you
+ * do not use is a request every 20 seconds for nothing.
+ */
+let devBrowserTimer = null;
+function paintDevBrowserPresence() {
+    const on = devBrowserShown();
+    paintToolbar();
+    clearInterval(devBrowserTimer);
+    devBrowserTimer = null;
+    if (on) {
+        refreshDevBrowser();
+        devBrowserTimer = setInterval(refreshDevBrowser, 20_000);
+    }
+    previewPane.paintToolbar();
 }
 
 async function refreshDevBrowser() {
@@ -6729,7 +6415,7 @@ async function markInstance() {
         // happened by the time /api/health comes back.
         renderQuota();
         if (!h.dev) return;
-        document.title = `Claude Sessions — dev :${h.port}`;
+        document.title = `TGXCode — dev :${h.port}`;
         document.querySelector('.wordmark').append(
             el('span', { class: 'dev-badge', title: `Development bridge on port ${h.port}` },
                 `dev :${h.port}`));
@@ -7523,8 +7209,9 @@ function liveGroup(key, label, list, hidden, strip) {
 /**
  * One session, as a card.
  *
- * Deliberately built from the same pieces as the rail row — activityBits,
- * queuedBadge, ago, clip — rather than a second vocabulary for the same facts.
+ * Deliberately built from the same pieces as the rail row — queuedBadge, ago,
+ * clip (web/rail.js keeps a vnode twin of the badge) — rather than a second
+ * vocabulary for the same facts.
  * The risk with a view like this is two renderers of one state drifting apart,
  * and sharing the small parts is what keeps them honest.
  */
@@ -7573,7 +7260,7 @@ function liveCard(s, strip = false) {
             (r && r.queued) ? queuedBadge(r.queued) : null,
             // A port something is answering on right now. The overview refreshes
             // these on its own slow cycle, so a chip is at most ~15s old.
-            ...(s.devservers || []).map(devChip),
+            ...(s.devservers || []).map(d => devChip(d, s)),
             el('span', { class: 'lcard-ago' }, ago(s.lastTs)),
         ),
 
@@ -7746,31 +7433,40 @@ const ASK_WORD = {
 };
 
 /**
- * A port this session has something answering on, as a chip that switches
- * DevBrowser to it.
+ * A port this session has something answering on, as a chip that shows it —
+ * in DevBrowser or in the preview, by Settings.
  *
- * Its own request rather than the channel strip's `openInDevBrowser`, which
- * writes progress into a separate "Open" button it is given — handing it the
- * chip's own label made a successful click rename `:5006` to `Open`.
+ * Not the channel strip's `openInDevBrowser`, which writes progress into a
+ * separate "Open" button it is given — handing it the chip's own label made a
+ * successful click rename `:5006` to `Open`.
  */
-function devChip(d) {
+function devChip(d, s) {
     return el('button', {
         class: 'lchip', type: 'button',
-        title: `Show :${d.port}${d.title ? ` (${d.title})` : ''} in DevBrowser`,
+        title: openTitle(d),
         onclick: async (e) => {
             const chip = e.currentTarget;
             chip.classList.add('busy');
             chip.disabled = true;
             try {
-                const r = await post('/api/devbrowser/open', {
+                // Over the board, or over that card's session as though it had
+                // been opened and the chip clicked there — preview.overLive.
+                const overLive = BOOT_PREFS.preview.overLive !== false;
+                if (!overLive && !opensInDevBrowser() && s && d.http !== false
+                    && (!state.current || state.current.sessionId !== s.sessionId)) {
+                    await openSession(s.sessionId);
+                }
+                await openPreview({
                     port: d.port,
+                    title: d.title || null,
                     // Name the tab if the transcript knew what it was and
                     // DevBrowser did not.
-                    title: d.owned ? undefined : d.title || undefined,
+                    devbrowserTitle: d.owned ? undefined : d.title || undefined,
+                    http: d.http,
+                    from: overLive ? 'live' : 'session',
                 });
-                if (r.launched) toast(`Started DevBrowser and switched to :${d.port}.`, 'ok');
             } catch (err) {
-                toast(`Could not switch to :${d.port}. ${err.message}`, 'error');
+                toast(`Could not open :${d.port}. ${err.message}`, 'error');
             } finally {
                 chip.classList.remove('busy');
                 chip.disabled = false;
@@ -7957,17 +7653,30 @@ function paintPanels() {
     // from the whole window to a column beside Tasks needs its cards rebuilt.
     const drawnFor = `${dom.live.hidden}/${dom.live.dataset.mode}/${dom.main.dataset.dock}`;
 
+    // The preview sits between the two: it covers the conversation as a panel
+    // would, and is itself covered by one. A docked board stays beside it unless
+    // this preview was opened to go over the board (preview.overLive), and a
+    // full-height board has nowhere to go but under it.
+    const preview = state.preview.open && !covered;
+    const liveUnder = preview && (state.preview.overLive || !docked || state.preview.max);
+
     for (const p of PANELS) dom[p].hidden = !state[p].open;
-    dom.live.hidden = !state.live.open || (covered && !kept);
+    dom.preview.hidden = !preview;
+    dom.live.hidden = !state.live.open || (covered && !kept) || liveUnder;
     dom.live.dataset.mode = docked ? 'dock' : 'full';
     // The orientation lives on both: `main` has to change its flex direction,
     // and the board has to know whether it is a strip or a column.
     dom.live.dataset.dock = state.live.dock;
-    dom.main.dataset.dock = docked ? state.live.dock : 'bottom';
+    dom.main.dataset.dock = docked && !liveUnder ? state.live.dock : 'bottom';
     // The conversation stays up under a docked board; a whole-screen panel
     // still covers it.
-    dom.conv.hidden = covered || full || !state.current;
-    dom.placeholder.hidden = covered || state.live.open || Boolean(state.current);
+    dom.conv.hidden = covered || preview || full || !state.current;
+    dom.placeholder.hidden = covered || preview || state.live.open || Boolean(state.current);
+    // Maximize belongs to the preview being on screen, not to the preview
+    // existing: opening Settings over it has to bring the rail back.
+    if (preview && state.preview.max) dom.app.dataset.previewMax = '1';
+    else delete dom.app.dataset.previewMax;
+    previewPane.setVisible(preview);
     // Nothing to find in a conversation that is not on screen — and this is what
     // lets the Escape ladder put find below the panels without them overlapping.
     if (dom.conv.hidden) closeFind();
@@ -11497,16 +11206,16 @@ function paintPcolorDialog() {
  * Open the one-item menu against a project card's ⋮.
  *
  * Fixed and placed by hand, for positionMenu()'s reason one step further on: the
- * rail scrolls, and renderRail() rebuilds it whenever any session changes — so a
- * menu that lived inside a card would be both clipped and torn out from under a
- * click. `state.projMenu` remembers which card it belongs to so a rebuild can
- * put it back; see syncProjMenu().
+ * rail scrolls and clips, and cards move when the order does. `state.projMenu`
+ * remembers which card it belongs to, so a render can draw that card's ⋮ as
+ * expanded and syncProjMenu() can follow it.
  *
  * @param {{key: string, cwd: string, name: string}} project
  */
-function showProjMenu(project, btn) {
+export function showProjMenu(project, btn) {
     state.projMenu = { key: project.key, cwd: project.cwd, name: project.name };
     dom.projMenu.hidden = false;
+    renderRail();   // the ⋮ draws itself expanded
     const row = (label, act, disabled) => el('button', {
         class: 'picker-row', type: 'button', role: 'menuitem', disabled: disabled || null,
         onclick: () => { closeProjMenu(); act(); },
@@ -11529,12 +11238,11 @@ function showProjMenu(project, btn) {
     dom.projMenu.querySelector('.picker-row').focus();
 }
 
-function closeProjMenu() {
+export function closeProjMenu() {
     if (!state.projMenu) return;
-    const btn = dom.rail.querySelector('.group-menu-btn[aria-expanded="true"]');
-    if (btn) btn.setAttribute('aria-expanded', 'false');
     state.projMenu = null;
     dom.projMenu.hidden = true;
+    renderRail();
 }
 
 /** Under the button, or over it when there is more room that way. */
@@ -11565,8 +11273,9 @@ const PROJ_MENU_W = 220;
  * something moved a pixel would be the wrong reading of what happened.
  *
  * From renderRail(), because that runs whenever any session changes — several
- * times a minute in a busy window — and a menu that shut itself that often would
- * be unusable for the one thing it is for.
+ * times a minute in a busy window — and can move the card the menu belongs to;
+ * a menu that shut itself that often would be unusable for the one thing it is
+ * for.
  *
  * From the rail's `scroll`, because pressing a ⋮ that is only half on screen
  * makes the browser scroll it into view *first*, and that scroll lands after the
@@ -11586,7 +11295,6 @@ function syncProjMenu() {
     const b = btn.getBoundingClientRect();
     const rail = dom.rail.getBoundingClientRect();
     if (b.bottom < rail.top || b.top > rail.bottom) { closeProjMenu(); return; }
-    btn.setAttribute('aria-expanded', 'true');
     placeProjMenu(btn);
 }
 
@@ -11875,6 +11583,48 @@ const SETTINGS = [
                 options: LIVE_OVER_OPTIONS,
                 note: 'Sets every screen below at once.' },
             ...LIVE_OVER_ROWS,
+        ],
+    },
+    {
+        title: 'Browser preview', section: 'preview', userOnly: true,
+        note: 'The page behind a port or a running task, shown in this window with '
+            + 'DevBrowser’s toolbar.',
+        rows: [
+            { key: 'keepAliveMinutes', type: 'int', min: 0, max: 240,
+                label: 'Minutes to keep a page you left',
+                note: 'Come back inside this and the page is as you left it — scroll, '
+                    + 'form state, the dev server’s live reload still connected. After '
+                    + 'it the page is thrown away and loads fresh. 0 throws it away as '
+                    + 'soon as you leave.' },
+            { key: 'overLive', type: 'bool',
+                label: 'Open over the Live board',
+                note: 'A port clicked on a Live card covers the board, and Home brings '
+                    + 'it back. Off opens that card’s session and previews over it, '
+                    + 'with the board still docked beside it.' },
+        ],
+    },
+    {
+        title: 'DevBrowser', section: 'devbrowser', userOnly: true,
+        note: 'The separate browser app on this machine that shows one tab per port.',
+        rows: [
+            { key: 'show', type: 'bool',
+                label: 'Show DevBrowser in this app',
+                note: 'The status pill, “Open in DevBrowser” on a preview, and the '
+                    + 'DevBrowser tab field on a project command. Off, every port opens '
+                    + 'in the preview here. A task still names its port in DevBrowser '
+                    + 'when it comes up; with DevBrowser not running that does nothing.' },
+            { key: 'openIn', type: 'choice',
+                when: (p) => p.devbrowser && p.devbrowser.show !== false,
+                label: 'Open previews in',
+                options: [['devbrowser', 'DevBrowser'], ['inline', 'This window']],
+                note: 'Where clicking a port or a running task shows its page.' },
+            { key: 'whenClosed', type: 'choice',
+                when: (p) => p.devbrowser && p.devbrowser.show !== false
+                    && p.devbrowser.openIn === 'devbrowser',
+                label: 'When DevBrowser is not running',
+                options: [['launch', 'Start it'], ['inline', 'Preview here instead'],
+                    ['nothing', 'Do nothing']],
+                note: 'Starting it opens a window; “do nothing” only says it is closed.' },
         ],
     },
     {
@@ -12256,6 +12006,9 @@ function applyPrefsLive(prefs, section) {
     if (liveVisible()) renderLive();
     if (section === 'keyboard') paintComposerHint();
     if (section === 'projects') { renderRail(); paintRailSort(); }
+    // The pill, its poll, and every chip's tooltip say which browser a click
+    // means, and all of them were drawn under the old answer.
+    if (section === 'devbrowser') { paintDevBrowserPresence(); renderChannels(); }
     if (section === 'transcript' && state.current) {
         // Re-read the conversation so the new folding rule applies to what is
         // already on screen. keepDash so going and looking does not close this.
@@ -12342,7 +12095,13 @@ function renderSettings() {
                     onclick: () => { s.scope = 'user'; renderSettings(); },
                 }, 'Switch to User')) : null);
 
+        // A row's own `when` leaves it out while another setting makes it
+        // meaningless, and is asked of the merged answer rather than of the
+        // file being edited — a choice nothing would consult is not worth a row.
+        // renderSettings runs again after every save, which is what brings it
+        // back the moment the setting it depends on changes.
         for (const row of group.rows) {
+            if (row.when && !row.when(s.data)) continue;
             card.append(row.type === 'heading' ? settingHeading(row)
                 : row.type === 'all' ? settingAllRow(group, row, locked)
                 : settingRow(group, row, locked));
@@ -15666,6 +15425,9 @@ function cmdCard(entry, i, shared, editable) {
     // silently orphan the entry.
     body.append(cmdIdField(entry, i, local, base, editable, problems));
     for (const field of CMD_FIELDS) {
+        // Settings → DevBrowser → Show off: nothing in the window names it.
+        // The key is kept in the file either way; only the field goes.
+        if (field.key === 'devbrowser' && !devBrowserShown()) continue;
         body.append(cmdField(field, entry, i, { local, base, editable, problems }));
     }
     // Filtered rather than passed through: `append` stringifies a null into the
@@ -16213,8 +15975,11 @@ const toolbarItems = (layout) => layout.map(o => ({ id: o.def.id, place: o.place
 
 function paintToolbar() {
     const bar = dom.barMoreWrap.parentElement;
-    for (const { def, place, label } of toolbarLayout()) {
+    for (const { def, place: placed, label } of toolbarLayout()) {
         const node = dom[def.node];
+        // Settings → DevBrowser → Show, which outranks where the pill was put:
+        // off means no DevBrowser anywhere, the More menu included.
+        const place = def.id === 'devbrowser' && !devBrowserShown() ? 'hidden' : placed;
         if (place === 'more') dom.barMoreMenu.append(node);
         else bar.insertBefore(node, dom.barMoreWrap);
         // An attribute of our own rather than `hidden`, which the quota pill
@@ -16953,7 +16718,7 @@ navigator.serviceWorker?.addEventListener('message', (e) => {
 /**
  * `#/session/<id>` on load, which is how a click that had to open a window
  * gets to the right conversation. Deliberately the same shape plan 02 gives
- * the deep links, so a `claude-sessions://` handler can route into the page
+ * the deep links, so a `tgxcode://` handler can route into the page
  * without inventing a second vocabulary.
  */
 function openFromHash() {
@@ -17034,7 +16799,7 @@ dom.optSound.addEventListener('change', () => {
 // Worth having: Focus Assist and Do Not Disturb drop notifications without a
 // word, so "did that work" is otherwise unanswerable until a turn ends.
 dom.notifyTry.addEventListener('click', () => {
-    announce('Claude Sessions', 'This is what a finished turn will look like.', 'done', null);
+    announce('TGXCode', 'This is what a finished turn will look like.', 'done', null);
     if (!notify.sound && (!notify.desktop || notifyPermission() !== 'granted')) {
         toast('Both switches are off, so nothing would fire.', 'warn');
     }
@@ -18211,15 +17976,17 @@ function connect() {
         const s = JSON.parse(e.data);
         noteRunner(s);   // when this turn started, for the notification rules
         if (state.current && s.sessionId === state.current.sessionId) applyRunner(s);
-        // The rail's own copy, so a rebuild from the held order draws what the
-        // patch below already put on screen rather than reverting it.
+        // The rail's own copy. The session list is only re-sent when the list
+        // changes, and none of what moves while a turn runs changes it — the tool
+        // being called, the queue behind it, the turn ending — so without this a
+        // row would keep an activity line minutes stale and a finished turn still
+        // breathing.
         const row = state.sessions.find(x => x.sessionId === s.sessionId);
         if (row) {
             row.runner = { state: s.state, activity: s.activity,
                 detail: s.detail, queued: s.queued };
+            renderRail();
         }
-        const strip = dom.rail.querySelector(`[data-id="${CSS.escape(s.sessionId)}"]`);
-        if (strip && row) patchStripStatus(strip, row);
     });
 
     es.addEventListener('permission-request', (e) => {
@@ -19660,7 +19427,7 @@ function resetFind() {
  * be — you pick a time to the minute and the tick finds it within thirty — so the
  * extra digits are noise on every chip and badge this section draws.
  */
-const hhmm = (ts) => (ts ? `${pad(new Date(ts).getHours())}:${pad(new Date(ts).getMinutes())}` : '');
+export const hhmm = (ts) => (ts ? `${pad(new Date(ts).getHours())}:${pad(new Date(ts).getMinutes())}` : '');
 
 /** The modes worth offering, loudest first — see the note above about `auto`. */
 const LATER_MODES = ['bypassPermissions', 'dontAsk', 'acceptEdits', 'auto', 'plan'];
@@ -21042,8 +20809,18 @@ function renderCommands() {
 async function clickCommand(cmd) {
     const existing = runFor(cmd.id);
     if (existing && existing.state !== 'exited') {
+        // Up and serving pages: the page is what the button is for. The log is
+        // one click away, on the preview's toolbar, and the pane is left as it
+        // was rather than opened underneath where nobody can see it.
+        if (existing.state === 'listening' && existing.http && existing.port) {
+            openRunPreview(existing);
+            return;
+        }
         showTerm(true);
         setTermTab(existing.id);
+        // Still coming up: show the page once it does. One-shot, and only for
+        // the run this click was about.
+        if (existing.port) state.previewWhenUp = existing.id;
         return;
     }
     try {
@@ -21056,17 +20833,44 @@ async function clickCommand(cmd) {
         renderCommands();
         showTerm(true);
         setTermTab(run.id);
+        // Starting a server is asking to look at it: the log first, while it
+        // compiles, and the page once it answers.
+        if (run.port) state.previewWhenUp = run.id;
     } catch (err) {
         toast(`${cmd.label}: ${err.message}`, 'error');
     }
+}
+
+/** A task's page, by the same rule as any other port. */
+function openRunPreview(run) {
+    openPreview({
+        port: run.port,
+        title: run.label || null,
+        runId: run.id,
+        http: run.http,
+    }).catch((err) => toast(`Could not open :${run.port}. ${err.message}`, 'error'));
 }
 
 /** A run's state changed somewhere — possibly in another window. */
 function applyRunChange(e) {
     const known = state.runs.get(e.runId);
     if (known) {
-        state.runs.set(e.runId,
-            { ...known, state: e.state, port: e.port, exit: e.exit, stopped: e.stopped });
+        state.runs.set(e.runId, { ...known, state: e.state, port: e.port, http: e.http,
+            exit: e.exit, stopped: e.stopped });
+        const run = state.runs.get(e.runId);
+        // The one-shot a click on a starting task left behind, now due. In this
+        // window only: raising DevBrowser because a server finished compiling
+        // is the window-on-the-Windows-host that bridge/runs.js name() refuses
+        // to open, and a click that happened a minute ago is not consent to it.
+        if (state.previewWhenUp === e.runId && e.state === 'listening' && e.http) {
+            state.previewWhenUp = null;
+            if (!opensInDevBrowser() && run.workspace === cmdDir()) openRunPreview(run);
+        }
+        // Its server is gone, so its kept page is a page of nothing.
+        if (e.state === 'exited' && e.port) {
+            if (state.previewWhenUp === e.runId) state.previewWhenUp = null;
+            previewPane.discard(e.port);
+        }
     } else if (e.workspace === cmdDir()) {
         // Started from another window, in the directory on screen. Ask for the
         // whole record rather than inventing one from a state change.
@@ -24379,7 +24183,7 @@ window.addEventListener('blur', () => closeContextMenu({ focus: false }));
 // likely, let them be edited, and explain rather than pretend.
 
 function pairToken() {
-    const meta = document.querySelector('meta[name="cs-token"]');
+    const meta = document.querySelector('meta[name="tgx-token"], meta[name="cs-token"]');
     return meta ? meta.content : null;
 }
 
@@ -24440,7 +24244,7 @@ function pairNote(base) {
     }
     if (/^https:/.test(base)) {
         return 'Anything terminating TLS in front of the bridge works. Add its '
-            + 'hostname to CLAUDE_SESSIONS_ORIGINS if the origin check refuses it.';
+            + 'hostname to TGXCODE_ORIGINS if the origin check refuses it.';
     }
     return 'Plain HTTP: the Android app will connect, but nothing about the link '
         + 'is confidential in transit — anything on the path can read the token.';
@@ -24685,6 +24489,10 @@ document.addEventListener('keydown', (e) => {
     // working rather than as a panel that is special.
     if (e.key === 'Escape' && state.sched.open) { showSched(false); return; }
     if (e.key === 'Escape' && state.settings.open) { showSettings(false); return; }
+    // The preview, one step at a time: out of Maximize first, then Home. Keys
+    // typed into the page itself go to the page and never reach here.
+    if (e.key === 'Escape' && state.preview.open && state.preview.max) { previewPane.setMaximized(false); return; }
+    if (e.key === 'Escape' && state.preview.open) { showPreview(false); return; }
     // Focus mode is a way of showing the board rather than a panel of its own, so
     // Escape leaves it without also taking the board away. Closing the board is
     // the Live button's alone — it is somewhere you go and stay, not something
@@ -24978,12 +24786,13 @@ paintShortcutHints();
 paintComposerHint();
 restoreView();          // and where we were, from the address that survived the refresh
 primeWaiting();
-refreshDevBrowser();
+// The pill's first answer and its 20-second poll — or neither, when Settings
+// says DevBrowser is not part of this app.
+paintDevBrowserPresence();
 // Nothing to restore here any more: the pane belongs to a session, and the
 // first beginOpen is what shows it — for the session it was opened in. The
 // window-wide flag this used to read is dropped so it cannot come back.
 try { localStorage.removeItem('termOpen'); } catch { /* storage unavailable */ }
-setInterval(refreshDevBrowser, 20_000);
 // Not while a chip is armed or working: rebuilding the strip there would either
 // take back a stop the user is halfway through asking for, or drop the label off
 // one already in flight.

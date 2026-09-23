@@ -30,6 +30,7 @@ const os = require('os');
 const path = require('path');
 const { spawn, execFile } = require('child_process');
 const { randomUUID } = require('crypto');
+const { deleteBoth } = require('./legacy-env');
 
 // Enough to redraw what was on screen when a pane is reopened or the window is
 // reloaded, without holding the output of a `find /` forever.
@@ -155,7 +156,7 @@ class Terminal {
         // everyday instance without saying so — see sessionEnv in runner.js.
         // A declared `npm run dev` in *this* repo is the same accident with
         // nobody typing anything, which is why it is unconditional.
-        delete env.CLAUDE_SESSIONS_PORT;
+        deleteBoth(env, 'PORT');
         // Nothing to delete for the API token: auth.js reads it from TOKEN_FILE
         // and never puts it in the environment, so a child cannot inherit it.
 
@@ -183,7 +184,7 @@ class Terminal {
         this.proc.stderr.on('error', () => { /* ditto */ });
 
         this.proc.on('error', (err) => {
-            this.push(Buffer.from(`\r\n[claude-sessions] could not start a shell: ${err.message}\r\n`));
+            this.push(Buffer.from(`\r\n[tgxcode] could not start a shell: ${err.message}\r\n`));
             this.finish(null, null);
         });
         this.proc.on('exit', (code, signal) => this.finish(code, signal));
@@ -246,7 +247,7 @@ class Terminal {
             const fn = this.onExit;
             this.onExit = null;
             try { fn({ code, signal }); } catch (err) {
-                console.error(`[claude-sessions] terminal onExit failed: ${err.message}`);
+                console.error(`[tgxcode] terminal onExit failed: ${err.message}`);
             }
         }
     }
@@ -348,7 +349,9 @@ class Terminal {
     get pid() { return (this.proc && this.proc.pid) || null; }
 }
 
-const TTY_PREFIX = 'claude-sessions-tty-';
+const TTY_PREFIX = 'tgxcode-tty-';
+// What a bridge from before the rename called them. Still swept.
+const OLD_TTY_PREFIX = 'claude-sessions-tty-';
 
 /**
  * Clear out pty-path files left by a bridge that was killed outright.
@@ -362,7 +365,7 @@ function sweepStaleTtyFiles() {
     let names = [];
     try { names = fs.readdirSync(dir); } catch { return; }
     for (const name of names) {
-        if (!name.startsWith(TTY_PREFIX)) continue;
+        if (!name.startsWith(TTY_PREFIX) && !name.startsWith(OLD_TTY_PREFIX)) continue;
         const file = path.join(dir, name);
         try {
             if (fs.statSync(file).mtimeMs < cutoff) fs.unlinkSync(file);

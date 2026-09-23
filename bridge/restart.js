@@ -224,7 +224,7 @@ function launch({ force = false } = {}) {
             cwd: cfg.ROOT,
             detached: true,
             stdio: ['ignore', fd, fd],
-            // Told, not inherited. The script reads CLAUDE_SESSIONS_PORT to
+            // Told, not inherited. The script reads TGXCODE_PORT to
             // decide *which bridge to replace* and defaults to 45888 — the
             // everyday instance — when it is unset. Inheritance happens to agree
             // today because everything that starts a bridge exports it, which
@@ -234,7 +234,7 @@ function launch({ force = false } = {}) {
             // runner.js and terminal.js, which *delete* it from their children:
             // a session must not learn a port, and this child must be told the
             // one it is standing in for.
-            env: { ...process.env, CLAUDE_SESSIONS_PORT: String(cfg.PORT) },
+            env: { ...process.env, TGXCODE_PORT: String(cfg.PORT) },
         });
         child.unref();
         return { pid: child.pid, log: outLog(), journal: journalLog() };

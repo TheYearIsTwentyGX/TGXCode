@@ -77,7 +77,7 @@ it is a much bigger one and possibly not worth it.
 Once branching from a point is possible, a session has siblings. Cheap version,
 worth doing:
 
-- Record the parent in our own state: `~/.local/share/claude-sessions/lineage.json`
+- Record the parent in our own state: `~/.local/share/tgxcode/lineage.json`
   mapping `childSessionId -> {parent, fromUuid, at}`. This is ours to write.
 - Show it in the header: `branched from "add company flow" at turn 4`, as a
   link.

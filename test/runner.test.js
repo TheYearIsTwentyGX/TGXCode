@@ -3,7 +3,7 @@
 // The runner's message accounting — bridge/runner.js.
 //
 // No bridge needed, and no real `claude`: CLAUDE_BIN comes from
-// CLAUDE_SESSIONS_CLAUDE_BIN, so a stub script standing in for the CLI is enough
+// TGXCODE_CLAUDE_BIN, so a stub script standing in for the CLI is enough
 // to drive the whole state machine. It has to be set *before* the module is
 // required, because the constant is destructured at load.
 //
@@ -155,11 +155,11 @@ function onUser(m) {
 
 fs.writeFileSync(stub, STUB, { mode: 0o755 });
 
-process.env.CLAUDE_SESSIONS_CLAUDE_BIN = stub;
+process.env.TGXCODE_CLAUDE_BIN = stub;
 process.env.FAKE_CLAUDE_LOG = logFile;
 // Not 45888, and never actually reached: it only lands in the --mcp-config string
 // the stub ignores, and sessionEnv() strips it from the child anyway.
-process.env.CLAUDE_SESSIONS_PORT = '45939';
+process.env.TGXCODE_PORT = '45939';
 
 const { Runner, RunnerPool } = require('../bridge/runner.js');
 const hostClient = require('../bridge/host-client.js');

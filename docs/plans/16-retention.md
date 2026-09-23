@@ -61,7 +61,7 @@ Claude Code itself may still reference. Requirements:
 - **Refuse the live ones.** Anything running (plan 04's registry) or with a
   runner in the pool is excluded, with a reason shown.
 - **Trash, not `unlink`.** Move to
-  `~/.local/share/claude-sessions/trash/<date>/` and keep it for 30 days. The
+  `~/.local/share/tgxcode/trash/<date>/` and keep it for 30 days. The
   app gets its storage back on a delay, and a mistake is recoverable. Purging
   trash is its own explicit action.
 - **Type to confirm** for anything over, say, 20 sessions or 100 MB.

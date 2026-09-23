@@ -215,7 +215,7 @@ function read() {
         }
         return out.sort(byDue);
     } catch (err) {
-        console.error(`[claude-sessions] ignoring unreadable ${STATE_FILE}: ${err.message}`);
+        console.error(`[tgxcode] ignoring unreadable ${STATE_FILE}: ${err.message}`);
         return [];
     }
 }
@@ -287,7 +287,7 @@ class Later {
             fs.writeFileSync(tmp, JSON.stringify({ version: VERSION, messages: rows }, null, 2));
             fs.renameSync(tmp, STATE_FILE);
         } catch (err) {
-            console.error(`[claude-sessions] could not save scheduled messages: ${err.message}`);
+            console.error(`[tgxcode] could not save scheduled messages: ${err.message}`);
         }
     }
 

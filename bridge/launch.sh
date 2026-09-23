@@ -36,7 +36,7 @@ find_node() {
 }
 
 if ! find_node; then
-    echo "claude-sessions: no node found in WSL." >&2
+    echo "tgxcode: no node found in WSL." >&2
     echo "  Looked on PATH, in \$NVM_DIR/nvm.sh, and under \$NVM_DIR/versions/node." >&2
     echo "  Install node, or add it to PATH from ~/.profile so login shells see it." >&2
     exit 127

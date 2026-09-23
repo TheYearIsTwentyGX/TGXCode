@@ -31,7 +31,7 @@ const ok = (name) => { pass++; console.log(`  ok  ${name}`); };
 // A PATH made entirely of fakes
 // ---------------------------------------------------------------------------
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-sessions-platform-'));
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tgxcode-platform-'));
 const binDir = path.join(tmp, 'bin');
 const marker = path.join(tmp, 'called.log');
 fs.mkdirSync(binDir);
@@ -65,7 +65,7 @@ const saved = {
     PATH: process.env.PATH,
     HOME: process.env.HOME,
     XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
-    CLAUDE_SESSIONS_HOST_KIND: process.env.CLAUDE_SESSIONS_HOST_KIND,
+    TGXCODE_HOST_KIND: process.env.TGXCODE_HOST_KIND,
 };
 const restore = () => {
     for (const [k, v] of Object.entries(saved)) {
@@ -85,34 +85,34 @@ fs.mkdirSync(aDir);
 (async () => {
     // --- the switch itself ------------------------------------------------
 
-    process.env.CLAUDE_SESSIONS_HOST_KIND = 'linux';
+    process.env.TGXCODE_HOST_KIND = 'linux';
     assert.strictEqual(platform.hostKind(), 'linux');
     assert.strictEqual(platform.isWsl(), false);
 
-    process.env.CLAUDE_SESSIONS_HOST_KIND = 'wsl';
+    process.env.TGXCODE_HOST_KIND = 'wsl';
     assert.strictEqual(platform.hostKind(), 'wsl');
     assert.strictEqual(platform.isWsl(), true);
 
     // Case-insensitively, because an env var typed by a person is not a
     // constant in a file.
-    process.env.CLAUDE_SESSIONS_HOST_KIND = 'LINUX';
+    process.env.TGXCODE_HOST_KIND = 'LINUX';
     assert.strictEqual(platform.hostKind(), 'linux');
-    ok('CLAUDE_SESSIONS_HOST_KIND forces the answer, either way');
+    ok('TGXCODE_HOST_KIND forces the answer, either way');
 
     // A typo must not stop the bridge starting, and must not answer "linux" on a
     // machine that has an Explorer — the detected answer is the safe fallback.
-    process.env.CLAUDE_SESSIONS_HOST_KIND = 'windows-ish';
-    delete process.env.CLAUDE_SESSIONS_HOST_KIND;
+    process.env.TGXCODE_HOST_KIND = 'windows-ish';
+    delete process.env.TGXCODE_HOST_KIND;
     const detected = platform.hostKind();
-    process.env.CLAUDE_SESSIONS_HOST_KIND = 'nonsense';
+    process.env.TGXCODE_HOST_KIND = 'nonsense';
     assert.strictEqual(platform.hostKind(), detected);
     ok('an unrecognised value falls back to detection rather than throwing');
 
     // The env var is read per call, not captured at require time. Without this
     // the suite could not drive both branches, which is the reason it exists.
-    process.env.CLAUDE_SESSIONS_HOST_KIND = 'wsl';
+    process.env.TGXCODE_HOST_KIND = 'wsl';
     const a = platform.isWsl();
-    process.env.CLAUDE_SESSIONS_HOST_KIND = 'linux';
+    process.env.TGXCODE_HOST_KIND = 'linux';
     const b = platform.isWsl();
     assert.strictEqual(a, true);
     assert.strictEqual(b, false);
@@ -122,7 +122,7 @@ fs.mkdirSync(aDir);
 
     process.env.PATH = binDir;
 
-    process.env.CLAUDE_SESSIONS_HOST_KIND = 'linux';
+    process.env.TGXCODE_HOST_KIND = 'linux';
 
     reset();
     let out = await explorer.openFile(aFile);
@@ -149,7 +149,7 @@ fs.mkdirSync(aDir);
     assert.deepStrictEqual(called(), [], 'wslpath is not a thing on a Linux host');
     ok('toWindowsPath is null on a Linux host, without spawning anything');
 
-    process.env.CLAUDE_SESSIONS_HOST_KIND = 'wsl';
+    process.env.TGXCODE_HOST_KIND = 'wsl';
 
     reset();
     out = await explorer.openFile(aFile);
@@ -171,7 +171,7 @@ fs.mkdirSync(aDir);
     // that is what makes these assertions about the code rather than about
     // whichever machine is running them.
 
-    process.env.CLAUDE_SESSIONS_HOST_KIND = 'linux';
+    process.env.TGXCODE_HOST_KIND = 'linux';
     process.env.XDG_CONFIG_HOME = tmp;
     process.env.HOME = tmp;
 

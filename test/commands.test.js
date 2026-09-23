@@ -24,7 +24,7 @@ const path = require('path');
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'commands-test-'));
 process.env.HOME = home;
 process.env.USERPROFILE = home;
-process.env.CLAUDE_SESSIONS_ROOTS = home;
+process.env.TGXCODE_ROOTS = home;
 
 const cfg = require('../bridge/config.js');
 const commands = require('../bridge/commands.js');

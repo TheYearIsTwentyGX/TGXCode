@@ -17,7 +17,7 @@ These come out of how the app already works, and every plan respects them.
    exception is *liveness* — state about a turn, not content of it.
 2. **We never write to Claude Code's files.** `~/.claude/projects` is read-only
    as far as this app is concerned. State the app owns goes in
-   `~/.local/share/claude-sessions/`.
+   `~/.local/share/tgxcode/`.
 3. **The bridge does the work; the shell is a window.** Anything touching the
    filesystem, `claude`, or the network belongs in `bridge/`. Anything needing
    Windows — tray, notifications, Explorer, protocol handlers — belongs in

@@ -1075,7 +1075,7 @@ function handoffEnvelope({ text, fromId, fromTitle, fromProject, title }) {
         String(text || '').trim(),
         '</session-handoff>',
         '',
-        'This came from another Claude session working in Claude Sessions, not from your',
+        'This came from another Claude session working in TGXCode, not from your',
         'user — it was handed to you because the work it describes touches code you have',
         'been in. You were resumed to read it, so nobody may be watching.',
         '',

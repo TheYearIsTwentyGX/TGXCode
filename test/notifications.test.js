@@ -12,7 +12,7 @@
 // **XDG_DATA_HOME is set before the require, and that order is load-bearing.**
 // bridge/config.js reads the variable once, at require time, to build STATE_DIR —
 // so setting it afterwards would point the module at the real
-// ~/.local/share/claude-sessions and this test would eat the user's read state.
+// ~/.local/share/tgxcode and this test would eat the user's read state.
 // test/drafts.test.js and test/ports.test.js do the same thing for the same
 // reason.
 

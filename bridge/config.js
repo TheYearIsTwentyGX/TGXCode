@@ -1,32 +1,44 @@
 'use strict';
 
+require('./legacy-env');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { migrateDir } = require('./legacy-dirs');
 
 const HOME = os.homedir();
 
 // Claude Code keeps one directory per project here, each holding <session-id>.jsonl
-const PROJECTS_DIR = process.env.CLAUDE_SESSIONS_PROJECTS_DIR
+const PROJECTS_DIR = process.env.TGXCODE_PROJECTS_DIR
     || path.join(HOME, '.claude', 'projects');
 
 // And one file per *running* session here, named for its pid. Read-only to us,
 // like everything else under ~/.claude — see bridge/registry.js.
-const REGISTRY_DIR = process.env.CLAUDE_SESSIONS_REGISTRY_DIR
+const REGISTRY_DIR = process.env.TGXCODE_REGISTRY_DIR
     || path.join(HOME, '.claude', 'sessions');
 
+// Both of our own directories were named `claude-sessions` before the app was
+// TGXCode. The first module to load this one moves them across and leaves a
+// symlink behind — see bridge/legacy-dirs.js for why a symlink and not a copy.
+const CACHE_BASE = process.env.XDG_CACHE_HOME || path.join(HOME, '.cache');
+const DATA_BASE = process.env.XDG_DATA_HOME || path.join(HOME, '.local', 'share');
+for (const base of [CACHE_BASE, DATA_BASE]) {
+    try {
+        migrateDir(path.join(base, 'claude-sessions'), path.join(base, 'tgxcode'));
+    } catch (err) {
+        console.error(`[tgxcode] could not move ${base}/claude-sessions: ${err.message}`);
+    }
+}
+
 // Our cache lives outside ~/.claude so we never confuse Claude's own tooling.
-const CACHE_DIR = path.join(process.env.XDG_CACHE_HOME || path.join(HOME, '.cache'),
-    'claude-sessions');
+const CACHE_DIR = path.join(CACHE_BASE, 'tgxcode');
 
 // State the app owns, as opposed to state it merely reads. Losing the cache costs
 // a rescan; losing this loses a decision the user made, so it lives under
 // XDG_DATA_HOME rather than in the cache. bridge/flags.js and bridge/auth.js both
 // write here and used to each define the path — one definition, so they cannot
 // drift apart.
-const STATE_DIR = path.join(
-    process.env.XDG_DATA_HOME || path.join(HOME, '.local', 'share'),
-    'claude-sessions');
+const STATE_DIR = path.join(DATA_BASE, 'tgxcode');
 
 // The bearer token every /api/ route but /api/health requires. Created on first
 // run with mode 0600; see bridge/auth.js.
@@ -50,7 +62,7 @@ const SETTINGS_LOCAL_FILE = 'settings.local.json';
 // this is a file a person edits by hand — and the start of a directory meant to
 // outlive this app's share of it.
 //
-// CLAUDE_SESSIONS_PREFS_DIR stands in for the whole of `~/.tgxcode` — settings
+// TGXCODE_PREFS_DIR stands in for the whole of `~/.tgxcode` — settings
 // and `verbs/` alike — and exists so a dev bridge can press Save on the settings
 // page without rewriting the user's real file. Every bridge shares this
 // directory otherwise, and the obvious isolation, a different HOME, is refused
@@ -58,8 +70,8 @@ const SETTINGS_LOCAL_FILE = 'settings.local.json';
 // the default was never under it, so honouring it would move the file for
 // anyone who already has it set. Unset, nothing changes. A project's own
 // `.tgxcode/` is relative to the workspace and is not affected.
-const USER_TGX_DIR = process.env.CLAUDE_SESSIONS_PREFS_DIR
-    ? path.resolve(expandHome(process.env.CLAUDE_SESSIONS_PREFS_DIR))
+const USER_TGX_DIR = process.env.TGXCODE_PREFS_DIR
+    ? path.resolve(expandHome(process.env.TGXCODE_PREFS_DIR))
     : path.join(HOME, TGX_DIR);
 const USER_PREFS_FILE = path.join(USER_TGX_DIR, SETTINGS_FILE);
 
@@ -81,7 +93,7 @@ const USER_CLAUDE_SETTINGS = path.join(USER_CLAUDE_DIR, CLAUDE_SETTINGS_FILE);
 // Overridable by environment for one reason only: without it the read-only
 // scope is untestable, and a scope nobody can test is a scope that is wrong the
 // first time somebody actually has one. Same pattern as PROJECTS_DIR above.
-const MANAGED_CLAUDE_SETTINGS = process.env.CLAUDE_SESSIONS_MANAGED_SETTINGS
+const MANAGED_CLAUDE_SETTINGS = process.env.TGXCODE_MANAGED_SETTINGS
     || '/etc/claude-code/managed-settings.json';
 
 // Two files Claude Code is given rather than ones anybody edits: what the
@@ -119,7 +131,7 @@ const RUNS_LOG_DIR = path.join(CACHE_DIR, 'runs');
 const DEFAULT_PORT = 45888;
 const DEV_PORT = 45899;
 
-const PORT = Number(process.env.CLAUDE_SESSIONS_PORT || DEFAULT_PORT);
+const PORT = Number(process.env.TGXCODE_PORT || DEFAULT_PORT);
 const IS_DEV = PORT !== DEFAULT_PORT;
 
 // The session host — bridge/host.js, the process that holds `claude`'s pipes so a
@@ -127,13 +139,13 @@ const IS_DEV = PORT !== DEFAULT_PORT;
 // never reach the everyday instance's sessions. In STATE_DIR rather than a runtime
 // directory so that a test with its own XDG_DATA_HOME gets its own host for free.
 //
-// CLAUDE_SESSIONS_NO_HOST=1 spawns directly, the way everything worked before the
+// TGXCODE_NO_HOST=1 spawns directly, the way everything worked before the
 // host existed. The test harness sets it for the bridges it starts: they live for
 // seconds on a port nobody will reuse, so a host behind one would only be a
 // process holding sessions no bridge is coming back for.
 const HOST_SOCKET = path.join(STATE_DIR, `host-${PORT}.sock`);
 const HOST_LOG = path.join(CACHE_DIR, `host-${PORT}.log`);
-const USE_HOST = process.env.CLAUDE_SESSIONS_NO_HOST !== '1';
+const USE_HOST = process.env.TGXCODE_NO_HOST !== '1';
 
 // The checkout this bridge is running out of.
 //
@@ -161,15 +173,15 @@ const IS_WORKTREE = `${ROOT}${path.sep}`.includes(
 // LAN. That matters more than usual on this machine: the home network is AT&T
 // Community Wi-Fi for Apartments, a /24 shared with the building, and client
 // isolation is misconfigured in both directions. See docs/remote.md.
-const HOST = process.env.CLAUDE_SESSIONS_HOST || '127.0.0.1';
+const HOST = process.env.TGXCODE_HOST || '127.0.0.1';
 
 // Binding a non-loopback interface is a deliberate act, so it takes two env vars
 // rather than one — see the refusal in server.js. A typo in HOST should not be
 // able to publish the bridge to the building.
-const ALLOW_REMOTE_BIND = process.env.CLAUDE_SESSIONS_ALLOW_REMOTE_BIND === '1';
+const ALLOW_REMOTE_BIND = process.env.TGXCODE_ALLOW_REMOTE_BIND === '1';
 
 // The distribution this bridge is running in, for the \\wsl.localhost\<distro>\...
-// form of a path. Cosmetic and only that: it reaches the page in a `cs-host` meta
+// form of a path. Cosmetic and only that: it reaches the page in a `tgx-host` meta
 // tag so a transcript can draw a file link with a Windows path in its href and
 // its tooltip. The translation that is acted on is `wslpath -w` in
 // bridge/explorer.js, which is the one that knows about automount.root and about
@@ -189,13 +201,13 @@ const WSL_DISTRO = process.env.WSL_DISTRO_NAME || '';
 //
 // An opt-out rather than an opt-in, because the panel is on by default and a
 // panel that is empty for everybody is worse than no panel at all. Set
-// CLAUDE_SESSIONS_TODO_TOOLS=0 in front of the bridge and it adds nothing.
+// TGXCODE_TODO_TOOLS=0 in front of the bridge and it adds nothing.
 //
 // It reaches only sessions the bridge *starts* — see sessionEnv in runner.js —
 // and only from the next process start, so a session already running is
 // unaffected. A session in somebody's own terminal keeps no list unless they set
 // the variable for themselves.
-const TODO_TOOLS = process.env.CLAUDE_SESSIONS_TODO_TOOLS !== '0';
+const TODO_TOOLS = process.env.TGXCODE_TODO_TOOLS !== '0';
 
 /**
  * `~` and `~/thing` mean the home directory; `~other` is somebody else's and is
@@ -210,12 +222,12 @@ function expandHome(p) {
 // Where a session may be started, and how far /api/fs will list. Defaults to the
 // home directory: without it, one authenticated call can start an agent in /etc.
 // Colon-separated, like PATH.
-const ALLOWED_ROOTS = (process.env.CLAUDE_SESSIONS_ROOTS || HOME)
+const ALLOWED_ROOTS = (process.env.TGXCODE_ROOTS || HOME)
     .split(':').filter(Boolean).map(p => path.resolve(expandHome(p)));
 
 // Extra browser origins allowed to call the API, for a reverse proxy on a hostname
 // this code cannot guess. Loopback and *.ts.net are accepted without configuration.
-const EXTRA_ORIGINS = (process.env.CLAUDE_SESSIONS_ORIGINS || '')
+const EXTRA_ORIGINS = (process.env.TGXCODE_ORIGINS || '')
     .split(',').map(s => s.trim()).filter(Boolean);
 
 // DevBrowser's control server default. It advertises a different port in
@@ -223,7 +235,7 @@ const EXTRA_ORIGINS = (process.env.CLAUDE_SESSIONS_ORIGINS || '')
 const DEVBROWSER_DEFAULT_PORT = 45777;
 
 // nvm-managed node means PATH differs per shell, so callers may need to override.
-const CLAUDE_BIN = process.env.CLAUDE_SESSIONS_CLAUDE_BIN || 'claude';
+const CLAUDE_BIN = process.env.TGXCODE_CLAUDE_BIN || 'claude';
 
 // Ports that are never a dev server worth offering a DevBrowser button for.
 const PORT_DENYLIST = new Set([

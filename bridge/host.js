@@ -59,6 +59,7 @@
 // bridge relies on: a note sent before a write is on record before the write
 // reaches the child.
 
+require('./legacy-env');
 const fs = require('fs');
 const net = require('net');
 const { spawn } = require('child_process');
@@ -81,11 +82,11 @@ const EXITED_KEEP_MS = 10 * 60_000;
 // child would sit in the host indefinitely, holding a few hundred megabytes and
 // keeping the host from ever idling out. Hours, not minutes: a bridge that is
 // down is usually coming back, and a turn it left running should get to finish.
-const ORPHAN_MS = Number(process.env.CLAUDE_SESSIONS_HOST_ORPHAN_MS) || 6 * 60 * 60_000;
+const ORPHAN_MS = Number(process.env.TGXCODE_HOST_ORPHAN_MS) || 6 * 60 * 60_000;
 
 // Held nothing for this long: exit, and let the next bridge start a fresh copy.
 // Both overridable so a test can watch it happen in a second rather than ten minutes.
-const IDLE_EXIT_MS = Number(process.env.CLAUDE_SESSIONS_HOST_IDLE_MS) || 10 * 60_000;
+const IDLE_EXIT_MS = Number(process.env.TGXCODE_HOST_IDLE_MS) || 10 * 60_000;
 const IDLE_CHECK_MS = Math.min(30_000, IDLE_EXIT_MS, ORPHAN_MS);
 
 function arg(name) {

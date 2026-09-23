@@ -105,7 +105,7 @@ phone button needs no change.
    ```bash
    echo "https://$(/mnt/c/Program\ Files/Tailscale/tailscale.exe status --json \
      | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))'
-     )/pair?token=$(cat ~/.local/share/claude-sessions/token)"
+     )/pair?token=$(cat ~/.local/share/tgxcode/token)"
    ```
 
    Get that link onto the phone and paste it into the Android app's settings form,
@@ -258,7 +258,7 @@ To rebuild from nothing:
    On this machine that lives in **`~/.profile`**:
 
    ```bash
-   export CLAUDE_SESSIONS_ORIGINS=https://tgxcode.com
+   export TGXCODE_ORIGINS=https://tgxcode.com
    ```
 
    That file rather than the app, because the Windows shell starts the bridge with
@@ -296,7 +296,7 @@ shutdown — but they are a second line, not the first.
 ## Last resort: binding the LAN
 
 ```bash
-CLAUDE_SESSIONS_HOST=0.0.0.0 CLAUDE_SESSIONS_ALLOW_REMOTE_BIND=1 npm run dev
+TGXCODE_HOST=0.0.0.0 TGXCODE_ALLOW_REMOTE_BIND=1 npm run dev
 ```
 
 The token is required, the remote refusals apply, and every remote request is
@@ -342,7 +342,7 @@ time so it cannot be turned into a fan of processes.
 | `/api/claude-docs`, **every method** | Claude Code's `CLAUDE.md` files, refused on the same terms as the row above and for a stronger version of the same reason. A project's is repository source; a user's describes the machine — what is installed, which ports are in use, which instance not to touch. And writing one is not changing a setting: it changes what every session started on this machine is told before its first message, which is the largest thing on this list that is not a shell. Prefix, no method test, same as above. |
 
 Independent of remoteness, and applying to every caller: a session can only start
-inside `CLAUDE_SESSIONS_ROOTS` (default `$HOME`), `/api/fs` only lists and
+inside `TGXCODE_ROOTS` (default `$HOME`), `/api/fs` only lists and
 `/api/fs/mkdir` only creates inside the same roots, and session creation is capped
 at 8 a minute. `GET /api/sessions/:id/diff` and `POST /api/sessions/:id/open-file`
 are narrower still: inside those roots **and** inside the session's own repository
@@ -360,11 +360,11 @@ that a checkout is exactly where a `.ps1` an agent has just written would be.
 
 ## Authentication, in one paragraph
 
-A token is created on first run at `~/.local/share/claude-sessions/token`, mode
+A token is created on first run at `~/.local/share/tgxcode/token`, mode
 `0600`. Every `/api/` route requires it except `/api/health`, which stays open
 because the Windows shell pings it before it could know a token and it gives away
 only counts. It is accepted as `Authorization: Bearer`, as `?token=`, or as the
-`cs_token` cookie, and any one of the three being valid is enough.
+`tgx_token` cookie (or `cs_token`, its name before the rename), and any one of the three being valid is enough.
 
 A local browser is spared a login step because the bridge serves its own UI: a page
 fetched over loopback comes back with the cookie set and the token in a `<meta>`
@@ -375,17 +375,17 @@ send same-origin cookies already.
 
 ```bash
 curl -s http://127.0.0.1:45899/api/sessions \
-  -H "Authorization: Bearer $(cat ~/.local/share/claude-sessions/token)"
+  -H "Authorization: Bearer $(cat ~/.local/share/tgxcode/token)"
 ```
 
 ## Environment variables
 
 | Variable | Default | What it does |
 |---|---|---|
-| `CLAUDE_SESSIONS_HOST` | `127.0.0.1` | Interface to bind. Never defaults to anything else. |
-| `CLAUDE_SESSIONS_ALLOW_REMOTE_BIND` | unset | Required in addition to `HOST` to bind a non-loopback interface. |
-| `CLAUDE_SESSIONS_ROOTS` | `$HOME` | Colon-separated roots a session may start in, and the limit of `/api/fs`. |
-| `CLAUDE_SESSIONS_ORIGINS` | empty | Extra allowed browser origins, for a proxy on a hostname this code cannot guess. Loopback and `*.ts.net` need no entry. |
+| `TGXCODE_HOST` | `127.0.0.1` | Interface to bind. Never defaults to anything else. |
+| `TGXCODE_ALLOW_REMOTE_BIND` | unset | Required in addition to `HOST` to bind a non-loopback interface. |
+| `TGXCODE_ROOTS` | `$HOME` | Colon-separated roots a session may start in, and the limit of `/api/fs`. |
+| `TGXCODE_ORIGINS` | empty | Extra allowed browser origins, for a proxy on a hostname this code cannot guess. Loopback and `*.ts.net` need no entry. |
 
 ## If something is wrong
 
@@ -394,7 +394,7 @@ curl -s http://127.0.0.1:45899/api/sessions \
 to be cleared first.
 
 **403 "unexpected host".** The bridge only answers to loopback, `*.ts.net`, a bare
-IP, or a hostname in `CLAUDE_SESSIONS_ORIGINS`. This is the DNS-rebinding guard.
+IP, or a hostname in `TGXCODE_ORIGINS`. This is the DNS-rebinding guard.
 
 **403 "forbidden origin".** A browser sent an `Origin` the bridge does not
 recognise. Same fix.

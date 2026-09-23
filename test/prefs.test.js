@@ -23,7 +23,7 @@ const path = require('path');
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'prefs-test-'));
 process.env.HOME = home;
-process.env.CLAUDE_SESSIONS_ROOTS = home;
+process.env.TGXCODE_ROOTS = home;
 
 const keymap = require('../bridge/keymap.js');
 const { Prefs, DEFAULTS, SHAPE, USER_ONLY, VERSION } = require('../bridge/prefs.js');
@@ -288,6 +288,34 @@ assert.strictEqual(got.projects.backdropStrength, 0, '0 is a strength, not a mis
 assert.deepStrictEqual(got.projects.colors, { [project]: '#abc' });
 ok('the backdrop tint defaults to what it was, and refuses what is not a strength');
 
+// The preview and DevBrowser keys. The defaults keep a click on a port doing
+// what it always did — DevBrowser, launched if need be — so nobody who never
+// opens Settings sees the in-app preview appear in its place.
+clear();
+write(userFile, { version: VERSION });
+prefs.cache.clear();
+got = prefs.forCwd();
+assert.deepStrictEqual(got.preview, { keepAliveMinutes: 10, overLive: true });
+assert.deepStrictEqual(got.devbrowser, { show: true, openIn: 'devbrowser', whenClosed: 'launch' });
+clear();
+write(userFile, { version: VERSION,
+    preview: { keepAliveMinutes: '5', overLive: 1 },
+    devbrowser: { show: 'no', openIn: 'window', whenClosed: 'ask' } });
+prefs.cache.clear();
+got = prefs.forCwd();
+assert.deepStrictEqual(got.preview, DEFAULTS.preview, 'a bad preview value was taken');
+assert.deepStrictEqual(got.devbrowser, DEFAULTS.devbrowser, 'a bad devbrowser value was taken');
+for (const bad of [-1, 241, 2.5]) {
+    assert.throws(() => prefs.save({ scope: 'user', patch: { preview: { keepAliveMinutes: bad } } }),
+        (e) => e.code === 'value', `${bad} minutes was saved`);
+}
+const kept = prefs.save({ scope: 'user',
+    patch: { preview: { keepAliveMinutes: 0 }, devbrowser: { openIn: 'inline', whenClosed: 'nothing' } } });
+assert.strictEqual(kept.prefs.preview.keepAliveMinutes, 0, '0 is "recycle at once", not missing');
+assert.strictEqual(kept.prefs.devbrowser.openIn, 'inline');
+assert.strictEqual(kept.prefs.devbrowser.whenClosed, 'nothing');
+ok('the preview keys default to the old behaviour and take only their closed sets');
+
 // --- the rail's project order -----------------------------------------------
 // `sort` and `newAt` are closed sets; the bumpOn* switches are booleans; and
 // `order` is the list twin of `colors`: absolute, resolved, one entry per
@@ -338,7 +366,8 @@ ok('an order saves resolved, refuses a bad entry, and is user-only');
 // Documented for `quota` long before anything enforced it, which held only
 // because the call sites passed no cwd. A page that prints which file wins for
 // each key cannot rely on that.
-assert.deepStrictEqual([...USER_ONLY].sort(), ['keyboard', 'projects', 'quota', 'toolbar', 'wispr']);
+assert.deepStrictEqual([...USER_ONLY].sort(),
+    ['devbrowser', 'keyboard', 'preview', 'projects', 'quota', 'toolbar', 'wispr']);
 
 clear();
 write(userFile, { version: VERSION });
@@ -348,9 +377,14 @@ write(projFile, {
     keyboard: { composerSend: 'ctrl-enter', contextualTerminalCopy: true },
     projects: { colors: { [project]: '#f28b82' } },
     wispr: { transforms: [{ id: 'lock', title: 'Lock', combo: 'Win+L' }] },
+    preview: { keepAliveMinutes: 200 },
+    devbrowser: { whenClosed: 'nothing' },
 });
 prefs.cache.clear();
 got = prefs.forCwd(project);
+// Whether a click launches an app on this machine is not a repository's call.
+assert.strictEqual(got.devbrowser.whenClosed, DEFAULTS.devbrowser.whenClosed, 'a project set devbrowser.whenClosed');
+assert.strictEqual(got.preview.keepAliveMinutes, DEFAULTS.preview.keepAliveMinutes, 'a project set preview.keepAliveMinutes');
 assert.strictEqual(got.transcript.groupMinCalls, 5, 'a project may still set transcript');
 assert.strictEqual(got.quota.beacon, DEFAULTS.quota.beacon, 'a project set quota.beacon');
 assert.strictEqual(got.keyboard.composerSend, DEFAULTS.keyboard.composerSend,
@@ -361,7 +395,7 @@ assert.deepStrictEqual(got.projects.colors, {}, 'a project coloured itself');
 // The bridge presses these chords on the desktop, so a repository listing one
 // would be a repository pressing keys on your machine.
 assert.deepStrictEqual(got.wispr.transforms, [], 'a project added a Wispr transform');
-for (const section of ['quota', 'keyboard', 'projects', 'wispr']) {
+for (const section of ['quota', 'keyboard', 'projects', 'wispr', 'preview', 'devbrowser']) {
     assert.ok(got.problems.some(p => p.file === projFile
         && p.message.includes(`"${section}" may only be set in`)),
     `no problem reported for a project's "${section}"`);
@@ -658,7 +692,7 @@ for (const section of Object.keys(SHAPE)) {
 assert.strictEqual(page.version, VERSION);
 ok('the page copy carries every section and none of the diagnostics');
 
-// --- CLAUDE_SESSIONS_PREFS_DIR -------------------------------------------
+// --- TGXCODE_PREFS_DIR -------------------------------------------
 // What lets a dev bridge press Save without touching the user's file. The path
 // is computed when config.js loads, so it takes a process of its own. Unset
 // gives the old location, and this process is the proof of that.
@@ -679,8 +713,8 @@ assert.strictEqual(cfg.USER_PREFS_FILE, userFile);
             file: cfg.USER_PREFS_FILE, verbs: cfg.USER_VERBS_DIR,
             target: prefs.targetFile('user'), sources: prefs.forCwd('').sources,
         }));`;
-    const env = { ...process.env, HOME: childHome, CLAUDE_SESSIONS_ROOTS: childHome,
-        CLAUDE_SESSIONS_PREFS_DIR: override };
+    const env = { ...process.env, HOME: childHome, TGXCODE_ROOTS: childHome,
+        TGXCODE_PREFS_DIR: override };
     const out = JSON.parse(require('child_process')
         .execFileSync(process.execPath, ['-e', script], { env, encoding: 'utf8' }).trim().split('\n').pop());
 
@@ -691,12 +725,12 @@ assert.strictEqual(cfg.USER_PREFS_FILE, userFile);
     assert.strictEqual(out.verbs, path.join(override, 'verbs'));
     assert.strictEqual(read(want).transcript.groupToolCalls, false);
     assert.ok(!fs.existsSync(path.join(childHome, '.tgxcode')),
-        'a bridge with CLAUDE_SESSIONS_PREFS_DIR wrote to ~/.tgxcode anyway');
+        'a bridge with TGXCODE_PREFS_DIR wrote to ~/.tgxcode anyway');
 
     fs.rmSync(childHome, { recursive: true, force: true });
     fs.rmSync(override, { recursive: true, force: true });
 }
-ok('CLAUDE_SESSIONS_PREFS_DIR takes the user file and its saves somewhere else');
+ok('TGXCODE_PREFS_DIR takes the user file and its saves somewhere else');
 
 fs.rmSync(home, { recursive: true, force: true });
 console.log(`\n${pass} prefs checks passed`);
