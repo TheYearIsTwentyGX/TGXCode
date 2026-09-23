@@ -382,6 +382,11 @@ const state = {
     // a message arriving from a list merely being re-sent. See rememberOrder.
     seenTs: new Map(),      // sessionId -> {user, last}
     railDrag: null,         // cwd of the project card being dragged, in `custom`
+    // A pointer is pressed inside the rail, so renders wait — see holdRail().
+    railPress: false,
+    railStale: false,       // a render was asked for while held
+    railHover: false,       // the pointer is over the rail; `dynamic` bumps wait
+    railBumps: [],          // session ids whose bumps are waiting on railHover
     sortMenu: false,        // the rail head's order menu is open
     unsent: new Map(),      // sessionId -> text written to a process but not yet in a transcript
     // The one message drawn in the log before the transcript has it:
@@ -1217,6 +1222,12 @@ function bumpGroup(s, ...reasons) {
     const p = BOOT_PREFS.projects;
     if (p.sort !== 'dynamic' || !s || !inProjectCard(s)) return false;
     if (!reasons.some(r => p[BUMP_PREF[r]])) return false;
+    // The pointer is over the rail: somebody is aiming at a card, and moving the
+    // cards now is how a click lands on the wrong one. Kept until it leaves.
+    if (state.railHover) {
+        if (!state.railBumps.includes(s.sessionId)) state.railBumps.push(s.sessionId);
+        return false;
+    }
     const key = groupKeyOf(s);
     // Already on top: taking another rank would change nothing on screen.
     const top = Math.min(...state.groupOrder.values());
@@ -1353,10 +1364,48 @@ function icon(name, size = 15) {
 }
 
 function renderRail() {
-    // A card is being carried; rebuilding would drop it. The drag's end renders.
-    if (state.railDrag) return;
+    // A card is being carried, or a click is half-way through: rebuilding now
+    // would drop the one or swallow the other. Whoever lets go renders.
+    if (state.railDrag || state.railPress) { state.railStale = true; return; }
+    state.railStale = false;
+    const focus = railFocus();
     dom.rail.replaceChildren();
+    try { buildRail(); } finally { restoreRailFocus(focus); }
+}
 
+/**
+ * Where the keyboard focus is inside the rail, in terms that survive a rebuild:
+ * the row's session id or the card's key, and the class of the control within
+ * it. A rebuild otherwise drops focus to <body>, so the Enter or arrow key you
+ * press next goes nowhere — the keyboard's version of a swallowed click.
+ */
+function railFocus() {
+    const a = document.activeElement;
+    if (!a || a === dom.rail || !dom.rail.contains(a)) return null;
+    const row = a.closest('[data-id]');
+    const card = a.closest('.rail-group[data-key]');
+    return {
+        id: row ? row.dataset.id : null,
+        key: card ? card.dataset.key : null,
+        cls: a.classList[0] || null,
+        self: row === a,
+    };
+}
+
+function restoreRailFocus(f) {
+    if (!f) return;
+    let n = null;
+    if (f.id) {
+        const row = dom.rail.querySelector(`[data-id="${cssEscape(f.id)}"]`);
+        n = row && (f.self || !f.cls ? row : row.querySelector(`.${cssEscape(f.cls)}`) || row);
+    } else if (f.key && f.cls) {
+        n = dom.rail.querySelector(
+            `.rail-group[data-key="${cssEscape(f.key)}"] > .${cssEscape(f.cls)}`);
+    }
+    if (n) n.focus({ preventScroll: true });
+}
+
+function buildRail() {
     if (!state.sessions.length) {
         paintHideDone(0);
         dom.rail.append(el('div', { class: 'rail-empty' },
@@ -1681,6 +1730,58 @@ async function saveRailPref(key, value) {
         toast(`Could not save the project order: ${err.message}`, 'error');
     }
     renderRail();
+}
+
+/**
+ * Keep the rail still under the pointer.
+ *
+ * renderRail() rebuilds every row on each `sessions-changed`, which on a busy
+ * machine is several times a second. A click is a press and a release on the
+ * same element, so a rebuild between the two leaves the release on a node that
+ * did not exist at the press and the browser fires no click at all: the rail
+ * appeared to ignore you. So from pointerdown to just after the click lands,
+ * renders are held and the last one asked for runs on release. The release
+ * waits a task so the click's own handler runs against the rows it was aimed
+ * at; a press that never releases (the button let go outside the window) is let
+ * go after a few seconds rather than freezing the rail.
+ *
+ * Separately, in `dynamic` order a card is not moved while the pointer is over
+ * the rail — bumpGroup() queues it and the move happens on leaving. Rows still
+ * update in place; only the order waits.
+ */
+function holdRail() {
+    let timer = null;
+    const release = () => {
+        if (!state.railPress) return;
+        clearTimeout(timer);
+        setTimeout(() => {
+            state.railPress = false;
+            if (state.railStale) renderRail();
+        }, 0);
+    };
+    dom.rail.addEventListener('pointerdown', () => {
+        state.railPress = true;
+        clearTimeout(timer);
+        timer = setTimeout(release, 4000);
+    }, true);
+    for (const type of ['pointerup', 'pointercancel']) {
+        document.addEventListener(type, release, true);
+    }
+    window.addEventListener('blur', release);
+
+    dom.rail.addEventListener('pointerenter', () => { state.railHover = true; });
+    dom.rail.addEventListener('pointerleave', () => {
+        state.railHover = false;
+        const waiting = state.railBumps.splice(0);
+        let moved = false;
+        // Each already passed the switches when it was queued; the rows are
+        // looked up again because a reload since may have replaced them.
+        for (const id of waiting) {
+            const s = state.sessions.find(x => x.sessionId === id);
+            moved = bumpGroup(s, ...Object.keys(BUMP_PREF)) || moved;
+        }
+        if (moved) renderRail();
+    });
 }
 
 /** The ⋮ menu's Move items: the keyboard way to do what dragging does. */
@@ -11671,6 +11772,7 @@ document.addEventListener('keydown', (e) => {
 dom.rail.addEventListener('scroll', syncProjMenu);
 window.addEventListener('resize', syncProjMenu);
 dom.rail.addEventListener('dragover', onRailDragOver);
+holdRail();
 dom.rail.addEventListener('drop', (e) => { if (state.railDrag) e.preventDefault(); });
 
 // --- the rail head's order menu -------------------------------------------
