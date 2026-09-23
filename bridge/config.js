@@ -49,7 +49,18 @@ const SETTINGS_LOCAL_FILE = 'settings.local.json';
 // not STATE_DIR: what lives there is state the app owns and nobody opens, and
 // this is a file a person edits by hand — and the start of a directory meant to
 // outlive this app's share of it.
-const USER_TGX_DIR = path.join(HOME, TGX_DIR);
+//
+// CLAUDE_SESSIONS_PREFS_DIR stands in for the whole of `~/.tgxcode` — settings
+// and `verbs/` alike — and exists so a dev bridge can press Save on the settings
+// page without rewriting the user's real file. Every bridge shares this
+// directory otherwise, and the obvious isolation, a different HOME, is refused
+// by the worktree guard because it also moves git's config. Not XDG_CONFIG_HOME:
+// the default was never under it, so honouring it would move the file for
+// anyone who already has it set. Unset, nothing changes. A project's own
+// `.tgxcode/` is relative to the workspace and is not affected.
+const USER_TGX_DIR = process.env.CLAUDE_SESSIONS_PREFS_DIR
+    ? path.resolve(expandHome(process.env.CLAUDE_SESSIONS_PREFS_DIR))
+    : path.join(HOME, TGX_DIR);
 const USER_PREFS_FILE = path.join(USER_TGX_DIR, SETTINGS_FILE);
 
 // Claude Code's own configuration, as opposed to this app's. Everything above
@@ -110,6 +121,19 @@ const DEV_PORT = 45899;
 
 const PORT = Number(process.env.CLAUDE_SESSIONS_PORT || DEFAULT_PORT);
 const IS_DEV = PORT !== DEFAULT_PORT;
+
+// The session host — bridge/host.js, the process that holds `claude`'s pipes so a
+// turn outlives a bridge restart. One per port, named for it, so a dev bridge can
+// never reach the everyday instance's sessions. In STATE_DIR rather than a runtime
+// directory so that a test with its own XDG_DATA_HOME gets its own host for free.
+//
+// CLAUDE_SESSIONS_NO_HOST=1 spawns directly, the way everything worked before the
+// host existed. The test harness sets it for the bridges it starts: they live for
+// seconds on a port nobody will reuse, so a host behind one would only be a
+// process holding sessions no bridge is coming back for.
+const HOST_SOCKET = path.join(STATE_DIR, `host-${PORT}.sock`);
+const HOST_LOG = path.join(CACHE_DIR, `host-${PORT}.log`);
+const USE_HOST = process.env.CLAUDE_SESSIONS_NO_HOST !== '1';
 
 // The checkout this bridge is running out of.
 //
@@ -336,5 +360,6 @@ module.exports = {
     sessionFilePath, realResolve,
     WSL_DISTRO,
     DEFAULT_PORT, DEV_PORT, IS_DEV,
+    HOST_SOCKET, HOST_LOG, USE_HOST,
     DEVBROWSER_DEFAULT_PORT, CLAUDE_BIN, PORT_DENYLIST,
 };

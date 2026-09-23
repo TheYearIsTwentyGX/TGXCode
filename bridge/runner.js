@@ -9,6 +9,15 @@
 // transcript, so a session driven from here is indistinguishable on disk from
 // one driven from a terminal.
 //
+// That process is normally not our child. It runs in the session host
+// (bridge/host.js), which holds its pipes so that a bridge restart does not end
+// the turn: `claude` stops at end-of-input, and the host is what keeps the input
+// open while no bridge is there. A bridge on the way down *releases* its
+// processes, leaving a note of what it knew (`_saveNote`), and the next one
+// *adopts* them from that note and the output the host kept (`adopt`). Without a
+// host, `spawnClaude` falls back to a plain child process and none of this
+// happens.
+//
 // Note on content: the UI does *not* render from this stream. It renders from
 // the transcript file, which the index tails — that way a session running in
 // somebody's terminal looks exactly like one this app started. What the runner
@@ -59,7 +68,6 @@
 
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
 const { randomUUID } = require('crypto');
 const { EventEmitter } = require('events');
 
@@ -68,6 +76,7 @@ const cfg = require('./config');
 const { CLAUDE_BIN } = cfg;
 const { describeTool } = require('./transcript');
 const { ATTACHMENT_NOTE_HEAD, attachmentNoteLine } = require('./attachments');
+const hostClient = require('./host-client');
 
 // Queue entry ids only have to be unique per process; the UI never persists one.
 let queueSeq = 0;
@@ -228,6 +237,20 @@ function userContent(entry) {
     return content;
 }
 
+/**
+ * The stdin line for one user turn. The uuid is ours, and the CLI reports what
+ * became of the message under it — `command_lifecycle` frames, see _onLifecycle —
+ * which is the only way to tell a message folded into a running turn from one
+ * still waiting in the CLI's queue.
+ */
+function userLine(entry) {
+    return {
+        type: 'user',
+        uuid: entry.uuid,
+        message: { role: 'user', content: userContent(entry) },
+    };
+}
+
 class Runner extends EventEmitter {
     /**
      * @param {object} opts
@@ -263,6 +286,11 @@ class Runner extends EventEmitter {
         this._reroll = null;           // the timer moving the verb along
 
         this.proc = null;
+        // What `claude --version` the running process is, from its init line.
+        // Not the transcript's `version`, which is the first one that ever wrote
+        // to it: a session outlives the binary it started on, and the question
+        // claude-version.js asks is whether *this process* predates an update.
+        this.claudeVersion = null;
         this.state = 'stopped';        // stopped | starting | idle | busy | error
         this.activity = null;          // human-readable "what is it doing right now"
         this.lastError = null;
@@ -280,6 +308,13 @@ class Runner extends EventEmitter {
         // and the next flush wrote a turn with `text: undefined` in it. Entries
         // throughout, so the two arrays are one shape.
         this.inFlight = [];            // written to the process, not yet answered
+        // Has this process shown us its command queue? Every message written to a
+        // build that has one comes back as `command_lifecycle` frames — our own
+        // first send included, well before any tool runs — so seeing one is proof
+        // enough that a message handed over mid-turn will be folded in rather than
+        // misread. Per process, not pool-wide like `caps`: it is learned for free
+        // on every start, and a build without it simply never sets it. See _handOver.
+        this._lifecycle = false;
         this._buf = '';
         this._stderr = '';
         this._pendingTools = new Map();
@@ -296,6 +331,15 @@ class Runner extends EventEmitter {
         // told too (destination "session"), so this only does work after a
         // process restart, when the CLI's own copy is gone and ours is not.
         this._sessionAllow = new Set();
+        // The asks this runner has answered, most recent last and capped. Only
+        // ever read by the next bridge: it is how an adopted process tells a card
+        // still waiting on somebody from one that was answered moments before the
+        // restart, since both look the same in the replayed output.
+        this._answered = [];
+        // Tags this runner's outbound control ids. A process adopted from the host
+        // may still answer a request the previous bridge made, and without the tag
+        // that answer would land on whichever request of ours had the same number.
+        this._ctlTag = randomUUID().slice(0, 6);
         this._autoDenies = 0;
         // This process did not answer an interrupt in time. Not the same claim as
         // `caps.interrupt`, which is about the build and is shared by the whole
@@ -386,7 +430,11 @@ class Runner extends EventEmitter {
         this._setState('starting', 'Starting Claude…');
 
         try {
-            this.proc = spawn(CLAUDE_BIN, args, {
+            // In the session host when there is one (bridge/host.js), so the turn
+            // outlives this bridge; as our own child when there is not. Either way
+            // what comes back has the ChildProcess surface the rest of this file
+            // uses, and nothing below needs to know which it got.
+            this.proc = hostClient.spawnClaude(CLAUDE_BIN, args, {
                 cwd: this.cwd,
                 stdio: ['pipe', 'pipe', 'pipe'],
                 env: sessionEnv(),
@@ -394,13 +442,13 @@ class Runner extends EventEmitter {
                 // also delivered to a turn in flight; it gets to shut down on
                 // stdin EOF instead of being interrupted mid-write.
                 //
-                // This does not make a turn outlive the bridge, and nothing can:
-                // `claude` reads stdin for input, so when the bridge exits and
-                // the pipe closes it treats that as end-of-input and stops. That
-                // is exactly why the everyday instance runs on its own port —
-                // see CLAUDE.md.
+                // Spawned directly, this does not make a turn outlive the bridge:
+                // `claude` reads stdin for input, so when the bridge exits and the
+                // pipe closes it treats that as end-of-input and stops. Owning the
+                // pipe somewhere else is the only thing that does, and that is
+                // what the host is for.
                 detached: true,
-            });
+            }, this.sessionId);
         } catch (err) {
             this.lastError = `Could not start ${CLAUDE_BIN}: ${err.message}`;
             this._setState('error', null);
@@ -431,10 +479,35 @@ class Runner extends EventEmitter {
         this.isNew = false;
         this.fork = false;
 
-        this.proc.stdout.setEncoding('utf8');
-        this.proc.stdout.on('data', (chunk) => this._onStdout(chunk));
-        this.proc.stderr.setEncoding('utf8');
-        this.proc.stderr.on('data', (chunk) => {
+        this._bind(this.proc, { wasNew, wasFork });
+        // Before anything is written, so a bridge that dies before the first line
+        // still leaves the host a record of whose process this is.
+        this._saveNote();
+
+        // The handshake the Agent SDK opens with. We need nothing from the
+        // reply, but a CLI that expects a client to announce itself gets what it
+        // is waiting for, and a round trip completing tells us the channel works
+        // in both directions before anything depends on it.
+        this._control('initialize', {}).catch(() => { /* older build; the fallbacks cover it */ });
+
+        // The process is ready for input immediately; `system/init` confirms it.
+        this._setState('idle', null);
+        this._flushQueue();
+    }
+
+    /**
+     * Listen to a process: its output, its errors, and above all its exit.
+     *
+     * Shared by the two ways a runner comes to have a process — starting one, and
+     * adopting one a previous bridge left in the host — so that an adopted process
+     * dies exactly the way a started one does. `wasNew`/`wasFork` are what the
+     * permission-prompt retry puts back; an adopted process was never new here.
+     */
+    _bind(proc, { wasNew = false, wasFork = false } = {}) {
+        proc.stdout.setEncoding('utf8');
+        proc.stdout.on('data', (chunk) => this._onStdout(chunk));
+        proc.stderr.setEncoding('utf8');
+        proc.stderr.on('data', (chunk) => {
             this._stderr = (this._stderr + chunk).slice(-4000);
         });
 
@@ -451,17 +524,18 @@ class Runner extends EventEmitter {
         //
         // There is nothing to *do* about it — 'close' is already on its way and
         // accounts for the turn. Same case and same answer as bridge/pulls.js.
-        this.proc.stdin.on('error', () => { /* the process is going away */ });
-        this.proc.stdout.on('error', () => { /* ditto */ });
-        this.proc.stderr.on('error', () => { /* ditto */ });
+        proc.stdin.on('error', () => { /* the process is going away */ });
+        proc.stdout.on('error', () => { /* ditto */ });
+        proc.stderr.on('error', () => { /* ditto */ });
 
-        this.proc.on('error', (err) => {
+        proc.on('error', (err) => {
             this.lastError = err.message;
             this._setState('error', null);
         });
 
-        this.proc.on('close', (code) => {
+        proc.on('close', (code) => {
             this.proc = null;
+            this.claudeVersion = null;
             this._pendingTools.clear();
             this._abandonControl('the Claude process exited');
             // The turn this process was answering, taken before any branch below
@@ -476,6 +550,11 @@ class Runner extends EventEmitter {
             // What happens to the *text* is each branch's decision. Whether it is
             // still held here is not.
             const flight = this.inFlight.splice(0);
+            // Whatever was handed over and never started went down with the
+            // process's own queue. It is ours again — waiting, and unsent as far
+            // as anything after this is concerned, including the next process.
+            for (const q of this.queue) q.handed = false;
+            this._lifecycle = false;
             if (this._stopping) {
                 this._stopping = false;
                 // Stopping means stopping. `flight` is the turn the user asked to
@@ -550,16 +629,6 @@ class Runner extends EventEmitter {
             }
             this.emit('exit', code);
         });
-
-        // The handshake the Agent SDK opens with. We need nothing from the
-        // reply, but a CLI that expects a client to announce itself gets what it
-        // is waiting for, and a round trip completing tells us the channel works
-        // in both directions before anything depends on it.
-        this._control('initialize', {}).catch(() => { /* older build; the fallbacks cover it */ });
-
-        // The process is ready for input immediately; `system/init` confirms it.
-        this._setState('idle', null);
-        this._flushQueue();
     }
 
     /**
@@ -574,21 +643,24 @@ class Runner extends EventEmitter {
         // entry — the queue chips, the hand-back on death, dequeue, reorder, the
         // `dropped` a stop reports — reads `.text`, and all of it keeps working
         // untouched. Only _flushQueue knows these are here.
-        const entry = { id: `q${++queueSeq}`, text, at: Date.now(), attachments };
+        const entry = { id: `q${++queueSeq}`, uuid: randomUUID(), text, at: Date.now(), attachments };
         this.queue.push(entry);
         if (!this.proc) this.start();
-        else this._flushQueue();
+        else { this._flushQueue(); this._handOver(); }
         if (this.queue.includes(entry)) this._queueChanged();
         return entry;
     }
 
     /**
-     * Hand the next message to the process, one turn at a time.
+     * Hand the next message to an idle process.
      *
      * The CLI would happily take several lines at once, but then they are gone:
      * nothing can be reordered or taken back, and there is no queue left for the
-     * UI to show. So only one message is in flight at a time and the rest wait
-     * here, where they can still be edited, reordered or dropped.
+     * UI to show. So while nothing is running, one message goes at a time and the
+     * rest wait here, where they can still be edited, reordered or dropped.
+     *
+     * While a turn *is* running, a tool call starting is what moves them on — see
+     * _handOver, which is the other way out of this queue.
      */
     _flushQueue() {
         if (!this.proc || !this.proc.stdin.writable) return;
@@ -599,42 +671,173 @@ class Runner extends EventEmitter {
         // again. Every path that nulls `this.proc` therefore has to empty it; see
         // the close handler, `detach`, and the top of `start`.
         if (this.state === 'busy' || this.inFlight.length) return;
+        // A message already handed over is the process's next turn, and it will
+        // start it on its own. Writing another would put this one ahead of it.
+        if (this.queue.some(q => q.handed)) return;
         const entry = this.queue.shift();
         if (!entry) return;
+        // Held until a result arrives: if the process dies first, this text
+        // was never written to the transcript and would otherwise be lost.
+        //
+        // Recorded, and told to the host, *before* the write rather than after.
+        // The host handles one connection's messages in order, so a bridge that
+        // dies between the two still leaves a note saying a turn went out — and
+        // the next bridge gates its queue on that note. After would leave a
+        // window where the turn is in the process and the note says idle.
+        this.inFlight.push(entry);
+        this._saveNote();
         // A rejected write means the process is going away. The message is still
         // ours at that point, so put it back rather than dropping it on the floor.
-        if (!this._write({
-            type: 'user',
-            message: { role: 'user', content: userContent(entry) },
-        })) {
+        if (!this._write(userLine(entry))) {
+            this.inFlight.pop();
             this.queue.unshift(entry);
             return;
         }
-        // Held until a result arrives: if the process dies first, this text
-        // was never written to the transcript and would otherwise be lost.
-        this.inFlight.push(entry);
         this._work();
         // _setState only reports when the state or activity moved; a shorter
         // queue is news on its own.
         this._queueChanged();
     }
 
-    /** Drop one waiting message. Returns it, or null if it already went out. */
-    dequeue(id) {
-        const i = this.queue.findIndex(q => q.id === id);
-        if (i < 0) return null;
-        const [entry] = this.queue.splice(i, 1);
+    /**
+     * Give everything waiting to the running turn, to be read at its next step.
+     *
+     * This is what a terminal does with a message typed while Claude works: the
+     * CLI keeps its own queue, and a user message written to it mid-turn is folded
+     * into that turn when the current tool round ends — the model gets it beside
+     * the tool result, as "the user sent a new message while you were working",
+     * and can change course there rather than after all of the work it was about.
+     * Waiting for `result` instead, which is what this app used to do, meant a
+     * "stop, wrong file" was read only once every wrong file had been edited.
+     *
+     * **Only while a tool is running.** The fold happens between tool rounds, so
+     * a message handed over while the model is only writing text would simply be
+     * the next turn — which is what staying here makes it anyway, and staying here
+     * keeps it editable for longer. Both halves measured against 2.1.280.
+     *
+     * A handed message stays on `queue`, flagged, rather than moving somewhere
+     * else. It is still the user's until the CLI says it started: the chip stays,
+     * dequeue can still take it back (`cancel_async_message`), and every path that
+     * hands the queue back on a failure keeps covering it without knowing about
+     * this. It leaves the queue on the `command_lifecycle` frame that says what
+     * became of it — see _onLifecycle.
+     */
+    _handOver() {
+        if (!this._lifecycle || !this._pendingTools.size) return;
+        if (!this.proc || !this.proc.stdin.writable) return;
+        const waiting = this.queue.filter(q => !q.handed);
+        if (!waiting.length) return;
+        for (const entry of waiting) {
+            // Before the write, for _flushQueue's reason: a bridge that dies
+            // between the two must leave a note saying the process has it.
+            entry.handed = true;
+            this._saveNote();
+            if (!this._write(userLine(entry))) { entry.handed = false; break; }
+        }
         this._queueChanged();
+    }
+
+    /**
+     * What the CLI did with a message we wrote, by the uuid we wrote it with.
+     *
+     *   queued     it is in the CLI's queue. Nothing to do; to us it already was.
+     *   started    it reached the model, and its user entry (or, folded into a
+     *              running turn, its `queued_command` attachment) is in the
+     *              transcript. Off the queue and in flight, like a flushed turn.
+     *   completed  the turn that took it ended; `result` accounts for that.
+     *   cancelled  taken back — by cancel_async_message, or swept by an interrupt.
+     *   discarded  the session ended with it still queued.
+     */
+    _onLifecycle(msg) {
+        this._lifecycle = true;
+        const i = this.queue.findIndex(q => q.handed && q.uuid === msg.command_uuid);
+        if (i < 0) return;
+        if (msg.state === 'started') {
+            const [entry] = this.queue.splice(i, 1);
+            this.inFlight.push(entry);
+            // Folded into the running turn, or starting the next one after a
+            // `result` that went by first. Either way it is working.
+            if (this.state !== 'busy') this._work();
+            this._queueChanged();
+        } else if (msg.state === 'cancelled' || msg.state === 'discarded') {
+            this.queue.splice(i, 1);
+            this._queueChanged();
+            this._settleIfDone();
+        }
+    }
+
+    /**
+     * Go idle once a `result` has gone by and nothing handed over is still coming.
+     * The `result` handler stays busy while the CLI holds one of ours, since it
+     * will start it as the next turn; this is how that ends when it does not.
+     */
+    _settleIfDone() {
+        if (this.state !== 'busy' || this.inFlight.length || this._pendingTools.size) return;
+        if (this.pendingPermission || this.queue.some(q => q.handed)) return;
+        this._setState('idle', null);
+        this._flushQueue();
+    }
+
+    /**
+     * Drop one waiting message. Resolves to it, or to null if it already went out.
+     *
+     * A message handed over to the running turn is taken back from the CLI's own
+     * queue first, and only dropped here if the CLI agrees it had not started it:
+     * a chip that vanished for a message Claude then read anyway would be the one
+     * lie this list must not tell.
+     */
+    async dequeue(id) {
+        const entry = this.queue.find(q => q.id === id);
+        if (!entry) return null;
+        if (entry.handed && !(await this._withdraw(entry))) return null;
+        // Possibly gone already. The CLI announces the cancel with a lifecycle
+        // frame *before* its answer to the request — measured, both on 2.1.280 —
+        // so _onLifecycle has usually taken it off by now. It was still withdrawn.
+        const i = this.queue.indexOf(entry);
+        if (i >= 0) {
+            this.queue.splice(i, 1);
+            this._queueChanged();
+        }
+        if (entry.handed) this._settleIfDone();
         return entry;
     }
 
-    /** Drop everything still waiting. Returns what was dropped. */
-    clearQueue() {
-        if (!this.queue.length) return [];
-        const dropped = this.queue.slice();
-        this.queue.length = 0;
-        this._queueChanged();
+    /** Drop everything still waiting. Resolves to what was actually dropped. */
+    async clearQueue() {
+        const dropped = [];
+        for (const entry of this.queue.slice()) {
+            const gone = await this.dequeue(entry.id);
+            if (gone) dropped.push(gone);
+        }
         return dropped;
+    }
+
+    /**
+     * Take the queue for another process, synchronously. Only for a runner that is
+     * not busy, which is when nothing can have been handed over — the `result`
+     * handler stays busy while anything is — and an entry carried to a new process
+     * must never also be sitting in this one's CLI queue.
+     */
+    takeQueue() {
+        const taken = this.queue.filter(q => !q.handed);
+        if (!taken.length) return [];
+        this.queue = this.queue.filter(q => q.handed);
+        this._queueChanged();
+        return taken;
+    }
+
+    /**
+     * Ask the CLI to give back a message handed over mid-turn. True only when it
+     * says it did; a build or a moment that cannot answer counts as "too late",
+     * which leaves the chip up rather than pretending.
+     */
+    async _withdraw(entry) {
+        try {
+            const r = await this._control('cancel_async_message', { message_uuid: entry.uuid });
+            return !!(r && r.cancelled);
+        } catch {
+            return false;
+        }
     }
 
     /**
@@ -644,8 +847,10 @@ class Runner extends EventEmitter {
      * take the rest of the queue with it.
      */
     reorder(ids) {
-        const byId = new Map(this.queue.map(q => [q.id, q]));
-        const next = [];
+        // Handed-over messages are in the CLI's queue in the order they were
+        // written, so they keep their place at the front whatever the drag said.
+        const byId = new Map(this.queue.filter(q => !q.handed).map(q => [q.id, q]));
+        const next = this.queue.filter(q => q.handed);
         for (const id of ids) {
             const entry = byId.get(id);
             if (entry && !next.includes(entry)) next.push(entry);
@@ -657,7 +862,45 @@ class Runner extends EventEmitter {
     }
 
     _queueChanged() {
+        this._saveNote();
         this.emit('status', this.status());
+    }
+
+    /**
+     * Leave the host what the next bridge needs and cannot read off the output.
+     *
+     * The replay says what `claude` did; this says what *we* did — which turn we
+     * sent and are waiting on, what is still queued, which asks were answered,
+     * what the user said yes to for the session. All of it lived only in this
+     * object before, which is fine while the object outlives the process and is
+     * the whole problem once the process can outlive the object.
+     *
+     * A no-op for a process spawned directly: there is nobody to leave it with,
+     * and nothing will outlive us to read it.
+     */
+    _saveNote() {
+        if (!this.proc || !this.proc.hosted) return;
+        const entry = (q) => ({ uuid: q.uuid, text: q.text, at: q.at,
+            attachments: q.attachments || [], ...(q.handed && { handed: true }) });
+        this.proc.note({
+            v: 1,
+            sessionId: this.sessionId,
+            cwd: this.cwd,
+            model: this.model,
+            permissionMode: this.permissionMode,
+            claudeVersion: this.claudeVersion,
+            inFlight: this.inFlight.map(entry),
+            queue: this.queue.map(entry),
+            lifecycle: this._lifecycle,
+            answered: this._answered,
+            sessionAllow: [...this._sessionAllow],
+        });
+    }
+
+    _markAnswered(id) {
+        this._answered.push(id);
+        if (this._answered.length > 20) this._answered.shift();
+        this._saveNote();
     }
 
     /**
@@ -800,7 +1043,7 @@ class Runner extends EventEmitter {
      */
     _control(subtype, payload = {}, { timeoutMs = CONTROL_TIMEOUT_MS } = {}) {
         return new Promise((resolve, reject) => {
-            const id = `req_${++this._ctlSeq}`;
+            const id = `req_${this._ctlTag}_${++this._ctlSeq}`;
             if (!this._write({
                 type: 'control_request', request_id: id, request: { subtype, ...payload },
             })) {
@@ -861,6 +1104,7 @@ class Runner extends EventEmitter {
         // cannot carry. Offering Allow would be a lie — the call fails anyway —
         // so say what happened instead of pretending it was a choice.
         if (req.requires_user_interaction && kind === 'tool') {
+            this._markAnswered(msg.request_id);
             this._write({
                 type: 'control_response',
                 response: {
@@ -880,20 +1124,7 @@ class Runner extends EventEmitter {
             return;
         }
 
-        const ask = {
-            id: msg.request_id,
-            kind,
-            tool: req.tool_name,
-            displayName: req.display_name || req.tool_name,
-            input: req.input || {},
-            toolUseId: req.tool_use_id || null,
-            description: req.description || null,
-            reason: req.decision_reason || null,
-            blockedPath: req.blocked_path || null,
-            // A call made by a subagent, not by the session itself.
-            agentId: req.agent_id || null,
-            askedAt: Date.now(),
-        };
+        const ask = askFrom(msg);
 
         // Said yes to this tool earlier in the session, before the process was
         // last restarted. The CLI has forgotten; we have not.
@@ -1081,6 +1312,8 @@ class Runner extends EventEmitter {
         if (behavior === 'allow' && updatedInput) response.updatedInput = updatedInput;
         if (behavior === 'deny') response.message = message || 'Denied from Claude Sessions.';
         if (updatedPermissions) response.updatedPermissions = updatedPermissions;
+        // Before the write, for _flushQueue's reason.
+        this._markAnswered(ask.id);
         this._write({
             type: 'control_response',
             response: { subtype: 'success', request_id: ask.id, response },
@@ -1133,12 +1366,12 @@ class Runner extends EventEmitter {
     /**
      * Stop managing the process without signalling it.
      *
-     * Used when the bridge is going away mid-turn. It buys the process a chance
-     * to wind down on its own as our stdin pipe closes, rather than being killed
-     * outright — but it does not save the turn. Nothing can: `claude` reads
-     * stdin for input, so the pipe closing when we exit is end-of-input and it
-     * stops there. Protecting work means not killing the bridge in the first
-     * place, which is what the separate development port is for.
+     * Used when the bridge is going away mid-turn with a process that is *not* in
+     * the session host (see `release` for the one that is). It buys the process a
+     * chance to wind down on its own as our stdin pipe closes, rather than being
+     * killed outright — but it does not save the turn: `claude` reads stdin for
+     * input, so the pipe closing when we exit is end-of-input and it stops there.
+     * Only a pipe held somewhere else survives that, which is what the host is.
      */
     detach() {
         if (!this.proc) return;
@@ -1152,6 +1385,144 @@ class Runner extends EventEmitter {
         this.inFlight.length = 0;
         try { proc.unref(); } catch { /* already gone */ }
         this._setState('stopped', null);
+    }
+
+    /**
+     * Let go of a process that lives in the host, and leave it running.
+     *
+     * What `detach()` wanted to be. The turn does not end, because its pipes are
+     * not ours: the host keeps them open, and the next bridge adopts the process
+     * from the note written here. False when there is no host behind this process,
+     * and then the caller has only `detach()` left.
+     */
+    release() {
+        if (!this.proc || !this.proc.hosted) return false;
+        this._saveNote();
+        const proc = this.proc;
+        this.proc = null;
+        proc.release();
+        // Our half of the channel is going away; the requests on it will never be
+        // answered to *us*. Nothing is emitted: there is nobody left to tell, and
+        // the ask itself is still open on the far side for the next bridge to show.
+        for (const [, p] of this._pending) {
+            clearTimeout(p.timer);
+            p.reject(controlError('the bridge let go of this process', 'gone'));
+        }
+        this._pending.clear();
+        this.inFlight.length = 0;
+        return true;
+    }
+
+    /**
+     * Take over a process a previous bridge left in the host.
+     *
+     * `records` is everything the host kept of its output, `note` what the last
+     * bridge wrote down before it went (see `_saveNote`), and `noteSeq` how far the
+     * output had got when it did. Between them they rebuild what this object would
+     * know had it been here all along — without *acting* on any of it. The replay
+     * goes nowhere near `_onMessage`: that would answer asks, auto-deny them for
+     * want of a window, and announce turns long finished.
+     *
+     * What is rebuilt:
+     *
+     *   - **the turn in flight**, from the note, unless a `result` arrived after
+     *     the note was written — then the turn finished while nobody listened, and
+     *     `turn-complete` is emitted for it now, since nobody heard it then;
+     *   - **an unanswered ask**, the last `can_use_tool` with nothing after it that
+     *     settled it. Put straight back on `pendingPermission` rather than through
+     *     `_onControlRequest`, which would deny it: no window is attached this
+     *     early in a bridge's life, and the CLI is still blocked waiting. The card
+     *     waits, exactly as one does that was on screen when a window closed;
+     *   - **the tool running**, for the activity line;
+     *   - the queue, the permission mode, and what was allowed for the session.
+     */
+    adopt({ child, records = [], note = {}, noteSeq = 0 }) {
+        this.proc = child;
+        this.isNew = false;
+        this.fork = false;
+        // Fresh ids: the old bridge's counter restarted with this one, and a
+        // carried-over `q3` would answer to a new `q3`'s dequeue.
+        // The uuid is kept, not reissued: a handed-over message is known to the
+        // process by it, and it is what the lifecycle frames below are matched on.
+        const entry = (q) => ({ id: `q${++queueSeq}`, uuid: q.uuid || randomUUID(),
+            text: q.text, at: q.at, attachments: q.attachments || [],
+            ...(q.handed && { handed: true }) });
+        this.queue = (note.queue || []).map(entry);
+        this.inFlight = (note.inFlight || []).map(entry);
+        this._lifecycle = !!note.lifecycle;
+        this._answered = (note.answered || []).slice(-20);
+        this._sessionAllow = new Set(note.sessionAllow || []);
+        this.claudeVersion = note.claudeVersion || null;
+        this.lastUsedAt = Date.now();
+
+        let ask = null;
+        let finished = null;       // a result the previous bridge never saw
+        const tools = new Map();
+        for (const r of records) {
+            if (r.dir === 'err') { this._stderr = (this._stderr + r.data).slice(-4000); continue; }
+            let msg;
+            try { msg = JSON.parse(r.data); } catch { continue; }
+            if (msg.type === 'control_request' && msg.request
+                && msg.request.subtype === 'can_use_tool') {
+                ask = msg;
+            } else if (msg.type === 'control_cancel_request') {
+                const id = msg.request_id || (msg.request && msg.request.request_id);
+                if (ask && ask.request_id === id) ask = null;
+            } else if (msg.type === 'assistant') {
+                for (const b of (msg.message && msg.message.content) || []) {
+                    if (b.type === 'tool_use') tools.set(b.id, b);
+                }
+            } else if (msg.type === 'user') {
+                for (const b of (msg.message && msg.message.content) || []) {
+                    if (b.type === 'tool_result') tools.delete(b.tool_use_id);
+                }
+            } else if (msg.type === 'command_lifecycle') {
+                // What became of a message handed over before the last bridge
+                // went. Replayed without _onLifecycle's side effects: the state
+                // is decided once, below, from everything at once.
+                this._lifecycle = true;
+                const i = this.queue.findIndex(q => q.handed && q.uuid === msg.command_uuid);
+                if (i < 0) continue;
+                if (msg.state === 'started') this.inFlight.push(this.queue.splice(i, 1)[0]);
+                else if (msg.state === 'cancelled' || msg.state === 'discarded') this.queue.splice(i, 1);
+            } else if (msg.type === 'result') {
+                ask = null;
+                tools.clear();
+                if (r.seq > noteSeq) finished = msg;
+            } else if (msg.type === 'system' && msg.subtype === 'init') {
+                if (msg.claude_code_version) this.claudeVersion = msg.claude_code_version;
+                // A fork the previous bridge had already followed is in the note;
+                // this catches one it did not live to see.
+                if (msg.session_id && msg.session_id !== this.sessionId) this.sessionId = msg.session_id;
+            }
+        }
+        if (ask && this._answered.includes(ask.request_id)) ask = null;
+        for (const [id, b] of tools) this._pendingTools.set(id, b.name);
+
+        this._bind(child);
+
+        if (finished) {
+            this._readResult(finished);
+            this.inFlight.length = 0;
+            // After the pool has wired its listeners, which happens once this
+            // returns. The turn ended while no bridge was up to say so.
+            setImmediate(() => this.emit('turn-complete', this.lastResult));
+        }
+
+        if (ask) {
+            this.pendingPermission = askFrom(ask);
+            const a = this.pendingPermission;
+            this._setState('busy', a.kind === 'plan' ? 'Waiting for you: a plan to approve'
+                : a.kind === 'question' ? 'Waiting for you: a question'
+                : `Waiting for you: ${a.displayName}`);
+        } else if (this.inFlight.length || tools.size || this.queue.some(q => q.handed)) {
+            const last = [...tools.values()].pop();
+            this._work(last ? describeTool(last) : null);
+        } else {
+            this._setState('idle', null);
+        }
+        this._saveNote();
+        this._flushQueue();
     }
 
     /** Close stdin so the process exits once the current turn finishes. */
@@ -1203,6 +1574,10 @@ class Runner extends EventEmitter {
                 break;
             }
 
+            case 'command_lifecycle':
+                this._onLifecycle(msg);
+                break;
+
             case 'control_cancel_request': {
                 // The CLI withdrew an ask — usually because the turn it belonged
                 // to ended. Take the card down rather than leaving a dead one on
@@ -1216,6 +1591,7 @@ class Runner extends EventEmitter {
 
             case 'system':
                 if (msg.subtype === 'init') {
+                    this.claudeVersion = msg.claude_code_version || null;
                     // A resumed session keeps its id; a fork gets a new one, and
                     // the UI has to follow it or the user is left watching a
                     // transcript that will never move again.
@@ -1225,6 +1601,11 @@ class Runner extends EventEmitter {
                         this.emit('forked', { from, to: msg.session_id });
                     }
                     this.emit('init', msg);
+                    // Once per process, and the only moment the version is known:
+                    // the note so an adopting bridge has it, the status so every
+                    // window's stale-binary hint can clear.
+                    this._saveNote();
+                    this.emit('status', this.status());
                 } else if (msg.subtype === 'permission_denied') {
                     this.emit('notice', {
                         level: 'warn', kind: 'permission_denied',
@@ -1279,6 +1660,9 @@ class Runner extends EventEmitter {
                     if (b.type === 'tool_use') {
                         this._pendingTools.set(b.id, b.name);
                         this._work(describeTool(b));
+                        // The round this tool belongs to is where anything waiting
+                        // gets read, so hand it over now, while there is time.
+                        this._handOver();
                     } else if (b.type === 'text' && b.text.trim()) {
                         this._work('Writing…');
                     } else if (b.type === 'thinking') {
@@ -1301,55 +1685,19 @@ class Runner extends EventEmitter {
             }
 
             case 'result': {
-                // A turn that ends in an API error still counts as "finished" to
-                // the CLI, so say what went wrong rather than quietly going idle.
-                const failed = !!msg.is_error;
-                const detail = typeof msg.result === 'string' ? msg.result : '';
-                // What the turn actually said, kept off `lastResult` on purpose.
-                //
-                // `lastResult` is what `turn-complete` broadcasts, and that event
-                // goes to every connected client — a desktop window, a phone over
-                // Tailscale — on every turn. The final assistant message can be
-                // pages long, and every client already has it: they tail the
-                // transcript. So putting it there would be sending the same text
-                // twice, over the slower path, to clients that did not ask.
-                //
-                // It is here because a scheduled run needs its verdict without
-                // waiting for the index to catch up on a session that was created
-                // seconds ago. Capped, since nothing reads more than the last few
-                // lines of it.
-                this.lastResultText = detail.slice(-4000);
-                // The same message from the *front*, for a scheduled review the
-                // bridge is going to post to GitHub.
-                //
-                // Two fields rather than one widened one, because the two readers
-                // want opposite ends of the same string. `verdictOf` uses `exec`
-                // and so takes the *first* match, and the tail slice above is what
-                // makes that first match be the real trailing `VERDICT:` line — on
-                // a 60KB body it would instead find whichever earlier paragraph
-                // happens to mention a verdict. Meanwhile a comment that begins
-                // mid-sentence, which is what posting the tail would produce, is
-                // worse than no comment.
-                //
-                // 60KB against GitHub's 65536-character comment limit, leaving
-                // room for the wrapper the bridge puts around it. Never broadcast,
-                // for `lastResultText`'s reason; four live runners at 60KB is
-                // nothing.
-                this.lastResultBody = detail.slice(0, 60_000);
-                this.lastResult = {
-                    isError: failed,
-                    detail: failed ? detail.slice(0, 300) : null,
-                    retries: this.retry ? this.retry.attempt : 0,
-                    costUsd: msg.total_cost_usd || 0,
-                    durationMs: msg.duration_ms || msg.duration_api_ms || 0,
-                    numTurns: msg.num_turns || 0,
-                    stopReason: msg.stop_reason || null,
-                };
+                const { failed, detail } = this._readResult(msg);
                 this._pendingTools.clear();
                 this.inFlight.length = 0;   // safely in the transcript now
+                this._saveNote();
                 this.retry = null;
                 this._autoDenies = 0;       // a finished turn is not a spin
-                this._setState('idle', null);
+                // Something handed over that the turn did not fold in is the
+                // process's next turn, and it starts it by itself. Staying busy
+                // keeps everything that waits on `idle` — the queue, the pool's
+                // eviction, a model change — from acting in between; its
+                // lifecycle frame moves things on either way.
+                if (this.queue.some(q => q.handed)) this._work();
+                else this._setState('idle', null);
                 // The turn that was holding the queue back has landed.
                 this._flushQueue();
                 if (failed) {
@@ -1379,6 +1727,59 @@ class Runner extends EventEmitter {
                 }
                 break;
         }
+    }
+
+    /**
+     * What a `result` says about the turn it ends. Split out of _onMessage so an
+     * adopted process can read the result of a turn that ended while no bridge was
+     * listening without also acting on it.
+     */
+    _readResult(msg) {
+        // A turn that ends in an API error still counts as "finished" to
+        // the CLI, so say what went wrong rather than quietly going idle.
+        const failed = !!msg.is_error;
+        const detail = typeof msg.result === 'string' ? msg.result : '';
+        // What the turn actually said, kept off `lastResult` on purpose.
+        //
+        // `lastResult` is what `turn-complete` broadcasts, and that event
+        // goes to every connected client — a desktop window, a phone over
+        // Tailscale — on every turn. The final assistant message can be
+        // pages long, and every client already has it: they tail the
+        // transcript. So putting it there would be sending the same text
+        // twice, over the slower path, to clients that did not ask.
+        //
+        // It is here because a scheduled run needs its verdict without
+        // waiting for the index to catch up on a session that was created
+        // seconds ago. Capped, since nothing reads more than the last few
+        // lines of it.
+        this.lastResultText = detail.slice(-4000);
+        // The same message from the *front*, for a scheduled review the
+        // bridge is going to post to GitHub.
+        //
+        // Two fields rather than one widened one, because the two readers
+        // want opposite ends of the same string. `verdictOf` uses `exec`
+        // and so takes the *first* match, and the tail slice above is what
+        // makes that first match be the real trailing `VERDICT:` line — on
+        // a 60KB body it would instead find whichever earlier paragraph
+        // happens to mention a verdict. Meanwhile a comment that begins
+        // mid-sentence, which is what posting the tail would produce, is
+        // worse than no comment.
+        //
+        // 60KB against GitHub's 65536-character comment limit, leaving
+        // room for the wrapper the bridge puts around it. Never broadcast,
+        // for `lastResultText`'s reason; four live runners at 60KB is
+        // nothing.
+        this.lastResultBody = detail.slice(0, 60_000);
+        this.lastResult = {
+            isError: failed,
+            detail: failed ? detail.slice(0, 300) : null,
+            retries: this.retry ? this.retry.attempt : 0,
+            costUsd: msg.total_cost_usd || 0,
+            durationMs: msg.duration_ms || msg.duration_api_ms || 0,
+            numTurns: msg.num_turns || 0,
+            stopReason: msg.stop_reason || null,
+        };
+        return { failed, detail };
     }
 
     /**
@@ -1482,6 +1883,10 @@ class Runner extends EventEmitter {
             detail: this._detail,
             model: this.model,
             permissionMode: this.permissionMode,
+            // Null whenever there is no process, so a session sitting idle with
+            // nothing running is never reported as on an old binary: its next
+            // message starts whatever is installed then.
+            claudeVersion: this.claudeVersion,
             cwd: this.cwd,
             error: this.lastError,
             errorKind: this.errorKind,
@@ -1497,8 +1902,11 @@ class Runner extends EventEmitter {
             // and so editing one puts them back on the composer rather than dropping
             // them on the floor. Metadata only — the base64 is read at flush time and
             // never travels on a status event.
+            // `handed` marks one given to the running turn to be read at its next
+            // step: still cancellable, no longer reorderable. See _handOver.
             queue: this.queue.map(q => ({
                 id: q.id, text: q.text, at: q.at, attachments: q.attachments || [],
+                handed: !!q.handed,
             })),
             // A window opening onto a session that is already blocked on an ask
             // has to be able to draw the card without having seen the event.
@@ -1509,6 +1917,25 @@ class Runner extends EventEmitter {
             busySince: this.state === 'busy' ? this.busySince : null,
         };
     }
+}
+
+/** A `can_use_tool` request as the runner holds it. */
+function askFrom(msg) {
+    const req = msg.request || {};
+    return {
+        id: msg.request_id,
+        kind: ASK_KINDS[req.tool_name] || 'tool',
+        tool: req.tool_name,
+        displayName: req.display_name || req.tool_name,
+        input: req.input || {},
+        toolUseId: req.tool_use_id || null,
+        description: req.description || null,
+        reason: req.decision_reason || null,
+        blockedPath: req.blocked_path || null,
+        // A call made by a subagent, not by the session itself.
+        agentId: req.agent_id || null,
+        askedAt: Date.now(),
+    };
 }
 
 /** The ask as the UI sees it — no timer handle, nothing it cannot serialise. */
@@ -1674,7 +2101,7 @@ class RunnerPool extends EventEmitter {
                 // A model or mode change replaces the process. Messages still
                 // waiting belong to the user, not to the process, so they move
                 // across rather than disappearing.
-                carried = r.clearQueue();
+                carried = r.takeQueue();
                 r.retire();
                 this.runners.delete(sessionId);
                 r = null;
@@ -1688,7 +2115,18 @@ class RunnerPool extends EventEmitter {
         // Delegated rather than handed over, so a runner asks the pool afresh
         // every time: settings change under a live session, and the answer
         // should not be the one that was true when it started.
-        r = new Runner({ sessionId, cwd, model, permissionMode, isNew, fork, caps: this.caps,
+        r = this._make({ sessionId, cwd, model, permissionMode, isNew, fork });
+        if (carried.length) {
+            r.queue.push(...carried);
+            r._queueChanged();
+        }
+        this.runners.set(sessionId, r);
+        return r;
+    }
+
+    /** A runner with the pool's listeners on it — shared by `ensure` and `adoptHeld`. */
+    _make(opts) {
+        const r = new Runner({ ...opts, caps: this.caps,
             thinking: (dir, last) => this.thinking(dir, last),
             rerollAfter: (dir) => this.rerollAfter(dir) });
         // Read through `r.sessionId` rather than closing over the id it was
@@ -1720,12 +2158,57 @@ class RunnerPool extends EventEmitter {
             this.runners.set(to, r);
             this.emit('forked', { from, to });
         });
-        if (carried.length) {
-            r.queue.push(...carried);
-            r._queueChanged();
-        }
-        this.runners.set(sessionId, r);
         return r;
+    }
+
+    /**
+     * Take back the processes a previous bridge left running in the session host.
+     *
+     * Called once, before the bridge serves anything: a send that arrived first
+     * would find no runner, start a second `claude` on the same session, and be
+     * refused as "already running elsewhere" — by the very process being adopted.
+     *
+     * A process with no usable note is ended rather than guessed at. It can only
+     * be one that was spawned in the instant before its bridge died, and a turn
+     * nobody can see or stop is worse than one that did not happen. An exited one
+     * is forgotten: the transcript already has everything it did.
+     *
+     * @returns {Promise<number>} how many were adopted
+     */
+    async adoptHeld() {
+        let n = 0;
+        for (const h of await hostClient.held()) {
+            if (h.exited) { await hostClient.forget(h.key); continue; }
+            const note = h.note;
+            if (!note || note.v !== 1 || !note.sessionId || !note.cwd) {
+                await this._endHeld(h.key);
+                continue;
+            }
+            // Two processes on one session is the case --resume refuses; keep the
+            // one already adopted and end the other.
+            if (this.runners.has(note.sessionId)) {
+                await this._endHeld(h.key);
+                continue;
+            }
+            let got;
+            try { got = await hostClient.adopt(h.key); } catch { continue; }
+            const r = this._make({
+                sessionId: note.sessionId, cwd: note.cwd, model: note.model,
+                permissionMode: note.permissionMode,
+            });
+            r.adopt({ child: got.child, records: got.records, note: got.note || note,
+                noteSeq: got.noteSeq });
+            this.runners.set(r.sessionId, r);
+            n++;
+        }
+        return n;
+    }
+
+    async _endHeld(key) {
+        try {
+            const { child } = await hostClient.adopt(key);
+            child.stdin.end();
+        } catch { /* gone already */ }
     }
 
     /** Create a brand-new session and deliver its first prompt. */
@@ -1803,28 +2286,55 @@ class RunnerPool extends EventEmitter {
     /**
      * Stand down.
      *
-     * A turn in flight is left unsignalled rather than killed, so it can wind
-     * down cleanly as our pipes close and whatever it already wrote stays in the
-     * transcript. It will still stop — see Runner#detach — which is why killing
-     * the bridge someone is using costs them work, and why development runs on
-     * its own port.
+     * Every process in the session host is released — idle ones too — and the next
+     * bridge adopts them. Idle is not the same as finished: a session whose turn
+     * ended after starting a background command or a subagent reports `idle` while
+     * that work runs on inside `claude`, and stopping it here killed the work. The
+     * first end-to-end run of the host lost exactly that, a `sleep` the model had
+     * moved into the background, to this loop's old rule of stopping whatever was
+     * not busy. An adopted idle process costs nothing and is retired by the idle
+     * sweep like any other.
+     *
+     * A process spawned directly — no host, or none reachable when it started —
+     * keeps the old rule: a busy one is left unsignalled rather than killed, so it
+     * can wind down as our pipes close and whatever it wrote stays in the
+     * transcript (it will still stop; see Runner#detach), and an idle one is
+     * stopped.
      */
     shutdown({ force = false } = {}) {
         clearInterval(this._sweep);
         let left = 0;
+        let held = 0;
         for (const r of this.runners.values()) {
-            if (r.state === 'busy' && !force) { left++; r.detach(); continue; }
+            if (!force && r.release()) { held++; continue; }
+            if (r.state === 'busy' && !force) {
+                left++;
+                r.detach();
+                continue;
+            }
             // Hard, deliberately: the bridge is going away, so there is nobody
             // left to wait for a polite interrupt to be answered.
             r.stop({ hard: true });
         }
         this.runners.clear();
-        return { stillRunning: left };
+        return { stillRunning: left, held };
     }
 
     get busyCount() {
         let n = 0;
         for (const r of this.runners.values()) if (r.state === 'busy') n++;
+        return n;
+    }
+
+    /**
+     * Turns a restart would end: busy, and not in the session host. What a
+     * restart should be asking about now, where `busyCount` is what it used to ask.
+     */
+    get atRiskCount() {
+        let n = 0;
+        for (const r of this.runners.values()) {
+            if (r.state === 'busy' && !(r.proc && r.proc.hosted && hostClient.connected())) n++;
+        }
         return n;
     }
 }

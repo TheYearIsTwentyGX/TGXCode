@@ -189,7 +189,8 @@ has your work in it, rather than the work sitting on origin where nobody sees it
 ```bash
 npm run land -- --status    # what would land, and whether it can
 npm run land -- --dry-run   # say what would happen, change nothing
-npm run land                # merge the PR, then pull the main checkout
+npm run land                # merge the PR, pull the main checkout, restart if bridge/ changed
+npm run land -- --no-restart  # the same, but leave the running bridge alone
 ```
 
 It refuses rather than guesses, and every refusal says what to do next:
@@ -198,11 +199,14 @@ leave them behind), commits you have not pushed, a PR that conflicts or is
 blocked, a main checkout that is dirty or on some other branch. A refusal that
 comes *after* the merge says so, so you always know which half happened.
 
-**It does not restart the bridge.** The everyday instance usually has live turns
-in it and a restart ends them, so picking up merged code stays the user's call.
-When the merge touched `bridge/` the script says the running bridge is now on old
-code and leaves `npm run restart` to them; `--restart` opts in, and delegates to
-the script that has the turn-in-flight guard rather than reimplementing it.
+**When the merge touched `bridge/`, it restarts the everyday bridge.** Live turns
+survive that now — they run in the session host, and the next bridge adopts them
+(see *Notes that save time*). The restart is delegated to `scripts/restart-bridge.sh`,
+which refuses while any turn is `atRisk` (started with no host to hold it); land
+reports that refusal and says to `npm run restart` later, and never forces it. It
+does not start a bridge that was not already running on 45888. `--no-restart`
+leaves the running bridge alone; `--restart` restarts even when `bridge/` did not
+change.
 
 It is also the sanctioned way to reach the main checkout at all: a worktree-isolated
 session is refused `git -C ~/Other/claude-sessions` by its own harness, which is
@@ -289,12 +293,12 @@ the accident the rest of this file is about.
 The suite is `auth`, `temp`, `recent`, `pulls`, `taskboard`, `ports`, `spinner`,
 `changes`, `restart`, `handoff`, `drafts`, `snippets`, `notifications`, `schedule`,
 `usage`, `titles`, `tasks`, `prefs`, `paths`, `logwidth`, `claude-config`,
-`claude-docs` and `runner` on their own — no bridge needed — plus four that want a live one: `gate`,
-`browser`, `refusals`, `unpaired`. Between them they cover the token, what a remote
-caller is refused, what an unpaired remote device sees before and after pairing, and
-what the nightly restart does when there is nobody to ask. If you touch
-`bridge/auth.js` or any route's local/remote rule, run it: that is the part of this
-codebase with tests around it.
+`claude-docs`, `ask-result` and `runner` on their own — no bridge needed — plus
+four that want a live one: `gate`, `browser`, `refusals`, `unpaired`. Between them
+they cover the token, what a remote caller is refused, what an unpaired remote
+device sees before and after pairing, and what the nightly restart does when there
+is nobody to ask. If you touch `bridge/auth.js` or any route's local/remote rule,
+run it: that is the part of this codebase with tests around it.
 
 **`runner` is the one to run when you touch `bridge/runner.js`**, and for the same
 reason `schedule` exists: its bugs do not announce themselves. `inFlight` is both the
@@ -340,6 +344,20 @@ XDG_DATA_HOME=$(mktemp -d) CLAUDE_SESSIONS_SCHEDULE_ON_DEV=1 \
 That gets its own store *and* its own token, which is the point: nothing you do
 there can reach the user's schedules. `CLAUDE_SESSIONS_SCHEDULE_ON_DEV=1` is what
 lets a dev bridge fire at all, and it fires only `test` rows.
+
+**Testing a Settings save needs its own `~/.tgxcode`, for the same reason.**
+`~/.tgxcode/settings.json` is derived from `HOME`, and every bridge shares it, so
+pressing Save on a dev bridge rewrites the user's real settings. Overriding `HOME`
+is refused by the worktree guard, because it also moves git's config. Use the
+variable instead:
+
+```bash
+CLAUDE_SESSIONS_PREFS_DIR=$(mktemp -d) npm run dev:headless
+```
+
+It stands in for the whole directory, so the spinner's `verbs/` is seeded there
+too. Rewriting the `cs-prefs` `<meta>` tag with Playwright's `page.route` only
+tests reading a setting and never exercises the save.
 
 **A `test` schedule never writes to GitHub.** The pull-request gate comments on
 pull requests and labels them, and `gh` is authenticated as the user on every
@@ -519,11 +537,23 @@ sectioned by comment headers, so search for the section name rather than scrolli
   session its own terminal pane", "Let an approval card wait as long as you do" —
   and a body explaining why, including what was rejected and what still holds. No
   `feat:` or `fix:` prefixes appear anywhere in this repo.
-- **Killing a bridge kills its turns.** This is measured, not assumed: `claude`
-  reads stdin for input, so when the bridge exits and that pipe closes it treats
-  it as end-of-input and stops, mid-turn. Running it detached with its output on
-  a file descriptor does not change this. There is no way to make a turn outlive
-  its bridge, which is the whole reason for the separate development port.
+- **Killing a bridge no longer kills its turns — killing the session host does.**
+  `claude` reads stdin for input, so when whoever holds that pipe exits, `claude`
+  treats it as end-of-input and stops, mid-turn. That is measured, not assumed, and
+  running it detached changes nothing. What changed is who holds the pipe:
+  `bridge/host.js`, one per port, at `~/.local/share/claude-sessions/host-<port>.sock`.
+  A bridge that exits releases its sessions to the host, and the next bridge on the
+  same port adopts them. A turn started while no host could be reached still dies
+  with its bridge; `atRisk` in `/api/health` is the count of those.
+
+  So the host is now the process not to kill. Its pid is `sessionHost.pid` in
+  `/api/health`, it lives in its own session (`setsid`), and it exits by itself once
+  it has held nothing for ten minutes, which is also how a new `host.js` gets picked
+  up. **Keep `host.js` boring:** it relays bytes and knows nothing about stream-json,
+  because replacing it costs every turn it holds. Protocol changes belong in
+  `bridge/runner.js`. Run `node test/host.test.js` if you do touch it. The separate
+  development port still matters: a dev bridge gets its own host, and nothing it
+  does can reach the everyday one's.
 - **"Why is the bridge still on old code?" has a log.** A midnight cron entry
   restarts the everyday bridge, and every run that could change something appends
   a line to `~/.cache/claude-sessions/restart-45888.log` — a `start` line and then
@@ -533,4 +563,4 @@ sectioned by comment headers, so search for the section name rather than scrolli
   checkout clean — leaving half-finished `bridge/` edits in it is what silently
   pins the everyday instance to yesterday's code. Nothing else in that directory
   blocks it: `web/` is read per request and is already live, and docs, tests and
-  scripts the bridge never reads. See README §Picking up new code.
+  scripts the bridge never reads. See docs/manual.md §Picking up new code.

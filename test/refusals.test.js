@@ -95,6 +95,7 @@ const HOME = os.homedir();
     check('terminals stream', (await call('GET', '/api/terminals/x/stream', { headers: PHONE })).status, 403);
     check('terminals input', (await call('POST', '/api/terminals/x/input', { headers: PHONE, body: {} })).status, 403);
     check('shutdown', (await call('POST', '/api/shutdown', { headers: PHONE })).status, 403);
+    check('claude update', (await call('POST', '/api/claude-version/update', { headers: PHONE })).status, 403);
     // Both methods. The refusal has to land before the body is read, or a phone
     // could pull a checkout it is refused the restart of.
     check('restart', (await call('POST', '/api/restart', { headers: PHONE, body: {} })).status, 403);
@@ -196,6 +197,21 @@ const HOME = os.homedir();
     // it is reaching past the app into the machine.
     check('reading what a project declares', (await call('GET',
         `/api/commands?cwd=${encodeURIComponent(HOME)}`, { headers: PHONE })).status, 200);
+    // And the editor, which is refused in *both* directions — including the
+    // read, one line under a read that is allowed. These two must disagree, and
+    // that is the point rather than an oversight: the merged answer above has
+    // never carried `env`, and these files are where somebody keeps a token, in
+    // one whose whole premise is that it is private. Pinned adjacent so a future
+    // tidy-up cannot quietly make them agree.
+    check('editing a project’s commands', (await call('PUT', '/api/commands-config', {
+        headers: PHONE, body: { cwd: HOME, scope: 'project', stamp: null, commands: [] },
+    })).status, 403);
+    check('reading the files behind those commands', (await call('GET',
+        `/api/commands-config?cwd=${encodeURIComponent(HOME)}`, { headers: PHONE })).status, 403);
+    // A prefix, not an equality, so anything added under it later is refused by
+    // default rather than by being remembered. This is the line that pins that.
+    check('and anything else under that prefix', (await call('GET',
+        '/api/commands-config/whatever', { headers: PHONE })).status, 403);
     // The asymmetry that decision rests on: reading the tree stays allowed, and
     // this is the line that pins it. A phone may already start a session, so it
     // may see where one could start; writing to the filesystem is the other side.

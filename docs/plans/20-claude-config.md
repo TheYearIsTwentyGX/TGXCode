@@ -162,13 +162,14 @@ remembered.
 
 ## Smaller decisions worth not re-litigating
 
-- **`hooks` is read-only with an *Edit as JSON* button.** Thirty-three events, an
-  optional matcher, and a five-variant union, where `command` is an arbitrary
-  shell string run on every matching tool call — the highest-privilege field in
-  the file, and a poor thing to put a casual text box over. What the summary
-  offers instead is the one question a text editor cannot answer: **whether the
-  script each hook points at still exists.** A hook aimed at a deleted file
-  fails silently and nothing in Claude Code says so.
+- ~~**`hooks` is read-only with an *Edit as JSON* button.**~~ **Reversed — see
+  *The hooks editor* below.** The argument was that `command` is an arbitrary
+  shell string run on every matching tool call, the highest-privilege field in
+  the file, and a poor thing to put a casual text box over. That was true of a
+  *casual* box. It was never a capability argument: the JSON tab has written
+  `hooks` through the same local-only route since the first commit. The script
+  check it offered instead — **whether the script each hook points at still
+  exists** — is kept, on every hook the editor draws.
 - **`statusLine` is read-only when it is ours.** `install-quota-statusline.js`
   exists precisely to avoid clobbering somebody's deliberate choice; a text box
   here would reopen that hole from the other side. The JSON tab still reaches
@@ -200,8 +201,7 @@ remembered.
   So the value there is *authoring*, which is a small file manager rather than
   another settings group — and editing a plugin-owned file is a footgun, since
   the next plugin update overwrites it.
-- **A `hooks` form editor**, for the privilege reason above, and because the
-  existence check is most of the value.
+- ~~**A `hooks` form editor**~~ — **built**; see *The hooks editor* below.
 - **MCP server configuration** — `~/.claude.json`, `.mcp.json`. A different file
   family, credentials-adjacent, and it needs a threat model this change does not
   have.
@@ -340,3 +340,44 @@ neither exists on this machine, and `docs[]` is an array of `{scope, kind}` rows
 precisely so a third one costs a row rather than a route. `CLAUDE.local.md`
 would also want `git.ignored()` the way `settings.local.json` does, which is the
 only real work in adding it.
+
+## The hooks editor, which reversed a decision
+
+The first pass kept `hooks` read-only on privilege grounds. What changed the
+answer was noticing that the grounds were about the *control*, not the route:
+`PUT /api/claude-config` with `text` could always write any hook, and it is
+local-only and token-gated either way. So the question was never "should the
+page be able to write hooks" but "should writing one be as casual as the other
+controls here", and the answer to that is still no. Everything below follows
+from keeping it no:
+
+- **A draft with an explicit Save**, unlike every other control on the page,
+  which saves on change. A hook is a structured record, and a half-typed
+  command reaching disk is a hook that fires.
+- **Save reviews first.** The footer turns into a list of what will start and
+  stop running — `Event · matcher → command` — computed as a multiset compare
+  so a hook that only moved is not reported as removed and re-added. That is
+  the step the old decision was asking for: the shell string gets read once,
+  deliberately, before it is armed.
+- **Written whole, with the stamp**, like every collection, and *also*
+  compared against the block the draft was seeded from. The stamp alone is
+  wrong in both directions here: a save of another key on this page moves it
+  without touching `hooks`, and `claude` approving a permission into the local
+  file moves it too. A change to the hooks themselves is what the draft needs
+  to know about, and it gets its own banner with *keep mine* and *take theirs*.
+- **Seeded from the target file's own block, never the merged one** — the
+  rules-list lesson, with a sharper edge: hooks from every scope all *run*, so
+  a seed from the merged view would make each inherited hook fire twice.
+- **The summary covers every scope now.** It used to summarise the strongest
+  file's block, on the "last file wins" rule that is right for scalars and
+  wrong for hooks. The other scopes' hooks are listed read-only under the
+  editor as *also run*, because "I deleted that hook and it still fires" was
+  exactly what the old summary set up.
+- **The bridge checks shape, not wisdom.** `checkHooks()` refuses what Claude
+  Code would skip or trip over — a group with no hooks, a hook with no type, a
+  command hook with no command — and passes every unknown event, type and field
+  through untouched. The event list is a hint, like the rest of the catalogue.
+
+Still not done: hooks contributed by plugins and skills, which are not in these
+files and are not shown; and any way to *run* a hook against a sample event
+before saving it.

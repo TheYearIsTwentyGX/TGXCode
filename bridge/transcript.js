@@ -173,6 +173,22 @@ function scanMeta(filePath) {
             }
         }
 
+        // A message you sent mid-turn that the turn folded in. It is a turn you
+        // took, so it counts and it moves lastUserTs, but it is an `attachment` on
+        // disk and would never reach the classification below. Counted only where
+        // the line names the message it came from, or says a person sent it: an
+        // older build also wrote a `user` entry for the same message, and those
+        // attachments carry neither, so counting them would count it twice.
+        if (line.includes('"queued_command"')) {
+            const parsed = safeParse(line);
+            const att = parsed && parsed.attachment;
+            if (att && (att.source_uuid || (att.origin && att.origin.kind === 'human'))
+                && foldedUserEntry(parsed)) {
+                meta.userMessages++;
+                if (parsed.timestamp) meta.lastUserTs = parsed.timestamp;
+            }
+        }
+
         // A handoff from another session. Here for the same reason as the block
         // above — it is what the bridge watches to notice one arriving — and one
         // line is one handoff, since this bridge wrote it and wrote it once.
@@ -569,8 +585,34 @@ function buildEvents(entries, ctx = {}) {
     // message can reach disk twice.
     const seenPeerIds = new Set();
     let lastAssistantModel = null;
+    // For a folded message that also reached disk as a `user` entry — an older
+    // build's habit; see foldedUserEntry. By the uuid we sent it with where the
+    // attachment names one, by its words where it does not. Built only when there
+    // is something to check, since most transcripts have no folds at all.
+    let userIds = null;
+    const alreadyAUserEntry = (f) => {
+        if (!userIds) {
+            userIds = new Set();
+            for (const x of entries) {
+                if (x.type !== 'user') continue;
+                userIds.add(x.uuid);
+                const t = userText(x);
+                if (t) userIds.add(`text:${t}`);
+            }
+        }
+        if (f.sourceUuid) return userIds.has(f.sourceUuid);
+        return userIds.has(`text:${userText(f)}`);
+    };
 
-    for (const e of entries) {
+    for (let e of entries) {
+        // A message folded into a running turn is drawn as the user message it
+        // is. Rewritten here, first, so every branch below treats it as one.
+        const folded = foldedUserEntry(e);
+        if (folded) {
+            if (alreadyAUserEntry(folded)) continue;
+            e = folded;
+        }
+
         // Before the content-type gate, because an `attachment` is bookkeeping by
         // every other measure and would never get this far otherwise.
         const peerOrigin = peerOriginOf(e);
@@ -920,6 +962,39 @@ function peerOriginOf(entry) {
     return null;
 }
 
+/**
+ * A message the user sent mid-turn, as the `user` entry it would have been.
+ *
+ * Typed while Claude is working — in a terminal, or handed over by the runner at a
+ * tool boundary (see _handOver in bridge/runner.js) — a message waits in the CLI's
+ * queue and is folded into the running turn after the current tool round. What
+ * reaches disk then is `{type:"attachment", attachment:{type:"queued_command",
+ * prompt, source_uuid?, origin?}}` and **no `user` entry at all**, the same shape
+ * the peer message above arrives in. Without this, the one message most likely to
+ * have changed what the agent did next would be the one the conversation leaves out.
+ *
+ * Only a person's prompt qualifies. A peer message has its own path above; a task
+ * notification or any other origin is the machine talking and stays as it was.
+ * Measured against 2.1.280: the attachment is written at the fold, never for a
+ * message that ran as its own turn. Older builds wrote it at queue time *as well
+ * as* the `user` entry, which is what buildEvents' duplicate check is for.
+ */
+function foldedUserEntry(entry) {
+    const att = entry && entry.type === 'attachment' && entry.attachment;
+    if (!att || att.type !== 'queued_command') return null;
+    if (entry.isMeta || entry.isSidechain) return null;
+    if (att.commandMode && att.commandMode !== 'prompt') return null;
+    const kind = att.origin && att.origin.kind;
+    if (kind && kind !== 'human') return null;
+    const content = typeof att.prompt === 'string' || Array.isArray(att.prompt) ? att.prompt : null;
+    if (!content) return null;
+    const folded = { ...entry, type: 'user', message: { role: 'user', content },
+        origin: att.origin, sourceUuid: att.source_uuid || null };
+    const text = userText(folded);
+    if (text && (isTaskNotification(text) || isPeerMessage(text))) return null;
+    return folded;
+}
+
 function isPeerMessage(text) {
     const t = String(text || '').trimStart();
     if (!t.includes(PEER_TAG)) return false;
@@ -1177,6 +1252,15 @@ function resultPayload(block, entry, ctx) {
     ev.persistedPath = spill ? spill[1]
         : (structured && structured.persistedOutputPath) || null;
 
+    // `toolUseResult` is an object for a call that produced structure and a bare
+    // string — "Error: …" — on every error path. The fields above get away with
+    // reading straight through it because a string answers `undefined` to every
+    // property they want. The two below ask first, because what they are looking
+    // for is exactly what an error case would plausibly carry, and an accidental
+    // guard is one refactor away from not being one.
+    const struct = structured && typeof structured === 'object'
+        && !Array.isArray(structured) ? structured : null;
+
     ev.result = {
         text,
         stdout: structured && typeof structured.stdout === 'string' ? structured.stdout : null,
@@ -1186,6 +1270,35 @@ function resultPayload(block, entry, ctx) {
             || (structured.file && structured.file.filePath)) || null,
         interrupted: !!(structured && structured.interrupted),
         backgroundTaskId: (structured && structured.backgroundTaskId) || null,
+        // What you picked, for an AskUserQuestion. Keyed by the exact question
+        // text — Claude Code's choice, not ours — with the chosen option label
+        // as the value, several of them joined for a multi-select, or a typed
+        // sentence when the answer went through "Other".
+        //
+        // The other half of that result, `questions`, is a verbatim echo of the
+        // call's own input and is deliberately left behind: carrying it would
+        // double the payload to repeat what the client already has.
+        //
+        // Without this the record of a decision showed the choices and not the
+        // choice — every option drawn with the same mark, because the one fact
+        // worth reading back was dropped here.
+        answers: struct && struct.answers && typeof struct.answers === 'object'
+            && !Array.isArray(struct.answers) ? struct.answers : null,
+        // The plan that was *approved*, which is not always the plan that was
+        // proposed: approving with a note appends `## Note from the user` to it
+        // (see _answerConversation in runner.js) and editing it rewrites it.
+        // `input.plan` keeps the proposal; this is what was agreed to, and the
+        // note exists nowhere else.
+        //
+        // Carried whenever it is there rather than only when it differs from
+        // the input. A field whose presence depends on whether the call and its
+        // result were read in the same pass is the kind of difference a second
+        // client cannot discover, and docs/api.md would have to describe two
+        // shapes instead of one.
+        plan: struct && typeof struct.plan === 'string' ? struct.plan : null,
+        // Written only when true, so its absence is not "not edited" arriving
+        // as a fact — it is the usual case saying nothing.
+        planWasEdited: !!(struct && struct.planWasEdited),
     };
 
     // A Task/Agent call writes its own transcript keyed by the tool_use id.

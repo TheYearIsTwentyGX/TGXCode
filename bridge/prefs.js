@@ -24,12 +24,29 @@
 // you want to see is a preference about the app, not about the machine you
 // happened to open it on.
 //
-// `keyboard` is the fourth, and it is the one section that is not about a view
+// `projects` is the fourth, and it is the only one that is a *map* rather than
+// a handful of named keys: a colour per project directory, which the rail, the
+// boards and the Start-a-session dialog wear so that a session scoped to the
+// wrong checkout is something you see rather than something you read. It is
+// here for `live`'s reason again — a colour you chose should be the same colour
+// in the Electron window and in a tab — and it is **user-only** for a reason of
+// its own, spelled out at USER_ONLY below: the map names other projects' paths,
+// so a repository setting one would be a repository colouring its neighbours.
+// Beside the map sit two plain keys about how strongly one piece of that is
+// worn — the wash over a dialog's backdrop — which are here rather than in a
+// section of their own because they mean nothing without the map.
+//
+// `keyboard` is the fifth, and it is the one section that is not about a view
 // at all: which chord reaches which command, what Enter does in the composer,
 // and whether Ctrl+C in the terminal copies a selection or interrupts. The
 // bindings themselves are validated against bridge/keymap.js, which owns the
 // catalogue of what may be bound — see the header there for why the list is not
 // in `web/`.
+//
+// `toolbar` is the sixth: which buttons the top bar carries, in what order,
+// which of them are folded into its More menu, and which show their text. A
+// view rather than a behaviour, and here for `live`'s reason — the bar you
+// arranged should be the same bar in every window.
 //
 // **Where the file lives is the deliberate part.** `~/.tgxcode/settings.json`,
 // not STATE_DIR. Everything under STATE_DIR is state the app owns and nobody is
@@ -39,7 +56,9 @@
 // project may override any key from `<workspace>/.tgxcode/settings.json`, which
 // is the same directory a project already declares its commands in — see
 // bridge/commands.js, whose precedence this mirrors so the two cannot disagree
-// about what "the local file" means.
+// about what "the local file" means. `CLAUDE_SESSIONS_PREFS_DIR` moves the
+// user's half somewhere else (see bridge/config.js). It is there so a dev
+// bridge can test a save, not to give the file a second home.
 //
 // Unlike Flags, the defaults are written out on first read. A settings file
 // with no UI in front of it has to be discoverable to be editable at all, and
@@ -54,6 +73,12 @@ const path = require('path');
 const cfg = require('./config');
 const keymap = require('./keymap');
 const { readJson, serialize, writeAtomic, writable, refuse } = require('./jsonfile');
+// The accent rule, borrowed rather than copied. bridge/snippets.js owns it and
+// argues at length for why it is that strict — the client turns the value into
+// a CSS custom property, so `red`, `var(--x)` and `#fff;}` are all refused. A
+// project's colour ends up in the same stylesheet as a snippet group's, so the
+// two must not drift apart.
+const { isAccent } = require('./snippets');
 const { projectRootOf } = require('./transcript');
 
 const VERSION = 1;
@@ -67,6 +92,31 @@ const VERSION = 1;
 // file that changes monthly is a poor trade, and this is read once per session
 // open.
 const CACHE_MS = 2000;
+
+// How many projects may carry a colour. The same bound `spinner.groups` and
+// `spinner.weights` take, for the same reason: this is a file people edit, and
+// one naming ten thousand directories is either a mistake or an attempt to make
+// the bridge do unbounded work. Nobody has two hundred projects; anybody who
+// does has stopped being able to tell them apart by colour anyway.
+const MAX_COLORS = 200;
+
+// What the top bar is made of, in the order it has always been drawn. The page
+// holds the same list — see TOOLBAR in web/app.js — and this copy exists so a
+// file naming a button that does not exist is told so rather than kept.
+//
+// Two of them have rules the rest do not, and they are enforced here rather
+// than only in the page, because the page is not the only thing that writes
+// this file:
+//
+//  - `settings` may go into the More menu but never be hidden. It is the one
+//    place a hidden button can be brought back from, so hiding it would leave
+//    hand-editing the file as the only way home.
+//  - `quota` stays on the bar. Its popover is anchored to the pill and holds
+//    Restart bridge, and neither works from inside another popover.
+const TOOLBAR_IDS = ['tasks', 'live', 'dashboard', 'history', 'drafts', 'schedules',
+    'settings', 'quota', 'devbrowser'];
+const TOOLBAR_PLACES = new Set(['bar', 'more', 'hidden']);
+const TOOLBAR_PINNED = { settings: new Set(['bar', 'more']), quota: new Set(['bar']) };
 
 const DEFAULTS = {
     version: VERSION,
@@ -96,6 +146,30 @@ const DEFAULTS = {
         // Off by default, because a session you cannot drive from here is still
         // a session you may want to know is running.
         hideElsewhere: false,
+    },
+    projects: {
+        // Directory -> `#rgb` or `#rrggbb`. Absent means no colour, which is
+        // what nearly every project is: the point of colouring one is to tell
+        // it apart from the rest, and a rail where every card is painted says
+        // no more than a rail where none is.
+        //
+        // Keyed by **path**, not by the name the rail draws. That name is the
+        // last segment of the directory, so two checkouts called `api` share
+        // one, and a colour keyed on it would be wrong for both of them.
+        //
+        // A directory is matched as a prefix at a path boundary, longest first,
+        // so a worktree under `<proj>/.claude/worktrees/` wears its checkout's
+        // colour without anything having to be said about it twice. That rule
+        // lives in the client — see projectColor() in web/app.js — because it
+        // is asked on every keystroke in the Start-a-session dialog.
+        colors: {},
+        // Whether the backdrop behind a project-scoped dialog takes a wash of
+        // the project's colour, and how much of it — a percentage mixed into
+        // the dim. 13 is what the dialog drew before either was a setting, so
+        // nobody who never opens it sees anything change. Off leaves the plain
+        // dim every other dialog has; the dialog's own head keeps its colour.
+        backdropTint: true,
+        backdropStrength: 13,
     },
     quota: {
         // Refresh the quota percentages by starting a short-lived `claude`,
@@ -159,10 +233,28 @@ const DEFAULTS = {
         // them, for anyone who writes several paragraphs before sending one.
         // Ctrl+Enter sends either way, which it already did.
         composerSend: 'enter',
+        // The order Ctrl+P / Ctrl+M (and their Shift twins) walk the composer's
+        // Permissions and Model pickers in. 'default' is the order the dropdown
+        // lists them; 'alphabetical' sorts by the label you see, with an empty
+        // "inherit" choice kept first because it is the absence of a pick rather
+        // than one more name. Only the cycle — the dropdown itself is unchanged.
+        cycleOrder: 'default',
         // Command id -> combo, or null to leave a command unbound. Absent means
         // the default in bridge/keymap.js, so this holds only what you changed
         // and a command added later arrives already bound.
         bindings: {},
+    },
+    toolbar: {
+        // The top bar, one entry per button: `{id, place, label}`, in the order
+        // they are drawn. `place` is `bar`, `more` (the overflow menu) or
+        // `hidden`; `label` is whether the text shows beside the icon. Empty
+        // means the built-in layout, and an id the list leaves out is drawn in
+        // its default place — so a button added later arrives without anybody
+        // having to say so, the way an unmentioned binding keeps its default.
+        //
+        // Hiding a view removes its button and nothing else: its shortcut still
+        // opens it, so a button hidden by mistake is not a view lost.
+        items: [],
     },
 };
 
@@ -180,7 +272,10 @@ const DEFAULTS = {
 // quotaPrefs) — which held, but left `GET /api/prefs?cwd=…` echoing a project's
 // value back as though it counted. That was harmless while nothing read the
 // answer and is not once a settings page prints which file wins for each key.
-const USER_ONLY = new Set(['quota', 'keyboard']);
+//
+// `toolbar` is the keyboard argument applied to the bar: a checked-in file that
+// could move or hide your buttons would be a repository rearranging your window.
+const USER_ONLY = new Set(['quota', 'keyboard', 'projects', 'toolbar']);
 
 // What each key is allowed to be. A file is a thing people edit, so a bad value
 // is dropped and the default kept rather than taken at face value — a
@@ -195,6 +290,22 @@ const SHAPE = {
     live: {
         compact: (v) => typeof v === 'boolean',
         hideElsewhere: (v) => typeof v === 'boolean',
+    },
+    projects: {
+        // The last gate rather than the only one, as `keyboard.bindings` and
+        // `spinner.weights` are: cleanColors() below has already thrown out the
+        // entries that fail, one problem each.
+        colors: (v) => {
+            if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
+            const dirs = Object.keys(v);
+            if (dirs.length > MAX_COLORS) return false;
+            return dirs.every(d => d.startsWith('/') && d === path.resolve(d) && isAccent(v[d]));
+        },
+        backdropTint: (v) => typeof v === 'boolean',
+        // Capped at 40 because past that the dim stops being a dim: the window
+        // behind the dialog turns into a coloured sheet, which says no more
+        // about which project than a lighter wash does.
+        backdropStrength: (v) => Number.isInteger(v) && v >= 0 && v <= 40,
     },
     quota: {
         beacon: (v) => typeof v === 'boolean',
@@ -221,6 +332,7 @@ const SHAPE = {
     keyboard: {
         contextualTerminalCopy: (v) => typeof v === 'boolean',
         composerSend: (v) => v === 'enter' || v === 'ctrl-enter',
+        cycleOrder: (v) => v === 'default' || v === 'alphabetical',
         // The last gate rather than the only one: cleanBindings() below has
         // already thrown out the entries that fail, one problem each, so
         // anything reaching here is a map of known command ids to `null` or a
@@ -232,6 +344,15 @@ const SHAPE = {
             return ids.every(id => keymap.COMMAND_IDS.has(id)
                 && (v[id] === null || keymap.normalize(v[id]) === v[id]));
         },
+    },
+    toolbar: {
+        // The last gate again: cleanToolbar() below has already dropped what
+        // fails and moved a pinned button back where it is allowed to be.
+        items: (v) => Array.isArray(v) && v.length <= TOOLBAR_IDS.length
+            && new Set(v.map(e => e && e.id)).size === v.length
+            && v.every(e => e && TOOLBAR_IDS.includes(e.id) && TOOLBAR_PLACES.has(e.place)
+                && typeof e.label === 'boolean'
+                && (!TOOLBAR_PINNED[e.id] || TOOLBAR_PINNED[e.id].has(e.place))),
     },
 };
 
@@ -313,12 +434,109 @@ function cleanWeights(value, note) {
     return out;
 }
 
+/**
+ * `projects.colors`, entry by entry.
+ *
+ * The third of these and the same shape as the two above, for the reason they
+ * both give: one hand-typed colour that is not a colour must not throw away the
+ * projects beside it. What is different is that the *key* can fail too — this
+ * is the only setting whose keys carry meaning — so a directory that is not an
+ * absolute path is rejected on its own account rather than silently colouring
+ * nothing.
+ *
+ * Paths are resolved, so `~/proj/` and `/home/you/proj/../proj` cannot become a
+ * second entry for a project that already has one. `~` is deliberately *not*
+ * expanded: the client sends the same absolute directories `GET /api/projects`
+ * gave it, and a file written by hand with a `~` in it is better rejected with
+ * a message than quietly attached to whoever the bridge is running as.
+ *
+ * @param {*} value whatever the file had
+ * @param {(msg: string) => void} note where a rejected entry gets reported
+ * @returns {object|undefined} the cleaned map, or undefined to leave the
+ *   default alone — which is what a value that is not a map at all gets.
+ */
+function cleanColors(value, note) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    const out = {};
+    let n = 0;
+    for (const [dir, raw] of Object.entries(value)) {
+        if (typeof dir !== 'string' || !dir.startsWith('/') || dir.length > 4096) {
+            note(`${JSON.stringify(dir)} is not an absolute directory`);
+            continue;
+        }
+        if (!isAccent(raw)) {
+            note(`${JSON.stringify(raw)} is not a colour for ${JSON.stringify(dir)}`
+                + ' — #abc or #aabbcc');
+            continue;
+        }
+        if (n >= MAX_COLORS) {
+            note(`more than ${MAX_COLORS} project colours — the rest dropped`);
+            break;
+        }
+        n++;
+        out[path.resolve(dir)] = raw;
+    }
+    return out;
+}
+
+/**
+ * `toolbar.items`, entry by entry.
+ *
+ * A list rather than a map, but the argument is cleanBindings()'s: one button
+ * misspelled must not put every other button back where it started. An entry
+ * with no `label` takes true, which is what a hand-written `{"id": "live",
+ * "place": "more"}` obviously means.
+ *
+ * A pinned button asked to go somewhere it may not is *moved* rather than
+ * dropped, and reported. Dropping it would put it back in its default place,
+ * which for `settings` is also the bar — but the entry's position in the list is
+ * the other half of what it said, and that part is still worth keeping.
+ *
+ * @returns {Array|undefined} the cleaned list, or undefined to leave the
+ *   default alone — which is what a value that is not a list at all gets.
+ */
+function cleanToolbar(value, note) {
+    if (!Array.isArray(value)) return undefined;
+    const out = [];
+    const seen = new Set();
+    for (const raw of value) {
+        const id = raw && typeof raw === 'object' ? raw.id : raw;
+        if (typeof id !== 'string' || !TOOLBAR_IDS.includes(id)) {
+            note(`${JSON.stringify(id)} is not a toolbar button`);
+            continue;
+        }
+        if (seen.has(id)) {
+            note(`${JSON.stringify(id)} is listed twice — the first stands`);
+            continue;
+        }
+        let place = raw.place === undefined ? 'bar' : raw.place;
+        if (!TOOLBAR_PLACES.has(place)) {
+            note(`${JSON.stringify(place)} is not a place for ${id} — bar, more or hidden`);
+            continue;
+        }
+        const label = raw.label === undefined ? true : raw.label;
+        if (typeof label !== 'boolean') {
+            note(`${JSON.stringify(label)} is not a label setting for ${id} — true or false`);
+            continue;
+        }
+        if (TOOLBAR_PINNED[id] && !TOOLBAR_PINNED[id].has(place)) {
+            note(`${id} cannot be ${place === 'hidden' ? 'hidden' : `put in "${place}"`} — kept on the bar`);
+            place = 'bar';
+        }
+        seen.add(id);
+        out.push({ id, place, label });
+    }
+    return out;
+}
+
 // Section keys whose value is a map and so gets the treatment above, before
-// SHAPE sees it. Two entries; the table exists so the next one does not have to
-// special-case merge().
+// SHAPE sees it. Four entries; the table exists so the next one does not have
+// to special-case merge().
 const SANITIZE = {
     keyboard: { bindings: cleanBindings },
     spinner: { weights: cleanWeights },
+    projects: { colors: cleanColors },
+    toolbar: { items: cleanToolbar },
 };
 
 /**
@@ -468,7 +686,7 @@ class Prefs {
      * @param {string} [dir] a workspace — a session's cwd. Omitted gives the
      *   user-level answer, which is what the page is served before it knows
      *   which conversation it is about to show.
-     * @returns {{version, transcript, live, quota, spinner, keyboard,
+     * @returns {{version, transcript, live, projects, quota, spinner, keyboard,
      *   sources: string[], problems: object[]}}
      */
     forCwd(dir) {
@@ -494,9 +712,11 @@ class Prefs {
             version: VERSION,
             transcript: { ...DEFAULTS.transcript },
             live: { ...DEFAULTS.live },
+            projects: { ...DEFAULTS.projects, colors: { ...DEFAULTS.projects.colors } },
             quota: { ...DEFAULTS.quota },
             spinner: { ...DEFAULTS.spinner, weights: { ...DEFAULTS.spinner.weights } },
             keyboard: { ...DEFAULTS.keyboard, bindings: { ...DEFAULTS.keyboard.bindings } },
+            toolbar: { ...DEFAULTS.toolbar, items: [...DEFAULTS.toolbar.items] },
             sources: [],
             problems: [],
         };
@@ -692,4 +912,4 @@ class Prefs {
     }
 }
 
-module.exports = { Prefs, DEFAULTS, SHAPE, SANITIZE, USER_ONLY, VERSION };
+module.exports = { Prefs, DEFAULTS, SHAPE, SANITIZE, USER_ONLY, VERSION, TOOLBAR_IDS };
