@@ -48,7 +48,9 @@
 // project may override any key from `<workspace>/.tgxcode/settings.json`, which
 // is the same directory a project already declares its commands in — see
 // bridge/commands.js, whose precedence this mirrors so the two cannot disagree
-// about what "the local file" means.
+// about what "the local file" means. `CLAUDE_SESSIONS_PREFS_DIR` moves the
+// user's half somewhere else (see bridge/config.js). It is there so a dev
+// bridge can test a save, not to give the file a second home.
 //
 // Unlike Flags, the defaults are written out on first read. A settings file
 // with no UI in front of it has to be discoverable to be editable at all, and

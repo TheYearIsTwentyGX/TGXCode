@@ -345,6 +345,20 @@ That gets its own store *and* its own token, which is the point: nothing you do
 there can reach the user's schedules. `CLAUDE_SESSIONS_SCHEDULE_ON_DEV=1` is what
 lets a dev bridge fire at all, and it fires only `test` rows.
 
+**Testing a Settings save needs its own `~/.tgxcode`, for the same reason.**
+`~/.tgxcode/settings.json` is derived from `HOME`, and every bridge shares it, so
+pressing Save on a dev bridge rewrites the user's real settings. Overriding `HOME`
+is refused by the worktree guard, because it also moves git's config. Use the
+variable instead:
+
+```bash
+CLAUDE_SESSIONS_PREFS_DIR=$(mktemp -d) npm run dev:headless
+```
+
+It stands in for the whole directory, so the spinner's `verbs/` is seeded there
+too. Rewriting the `cs-prefs` `<meta>` tag with Playwright's `page.route` only
+tests reading a setting and never exercises the save.
+
 **A `test` schedule never writes to GitHub.** The pull-request gate comments on
 pull requests and labels them, and `gh` is authenticated as the user on every
 bridge — so that one line in `postReviewToPr` is the only thing between testing

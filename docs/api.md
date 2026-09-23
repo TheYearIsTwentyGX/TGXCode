@@ -962,6 +962,11 @@ commands: the workspace's checked-in file (falling back to the main checkout's),
 then `settings.local.json` from the main checkout, then one in the workspace.
 `sources` lists the files that were actually read, weakest first.
 
+A bridge started with `CLAUDE_SESSIONS_PREFS_DIR` set uses that directory in place
+of `~/.tgxcode`, for reads and saves alike, so the user file's path in `sources`
+and `target` is under it. This exists so a development bridge can test a save
+without touching the real file; no field changes because of it.
+
 A value that is not what the key allows is dropped and reported in `problems`
 rather than taken at face value; the default stands. Without `?cwd=` you get the
 user-level answer, which is also what every page is served in a `cs-prefs`
@@ -2898,7 +2903,7 @@ exactly one file:
 
 | `scope` | file |
 |---|---|
-| `user` | `~/.tgxcode/settings.json` — `cwd` ignored |
+| `user` | `~/.tgxcode/settings.json` — `cwd` ignored (under `CLAUDE_SESSIONS_PREFS_DIR` instead when the bridge was started with it) |
 | `project` | `<cwd>/.tgxcode/settings.json`, which git tracks |
 | `project-local` | `<cwd>/.tgxcode/settings.local.json`, which is meant to be ignored — **check the repository actually ignores it**; this one does, since the Settings panel landed, but that is a line in a `.gitignore` and not something the bridge can promise |
 
