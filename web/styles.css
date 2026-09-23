@@ -6735,13 +6735,34 @@ body.term-resizing { user-select: none; cursor: row-resize; }
    gives width back when it is not, so the aside stays put instead of vanishing
    at some particular window size. Below the narrow breakpoint the aside becomes
    a strip above and `--set-aside` goes to zero, which hands the width back. */
-.settings-shell { flex: 1; min-height: 0; overflow-y: auto; --set-aside: 172px; }
+.settings-shell {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    --set-aside: 172px;
+    /* So a contents jump lands a group under the pinned head rather than behind
+       it. --set-top-h is measured by a ResizeObserver in app.js, because the
+       head's height moves with the project picker and the file line's tags. */
+    scroll-padding-top: var(--set-top-h, 0px);
+}
 .settings-col {
     width: min(880px, calc(100% - 2 * var(--set-aside)));
     margin: 0 auto;
     padding: 0 28px;
 }
 
+/* The head and the file line, pinned. Sticky inside .settings-col, which spans
+   the whole scroll height, so it has the full length of the pane to travel. It
+   paints the pane's own surface so the groups pass underneath rather than
+   through it; the rule under it is what says "this stays". */
+.settings-top {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    background: var(--s1);
+    border-bottom: 1px solid var(--outline-soft);
+    margin-bottom: 14px;
+}
 .settings-head { padding: 22px 0 14px; }
 .settings-title { margin: 0; font: 400 21px/1.3 var(--sans); color: var(--text); }
 .settings-sub { margin: 5px 0 0; max-width: 560px; font-size: 13px; line-height: 1.6; color: var(--text-3); }
@@ -7517,6 +7538,37 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 }
 .cmd-card.bad { border-color: var(--red); }
 .cmd-card-head { display: flex; align-items: center; gap: 8px; }
+/* Collapsed by default: a file of eight commands was eight screens of fields
+   before you could see the list. The toggle is everything in the head but the
+   delete button, which stays a sibling — a button cannot hold a button. */
+.cmd-card:not(.open) { padding-bottom: 12px; }
+.cmd-card-toggle {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: none;
+    border: 0;
+    padding: 0;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.cmd-card-toggle::before {
+    content: "";
+    flex: none;
+    width: 6px;
+    height: 6px;
+    margin: 0 3px 0 1px;
+    border-right: 1.5px solid var(--text-4);
+    border-bottom: 1.5px solid var(--text-4);
+    transform: rotate(-45deg);
+    transition: transform 0.12s;
+}
+.cmd-card-toggle[aria-expanded="true"]::before { transform: rotate(45deg); }
+.cmd-card-toggle:hover .cmd-card-id { color: var(--text); }
 .cmd-card-spacer { flex: 1; min-width: 0; }
 .cmd-card-id { font: 400 12px var(--mono); color: var(--text-2); }
 .cmd-card-name { font-size: 12px; color: var(--text-4); }

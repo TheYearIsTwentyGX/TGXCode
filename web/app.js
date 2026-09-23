@@ -652,6 +652,13 @@ const state = {
         scope: 'project', tab: 'form', data: null, loading: false, error: null,
         saving: false, draft: null, dirty: false, raw: null, rawDirty: false,
         jsonError: null, stale: null, problems: null,
+        // Which command cards are expanded. Cards start shut, and this has to
+        // live here because renderSettings() redraws the whole form on nearly
+        // every edit. Held twice over: by the client-only `_k`, which is the
+        // only name a card has while its id is blank or being typed, and by
+        // id, because a save or a re-read reseeds the draft with new keys and
+        // would otherwise fold up everything you had open.
+        open: new Set(), openIds: new Set(),
     },
     // Sessions blocked on an answer, kept whether or not the board is open, so
     // the badge on a shut board still says how many people are waiting.
@@ -721,7 +728,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'btn-drafts', 'dr-badge', 'drafts', 'dr-sub', 'dr-body', 'dr-new',
     'btn-sched', 'sched-badge', 'sched', 'sched-sub', 'sched-body', 'sched-new',
     'btn-settings', 'settings', 'set-scope', 'set-project', 'set-project-wrap',
-    'set-file', 'set-problems', 'set-body', 'set-shell', 'set-toc', 'composer-hint',
+    'set-file', 'set-problems', 'set-body', 'set-shell', 'set-toc', 'set-top', 'composer-hint',
     'memo-scrim', 'memo-title', 'memo-big', 'memo-note', 'memo-count',
     'memo-close', 'memo-save',
     'set-g-notify', 'set-g-pair', 'set-g-projects', 'pcolor-list', 'pcolor-backdrop',
@@ -11705,7 +11712,9 @@ function renderSettingsToc() {
  */
 function markSettingsToc() {
     if (!state.settings.open) return;
-    const top = dom.setShell.getBoundingClientRect().top;
+    // The foot of the pinned head, not the top of the pane: a card scrolled
+    // under the head is out of sight, so it is not the one being read.
+    const top = dom.setTop.getBoundingClientRect().bottom;
     let active = SETTINGS[0] && SETTINGS[0].section;
     for (const group of SETTINGS) {
         const card = document.getElementById(`set-g-${group.section}`);
@@ -14833,8 +14842,11 @@ function cmdFormCard() {
             onclick: () => {
                 // A new row starts with the keys the file will need and nothing
                 // else, so the JSON tab shows exactly what the form says.
-                draft.push(cmdKeyed(s.scope === 'project-local'
-                    ? { id: '' } : { id: '', label: '', run: '' }));
+                const added = cmdKeyed(s.scope === 'project-local'
+                    ? { id: '' } : { id: '', label: '', run: '' });
+                draft.push(added);
+                // Open, since the only thing to do with a blank one is fill it in.
+                s.open.add(added._k);
                 cmdDirty();
                 renderSettings();
             },
@@ -14873,22 +14885,52 @@ function cmdCard(entry, i, shared, editable) {
     const orphan = local && !base && !(entry.label && entry.run);
     const problems = (s.problems || []).filter(p => p.index === i);
 
-    const head = el('div', { class: 'cmd-card-head' },
-        el('code', { class: 'cmd-card-id', text: entry.id || 'no id yet' }),
-        el('span', { class: 'cmd-card-name',
-            text: entry.label || (base && base.label) || '' }),
-        local && base ? el('span', { class: 'cfg-tab-tag', text: 'overrides the shared file' }) : null,
-        local && !base && !orphan ? el('span', { class: 'cfg-tab-tag', text: 'local only' }) : null,
-        orphan ? el('span', { class: 'cfg-tab-tag bad', text: 'orphaned' }) : null,
-        el('div', { class: 'cmd-card-spacer' }),
-        cmdDeleteButton(i, editable));
+    // A card the bridge refused is open whatever you last did with it: the
+    // reason it was refused is a field inside, and a folded card hides it.
+    const open = problems.length > 0 || s.open.has(entry._k)
+        || (!!entry.id && s.openIds.has(entry.id));
+    // Kept in step on every draw, so an id typed into an open card is the one
+    // remembered when a save reseeds the draft.
+    if (open) {
+        s.open.add(entry._k);
+        if (entry.id) s.openIds.add(entry.id);
+    }
+
+    const body = el('div', { class: 'cmd-card-body', hidden: !open || null });
+    const toggle = el('button', {
+        class: 'cmd-card-toggle', type: 'button',
+        'aria-expanded': open ? 'true' : 'false',
+        onclick: () => {
+            const now = toggle.getAttribute('aria-expanded') !== 'true';
+            // Flipped in place rather than through renderSettings(): nothing
+            // else on the page depends on it, and a redraw would take focus.
+            toggle.setAttribute('aria-expanded', now ? 'true' : 'false');
+            body.hidden = !now;
+            card.classList.toggle('open', now);
+            if (now) {
+                s.open.add(entry._k);
+                if (entry.id) s.openIds.add(entry.id);
+            } else {
+                s.open.delete(entry._k);
+                s.openIds.delete(entry.id);
+            }
+        },
+    },
+    el('code', { class: 'cmd-card-id', text: entry.id || 'no id yet' }),
+    el('span', { class: 'cmd-card-name',
+        text: entry.label || (base && base.label) || '' }),
+    local && base ? el('span', { class: 'cfg-tab-tag', text: 'overrides the shared file' }) : null,
+    local && !base && !orphan ? el('span', { class: 'cfg-tab-tag', text: 'local only' }) : null,
+    orphan ? el('span', { class: 'cfg-tab-tag bad', text: 'orphaned' }) : null);
+
+    const head = el('div', { class: 'cmd-card-head' }, toggle, cmdDeleteButton(i, editable));
 
     const card = el('div', {
-        class: `cmd-card${problems.length ? ' bad' : ''}`, 'data-index': i,
-    }, head);
+        class: `cmd-card${problems.length ? ' bad' : ''}${open ? ' open' : ''}`, 'data-index': i,
+    }, head, body);
 
     if (orphan) {
-        card.append(el('p', { class: 'cmd-orphan' },
+        body.append(el('p', { class: 'cmd-orphan' },
             el('strong', { text: 'The shared file no longer declares this id.' }),
             ' So this is a new command rather than an override, and it needs a label '
             + 'and a command of its own before anything here will save. ',
@@ -14907,16 +14949,16 @@ function cmdCard(entry, i, shared, editable) {
     // The id is the join key rather than a field: changing it on an override is
     // "delete this and add another", not an edit, and doing it in place would
     // silently orphan the entry.
-    card.append(cmdIdField(entry, i, local, base, editable, problems));
+    body.append(cmdIdField(entry, i, local, base, editable, problems));
     for (const field of CMD_FIELDS) {
-        card.append(cmdField(field, entry, i, { local, base, editable, problems }));
+        body.append(cmdField(field, entry, i, { local, base, editable, problems }));
     }
     // Filtered rather than passed through: `append` stringifies a null into the
     // literal word, where el()'s own children skip it. The same trap
     // docsFileLine() carries a comment about, and it prints "null" under a
     // command before anybody notices.
     const preview = cmdPreview(entry, base);
-    if (preview) card.append(preview);
+    if (preview) body.append(preview);
     return card;
 }
 
@@ -23496,6 +23538,13 @@ dom.setShell.addEventListener('scroll', () => {
     if (tocFrame) return;
     tocFrame = requestAnimationFrame(() => { tocFrame = 0; markSettingsToc(); });
 }, { passive: true });
+// The pinned head's height, for the shell's scroll-padding: it grows when the
+// file line picks up tags or wraps, and shrinks when the project picker hides.
+if (typeof ResizeObserver === 'function') {
+    new ResizeObserver(() => {
+        dom.setShell.style.setProperty('--set-top-h', `${dom.setTop.offsetHeight}px`);
+    }).observe(dom.setTop);
+}
 // Changing scope redraws off the answer already in hand — the chain came back
 // whole, so there is nothing to fetch. Changing project does need a fetch,
 // because it is a different chain.
