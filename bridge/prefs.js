@@ -198,6 +198,12 @@ const DEFAULTS = {
         // them, for anyone who writes several paragraphs before sending one.
         // Ctrl+Enter sends either way, which it already did.
         composerSend: 'enter',
+        // The order Ctrl+P / Ctrl+M (and their Shift twins) walk the composer's
+        // Permissions and Model pickers in. 'default' is the order the dropdown
+        // lists them; 'alphabetical' sorts by the label you see, with an empty
+        // "inherit" choice kept first because it is the absence of a pick rather
+        // than one more name. Only the cycle — the dropdown itself is unchanged.
+        cycleOrder: 'default',
         // Command id -> combo, or null to leave a command unbound. Absent means
         // the default in bridge/keymap.js, so this holds only what you changed
         // and a command added later arrives already bound.
@@ -271,6 +277,7 @@ const SHAPE = {
     keyboard: {
         contextualTerminalCopy: (v) => typeof v === 'boolean',
         composerSend: (v) => v === 'enter' || v === 'ctrl-enter',
+        cycleOrder: (v) => v === 'default' || v === 'alphabetical',
         // The last gate rather than the only one: cleanBindings() below has
         // already thrown out the entries that fail, one problem each, so
         // anything reaching here is a map of known command ids to `null` or a

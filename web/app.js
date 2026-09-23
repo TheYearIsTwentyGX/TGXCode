@@ -132,7 +132,7 @@ const PREFS_FALLBACK = {
     projects: { colors: {} },
     quota: { beacon: false, beaconDir: null, beaconEveryMinutes: 20 },
     spinner: { randomize: true, groups: [], weights: {}, rerollMs: 8000 },
-    keyboard: { contextualTerminalCopy: false, composerSend: 'enter', bindings: {} },
+    keyboard: { contextualTerminalCopy: false, composerSend: 'enter', cycleOrder: 'default', bindings: {} },
 };
 
 /** One block of settings folded over its fallback, with the shape guaranteed. */
@@ -9686,9 +9686,19 @@ const CYCLE_PERM = ['acceptEdits', 'auto', 'manual', 'plan'];
  * the listeners above are what remember a choice against a session, and a chord
  * that skipped them would be a second way to set these controls that forgets
  * what the first one records.
+ *
+ * `keyboard.cycleOrder` decides what "next" means. Alphabetical sorts by the
+ * label rather than the value, since the label is what you are reading, and
+ * keeps an empty value — the model's "inherit" — first, because it is the
+ * absence of a choice rather than one more name to file among the others.
  */
 function cycleSelect(sel, allow, step = 1) {
     const opts = [...sel.options];
+    if (BOOT_PREFS.keyboard.cycleOrder === 'alphabetical') {
+        const label = o => o.textContent.trim();
+        opts.sort((a, b) => (b.value === '') - (a.value === '')
+            || label(a).localeCompare(label(b), undefined, { sensitivity: 'base' }));
+    }
     const n = opts.length;
     // A value the select does not list has no index; walking back from -1 would
     // skip the last option, so start that walk just past the end instead.
@@ -11233,7 +11243,7 @@ const SETTINGS = [
     },
     {
         title: 'Keyboard', section: 'keyboard', userOnly: true, keymap: true,
-        note: 'Two keys that switch in pairs, and then every shortcut this window '
+        note: 'How a few keys behave, and then every shortcut this window '
             + 'answers to.',
         rows: [
             { key: 'contextualTerminalCopy', type: 'bool',
@@ -11249,6 +11259,14 @@ const SETTINGS = [
                     ['ctrl-enter', 'Enter for a newline · Ctrl+Enter sends'],
                 ],
                 note: 'Ctrl+Enter sends either way.' },
+            { key: 'cycleOrder', type: 'choice',
+                label: 'Picker cycle order',
+                options: [
+                    ['default', 'As the dropdown lists them'],
+                    ['alphabetical', 'Alphabetical'],
+                ],
+                note: 'The order Ctrl+P and Ctrl+M step through Permissions and Model, '
+                    + 'and Shift walks it backwards. The dropdowns keep their own order.' },
         ],
     },
     // Claude Code's own settings — a different owner's files, and the one group
