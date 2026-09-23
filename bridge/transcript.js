@@ -173,6 +173,22 @@ function scanMeta(filePath) {
             }
         }
 
+        // A message you sent mid-turn that the turn folded in. It is a turn you
+        // took, so it counts and it moves lastUserTs, but it is an `attachment` on
+        // disk and would never reach the classification below. Counted only where
+        // the line names the message it came from, or says a person sent it: an
+        // older build also wrote a `user` entry for the same message, and those
+        // attachments carry neither, so counting them would count it twice.
+        if (line.includes('"queued_command"')) {
+            const parsed = safeParse(line);
+            const att = parsed && parsed.attachment;
+            if (att && (att.source_uuid || (att.origin && att.origin.kind === 'human'))
+                && foldedUserEntry(parsed)) {
+                meta.userMessages++;
+                if (parsed.timestamp) meta.lastUserTs = parsed.timestamp;
+            }
+        }
+
         // A handoff from another session. Here for the same reason as the block
         // above — it is what the bridge watches to notice one arriving — and one
         // line is one handoff, since this bridge wrote it and wrote it once.
@@ -569,8 +585,34 @@ function buildEvents(entries, ctx = {}) {
     // message can reach disk twice.
     const seenPeerIds = new Set();
     let lastAssistantModel = null;
+    // For a folded message that also reached disk as a `user` entry — an older
+    // build's habit; see foldedUserEntry. By the uuid we sent it with where the
+    // attachment names one, by its words where it does not. Built only when there
+    // is something to check, since most transcripts have no folds at all.
+    let userIds = null;
+    const alreadyAUserEntry = (f) => {
+        if (!userIds) {
+            userIds = new Set();
+            for (const x of entries) {
+                if (x.type !== 'user') continue;
+                userIds.add(x.uuid);
+                const t = userText(x);
+                if (t) userIds.add(`text:${t}`);
+            }
+        }
+        if (f.sourceUuid) return userIds.has(f.sourceUuid);
+        return userIds.has(`text:${userText(f)}`);
+    };
 
-    for (const e of entries) {
+    for (let e of entries) {
+        // A message folded into a running turn is drawn as the user message it
+        // is. Rewritten here, first, so every branch below treats it as one.
+        const folded = foldedUserEntry(e);
+        if (folded) {
+            if (alreadyAUserEntry(folded)) continue;
+            e = folded;
+        }
+
         // Before the content-type gate, because an `attachment` is bookkeeping by
         // every other measure and would never get this far otherwise.
         const peerOrigin = peerOriginOf(e);
@@ -918,6 +960,39 @@ function peerOriginOf(entry) {
         return att.origin;
     }
     return null;
+}
+
+/**
+ * A message the user sent mid-turn, as the `user` entry it would have been.
+ *
+ * Typed while Claude is working — in a terminal, or handed over by the runner at a
+ * tool boundary (see _handOver in bridge/runner.js) — a message waits in the CLI's
+ * queue and is folded into the running turn after the current tool round. What
+ * reaches disk then is `{type:"attachment", attachment:{type:"queued_command",
+ * prompt, source_uuid?, origin?}}` and **no `user` entry at all**, the same shape
+ * the peer message above arrives in. Without this, the one message most likely to
+ * have changed what the agent did next would be the one the conversation leaves out.
+ *
+ * Only a person's prompt qualifies. A peer message has its own path above; a task
+ * notification or any other origin is the machine talking and stays as it was.
+ * Measured against 2.1.280: the attachment is written at the fold, never for a
+ * message that ran as its own turn. Older builds wrote it at queue time *as well
+ * as* the `user` entry, which is what buildEvents' duplicate check is for.
+ */
+function foldedUserEntry(entry) {
+    const att = entry && entry.type === 'attachment' && entry.attachment;
+    if (!att || att.type !== 'queued_command') return null;
+    if (entry.isMeta || entry.isSidechain) return null;
+    if (att.commandMode && att.commandMode !== 'prompt') return null;
+    const kind = att.origin && att.origin.kind;
+    if (kind && kind !== 'human') return null;
+    const content = typeof att.prompt === 'string' || Array.isArray(att.prompt) ? att.prompt : null;
+    if (!content) return null;
+    const folded = { ...entry, type: 'user', message: { role: 'user', content },
+        origin: att.origin, sourceUuid: att.source_uuid || null };
+    const text = userText(folded);
+    if (text && (isTaskNotification(text) || isPeerMessage(text))) return null;
+    return folded;
 }
 
 function isPeerMessage(text) {

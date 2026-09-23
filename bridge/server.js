@@ -5129,16 +5129,18 @@ async function api(req, res, url, pathname, who) {
 
             if (req.method === 'DELETE' && qid) {
                 if (!r) return send(res, 404, { error: 'nothing is queued for this session' });
-                const removed = r.dequeue(qid);
-                // Already written to the process: it cannot be taken back, and
-                // saying so beats silently doing nothing.
+                // Awaited: a message already handed to the running turn is taken
+                // back from the CLI's own queue, which is a round trip.
+                const removed = await r.dequeue(qid);
+                // Already read by the turn, or written as one: it cannot be taken
+                // back, and saying so beats silently doing nothing.
                 if (!removed) return send(res, 409, { error: 'that message has already been sent' });
                 return send(res, 200, { ok: true, removed, status: r.status() });
             }
 
             if (req.method === 'DELETE') {
                 if (!r) return send(res, 200, { ok: true, dropped: [] });
-                const dropped = r.clearQueue();
+                const dropped = await r.clearQueue();
                 return send(res, 200, { ok: true, dropped, status: r.status() });
             }
 
