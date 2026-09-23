@@ -129,7 +129,7 @@ const PREFS_FALLBACK = {
     version: 1,
     transcript: { groupToolCalls: true, groupMinCalls: 3, groupIncludesThinking: true },
     live: { compact: false, hideElsewhere: false },
-    projects: { colors: {} },
+    projects: { colors: {}, backdropTint: true, backdropStrength: 13 },
     quota: { beacon: false, beaconDir: null, beaconEveryMinutes: 20 },
     spinner: { randomize: true, groups: [], weights: {}, rerollMs: 8000 },
     keyboard: { contextualTerminalCopy: false, composerSend: 'enter', cycleOrder: 'default', bindings: {} },
@@ -211,6 +211,25 @@ function projectColor(dir) {
     }
     return best;
 }
+
+/**
+ * The wash a project-scoped dialog's backdrop takes, from the user's settings.
+ *
+ * On the root rather than on #new-scrim, so a second dialog that ever wears a
+ * project's colour gets the same answer without being told. Off is an attribute
+ * rather than a strength of 0: a 0% mix still lands on the tinted rule's darker
+ * `#000000c2`, and "no tint" should mean the plain dim every other dialog has.
+ *
+ * @param {number} [preview] a strength being dragged, not yet saved
+ */
+function paintBackdropTint(preview) {
+    const p = BOOT_PREFS.projects;
+    const n = preview ?? p.backdropStrength;
+    const root = document.documentElement;
+    root.style.setProperty('--backdrop-tint', `${Number.isInteger(n) ? n : 13}%`);
+    root.toggleAttribute('data-plain-backdrop', p.backdropTint === false);
+}
+paintBackdropTint();
 
 /**
  * The board's settings — the user's own, and deliberately never `state.prefs`.
@@ -697,7 +716,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'set-file', 'set-problems', 'set-body', 'set-shell', 'set-toc', 'composer-hint',
     'memo-scrim', 'memo-title', 'memo-big', 'memo-note', 'memo-count',
     'memo-close', 'memo-save',
-    'set-g-notify', 'set-g-pair', 'set-g-projects', 'pcolor-list',
+    'set-g-notify', 'set-g-pair', 'set-g-projects', 'pcolor-list', 'pcolor-backdrop',
     'proj-menu', 'pcolor-scrim', 'pcolor-name', 'pcolor-path', 'pcolor-swatches',
     'pcolor-input', 'pcolor-done', 'new-project',
     'new-cron', 'new-cron-row', 'new-cron-note', 'new-gate-ref', 'new-gate-row',
@@ -10889,6 +10908,7 @@ async function saveProjectColor(cwd, hex) {
  * anything. Each of these is a no-op when its surface is shut.
  */
 function repaintProjectColors() {
+    paintBackdropTint();
     renderRail();
     paintNewProject();
     paintPcolorDialog();
@@ -11105,6 +11125,21 @@ function renderProjectColors() {
     }));
 }
 
+/**
+ * The two backdrop rows above the colour list.
+ *
+ * settingRow() rather than hand-built controls, so they get the Clear, the
+ * "default" and the override line every other setting has. Locked at a project
+ * scope like the rest of `projects` — the section is user-only in
+ * bridge/prefs.js, and a control that saved would only earn a problem line.
+ */
+function renderProjectBackdrop() {
+    const group = SETTINGS.find(g => g.section === 'projects');
+    const locked = state.settings.scope !== 'user';
+    if (!state.settings.data) { dom.pcolorBackdrop.replaceChildren(); return; }
+    dom.pcolorBackdrop.replaceChildren(...group.rows.map(row => settingRow(group, row, locked)));
+}
+
 // --- wiring --------------------------------------------------------------
 
 for (const n of dom.pcolorScrim.querySelectorAll('[data-close-pcolor]')) {
@@ -11301,7 +11336,21 @@ const SETTINGS = [
     // the markup put them.
     {
         title: 'Projects', section: 'projects', node: 'setGProjects',
-        after: () => renderProjectColors(),
+        userOnly: true,
+        // Ordinary rows, drawn into the markup group because the group is not
+        // built from `rows` — see renderProjectBackdrop().
+        rows: [
+            { key: 'backdropTint', type: 'bool',
+                label: 'Tint the backdrop behind a dialog',
+                note: 'Start a session and a schedule wash the screen behind them in '
+                    + 'the project’s colour. Off gives the plain dim every other dialog '
+                    + 'has; the dialog’s own head keeps its colour either way.' },
+            { key: 'backdropStrength', type: 'range', min: 0, max: 40, unit: '%',
+                label: 'Backdrop tint strength',
+                note: 'How much of the colour goes into the dim.',
+                preview: (n) => paintBackdropTint(n) },
+        ],
+        after: () => { renderProjectBackdrop(); renderProjectColors(); },
     },
     {
         title: 'Snippets', section: 'snippets', node: 'setGSnippets',
@@ -11487,6 +11536,7 @@ function applyPrefsLive(prefs, section) {
     }
     keys.apply(BOOT_PREFS.keyboard);
     paintShortcutHints();
+    paintBackdropTint();
     if (state.live.open) renderLive();
     if (section === 'keyboard') paintComposerHint();
     if (section === 'transcript' && state.current) {
@@ -11775,6 +11825,24 @@ function settingControl(row, value, disabled, save, saveKey) {
         }, row.options.map(([v, text]) => el('option', {
             value: v, selected: v === value || null,
         }, text)));
+    }
+    if (row.type === 'range') {
+        const out = el('output', { text: `${value ?? row.min}${row.unit || ''}` });
+        return el('label', { class: 'settings-range' },
+            el('input', {
+                type: 'range', min: row.min, max: row.max, step: row.step || 1,
+                value: value ?? row.min, disabled: disabled || null,
+                'aria-label': row.label,
+                // Dragging shows the number and, where the row has one, what it
+                // does — but saves only on release, so a drag across the track
+                // is one write and not forty.
+                oninput: (e) => {
+                    out.textContent = `${e.target.value}${row.unit || ''}`;
+                    if (row.preview) row.preview(Number(e.target.value));
+                },
+                onchange: (e) => save(Number(e.target.value)),
+            }),
+            out);
     }
     if (row.type === 'groups') return settingGroups(value, disabled, save, saveKey);
     return el('span', { text: String(value) });
