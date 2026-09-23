@@ -108,6 +108,17 @@ assert.ok(!kb.bindings({ 'view.live': 'cmd+9' }), 'only the canonical spelling i
 assert.ok(!kb.bindings([]) && !kb.bindings(null) && !kb.bindings('Ctrl+9'));
 ok('the keyboard block accepts what it should and nothing else');
 
+// --- live: whether the board stays up over a panel ----------------------
+const OVER = ['overTasks', 'overDashboard', 'overHistory', 'overDrafts', 'overSchedules', 'overSettings'];
+for (const key of OVER) {
+    const check = SHAPE.live[key];
+    assert.strictEqual(DEFAULTS.live[key], 'hidden', `${key} should default to today's behaviour`);
+    for (const v of ['hidden', 'always', 'side', 'stacked']) assert.ok(check(v), `${key}: ${v}`);
+    // `bottom` is what state.live.dock says internally; the setting says the word on the button.
+    for (const v of ['bottom', 'Always', true, '', null]) assert.ok(!check(v), `${key}: ${JSON.stringify(v)}`);
+}
+ok('the live.over* keys take the four visibilities and nothing else');
+
 // --- bindings are cleaned entry by entry --------------------------------
 // Every other setting is one value, so a bad one costs that value. A map is
 // different: one typo'd id must not throw away the bindings beside it.
@@ -469,6 +480,17 @@ assert.ok(!('live' in doc), 'an emptied section should go rather than sit there 
 assert.strictEqual(prefs.forCwd().live.compact, DEFAULTS.live.compact);
 ok('null removes a key, and an emptied section goes with it');
 
+// "All views" in Settings is one save of six keys, and clearing one afterwards
+// must leave the other five where they were.
+prefs.save({ scope: 'user', patch: { live: Object.fromEntries(OVER.map(k => [k, 'always'])) } });
+assert.deepStrictEqual(read(userFile).live, Object.fromEntries(OVER.map(k => [k, 'always'])));
+prefs.save({ scope: 'user', patch: { live: { overTasks: null } } });
+doc = read(userFile);
+assert.ok(!('overTasks' in doc.live) && doc.live.overDashboard === 'always');
+assert.strictEqual(prefs.forCwd().live.overTasks, 'hidden', 'a cleared key falls back to the default');
+prefs.save({ scope: 'user', patch: { live: Object.fromEntries(OVER.map(k => [k, null])) } });
+ok('several live keys save together, and one clears on its own');
+
 // A patch is per key, and `keyboard.bindings` is one key whose value is a map —
 // so it goes over wholesale. The page holds the resolved map and sends all of it.
 prefs.save({ scope: 'user', patch: { keyboard: { bindings: { 'view.live': 'Alt+L' } } } });
@@ -551,6 +573,7 @@ refuses({ scope: 'user', patch: { keyboard: { bindings: { 'view.nope': 'Ctrl+9' 
 refuses({ scope: 'user', patch: { nope: { a: 1 } } }, 'section', 'a section that does not exist');
 refuses({ scope: 'user', patch: { live: { nope: true } } }, 'section', 'a key that does not exist');
 refuses({ scope: 'user', patch: { live: true } }, 'section', 'a section that is not an object');
+refuses({ scope: 'user', patch: { live: { overTasks: 'bottom' } } }, 'value', 'a dock word that is not a visibility');
 refuses({ scope: 'user', patch: null }, 'section', 'no patch at all');
 refuses({ scope: 'project', patch: { live: { compact: true } } }, 'dir', 'a project scope with no directory');
 refuses({ scope: 'project', dir: '/etc', patch: { live: { compact: true } } },

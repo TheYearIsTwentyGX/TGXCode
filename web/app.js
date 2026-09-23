@@ -135,7 +135,11 @@ const DEFAULT_PERM = 'auto';
 const PREFS_FALLBACK = {
     version: 1,
     transcript: { groupToolCalls: true, groupMinCalls: 3, groupIncludesThinking: true },
-    live: { compact: false, hideElsewhere: false },
+    live: {
+        compact: false, hideElsewhere: false,
+        overTasks: 'hidden', overDashboard: 'hidden', overHistory: 'hidden',
+        overDrafts: 'hidden', overSchedules: 'hidden', overSettings: 'hidden',
+    },
     projects: {
         colors: {}, backdropTint: true, backdropStrength: 13,
         sort: 'recent', bumpOnCreate: true, bumpOnUser: true, bumpOnAny: false,
@@ -6657,7 +6661,10 @@ function showLive(on) {
     // All of them, not just the dashboard — History had the same gap all along
     // and it only became visible once Ctrl+3 had to reach the live board past
     // whatever was already up.
-    if (on) {
+    //
+    // Except a panel set to keep the board up (`live.over*`): that one stays, and
+    // the board docks beside or under it instead of taking the screen from it.
+    if (on && !liveKeptOver()) {
         state.dash.open = false; state.notes.open = false;
         state.taskboard.open = false; state.drafts.open = false;
         state.sched.open = false;
@@ -6870,9 +6877,9 @@ function applyOverview(data) {
 // Every whole-screen panel, not just the dashboard: a board left switched on
 // under one of them is not on screen, and rebuilding it once a second while it
 // cannot be seen is what `showDash`/`showTaskboard` catch it up from on the way
-// out. History was already missed here before the task board arrived.
+// out — unless that panel is one the settings keep the board up over.
 const liveVisible = () => state.live.open
-    && !state.dash.open && !state.notes.open && !state.taskboard.open;
+    && (!PANELS.some(p => state[p].open) || Boolean(liveKeptOver()));
 
 /**
  * Whether the board is the sideways strip under a conversation.
@@ -7581,6 +7588,29 @@ const DASH_STALE_MS = 45_000;
 // five other functions, none of which would have complained about being missed.
 const PANELS = ['taskboard', 'dash', 'notes', 'drafts', 'sched', 'settings'];
 
+// Which `live.*` key says whether the board stays up over each panel.
+const LIVE_OVER_KEY = {
+    taskboard: 'overTasks', dash: 'overDashboard', notes: 'overHistory',
+    drafts: 'overDrafts', sched: 'overSchedules', settings: 'overSettings',
+};
+
+/**
+ * The open panel, if the settings keep the board on screen over it.
+ *
+ * Asked of the dock toggle as it stands, which is the point of `side` and
+ * `stacked`: the one button in the board's header then decides whether the
+ * board comes along to that panel as well as how it sits there. Answers whether
+ * or not the board is switched on — showLive asks before turning it on.
+ */
+function liveKeptOver() {
+    const panel = PANELS.find(p => state[p].open);
+    if (!panel) return null;
+    const rule = BOOT_PREFS.live[LIVE_OVER_KEY[panel]];
+    const side = state.live.dock === 'side';
+    const kept = rule === 'always' || (rule === 'side' && side) || (rule === 'stacked' && !side);
+    return kept ? panel : null;
+}
+
 /** Shut every whole-screen panel but this one. */
 function closeOtherPanels(keep) {
     for (const p of PANELS) if (p !== keep) state[p].open = false;
@@ -7606,12 +7636,22 @@ function paintPanels() {
     //
     // With nothing open, or in focus mode, there is no conversation to share
     // with and the board has the floor.
-    const docked = state.live.open && Boolean(state.current) && !state.focus;
+    //
+    // Six whole-screen panels, kept exclusive by closeOtherPanels, so "one of
+    // them is up" is the only thing anything below has to ask. One of them
+    // normally covers the board; a panel the `live.over*` settings keep it up
+    // over gets the board docked beside or under it instead, exactly as a
+    // conversation does — focus mode or not, since the panel is on screen.
+    const covered = PANELS.some(p => state[p].open);
+    const kept = state.live.open && Boolean(liveKeptOver());
+    const docked = state.live.open && (kept || (Boolean(state.current) && !state.focus));
     const full = state.live.open && !docked;
 
-    // Six whole-screen panels, kept exclusive by closeOtherPanels, so "one of
-    // them is up" is the only thing anything below has to ask.
-    const covered = PANELS.some(p => state[p].open);
+    // What the board was drawn for, so that a panel opened over it with the
+    // board kept can tell it has been re-arranged. The show…() functions only
+    // catch the board up on the way *out* of a panel, and a board that goes
+    // from the whole window to a column beside Tasks needs its cards rebuilt.
+    const drawnFor = `${dom.live.hidden}/${dom.live.dataset.mode}/${dom.main.dataset.dock}`;
 
     // The preview sits between the two: it covers the conversation as a panel
     // would, and is itself covered by one. A docked board stays beside it unless
@@ -7622,7 +7662,7 @@ function paintPanels() {
 
     for (const p of PANELS) dom[p].hidden = !state[p].open;
     dom.preview.hidden = !preview;
-    dom.live.hidden = !state.live.open || covered || liveUnder;
+    dom.live.hidden = !state.live.open || (covered && !kept) || liveUnder;
     dom.live.dataset.mode = docked ? 'dock' : 'full';
     // The orientation lives on both: `main` has to change its flex direction,
     // and the board has to know whether it is a strip or a column.
@@ -7651,6 +7691,9 @@ function paintPanels() {
     // The conversation's box just changed height, and xterm only knows what it
     // is told.
     if (state.current && !dom.conv.hidden) termPane.refit();
+    if (kept && drawnFor !== `${dom.live.hidden}/${dom.live.dataset.mode}/${dom.main.dataset.dock}`) {
+        renderLive();
+    }
 }
 
 function showDash(on) {
@@ -11490,6 +11533,17 @@ paintRailSort();
 // `userOnly` mirrors USER_ONLY in bridge/prefs.js. It is drawn rather than
 // hidden at a project scope, because a section that vanishes reads as a bug and
 // a section that says why it is disabled teaches the rule.
+// The four answers to "does the board stay up over this panel?", in the order
+// the radios and the All views buttons draw them. See DEFAULTS.live in
+// bridge/prefs.js for what each one means.
+const LIVE_OVER_OPTIONS = [
+    ['hidden', 'Hidden'], ['always', 'Always'], ['side', 'Side-by-Side'], ['stacked', 'Stacked'],
+];
+const LIVE_OVER_ROWS = [
+    ['overTasks', 'Tasks'], ['overDashboard', 'Dashboard'], ['overHistory', 'History'],
+    ['overDrafts', 'Drafts'], ['overSchedules', 'Schedules'], ['overSettings', 'Settings'],
+].map(([key, label]) => ({ key, type: 'radio', label, options: LIVE_OVER_OPTIONS }));
+
 const SETTINGS = [
     {
         title: 'Reading', section: 'transcript',
@@ -11520,6 +11574,15 @@ const SETTINGS = [
                 label: 'Leave out sessions running elsewhere',
                 note: 'Sessions under a terminal or another window — the cards this '
                     + 'board cannot drive. It says how many it left out.' },
+            { type: 'heading', label: 'Live board visibility',
+                note: 'Whether the board stays up, docked beside or under the screen, '
+                    + 'while one of these is open. Side-by-Side and Stacked keep it '
+                    + 'only while the board’s dock toggle says so; Hidden covers it, '
+                    + 'as before.' },
+            { type: 'all', label: 'All views', keys: LIVE_OVER_ROWS.map(r => r.key),
+                options: LIVE_OVER_OPTIONS,
+                note: 'Sets every screen below at once.' },
+            ...LIVE_OVER_ROWS,
         ],
     },
     {
@@ -11880,7 +11943,16 @@ function openSettingsAt(section) {
  * the value lands in a file a stronger one is already overriding, which is the
  * one a client that assumed success would draw wrongly.
  */
-async function saveSetting(section, key, value) {
+function saveSetting(section, key, value) {
+    return saveSettings(section, { [key]: value });
+}
+
+/**
+ * Save several keys of one section in one write. "All views" under the live
+ * board's visibility is six keys, and six saves would be six chances to stop
+ * halfway — the bridge validates a patch whole, so this lands all or nothing.
+ */
+async function saveSettings(section, patch) {
     const s = state.settings;
     if (s.saving) return;
     s.saving = true;
@@ -11890,7 +11962,7 @@ async function saveSetting(section, key, value) {
         const answer = await put('/api/prefs', {
             scope: s.scope,
             cwd: dir,
-            patch: { [section]: { [key]: value } },
+            patch: { [section]: patch },
         });
         s.data = { ...answer.prefs, files: answer.files };
         applyPrefsLive(answer.prefs, section);
@@ -11929,7 +12001,9 @@ function applyPrefsLive(prefs, section) {
     paintShortcutHints();
     paintToolbar();
     paintBackdropTint();
-    if (state.live.open) renderLive();
+    // `live.over*` can put the board beside the panel you are saving it from.
+    if (section === 'live') paintPanels();
+    if (liveVisible()) renderLive();
     if (section === 'keyboard') paintComposerHint();
     if (section === 'projects') { renderRail(); paintRailSort(); }
     // The pill, its poll, and every chip's tooltip say which browser a click
@@ -12028,7 +12102,9 @@ function renderSettings() {
         // back the moment the setting it depends on changes.
         for (const row of group.rows) {
             if (row.when && !row.when(s.data)) continue;
-            card.append(settingRow(group, row, locked));
+            card.append(row.type === 'heading' ? settingHeading(row)
+                : row.type === 'all' ? settingAllRow(group, row, locked)
+                : settingRow(group, row, locked));
         }
         if (group.keymap) card.append(renderKeymap(locked));
         if (group.toolbar) card.append(renderToolbarSettings(locked));
@@ -12195,6 +12271,41 @@ function settingRow(group, row, locked) {
         el('div', { class: 'settings-row-ctl' }, control, side));
 }
 
+/** A title partway down a group, for a run of rows that belong together. */
+function settingHeading(row) {
+    return el('div', { class: 'settings-subhead' },
+        el('h3', { class: 'settings-subhead-title', text: row.label }),
+        row.note ? el('p', { class: 'settings-group-note', text: row.note }) : null);
+}
+
+/**
+ * Buttons that set several rows to one value — not a setting of its own, so
+ * nothing is stored for it. A button reads as pressed when every row it covers
+ * already says its value, which is the only honest thing it can claim.
+ */
+function settingAllRow(group, row, locked) {
+    const target = settingsTargetRow();
+    const disabled = locked || !target || (target.exists && !target.parsed) || !target.writable
+        || state.settings.saving;
+    const values = row.keys.map((key) => {
+        const own = target && target.values && target.values[group.section];
+        if (own && own[key] !== undefined) return own[key];
+        return state.settings.data[group.section] ? state.settings.data[group.section][key] : undefined;
+    });
+    return el('div', { class: 'settings-row' },
+        el('div', { class: 'settings-row-text' },
+            el('div', { class: 'settings-row-label', text: row.label }),
+            row.note ? el('div', { class: 'settings-row-note', text: row.note }) : null),
+        el('div', { class: 'settings-row-ctl' },
+            el('div', { class: 'seg', role: 'group', 'aria-label': row.label },
+                row.options.map(([v, text]) => el('button', {
+                    class: 'seg-btn', type: 'button', disabled: disabled || null,
+                    'aria-pressed': String(values.every(x => x === v)),
+                    onclick: () => saveSettings(group.section,
+                        Object.fromEntries(row.keys.map(k => [k, v]))),
+                }, text)))));
+}
+
 /** The input itself, by type. Each one saves on change; none of them is a draft. */
 function settingControl(row, value, disabled, save, saveKey) {
     if (row.type === 'bool') {
@@ -12233,6 +12344,16 @@ function settingControl(row, value, disabled, save, saveKey) {
         }, row.options.map(([v, text]) => el('option', {
             value: v, selected: v === value || null,
         }, text)));
+    }
+    if (row.type === 'radio') {
+        return el('div', { class: 'settings-radios', role: 'radiogroup', 'aria-label': row.label },
+            row.options.map(([v, text]) => el('label', { class: 'settings-radio' },
+                el('input', {
+                    type: 'radio', name: `set-${row.key}`, value: v,
+                    checked: v === value || null, disabled: disabled || null,
+                    onchange: () => save(v),
+                }),
+                el('span', { text }))));
     }
     if (row.type === 'range') {
         const out = el('output', { text: `${value ?? row.min}${row.unit || ''}` });
@@ -17747,7 +17868,9 @@ function connect() {
         paintShortcutHints();
         paintComposerHint();
         paintToolbar();
-        if (state.live.open) renderLive();
+        // `live.over*` may have changed whether the board is up over this panel.
+        paintPanels();
+        if (liveVisible()) renderLive();
         // Project colours are in that payload too, and everything wearing one has
         // to be redrawn — including the rail, which nothing else here touches.
         repaintProjectColors();

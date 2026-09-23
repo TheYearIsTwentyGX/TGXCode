@@ -1024,6 +1024,23 @@ under something that is not this bridge, i.e. `reason: "elsewhere"`; the board
 says how many it left out rather than dropping them silently). Both default
 `false`.
 
+Six more `live` keys say whether the board stays on screen while a whole-screen
+panel is open, one per panel: `overTasks`, `overDashboard`, `overHistory`,
+`overDrafts`, `overSchedules`, `overSettings`. Each is a string, one of
+`"hidden" | "always" | "side" | "stacked"`, default `"hidden"`:
+
+| Value | Over that panel, the board is… |
+|---|---|
+| `hidden` | covered (the behaviour before these keys existed) |
+| `always` | docked beside or under the panel, whichever way the board's dock toggle is set |
+| `side` | docked beside the panel while the dock toggle is *side by side*, covered while it is *stacked* |
+| `stacked` | docked under the panel while the dock toggle is *stacked*, covered while it is *side by side* |
+
+The dock toggle itself is per-browser (`localStorage`), not a pref. Any other
+string, including `"bottom"`, is refused with `400` (`code: "value"`). The
+Settings page's "All views" buttons are not a key — they send all six in one
+`PUT /api/prefs` patch.
+
 Note that the page reads these from its `<meta>` copy, which is the **user-level**
 answer — the board draws sessions from every project at once, so a project's
 `<workspace>/.tgxcode/settings.json` can set `live` and will see it echoed back
