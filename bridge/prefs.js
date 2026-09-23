@@ -295,6 +295,32 @@ const DEFAULTS = {
         // bridge/wispr.js spells it — `Win+Alt+2`.
         transforms: [],
     },
+    preview: {
+        // How long a page you left stays loaded, in minutes. Coming back inside
+        // that finds it exactly as you left it — scroll, form state, a dev
+        // server's HMR socket still connected. Past it the page is thrown away
+        // and the next open loads it fresh. 0 throws it away on the way out.
+        keepAliveMinutes: 10,
+        // A preview opened from a Live card goes over the Live board, and Home
+        // brings the board back. Off opens it over that session instead, as
+        // though you had opened the session and clicked the chip there.
+        overLive: true,
+    },
+    devbrowser: {
+        // Whether the app mentions DevBrowser at all: the status pill, "open in
+        // DevBrowser", the DevBrowser tab field on a project command. Off is
+        // for a machine without it. It is about what is *shown* — naming a
+        // task's port in DevBrowser when it comes up is harmless when nothing
+        // is listening, and still happens.
+        show: true,
+        // Where a preview opens when DevBrowser is shown. 'devbrowser' is what
+        // clicking a port has always done.
+        openIn: 'devbrowser',
+        // With openIn 'devbrowser', what to do when DevBrowser is not running:
+        // start it (what it has always done), preview inline instead, or
+        // nothing.
+        whenClosed: 'launch',
+    },
 };
 
 // Sections a project may not set, however the precedence would otherwise fall.
@@ -314,7 +340,11 @@ const DEFAULTS = {
 //
 // `toolbar` is the keyboard argument applied to the bar: a checked-in file that
 // could move or hide your buttons would be a repository rearranging your window.
-const USER_ONLY = new Set(['quota', 'keyboard', 'projects', 'toolbar', 'wispr']);
+//
+// `preview` and `devbrowser` are about which browser on this machine you look at
+// pages in, and whether one of them launches on a click — the same class of thing.
+const USER_ONLY = new Set(['quota', 'keyboard', 'projects', 'toolbar', 'wispr',
+    'preview', 'devbrowser']);
 
 // What each key is allowed to be. A file is a thing people edit, so a bad value
 // is dropped and the default kept rather than taken at face value — a
@@ -407,6 +437,17 @@ const SHAPE = {
     wispr: {
         // The last gate again: cleanTransforms() has dropped the bad entries.
         transforms: wispr.validTransforms,
+    },
+    preview: {
+        // Four hours is plenty: a page kept alive is a renderer process and
+        // whatever its dev server's HMR socket is holding.
+        keepAliveMinutes: (v) => Number.isInteger(v) && v >= 0 && v <= 240,
+        overLive: (v) => typeof v === 'boolean',
+    },
+    devbrowser: {
+        show: (v) => typeof v === 'boolean',
+        openIn: (v) => v === 'inline' || v === 'devbrowser',
+        whenClosed: (v) => v === 'launch' || v === 'inline' || v === 'nothing',
     },
 };
 
@@ -775,7 +816,7 @@ class Prefs {
      *   user-level answer, which is what the page is served before it knows
      *   which conversation it is about to show.
      * @returns {{version, transcript, live, projects, quota, spinner, keyboard,
-     *   wispr, sources: string[], problems: object[]}}
+     *   wispr, preview, devbrowser, sources: string[], problems: object[]}}
      */
     forCwd(dir) {
         const key = dir || '';
@@ -806,6 +847,8 @@ class Prefs {
             keyboard: { ...DEFAULTS.keyboard, bindings: { ...DEFAULTS.keyboard.bindings } },
             toolbar: { ...DEFAULTS.toolbar, items: [...DEFAULTS.toolbar.items] },
             wispr: { transforms: [...DEFAULTS.wispr.transforms] },
+            preview: { ...DEFAULTS.preview },
+            devbrowser: { ...DEFAULTS.devbrowser },
             sources: [],
             problems: [],
         };

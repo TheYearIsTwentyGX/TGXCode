@@ -10,7 +10,7 @@
      was reading every screenshot into a base64 data URI, a third larger, held in a
      string for as long as the chip is on screen. -->
 <meta http-equiv="Content-Security-Policy"
-      content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; connect-src 'self'">
+      content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-src http://localhost:* http://127.0.0.1:*">
 <title>Claude Sessions</title>
 <link rel="stylesheet" href="./vendor/xterm.css">
 <!-- Before styles.css on purpose: the diff viewer re-themes diff2html by
@@ -818,6 +818,81 @@
         <div id="term-body" class="term-body"></div>
       </section>
     </div>
+
+    <!-- The browser preview: a dev server's page in the window. DevBrowser's
+         toolbar, left to right, minus its OS-window presets — see
+         web/preview.js. Covers the conversation the way the panels below do;
+         whether it covers a docked Live board as well is preview.overLive.
+         The glyphs are DevBrowser's too, so the two read as one tool. -->
+    <section id="preview" class="preview" hidden aria-label="Browser preview">
+      <div class="pv-bar" role="toolbar" aria-label="Preview">
+        <div class="pv-nav">
+          <button class="pv-btn" data-pv="home" type="button" title="Back to the conversation — the page stays loaded">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
+          </button>
+          <button class="pv-btn" data-pv="back" type="button" disabled title="Back">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+          </button>
+          <button class="pv-btn" data-pv="forward" type="button" disabled title="Forward">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z"/></svg>
+          </button>
+          <button class="pv-btn" data-pv="reload" type="button" title="Reload">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+          </button>
+          <span class="pv-divider"></span>
+          <button class="pv-btn" data-pv="shot" type="button" disabled title="Copy a screenshot to the clipboard">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M9 3L7.17 5H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2h-3.17L15 3H9zm3 5c2.76 0 5 2.24 5 5s-2.24 5-5 5-5-2.24-5-5 2.24-5 5-5zm0 2c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
+          </button>
+          <button class="pv-btn" data-pv="pick" type="button" disabled aria-pressed="false" title="Pick an element (Esc cancels)">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M13 1h-2v4h2V1zM1 11v2h4v-2H1zm18 0v2h4v-2h-4zM13 19h-2v4h2v-4zM7 7h10v10H7V7zm2 2v6h6V9H9z"/></svg>
+          </button>
+        </div>
+
+        <label class="pv-address">
+          <span class="pv-title" data-pv="title" hidden></span>
+          <span class="pv-proto">http://</span>
+          <span class="pv-host" data-pv="host"></span>
+          <input class="pv-path" data-pv="path" type="text" placeholder="path/to/page"
+                 autocomplete="off" spellcheck="false" aria-label="Path">
+        </label>
+
+        <div class="pv-sizes">
+          <span class="pv-label">Internal Viewport</span>
+          <div class="pv-group" role="group" aria-label="Internal viewport">
+            <button class="pv-size on" data-pv-device="fit" type="button" aria-pressed="true">Fit</button>
+            <button class="pv-size" data-pv-device="phone" type="button" aria-pressed="false" title="375 × 812">Phone</button>
+            <button class="pv-size" data-pv-device="tablet" type="button" aria-pressed="false" title="768 × 1024">Tablet</button>
+            <button class="pv-size" data-pv-device="desktop" type="button" aria-pressed="false" title="1440 × 900">Desktop</button>
+          </div>
+          <button class="pv-btn" data-pv="orient" type="button" disabled title="Portrait / landscape">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M17 1.01L7 1c-1.1 0-2 .9-2 2v18c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2V3c0-1.1-.9-1.99-2-1.99zM17 19H7V5h10v14z"/></svg>
+          </button>
+        </div>
+
+        <span class="pv-divider"></span>
+        <div class="pv-nav">
+          <button class="pv-btn" data-pv="output" type="button" hidden title="Show this task's output in the terminal">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M20 4H4c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 14H4V8h16v10zm-2-1h-6v-2h6v2zM7.5 17l-1.41-1.41L8.67 13l-2.59-2.59L7.5 9l4 4-4 4z"/></svg>
+          </button>
+          <button class="pv-btn" data-pv="devbrowser" type="button" hidden title="Open this page in DevBrowser">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>
+          </button>
+          <button class="pv-btn" data-pv="max" type="button" aria-pressed="false" title="Maximize — hide everything but the top bar">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M21 11V3h-8l3.29 3.29-10 10L3 13v8h8l-3.29-3.29 10-10z"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="pv-canvas" data-pv="canvas">
+        <div class="pv-device fit" data-pv="device">
+          <span class="pv-notch" aria-hidden="true"></span>
+          <span class="pv-homebar" aria-hidden="true"></span>
+          <div class="pv-frames" data-pv="frames"></div>
+          <span class="pv-badge" data-pv="badge" hidden></span>
+        </div>
+        <p class="pv-empty" data-pv="empty">Nothing to preview. Pick a port or a running task.</p>
+      </div>
+    </section>
 
     <!-- The board of unfinished work. Grouped by project, a row per directory,
          because a worktree is what holds uncommitted changes — sessions share

@@ -8580,3 +8580,240 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     font: 400 11.5px/1.4 var(--sans);
     color: var(--red);
 }
+
+/* ── browser preview ─────────────────────────────────────────────────────
+   web/preview.js. DevBrowser's toolbar, in this app's surfaces rather than its
+   own: one row, controls left, address in the middle taking the slack, the
+   viewport presets right. Everything below the bar is the canvas the device
+   frame sits in. */
+
+.preview {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+}
+.preview[hidden] { display: none; }
+
+.pv-bar {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    height: 52px;
+    padding: 0 14px;
+    background: var(--s2);
+    border-bottom: 1px solid var(--outline-soft);
+}
+/* Only the address bar gives: the button groups keep their size, or a narrow
+   window squeezes them under it. */
+.pv-nav { flex: none; display: flex; align-items: center; gap: 2px; }
+.pv-divider { flex: none; width: 1px; height: 22px; background: var(--outline-soft); }
+
+.pv-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border: 0;
+    border-radius: var(--r-xs);
+    background: none;
+    color: var(--text-2);
+    cursor: pointer;
+}
+.pv-btn[hidden] { display: none; }
+.pv-btn:hover:not(:disabled) { background: var(--s4); color: var(--text); }
+.pv-btn:disabled { color: var(--text-4); opacity: 0.5; cursor: default; }
+.pv-btn.on { background: var(--blue-cont); color: var(--blue); }
+
+.pv-address {
+    flex: 1;
+    min-width: 120px;
+    display: flex;
+    align-items: center;
+    height: 34px;
+    padding: 0 12px;
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-sm);
+    background: var(--s1);
+    font: 400 13px/1 var(--mono);
+    color: var(--text-3);
+    cursor: text;
+}
+.pv-address:focus-within { border-color: var(--blue); }
+.pv-title {
+    flex: none;
+    max-width: 200px;
+    margin-right: 10px;
+    padding: 2px 8px;
+    border-radius: var(--r-xs);
+    background: var(--blue-tint);
+    color: var(--blue);
+    font: 500 11px/1.4 var(--sans);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.pv-title[hidden] { display: none; }
+.pv-proto { color: var(--text-4); }
+.pv-host { color: var(--text-2); white-space: nowrap; }
+.pv-path {
+    flex: 1;
+    min-width: 40px;
+    border: 0;
+    outline: 0;
+    padding: 0;
+    background: none;
+    color: var(--text);
+    font: inherit;
+}
+
+.pv-sizes { flex: none; display: flex; align-items: center; gap: 8px; }
+.pv-label { font: 500 11px/1 var(--sans); color: var(--text-4); white-space: nowrap; }
+.pv-group {
+    display: flex;
+    padding: 2px;
+    border-radius: var(--r-sm);
+    background: var(--s1);
+}
+.pv-size {
+    border: 0;
+    border-radius: var(--r-xs);
+    padding: 5px 10px;
+    background: none;
+    color: var(--text-3);
+    font: 500 12px/1 var(--sans);
+    cursor: pointer;
+}
+.pv-size:hover { color: var(--text); }
+.pv-size.on { background: var(--s4); color: var(--text); }
+
+/* The presets' label is the first thing a narrow window can do without — the
+   buttons say Phone, Tablet and Desktop on their own. */
+@media (max-width: 1480px) { .pv-label { display: none; } }
+
+.pv-canvas {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    background: var(--bg);
+    transition: padding var(--t-med) var(--ease);
+}
+.pv-canvas.device-mode { padding: 40px; }
+
+.pv-device {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+    background: #fff;
+    transition: width 0.35s var(--ease), height 0.35s var(--ease),
+        border-radius 0.35s, border-width 0.35s;
+}
+/* The bezels are drawn outside the size preview.js sets, so the page inside
+   lays out at exactly the preset's pixels. DevBrowser's frames, recoloured. */
+.pv-device:not(.fit) {
+    box-sizing: content-box;
+    border: 0 solid var(--s4);
+    box-shadow: 0 25px 60px #0009;
+}
+.pv-device.phone { border-radius: 36px; border-width: 14px 12px; }
+.pv-device.tablet { border-radius: 20px; border-width: 16px; }
+.pv-device.desktop { border-radius: 8px; border-width: 8px 8px 24px; }
+
+.pv-notch, .pv-homebar { display: none; }
+.pv-device.phone .pv-notch, .pv-device.phone .pv-homebar {
+    display: block;
+    position: absolute;
+    z-index: 2;
+    pointer-events: none;
+}
+.pv-device.phone .pv-notch {
+    top: -12px; left: 50%; transform: translateX(-50%);
+    width: 110px; height: 18px;
+    background: var(--s4);
+    border-radius: 0 0 12px 12px;
+}
+.pv-device.phone.landscape .pv-notch {
+    top: 50%; left: -12px; transform: translateY(-50%);
+    width: 18px; height: 110px;
+    border-radius: 0 12px 12px 0;
+}
+.pv-device.phone .pv-homebar {
+    bottom: 6px; left: 50%; transform: translateX(-50%);
+    width: 100px; height: 4px;
+    border-radius: 2px;
+    background: #0004;
+}
+.pv-device.phone.landscape .pv-homebar {
+    bottom: 50%; left: auto; right: 6px; transform: translateY(50%);
+    width: 4px; height: 100px;
+}
+
+.pv-frames {
+    position: relative;
+    flex: 1;
+    overflow: hidden;
+    border-radius: inherit;
+}
+.pv-device.phone .pv-frames { border-radius: 24px; }
+.pv-device.tablet .pv-frames { border-radius: 6px; }
+.pv-device.desktop .pv-frames { border-radius: 0; }
+.pv-frame {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border: 0;
+    background: #fff;
+    /* Off-screen rather than display:none — see web/preview.js. */
+    transform: translateY(-99999px);
+    opacity: 0;
+    pointer-events: none;
+}
+.pv-frame.active { transform: none; opacity: 1; pointer-events: auto; }
+.pv-frames.picking { cursor: crosshair; }
+
+.pv-badge {
+    position: absolute;
+    bottom: -30px;
+    left: 50%;
+    transform: translateX(-50%);
+    white-space: nowrap;
+    font: 400 11.5px/1 var(--mono);
+    color: var(--text-4);
+}
+.pv-badge[hidden] { display: none; }
+
+.pv-empty {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0;
+    color: var(--text-3);
+    font: 400 14px/1.4 var(--sans);
+    background: var(--bg);
+}
+.pv-empty[hidden] { display: none; }
+
+/* Maximize: everything but the top bar and the preview's own toolbar. The rail
+   column collapses to nothing and a docked Live board goes, so the page has the
+   whole of the window below the bar. */
+.app[data-preview-max="1"] {
+    /* minmax, not 1fr: a bare 1fr is at least the top bar's content width, and
+       with the rail gone that pushed the page off the right of the window. */
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "bar" "main";
+}
+.app[data-preview-max="1"] .rail,
+.app[data-preview-max="1"] #live { display: none; }
+.app[data-preview-max="1"] .main { border-radius: 0; }

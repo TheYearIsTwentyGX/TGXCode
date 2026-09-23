@@ -19,7 +19,7 @@ it, and how the pieces fit together. Start there if you have not already.
 | **Plans & questions** | When Claude presents a plan or asks a multiple-choice question, the turn stops on a card at the foot of the transcript. A plan can be approved, approved with a note to bear in mind, or sent back with what to change; approving picks the mode the work continues in. Questions are answered by picking, with an *Other* row for none-of-the-above. |
 | **Subagents** | The first chip row under the title, one per subagent, with a light for how it is going and a line of what it is doing. Click to switch the pane over to it; `Esc` or the breadcrumb comes back. |
 | **Pull requests** | Every PR the session raised, on the line under the title, each with a glyph and a colour for where it has got to — draft, open, approved, changes requested, checks running or failing, conflicting, merged, closed. Hover for the status in words, the title, and how the checks stand. Merged and closed ones stay, dimmed, so the line is the session's whole PR history rather than only its newest. |
-| **Dev servers** | The second chip row. Green means the port is answering right now; click to switch DevBrowser to that tab, starting DevBrowser if it isn't running. The button on the end shuts the server down — one click arms it, the next signals. |
+| **Dev servers** | The second chip row. Green means the port is answering right now; click to show its page — in DevBrowser, starting it if it isn't running, or in the window's own browser preview, as Settings → DevBrowser says. See *The browser preview*. The button on the end shuts the server down — one click arms it, the next signals. |
 | **Task board** | `Ctrl+2`, or *Tasks* in the top bar with a count of how many sessions are blocked on you. Four columns over everything outstanding: **Needs you** (a permission, a plan or a question waiting, or a turn that failed), **Working**, **Suggested** — every open task from every session, not only the conversation you have open — and **Idle**. Archived sessions are not on it; that is what archiving is for. A task card starts the work or opens it to read; a session card opens the conversation, and the button that appears on hover archives it. Idle leads with what has moved today and *Show all* pages in the rest. Nothing on it reorders while you read — see *The rail is sorted on load*. |
 | **Dashboard** | The button in the top bar, with a count of how many places are unfinished. It lists, per project, every directory holding uncommitted changes and every pull request still open, with the sessions that worked there as links back into the conversation. |
 | **Open folder** | The folder button by the title shows the session's working directory in the host's file manager — on Linux whatever `xdg-open` picks, and from WSL, Windows File Explorer through the `\\wsl.localhost` share. |
@@ -1135,6 +1135,46 @@ reads the closed stdin as end-of-input — and a **`claude`** process, which *is
 turn. Both are named and left alone. A port with no Linux process behind it says
 so too: with WSL mirrored networking a Windows-side server answers on 127.0.0.1
 but has no pid on this side, and the chip reports that rather than guessing.
+
+### The browser preview
+
+A dev server's page, inside this window, with DevBrowser's toolbar: Home, Back,
+Forward, Reload, a screenshot to the clipboard, the element picker, the address
+bar, and the Fit / Phone / Tablet / Desktop viewports with a portrait–landscape
+toggle. At the right end: *Output* (a task's terminal tab), *Open in DevBrowser*,
+and *Maximize*, which leaves only the top bar and the preview's own toolbar.
+`Esc` leaves Maximize, then leaves the preview.
+
+It opens from three places, as long as the port answers HTTP — a port that
+accepts connections but is not a web server (a database, a debugger) is
+nothing a browser can show, and the chip says so:
+
+- a **dev-server chip** above the conversation;
+- a **port chip on a Live card** — over the board, or over that card's session
+  with the board still docked beside it (*Open over the Live board*);
+- a **project task** in the conversation header. Clicking one that is running
+  shows its page. Clicking one that is not starts it and shows its log as
+  before, then opens the page once the server answers — in this window only:
+  a server finishing its compile never launches DevBrowser by itself.
+
+Home keeps the page loaded. Come back inside *Minutes to keep a page you left*
+(Settings → Browser preview, default 10) and it is as you left it — scroll, form
+state, the dev server's live reload still connected; after that it loads fresh.
+A task that stops takes its kept page with it.
+
+Where a click goes is Settings → DevBrowser. *Show DevBrowser in this app* off
+takes the pill, the button and the command editor's DevBrowser field away and
+sends everything to the preview. On, *Open previews in* picks DevBrowser or this
+window, and with DevBrowser picked, *When DevBrowser is not running* picks
+between starting it, previewing here instead, and doing nothing.
+
+**The full toolbar needs the rebuilt desktop app.** The page is held in an
+Electron `<webview>`, which only a shell built with this change has. In an older
+shell, or in a plain browser tab on `npm run dev:headless`, it is an `<iframe>`
+instead — and a page of another origin in an iframe cannot be sent back or
+forward, captured or inspected, so those four buttons are greyed out with a
+tooltip saying why. Everything else works the same. F12 inside a `<webview>`
+opens DevTools for the page being previewed, not for the app.
 
 ### What the dashboard counts
 
