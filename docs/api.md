@@ -165,6 +165,7 @@ of `/api/terminals/*`; all of `/api/runs/*`; `POST /api/commands/run`; all of
 `POST /api/sessions/:id/reveal`; `POST /api/sessions/:id/open-file`;
 `POST /api/sessions/:id/handoff`; `POST /api/fs/mkdir`;
 `POST /api/fs/open`;
+`POST /api/wispr/press`;
 `PUT /api/prefs`;
 **every method of `/api/claude-config` and anything under it, the GET included**;
 **every method of `/api/claude-docs` likewise**;
@@ -929,7 +930,7 @@ it opens is on this machine's desktop, which a phone cannot look at.
 ### `GET /api/prefs?cwd=<path>&files=1`
 
 `{ version, transcript: {…}, live: {…}, projects: {…}, quota: {…}, spinner: {…},
-keyboard: {…}, sources: [string], problems: [{file, message}] }` — how the person using the app
+keyboard: {…}, wispr: {…}, sources: [string], problems: [{file, message}] }` — how the person using the app
 wants it to behave. `sources` is file paths, weakest first; each `problems` entry
 is an **object**, `{file, message}`, naming the file that carried a value the key
 does not allow and what was wrong with it.
@@ -967,8 +968,8 @@ rather than taken at face value; the default stands. Without `?cwd=` you get the
 user-level answer, which is also what every page is served in a `cs-prefs`
 `<meta>` tag (minus `sources` and `problems`).
 
-**Three sections may only be set in the user's own file**: `quota`, `keyboard`
-and `projects`. A project file that carries one is ignored and says so in
+**Four sections may only be set in the user's own file**: `quota`, `keyboard`,
+`projects` and `wispr`. A project file that carries one is ignored and says so in
 `problems`. What directory this app starts `claude` in, and which keys your
 hands use, are not a repository's business — and a repository that could rebind
 your keys could make the window unusable with hand-editing the file as the only
@@ -976,7 +977,9 @@ way back. `projects` is there for a third reason: the map is keyed by absolute
 path and so names *other* projects, and a repository setting one would be a
 repository colouring its neighbours. `quota` was documented this way before it
 was enforced this way; it is enforced now, so `?cwd=` no longer echoes a
-project's value back as though it counted.
+project's value back as though it counted. `wispr` is there because the bridge
+presses its chords on the desktop, and a repository choosing which keys get
+pressed on your machine is not a preference.
 
 `transcript` today: `groupToolCalls` (fold a run of tool calls into one row once
 a message closes it), `groupMinCalls` (how long a run has to be — at least 2),
@@ -1075,6 +1078,26 @@ User file only, and `bindings` is a **map**, so a `PUT` naming it replaces the
 whole thing rather than merging into it — inside the map `null` already means
 "unbound on purpose", so there is no spare spelling for "drop this one entry
 back to its default". Send all of it.
+
+`wispr` is the Wispr Flow transforms the composers' Wispr button lists, and is one
+key:
+
+| Key | Type | |
+|---|---|---|
+| `transforms` | **array of objects**, `[{id: string, title: string, combo: string}]`, default `[]` | in the order the popover lists them. `id` is 1–40 of `a-z`, `0-9` and `-`, unique in the list, and is what `POST /api/wispr/press` names; a client makes it up when a transform is added and keeps it. `title` is 1–60 characters, trimmed. `combo` is the chord the transform has in Wispr Flow: modifiers `Win`, `Ctrl`, `Alt`, `Shift` (read case-insensitively, with `Super`/`Meta`/`Cmd` as aliases for `Win`) and one key name from `GET /api/keymap`'s `keys`, stored canonically in that modifier order — `win+alt+2` comes back `Win+Alt+2`. It needs a modifier unless the key is `F1`–`F12`. **`Win` is its own modifier here**, unlike in `keyboard.bindings`, where Ctrl and Cmd are one. At most 20 entries. |
+
+User file only. In a file a bad entry is dropped alone with one `problems` line; in a
+`PUT` it refuses the whole call, as every value does. The array is one key, so a
+`PUT` naming it replaces the list whole — send all of it, and `null` to empty it.
+
+### `GET /api/wispr`
+
+`{available: boolean}` — whether a Wispr Flow chord pressed through this bridge can
+reach anything, which is what decides whether a client draws the Wispr button and
+the settings for it at all. `false` on a Linux host (Wispr Flow has no Linux build)
+and `false` for a **remote** caller, whatever the host: the answer is about the
+caller, and a remote one is refused the press. A client that gets `false` should
+draw nothing rather than a disabled button.
 
 ### `GET /api/keymap`
 
@@ -2319,7 +2342,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `handoff` | `{at, sessionId, from, count}` — another session handed this one work, and it was resumed to deal with it. Same shape and same reasoning as above; watched in the transcript rather than reported by the route, so it fires when the message *arrived* rather than when it was queued |
 | `suggestion-changed` | `{at, sessionId, toolUseId}` — a suggested follow-up was started, dismissed, or undone, possibly in another window |
 | `session-deleted` | `{sessionId, title}` |
-| `prefs` | the **user-level** settings, in the same shape as the `cs-prefs` `<meta>` tag: `{version, transcript, live, projects, quota, spinner, keyboard}`, with no `sources` or `problems`. Fired on every `PUT /api/prefs` including your own, so a second window does not sit on a stale copy — two are routinely open here. A project's answer is deliberately not sent: it is the open session's business and arrives with `GET /api/sessions/:id` |
+| `prefs` | the **user-level** settings, in the same shape as the `cs-prefs` `<meta>` tag: `{version, transcript, live, projects, quota, spinner, keyboard, wispr}`, with no `sources` or `problems`. Fired on every `PUT /api/prefs` including your own, so a second window does not sit on a stale copy — two are routinely open here. A project's answer is deliberately not sent: it is the open session's business and arrives with `GET /api/sessions/:id` |
 | `claude-config` | `{at: number, scope: 'user'\|'project'\|'project-local'\|'managed', file: string}` — the *fact* that one of Claude Code's settings files changed, and deliberately **not** its content. Unlike `prefs` there is no `<meta>` copy for a page to keep in sync and nothing in this app behaves differently because of those files, so the event is a nudge to re-read; pushing the contents of a file whose route is local-only down every open channel would be a poor trade for saving a fetch. Fired on every successful `PUT /api/claude-config`, including your own — **and on a change this bridge did not make**: `claude` writes these files itself, so `theme` or `editorMode` from `/config`, `enabledPlugins` from a plugin toggle, and a rule appended to `settings.local.json` when somebody approves a permission mid-turn all arrive here too. `scope` may then be `managed`, which no `PUT` can produce. **Two caveats a client has to hold.** It is best-effort: the bridge watches directories with `fs.watch`, which throws on some filesystems and silently does nothing on others, so a change can go unannounced — keep treating `409 {code:'stale'}` from `PUT /api/claude-config` as the guarantee, and this only as the convenience that usually saves you from meeting it. And a project's two files are watched only once `GET /api/claude-config?cwd=<dir>` has been called for that directory, only for a small number of directories at a time (least-recently-read dropped first), and not after ten minutes without another read of it; the user file and the managed file are watched throughout. So poll or re-`GET` if you need certainty about a directory you have not asked about |
 | `claude-docs` | `{at, scope, file}` — the same trade for a `CLAUDE.md`: the fact one was written, never its contents. `scope` is `"user"` or `"project"`. Fired on every successful `PUT /api/claude-docs`, including your own. **A client holding an unsaved draft must not reload on this** — show a conflict and keep what the person typed; the whole draft here is somebody's prose rather than one key |
 | `notification` | a whole notification row, just filed — the same shape `GET /api/notifications` returns, `read` included — plus `unread`, the badge count after this row. So an open history view need not refetch, and need not guess whether the new row counts |
@@ -3465,6 +3488,31 @@ recomputed, so `404` means "not one of this session's attachments" rather than
 
 `file` is the Linux path; `path` is the path as handed to the host's file manager,
 with the same host-dependent shape as `POST /api/sessions/:id/open-file`.
+
+### `POST /api/wispr/press`
+
+`{id: string}` → `{ok: true, combo: string}`.
+
+Presses a Wispr Flow transform's chord on the Windows desktop, into whichever window
+has the focus. `id` names an entry in the user's `wispr.transforms` (see
+§`GET /api/prefs`), and the chord is looked up there. **The route never takes a chord
+from the request**, so a caller can press what the user set up and nothing else.
+
+The press goes to the focused window, so a client does its own half first: focus the
+message box, select the text Wispr should transform (all of it, if nothing is
+selected), then call this. Wispr rewrites the selection itself. Nothing in the
+response says it did — `ok` means the keystrokes were injected, not that Wispr
+answered them. It takes about 0.6 s, most of it PowerShell starting.
+
+| Status | When |
+|---|---|
+| `200` | pressed |
+| `404` | no transform with that `id` in the user's settings |
+| `409` | `{error, available: false}` — the bridge is not on the Windows host |
+| `502` | PowerShell could not be run, timed out, or Windows injected fewer events than it was given. The last usually means the focused window is running as administrator and the bridge is not. |
+
+**Local only.** A remote caller gets
+`403 {"error": "keys can only be pressed on the machine they reach"}`.
 
 ### `POST /api/fs/open`
 

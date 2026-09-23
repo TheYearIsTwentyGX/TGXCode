@@ -613,6 +613,19 @@
                    way in at all on a touch screen. The input is hidden rather than
                    styled because a file input cannot be styled, and both go through
                    the same attachFiles() as a paste. -->
+              <!-- Wispr Flow transforms, which rewrite the text in this box, so the
+                   button sits right beside the box rather than out past Send. Hidden
+                   until the bridge says a chord can reach Wispr — see
+                   bridge/wispr.js — which it cannot from a Linux host or from a
+                   phone. -->
+              <div class="wispr-wrap" hidden>
+                <button id="btn-wispr" class="btn-wispr" type="button"
+                        aria-haspopup="listbox" aria-expanded="false"
+                        aria-controls="wispr-menu"
+                        title="Wispr Flow transforms" aria-label="Wispr Flow transforms"></button>
+                <div id="wispr-menu" class="snip-menu later-menu wispr-menu" role="listbox" hidden
+                     aria-label="Wispr Flow transforms"></div>
+              </div>
               <input id="attach-input" type="file" multiple hidden aria-hidden="true">
               <button id="btn-attach" class="btn-attach" type="button" disabled
                       title="Attach files (or paste, or drop them here)"
@@ -976,6 +989,26 @@
                 <div id="snip-settings-body"></div>
               </section>
 
+              <!-- Wispr Flow transforms, which the composers' Wispr button lists.
+                   Written out here for the reason above. Hidden until the bridge
+                   says a chord can reach Wispr — the same answer that hides the
+                   button. -->
+              <section id="set-g-wispr" class="settings-group" hidden>
+                <h2 class="settings-group-title">Wispr Flow</h2>
+                <p class="settings-group-note">The transforms the Wispr button beside
+                   each message box offers. Give each the title you want to see and
+                   the shortcut you gave it in Wispr Flow, written like
+                   <kbd>Win+Alt+2</kbd>. Picking one selects everything in the box
+                   (or keeps your selection, if you made one) and presses that
+                   shortcut for you. <strong>Always your own settings file</strong>
+                   — a repository does not get to choose which keys are pressed
+                   on your desktop.</p>
+                <div id="wispr-list"></div>
+                <div class="snip-settings-acts">
+                  <button id="wispr-add" class="btn small" type="button">Add a transform</button>
+                </div>
+              </section>
+
               <!-- What reaches you when the window is not the thing you are
                    looking at. The rules it obeys are in announceTurn(); the note
                    says them out loud, because a notification you cannot predict
@@ -1207,6 +1240,14 @@
                       aria-controls="new-snip-menu">Snippets</button>
               <div id="new-snip-menu" class="snip-menu" role="listbox" hidden
                    aria-label="Snippets"></div>
+            </div>
+            <div class="wispr-wrap" hidden>
+              <button id="new-btn-wispr" class="btn small btn-wispr-small" type="button"
+                      aria-haspopup="listbox" aria-expanded="false"
+                      aria-controls="new-wispr-menu"
+                      title="Wispr Flow transforms" aria-label="Wispr Flow transforms"></button>
+              <div id="new-wispr-menu" class="snip-menu later-menu wispr-menu" role="listbox" hidden
+                   aria-label="Wispr Flow transforms"></div>
             </div>
           </div>
           <div class="compose-foot" id="new-attach-row">

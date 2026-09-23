@@ -115,6 +115,14 @@ const HOME = os.homedir();
     check('opening a path', (await call('POST', '/api/fs/open', {
         headers: PHONE, body: { path: `${HOME}/x.md` },
     })).status, 403);
+    // Pressing a Wispr Flow chord types on this machine's keyboard, into whatever
+    // window has the focus — nothing a phone should be able to reach.
+    check('pressing a Wispr Flow chord', (await call('POST', '/api/wispr/press', {
+        headers: PHONE, body: { id: 'anything' },
+    })).status, 403);
+    // And the page is told not to draw the button, so the refusal is never met.
+    check('and a phone is told there is no Wispr to reach',
+        (await call('GET', '/api/wispr', { headers: PHONE })).body.available, false);
     // The client-side half of the same rule: with no cs-host tag the page cannot
     // draw the link whose click that route would refuse.
     check('and a phone is not told where the filesystem is',
@@ -243,6 +251,13 @@ const HOME = os.homedir();
     check('opening a path that is not there is a 404', (await call('POST', '/api/fs/open', {
         headers: LOCAL, body: { path: `${HOME}/not-here-${Date.now()}.md` },
     })).status, 404);
+
+    // An id that is not in the settings never reaches the keyboard. 404 on the
+    // Windows host, 409 on a Linux one — either way the gate let it through.
+    const localPress = (await call('POST', '/api/wispr/press', {
+        headers: LOCAL, body: { id: `not-a-transform-${Date.now()}` },
+    })).status;
+    check('an unknown transform locally is its own refusal', [404, 409].includes(localPress), true);
 
     // The path is checked before the session is looked up, so a request wrong about
     // both is refused for the path — otherwise the 400/404 difference is an oracle

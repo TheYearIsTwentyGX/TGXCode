@@ -251,7 +251,7 @@ ok('the colour map is bounded, and says so when it truncates');
 // Documented for `quota` long before anything enforced it, which held only
 // because the call sites passed no cwd. A page that prints which file wins for
 // each key cannot rely on that.
-assert.deepStrictEqual([...USER_ONLY].sort(), ['keyboard', 'projects', 'quota']);
+assert.deepStrictEqual([...USER_ONLY].sort(), ['keyboard', 'projects', 'quota', 'wispr']);
 
 clear();
 write(userFile, { version: VERSION });
@@ -260,6 +260,7 @@ write(projFile, {
     quota: { beacon: true, beaconDir: '/tmp/somewhere' },
     keyboard: { composerSend: 'ctrl-enter', contextualTerminalCopy: true },
     projects: { colors: { [project]: '#f28b82' } },
+    wispr: { transforms: [{ id: 'lock', title: 'Lock', combo: 'Win+L' }] },
 });
 prefs.cache.clear();
 got = prefs.forCwd(project);
@@ -270,12 +271,15 @@ assert.strictEqual(got.keyboard.composerSend, DEFAULTS.keyboard.composerSend,
 // The map names *other* projects' paths, so a repository setting one would be a
 // repository colouring its neighbours.
 assert.deepStrictEqual(got.projects.colors, {}, 'a project coloured itself');
-for (const section of ['quota', 'keyboard', 'projects']) {
+// The bridge presses these chords on the desktop, so a repository listing one
+// would be a repository pressing keys on your machine.
+assert.deepStrictEqual(got.wispr.transforms, [], 'a project added a Wispr transform');
+for (const section of ['quota', 'keyboard', 'projects', 'wispr']) {
     assert.ok(got.problems.some(p => p.file === projFile
         && p.message.includes(`"${section}" may only be set in`)),
     `no problem reported for a project's "${section}"`);
 }
-ok('a repository cannot set the beacon directory, your keys, or anybody’s colour');
+ok('a repository cannot set the beacon directory, your keys, anybody’s colour, or a chord to press');
 
 // The user file still may, obviously — that is the whole point of the split.
 write(userFile, { version: VERSION, keyboard: { composerSend: 'ctrl-enter' } });

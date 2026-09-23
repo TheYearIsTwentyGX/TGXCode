@@ -60,6 +60,7 @@ const overview = require('./overview');
 const taskboard = require('./taskboard');
 const tasks = require('./tasks');
 const { openInExplorer, openFile, isLaunchable } = require('./explorer');
+const wispr = require('./wispr');
 const attachments = require('./attachments');
 const { TerminalPool } = require('./terminal');
 const commands = require('./commands');
@@ -888,6 +889,12 @@ function remoteRefusal(pathname, method) {
     // came out of a transcript.
     if (pathname === '/api/fs/open') {
         return 'a file can only be opened on the machine it lives on';
+    }
+    // Pressing a Wispr Flow chord puts keystrokes on this machine's desktop, into
+    // whichever window has the focus. From anywhere else that is a keyboard
+    // somebody is not at, typing into a window nobody is watching.
+    if (pathname === '/api/wispr/press') {
+        return 'keys can only be pressed on the machine they reach';
     }
     // Saving settings writes a file in the user's home directory, or inside a
     // checkout — the mkdir clause above, with a worse blast radius, because
@@ -5469,6 +5476,29 @@ async function api(req, res, url, pathname, who) {
         if (!Number.isInteger(port)) return send(res, 400, { error: 'invalid port' });
         const r = await devbrowser.setTitle(port, body.title == null ? null : String(body.title));
         return send(res, r.ok ? 200 : 502, { ok: r.ok });
+    }
+
+    // --- wispr flow --------------------------------------------------------
+    // Whether the composer's Wispr button should be drawn at all. The answer is
+    // about *this caller*: a remote one is refused the press below, so for it
+    // there is nothing to draw, even on a host where the press would work.
+    if (pathname === '/api/wispr' && req.method === 'GET') {
+        return send(res, 200, { available: wispr.available() && !who.remote });
+    }
+
+    // By id and never by chord: the chord comes out of the user's own settings,
+    // so a caller can press what the user set up and nothing else. See
+    // bridge/wispr.js.
+    if (pathname === '/api/wispr/press' && req.method === 'POST') {
+        const body = await readJson(req);
+        if (!wispr.available()) {
+            return send(res, 409, { error: 'Wispr Flow shortcuts need the Windows host', available: false });
+        }
+        const found = prefs.forCwd('').wispr.transforms.find(t => t.id === body.id);
+        if (!found) return send(res, 404, { error: 'no such transform' });
+        const out = await wispr.press(found.combo);
+        if (!out.ok) return send(res, 502, { error: out.error });
+        return send(res, 200, { ok: true, combo: found.combo });
     }
 
     // --- pairing -----------------------------------------------------------

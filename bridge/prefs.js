@@ -40,6 +40,12 @@
 // catalogue of what may be bound — see the header there for why the list is not
 // in `web/`.
 //
+// `wispr` is the sixth: the Wispr Flow transforms the composer's Wispr button
+// lists, each a title and the chord Wispr Flow has it on. The bridge presses
+// that chord on the desktop (see bridge/wispr.js), so it is **user-only** for
+// `keyboard`'s reason made sharper — a repository choosing which keys get
+// pressed on your machine is not a preference.
+//
 // **Where the file lives is the deliberate part.** `~/.tgxcode/settings.json`,
 // not STATE_DIR. Everything under STATE_DIR is state the app owns and nobody is
 // expected to open — a token, a set of archived ids. This is a file a person
@@ -70,6 +76,7 @@ const { readJson, serialize, writeAtomic, writable, refuse } = require('./jsonfi
 // two must not drift apart.
 const { isAccent } = require('./snippets');
 const { projectRootOf } = require('./transcript');
+const wispr = require('./wispr');
 
 const VERSION = 1;
 
@@ -203,6 +210,12 @@ const DEFAULTS = {
         // and a command added later arrives already bound.
         bindings: {},
     },
+    wispr: {
+        // {id, title, combo}, in the order the popover lists them. `combo` is
+        // the chord you gave the transform in Wispr Flow, written the way
+        // bridge/wispr.js spells it — `Win+Alt+2`.
+        transforms: [],
+    },
 };
 
 // Sections a project may not set, however the precedence would otherwise fall.
@@ -219,7 +232,7 @@ const DEFAULTS = {
 // quotaPrefs) — which held, but left `GET /api/prefs?cwd=…` echoing a project's
 // value back as though it counted. That was harmless while nothing read the
 // answer and is not once a settings page prints which file wins for each key.
-const USER_ONLY = new Set(['quota', 'keyboard', 'projects']);
+const USER_ONLY = new Set(['quota', 'keyboard', 'projects', 'wispr']);
 
 // What each key is allowed to be. A file is a thing people edit, so a bad value
 // is dropped and the default kept rather than taken at face value — a
@@ -282,6 +295,10 @@ const SHAPE = {
             return ids.every(id => keymap.COMMAND_IDS.has(id)
                 && (v[id] === null || keymap.normalize(v[id]) === v[id]));
         },
+    },
+    wispr: {
+        // The last gate again: cleanTransforms() has dropped the bad entries.
+        transforms: wispr.validTransforms,
     },
 };
 
@@ -409,12 +426,13 @@ function cleanColors(value, note) {
 }
 
 // Section keys whose value is a map and so gets the treatment above, before
-// SHAPE sees it. Three entries; the table exists so the next one does not have
+// SHAPE sees it. Four entries; the table exists so the next one does not have
 // to special-case merge().
 const SANITIZE = {
     keyboard: { bindings: cleanBindings },
     spinner: { weights: cleanWeights },
     projects: { colors: cleanColors },
+    wispr: { transforms: wispr.cleanTransforms },
 };
 
 /**
@@ -565,7 +583,7 @@ class Prefs {
      *   user-level answer, which is what the page is served before it knows
      *   which conversation it is about to show.
      * @returns {{version, transcript, live, projects, quota, spinner, keyboard,
-     *   sources: string[], problems: object[]}}
+     *   wispr, sources: string[], problems: object[]}}
      */
     forCwd(dir) {
         const key = dir || '';
@@ -594,6 +612,7 @@ class Prefs {
             quota: { ...DEFAULTS.quota },
             spinner: { ...DEFAULTS.spinner, weights: { ...DEFAULTS.spinner.weights } },
             keyboard: { ...DEFAULTS.keyboard, bindings: { ...DEFAULTS.keyboard.bindings } },
+            wispr: { transforms: [...DEFAULTS.wispr.transforms] },
             sources: [],
             problems: [],
         };

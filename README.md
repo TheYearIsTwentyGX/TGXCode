@@ -262,6 +262,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/devservers.js` | Port detection, ranking, and stopping a server |
 | `bridge/devbrowser.js` | DevBrowser control client |
 | `bridge/explorer.js` | Opens a directory in the host's file manager, a file in whatever the host opens it with, and knows what it will not launch |
+| `bridge/wispr.js` | Presses a Wispr Flow transform's chord on the Windows desktop through PowerShell's SendInput, and the chord grammar `wispr.transforms` is written in |
 | `bridge/platform.js` | Whether there is a Windows on the other side of this bridge, and the env var that lets a test pretend otherwise |
 | `bridge/notifications.js` | The notification log, what is worth raising, and what you have already read |
 | `bridge/flags.js` | Pinned, archived and test state |
