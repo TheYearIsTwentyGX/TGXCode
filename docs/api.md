@@ -1001,7 +1001,17 @@ answer — the board draws sessions from every project at once, so a project's
 on `?cwd=`, but it does not change what the board draws. A client that builds its
 own cards has no reason to read `live` at all — the Android app does not.
 
-`projects` is one key, `colors`, and it is an **object**:
+`projects` is three keys: `colors`, a map described below, and two plain ones
+about how the desktop wears a colour — `backdropTint {boolean}`, default `true`,
+and `backdropStrength {integer 0–40}`, default `13`, a percentage of the
+project's colour mixed into the dim behind the Start-a-session dialog. `false`
+gives that dialog the plain dim every other dialog has. Both are presentation in
+the desktop window alone, so a client with no such backdrop has no reason to
+read them; a value out of range, a string, or a fraction is dropped with one
+`problems` line and the default holds. They are user-only like the rest of the
+section.
+
+`colors` is an **object**:
 `{"<absolute project directory>": "<#rgb or #rrggbb>"}`. It is a colour a person
 gave a project so that a session scoped to the wrong checkout is visible rather
 than only readable — the desktop wears it on the rail's project cards, the
@@ -1030,8 +1040,8 @@ with one `problems` line rather than costing the map, exactly as
 Like those two, `colors` is a **map**, so a `PUT` naming it replaces the whole
 thing rather than merging into it: there is no spelling for "clear this one
 entry", because leaving the key out *is* that. Send all of it. Clearing the last
-colour is `{"projects": {"colors": null}}`, which removes the section from the
-file.
+colour is `{"projects": {"colors": null}}`, which removes the key from the file —
+and the section with it, when neither backdrop key is set there either.
 
 User file only — see the three-section paragraph below.
 

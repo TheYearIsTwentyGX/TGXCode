@@ -249,6 +249,34 @@ assert.strictEqual(Object.keys(got.projects.colors).length, 200);
 assert.ok(got.problems.some(p => /more than 200 project colours/.test(p.message)));
 ok('the colour map is bounded, and says so when it truncates');
 
+// The backdrop wash: two plain keys beside the map. The default is the 13% the
+// dialog drew before it was a setting, and a bad value falls back to it rather
+// than turning the wash off or into a coloured sheet.
+clear();
+write(userFile, { version: VERSION });
+prefs.cache.clear();
+got = prefs.forCwd();
+assert.strictEqual(got.projects.backdropTint, true);
+assert.strictEqual(got.projects.backdropStrength, 13);
+for (const bad of ['20', 41, -1, 12.5]) {
+    clear();
+    write(userFile, { version: VERSION,
+        projects: { backdropTint: 'no', backdropStrength: bad } });
+    prefs.cache.clear();
+    got = prefs.forCwd();
+    assert.strictEqual(got.projects.backdropStrength, 13, `${JSON.stringify(bad)} was taken`);
+    assert.strictEqual(got.projects.backdropTint, true, 'a string was taken as a boolean');
+}
+clear();
+write(userFile, { version: VERSION,
+    projects: { backdropTint: false, backdropStrength: 0, colors: { [project]: '#abc' } } });
+prefs.cache.clear();
+got = prefs.forCwd();
+assert.strictEqual(got.projects.backdropTint, false);
+assert.strictEqual(got.projects.backdropStrength, 0, '0 is a strength, not a missing one');
+assert.deepStrictEqual(got.projects.colors, { [project]: '#abc' });
+ok('the backdrop tint defaults to what it was, and refuses what is not a strength');
+
 // --- user-only sections --------------------------------------------------
 // Documented for `quota` long before anything enforced it, which held only
 // because the call sites passed no cwd. A page that prints which file wins for
