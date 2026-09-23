@@ -251,7 +251,7 @@ ok('the colour map is bounded, and says so when it truncates');
 // Documented for `quota` long before anything enforced it, which held only
 // because the call sites passed no cwd. A page that prints which file wins for
 // each key cannot rely on that.
-assert.deepStrictEqual([...USER_ONLY].sort(), ['keyboard', 'projects', 'quota']);
+assert.deepStrictEqual([...USER_ONLY].sort(), ['keyboard', 'projects', 'quota', 'toolbar']);
 
 clear();
 write(userFile, { version: VERSION });
@@ -474,6 +474,75 @@ assert.strictEqual(prefs.forCwd().live.compact, false);
 prefs.save({ scope: 'user', patch: { live: { compact: true } } });
 assert.strictEqual(prefs.forCwd().live.compact, true, 'a stale cache survived a save');
 ok('a save invalidates the cache it would otherwise be read through');
+
+// --- the toolbar -------------------------------------------------------
+// A list somebody edits by hand, cleaned entry by entry like the bindings — and
+// the one setting with rules about what may not be done at all: Settings is
+// never hidden, and the quota pill never leaves the bar.
+clear();
+write(userFile, {
+    version: VERSION,
+    toolbar: {
+        items: [
+            { id: 'dashboard', place: 'more', label: false },
+            { id: 'nope', place: 'bar' },                 // not a button
+            { id: 'dashboard', place: 'hidden' },         // listed twice
+            { id: 'drafts', place: 'somewhere' },         // not a place
+            { id: 'history', place: 'bar', label: 'no' }, // not a bool
+            { id: 'settings', place: 'hidden' },          // may not be hidden
+            { id: 'quota', place: 'more' },               // stays on the bar
+            { id: 'live', place: 'hidden' },              // label defaults on
+        ],
+    },
+});
+prefs.cache.clear();
+got = prefs.forCwd();
+assert.deepStrictEqual(got.toolbar.items, [
+    { id: 'dashboard', place: 'more', label: false },
+    { id: 'settings', place: 'bar', label: true },
+    { id: 'quota', place: 'bar', label: true },
+    { id: 'live', place: 'hidden', label: true },
+]);
+assert.strictEqual(got.problems.length, 6, JSON.stringify(got.problems));
+assert.ok(got.problems.some(p => /"nope" is not a toolbar button/.test(p.message)));
+assert.ok(got.problems.some(p => /listed twice/.test(p.message)));
+assert.ok(got.problems.some(p => /settings cannot be hidden/.test(p.message)));
+assert.ok(got.problems.some(p => /quota cannot be put in "more"/.test(p.message)));
+ok('toolbar entries are cleaned one by one, and Settings and Quota cannot be put away');
+
+write(userFile, { version: VERSION, toolbar: { items: { live: 'more' } } });
+prefs.cache.clear();
+got = prefs.forCwd();
+assert.deepStrictEqual(got.toolbar.items, []);
+assert.ok(got.problems.some(p => /toolbar\.items/.test(p.message)));
+ok('a toolbar that is not a list falls back to the built-in layout');
+
+// A page sending a pinned button somewhere it may not go is a bug in the page,
+// so the save refuses rather than quietly moving it.
+write(userFile, { version: VERSION });
+prefs.cache.clear();
+refuses({ scope: 'user', patch: { toolbar: { items: [{ id: 'settings', place: 'hidden', label: false }] } } },
+    'value', 'hiding Settings');
+const saved = prefs.save({ scope: 'user', patch: { toolbar: { items: [
+    { id: 'schedules', place: 'bar', label: false }, { id: 'tasks', place: 'more', label: true },
+] } } });
+assert.deepStrictEqual(saved.prefs.toolbar.items.map(e => e.id), ['schedules', 'tasks']);
+prefs.save({ scope: 'user', patch: { toolbar: { items: null } } });
+assert.deepStrictEqual(prefs.forCwd().toolbar.items, [], 'null did not put the default back');
+assert.ok(!('toolbar' in read(userFile)), 'an emptied section should leave the file');
+ok('a toolbar save refuses what the file would coerce, and null resets it');
+
+// A repository does not get to rearrange your window.
+write(projFile, { toolbar: { items: [{ id: 'live', place: 'hidden', label: true }] } });
+prefs.cache.clear();
+got = prefs.forCwd(project);
+assert.deepStrictEqual(got.toolbar.items, []);
+assert.ok(got.problems.some(p => p.file === projFile && /"toolbar" may only be set/.test(p.message)));
+assert.ok(USER_ONLY.has('toolbar'));
+refuses({ scope: 'project', dir: project, patch: { toolbar: { items: [] } } },
+    'readonly', 'a project toolbar');
+clear();
+ok('a project file cannot set the toolbar');
 
 // --- the page copy -------------------------------------------------------
 // `sources` names files in somebody's home directory and nothing in the page

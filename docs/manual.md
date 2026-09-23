@@ -744,6 +744,27 @@ are widget semantics rather than shortcuts, and remapping them means breaking
 keyboard navigation. Nor the Electron shell's `Ctrl+R`, `F12` and zoom, which
 live in the packaged executable rather than the page.
 
+#### The bar
+
+The *Toolbar* group is the row of buttons along the top, one row per button in
+the order the bar draws them. Drag a row by its grip, or use ↑/↓, to move it.
+The select next to each one sends it to the **Bar**, into the **More menu** (the
+⋯ button at the right-hand end, which only appears once something is in it),
+or out of sight with **Hidden**. **Show label** turns the name beside a view's
+icon on or off. Settings starts with its label off, which is how it has always
+looked.
+
+Hiding a view removes its button and nothing else, so its shortcut still opens
+it. A count does not disappear into the menu either: the ⋯ button shows the
+total of the counts it holds, turns yellow when one of them is urgent, and
+lights up while one of its views is open. Two buttons cannot be put away.
+Settings can go into the menu but cannot be hidden, since it is where a hidden
+button is brought back from. The quota pill stays on the bar, since its popover
+holds Restart bridge. *Reset to default* puts the whole bar back.
+
+Like the keys, this is kept in your own settings file only, as `toolbar.items`,
+and a project's file cannot change it.
+
 #### Claude Code's own settings
 
 The group below the app's own edits a different owner's files:

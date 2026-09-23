@@ -187,6 +187,10 @@ a:hover { text-decoration: underline; }
 /* A square button for a setup step you do once per device, rather than one that
    spends a word of the bar on itself forever. */
 .bar-btn.icon-only { padding: 0; width: 34px; justify-content: center; gap: 0; }
+/* The label goes; a count stays, since it is the reason to look at the button.
+   With one showing, the square widens to a pill around the icon and the count. */
+.bar-btn.icon-only > span:not(.bar-badge) { display: none; }
+.bar-btn.icon-only:has(> .bar-badge:not([hidden])) { width: auto; padding: 0 10px; gap: 6px; }
 
 
 /* A count, not an alert: unfinished work is the normal state of this machine. */
@@ -219,6 +223,62 @@ a:hover { text-decoration: underline; }
 .db-status:hover { background: var(--s3); color: var(--text); }
 .db-status .led { width: 7px; height: 7px; border-radius: 50%; background: var(--text-4); }
 .db-status[data-up="true"] .led { background: var(--green); }
+
+/* The bar's overflow. The buttons in it are the bar's own, moved here by
+   paintToolbar() rather than copied, so these rules restyle a pill as a menu
+   row: full width, always labelled, and the count pushed to the far edge. */
+.bar-more-wrap { position: relative; }
+.bar-more-wrap[hidden] { display: none; }
+.bar [data-bar-hidden] { display: none; }
+#bar-more { position: relative; }
+/* A count on a square button would push the dots off-centre, so it rides the
+   corner instead. */
+#bar-more .bar-badge {
+    position: absolute;
+    top: -5px;
+    right: -6px;
+    min-width: 17px;
+    height: 17px;
+    padding: 0 5px;
+    font-size: 10px;
+    line-height: 17px;
+}
+#bar-more[aria-expanded="true"] { background: var(--s3); color: var(--text); }
+
+.bar-more-menu {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    z-index: 60;
+    min-width: 200px;
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    background: var(--s3);
+    border-radius: var(--r);
+    box-shadow: 0 10px 30px #000a;
+    animation: menu-in var(--t-fast) var(--ease);
+    transform-origin: top right;
+}
+.bar-more-menu[hidden] { display: none; }
+.bar-more-menu .bar-btn,
+.bar-more-menu .db-status {
+    width: 100%;
+    height: 34px;
+    padding: 0 10px;
+    gap: 10px;
+    justify-content: flex-start;
+    background: transparent;
+    border-radius: var(--r-xs);
+}
+.bar-more-menu .bar-btn:hover,
+.bar-more-menu .db-status:hover { background: var(--s4); }
+.bar-more-menu .bar-btn.on { background: var(--blue-cont); }
+/* A button whose label you turned off on the bar still needs one in a list. */
+.bar-more-menu .bar-btn.icon-only > span:not(.bar-badge) { display: inline; }
+.bar-more-menu .bar-badge { margin-left: auto; }
+@media (prefers-reduced-motion: reduce) { .bar-more-menu { animation: none; } }
 
 /* ── quota ───────────────────────────────────────────────────────────── */
 
@@ -7004,6 +7064,30 @@ body.term-resizing { user-select: none; cursor: row-resize; }
 }
 .settings-key-row[data-recording] { background: var(--blue-tint); border-radius: var(--r-xs); }
 .settings-key-acts { flex: none; display: flex; gap: 10px; min-width: 150px; justify-content: flex-end; }
+
+/* The Toolbar group: one row per bar button, dragged or stepped into order. */
+.settings-bar { display: flex; flex-direction: column; gap: 2px; padding-top: 6px; }
+.settings-bar-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 5px 8px;
+    border-radius: var(--r-xs);
+}
+.settings-bar-row:hover { background: var(--s2); }
+.settings-bar-row.dragging { opacity: 0.4; }
+.settings-bar-row[draggable="true"]:active .snip-grip { cursor: grabbing; }
+.settings-bar-row[data-place="hidden"] .settings-bar-name { color: var(--text-4); }
+.settings-bar-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px;
+    font-size: 13px; color: var(--text-2); }
+.settings-bar-name svg { flex: none; color: var(--text-3); }
+.settings-bar-noglyph { flex: none; width: 14px; }
+.settings-bar-row .snip-move:disabled { opacity: 0.3; cursor: default; background: transparent; }
+.settings-bar-label { flex: none; display: flex; align-items: center; gap: 6px;
+    width: 110px; font-size: 12px; color: var(--text-3); }
+.settings-bar-place { flex: none; width: 130px; }
+.settings-bar-fixed { flex: none; width: 130px; font-size: 11px; color: var(--text-4); }
+.settings-bar-foot { display: flex; justify-content: flex-end; padding-top: 8px; }
 
 /* A text-only button, for the actions inside a row where a pill would be three
    times the weight of the word in it. */

@@ -929,7 +929,7 @@ it opens is on this machine's desktop, which a phone cannot look at.
 ### `GET /api/prefs?cwd=<path>&files=1`
 
 `{ version, transcript: {…}, live: {…}, projects: {…}, quota: {…}, spinner: {…},
-keyboard: {…}, sources: [string], problems: [{file, message}] }` — how the person using the app
+keyboard: {…}, toolbar: {…}, sources: [string], problems: [{file, message}] }` — how the person using the app
 wants it to behave. `sources` is file paths, weakest first; each `problems` entry
 is an **object**, `{file, message}`, naming the file that carried a value the key
 does not allow and what was wrong with it.
@@ -967,14 +967,16 @@ rather than taken at face value; the default stands. Without `?cwd=` you get the
 user-level answer, which is also what every page is served in a `cs-prefs`
 `<meta>` tag (minus `sources` and `problems`).
 
-**Three sections may only be set in the user's own file**: `quota`, `keyboard`
-and `projects`. A project file that carries one is ignored and says so in
+**Four sections may only be set in the user's own file**: `quota`, `keyboard`,
+`projects` and `toolbar`. A project file that carries one is ignored and says so in
 `problems`. What directory this app starts `claude` in, and which keys your
 hands use, are not a repository's business — and a repository that could rebind
 your keys could make the window unusable with hand-editing the file as the only
 way back. `projects` is there for a third reason: the map is keyed by absolute
 path and so names *other* projects, and a repository setting one would be a
-repository colouring its neighbours. `quota` was documented this way before it
+repository colouring its neighbours. `toolbar` is the `keyboard` argument
+applied to the top bar: a checked-in file should not be able to rearrange your
+window. `quota` was documented this way before it
 was enforced this way; it is enforced now, so `?cwd=` no longer echoes a
 project's value back as though it counted.
 
@@ -1075,6 +1077,31 @@ User file only, and `bindings` is a **map**, so a `PUT` naming it replaces the
 whole thing rather than merging into it — inside the map `null` already means
 "unbound on purpose", so there is no spare spelling for "drop this one entry
 back to its default". Send all of it.
+
+`toolbar` is how the desktop page lays out its top bar. It has one key, `items`,
+an **array of objects** `[{id, place, label}]` in the order the bar draws them:
+
+| Field | Type | |
+|---|---|---|
+| `id` | string | one of `tasks`, `live`, `dashboard`, `history`, `drafts`, `schedules`, `settings`, `quota`, `devbrowser` |
+| `place` | `"bar"`, `"more"` or `"hidden"` | on the bar, in its More menu, or not drawn. Missing means `"bar"` |
+| `label` | bool | whether the name shows beside the icon. Missing means `true`. Only the seven views have an icon, so it means nothing on `quota` or `devbrowser` |
+
+The default is `[]`, which means the built-in layout. An id the list leaves out
+is drawn in its default place, so a button added later shows up without anyone
+having to list it. Entries are cleaned one at a time, as `keyboard.bindings`
+is: an unknown or repeated id, a `place` outside the three, or a `label` that is
+not a bool costs that entry and adds one `problems` line. Two buttons are
+**pinned**. `settings` may be `"bar"` or `"more"` but never `"hidden"`, because
+it is where hidden buttons are brought back from. `quota` is always `"bar"`,
+because its popover holds Restart bridge. A file that asks otherwise is
+**moved** back to `"bar"` with a `problems` line. A `PUT` that asks otherwise is
+refused with `400`, the way any value the file would have had to correct is.
+
+Hiding a view removes its button and nothing else: its shortcut in
+`keyboard.bindings` still opens it. User file only, and `items` is one key, so
+a `PUT` sends the whole list. The Android app draws no such bar and can ignore
+this section.
 
 ### `GET /api/keymap`
 
@@ -2911,7 +2938,7 @@ are preserved, and `version` is stamped.
 
 **A key whose value is a map is still one key**, so naming it replaces the whole
 map. That is true of all three — `keyboard.bindings`, `spinner.weights` and
-`projects.colors` — and it is deliberate: a client that holds the resolved map
+`projects.colors` — and of the one list, `toolbar.items`, and it is deliberate: a client that holds the resolved map
 can say exactly what it wants by sending all of it, and there is no second
 spelling that would have to mean "drop one entry". See each one under
 `GET /api/prefs`.
