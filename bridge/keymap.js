@@ -9,8 +9,8 @@
 // hand-editing the file — has no way to discover what may go in it, and a typo
 // is indistinguishable from a setting that does not work. So the catalogue is
 // here, where bridge/prefs.js can validate against it, `GET /api/keymap` can
-// serve it, and every page gets it in a `cs-keymap` <meta> tag beside
-// `cs-prefs`.
+// serve it, and every page gets it in a `tgx-keymap` <meta> tag beside
+// `tgx-prefs`.
 //
 // **What is in the catalogue is deliberately narrow.** The window has around
 // forty key handlers and only the ones below are shortcuts in the sense worth

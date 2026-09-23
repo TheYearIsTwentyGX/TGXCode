@@ -84,7 +84,7 @@ ok('the list is bounded');
 
 // --- pressing ------------------------------------------------------------
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-sessions-wispr-'));
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tgxcode-wispr-'));
 const binDir = path.join(tmp, 'bin');
 const marker = path.join(tmp, 'called.log');
 fs.mkdirSync(binDir);
@@ -101,7 +101,7 @@ const reset = () => { try { fs.unlinkSync(marker); } catch { /* never written */
 
 const saved = {
     PATH: process.env.PATH,
-    CLAUDE_SESSIONS_HOST_KIND: process.env.CLAUDE_SESSIONS_HOST_KIND,
+    TGXCODE_HOST_KIND: process.env.TGXCODE_HOST_KIND,
     FAKE_SENT: process.env.FAKE_SENT,
 };
 const restore = () => {
@@ -115,7 +115,7 @@ const restore = () => {
 (async () => {
     process.env.PATH = binDir;
 
-    process.env.CLAUDE_SESSIONS_HOST_KIND = 'linux';
+    process.env.TGXCODE_HOST_KIND = 'linux';
     reset();
     assert.strictEqual(wispr.available(), false);
     let out = await wispr.press('Win+Alt+2');
@@ -123,7 +123,7 @@ const restore = () => {
     assert.deepStrictEqual(called(), [], 'a Linux host spawned powershell.exe');
     ok('on a Linux host nothing is available and nothing is spawned');
 
-    process.env.CLAUDE_SESSIONS_HOST_KIND = 'wsl';
+    process.env.TGXCODE_HOST_KIND = 'wsl';
     assert.strictEqual(wispr.available(), true);
 
     reset();

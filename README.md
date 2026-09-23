@@ -120,7 +120,7 @@ is specific about which parts it uses:
 | | For |
 |---|---|
 | node | The bridge. `bridge/launch.sh` finds an nvm-managed one if it is not on `PATH`. |
-| `claude` | The whole point. On `PATH`, or named by `CLAUDE_SESSIONS_CLAUDE_BIN`. |
+| `claude` | The whole point. On `PATH`, or named by `TGXCODE_CLAUDE_BIN`. |
 | `bash` | `launch.sh`, the terminal pane, `restart-bridge.sh`. |
 | `util-linux` — `script`, `stty` | The pty. There is no node-pty here and no native modules; `script(1)` *is* the terminal. |
 | `iproute2` — `ss` | Which process holds a dev server's port. |
@@ -171,7 +171,7 @@ Windows-side on purpose: electron-builder is slow and flaky over the
 
 The script bakes the bridge location into `app/config.json`. To change it later
 without rebuilding, edit that file next to the installed executable, or create
-one in `%APPDATA%\claude-sessions\` (on Linux, `~/.config/claude-sessions/`):
+one in `%APPDATA%\tgxcode\` (on Linux, `~/.config/tgxcode/`):
 
 ```json
 { "bridgeDir": "~/src/tgxcode", "distro": "Ubuntu" }

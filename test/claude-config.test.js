@@ -21,8 +21,8 @@ const home = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-config-test-'));
 const managed = path.join(home, 'managed-settings.json');
 process.env.HOME = home;
 process.env.USERPROFILE = home;
-process.env.CLAUDE_SESSIONS_ROOTS = home;
-process.env.CLAUDE_SESSIONS_MANAGED_SETTINGS = managed;
+process.env.TGXCODE_ROOTS = home;
+process.env.TGXCODE_MANAGED_SETTINGS = managed;
 
 const cfg = require('../bridge/config.js');
 const jsonfile = require('../bridge/jsonfile.js');

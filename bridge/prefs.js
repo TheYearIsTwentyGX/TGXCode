@@ -62,7 +62,7 @@
 // project may override any key from `<workspace>/.tgxcode/settings.json`, which
 // is the same directory a project already declares its commands in — see
 // bridge/commands.js, whose precedence this mirrors so the two cannot disagree
-// about what "the local file" means. `CLAUDE_SESSIONS_PREFS_DIR` moves the
+// about what "the local file" means. `TGXCODE_PREFS_DIR` moves the
 // user's half somewhere else (see bridge/config.js). It is there so a dev
 // bridge can test a save, not to give the file a second home.
 //
@@ -152,7 +152,7 @@ const DEFAULTS = {
         // beats any one of them being actionable in place.
         compact: false,
         // Leave out sessions running under something that is not this bridge —
-        // a terminal, VS Code, another Claude Sessions window. They are the
+        // a terminal, VS Code, another TGXCode window. They are the
         // cards the board cannot do anything with: no send, no stop, no answer,
         // because a second process on one transcript is two writers on one file.
         // Off by default, because a session you cannot drive from here is still
@@ -710,7 +710,7 @@ class Prefs {
             if (fs.existsSync(cfg.USER_PREFS_FILE)) return;
             writeAtomic(cfg.USER_PREFS_FILE, serialize(DEFAULTS));
         } catch (err) {
-            console.error(`[claude-sessions] could not create ${cfg.USER_PREFS_FILE}: ${err.message}`);
+            console.error(`[tgxcode] could not create ${cfg.USER_PREFS_FILE}: ${err.message}`);
         }
     }
 

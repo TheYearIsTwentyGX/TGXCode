@@ -143,7 +143,7 @@ function load() {
         // worth one line, because a cache that cannot be read is a cache that is
         // being rebuilt on every boot.
         if (err.code !== 'ENOENT') {
-            console.error(`[claude-sessions] ignoring unreadable ${STORE_FILE}: ${err.message}`);
+            console.error(`[tgxcode] ignoring unreadable ${STORE_FILE}: ${err.message}`);
         }
     }
 }
@@ -163,7 +163,7 @@ function flush() {
         fs.writeFileSync(tmp, serialise());
         fs.renameSync(tmp, STORE_FILE);
     } catch (err) {
-        console.error(`[claude-sessions] could not save PR cache: ${err.message}`);
+        console.error(`[tgxcode] could not save PR cache: ${err.message}`);
     }
 }
 

@@ -11,6 +11,7 @@
 // ~/.claude/projects — so a session started in one shows up in the other. What
 // is separate is the process: restarting this one leaves the other alone.
 
+require('../bridge/legacy-env');
 const fs = require('fs');
 const path = require('path');
 const { spawn, execFile } = require('child_process');
@@ -39,7 +40,7 @@ const memoryKey = `dev:${repo}`;
  *
  * `denylist: null` because this is picking a port for a *bridge*, not for a
  * project's dev server: the config denylist contains the bridge port, and
- * `CLAUDE_SESSIONS_PORT=45899 npm run dev` is a request for that exact one.
+ * `TGXCODE_PORT=45899 npm run dev` is a request for that exact one.
  */
 function pickPort(from, sticky) {
     const remembered = sticky ? ports.rememberedPort(memoryKey) : null;
@@ -60,7 +61,11 @@ function pickPort(from, sticky) {
 function findExe() {
     const local = winEnvAsWslPath('LOCALAPPDATA');
     if (!local) return null;
+    // The ClaudeSessions paths are the app as it was installed before the
+    // rename; they go once nobody has that build any more.
     return [
+        path.join(local, 'Programs', 'TGXCode', 'TGXCode.exe'),
+        path.join(local, 'TGXCode-build', 'dist', 'win-unpacked', 'TGXCode.exe'),
         path.join(local, 'Programs', 'ClaudeSessions', 'ClaudeSessions.exe'),
         path.join(local, 'ClaudeSessions-build', 'dist', 'win-unpacked', 'ClaudeSessions.exe'),
     ].find(p => fs.existsSync(p)) || null;
@@ -79,8 +84,10 @@ function findLinuxApp() {
     const electron = path.join(repo, 'node_modules', '.bin', 'electron');
     if (fs.existsSync(electron)) return { cmd: electron, args: [repo] };
 
-    const unpacked = path.join(repo, 'dist', 'linux-unpacked', 'ClaudeSessions');
-    if (fs.existsSync(unpacked)) return { cmd: unpacked, args: [] };
+    const unpacked = ['TGXCode', 'tgxcode', 'ClaudeSessions']
+        .map(name => path.join(repo, 'dist', 'linux-unpacked', name))
+        .find(p => fs.existsSync(p));
+    if (unpacked) return { cmd: unpacked, args: [] };
 
     try {
         const image = fs.readdirSync(path.join(repo, 'dist'))
@@ -98,10 +105,10 @@ function findLinuxApp() {
  *
  * The flag exists because the environment is not a channel that reaches here
  * from everywhere: a run started from the app's own buttons has
- * CLAUDE_SESSIONS_PORT deleted before the process starts — deliberately, see
+ * TGXCODE_PORT deleted before the process starts — deliberately, see
  * bridge/terminal.js — so `.tgxcode/commands.json` has no way to hand a port
  * over except this. It is worth having by itself, too: `npm run dev --
- * --port=45905` says what it means where `CLAUDE_SESSIONS_PORT=45905 npm run
+ * --port=45905` says what it means where `TGXCODE_PORT=45905 npm run
  * dev` reads like it is aiming at the everyday instance.
  */
 function askedPort() {
@@ -113,11 +120,11 @@ function askedPort() {
 (async () => {
     // Named, as against defaulted: a port somebody typed outranks a remembered
     // one, even when it happens to be the development default.
-    const named = askedPort() || Number(process.env.CLAUDE_SESSIONS_PORT) || 0;
+    const named = askedPort() || Number(process.env.TGXCODE_PORT) || 0;
     const requested = named || DEV_PORT;
     if (requested === DEFAULT_PORT) {
         console.error(`Refusing to run development on ${DEFAULT_PORT} — that is the `
-            + 'everyday instance. Leave CLAUDE_SESSIONS_PORT unset and --port off.');
+            + 'everyday instance. Leave TGXCODE_PORT unset and --port off.');
         process.exit(1);
     }
 
@@ -130,7 +137,7 @@ function askedPort() {
     const bridge = spawn(process.execPath, [path.join(repo, 'bridge', 'server.js')], {
         cwd: repo,
         stdio: 'inherit',
-        env: { ...process.env, CLAUDE_SESSIONS_PORT: String(port) },
+        env: { ...process.env, TGXCODE_PORT: String(port) },
     });
 
     // Remembered only once it has stayed up — a bridge that lost a race for the
@@ -165,18 +172,20 @@ function askedPort() {
     // Give the bridge a moment so the window does not open on a splash.
     setTimeout(() => {
         // The port travels in the environment either way; the shell prefers it
-        // over config.json.
+        // over config.json. Under both names, because a shell packaged before
+        // the rename only knows CLAUDE_SESSIONS_PORT.
         if (onWsl) {
             const winPath = toWindowsPath(app);
             if (!winPath) return;
             execFile('cmd.exe',
-                ['/c', 'set', `CLAUDE_SESSIONS_PORT=${port}`, '&&', 'start', '', winPath],
+                ['/c', 'set', `TGXCODE_PORT=${port}`, '&&', 'set', `CLAUDE_SESSIONS_PORT=${port}`,
+                    '&&', 'start', '', winPath],
                 { cwd: '/mnt/c' }, () => {});
         } else {
             const child = spawn(app.cmd, app.args, {
                 detached: true,
                 stdio: 'ignore',
-                env: { ...process.env, CLAUDE_SESSIONS_PORT: String(port) },
+                env: { ...process.env, TGXCODE_PORT: String(port), CLAUDE_SESSIONS_PORT: String(port) },
             });
             child.on('error', err => console.error(`  Could not open a window: ${err.message}`));
             child.unref();

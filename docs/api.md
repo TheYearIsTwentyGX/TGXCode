@@ -11,6 +11,21 @@ here, not a page in `web/`.
 Anything a client needs and cannot get from here is a gap in the API, and belongs
 fixed here rather than worked around in the client.
 
+**The app was called Claude Sessions until the rename to TGXCode.** Every name a
+client can see changed with it, and every old one is still accepted, so a client
+built against the old names keeps working:
+
+| Was | Is | Old name still… |
+|---|---|---|
+| `X-Claude-Sessions-Client: 1` | `X-TGXCode-Client: 1` | accepted by the CSRF guard |
+| cookie `cs_token` | cookie `tgx_token` | read; never set; expired by `/pair/forget` |
+| `~/.local/share/claude-sessions/` | `~/.local/share/tgxcode/` | a symlink to the new directory |
+| `CLAUDE_SESSIONS_<X>` variables | `TGXCODE_<X>` | read when the new one is unset |
+| `/api/health` `app: "claude-sessions"` | `app: "tgxcode"` | reported by an older bridge |
+| `<meta name="cs-token">`, `cs-prefs`, `cs-keymap`, `cs-host` | `tgx-token`, `tgx-prefs`, `tgx-keymap`, `tgx-host` | read by `web/` beside the new |
+| MCP tools `mcp__claude-sessions__*` | `mcp__tgxcode__*` | in transcripts written before it |
+| `live.entrypoint` `"claude-sessions"` | `"tgxcode"` | on sessions started before it |
+
 **This file is the contract, not a summary of one.** The Android client adds no
 code to this repository and cannot read `bridge/`; it is written against this
 document alone. So a change to the wire surface that is not written down here does
@@ -38,7 +53,7 @@ design avoids. Do not.
 
 ## Authentication
 
-A token is created on first run at `~/.local/share/claude-sessions/token`
+A token is created on first run at `~/.local/share/tgxcode/token`
 (mode `0600`), 32 random bytes as base64url. Every `/api/` route requires it except
 `GET /api/health`.
 
@@ -49,16 +64,22 @@ credential in one slot does not shadow a good one in another:
 |---|---|
 | `Authorization: Bearer <token>` | The normal one. What an Android client should send. |
 | `?token=<token>` | For `EventSource`, which cannot set headers. In practice only used by the pairing handshake. |
-| `Cookie: cs_token=<token>` | What browsers use after pairing. |
+| `Cookie: tgx_token=<token>` | What browsers use after pairing. `cs_token`, the name from before the rename, is still read but never set. |
 
 Failure is `401` with `{"error": "unauthorized", "hint": …}`.
 
-### `X-Claude-Sessions-Client: 1` on every write
+### `X-TGXCode-Client: 1` on every write
 
 **Every non-GET `/api/` route except `/api/health` also requires the header
-`X-Claude-Sessions-Client: 1`**, and refuses without it with
+`X-TGXCode-Client: 1`**, and refuses without it with
 `403 {"error": "missing client header"}`. It is checked before the token, so a
 request that is missing it fails the same way whether or not the token was good.
+
+**`X-Claude-Sessions-Client: 1`, the name from before the rename, is accepted in its
+place** — either one satisfies the guard. A client should send the new one. The
+desktop's own clients send both for now, because a bridge started before the rename
+only knows the old name and `web/` goes live before that bridge restarts; a client
+that must talk to such a bridge can do the same.
 
 It is a CSRF guard, not a secret: the value is a constant published in this
 repository, and the point is only that a form post or an image tag from another
@@ -78,17 +99,17 @@ Sending it on a GET is harmless and simplest.
 
 A **remote** request addressed to a host the bridge does not recognise is
 `403 {"error": "unexpected host", "host": …}`, before auth. Loopback names, any
-`.ts.net` name, a bare IP address, and anything in `CLAUDE_SESSIONS_ORIGINS`
+`.ts.net` name, a bare IP address, and anything in `TGXCODE_ORIGINS`
 are recognised; a name that resolves to `127.0.0.1` from somewhere else is the
 DNS-rebinding case this closes. A client reaching the bridge through a proxy on a
-new hostname needs that hostname in `CLAUDE_SESSIONS_ORIGINS` — the symptom is a 403 that no
+new hostname needs that hostname in `TGXCODE_ORIGINS` — the symptom is a 403 that no
 amount of correct token fixes.
 
 ### Pairing a device
 
 ```
-GET /pair?token=<token>   →  303 to /, Set-Cookie: cs_token=…; HttpOnly; SameSite=Lax; Max-Age=31536000
-POST /pair/forget         →  303, cookie expired
+GET /pair?token=<token>   →  303 to /, Set-Cookie: tgx_token=…; HttpOnly; SameSite=Lax; Max-Age=31536000
+POST /pair/forget         →  303, both tgx_token and the old cs_token expired
 ```
 
 `Secure` is added when the request arrived over HTTPS (or the host is a `.ts.net`
@@ -241,7 +262,7 @@ will accept in the composer, the other is what the repository declares in
 `.tgxcode/`. It is still roots-scoped, so a `?cwd=` outside them is refused for
 every caller.
 
-**For every caller:** a session may only start inside `CLAUDE_SESSIONS_ROOTS`
+**For every caller:** a session may only start inside `TGXCODE_ROOTS`
 (default `$HOME`); `/api/fs` lists and `/api/fs/mkdir` writes only inside the same
 roots; `GET /api/sessions/:id/diff` and `POST /api/sessions/:id/open-file` reach
 only inside those roots **and** only inside the session's own repository root;
@@ -256,14 +277,15 @@ would in a shell.
 The only unauthenticated route. Counts, a pid, and:
 
 ```json
-{ "ok": true, "version": "1.0.0", "port": 45888, "dev": false,
+{ "ok": true, "app": "tgxcode", "version": "1.0.0", "port": 45888, "dev": false,
   "remote": false, "authRequired": true,
   "permissionModes": ["auto","acceptEdits","plan","manual","dontAsk","bypassPermissions"],
   "sessions": 120, "clients": 1, "live": 4, "busy": 3, "atRisk": 0,
   "sessionHost": { "pid": 5031, "protocol": 1, "startedAt": 1790098455020, "attached": 3 } }
 ```
 
-`busy` is a number: turns in flight. `atRisk` is a number, never more than `busy`:
+`app` is the string `"tgxcode"` — `"claude-sessions"` from a bridge that predates the
+rename. `busy` is a number: turns in flight. `atRisk` is a number, never more than `busy`:
 the turns a restart of this bridge would **end**. A turn running in the session host
 (`bridge/host.js`) survives a restart and is picked up by the next bridge on the same
 port, so it counts in `busy` and not in `atRisk`. Anything deciding whether a restart
@@ -282,7 +304,7 @@ than hardcoding the list; a remote client should drop `bypassPermissions` and
 `dontAsk` from what it offers, because the bridge will refuse them.
 
 `todoTools` is a boolean: whether this bridge sets `CLAUDE_CODE_ENABLE_TODO_TOOLS=1`
-on the sessions it starts (`CLAUDE_SESSIONS_TODO_TOOLS=0` in front of the bridge turns
+on the sessions it starts (`TGXCODE_TODO_TOOLS=0` in front of the bridge turns
 that off). It is worth reading before drawing an empty task list as "no tasks": Claude
 Code stopped offering the task tools to current models by default, so `false` means a
 session's list will usually be empty for that reason rather than because the agent chose
@@ -360,7 +382,7 @@ this bridge knows nothing else about — and `null` otherwise:
 `{sessionId, pid, procStart, cwd, kind, entrypoint, name, nameSource, addressable,
 peerProtocol, status, version, startedAt, updatedAt, running}`. `kind` is
 `"interactive"`, `"bg"`, or whatever Claude Code adds next; `entrypoint` is `"cli"`,
-`"vscode"`, `"claude-sessions"` (us), …; `name` is the session's *address* for
+`"vscode"`, `"tgxcode"` (us — `"claude-sessions"` on a session started before the rename), …; `name` is the session's *address* for
 cross-session messaging and `addressable` says whether it is listening. Treat truthiness
 of `live` as "there is a process" and `live.running` as "and it is still alive" — the
 registry file outlives the process that wrote it.
@@ -504,7 +526,7 @@ On `status: "error"` both are null and `result.text` is the reason. That is usua
 the person's own words and can be shown as such, but three canned strings are not and
 should not be presented as feedback: `"Not yet — keep planning."`, `"The question was
 dismissed unanswered. Use your own judgement and carry on."` and `"Stopped from
-Claude Sessions before this was approved."` — the last meaning the turn was stopped
+TGXCode before this was approved."` — the last meaning the turn was stopped
 while the ask was still open, so nobody answered it at all.
 
 **`tool.agent` is a subagent descriptor, not a name** — `{agentId, agentType,
@@ -672,7 +694,7 @@ everything. Check `gh.ok` before drawing a conclusion from an empty `prs`.
 
 Settled pull requests — merged or closed — are resolved once and written to disk, so
 a restart does not pay for them again. The store lives at
-`$XDG_CACHE_HOME/claude-sessions/prs.json` and is a cache: deleting it costs one
+`$XDG_CACHE_HOME/tgxcode/prs.json` and is a cache: deleting it costs one
 round of `gh` calls and loses nothing.
 
 `?refresh=1` on `GET /api/dashboard` is the only way to make the refresher run out
@@ -846,7 +868,7 @@ per-file view offers that the drawer cannot. Out-of-range values are clamped.
 of `no-directory`, `not-a-repo`, `left-behind`, `no-such-file`, `outside-repo` or
 `diff-failed`, plus `error` where git said something. `outside-repo` in particular is
 an ordinary result a client draws, not a refusal: a `403` is reserved for a path
-outside `CLAUDE_SESSIONS_ROOTS`, and it carries `{error, path, roots}`. A missing
+outside `TGXCODE_ROOTS`, and it carries `{error, path, roots}`. A missing
 `path` or an unrecognised `mode` is a `400`, **checked before the session is looked
 up**, so the difference between `400` and `404` cannot be used to enumerate session
 ids. `404` is only "session not found".
@@ -963,7 +985,7 @@ commands: the workspace's checked-in file (falling back to the main checkout's),
 then `settings.local.json` from the main checkout, then one in the workspace.
 `sources` lists the files that were actually read, weakest first.
 
-A bridge started with `CLAUDE_SESSIONS_PREFS_DIR` set uses that directory in place
+A bridge started with `TGXCODE_PREFS_DIR` set uses that directory in place
 of `~/.tgxcode`, for reads and saves alike, so the user file's path in `sources`
 and `target` is under it. This exists so a development bridge can test a save
 without touching the real file; no field changes because of it.
@@ -1590,7 +1612,7 @@ the permission to act on itself.
 same symmetric rule the schedule tick applies — but here the flag is not something a
 caller sets. It is copied off the target session, so it says no more than "the bridge
 that owns this session is the one that delivers to it". Unlike schedules this needs no
-`CLAUDE_SESSIONS_SCHEDULE_ON_DEV`: a scheduled message can only speak to a session that
+`TGXCODE_SCHEDULE_ON_DEV`: a scheduled message can only speak to a session that
 already exists, so there is no unattended-agent-in-the-user's-checkout hazard for that
 variable to guard.
 
@@ -1722,7 +1744,7 @@ hand-editable, and two bridges number independently.
 pinned and set to send itself. Seeded **once ever**: the file records which shipped
 snippets it has been offered, so deleting it is permanent and a later release adding a
 second shipped snippet will not bring it back. Deleting
-`~/.local/share/claude-sessions/snippets.json` outright is how to get the shipped ones
+`~/.local/share/tgxcode/snippets.json` outright is how to get the shipped ones
 again.
 
 Global — not per-session and not per-project. `projects` is the only scoping and it
@@ -1837,7 +1859,7 @@ not. The flag decides what the session becomes, and — see below — which brid
 
 **Only the everyday instance fires schedules.** Several bridges share `schedules.json` by
 design, so a development bridge lists, edits and runs-on-demand but its tick does nothing.
-With `CLAUDE_SESSIONS_SCHEDULE_ON_DEV=1` a dev bridge fires schedules with `test: true`
+With `TGXCODE_SCHEDULE_ON_DEV=1` a dev bridge fires schedules with `test: true`
 and only those. A client cannot see which bridge it is talking to beyond `dev` in
 `/api/health`, and should not need to.
 
@@ -2110,7 +2132,7 @@ a hostile caller could do with it is clear a badge.
 
 A move broadcasts `notification-read`. Nothing is broadcast when `moved` is false.
 
-History is kept in `~/.local/share/claude-sessions/notifications.jsonl`, appended a
+History is kept in `~/.local/share/tgxcode/notifications.jsonl`, appended a
 line at a time so that two bridges writing at once interleave instead of clobbering,
 and pruned to 1000 rows or 14 days, whichever bites first. The watermarks live beside
 it in `notification-reads.json`, which is rewritten whole — safe there, where it would
@@ -2269,7 +2291,7 @@ quota probe runs and the status line can be harvested — see `bridge/beacon.js`
 | Field | Type |
 | --- | --- |
 | `enabled` | boolean — on *and* pointed at a directory. Off is the default and means the percentage only refreshes while a terminal is open |
-| `suppressed` | `"dev-bridge"` or null. A development bridge does not run the beacon even when `enabled` is true: the reading is account-wide, so the everyday instance owns the probe, and a worktree bridge doing it too spends quota to measure quota. `CLAUDE_SESSIONS_BEACON_ON_DEV=1` overrides it. When this is set, `at`/`ok` describe some older run and will not advance |
+| `suppressed` | `"dev-bridge"` or null. A development bridge does not run the beacon even when `enabled` is true: the reading is account-wide, so the everyday instance owns the probe, and a worktree bridge doing it too spends quota to measure quota. `TGXCODE_BEACON_ON_DEV=1` overrides it. When this is set, `at`/`ok` describe some older run and will not advance |
 | `dir` | string or null — where it runs. The user names it in `~/.tgxcode/settings.json`, **user file only**: a project's `.tgxcode/settings.json` is checked into a repository and cannot set this |
 | `everyMinutes` | number or null — floor of 5 |
 | `running` | boolean — a run is in flight right now |
@@ -2292,7 +2314,7 @@ the same case the draft routes are open for.
 
 Harvest a percentage **now**, rather than waiting out `beacon.everyMinutes`.
 Body is ignored. Like every non-GET under `/api/`, it needs
-`X-Claude-Sessions-Client: 1`.
+`X-TGXCode-Client: 1`.
 
 ```
 200 { ok: boolean, quota: <the GET /api/quota payload> }
@@ -2373,7 +2395,7 @@ binary.
 
 ### `POST /api/claude-version/update`
 
-Runs `claude update` on the machine. Body is ignored; needs `X-Claude-Sessions-Client: 1`.
+Runs `claude update` on the machine. Body is ignored; needs `X-TGXCode-Client: 1`.
 
 ```
 200 { ok: boolean, output: string, summary: <the GET /api/claude-version payload, freshly checked> }
@@ -3058,7 +3080,7 @@ exactly one file:
 
 | `scope` | file |
 |---|---|
-| `user` | `~/.tgxcode/settings.json` — `cwd` ignored (under `CLAUDE_SESSIONS_PREFS_DIR` instead when the bridge was started with it) |
+| `user` | `~/.tgxcode/settings.json` — `cwd` ignored (under `TGXCODE_PREFS_DIR` instead when the bridge was started with it) |
 | `project` | `<cwd>/.tgxcode/settings.json`, which git tracks |
 | `project-local` | `<cwd>/.tgxcode/settings.local.json`, which is meant to be ignored — **check the repository actually ignores it**; this one does, since the Settings panel landed, but that is a line in a `.gitignore` and not something the bridge can promise |
 
@@ -3412,7 +3434,7 @@ Claude Code reads the `CLAUDE.md` of the directory it runs in, so a worktree's
 own file is the one in force.
 
 **A row is absent rather than empty when there is nothing to name.** With no
-`cwd`, or a `cwd` outside `CLAUDE_SESSIONS_ROOTS`, the answer is the `user` row
+`cwd`, or a `cwd` outside `TGXCODE_ROOTS`, the answer is the `user` row
 alone — not a `project` row pointing at a path no write would accept. So the
 array is one or two entries and a client should find its scope in it rather than
 index into it. This is deliberately *not* a `403`: a directory the bridge will
@@ -3553,7 +3575,7 @@ would be two kills racing for one port. `500` if the pull removed the script.
 
 `→ {pid, port, root, worktree, busy, atRisk, journal}`. **Local callers only.** `busy` and
 `atRisk` are numbers with their `/api/health` meanings. `journal` is
-up to the last 20 lines of `~/.cache/claude-sessions/restart-<port>.log` as strings.
+up to the last 20 lines of `~/.cache/tgxcode/restart-<port>.log` as strings.
 
 This exists for the case a `POST` cannot report: a restart that refused. The script's
 own turn-in-flight guard is still armed on every invocation, so a turn starting between
@@ -3743,7 +3765,7 @@ kinds of path are revealed even when you asked to open them, and come back
   without asking what it is running on.
 
 There is **no roots check**: unlike `GET /api/fs` and `POST /api/fs/mkdir`, this route
-is not bounded by `CLAUDE_SESSIONS_ROOTS`. Opening `/tmp/…` and `/mnt/c/…` is the
+is not bounded by `TGXCODE_ROOTS`. Opening `/tmp/…` and `/mnt/c/…` is the
 common case, and a fence at `$HOME` would refuse those while buying little — anything
 a caller could be induced to open, it could have written inside `$HOME` first. The
 route being local-only, and the launchable list above, are what carry the weight.
@@ -4111,7 +4133,7 @@ These are cheap now and expensive later, so they are settled:
 
 ## Things that will bite
 
-**The write surface 403s without `X-Claude-Sessions-Client: 1`.** Reads work, writes
+**The write surface 403s without `X-TGXCode-Client: 1`.** Reads work, writes
 do not, and the message says `missing client header` rather than anything about auth.
 See §*Authentication*.
 

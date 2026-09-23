@@ -72,6 +72,7 @@ const { randomUUID } = require('crypto');
 const { EventEmitter } = require('events');
 
 const cfg = require('./config');
+const { deleteBoth } = require('./legacy-env');
 
 const { CLAUDE_BIN } = cfg;
 const { describeTool } = require('./transcript');
@@ -84,7 +85,7 @@ let queueSeq = 0;
 /**
  * The environment a session runs in.
  *
- * A session inherits the bridge's environment, and `CLAUDE_SESSIONS_PORT` has no
+ * A session inherits the bridge's environment, and `TGXCODE_PORT` has no
  * business travelling down it. The bridge sets that variable for itself; an agent
  * that inherits it is holding the port of *this* instance, so a bridge it starts
  * while working on this codebase silently binds the everyday one — which is
@@ -95,8 +96,8 @@ let queueSeq = 0;
  * started it.
  */
 function sessionEnv() {
-    const env = { ...process.env, CLAUDE_CODE_ENTRYPOINT: 'claude-sessions' };
-    delete env.CLAUDE_SESSIONS_PORT;
+    const env = { ...process.env, CLAUDE_CODE_ENTRYPOINT: 'tgxcode' };
+    deleteBoth(env, 'PORT');
     // And this one goes the same way as the entrypoint: the app shows a
     // session's own task list, and current models are not offered the tools that
     // keep one unless this is set. See cfg.TODO_TOOLS for the opt-out.
@@ -119,20 +120,20 @@ function sessionEnv() {
 //
 // **The port and the session id are arguments, and the token is not.** Two of
 // these tools call back into this bridge, so the server has to know where it is
-// — and `sessionEnv()` strips CLAUDE_SESSIONS_PORT on purpose, so the
+// — and `sessionEnv()` strips TGXCODE_PORT on purpose, so the
 // environment is not the channel. This string lands on the `claude` command
 // line, where `ps` can read it, which is why the port travels here and the token
 // is read off disk at the other end instead.
 const AGENT_TOOLS = [
-    'mcp__claude-sessions__suggest_session',
-    'mcp__claude-sessions__list_sessions',
-    'mcp__claude-sessions__message_session',
+    'mcp__tgxcode__suggest_session',
+    'mcp__tgxcode__list_sessions',
+    'mcp__tgxcode__message_session',
 ];
 
 function mcpConfig(sessionId) {
     return JSON.stringify({
         mcpServers: {
-            'claude-sessions': {
+            tgxcode: {
                 command: process.execPath,
                 args: [
                     path.join(__dirname, 'mcp.js'),
@@ -970,7 +971,7 @@ class Runner extends EventEmitter {
             const ask = this.pendingPermission;
             this._respondPermission(ask, {
                 behavior: 'deny',
-                message: 'Stopped from Claude Sessions before this was approved.',
+                message: 'Stopped from TGXCode before this was approved.',
             });
             this._clearPermission('stopped');
         }
@@ -1090,7 +1091,7 @@ class Runner extends EventEmitter {
                 type: 'control_response',
                 response: {
                     subtype: 'error', request_id: msg.request_id,
-                    error: `claude-sessions does not handle the "${req.subtype}" control request`,
+                    error: `tgxcode does not handle the "${req.subtype}" control request`,
                 },
             });
             return;
@@ -1145,8 +1146,8 @@ class Runner extends EventEmitter {
         // app produced before any of this existed: denied.
         if (!this.hasViewer()) {
             this._autoDeny(ask, kind === 'tool'
-                ? 'No Claude Sessions window was open to approve this, so it was denied.'
-                : `No Claude Sessions window was open to answer this, so ${
+                ? 'No TGXCode window was open to approve this, so it was denied.'
+                : `No TGXCode window was open to answer this, so ${
                     kind === 'plan' ? 'the plan was not approved' : 'the question went unanswered'}.`);
             return;
         }
@@ -1193,7 +1194,7 @@ class Runner extends EventEmitter {
 
         if (decision === 'deny') {
             this._respondPermission(ask, {
-                behavior: 'deny', message: 'Denied from Claude Sessions.',
+                behavior: 'deny', message: 'Denied from TGXCode.',
             });
         } else {
             const always = decision === 'allow-always';
@@ -1310,7 +1311,7 @@ class Runner extends EventEmitter {
     _respondPermission(ask, { behavior, message, updatedInput, updatedPermissions }) {
         const response = { behavior, toolName: ask.tool };
         if (behavior === 'allow' && updatedInput) response.updatedInput = updatedInput;
-        if (behavior === 'deny') response.message = message || 'Denied from Claude Sessions.';
+        if (behavior === 'deny') response.message = message || 'Denied from TGXCode.';
         if (updatedPermissions) response.updatedPermissions = updatedPermissions;
         // Before the write, for _flushQueue's reason.
         this._markAnswered(ask.id);

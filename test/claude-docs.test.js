@@ -20,7 +20,7 @@ const path = require('path');
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-docs-test-'));
 process.env.HOME = home;
 process.env.USERPROFILE = home;
-process.env.CLAUDE_SESSIONS_ROOTS = home;
+process.env.TGXCODE_ROOTS = home;
 
 const cfg = require('../bridge/config.js');
 const { ClaudeDocs, MAX_DOC_BYTES, specFor, readText } = require('../bridge/claude-docs.js');

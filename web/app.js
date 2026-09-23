@@ -1,4 +1,4 @@
-// Claude Sessions — renderer.
+// TGXCode — renderer.
 //
 // All state lives in the bridge; this file is a view over it. Transcript content
 // arrives from one place only (the file tail, pushed over SSE), so a session
@@ -11,7 +11,12 @@ import * as keys from './keys.js';
 
 // ── api ──────────────────────────────────────────────────────────────────
 
-const HEADERS = { 'X-Claude-Sessions-Client': '1', 'Content-Type': 'application/json' };
+// The CSRF header under both names. web/ is live the moment it lands, but the
+// bridge serving it keeps its old code until it restarts, and a bridge from
+// before the rename only knows X-Claude-Sessions-Client. The same goes for the
+// `cs-*` <meta> names read below beside their `tgx-*` ones. Drop the old names
+// once no bridge that predates the rename can be running.
+const HEADERS = { 'X-TGXCode-Client': '1', 'X-Claude-Sessions-Client': '1', 'Content-Type': 'application/json' };
 
 /**
  * The Error a failed call throws, carrying the status and the body with it.
@@ -31,7 +36,7 @@ function httpError(status, data) {
 }
 
 async function get(path) {
-    const r = await fetch(path, { headers: { 'X-Claude-Sessions-Client': '1' } });
+    const r = await fetch(path, { headers: { 'X-TGXCode-Client': '1', 'X-Claude-Sessions-Client': '1' } });
     if (!r.ok) throw httpError(r.status, await r.json().catch(() => ({})));
     return r.json();
 }
@@ -58,7 +63,7 @@ async function postFile(path, file) {
     const r = await fetch(path, {
         method: 'POST',
         headers: {
-            'X-Claude-Sessions-Client': '1',
+            'X-TGXCode-Client': '1', 'X-Claude-Sessions-Client': '1',
             // The bridge sniffs the real type from the bytes; this is a hint, and the
             // fallback matters because a File dragged from some places has no type.
             'Content-Type': file.type || 'application/octet-stream',
@@ -159,7 +164,7 @@ const mergePrefs = (d) => {
 
 const BOOT_PREFS = (() => {
     try {
-        const m = document.querySelector('meta[name="cs-prefs"]');
+        const m = document.querySelector('meta[name="tgx-prefs"], meta[name="cs-prefs"]');
         if (!m) return mergePrefs(null);
         return mergePrefs(JSON.parse(decodeURIComponent(m.content)));
     } catch { return mergePrefs(null); }
@@ -172,7 +177,7 @@ const BOOT_PREFS = (() => {
 // Absent means markdown.js leaves paths as plain text — see configurePaths.
 const BOOT_HOST = (() => {
     try {
-        const m = document.querySelector('meta[name="cs-host"]');
+        const m = document.querySelector('meta[name="tgx-host"], meta[name="cs-host"]');
         return m ? JSON.parse(decodeURIComponent(m.content)) : null;
     } catch { return null; }
 })();
@@ -1833,7 +1838,9 @@ const WHERE = {
     cli: 'in a terminal',
     vscode: 'in VS Code',
     'sdk-cli': 'under the SDK',
-    'claude-sessions': 'in another Claude Sessions window',
+    tgxcode: 'in another TGXCode window',
+    // Sessions started before the rename still carry the old entrypoint.
+    'claude-sessions': 'in another TGXCode window',
 };
 
 /**
@@ -5637,7 +5644,7 @@ function toolSummary(ev) {
     const i = ev.input || {};
 
     // Handing work to another session. Before the switch because the CLI prefixes
-    // an MCP tool with its server — `mcp__claude-sessions__message_session` — and
+    // an MCP tool with its server — `mcp__tgxcode__message_session` — and
     // the suffix is the part worth matching, for the same reason
     // SUGGEST_TOOL_SUFFIX is matched that way in bridge/transcript.js.
     //
@@ -6067,7 +6074,7 @@ function questionsView(questions, answers) {
 /** What became of an ask, in the few words a tick label and a popover have room for. */
 function markOutcome(ev) {
     if (!ev.result) return 'still waiting';
-    const stopped = /^Stopped from Claude Sessions/.test(ev.result.text || '');
+    const stopped = /^Stopped from (TGXCode|Claude Sessions)/.test(ev.result.text || '');
     if (ev.name === 'ExitPlanMode') {
         if (ev.status === 'error') return stopped ? 'stopped' : 'sent back';
         return ev.result.planWasEdited ? 'approved with a note' : 'approved';
@@ -6145,7 +6152,7 @@ function reviewPlan(ev) {
     const text = r.plan || ev.input.plan || '';
 
     if (ev.status === 'error') {
-        const stopped = /^Stopped from Claude Sessions/.test(r.text || '');
+        const stopped = /^Stopped from (TGXCode|Claude Sessions)/.test(r.text || '');
         dom.reviewOutcome.replaceChildren(stopped
             // Nobody turned this down — the turn ended while it was still up.
             // Printing the canned sentence as though it were feedback would put
@@ -6185,7 +6192,7 @@ function reviewQuestions(ev) {
     dom.reviewModal.dataset.cols = String(Math.min(Math.max(qs.length, 1), 4));
 
     if (ev.status === 'error') {
-        const stopped = /^Stopped from Claude Sessions/.test((ev.result || {}).text || '');
+        const stopped = /^Stopped from (TGXCode|Claude Sessions)/.test((ev.result || {}).text || '');
         dom.reviewOutcome.replaceChildren(el('span', { class: 'review-said' }, stopped
             ? 'Stopped before it was answered.'
             : 'Dismissed — Claude carried on unaided.'));
@@ -6725,7 +6732,7 @@ async function markInstance() {
         // happened by the time /api/health comes back.
         renderQuota();
         if (!h.dev) return;
-        document.title = `Claude Sessions — dev :${h.port}`;
+        document.title = `TGXCode — dev :${h.port}`;
         document.querySelector('.wordmark').append(
             el('span', { class: 'dev-badge', title: `Development bridge on port ${h.port}` },
                 `dev :${h.port}`));
@@ -16830,7 +16837,7 @@ navigator.serviceWorker?.addEventListener('message', (e) => {
 /**
  * `#/session/<id>` on load, which is how a click that had to open a window
  * gets to the right conversation. Deliberately the same shape plan 02 gives
- * the deep links, so a `claude-sessions://` handler can route into the page
+ * the deep links, so a `tgxcode://` handler can route into the page
  * without inventing a second vocabulary.
  */
 function openFromHash() {
@@ -16911,7 +16918,7 @@ dom.optSound.addEventListener('change', () => {
 // Worth having: Focus Assist and Do Not Disturb drop notifications without a
 // word, so "did that work" is otherwise unanswerable until a turn ends.
 dom.notifyTry.addEventListener('click', () => {
-    announce('Claude Sessions', 'This is what a finished turn will look like.', 'done', null);
+    announce('TGXCode', 'This is what a finished turn will look like.', 'done', null);
     if (!notify.sound && (!notify.desktop || notifyPermission() !== 'granted')) {
         toast('Both switches are off, so nothing would fire.', 'warn');
     }
@@ -24254,7 +24261,7 @@ window.addEventListener('blur', () => closeContextMenu({ focus: false }));
 // likely, let them be edited, and explain rather than pretend.
 
 function pairToken() {
-    const meta = document.querySelector('meta[name="cs-token"]');
+    const meta = document.querySelector('meta[name="tgx-token"], meta[name="cs-token"]');
     return meta ? meta.content : null;
 }
 
@@ -24315,7 +24322,7 @@ function pairNote(base) {
     }
     if (/^https:/.test(base)) {
         return 'Anything terminating TLS in front of the bridge works. Add its '
-            + 'hostname to CLAUDE_SESSIONS_ORIGINS if the origin check refuses it.';
+            + 'hostname to TGXCODE_ORIGINS if the origin check refuses it.';
     }
     return 'Plain HTTP: the Android app will connect, but nothing about the link '
         + 'is confidential in transit — anything on the path can read the token.';

@@ -211,7 +211,7 @@ function readEntry(file) {
         // 'interactive' | 'bg' | whatever comes next. Worth a badge when it is
         // a background agent, and worth saying in a tooltip either way.
         kind: str(raw.kind),
-        // How it was started: 'cli', 'vscode', 'claude-sessions' (us), …
+        // How it was started: 'cli', 'vscode', 'tgxcode' (us; 'claude-sessions' before the rename), …
         entrypoint: str(raw.entrypoint),
         // A human label Claude Code already derived. Used as a title source for
         // a session whose transcript has not produced one — and, since cross-

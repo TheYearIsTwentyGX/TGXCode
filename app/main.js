@@ -26,6 +26,49 @@ const fs = require('fs');
 const http = require('http');
 const { spawn, execFile } = require('child_process');
 
+// ── the rename ───────────────────────────────────────────────────────────
+//
+// This app was called ClaudeSessions before it was TGXCode, and two things
+// that carry the old name have to be carried across before anything else runs.
+//
+// **The variables.** Every TGXCODE_<X> used to be CLAUDE_SESSIONS_<X>, and a
+// shortcut or a script may still set the old one. The shell is packaged on its
+// own and cannot require bridge/legacy-env.js, so this is that module's loop
+// again: the old name fills in for a new one that is not set.
+for (const key of Object.keys(process.env)) {
+    if (!key.startsWith('CLAUDE_SESSIONS_')) continue;
+    const renamed = `TGXCODE_${key.slice('CLAUDE_SESSIONS_'.length)}`;
+    if (process.env[renamed] === undefined) process.env[renamed] = process.env[key];
+}
+
+// **The profile.** Electron names its userData directory after the app, so the
+// rename moves it from `<appData>/claude-sessions` to `<appData>/tgxcode` — and
+// that directory is the window's localStorage (the rail's sort and folds,
+// half-written drafts), its config.json, and the single-instance lock. Copied
+// rather than moved, because the old install may be open while the new one
+// starts for the first time. Before `ready` and before the lock, which is when
+// Chromium opens it.
+(function carryProfileAcross() {
+    try {
+        const now = app.getPath('userData');
+        // Electron names it after package.json's top-level `name` unless a
+        // top-level productName is set, and ours lives under `build` — so the old
+        // directory is `claude-sessions`. `ClaudeSessions` too, in case a build
+        // ever wrote one; on Windows the two are the same folder anyway.
+        const before = ['claude-sessions', 'ClaudeSessions']
+            .map(name => path.join(app.getPath('appData'), name))
+            .find(p => fs.existsSync(p));
+        if (fs.existsSync(now) || !before) return;
+        fs.cpSync(before, now, {
+            recursive: true,
+            // Chromium's lock files belong to the process that holds them.
+            filter: (src) => !/[\\/](Singleton\w*|lockfile)$/.test(src),
+        });
+    } catch (err) {
+        console.error(`[tgxcode] could not copy the old profile: ${err.message}`);
+    }
+})();
+
 // 45888 is the everyday instance. `npm run dev` starts a separate one on
 // another port and passes it in here, so working on this app cannot disturb a
 // window that has live sessions in it.
@@ -39,7 +82,7 @@ function usePort(port) {
 }
 
 // Where the bridge lives. Override in config.json next to this file or with
-// CLAUDE_SESSIONS_DIR, which is what you want when running from a worktree
+// TGXCODE_DIR, which is what you want when running from a worktree
 // rather than the checkout.
 const DEFAULTS = {
     distro: '',                              // Windows only; empty = WSL's default distro
@@ -70,14 +113,14 @@ function loadConfig() {
             // byte is a miserable way to fail, so strip it.
             Object.assign(cfg, JSON.parse(raw.replace(/^﻿/, '')));
         } catch (err) {
-            console.error(`[claude-sessions] ignoring ${p}: ${err.message}`);
+            console.error(`[tgxcode] ignoring ${p}: ${err.message}`);
         }
     }
-    if (process.env.CLAUDE_SESSIONS_DIR) cfg.bridgeDir = process.env.CLAUDE_SESSIONS_DIR;
-    if (process.env.CLAUDE_SESSIONS_DISTRO) cfg.distro = process.env.CLAUDE_SESSIONS_DISTRO;
+    if (process.env.TGXCODE_DIR) cfg.bridgeDir = process.env.TGXCODE_DIR;
+    if (process.env.TGXCODE_DISTRO) cfg.distro = process.env.TGXCODE_DISTRO;
     // The environment wins: it is how `npm run dev` hands this window its own
     // instance without editing the installed config.
-    if (process.env.CLAUDE_SESSIONS_PORT) cfg.port = Number(process.env.CLAUDE_SESSIONS_PORT);
+    if (process.env.TGXCODE_PORT) cfg.port = Number(process.env.TGXCODE_PORT);
     usePort(cfg.port);
     return cfg;
 }
@@ -100,7 +143,11 @@ function ping(timeout = 1200) {
 }
 
 // Where the bridge's own output goes, as a shell expression evaluated in WSL.
-const LOG_DIR = '"${XDG_CACHE_HOME:-$HOME/.cache}/claude-sessions"';
+// `tgxcode`, or `claude-sessions` if the bridge has not moved it across yet —
+// never create the new one while the old holds the logs (bridge/legacy-dirs.js).
+const LOG_DIR = '"$(c="${XDG_CACHE_HOME:-$HOME/.cache}"; '
+    + 'if [ ! -e "$c/tgxcode" ] && [ -e "$c/claude-sessions" ]; '
+    + 'then echo "$c/claude-sessions"; else echo "$c/tgxcode"; fi)"';
 // Per-port, so a development bridge does not overwrite the everyday one's log.
 const logFile = () => `${LOG_DIR}/bridge-${PORT}.log`;
 
@@ -147,14 +194,15 @@ function startBridge(cfg) {
     const script = [
         `cd ${shellQuote(cfg.bridgeDir)} || exit 1`,
         `mkdir -p ${LOG_DIR}`,
-        `export CLAUDE_SESSIONS_PORT=${PORT}`,
+        // Both names: the checkout it launches may predate the rename.
+        `export TGXCODE_PORT=${PORT} CLAUDE_SESSIONS_PORT=${PORT}`,
         `setsid nohup bash bridge/launch.sh >${logFile()} 2>&1 </dev/null &`,
         'exit 0',
     ].join('\n');
 
     const { cmd, args } = bridgeShell(cfg, script);
     const child = spawn(cmd, args, { stdio: 'ignore', windowsHide: true });
-    child.on('error', (err) => console.error(`[claude-sessions] ${err.message}`));
+    child.on('error', (err) => console.error(`[tgxcode] ${err.message}`));
 
     bridgeStartedByUs = true;
 }
@@ -182,7 +230,7 @@ function shellQuote(p) {
 // A port answering is not proof it is answering for the right tree.
 //
 // The bridge hands its environment to every session it starts, so an agent
-// working on this codebase inherits CLAUDE_SESSIONS_PORT pointing at the
+// working on this codebase inherits TGXCODE_PORT pointing at the
 // everyday instance; a bridge started from a worktree then binds 45888 without
 // anyone choosing that port, reports `dev: false`, and gets adopted here. The
 // window looks exactly like the everyday one and serves a branch's UI out of a
@@ -226,7 +274,7 @@ function askShutdown(pid) {
     return new Promise((resolve) => {
         const req = http.request(`${ORIGIN}/api/shutdown?pid=${pid}`, {
             method: 'POST',
-            headers: { 'X-Claude-Sessions-Client': '1', 'Content-Length': '0' },
+            headers: { 'X-TGXCode-Client': '1', 'X-Claude-Sessions-Client': '1', 'Content-Length': '0' },
             timeout: 4000,
         }, (res) => {
             res.resume();
@@ -264,7 +312,7 @@ async function reclaimPort(cfg, health, onStatus) {
                     + `${code === 409 ? ' — it still has a turn running' : ''}.\n\n`
                     + `Finish or stop that work, or end it by hand inside WSL:\n`
                     + `  kill ${health.pid}\n\n`
-                    + `then reopen Claude Sessions.`,
+                    + `then reopen TGXCode.`,
             };
         }
 
@@ -289,7 +337,7 @@ async function reclaimPort(cfg, health, onStatus) {
     return {
         ok: false,
         error: `The bridge on ${PORT} agreed to stop but is still answering.\n\n`
-            + `Inside WSL:\n  kill ${health.pid}\n\nthen reopen Claude Sessions.`,
+            + `Inside WSL:\n  kill ${health.pid}\n\nthen reopen TGXCode.`,
     };
 }
 
@@ -330,7 +378,7 @@ async function ensureBridge(cfg, onStatus) {
                 error: `Started a bridge in ${cfg.bridgeDir}, but ${PORT} is being `
                     + `answered by one serving ${health.root || 'an unknown checkout'}.\n\n`
                     + `Something else claimed the port first. Inside WSL:\n`
-                    + `  kill ${health.pid}\n\nthen reopen Claude Sessions.`,
+                    + `  kill ${health.pid}\n\nthen reopen TGXCode.`,
             };
         }
         bridgePid = health.pid || null;
@@ -344,7 +392,7 @@ async function stopBridgeIfIdle() {
     await new Promise((resolve) => {
         const req = http.request(`${ORIGIN}/api/shutdown?pid=${bridgePid}`, {
             method: 'POST',
-            headers: { 'X-Claude-Sessions-Client': '1', 'Content-Length': '0' },
+            headers: { 'X-TGXCode-Client': '1', 'X-Claude-Sessions-Client': '1', 'Content-Length': '0' },
             timeout: 1500,
         }, (res) => {
             // 409 means a turn is still running; leaving it up is the right call.
@@ -397,7 +445,7 @@ function createWindow() {
         backgroundColor: '#131314',
         // Name the instance in the title bar: two identical windows, one of them
         // holding real work, is a mistake waiting to happen.
-        title: PORT === DEFAULT_PORT ? 'Claude Sessions' : `Claude Sessions — dev :${PORT}`,
+        title: PORT === DEFAULT_PORT ? 'TGXCode' : `TGXCode — dev :${PORT}`,
         // .ico is a Windows format and Linux wants a PNG. Both are generated by
         // app/make-icon.js from the same source, so this is a filename choice
         // and not two pictures to keep in step.
@@ -489,7 +537,7 @@ function createWindow() {
 // what electron-builder installs, or clicks land nowhere. That is the Linux
 // spelling of the bug this comment records, and it is worth checking on the
 // first real Linux build rather than assuming.
-app.setAppUserModelId('com.claudesessions.desktop');
+app.setAppUserModelId('com.tgxcode.desktop');
 
 // One window, however it was asked for.
 //
@@ -574,7 +622,7 @@ app.whenReady().then(async () => {
     const setStatus = (msg, detail) => {
         if (win && !win.isDestroyed()) win.loadURL(splash(msg, detail));
     };
-    setStatus('Connecting to Claude Sessions…');
+    setStatus('Connecting to TGXCode…');
 
     const result = await ensureBridge(cfg, setStatus);
     if (!win || win.isDestroyed()) return;
@@ -589,7 +637,7 @@ app.whenReady().then(async () => {
         setStatus('The bridge would not start.',
             `Tried to run bridge/launch.sh in ${cfg.bridgeDir}`
             + `${cfg.distro ? ` on WSL distro ${cfg.distro}` : ''}.\n\n`
-            + `Output from ~/.cache/claude-sessions/bridge.log:\n${result.error}\n\n`
+            + `Output from ~/.cache/tgxcode/bridge-${PORT}.log:\n${result.error}\n\n`
             + `Check that the path exists inside WSL and that node is on PATH there. `
             + `Set a different location in config.json next to this app, or in `
             + `${path.join(app.getPath('userData'), 'config.json')}:\n`

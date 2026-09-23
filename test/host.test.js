@@ -188,7 +188,7 @@ async function main() {
         const sock = path.join(root, 'o.sock');
         const h = spawn(process.execPath, [path.join(__dirname, '..', 'bridge', 'host.js'),
             '--socket', sock], { stdio: 'ignore',
-            env: { ...process.env, CLAUDE_SESSIONS_HOST_ORPHAN_MS: '400' } });
+            env: { ...process.env, TGXCODE_HOST_ORPHAN_MS: '400' } });
         hostPids.add(h.pid);
         const c = new HostConnection(sock);
         await until(() => c.connect(300), 3000, 'orphan host');
@@ -211,7 +211,7 @@ async function main() {
         const sock = path.join(root, 'i.sock');
         const h = spawn(process.execPath, [path.join(__dirname, '..', 'bridge', 'host.js'),
             '--socket', sock], { stdio: 'ignore',
-            env: { ...process.env, CLAUDE_SESSIONS_HOST_IDLE_MS: '600' } });
+            env: { ...process.env, TGXCODE_HOST_IDLE_MS: '600' } });
         hostPids.add(h.pid);
         const code = await new Promise(r => h.on('close', r));
         assert.strictEqual(code, 0);

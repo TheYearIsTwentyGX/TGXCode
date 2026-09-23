@@ -46,7 +46,7 @@ const path = require('path');
 const { HOME } = require('./config');
 const { todoProgress, todoList } = require('./transcript');
 
-const TASKS_DIR = process.env.CLAUDE_SESSIONS_TASKS_DIR
+const TASKS_DIR = process.env.TGXCODE_TASKS_DIR
     || path.join(HOME, '.claude', 'tasks');
 
 // Files are a few hundred bytes and there are rarely more than a dozen, but the

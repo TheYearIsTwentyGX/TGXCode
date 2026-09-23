@@ -339,7 +339,7 @@ async function enrich(candidates, titles = {}, session = {}) {
 /**
  * Processes that are never a dev server, however they got hold of a port.
  *
- * A bridge is a Claude Sessions instance like this one, and killing it takes its
+ * A bridge is a TGXCode instance like this one, and killing it takes its
  * turns down with it — `claude` reads stdin, so the closed pipe reads as
  * end-of-input and the turn stops mid-flight. A `claude` process *is* a turn.
  * Neither is something a button in this UI should be able to end by accident.
@@ -348,7 +348,7 @@ function protectedAs(cmdline) {
     const argv = cmdline.split('\0').filter(Boolean);
     const joined = argv.join(' ');
     const argv0 = (argv[0] || '').split('/').pop();
-    if (/bridge\/server\.js/.test(joined)) return 'a Claude Sessions bridge';
+    if (/bridge\/server\.js/.test(joined)) return 'a TGXCode bridge';
     if (argv0 === 'claude' || /claude-code\/cli\.js|\.claude\/local\/claude/.test(joined)) {
         return 'a claude agent process';
     }

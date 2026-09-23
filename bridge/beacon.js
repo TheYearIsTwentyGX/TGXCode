@@ -56,6 +56,7 @@ const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 
 const cfg = require('./config');
+const { deleteBoth } = require('./legacy-env');
 
 // The harvester. Passed by absolute path because `--settings` is read by a
 // process whose cwd is the beacon directory, not ours.
@@ -195,7 +196,7 @@ class Beacon {
         delete env.CLAUDE_CODE_SIMPLE;
         delete env.CLAUDE_CODE_ENTRYPOINT;
         // Same reasoning as bridge/terminal.js — never hand a child the port.
-        delete env.CLAUDE_SESSIONS_PORT;
+        deleteBoth(env, 'PORT');
 
         const proc = spawn('script', ['-qfec', boot, '/dev/null'], {
             cwd,

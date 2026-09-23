@@ -56,7 +56,7 @@ function check(name, got, want) {
     console.log('\n--- an unpaired remote device loading / ---');
     const page = await call('/', PHONE);
     check('the page loads', page.status, 200);
-    check('but is NOT handed the token', /cs-token/.test(page.body), false);
+    check('but is NOT handed the token', /tgx-token/.test(page.body), false);
     check('and gets no cookie', page.headers['set-cookie'], undefined);
 
     console.log('\n--- what boot() then sees ---');
@@ -71,7 +71,7 @@ function check(name, got, want) {
     console.log('\n--- after pairing ---');
     const paired = await call(`/pair?token=${require('fs').readFileSync(
         require('path').join(require('os').homedir(),
-            '.local/share/claude-sessions/token'), 'utf8').trim()}`, PHONE);
+            '.local/share/tgxcode/token'), 'utf8').trim()}`, PHONE);
     check('pair redirects', paired.status, 303);
     const cookie = String(paired.headers['set-cookie']).split(';')[0];
     check('and the cookie then works',

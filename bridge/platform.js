@@ -27,12 +27,13 @@
 //     that makes `explorer.exe` executable from Linux. If interop is switched
 //     off in /etc/wsl.conf, "Windows" is the wrong answer even under WSL.
 //
-// CLAUDE_SESSIONS_HOST_KIND overrides both. That is not a debugging knob left in
+// TGXCODE_HOST_KIND overrides both. That is not a debugging knob left in
 // by accident — it is how the test suite drives both branches from whichever
 // machine is running it. Without it the Linux path ships untested from the
 // Windows box and the Windows path ships untested from the Linux one, which is
 // the failure this module exists to prevent.
 
+require('./legacy-env');
 const fs = require('fs');
 
 const WSL_INTEROP = '/proc/sys/fs/binfmt_misc/WSLInterop';
@@ -50,12 +51,12 @@ function probe() {
 }
 
 /**
- * 'wsl' or 'linux'. Anything else in CLAUDE_SESSIONS_HOST_KIND is ignored rather
+ * 'wsl' or 'linux'. Anything else in TGXCODE_HOST_KIND is ignored rather
  * than thrown on: a typo in an env var should not stop the bridge from starting,
  * and the detected answer is the safe one to fall back to.
  */
 function hostKind() {
-    const forced = String(process.env.CLAUDE_SESSIONS_HOST_KIND || '').toLowerCase();
+    const forced = String(process.env.TGXCODE_HOST_KIND || '').toLowerCase();
     if (forced === 'wsl' || forced === 'linux') return forced;
     return probe() ? 'wsl' : 'linux';
 }
@@ -65,7 +66,7 @@ function isWsl() {
     return hostKind() === 'wsl';
 }
 
-/** Only for the tests that flip CLAUDE_SESSIONS_HOST_KIND. */
+/** Only for the tests that flip TGXCODE_HOST_KIND. */
 function _resetProbe() {
     probed = null;
 }

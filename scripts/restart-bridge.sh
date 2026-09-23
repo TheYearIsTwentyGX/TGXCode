@@ -15,7 +15,7 @@
 #            bridge that never came back
 #
 # Every run that could change something appends a line to
-# ~/.cache/claude-sessions/restart-<port>.log, one word for the outcome, so
+# ~/.cache/tgxcode/restart-<port>.log, one word for the outcome, so
 # `grep skipped-dirty` is a real question to ask of it. A night with no `start`
 # line at all means cron never fired — usually WSL was not running at midnight,
 # which is a different problem and used to look identical to every other one.
@@ -47,9 +47,15 @@
 
 set -uo pipefail
 
-PORT="${CLAUDE_SESSIONS_PORT:-45888}"
+PORT="${TGXCODE_PORT:-${CLAUDE_SESSIONS_PORT:-45888}}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LOG_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/claude-sessions"
+# tgxcode, or claude-sessions from before the rename if the bridge has not moved
+# it yet. Never create the new one while the old holds the logs; see
+# bridge/legacy-dirs.js.
+LOG_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/tgxcode"
+if [ ! -e "$LOG_DIR" ] && [ -e "${XDG_CACHE_HOME:-$HOME/.cache}/claude-sessions" ]; then
+    LOG_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/claude-sessions"
+fi
 LOG="$LOG_DIR/bridge-$PORT.log"
 
 # The run journal. Deliberately not $LOG: that one is the bridge's own stdout and
@@ -171,7 +177,7 @@ case "$REPO/" in
             die 1 refused-worktree "$REPO is a worktree." \
                 "Refusing to restart the everyday bridge on $PORT — it would come" \
                 "back serving this worktree, and bridge/server.js will not allow that." \
-                "Your own: CLAUDE_SESSIONS_PORT=45899 scripts/restart-bridge.sh" \
+                "Your own: TGXCODE_PORT=45899 scripts/restart-bridge.sh" \
                 "The everyday one: run this from the main checkout."
         fi
         ;;

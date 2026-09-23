@@ -501,7 +501,7 @@ function read() {
             unreadable: false,
         };
     } catch (err) {
-        console.error(`[claude-sessions] ignoring unreadable ${STATE_FILE}: ${err.message}`);
+        console.error(`[tgxcode] ignoring unreadable ${STATE_FILE}: ${err.message}`);
         return { ...empty, unreadable: true };
     }
 }
@@ -641,7 +641,7 @@ class Snippets {
             }, null, 2));
             fs.renameSync(tmp, STATE_FILE);
         } catch (err) {
-            console.error(`[claude-sessions] could not save snippets: ${err.message}`);
+            console.error(`[tgxcode] could not save snippets: ${err.message}`);
         }
     }
 

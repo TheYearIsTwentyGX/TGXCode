@@ -29,8 +29,11 @@ function findExe() {
     if (!local) return null;
     const candidates = [
         // Installed via the NSIS installer.
-        path.join(local, 'Programs', 'ClaudeSessions', 'ClaudeSessions.exe'),
+        path.join(local, 'Programs', 'TGXCode', 'TGXCode.exe'),
         // Built but not installed.
+        path.join(local, 'TGXCode-build', 'dist', 'win-unpacked', 'TGXCode.exe'),
+        // The same two from before the rename, until nobody has that build.
+        path.join(local, 'Programs', 'ClaudeSessions', 'ClaudeSessions.exe'),
         path.join(local, 'ClaudeSessions-build', 'dist', 'win-unpacked', 'ClaudeSessions.exe'),
     ];
     return candidates.find(p => fs.existsSync(p)) || null;
@@ -50,8 +53,10 @@ function findLinuxApp() {
     } catch { /* never built */ }
 
     // `--dir` builds leave an unpacked tree instead.
-    const unpacked = path.join(dist, 'linux-unpacked', 'ClaudeSessions');
-    if (fs.existsSync(unpacked)) return unpacked;
+    const unpacked = ['TGXCode', 'tgxcode', 'ClaudeSessions']
+        .map(name => path.join(dist, 'linux-unpacked', name))
+        .find(p => fs.existsSync(p));
+    if (unpacked) return unpacked;
 
     return null;
 }
@@ -60,7 +65,7 @@ function startOnWindows() {
     const exe = findExe();
     if (!exe) {
         console.error([
-            'Claude Sessions has not been built yet.',
+            'TGXCode has not been built yet.',
             '',
             'Build it from PowerShell, in this directory:',
             '',
@@ -106,7 +111,7 @@ function startOnLinux() {
         args = [repo];
     } else {
         console.error([
-            'Claude Sessions has not been built yet, and electron is not installed.',
+            'TGXCode has not been built yet, and electron is not installed.',
             '',
             'Build it:',
             '',

@@ -19,7 +19,7 @@
 import { Terminal } from './vendor/xterm.js';
 import { FitAddon } from './vendor/addon-fit.js';
 
-const HEADERS = { 'X-Claude-Sessions-Client': '1', 'Content-Type': 'application/json' };
+const HEADERS = { 'X-TGXCode-Client': '1', 'X-Claude-Sessions-Client': '1', 'Content-Type': 'application/json' };
 
 // Bytes both ways, base64 over JSON. A terminal stream is not text — half a
 // multi-byte character can and does arrive on its own — so nothing here is

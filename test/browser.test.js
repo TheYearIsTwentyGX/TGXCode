@@ -82,25 +82,25 @@ function check(name, got, want) {
     check('it is NOT Secure over plain loopback http',
         /Secure/.test(String(page.headers['set-cookie'])), false);
     check('and the page can read the token for the pairing link',
-        /name="cs-token" content="[\w-]{43}"/.test(page.body), true);
+        /name="tgx-token" content="[\w-]{43}"/.test(page.body), true);
     // The transcript decides how to draw itself from this before its first
     // fetch, so a page served without it is a page that renders the wrong way
     // with nothing to say so. Percent-encoded, because it is JSON in an
     // attribute — see auth.injectMeta.
     check('and the settings are in the page, not behind a fetch',
-        /name="cs-prefs" content="%7B%22version%22/.test(page.body), true);
+        /name="tgx-prefs" content="%7B%22version%22/.test(page.body), true);
     // Same argument, one step further: the first key somebody presses can land
     // before a fetch could answer, and a Ctrl+3 that does nothing because the
     // keymap has not arrived is indistinguishable from a broken binding.
     check('and so is the shortcut catalogue',
-        /name="cs-keymap" content="%7B%22commands%22/.test(page.body), true);
+        /name="tgx-keymap" content="%7B%22commands%22/.test(page.body), true);
     // And where the filesystem is, so a path in a transcript can be drawn as a
     // link to the Windows form of it before anything has been fetched. Guarded
     // rather than asserted flat: outside WSL there is no share to name, and a
     // bridge withholding the tag there is correct rather than broken.
     if (process.env.WSL_DISTRO_NAME) {
         check('and where the filesystem is, for the paths in a transcript',
-            /name="cs-host" content="%7B%22distro%22/.test(page.body), true);
+            /name="tgx-host" content="%7B%22distro%22/.test(page.body), true);
     }
 
     // Everything web/app.js does, now that the jar is warm. No header anywhere.
@@ -176,8 +176,16 @@ function check(name, got, want) {
         (await call('/api/fs/open')).status, 404);
     check('POST /api/subscribe reaches its own 404, not the gate',
         (await call('/api/subscribe', {
+            method: 'POST', headers: { 'x-tgxcode-client': '1' },
+        })).status, 404);
+    // The name from before the rename, which a shell or a phone built then still
+    // sends. Refusing it would 403 their whole write surface.
+    check('and so does one carrying the pre-rename header',
+        (await call('/api/subscribe', {
             method: 'POST', headers: { 'x-claude-sessions-client': '1' },
         })).status, 404);
+    check('and one carrying neither is refused by the gate',
+        (await call('/api/subscribe', { method: 'POST' })).status, 403);
 
     const es = await stream('/api/events');
     check('EventSource /api/events opens', es.status, 200);

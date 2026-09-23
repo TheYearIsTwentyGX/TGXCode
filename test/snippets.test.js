@@ -18,7 +18,7 @@
 // **XDG_DATA_HOME is set before the require, and that order is load-bearing.**
 // bridge/config.js reads the variable once, at require time, to build STATE_DIR —
 // so setting it afterwards would point the module at the real
-// ~/.local/share/claude-sessions and this test would eat the user's snippets.
+// ~/.local/share/tgxcode and this test would eat the user's snippets.
 
 const assert = require('assert');
 const fs = require('fs');
