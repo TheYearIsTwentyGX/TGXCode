@@ -8,7 +8,8 @@
 #   land --squash          squash instead of a merge commit (--rebase also works)
 #   land --delete-branch   delete the remote branch afterwards
 #   land --no-pull         merge only, leave the main checkout alone
-#   land --restart         also restart the everyday bridge (opt-in; see below)
+#   land --no-restart      leave the everyday bridge alone, even if bridge/ changed
+#   land --restart         restart the everyday bridge even if bridge/ did not change
 #   land --dry-run         say what would happen and change nothing
 #   land --status          report what is landable here and exit
 #
@@ -22,10 +23,15 @@
 # sanctioned is safe: it fast-forwards and nothing else, it will not touch a main
 # checkout that is dirty or on another branch, and it never commits there.
 #
-# It does not restart the bridge unless asked. The everyday instance usually has
-# live turns in it and a restart ends them — `claude` stops when its input pipe
-# closes — so picking up merged code is the user's call, not a side effect of
-# landing a branch. What the merge implies is printed instead.
+# When the merge changed bridge/, it restarts the everyday bridge so that the
+# code just landed is the code running. That used to be opt-in, because a
+# restart ended every live turn — `claude` stops when its input pipe closes. It
+# no longer does: turns run in the session host (bridge/host.js), which outlives
+# the bridge and hands them to the next one. The restart is delegated to
+# scripts/restart-bridge.sh, which refuses while any turn is `atRisk` — started
+# while no host was reachable, so a restart really would end it — and that
+# refusal is reported, never overridden. It does not start a bridge that was not
+# already running. --no-restart keeps the old behaviour: say, do not act.
 
 set -uo pipefail
 
@@ -36,7 +42,7 @@ MAIN="${CLAUDE_SESSIONS_MAIN:-$HOME/Other/claude-sessions}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 METHOD=--merge
-BRANCH=""; PULL=1; RESTART=0; DRY=0; STATUS_ONLY=0; DELETE=0
+BRANCH=""; PULL=1; RESTART=auto; DRY=0; STATUS_ONLY=0; DELETE=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --branch) shift; BRANCH="${1:-}" ;;
@@ -47,9 +53,10 @@ while [ $# -gt 0 ]; do
         --delete-branch) DELETE=1 ;;
         --no-pull) PULL=0 ;;
         --restart) RESTART=1 ;;
+        --no-restart) RESTART=0 ;;
         --dry-run) DRY=1 ;;
         --status) STATUS_ONLY=1 ;;
-        -h|--help) sed -n '3,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '3,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "land: unknown option '$1'" >&2; exit 1 ;;
     esac
     shift
@@ -184,6 +191,10 @@ BEFORE="$(git -C "$MAIN" rev-parse HEAD 2>/dev/null)"
 
 if [ "$DRY" = 1 ]; then
     say "  would run: git -C $MAIN pull --ff-only"
+    case "$RESTART" in
+        1) say "  would restart the everyday bridge (--restart)" ;;
+        auto) say "  would restart the everyday bridge if the pull changes bridge/" ;;
+    esac
     exit 0
 fi
 
@@ -199,22 +210,27 @@ AFTER="$(git -C "$MAIN" rev-parse HEAD 2>/dev/null)"
 
 # --- say what that means ----------------------------------------------------
 
+CHANGED=""
 if [ "$BEFORE" = "$AFTER" ]; then
     say "$MAIN was already up to date."
-    exit 0
+    # Nothing new on disk, so nothing for a restart to pick up — unless one was
+    # asked for by name.
+    [ "$RESTART" = 1 ] || exit 0
+else
+    CHANGED="$(git -C "$MAIN" diff --name-only "$BEFORE" "$AFTER" 2>/dev/null)"
+    say "$MAIN is now at $(git -C "$MAIN" log --oneline -1 | cut -c1-60)"
 fi
 
-CHANGED="$(git -C "$MAIN" diff --name-only "$BEFORE" "$AFTER" 2>/dev/null)"
-say "$MAIN is now at $(git -C "$MAIN" log --oneline -1 | cut -c1-60)"
-
 # The bridge runs what was on disk when it started, so a merge that touched
-# bridge/ is on disk but not in the running process. Say so; do not act on it.
-if printf '%s\n' "$CHANGED" | grep -q '^bridge/'; then
+# bridge/ is on disk but not in the running process until it restarts.
+BRIDGE_CHANGED=0
+printf '%s\n' "$CHANGED" | grep -q '^bridge/' && BRIDGE_CHANGED=1
+if [ "$BRIDGE_CHANGED" = 1 ]; then
     say ""
     say "This merge changed bridge/ — the running bridge is still on the old code."
-    if [ "$RESTART" != 1 ]; then
+    if [ "$RESTART" = 0 ]; then
         say "  When it suits you, from $MAIN:  npm run restart"
-        say "  (it refuses while a turn is in flight, which is the point)"
+        say "  (it refuses while a turn would be lost, which is the point)"
     fi
 fi
 if printf '%s\n' "$CHANGED" | grep -qE '^(app/|package\.json)'; then
@@ -224,27 +240,46 @@ if printf '%s\n' "$CHANGED" | grep -qE '^(app/|package\.json)'; then
     say "  Ask before running it."
 fi
 if printf '%s\n' "$CHANGED" | grep -q '^web/' \
-   && ! printf '%s\n' "$CHANGED" | grep -q '^bridge/'; then
+   && [ "$BRIDGE_CHANGED" = 0 ]; then
     say ""
     say "This merge was UI only — a refresh in the open window picks it up."
 fi
 
-# --- optionally restart, having been asked explicitly -----------------------
+# --- restart, when there is new bridge code to run --------------------------
 
-if [ "$RESTART" = 1 ]; then
-    say ""
-    say "Restarting the everyday bridge, as asked…"
-    # Delegated rather than reimplemented: that script has the turn-in-flight
-    # guard, and running it from $MAIN is the one place it is allowed to
-    # replace the everyday instance.
-    #
-    # Its status is worth reading. It exits 3 when it deliberately did not
-    # restart — a turn in flight, or uncommitted bridge/ changes — and swallowing
-    # that would leave you thinking the merge you just landed is running when it
-    # is not, which is the same silent skip the nightly cron run used to have.
-    if ! ( cd "$MAIN" && bash scripts/restart-bridge.sh ); then
-        say ""
-        say "  The restart did not happen — see above. $MAIN is merged either way;"
-        say "  the running bridge is still on the code it started with."
-    fi
+DO_RESTART=0
+[ "$RESTART" = 1 ] && DO_RESTART=1
+[ "$RESTART" = auto ] && [ "$BRIDGE_CHANGED" = 1 ] && DO_RESTART=1
+[ "$DO_RESTART" = 1 ] || exit 0
+
+say ""
+# Landing is no reason to bring up a bridge the user had not got running, and
+# restart-bridge.sh would start one on an empty port — so look first.
+if ! curl -fsS -m 3 http://127.0.0.1:45888/api/health >/dev/null 2>&1; then
+    say "No everyday bridge is running on 45888 — nothing to restart."
+    say "  It will run the new code whenever it is next started."
+    exit 0
 fi
+
+say "Restarting the everyday bridge…"
+# Delegated rather than reimplemented: that script has the turn-at-risk guard,
+# and running it from $MAIN is the one place it is allowed to replace the
+# everyday instance. No --force and no --yes: the guard is the point, and its
+# dirty-checkout prompt cannot fire, because a dirty main was refused above.
+#
+# env -u because landing always means the everyday instance. A session can
+# still carry a CLAUDE_SESSIONS_PORT it never chose, and letting that aim the
+# restart somewhere else is the trap CLAUDE.md spends a section on.
+#
+# Its status is worth reading. It exits 3 when it deliberately did not restart,
+# and swallowing that would leave you thinking the merge you just landed is
+# running when it is not.
+( cd "$MAIN" && env -u CLAUDE_SESSIONS_PORT bash scripts/restart-bridge.sh )
+RC=$?
+if [ "$RC" != 0 ]; then
+    say ""
+    say "  The restart did not happen — see above. $MAIN is merged either way;"
+    say "  the running bridge is still on the code it started with."
+    [ "$RC" = 3 ] && say "  Once those turns finish, from $MAIN:  npm run restart"
+fi
+exit 0

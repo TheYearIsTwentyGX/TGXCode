@@ -2240,7 +2240,7 @@ a:hover { text-decoration: underline; }
     100% { background: transparent; box-shadow: 0 0 0 8px transparent; }
 }
 /* A select the keyboard just moved. Ctrl+P and Ctrl+M cycle the composer's
- * Permissions and Model, and a value changing on its own is easy to miss in a
+ * Permissions and Model (Shift walks them backwards), and a value changing on its own is easy to miss in a
  * row of small pills — so the same "this just changed" vocabulary as the two
  * above, aimed at a control rather than a row.
  *

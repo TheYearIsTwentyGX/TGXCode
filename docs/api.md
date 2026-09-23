@@ -962,6 +962,11 @@ commands: the workspace's checked-in file (falling back to the main checkout's),
 then `settings.local.json` from the main checkout, then one in the workspace.
 `sources` lists the files that were actually read, weakest first.
 
+A bridge started with `CLAUDE_SESSIONS_PREFS_DIR` set uses that directory in place
+of `~/.tgxcode`, for reads and saves alike, so the user file's path in `sources`
+and `target` is under it. This exists so a development bridge can test a save
+without touching the real file; no field changes because of it.
+
 A value that is not what the key allows is dropped and reported in `problems`
 rather than taken at face value; the default stands. Without `?cwd=` you get the
 user-level answer, which is also what every page is served in a `cs-prefs`
@@ -1063,12 +1068,13 @@ short-lived `claude` runs; nothing happens until it names somewhere you have
 already trusted), `beaconEveryMinutes` (int, 5–1440). See `GET /api/quota` for
 what the refresh itself reports. User file only.
 
-`keyboard` is about keys, and is three keys of its own:
+`keyboard` is about keys, and is four keys of its own:
 
 | Key | Type | |
 |---|---|---|
 | `contextualTerminalCopy` | bool, default `false` | in the integrated terminal, `Ctrl+C` copies the selection and clears it when there is one and interrupts when there is not, and plain `Ctrl+V` pastes instead of `Ctrl+Shift+V`. Only while the terminal has the focus. |
 | `composerSend` | `"enter"` (default) or `"ctrl-enter"` | what Enter does in a composer. `"enter"`: Enter sends, Shift+Enter is a newline. `"ctrl-enter"`: the reverse. `Ctrl+Enter` sends under both. |
+| `cycleOrder` | `"default"` (default) or `"alphabetical"` | the order `composer.permissionMode` / `composer.model` (and their `…Prev` twins) step the composer's pickers in. `"default"`: the order the dropdown lists them. `"alphabetical"`: sorted by the option's label, case-insensitive, with an empty value (the model's "inherit") kept first. The dropdowns themselves are not reordered. |
 | `bindings` | **object**, `{[commandId]: string \| null}` | which chord reaches which command. A missing id means the default; `null` means deliberately unbound. Keys must be ids `GET /api/keymap` lists, and values must be canonical combos it would accept — anything else is one entry dropped with one `problems` line, not the whole map. At most 100 entries. |
 
 User file only, and `bindings` is a **map**, so a `PUT` naming it replaces the
@@ -2897,7 +2903,7 @@ exactly one file:
 
 | `scope` | file |
 |---|---|
-| `user` | `~/.tgxcode/settings.json` — `cwd` ignored |
+| `user` | `~/.tgxcode/settings.json` — `cwd` ignored (under `CLAUDE_SESSIONS_PREFS_DIR` instead when the bridge was started with it) |
 | `project` | `<cwd>/.tgxcode/settings.json`, which git tracks |
 | `project-local` | `<cwd>/.tgxcode/settings.local.json`, which is meant to be ignored — **check the repository actually ignores it**; this one does, since the Settings panel landed, but that is a line in a `.gitignore` and not something the bridge can promise |
 
