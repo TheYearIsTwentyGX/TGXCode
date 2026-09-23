@@ -3593,6 +3593,9 @@ body.term-resizing { user-select: none; cursor: row-resize; }
     cursor: grab;
 }
 .queue-item.dragging .queue-grip { cursor: grabbing; }
+/* Handed to the running turn: fixed in place, so no grab cursor, and the arrow
+   says it is on its way in rather than waiting. */
+.queue-item.handed .queue-grip { cursor: default; color: var(--blue); }
 
 /* The send order, which is the whole point of showing the queue at all. */
 .queue-n {
