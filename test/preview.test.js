@@ -16,7 +16,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-sessions-preview-'));
-process.env.CLAUDE_SESSIONS_HOST_KIND = 'linux';
+process.env.TGXCODE_HOST_KIND = 'linux';
 process.env.XDG_CONFIG_HOME = tmp;
 
 const assert = require('assert');

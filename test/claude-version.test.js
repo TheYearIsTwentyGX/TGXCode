@@ -7,7 +7,7 @@
 // is wrong, and comparing a `stable` machine against `latest` lights one that
 // never goes out. Neither throws.
 //
-// `update()` is driven against a stub `claude`, through CLAUDE_SESSIONS_CLAUDE_BIN
+// `update()` is driven against a stub `claude`, through TGXCODE_CLAUDE_BIN
 // set before the require — bridge/config.js reads it once, at load. The stub is
 // the only thing that makes this file safe to run: the real `claude update`
 // replaces the binary every session on this machine starts from.
@@ -27,7 +27,7 @@ case "$1" in
   update) sleep 0.3; echo 2.1.300 > '${versionFile}'; echo "Updated to 2.1.300" ;;
 esac
 `, { mode: 0o755 });
-process.env.CLAUDE_SESSIONS_CLAUDE_BIN = stub;
+process.env.TGXCODE_CLAUDE_BIN = stub;
 process.env.XDG_DATA_HOME = dir;
 
 const { ClaudeVersion, summarize, compareVersions, tagForChannel, parseVersion }

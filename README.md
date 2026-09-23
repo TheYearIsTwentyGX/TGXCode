@@ -120,7 +120,7 @@ is specific about which parts it uses:
 | | For |
 |---|---|
 | node | The bridge. `bridge/launch.sh` finds an nvm-managed one if it is not on `PATH`. |
-| `claude` | The whole point. On `PATH`, or named by `CLAUDE_SESSIONS_CLAUDE_BIN`. |
+| `claude` | The whole point. On `PATH`, or named by `TGXCODE_CLAUDE_BIN`. |
 | `bash` | `launch.sh`, the terminal pane, `restart-bridge.sh`. |
 | `util-linux` — `script`, `stty` | The pty. There is no node-pty here and no native modules; `script(1)` *is* the terminal. |
 | `iproute2` — `ss` | Which process holds a dev server's port. |
@@ -171,7 +171,7 @@ Windows-side on purpose: electron-builder is slow and flaky over the
 
 The script bakes the bridge location into `app/config.json`. To change it later
 without rebuilding, edit that file next to the installed executable, or create
-one in `%APPDATA%\claude-sessions\` (on Linux, `~/.config/claude-sessions/`):
+one in `%APPDATA%\tgxcode\` (on Linux, `~/.config/tgxcode/`):
 
 ```json
 { "bridgeDir": "~/src/tgxcode", "distro": "Ubuntu" }
@@ -222,8 +222,8 @@ are easier to read than to infer.
 Two rules worth knowing before you send a patch:
 
 - **`dependencies` is empty and stays empty.** The bridge uses Node built-ins
-  only. `web/vendor/` holds prebuilt, committed bundles (xterm, diff2html)
-  fetched with `npm pack` — never an `npm install`. A bundler would turn
+  only. `web/vendor/` holds prebuilt, committed bundles (xterm, diff2html,
+  Preact) fetched with `npm pack` — never an `npm install`. A bundler would turn
   `web/app.js` into a build artifact and put a build step between every UI edit
   and a refresh, which is the loop worth protecting.
 - **`docs/api.md` is a contract.** A second client — the Android app — reads it
@@ -296,7 +296,8 @@ Two rules worth knowing before you send a patch:
 | `web/preview.js` | The browser preview — a dev server's page in the window, with DevBrowser's toolbar |
 | `web/preview-picker.js` | The preview's element picker, copied from DevBrowser; runs inside the previewed page |
 | `web/keys.js` | Which chord means which command, and the one function that decides it |
-| `web/vendor/` | The two libraries worth not writing — xterm, and diff2html for the diff viewer. Checked-in prebuilt bundles, not a `node_modules` |
+| `web/rail.js` | The sessions rail, drawn with Preact — keyed by session and by group, so an update keeps the rows it did not change. The first surface moved off `app.js`'s rebuild-everything rendering, and the pattern for the next |
+| `web/vendor/` | The libraries worth not writing — xterm; diff2html for the diff viewer; and `preact.js`, htm's standalone build (Preact 10 + hooks + htm in one ESM file) for components written without JSX. Checked-in prebuilt bundles, not a `node_modules` |
 | `app/main.js` | The Electron shell, and the rules for what a preview `<webview>` may load |
 | `app/preload.js` | The page's only doors into the shell: raise the window, and the preview's two clipboard writes |
 | `app/make-icon.js` | Generates the packaged shell's icon |

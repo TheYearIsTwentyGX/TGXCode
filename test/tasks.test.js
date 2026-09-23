@@ -10,9 +10,9 @@
 // **Two traps, both measured rather than guessed.**
 //
 // `TASKS_DIR` is resolved when `bridge/tasks.js` is *required* (the module
-// destructures it at load), so `CLAUDE_SESSIONS_TASKS_DIR` has to be in the
+// destructures it at load), so `TGXCODE_TASKS_DIR` has to be in the
 // environment before the require below — the same trap `runner.test.js`
-// documents about `CLAUDE_SESSIONS_CLAUDE_BIN`.
+// documents about `TGXCODE_CLAUDE_BIN`.
 //
 // And `items()` memoises for a second, so asking twice about one session gives
 // the first answer back. Every case below uses a **fresh session id** rather
@@ -39,7 +39,7 @@ const path = require('path');
 
 const TASKS = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-tasks-dir-'));
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-tasks-'));
-process.env.CLAUDE_SESSIONS_TASKS_DIR = TASKS;   // before the require, on purpose
+process.env.TGXCODE_TASKS_DIR = TASKS;   // before the require, on purpose
 
 const tasks = require('../bridge/tasks.js');
 const { todoProgress, todoInput } = require('../bridge/transcript.js');
@@ -320,10 +320,10 @@ const TODOS = [
     // reaches the CLI is only really provable by spawning one, which the
     // dev-bridge pass does.
     const configPath = require.resolve('../bridge/config.js');
-    const before = process.env.CLAUDE_SESSIONS_TODO_TOOLS;
+    const before = process.env.TGXCODE_TODO_TOOLS;
     const reload = (value) => {
-        if (value === undefined) delete process.env.CLAUDE_SESSIONS_TODO_TOOLS;
-        else process.env.CLAUDE_SESSIONS_TODO_TOOLS = value;
+        if (value === undefined) delete process.env.TGXCODE_TODO_TOOLS;
+        else process.env.TGXCODE_TODO_TOOLS = value;
         delete require.cache[configPath];
         return require('../bridge/config.js').TODO_TOOLS;
     };

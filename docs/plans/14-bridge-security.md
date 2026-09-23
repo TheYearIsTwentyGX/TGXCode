@@ -24,7 +24,7 @@ in another tab driving Claude. They work for that. Neither is authentication:
 
 - The origin check only applies when an `Origin` header is *present*. Anything
   that isn't a browser simply omits it.
-- `X-Claude-Sessions-Client: 1` is a constant, published in this repo.
+- `X-TGXCode-Client: 1` is a constant, published in this repo.
 
 So any process on the machine, and anything that can reach loopback, can
 `POST /api/sessions` with `permissionMode: bypassPermissions` and a `cwd` of its
@@ -38,7 +38,7 @@ vulnerability. It is cheap and it unblocks two other plans.
 ## A. Token auth
 
 - Generate a token on first run: `randomUUID()` into
-  `~/.local/share/claude-sessions/token` with mode `0600`.
+  `~/.local/share/tgxcode/token` with mode `0600`.
 - Require it on every `/api/` route except `/api/health` (which stays open so
   `app/main.js:59`'s `ping()` and any health check keep working — it already
   leaks only counts and a pid).

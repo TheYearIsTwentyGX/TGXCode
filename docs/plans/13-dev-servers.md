@@ -51,11 +51,11 @@ So "restart" means: re-run *that command*, in the session's cwd.
 
 > **Superseded by 17.** A run's log keys on the run, not on the port: ports get
 > reused across worktrees, so `<port>.log` would interleave two projects. It is
-> `~/.cache/claude-sessions/runs/<runId>.log`, and the pane that reads it is the
+> `~/.cache/tgxcode/runs/<runId>.log`, and the pane that reads it is the
 > terminal pane with a tab strip rather than a panel of its own.
 
 A server started by the app writes to
-`~/.cache/claude-sessions/devservers/<port>.log`. The chip menu opens a tail
+`~/.cache/tgxcode/devservers/<port>.log`. The chip menu opens a tail
 panel — the same event-stream plumbing as the transcript tail, pointed at a log
 file.
 

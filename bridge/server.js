@@ -72,7 +72,10 @@ const { handoffEnvelope } = require('./transcript');
 const { HandoffLimit, stateOf: handoffState, wakes, wakeFailure } = require('./handoff');
 
 const WEB_DIR = path.join(__dirname, '..', 'web');
-const CLIENT_HEADER = 'x-claude-sessions-client';
+// The CSRF header every non-GET /api/ call must carry. The old name is still
+// accepted: a packaged shell or a phone build from before the rename sends it,
+// and refusing it would 403 their entire write surface.
+const CLIENT_HEADERS = ['x-tgxcode-client', 'x-claude-sessions-client'];
 
 const flags = new Flags();
 // How the person using the app wants it to behave, from their own file and from
@@ -712,7 +715,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname.startsWith('/api/') && pathname !== '/api/health'
-        && req.method !== 'GET' && !req.headers[CLIENT_HEADER]) {
+        && req.method !== 'GET' && !CLIENT_HEADERS.some(h => req.headers[h])) {
         return send(res, 403, { error: 'missing client header' });
     }
 
@@ -724,12 +727,12 @@ const server = http.createServer(async (req, res) => {
     // exemption here.
     if (pathname.startsWith('/api/') && pathname !== '/api/health' && !who.ok) {
         if (who.remote) {
-            console.warn(`[claude-sessions] rejected ${req.method} ${pathname} from `
+            console.warn(`[tgxcode] rejected ${req.method} ${pathname} from `
                 + `${who.peer} — no valid token`);
         }
         return send(res, 401, {
             error: 'unauthorized',
-            hint: 'send the token from ~/.local/share/claude-sessions/token as '
+            hint: 'send the token from ~/.local/share/tgxcode/token as '
                 + 'Authorization: Bearer <token>',
         });
     }
@@ -740,7 +743,7 @@ const server = http.createServer(async (req, res) => {
     if (who.remote) {
         const refusal = remoteRefusal(pathname, req.method);
         if (refusal) {
-            console.warn(`[claude-sessions] refused ${req.method} ${pathname} from `
+            console.warn(`[tgxcode] refused ${req.method} ${pathname} from `
                 + `${who.peer} — ${refusal}`);
             return send(res, 403, { error: refusal, remote: true });
         }
@@ -755,7 +758,7 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
         // The stack goes to the log, not to the client. It names paths on this
         // machine and the shape of the code, and a client can do nothing with it.
-        console.error(`[claude-sessions] ${req.method} ${pathname} failed:`, err.stack || err);
+        console.error(`[tgxcode] ${req.method} ${pathname} failed:`, err.stack || err);
         send(res, 500, { error: err.message });
     }
 });
@@ -1451,7 +1454,7 @@ const SCHEDULE_MS = 30_000;
  * `test` now means "belongs to a development bridge" in both directions, which is
  * what it already meant for a session.
  */
-const SCHEDULE_ON_DEV = process.env.CLAUDE_SESSIONS_SCHEDULE_ON_DEV === '1';
+const SCHEDULE_ON_DEV = process.env.TGXCODE_SCHEDULE_ON_DEV === '1';
 
 /**
  * A schedule as it goes out on the wire.
@@ -2003,7 +2006,7 @@ async function prRange(cwd, pr) {
         // Named rather than left in FETCH_HEAD, so the SHA keeps a name that
         // survives the next fetch.
         await git.run('git', ['-C', cwd, 'fetch', '--quiet', '--no-tags', 'origin',
-            `pull/${pr.number}/head:refs/claude-sessions/pr/${pr.number}`],
+            `pull/${pr.number}/head:refs/tgxcode/pr/${pr.number}`],
             { timeout: 60_000 });
         have = await git.run('git', ['-C', cwd, 'cat-file', '-e', `${pr.headSha}^{commit}`]);
         if (!have.ok) {
@@ -2271,13 +2274,13 @@ async function runTick() {
             result = await runSchedule(row);
         } catch (err) {
             result = { ok: false, skip: 'error', error: err.message };
-            console.error(`[claude-sessions] schedule ${scheduleTitle(row)} threw: `
+            console.error(`[tgxcode] schedule ${scheduleTitle(row)} threw: `
                 + `${err.stack || err.message}`);
         }
 
         if (result.ok) {
             schedules.note(row.id, { sessionId: result.sessionId, marker: result.facts.head });
-            console.log(`[claude-sessions] schedule ${scheduleTitle(row)} started `
+            console.log(`[tgxcode] schedule ${scheduleTitle(row)} started `
                 + `${result.sessionId}`);
         } else {
             // `marker` is deliberately not passed on any of these paths, so a
@@ -2347,7 +2350,7 @@ async function runTick() {
             swept = await fireSchedule(row);
         } catch (err) {
             swept = null;
-            console.error(`[claude-sessions] sweep ${scheduleTitle(row)} threw: `
+            console.error(`[tgxcode] sweep ${scheduleTitle(row)} threw: `
                 + `${err.stack || err.message}`);
             schedules.closeSweep(row.id, { skipReason: 'error', error: err.message });
             changed = true;
@@ -2361,7 +2364,7 @@ async function runTick() {
             // reviewed three pull requests say "1 run". The last call also leaves
             // `lastSessionId` on the newest, which is what the card links to.
             for (const { sessionId, target } of swept.started) {
-                console.log(`[claude-sessions] schedule ${scheduleTitle(row)} started `
+                console.log(`[tgxcode] schedule ${scheduleTitle(row)} started `
                     + `${sessionId} for #${target.number}`);
                 schedules.note(row.id, { sessionId });
             }
@@ -2444,7 +2447,7 @@ function recoverInterruptedReviews() {
         }
     }
     if (found) {
-        console.log(`[claude-sessions] ${found} interrupted review(s) marked`);
+        console.log(`[tgxcode] ${found} interrupted review(s) marked`);
         broadcast('schedules-changed', schedulesPayload());
     }
 }
@@ -2736,7 +2739,7 @@ function recoverInterruptedLater() {
             loud: true,
         });
     }
-    console.log(`[claude-sessions] ${stuck.length} interrupted scheduled message(s) marked`);
+    console.log(`[tgxcode] ${stuck.length} interrupted scheduled message(s) marked`);
     broadcast('later-changed', laterPayload());
 }
 
@@ -2765,7 +2768,7 @@ function logRemote(req, pathname, who) {
     const last = remoteSeen.get(who.peer) || 0;
     if (!writes && Date.now() - last < 60_000) return;
     remoteSeen.set(who.peer, Date.now());
-    console.log(`[claude-sessions] remote ${req.method} ${pathname} from ${who.peer} `
+    console.log(`[tgxcode] remote ${req.method} ${pathname} from ${who.peer} `
         + `via ${who.host}`);
 }
 
@@ -2853,7 +2856,7 @@ async function api(req, res, url, pathname, who) {
         // remote caller can be told less without costing anything.
         const local = !who.remote;
         return send(res, 200, {
-            ok: true, app: 'claude-sessions', version: cfg.VERSION,
+            ok: true, app: 'tgxcode', version: cfg.VERSION,
             pid: process.pid, port: cfg.PORT, dev: cfg.IS_DEV, ready: index.ready,
             sessions: index.sessions.size, host: os.hostname(),
             // Whether this request arrived from off-machine, and whether the bridge
@@ -3173,7 +3176,7 @@ async function api(req, res, url, pathname, who) {
     // ids only the page knows are ids nobody else can discover.
     //
     // Not local-only — a list of command names is not a capability — and served
-    // in a `cs-keymap` <meta> tag as well, so the window's first keystroke does
+    // in a `tgx-keymap` <meta> tag as well, so the window's first keystroke does
     // not race a fetch.
     if (pathname === '/api/keymap' && req.method === 'GET') {
         return send(res, 200, keymap.payload());
@@ -3335,7 +3338,7 @@ async function api(req, res, url, pathname, who) {
                 // The 200 has already gone out, so the log is the only place left
                 // to put this; the caller finds out by watching pid never change.
                 handedOver = false;
-                console.error(`[claude-sessions] restart: could not start ${restart.SCRIPT}:`,
+                console.error(`[tgxcode] restart: could not start ${restart.SCRIPT}:`,
                     err.message);
             }
         };
@@ -4313,7 +4316,7 @@ async function api(req, res, url, pathname, who) {
         const refresh = url.searchParams.get('refresh') === '1';
         if (refresh) {
             await tickPrs({ force: true }).catch(err => console.error(
-                `[claude-sessions] forced PR refresh failed: ${err.message}`));
+                `[tgxcode] forced PR refresh failed: ${err.message}`));
         }
         const data = await dashboard.build(index, {
             includeTest: cfg.IS_DEV,
@@ -6051,7 +6054,7 @@ function archiveStoppedRuns(summary) {
     if (others) return 0;
     const stopped = runs.stopWorkspace(dir);
     if (stopped) {
-        console.log(`[claude-sessions] archived ${summary.sessionId}: stopped ${stopped} run(s) in ${dir}`);
+        console.log(`[tgxcode] archived ${summary.sessionId}: stopped ${stopped} run(s) in ${dir}`);
     }
     return stopped;
 }
@@ -6304,13 +6307,13 @@ function serveStatic(req, res, pathname, who) {
         // at startup: a transcript drawn before an async answer arrived would
         // stay drawn the wrong way, since nothing re-renders history.
         body = Buffer.from(auth.injectMeta(body.toString('utf8'),
-            'cs-prefs', JSON.stringify(prefs.page(''))), 'utf8');
+            'tgx-prefs', JSON.stringify(prefs.page(''))), 'utf8');
         // The shortcut catalogue, for the same reason and one more: the first
         // key somebody presses may land before a fetch could answer, and a
         // Ctrl+3 that does nothing because the keymap has not arrived yet is
         // indistinguishable from a broken binding.
         body = Buffer.from(auth.injectMeta(body.toString('utf8'),
-            'cs-keymap', JSON.stringify(keymap.payload())), 'utf8');
+            'tgx-keymap', JSON.stringify(keymap.payload())), 'utf8');
         // Where this bridge's filesystem is, so a path in a transcript can be
         // drawn as a link to the Windows form of it. Local callers only, on the
         // same reasoning as `root` and `home` on /api/health: a path on this
@@ -6319,7 +6322,7 @@ function serveStatic(req, res, pathname, who) {
         // as plain text, which is the right remote answer rather than a degraded
         // one — and the same answer outside WSL, where there is no share to name.
         if (!who.remote && cfg.WSL_DISTRO) {
-            body = Buffer.from(auth.injectMeta(body.toString('utf8'), 'cs-host',
+            body = Buffer.from(auth.injectMeta(body.toString('utf8'), 'tgx-host',
                 JSON.stringify({ distro: cfg.WSL_DISTRO, home: cfg.HOME })), 'utf8');
         }
     }
@@ -6352,7 +6355,7 @@ function pair(req, res, url, pathname, who) {
     if (pathname === '/pair/forget') {
         res.writeHead(303, {
             Location: '/',
-            'Set-Cookie': auth.pairCookie('', { secure: who.secure }),
+            'Set-Cookie': auth.forgetCookies({ secure: who.secure }),
             'Cache-Control': 'no-store',
         });
         return res.end();
@@ -6364,7 +6367,7 @@ function pair(req, res, url, pathname, who) {
         // tells them nothing about what to do.
         const body = Buffer.from('<!DOCTYPE html><meta charset="utf-8">'
             + '<meta name="viewport" content="width=device-width,initial-scale=1">'
-            + '<title>Claude Sessions — pairing failed</title>'
+            + '<title>TGXCode — pairing failed</title>'
             + '<style>body{font:16px/1.5 system-ui;margin:0;padding:2rem;'
             + 'background:#131314;color:#e8e8e8}code{background:#232325;padding:.15em .4em;'
             + 'border-radius:4px;font-size:.9em}</style>'
@@ -6372,7 +6375,7 @@ function pair(req, res, url, pathname, who) {
             + '<p>The token is missing, mistyped, or from before the bridge last '
             + 'created one.</p>'
             + '<p>Get a fresh link from <b>Connect a phone</b> in the desktop window, '
-            + 'or read the token with <code>cat ~/.local/share/claude-sessions/token</code>.</p>',
+            + 'or read the token with <code>cat ~/.local/share/tgxcode/token</code>.</p>',
             'utf8');
         res.writeHead(401, {
             'Content-Type': 'text/html; charset=utf-8',
@@ -6382,7 +6385,7 @@ function pair(req, res, url, pathname, who) {
         return res.end(body);
     }
 
-    console.log(`[claude-sessions] paired ${who.peer} via ${who.host}`);
+    console.log(`[tgxcode] paired ${who.peer} via ${who.host}`);
     res.writeHead(303, {
         // 303 with the token stripped, so the address bar and history keep the
         // bare / rather than the credential.
@@ -6474,7 +6477,7 @@ const BEACON_TICK_MS = 60_000;
 // spent to measure the API calls being spent. It was also where every orphaned
 // beacon came from — a dev bridge is restarted constantly and killed abruptly,
 // which is exactly the shape that leaks a detached child.
-const BEACON_ON_DEV = process.env.CLAUDE_SESSIONS_BEACON_ON_DEV === '1';
+const BEACON_ON_DEV = process.env.TGXCODE_BEACON_ON_DEV === '1';
 
 /** Why the beacon is not running, for the panel to say, or null. */
 function beaconSuppressed() {
@@ -6640,7 +6643,7 @@ function noteScheduledOutcome(r) {
             sessionId: r.sessionId, verdict, outcome,
             body: runner && runner.lastResultBody,
         }).catch(err => console.error(
-            `[claude-sessions] posting review for #${target.number} threw: ${err.message}`));
+            `[tgxcode] posting review for #${target.number} threw: ${err.message}`));
         return;   // postReviewToPr files the notification, once it knows the outcome
     }
 
@@ -6737,7 +6740,7 @@ async function postReviewToPr(row, target, { sessionId, verdict, outcome, body }
     // asked for a comment.
     if (row.test || !row.gate || row.gate.kind !== 'open-prs' || row.gate.post === false) {
         schedules.noteReview(row.id, key, { posted: 'skipped-test' });
-        console.log(`[claude-sessions] not posting #${target.number} (`
+        console.log(`[tgxcode] not posting #${target.number} (`
             + `${row.test ? 'test schedule' : 'posting is off'}); `
             + `verdict ${verdict || outcome}`);
         broadcast('schedules-changed', schedulesPayload());
@@ -6790,13 +6793,13 @@ async function postReviewToPr(row, target, { sessionId, verdict, outcome, body }
             const why = fresh.ok
                 ? `#${target.number} is no longer open`
                 : (fresh.error || 'could not list pull requests');
-            console.error(`[claude-sessions] not labelling #${target.number}: ${why}`);
+            console.error(`[tgxcode] not labelling #${target.number}: ${why}`);
             if (!postError) postError = `label: ${why}`;
         } else {
             const labelled = await pulls.setVerdictLabel(
                 target.repo, target.number, verdict, pr.labels);
             if (!labelled.ok) {
-                console.error(`[claude-sessions] could not label #${target.number}: `
+                console.error(`[tgxcode] could not label #${target.number}: `
                     + labelled.error);
                 if (!postError) postError = `label: ${labelled.error}`;
             }
@@ -6884,17 +6887,17 @@ function shutdown(code = 0) {
     try {
         const { stillRunning, held } = pool.shutdown();
         if (held) {
-            console.log(`[claude-sessions] ${held} session(s) left running in the session host; `
+            console.log(`[tgxcode] ${held} session(s) left running in the session host; `
                 + 'the next bridge on this port picks them up.');
         }
         if (stillRunning) {
-            console.log(`[claude-sessions] ${stillRunning} turn(s) were in flight and will `
+            console.log(`[tgxcode] ${stillRunning} turn(s) were in flight and will `
                 + 'stop with this process — their transcripts keep whatever was written.');
         }
     } catch (err) {
         // Not "nothing to clean" any more: a throw here can be the difference
         // between a turn left running in the host and one that is lost.
-        console.error(`[claude-sessions] runner shutdown failed: ${err && err.stack || err}`);
+        console.error(`[tgxcode] runner shutdown failed: ${err && err.stack || err}`);
     }
     // Terminals run in their own process groups, so unlike turns they would
     // outlive us if we did not take them with us. A run is the same, and worse
@@ -6947,7 +6950,7 @@ process.on('SIGTERM', () => shutdown(0));
 // A worktree may never be the everyday instance.
 //
 // The everyday port is not something anyone chose here: the bridge hands its own
-// environment to every session it starts, so `CLAUDE_SESSIONS_PORT=45888` is
+// environment to every session it starts, so `TGXCODE_PORT=45888` is
 // already set for an agent working in a worktree, and `bash bridge/launch.sh`
 // there binds the user's port without a port ever being mentioned. What follows
 // is worse than a clash — the bind succeeds if the everyday bridge is not up
@@ -6959,12 +6962,12 @@ process.on('SIGTERM', () => shutdown(0));
 // belongs where the port is bound so that no way of starting a bridge can get
 // around it.
 if (cfg.PORT === cfg.DEFAULT_PORT && cfg.IS_WORKTREE) {
-    console.error(`[claude-sessions] refusing to serve ${cfg.ROOT} on `
+    console.error(`[tgxcode] refusing to serve ${cfg.ROOT} on `
         + `${cfg.DEFAULT_PORT} — that is the everyday instance, and this is a `
         + 'worktree.');
     console.error('  Start a development bridge instead: npm run dev, or '
-        + `CLAUDE_SESSIONS_PORT=${cfg.DEV_PORT} bash bridge/launch.sh`);
-    console.error('  CLAUDE_SESSIONS_PORT is inherited from the bridge that '
+        + `TGXCODE_PORT=${cfg.DEV_PORT} bash bridge/launch.sh`);
+    console.error('  TGXCODE_PORT is inherited from the bridge that '
         + 'started this session, so unset it rather than trusting it.');
     process.exit(4);
 }
@@ -6978,12 +6981,12 @@ if (cfg.PORT === cfg.DEFAULT_PORT && cfg.IS_WORKTREE) {
 // instead. Plan 14-B asked for a refusal when no token file existed; a token now
 // always exists, so the refusal that still earns its place is this one.
 if (!auth.hostIsLocal(cfg.HOST.replace(/^\[|\]$/g, '')) && !cfg.ALLOW_REMOTE_BIND) {
-    console.error(`[claude-sessions] refusing to bind ${cfg.HOST} — that offers this `
+    console.error(`[tgxcode] refusing to bind ${cfg.HOST} — that offers this `
         + 'bridge to the network, and this machine is on a shared apartment subnet.');
     console.error('  For a phone, prefer `tailscale serve` on the Windows host: it '
         + 'reaches you from anywhere and the bridge never leaves loopback.');
     console.error('  See docs/remote.md. To bind anyway, set '
-        + 'CLAUDE_SESSIONS_ALLOW_REMOTE_BIND=1.');
+        + 'TGXCODE_ALLOW_REMOTE_BIND=1.');
     process.exit(5);
 }
 
@@ -6993,11 +6996,11 @@ auth.ensureToken();
 
 server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
-        console.error(`[claude-sessions] port ${cfg.PORT} is already in use — `
+        console.error(`[tgxcode] port ${cfg.PORT} is already in use — `
             + 'another bridge is probably running.');
         process.exit(3);
     }
-    console.error('[claude-sessions] server error:', err.message);
+    console.error('[tgxcode] server error:', err.message);
     process.exit(1);
 });
 
@@ -7028,33 +7031,33 @@ async function takeBackHeld() {
     if (await portTaken()) return;
     const up = await hostClient.ensureHost({ socketPath: cfg.HOST_SOCKET, logFile: cfg.HOST_LOG });
     if (!up) {
-        console.warn('[claude-sessions] no session host — turns will end if this bridge '
+        console.warn('[tgxcode] no session host — turns will end if this bridge '
             + `restarts. See ${cfg.HOST_LOG}.`);
         return;
     }
     const n = await pool.adoptHeld();
     const st = hostClient.status();
-    console.log(`[claude-sessions] session host pid ${st && st.pid}`
+    console.log(`[tgxcode] session host pid ${st && st.pid}`
         + (n ? `; picked up ${n} session(s) the last bridge left running` : ''));
 }
 
 takeBackHeld().catch((err) => {
-    console.error(`[claude-sessions] session host: ${err.message}`);
+    console.error(`[tgxcode] session host: ${err.message}`);
 }).then(() => server.listen(cfg.PORT, cfg.HOST, async () => {
-    console.log(`[claude-sessions] bridge listening on http://${cfg.HOST}:${cfg.PORT}`);
+    console.log(`[tgxcode] bridge listening on http://${cfg.HOST}:${cfg.PORT}`);
     // Before the index, so the very first summaries it hands out already say
     // what is running rather than guessing at it for one scan.
     registry.start();
     claudeConfig.start();
-    console.log(`[claude-sessions] registry: ${registry.liveCount} of ${registry.size} `
+    console.log(`[tgxcode] registry: ${registry.liveCount} of ${registry.size} `
         + 'session(s) still have a process');
 
     const t0 = Date.now();
     await index.start();
-    console.log(`[claude-sessions] indexed ${index.sessions.size} sessions in ${Date.now() - t0}ms`);
+    console.log(`[tgxcode] indexed ${index.sessions.size} sessions in ${Date.now() - t0}ms`);
 
     if (cfg.IS_DEV) {
-        console.log('[claude-sessions] development instance — the everyday one on '
+        console.log('[tgxcode] development instance — the everyday one on '
             + `${cfg.DEFAULT_PORT} is untouched.`);
     }
 
@@ -7074,25 +7077,25 @@ takeBackHeld().catch((err) => {
         const armed = schedules.enabled()
             .filter(r => cfg.IS_DEV === !!r.test).length;
         if (cfg.IS_DEV) {
-            console.log('[claude-sessions] CLAUDE_SESSIONS_SCHEDULE_ON_DEV=1 — this dev '
+            console.log('[tgxcode] TGXCODE_SCHEDULE_ON_DEV=1 — this dev '
                 + 'bridge will fire schedules marked as tests, and only those.');
         }
         if (armed) {
-            console.log(`[claude-sessions] ${armed} schedule(s) armed; `
+            console.log(`[tgxcode] ${armed} schedule(s) armed; `
                 + `checking every ${SCHEDULE_MS / 1000}s`);
         }
         // Before the first tick: a review this process cannot own must be marked
         // before the sweep looks at what is still in flight.
         try { recoverInterruptedReviews(); } catch (err) {
-            console.error(`[claude-sessions] review recovery failed: ${err.message}`);
+            console.error(`[tgxcode] review recovery failed: ${err.message}`);
         }
         tickSchedules().catch(err => console.error(
-            `[claude-sessions] schedule catch-up failed: ${err.message}`));
+            `[tgxcode] schedule catch-up failed: ${err.message}`));
         // `.unref()` for the reason handoff.js gives: a timer must never be the
         // thing keeping the bridge from exiting.
         setInterval(() => {
             tickSchedules().catch(err => console.error(
-                `[claude-sessions] schedule tick failed: ${err.message}`));
+                `[tgxcode] schedule tick failed: ${err.message}`));
         }, SCHEDULE_MS).unref();
     }
 
@@ -7100,7 +7103,7 @@ takeBackHeld().catch((err) => {
     // catch-up pass first, then every SCHEDULE_MS, both `.unref()`ed.
     //
     // **Outside the block above on purpose.** That one is gated on
-    // CLAUDE_SESSIONS_SCHEDULE_ON_DEV because a schedule starts an unattended agent
+    // TGXCODE_SCHEDULE_ON_DEV because a schedule starts an unattended agent
     // in the user's own checkout out of a file every bridge shares. A scheduled
     // message can only speak to a session that already exists, and the dev/test
     // symmetry inside the tick already decides which bridge owns which rows — so
@@ -7111,19 +7114,19 @@ takeBackHeld().catch((err) => {
     // bridge is not up continuously, and a message due while it was down has to be
     // found on the way back up rather than never.
     try { recoverInterruptedLater(); } catch (err) {
-        console.error(`[claude-sessions] message recovery failed: ${err.message}`);
+        console.error(`[tgxcode] message recovery failed: ${err.message}`);
     }
     // Rows whose session is gone, and terminal ones past their week. Once at boot
     // rather than on a clock of its own: nothing here grows fast enough to need
     // more, and the index has just finished scanning.
     try { later.prune(index.knownIds()); } catch (err) {
-        console.error(`[claude-sessions] message prune failed: ${err.message}`);
+        console.error(`[tgxcode] message prune failed: ${err.message}`);
     }
     tickLater().catch(err => console.error(
-        `[claude-sessions] scheduled message catch-up failed: ${err.message}`));
+        `[tgxcode] scheduled message catch-up failed: ${err.message}`));
     setInterval(() => {
         tickLater().catch(err => console.error(
-            `[claude-sessions] scheduled message tick failed: ${err.message}`));
+            `[tgxcode] scheduled message tick failed: ${err.message}`));
     }, SCHEDULE_MS).unref();
 
     // Pull request status. The only thing in this process that asks gh about a PR
@@ -7139,10 +7142,10 @@ takeBackHeld().catch((err) => {
     // GitHub, so there is no everyday-instance-only rule to draw here. Two bridges
     // both refreshing is two `gh pr list` calls and one file rewritten twice.
     tickPrs().catch(err => console.error(
-        `[claude-sessions] PR catch-up failed: ${err.message}`));
+        `[tgxcode] PR catch-up failed: ${err.message}`));
     setInterval(() => {
         tickPrs().catch(err => console.error(
-            `[claude-sessions] PR refresh failed: ${err.message}`));
+            `[tgxcode] PR refresh failed: ${err.message}`));
     }, prStore.TICK_MS).unref();
 
     // The quota beacon. Its own timer rather than a fold into the schedule
@@ -7158,7 +7161,7 @@ takeBackHeld().catch((err) => {
     // ask the registry hourly. Read-only on every bridge, dev included.
     const checkClaudeVersion = () => claudeVersion.summary({ fresh: true })
         .then(pushClaudeVersion)
-        .catch(err => console.error(`[claude-sessions] version check failed: ${err.message}`));
+        .catch(err => console.error(`[tgxcode] version check failed: ${err.message}`));
     checkClaudeVersion();
     setInterval(checkClaudeVersion, 60 * 60 * 1000).unref();
 
@@ -7174,7 +7177,7 @@ takeBackHeld().catch((err) => {
             // Process groups, not beacons: `script` and the `claude` it runs
             // in the pty end up in groups of their own, so one leaked beacon
             // is two of these.
-            console.log(`[claude-sessions] killed ${reaped} orphaned quota beacon `
+            console.log(`[tgxcode] killed ${reaped} orphaned quota beacon `
                 + 'process group(s) left by a bridge that is no longer running.');
         }
     } catch { /* ps(1) is best-effort */ }
@@ -7185,12 +7188,12 @@ takeBackHeld().catch((err) => {
     tickBeacon();
 
     if (!auth.hostIsLocal(cfg.HOST.replace(/^\[|\]$/g, ''))) {
-        console.warn(`[claude-sessions] bound ${cfg.HOST} — reachable from the network. `
+        console.warn(`[tgxcode] bound ${cfg.HOST} — reachable from the network. `
             + 'Every remote request is logged below.');
     }
 
     // This port shows up in DevBrowser's detected list; name it so it isn't just
     // another anonymous number in the rail.
     devbrowser.setTitle(cfg.PORT,
-        cfg.IS_DEV ? 'Claude Sessions (dev)' : 'Claude Sessions (app)').catch(() => {});
+        cfg.IS_DEV ? 'TGXCode (dev)' : 'TGXCode (app)').catch(() => {});
 }));

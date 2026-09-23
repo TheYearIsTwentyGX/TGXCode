@@ -195,7 +195,7 @@ class SlashCommandCache {
             }
             this._evict();
         } catch (err) {
-            console.error(`[claude-sessions] ignoring unreadable ${SLASH_CACHE_FILE}: ${err.message}`);
+            console.error(`[tgxcode] ignoring unreadable ${SLASH_CACHE_FILE}: ${err.message}`);
         }
     }
 
@@ -215,7 +215,7 @@ class SlashCommandCache {
                 }, null, 2));
                 fs.renameSync(tmp, SLASH_CACHE_FILE);
             } catch (err) {
-                console.error(`[claude-sessions] could not save commands: ${err.message}`);
+                console.error(`[tgxcode] could not save commands: ${err.message}`);
             }
         }, 400);
         this._saveTimer.unref();

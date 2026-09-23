@@ -17,7 +17,7 @@
 // **XDG_DATA_HOME is set before the require, and that order is load-bearing.**
 // bridge/config.js reads the variable once, at require time, to build STATE_DIR
 // — so setting it afterwards would point the module at the real
-// ~/.local/share/claude-sessions and this test would fight the user's own
+// ~/.local/share/tgxcode and this test would fight the user's own
 // bridges over their quota file. test/drafts.test.js does the same thing for
 // the same reason.
 
@@ -561,7 +561,7 @@ const {
     // Nor is a beacon-ish CLI that is actually carrying MCP servers.
     assert.ok(!isBeaconArgv('claude --settings \'{"statusLine":{"command":'
         + '"python3 /x/quota-statusline.py"}}\' --mcp-config \'{"mcpServers":'
-        + '{"claude-sessions":{}}}\' --strict-mcp-config'));
+        + '{"tgxcode":{}}}\' --strict-mcp-config'));
 
     ok('the reaper recognises a beacon and nothing else');
 }

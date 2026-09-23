@@ -27,7 +27,7 @@ const UNIT = ['auth.test.js', 'temp.test.js', 'recent.test.js', 'pulls.test.js',
     'platform.test.js', 'preview.test.js',
     'claude-config.test.js', 'claude-docs.test.js', 'ask-result.test.js',
     'commands.test.js', 'message-date.test.js', 'folded.test.js',
-    'claude-version.test.js', 'wispr.test.js'];
+    'claude-version.test.js', 'wispr.test.js', 'legacy.test.js'];
 const LIVE = ['gate.test.js', 'browser.test.js', 'refusals.test.js', 'unpaired.test.js'];
 
 const given = Number(process.argv[2]);
@@ -94,7 +94,7 @@ function run(file, port) {
             // No session host: this bridge lives for seconds on a port nobody will
             // reuse, so a host behind it would only hold sessions no bridge is
             // coming back for. test/host.test.js covers the host on its own.
-            env: { ...process.env, CLAUDE_SESSIONS_PORT: String(port), CLAUDE_SESSIONS_NO_HOST: '1' },
+            env: { ...process.env, TGXCODE_PORT: String(port), TGXCODE_NO_HOST: '1' },
             stdio: 'ignore',
         });
         if (!await waitFor(port)) {

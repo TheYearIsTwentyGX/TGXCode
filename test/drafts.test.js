@@ -12,7 +12,7 @@
 // **XDG_DATA_HOME is set before the require, and that order is load-bearing.**
 // bridge/config.js reads the variable once, at require time, to build STATE_DIR —
 // so setting it afterwards would point the module at the real
-// ~/.local/share/claude-sessions and this test would eat the user's drafts.
+// ~/.local/share/tgxcode and this test would eat the user's drafts.
 // test/ports.test.js does the same thing for the same reason.
 
 const assert = require('assert');
@@ -239,7 +239,7 @@ const FIELDS = ['id', 'cwd', 'prompt', 'title', 'model', 'permissionMode',
 //
 // The reason flush() merges rather than overwrites. Two Drafts instances over the
 // same path are exactly the situation on this machine: the everyday bridge on
-// 45888 and an agent's dev bridge, both reading ~/.local/share/claude-sessions.
+// 45888 and an agent's dev bridge, both reading ~/.local/share/tgxcode.
 
 {
     const a = fresh();

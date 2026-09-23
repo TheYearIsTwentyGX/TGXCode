@@ -12,7 +12,7 @@ const path = require('path');
 
 const PORT = Number(process.argv[2] || 45901);
 const TOKEN = fs.readFileSync(
-    path.join(os.homedir(), '.local/share/claude-sessions/token'), 'utf8').trim();
+    path.join(os.homedir(), '.local/share/tgxcode/token'), 'utf8').trim();
 
 function call(pathname, { headers = {}, method = 'GET' } = {}) {
     return new Promise((resolve, reject) => {
@@ -55,6 +55,9 @@ const PHONE = {
     check('sessions, bearer', (await call('/api/sessions', { headers: BEARER })).status, 200);
     check('sessions, ?token=', (await call(`/api/sessions?token=${TOKEN}`)).status, 200);
     check('sessions, cookie',
+        (await call('/api/sessions', { headers: { cookie: `tgx_token=${TOKEN}` } })).status, 200);
+    // A device paired before the rename holds the old name for up to a year.
+    check('sessions, pre-rename cookie',
         (await call('/api/sessions', { headers: { cookie: `cs_token=${TOKEN}` } })).status, 200);
     check('sessions, wrong token',
         (await call('/api/sessions', { headers: { authorization: 'Bearer nope' } })).status, 401);
@@ -138,7 +141,7 @@ const PHONE = {
     check('pair redirects', paired.status, 303);
     check('pair lands on /', paired.headers.location, '/');
     const cookie = String(paired.headers['set-cookie']);
-    check('pair sets the cookie', cookie.includes(`cs_token=${TOKEN}`), true);
+    check('pair sets the cookie', cookie.includes(`tgx_token=${TOKEN}`), true);
     check('cookie is HttpOnly', cookie.includes('HttpOnly'), true);
     check('cookie is Secure over https', cookie.includes('Secure'), true);
     check('cookie is Lax', cookie.includes('SameSite=Lax'), true);
@@ -152,7 +155,7 @@ const PHONE = {
     // But a device that is already paired can re-pair through a stale link, because
     // its cookie is a perfectly good credential.
     const rePair = await call('/pair?token=nope',
-        { headers: { ...PROXY_ONLY, cookie: `cs_token=${TOKEN}` } });
+        { headers: { ...PROXY_ONLY, cookie: `tgx_token=${TOKEN}` } });
     check('an already-paired device re-pairs anyway', rePair.status, 303);
     const forget = await call('/pair/forget', { headers: PHONE });
     check('forget expires the cookie',

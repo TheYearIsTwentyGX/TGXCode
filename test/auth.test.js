@@ -35,23 +35,26 @@ const creds = (headers, q = '') => auth.credentials(req('127.0.0.1', headers), u
 assert.deepStrictEqual(creds({ authorization: `Bearer ${token}` }), [token]);
 assert.deepStrictEqual(creds({ authorization: `bearer   ${token}` }), [token]);
 assert.deepStrictEqual(creds({}, `?token=${token}`), [token]);
-assert.deepStrictEqual(creds({ cookie: `cs_token=${token}` }), [token]);
-assert.deepStrictEqual(creds({ cookie: `other=1; cs_token=${token}; x=2` }), [token]);
+assert.deepStrictEqual(creds({ cookie: `tgx_token=${token}` }), [token]);
+assert.deepStrictEqual(creds({ cookie: `other=1; tgx_token=${token}; x=2` }), [token]);
 assert.deepStrictEqual(creds({}), []);
 assert.deepStrictEqual(
-    creds({ authorization: 'Bearer HEADER', cookie: 'cs_token=COOKIE' }, '?token=QUERY'),
+    creds({ authorization: 'Bearer HEADER', cookie: 'tgx_token=COOKIE' }, '?token=QUERY'),
     ['HEADER', 'QUERY', 'COOKIE'], 'all three are collected, in header/query/cookie order');
+// A device paired before the rename holds the old cookie name for up to a year.
+assert.deepStrictEqual(creds({ cookie: 'cs_token=OLD' }, ''), ['OLD'],
+    'the pre-rename cookie name is still read');
 ok('credentials collects the header, the query and the cookie');
 
 // Any one being valid is enough. The case that matters: a paired phone opening a
 // pairing link from before the token rotated — stale query, good cookie.
 const authed = (headers, q = '') => auth.authenticate(req('127.0.0.1', headers), u(q));
-assert.strictEqual(authed({ cookie: `cs_token=${token}` }, '?token=stale'), true,
+assert.strictEqual(authed({ cookie: `tgx_token=${token}` }, '?token=stale'), true,
     'a stale ?token= must not shadow a valid cookie');
-assert.strictEqual(authed({ cookie: 'cs_token=stale' }, `?token=${token}`), true,
+assert.strictEqual(authed({ cookie: 'tgx_token=stale' }, `?token=${token}`), true,
     'a fresh ?token= must re-pair past a stale cookie');
-assert.strictEqual(authed({ authorization: 'Bearer wrong', cookie: `cs_token=${token}` }), true);
-assert.strictEqual(authed({ cookie: 'cs_token=stale' }, '?token=alsostale'), false);
+assert.strictEqual(authed({ authorization: 'Bearer wrong', cookie: `tgx_token=${token}` }), true);
+assert.strictEqual(authed({ cookie: 'tgx_token=stale' }, '?token=alsostale'), false);
 assert.strictEqual(authed({}), false);
 ok('authenticate accepts any one valid credential');
 
@@ -130,8 +133,8 @@ ok('localPageRequest is true only for a local navigation to our own page');
 // --- injectToken ----------------------------------------------------------
 const html = '<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n</head>\n<body></body>\n</html>';
 const injected = auth.injectToken(html);
-assert.ok(injected.includes(`<meta name="cs-token" content="${token}">`));
-assert.ok(injected.indexOf('cs-token') < injected.indexOf('<meta charset'),
+assert.ok(injected.includes(`<meta name="tgx-token" content="${token}">`));
+assert.ok(injected.indexOf('tgx-token') < injected.indexOf('<meta charset'),
     'the token tag must precede other head content so early scripts can read it');
 assert.strictEqual(auth.injectToken(injected), injected, 'injectToken must be idempotent');
 ok('injectToken inserts once, at the top of head');
@@ -144,6 +147,10 @@ assert.ok(setCookie.includes('Secure'));
 assert.ok(setCookie.includes('Max-Age=31536000'));
 assert.ok(!auth.pairCookie(token, { secure: false }).includes('Secure'));
 assert.ok(auth.pairCookie('', { secure: false }).includes('Max-Age=0'), 'clearing must expire the cookie');
+assert.ok(setCookie.startsWith('tgx_token='), 'a new pairing sets the new cookie name');
+const forget = auth.forgetCookies({ secure: false });
+assert.ok(forget.some(c => c.startsWith('tgx_token=;')) && forget.some(c => c.startsWith('cs_token=;')),
+    'unpairing expires the old cookie name as well as the new');
 ok('pairCookie sets HttpOnly/Lax, and Secure only over HTTPS');
 
 console.log(`\n${pass} groups passed`);

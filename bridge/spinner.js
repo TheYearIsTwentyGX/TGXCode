@@ -242,7 +242,7 @@ class Spinner {
         } catch (err) {
             // Not fatal, and not worth a throw: without a catalogue every pick
             // falls back to `Thinking…`, which is what the app said before.
-            console.error(`[claude-sessions] could not read the bundled spinner verbs: ${err.message}`);
+            console.error(`[tgxcode] could not read the bundled spinner verbs: ${err.message}`);
         }
         return this.bundled;
     }
@@ -277,9 +277,9 @@ class Spinner {
                 fs.writeFileSync(tmp, JSON.stringify({ Category: name, Verbs: groups[name] }, null, 2) + '\n');
                 fs.renameSync(tmp, file);
             }
-            console.log(`[claude-sessions] wrote ${names.length} spinner verb groups to ${dir}`);
+            console.log(`[tgxcode] wrote ${names.length} spinner verb groups to ${dir}`);
         } catch (err) {
-            console.error(`[claude-sessions] could not create ${dir}: ${err.message}`);
+            console.error(`[tgxcode] could not create ${dir}: ${err.message}`);
         }
     }
 
