@@ -189,7 +189,8 @@ has your work in it, rather than the work sitting on origin where nobody sees it
 ```bash
 npm run land -- --status    # what would land, and whether it can
 npm run land -- --dry-run   # say what would happen, change nothing
-npm run land                # merge the PR, then pull the main checkout
+npm run land                # merge the PR, pull the main checkout, restart if bridge/ changed
+npm run land -- --no-restart  # the same, but leave the running bridge alone
 ```
 
 It refuses rather than guesses, and every refusal says what to do next:
@@ -198,12 +199,14 @@ leave them behind), commits you have not pushed, a PR that conflicts or is
 blocked, a main checkout that is dirty or on some other branch. A refusal that
 comes *after* the merge says so, so you always know which half happened.
 
-**It does not restart the bridge.** The everyday instance usually has live turns
-in it, and a restart ends any not running in the session host (see *Notes that save
-time*), so picking up merged code stays the user's call.
-When the merge touched `bridge/` the script says the running bridge is now on old
-code and leaves `npm run restart` to them; `--restart` opts in, and delegates to
-the script that has the turn-in-flight guard rather than reimplementing it.
+**When the merge touched `bridge/`, it restarts the everyday bridge.** Live turns
+survive that now — they run in the session host, and the next bridge adopts them
+(see *Notes that save time*). The restart is delegated to `scripts/restart-bridge.sh`,
+which refuses while any turn is `atRisk` (started with no host to hold it); land
+reports that refusal and says to `npm run restart` later, and never forces it. It
+does not start a bridge that was not already running on 45888. `--no-restart`
+leaves the running bridge alone; `--restart` restarts even when `bridge/` did not
+change.
 
 It is also the sanctioned way to reach the main checkout at all: a worktree-isolated
 session is refused `git -C ~/Other/claude-sessions` by its own harness, which is
