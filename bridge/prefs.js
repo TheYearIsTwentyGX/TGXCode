@@ -18,8 +18,9 @@
 //
 // `live` is the third, and it is about a view rather than about reading or
 // about wording: how much of a card the live board draws, and whether it draws
-// sessions this window has no process for. Per-browser was the obvious home for
-// it — the board's other layout choice, side or bottom, is localStorage — but it
+// sessions this window has no process for, and whether it stays up over the
+// other screens. Per-browser was the obvious home for it — the board's other
+// layout choice, side or bottom, is localStorage — but it
 // is the same argument as above that puts it here instead. How much of a card
 // you want to see is a preference about the app, not about the machine you
 // happened to open it on.
@@ -158,6 +159,20 @@ const DEFAULTS = {
         // Off by default, because a session you cannot drive from here is still
         // a session you may want to know is running.
         hideElsewhere: false,
+        // Whether the board stays on screen while one of the whole-screen
+        // panels is up, one key per panel. `hidden` is how it always was — the
+        // panel covers the board without closing it. `always` docks the board
+        // beside or under the panel the way it docks beside a conversation;
+        // `side` and `stacked` do that only while the dock toggle says so, so
+        // the one toggle in the board's header can bring it along or leave it
+        // behind. Flat keys rather than a map, so that each one can be set,
+        // inherited and cleared on its own like every other row in Settings.
+        overTasks: 'hidden',
+        overDashboard: 'hidden',
+        overHistory: 'hidden',
+        overDrafts: 'hidden',
+        overSchedules: 'hidden',
+        overSettings: 'hidden',
     },
     projects: {
         // Directory -> `#rgb` or `#rrggbb`. Absent means no colour, which is
@@ -320,6 +335,10 @@ const USER_ONLY = new Set(['quota', 'keyboard', 'projects', 'toolbar', 'wispr'])
 // is dropped and the default kept rather than taken at face value — a
 // `groupMinCalls` of `"3"` or of `-1` would otherwise turn grouping off with no
 // account of itself.
+// What `live.over*` may say: see DEFAULTS.live.
+const LIVE_OVER = ['hidden', 'always', 'side', 'stacked'];
+const isLiveOver = (v) => LIVE_OVER.includes(v);
+
 const SHAPE = {
     transcript: {
         groupToolCalls: (v) => typeof v === 'boolean',
@@ -329,6 +348,12 @@ const SHAPE = {
     live: {
         compact: (v) => typeof v === 'boolean',
         hideElsewhere: (v) => typeof v === 'boolean',
+        overTasks: isLiveOver,
+        overDashboard: isLiveOver,
+        overHistory: isLiveOver,
+        overDrafts: isLiveOver,
+        overSchedules: isLiveOver,
+        overSettings: isLiveOver,
     },
     projects: {
         // The last gate rather than the only one, as `keyboard.bindings` and

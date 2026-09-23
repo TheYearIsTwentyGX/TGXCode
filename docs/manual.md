@@ -488,6 +488,23 @@ defaults are only written out when there is no file at all. Add it by hand, or
 tick the two boxes under *Settings → Live board*, which writes them for you and
 repaints the board without a reload. A file edited by hand still needs one.
 
+### Keeping the board up over other screens
+
+Opening Tasks, the Dashboard, History, Drafts, Schedules or Settings normally
+covers the board. Six more `live` keys let it stay, docked beside or under that
+screen the way it docks beside a conversation — `overTasks`, `overDashboard`,
+`overHistory`, `overDrafts`, `overSchedules` and `overSettings`, each one of:
+
+- `"hidden"` — covered, as before. The default.
+- `"always"` — kept, whichever way the board is docked.
+- `"side"` — kept only while the board's dock toggle says *Side by side*.
+- `"stacked"` — kept only while it says *Stacked*.
+
+The last two make the dock toggle double as a switch: set Tasks to `side`, and
+flipping the board to *Stacked* leaves it behind whenever Tasks is open.
+*Settings → Live board → Live board visibility* has a radio row per screen, and
+an **All views** row whose buttons set all six at once.
+
 ### What a turn in progress calls itself
 
 While a turn runs, every surface that shows it working — the status line, the
