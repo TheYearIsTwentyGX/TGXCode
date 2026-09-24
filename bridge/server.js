@@ -39,7 +39,8 @@ const {
 } = require('./snippets');
 const {
     Schedules, MAX_SCHEDULES, CATCHUP_MS,
-    parseCron, nextSlot, isSpent, dueSlot, describeCron, cronForm, fillPrompt, unattended,
+    parseCron, nextSlot, isSpent, dueSlot, describeCron, cronForm, cronForDate, fillPrompt,
+    unattended,
     verdictOf,
     reviewKey, unreviewedPulls, scheduleTitle,
 } = require('./schedule');
@@ -216,7 +217,7 @@ const usage = new Usage();
 // a directory they trust — see bridge/beacon.js for why that consent is theirs
 // to give rather than ours to assume.
 const beacon = new Beacon();
-// What `?status=` on /api/suggestions accepts: the two decisions the store
+// What `?status=` on /api/suggestions accepts: the decisions the store
 // knows, plus `open` for a task nobody has decided about — which is the absence
 // of an entry rather than a status, so the store has no name for it.
 const SUGGESTION_STATES = new Set(['open', ...SUGGESTION_STATUSES]);
@@ -1554,8 +1555,22 @@ function scheduleFields(body, who, { partial }) {
         fields.prompt = prompt;
     }
 
+    // **`at` is a moment, for a caller that has one and not an expression.**
+    // It becomes the dated cron plus `once` that the dialog's one-time form
+    // saves, so the row is indistinguishable from one made by hand — see
+    // `cronForDate` for why it refuses what it refuses. Both at once is refused
+    // rather than one quietly winning: they are two answers to one question.
+    if (body.at !== undefined && body.at !== null) {
+        if (body.cron !== undefined && body.cron !== null) {
+            return { error: 'give either at or cron, not both', status: 400 };
+        }
+        const dated = cronForDate(body.at);
+        if (dated.error) return { error: dated.error, status: 400 };
+        body = { ...body, cron: dated.cron, once: true };
+    }
+
     if (!partial || body.cron !== undefined) {
-        if (!body.cron) return { error: 'cron is required', status: 400 };
+        if (!body.cron) return { error: 'cron (or at) is required', status: 400 };
         const spec = parseCron(String(body.cron));
         if (spec.error) return { error: spec.error, status: 400 };
         // A syntactically fine expression that can never match is still a
@@ -3534,6 +3549,95 @@ async function api(req, res, url, pathname, who) {
     // **The offers stay derived.** Nothing here is copied into state this app
     // owns, so deleting a session removes its tasks along with its transcript —
     // see docs/api.md for what that means and why it was chosen.
+    // POST /api/suggestions/:sessionId/:toolUseId/start — take a task up as a
+    // session of its own.
+    //
+    // **One call, not the two the web client makes.** `startSuggestion` in
+    // web/app.js creates the session and then records the decision, and if the
+    // second call fails the task stays offered beside the session that is already
+    // doing it. That is survivable when you are looking at the card. It is not for
+    // an unattended agent working down a list, which would read "open" and start
+    // it again — so here the order is the answer, the argument `fromDraft` makes
+    // on `POST /api/sessions`.
+    //
+    // **Refused unless it is open**, with the status and the session that has it.
+    // That refusal is the whole guard against a scheduled run starting a task a
+    // second time; undoing a decision first (`status: null` on the per-session
+    // route) is how you say you really mean it.
+    //
+    // `extra` is appended under a rule rather than woven in, so the task as
+    // filed is still recognisable at the top of the new session's first message.
+    if (seg[1] === 'suggestions' && seg[2] && seg[3] && seg[4] === 'start' && !seg[5]
+        && req.method === 'POST') {
+        const sourceId = seg[2];
+        const toolUseId = seg[3];
+        const body = await readJson(req);
+        let task = index.listSuggestions({ session: sourceId, includeTest: true })
+            .find(t => t.id === toolUseId);
+        // A task filed a moment ago is on screen before the index has rescanned
+        // the transcript it is in. The web client sends the prompt it is showing
+        // so that Start on a fresh card is not a 404; the decision store is still
+        // asked, below, whether it is taken.
+        if (!task && typeof body.prompt === 'string' && body.prompt.trim()
+            && index.summary(sourceId)) {
+            const decision = suggestions.forSession(sourceId)[toolUseId] || null;
+            task = {
+                id: toolUseId, sessionId: sourceId, prompt: body.prompt.trim(),
+                title: null, why: null, cwd: null,
+                status: decision ? decision.status : 'open',
+                startedId: decision ? decision.startedId : null,
+                session: { test: flags.get(sourceId).test, projectCwd: null },
+            };
+        }
+        if (!task) return send(res, 404, { error: 'no such task' });
+        if (task.status !== 'open') {
+            return send(res, 409, {
+                error: `that task is already ${task.status}`
+                    + (task.startedId ? ` (session ${task.startedId})` : ''),
+                status: task.status,
+                startedId: task.startedId,
+            });
+        }
+
+        const cwd = body.cwd ? String(body.cwd) : (task.cwd || task.session.projectCwd);
+        try {
+            resolveWorkdir(cwd);
+        } catch (err) {
+            return send(res, 400, { error: err.message });
+        }
+        // Plan unless asked otherwise, which is what the card's Start button
+        // does: a task was written by somebody else's agent, and reading it
+        // before editing anything is the cheap default.
+        const mode = normalizeMode(body.permissionMode || 'plan');
+        const refusal = modeRefusal(mode, who);
+        if (refusal) return send(res, 403, { error: refusal, remote: true });
+        if (tooManyCreates()) {
+            return send(res, 429, {
+                error: `more than ${CREATE_LIMIT.max} sessions started in a minute — `
+                    + 'slow down, or start the rest from the machine itself',
+            });
+        }
+
+        const extra = typeof body.extra === 'string' ? body.extra.trim() : '';
+        const prompt = extra ? `${task.prompt}\n\n---\n\n${extra}` : task.prompt;
+        let out;
+        try {
+            out = pool.create({ cwd, prompt, model: body.model || null, permissionMode: mode });
+        } catch (err) {
+            return send(res, 400, { error: err.message });
+        }
+        const test = !!(task.session.test || body.test);
+        if (test) flags.set(out.sessionId, { test: true });
+        index.note(out.sessionId);
+        const decision = suggestions.set(sourceId, toolUseId, {
+            status: 'started', startedId: out.sessionId, via: 'session',
+        });
+        broadcast('suggestion-changed', { at: Date.now(), sessionId: sourceId, toolUseId });
+        return send(res, 200, {
+            ...out, test, task: { ...task, ...decision, status: 'started' },
+        });
+    }
+
     if (pathname === '/api/suggestions' && req.method === 'GET') {
         const status = url.searchParams.get('status');
         if (status) {
@@ -3551,6 +3655,7 @@ async function api(req, res, url, pathname, who) {
                 session: url.searchParams.get('session') || null,
                 project: url.searchParams.get('project') || null,
                 status: status || null,
+                q: url.searchParams.get('q') || null,
                 limit: Number(url.searchParams.get('limit')) || 500,
                 // Same rule as /api/sessions: a scratch session belongs to the
                 // instance that started it.
@@ -3998,7 +4103,19 @@ async function api(req, res, url, pathname, who) {
         }
 
         if (!seg[2] && req.method === 'POST') {
-            const body = await readJson(req);
+            let body = await readJson(req);
+            // **Who asked, when it was a session.** `from` is what the agent
+            // tools send (bridge/mcp.js), and it does three things. It is
+            // recorded, so the card can say which conversation an unattended run
+            // came from. It stands in for a missing `cwd` — the project the
+            // session belongs to, not a worktree it may since have removed. And a
+            // test session's schedule is a test schedule: a probe run from a dev
+            // bridge must not leave a row the everyday bridge will fire, and the
+            // agent making it cannot be relied on to say so.
+            const fromSession = typeof body.from === 'string' && body.from.trim()
+                ? body.from.trim() : null;
+            const src = fromSession ? index.summary(fromSession) : null;
+            if (src && !body.cwd) body = { ...body, cwd: src.projectCwd || src.cwd };
             const v = scheduleFields(body, who, { partial: false });
             if (v.error) {
                 return send(res, v.status,
@@ -4062,6 +4179,14 @@ async function api(req, res, url, pathname, who) {
                     }
                     v.fields.reviewed = reviewed;
                 }
+            }
+
+            if (fromSession) {
+                v.fields.createdBy = {
+                    sessionId: fromSession,
+                    title: src ? (src.title || null) : null,
+                };
+                if (flags.get(fromSession).test) v.fields.test = true;
             }
 
             const row = schedules.create(v.fields);
@@ -5240,9 +5365,24 @@ async function api(req, res, url, pathname, who) {
                         + 'or absent to undo',
                 });
             }
+            // `ifOpen` makes this a claim rather than an overwrite: refused when
+            // a decision is already recorded. It is how an agent takes a task up
+            // inside its own session (`start_task` as a subagent) without the
+            // read-then-write gap in which a second run takes it too.
+            const prior = suggestions.forSession(sessionId)[toolUseId];
+            if (body.ifOpen && prior) {
+                return send(res, 409, {
+                    error: `that task is already ${prior.status}`
+                        + (prior.startedId ? ` (session ${prior.startedId})` : ''),
+                    status: prior.status,
+                    startedId: prior.startedId,
+                });
+            }
             const next = suggestions.set(sessionId, toolUseId, {
                 status,
                 startedId: typeof body.startedId === 'string' ? body.startedId : null,
+                via: typeof body.via === 'string' ? body.via : null,
+                note: typeof body.note === 'string' ? body.note : null,
             });
             broadcast('suggestion-changed', { at: Date.now(), sessionId, toolUseId });
             return send(res, 200, { ok: true, sessionId, toolUseId, ...next });

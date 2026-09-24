@@ -27,7 +27,8 @@ const UNIT = ['auth.test.js', 'temp.test.js', 'recent.test.js', 'pulls.test.js',
     'platform.test.js', 'preview.test.js',
     'claude-config.test.js', 'claude-docs.test.js', 'ask-result.test.js',
     'commands.test.js', 'message-date.test.js', 'folded.test.js',
-    'claude-version.test.js', 'wispr.test.js', 'legacy.test.js'];
+    'claude-version.test.js', 'wispr.test.js', 'legacy.test.js',
+    'suggestions.test.js', 'mcp.test.js'];
 const LIVE = ['gate.test.js', 'browser.test.js', 'refusals.test.js', 'unpaired.test.js'];
 
 const given = Number(process.argv[2]);

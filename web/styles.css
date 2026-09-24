@@ -1833,7 +1833,9 @@ a:hover { text-decoration: underline; }
     border-radius: var(--r-xs);
     background: var(--s2);
 }
-.task[data-status="started"] { border-left-color: var(--green); }
+.task[data-status="started"],
+.task[data-status="completed"] { border-left-color: var(--green); }
+.task[data-status="completed"] { opacity: 0.85; }
 .task[data-status="dismissed"] { border-left-color: var(--outline-soft); opacity: 0.72; }
 .task[data-status="dismissed"]:hover { opacity: 1; }
 

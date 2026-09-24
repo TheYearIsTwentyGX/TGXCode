@@ -128,6 +128,10 @@ const AGENT_TOOLS = [
     'mcp__tgxcode__suggest_session',
     'mcp__tgxcode__list_sessions',
     'mcp__tgxcode__message_session',
+    'mcp__tgxcode__find_tasks',
+    'mcp__tgxcode__start_task',
+    'mcp__tgxcode__set_task_status',
+    'mcp__tgxcode__schedule_session',
 ];
 
 function mcpConfig(sessionId) {
@@ -418,6 +422,12 @@ class Runner extends EventEmitter {
         // resumed in plan mode, so it cannot pass the work on to a third session
         // even though the tool is nominally allowed — which is exactly the
         // containment the wrapper asks for in prose, enforced.
+        //
+        // The task and schedule tools are on it for the handoff's reason. Their
+        // main caller is a *scheduled* run, which is unattended by definition, so
+        // an approval card would be auto-denied at the one moment it matters —
+        // and the same plan-mode rule means a session that is only planning still
+        // has to ask before it schedules or starts anything.
         args.push('--mcp-config', mcpConfig(this.sessionId));
         for (const tool of AGENT_TOOLS) args.push('--allowedTools', tool);
         // `--session-id` mints the id; `--resume` continues it. Which one is right

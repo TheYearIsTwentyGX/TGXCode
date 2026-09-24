@@ -2,12 +2,26 @@
 
 // The tools this app gives a session that it would not otherwise have.
 //
-// Three of them, and they exist for the same reason: a session knows something
-// the next piece of work needs, and until now had nowhere to put it.
+// Three of them started this file, and they exist for the same reason: a
+// session knows something the next piece of work needs, and until now had
+// nowhere to put it.
 //
 //   suggest_session  — offer the user a follow-up they can start in one click.
 //   list_sessions    — find out which other sessions exist, live or not.
 //   message_session  — hand a fact to one of them, waking it if it is idle.
+//
+// Four more close the loop on the first, so a list of suggested tasks can be
+// worked through by an agent and not only by clicks:
+//
+//   find_tasks        — search suggested tasks, with their status and source.
+//   start_task        — take one up, as a new session or inside this one.
+//   set_task_status   — say one is done, or dismiss it, or offer it again.
+//   schedule_session  — start a session later, once or on a cron.
+//
+// The permission modes those offer stop short of bypassPermissions. That is a
+// guardrail on the tool, not a boundary — the agent can read the same token
+// this process does — and it exists so the obvious call cannot produce an
+// unattended run with every check switched off.
 //
 // **suggest_session records nothing, and that is still its whole design.** The
 // card the user sees is rendered from the `tool_use` entry the CLI writes to the
@@ -283,7 +297,185 @@ const MESSAGE = {
     },
 };
 
-const TOOLS = [SUGGEST, LIST, MESSAGE];
+// A task is addressed by where it came from and which call filed it. Printed by
+// find_tasks, so the model copies it rather than assembling it.
+const TASK_REF_HELP = 'The task, as the `task:` line find_tasks prints '
+    + '(<sourceSessionId>:<toolUseId>).';
+
+// Offered to the model, and deliberately short of bypassPermissions — see the
+// header.
+const AGENT_MODES = ['plan', 'auto', 'acceptEdits', 'dontAsk'];
+
+const FIND_TASKS = {
+    name: 'find_tasks',
+    title: 'Search suggested tasks',
+    description: [
+        'Search the follow-up tasks sessions have filed with suggest_session —',
+        'yours or any other — with what has happened to each.',
+        '',
+        '`status` is one of:',
+        '  open       offered, nobody has acted on it.',
+        '  started    taken up; `started in` names the session doing it.',
+        '  completed  somebody said it was done (set_task_status), often with a note.',
+        '  dismissed  waved away.',
+        '',
+        'Results are oldest first, so a set of tasks filed in build order reads in',
+        'that order. Use `session: "self"` for the ones this session filed.',
+    ].join('\n'),
+    inputSchema: {
+        type: 'object',
+        properties: {
+            query: {
+                type: 'string',
+                description: 'Words that must all appear in the title, the prompt, the reason '
+                    + 'or the title of the session that filed it.',
+            },
+            session: {
+                type: 'string',
+                description: 'Only tasks filed by this session id, or "self" for this session.',
+            },
+            project: {
+                type: 'string',
+                description: 'Absolute path of a project to restrict to.',
+            },
+            status: {
+                type: 'array',
+                items: { type: 'string', enum: ['open', 'started', 'completed', 'dismissed'] },
+                description: 'Only these statuses. Omit for all of them.',
+            },
+            limit: { type: 'integer', description: 'How many to return. Defaults to 50.' },
+            full: {
+                type: 'boolean',
+                description: 'Print every prompt in full. Prompts are shortened when more '
+                    + 'than three tasks match.',
+            },
+        },
+    },
+};
+
+const START_TASK = {
+    name: 'start_task',
+    title: 'Take up a suggested task',
+    description: [
+        'Take up an open task from find_tasks. Two ways:',
+        '',
+        '  as: "session"   start it as a new session of its own, which runs on its',
+        '                  own and shows up in the user\'s sidebar. Returns its id.',
+        '  as: "subagent"  claim it for this session and get its full prompt back,',
+        '                  so you can run it now with your Agent tool. This does not',
+        '                  run anything itself — you do.',
+        '',
+        'Either way the task is marked started, so nobody else takes it up. A task',
+        'that is not open is refused, with who has it — do not work around that.',
+        'When the work is done, call set_task_status with status "completed" and a',
+        'note saying where the result is (a pull request URL is ideal).',
+        '',
+        '`extra` is added to the end of the task\'s prompt — instructions of your own,',
+        'such as which branch to start from or that it should open a pull request.',
+    ].join('\n'),
+    inputSchema: {
+        type: 'object',
+        properties: {
+            task: { type: 'string', description: TASK_REF_HELP },
+            as: { type: 'string', enum: ['session', 'subagent'] },
+            extra: {
+                type: 'string',
+                description: 'Added after the task\'s own prompt.',
+            },
+            permissionMode: {
+                type: 'string',
+                enum: AGENT_MODES,
+                description: 'For as: "session" only. Defaults to plan, the same as the '
+                    + 'Start button: the new session investigates and waits for the user '
+                    + 'to approve. Pick another only when nobody will be there to approve.',
+            },
+            cwd: {
+                type: 'string',
+                description: 'For as: "session" only. Where to run; defaults to where the '
+                    + 'task was filed.',
+            },
+        },
+        required: ['task', 'as'],
+    },
+};
+
+const SET_TASK_STATUS = {
+    name: 'set_task_status',
+    title: 'Mark a suggested task done, dismissed or open',
+    description: [
+        'Record what happened to a task.',
+        '',
+        '  completed  the work is done. Put where it is in `note` — a PR URL.',
+        '  dismissed  it should not be done, or is no longer needed. Say why in `note`.',
+        '  open       undo: offer it again.',
+        '',
+        'Mark a task completed only when its work actually exists, not when you have',
+        'merely started it — start_task already recorded that.',
+    ].join('\n'),
+    inputSchema: {
+        type: 'object',
+        properties: {
+            task: { type: 'string', description: TASK_REF_HELP },
+            status: { type: 'string', enum: ['completed', 'dismissed', 'open'] },
+            note: { type: 'string', description: 'One line: the PR, or why. Up to 500 characters.' },
+        },
+        required: ['task', 'status'],
+    },
+};
+
+const SCHEDULE = {
+    name: 'schedule_session',
+    title: 'Schedule a session',
+    description: [
+        'Start a new session later, unattended: once at a date and time (`at`), or',
+        'repeatedly on a cron expression (`cron`). It shows up in the user\'s',
+        'Schedules panel, marked as made by this session, and they can edit, pause or',
+        'delete it there.',
+        '',
+        'Only do this when the user asked for something to happen later. Write',
+        '`prompt` for an agent with none of your context, and remember nobody will be',
+        'watching when it runs — it cannot ask questions, so say what to do when',
+        'something is unclear.',
+        '',
+        'The usual pattern for working through suggested tasks later: file them with',
+        'suggest_session, then schedule a session whose prompt tells it to call',
+        'find_tasks with this session\'s id and status "open", take each one up with',
+        'start_task in order, and set_task_status "completed" with the PR URL as each',
+        'is finished. Put this session\'s id in that prompt — it is printed below.',
+    ].join('\n'),
+    inputSchema: {
+        type: 'object',
+        properties: {
+            prompt: { type: 'string', description: 'The first message the session starts with.' },
+            at: {
+                type: 'string',
+                description: 'When to run, once: a local date and time such as '
+                    + '2026-09-25T09:00. Must be in the future and within a year.',
+            },
+            cron: {
+                type: 'string',
+                description: 'For a repeating schedule instead: five-field cron in local time, '
+                    + 'e.g. "0 2 * * 1-5". Give at or cron, not both.',
+            },
+            title: { type: 'string', description: 'A short name for the schedule.' },
+            permissionMode: {
+                type: 'string',
+                enum: AGENT_MODES,
+                description: 'Defaults to auto. plan would stop at a plan nobody is there to '
+                    + 'approve; dontAsk runs without asking and is refused anything not '
+                    + 'already allowed.',
+            },
+            cwd: {
+                type: 'string',
+                description: "Where to run. Defaults to this session's project.",
+            },
+            model: { type: 'string', description: 'Model for the run. Defaults to the usual one.' },
+        },
+        required: ['prompt'],
+    },
+};
+
+const TOOLS = [SUGGEST, LIST, MESSAGE, FIND_TASKS, START_TASK, SET_TASK_STATUS, SCHEDULE];
 
 // What comes back to the model after a suggestion. It says the offer was made
 // and, more usefully, says not to go and do it — an agent told only "ok"
@@ -408,6 +600,202 @@ async function callMessage(id, args) {
     ].join(' '));
 }
 
+/** `<sessionId>:<toolUseId>` → the two halves, or null. */
+function parseTaskRef(ref) {
+    const s = typeof ref === 'string' ? ref.trim() : '';
+    const i = s.indexOf(':');
+    if (i <= 0 || i === s.length - 1) return null;
+    return { sessionId: s.slice(0, i), toolUseId: s.slice(i + 1) };
+}
+
+const SHORT_PROMPT = 400;
+
+function renderTask(t, { full }) {
+    const where = t.session && (t.session.title || t.session.projectName);
+    const lines = [`${t.title || '(untitled)'}  [${t.status}]`, `    task: ${t.sessionId}:${t.id}`];
+    if (where) lines.push(`    filed by: ${where} (${t.sessionId})`);
+    if (t.startedId) {
+        lines.push(`    started in: ${t.startedId}${t.via === 'subagent' ? ' (as a subagent)' : ''}`);
+    }
+    if (t.note) lines.push(`    note: ${t.note}`);
+    if (t.cwd) lines.push(`    cwd: ${t.cwd}`);
+    if (t.why) lines.push(`    why: ${t.why}`);
+    const prompt = String(t.prompt || '');
+    const shown = full || prompt.length <= SHORT_PROMPT
+        ? prompt
+        : `${prompt.slice(0, SHORT_PROMPT)}… (shortened — pass full: true, or narrow the search)`;
+    lines.push('    prompt:', ...shown.split('\n').map(l => `      ${l}`));
+    return lines.join('\n');
+}
+
+async function callFindTasks(id, args) {
+    const params = new URLSearchParams();
+    if (typeof args.query === 'string' && args.query.trim()) params.set('q', args.query.trim());
+    if (typeof args.session === 'string' && args.session.trim()) {
+        const s = args.session.trim();
+        if (s === 'self' && !SESSION_ID) {
+            return toolError(id, 'this session does not know its own id, so "self" cannot be used');
+        }
+        params.set('session', s === 'self' ? SESSION_ID : s);
+    }
+    if (typeof args.project === 'string' && args.project.trim()) {
+        params.set('project', args.project.trim());
+    }
+    const status = Array.isArray(args.status)
+        ? args.status.filter(v => typeof v === 'string' && v.trim())
+        : (typeof args.status === 'string' && args.status.trim() ? [args.status.trim()] : []);
+    if (status.length) params.set('status', status.join(','));
+    const limit = Number(args.limit);
+    params.set('limit', String(limit > 0 ? Math.min(Math.floor(limit), 200) : 50));
+
+    const r = await api('GET', `/api/suggestions?${params}`);
+    if (r.error) return toolError(id, r.error);
+    if (!r.ok) return toolError(id, msgOf(r));
+
+    // The bridge answers newest first, for a board. Reversed here because a set
+    // of tasks is usually filed in the order it should be built.
+    const rows = ((r.body && r.body.suggestions) || []).slice().reverse();
+    if (!rows.length) {
+        return say(id, r.body && r.body.ready === false
+            ? 'No tasks matched yet — TGXCode is still reading transcripts. Try again shortly.'
+            : 'No tasks matched.');
+    }
+    const full = !!args.full || rows.length <= 3;
+    const head = `${rows.length} task${rows.length === 1 ? '' : 's'}, oldest first:`;
+    return say(id, `${head}\n\n${rows.map(t => renderTask(t, { full })).join('\n\n')}`);
+}
+
+function taskRoute(ref) {
+    return `/api/sessions/${encodeURIComponent(ref.sessionId)}`
+        + `/suggestions/${encodeURIComponent(ref.toolUseId)}`;
+}
+
+async function callStartTask(id, args) {
+    const ref = parseTaskRef(args.task);
+    if (!ref) return toolError(id, `task must look like <sessionId>:<toolUseId>. ${TASK_REF_HELP}`);
+    const as = args.as;
+    if (as !== 'session' && as !== 'subagent') {
+        return toolError(id, 'as must be "session" or "subagent"');
+    }
+    const extra = typeof args.extra === 'string' ? args.extra.trim() : '';
+    const mode = typeof args.permissionMode === 'string' ? args.permissionMode : null;
+    if (mode && !AGENT_MODES.includes(mode)) {
+        return toolError(id, `permissionMode must be one of ${AGENT_MODES.join(', ')}`);
+    }
+
+    if (as === 'session') {
+        const r = await api('POST', `/api/suggestions/${encodeURIComponent(ref.sessionId)}/`
+            + `${encodeURIComponent(ref.toolUseId)}/start`, {
+            extra: extra || null,
+            permissionMode: mode,
+            cwd: typeof args.cwd === 'string' && args.cwd.trim() ? args.cwd.trim() : null,
+            from: SESSION_ID,
+        });
+        if (r.error) return toolError(id, r.error);
+        if (!r.ok) return toolError(id, msgOf(r));
+        return say(id, [
+            `Started as session ${r.body.sessionId}, in ${mode || 'plan'} mode.`,
+            'It runs on its own; the task is marked started. When its work is done, mark it',
+            'completed with set_task_status. Do not do the work yourself as well.',
+        ].join(' '));
+    }
+
+    // As a subagent: find it, claim it, hand the prompt back. The claim is
+    // `ifOpen`, so a second run racing this one is refused rather than both
+    // going ahead.
+    if (!SESSION_ID) {
+        return toolError(id, 'this session does not know its own id, so it cannot claim a task');
+    }
+    const found = await api('GET', `/api/suggestions?session=${encodeURIComponent(ref.sessionId)}`);
+    if (found.error) return toolError(id, found.error);
+    if (!found.ok) return toolError(id, msgOf(found));
+    const task = ((found.body && found.body.suggestions) || []).find(t => t.id === ref.toolUseId);
+    if (!task) return toolError(id, 'no such task — check the ref with find_tasks');
+    if (task.status !== 'open') {
+        return toolError(id, `that task is already ${task.status}`
+            + (task.startedId ? ` (session ${task.startedId})` : ''));
+    }
+    const claim = await api('POST', taskRoute(ref), {
+        status: 'started', startedId: SESSION_ID, via: 'subagent', ifOpen: true,
+    });
+    if (claim.error) return toolError(id, claim.error);
+    if (!claim.ok) return toolError(id, msgOf(claim));
+
+    const prompt = extra ? `${task.prompt}\n\n---\n\n${extra}` : task.prompt;
+    return say(id, [
+        `Claimed "${task.title || 'task'}" for this session; it is marked started.`,
+        'Run it now with your Agent tool, giving it exactly the prompt below. When it is',
+        `done, call set_task_status with task "${ref.sessionId}:${ref.toolUseId}", status`,
+        '"completed" and a note saying where the work is. If you decide not to run it after',
+        'all, set it back to "open" so it is offered again.',
+        task.cwd ? `The task was filed for ${task.cwd}.` : '',
+        '',
+        '--- prompt ---',
+        prompt,
+    ].join('\n'));
+}
+
+async function callSetTaskStatus(id, args) {
+    const ref = parseTaskRef(args.task);
+    if (!ref) return toolError(id, `task must look like <sessionId>:<toolUseId>. ${TASK_REF_HELP}`);
+    const status = args.status;
+    if (!['completed', 'dismissed', 'open'].includes(status)) {
+        return toolError(id, 'status must be "completed", "dismissed" or "open"');
+    }
+    const r = await api('POST', taskRoute(ref), {
+        // `open` is the absence of a decision, which the route spells as null.
+        status: status === 'open' ? null : status,
+        note: typeof args.note === 'string' ? args.note : null,
+    });
+    if (r.error) return toolError(id, r.error);
+    if (!r.ok) return toolError(id, msgOf(r));
+    return say(id, status === 'open'
+        ? 'The task is open again and offered to the user.'
+        : `Marked ${status}.`);
+}
+
+async function callSchedule(id, args) {
+    const prompt = typeof args.prompt === 'string' ? args.prompt.trim() : '';
+    if (!prompt) {
+        return toolError(id, 'prompt is required — write the message the session starts with.');
+    }
+    const at = typeof args.at === 'string' && args.at.trim() ? args.at.trim() : null;
+    const cron = typeof args.cron === 'string' && args.cron.trim() ? args.cron.trim() : null;
+    if (!at && !cron) return toolError(id, 'give at (a date and time) or cron');
+    if (at && cron) return toolError(id, 'give at or cron, not both');
+    const mode = typeof args.permissionMode === 'string' ? args.permissionMode : 'auto';
+    if (!AGENT_MODES.includes(mode)) {
+        return toolError(id, `permissionMode must be one of ${AGENT_MODES.join(', ')}`);
+    }
+
+    const r = await api('POST', '/api/schedules', {
+        prompt,
+        at,
+        cron,
+        title: typeof args.title === 'string' && args.title.trim() ? args.title.trim() : null,
+        cwd: typeof args.cwd === 'string' && args.cwd.trim() ? args.cwd.trim() : null,
+        model: typeof args.model === 'string' && args.model.trim() ? args.model.trim() : null,
+        permissionMode: mode,
+        from: SESSION_ID,
+    });
+    if (r.error) return toolError(id, r.error);
+    if (!r.ok) return toolError(id, msgOf(r));
+
+    const row = (r.body && r.body.schedule) || {};
+    const next = row.nextRunAt ? new Date(row.nextRunAt).toString() : 'never';
+    const lines = [
+        `Scheduled: ${row.title || prompt.split('\n')[0]}`,
+        `    id: ${row.id}`,
+        `    when: ${row.cronText || row.cron}`,
+        `    next run: ${next}`,
+        `    runs in: ${row.cwd}, ${row.permissionMode} mode${row.test ? ', test only' : ''}`,
+    ];
+    if (SESSION_ID) lines.push(`    made by this session: ${SESSION_ID}`);
+    lines.push('', 'The user can see and change it in the Schedules panel. '
+        + 'Tell them it is set, and when.');
+    return say(id, lines.join('\n'));
+}
+
 // ---------------------------------------------------------------------------
 // Dispatch
 // ---------------------------------------------------------------------------
@@ -435,6 +823,10 @@ async function handle(msg) {
         if (name === 'suggest_session') return callSuggest(id, args);
         if (name === 'list_sessions') return callList(id, args);
         if (name === 'message_session') return callMessage(id, args);
+        if (name === 'find_tasks') return callFindTasks(id, args);
+        if (name === 'start_task') return callStartTask(id, args);
+        if (name === 'set_task_status') return callSetTaskStatus(id, args);
+        if (name === 'schedule_session') return callSchedule(id, args);
         return toolError(id, `unknown tool: ${name}`);
     }
 

@@ -333,11 +333,15 @@ class SessionIndex extends EventEmitter {
      * loose end you still want to find after filing a conversation away. Temp
      * and test sessions are filtered as in list(), for the same reasons.
      */
-    listSuggestions({ session = null, project = null, status = null,
+    listSuggestions({ session = null, project = null, status = null, q = null,
         limit = 500, includeTest = false } = {}) {
         const wanted = status
             ? new Set(String(status).split(',').map(v => v.trim()).filter(Boolean))
             : null;
+        // Every word somewhere in the task or the title of the conversation it
+        // came from — the task board's search box (`tbMatches` in web/app.js),
+        // here so an agent can ask the same question without fetching the lot.
+        const words = q ? String(q).toLowerCase().split(/\s+/).filter(Boolean) : [];
         const out = [];
 
         for (const rec of this.sessions.values()) {
@@ -356,11 +360,18 @@ class SessionIndex extends EventEmitter {
                 const decision = acted[s.id] || null;
                 const state = decision ? decision.status : 'open';
                 if (wanted && !wanted.has(state)) continue;
+                if (words.length) {
+                    const hay = [s.title, s.prompt, s.why, m.title]
+                        .filter(Boolean).join('\n').toLowerCase();
+                    if (!words.every(w => hay.includes(w))) continue;
+                }
                 out.push({
                     ...s,
                     sessionId: m.sessionId,
                     status: state,
                     startedId: decision ? decision.startedId : null,
+                    via: decision ? (decision.via || null) : null,
+                    note: decision ? (decision.note || null) : null,
                     at: decision ? decision.at : 0,
                     archived: flags.archived,
                     // Enough to say where a task came from without a second

@@ -294,7 +294,7 @@ the accident the rest of this file is about.
 The suite is `auth`, `temp`, `recent`, `pulls`, `taskboard`, `ports`, `spinner`,
 `changes`, `restart`, `handoff`, `drafts`, `snippets`, `notifications`, `schedule`,
 `usage`, `titles`, `tasks`, `prefs`, `paths`, `logwidth`, `legacy`, `claude-config`,
-`claude-docs`, `ask-result`, `runner`, `wispr` and `preview` on their own — no bridge needed
+`claude-docs`, `ask-result`, `runner`, `wispr`, `preview`, `suggestions` and `mcp` on their own — no bridge needed
 — plus four that want a live one: `gate`, `browser`, `refusals`, `unpaired`.
 Between them they cover the token, what a remote caller is refused, what an
 unpaired remote device sees before and after pairing, and what the nightly restart
