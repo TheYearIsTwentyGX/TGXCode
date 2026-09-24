@@ -394,6 +394,7 @@ export const state = {
     // What each session's timestamps were on the last load, so `dynamic` can tell
     // a message arriving from a list merely being re-sent. See rememberOrder.
     seenTs: new Map(),      // sessionId -> {user, last}
+    railRename: null,       // {id, draft} while a rail row's name is being edited
     railDrag: null,         // {cwd, order} while a project card is dragged, in `custom`
     sortMenu: false,        // the rail head's order menu is open
     unsent: new Map(),      // sessionId -> text written to a process but not yet in a transcript
@@ -1252,6 +1253,9 @@ export const ICON = {
     pin: '<path d="M9 3h6l-.7 5.2 3 2.6V13H6.7v-2.2l3-2.6L9 3Z" stroke="currentColor" '
         + 'stroke-width="1.8" stroke-linejoin="round"/><path d="M12 13v8" stroke="currentColor" '
         + 'stroke-width="1.8" stroke-linecap="round"/>',
+    pencil: '<path d="M4.5 19.5 5.3 15.6 15.6 5.3a1.9 1.9 0 0 1 2.7 0l.4.4a1.9 1.9 0 0 1 0 2.7'
+        + 'L8.4 18.7l-3.9.8Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>'
+        + '<path d="m13.8 7.1 3.1 3.1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
     archive: '<path d="M3.5 6.2h17V9h-17V6.2Z" stroke="currentColor" stroke-width="1.8" '
         + 'stroke-linejoin="round"/><path d="M5 9v9.3h14V9" stroke="currentColor" '
         + 'stroke-width="1.8" stroke-linejoin="round"/><path d="M10 12.5h4" stroke="currentColor" '
@@ -1593,19 +1597,63 @@ function queuedBadge(queued) {
     }, `+${queued} queued`);
 }
 
-/** Toggle pin/archive, updating in place so the rail doesn't jump under the cursor. */
+/**
+ * Toggle pin/archive or set a name, updating in place so the rail doesn't jump
+ * under the cursor. The answer's `title` is the name the session now shows —
+ * with a name cleared, what the transcript calls it — so it can be copied as is.
+ */
 export async function setFlags(summary, change) {
     try {
         const r = await post(`/api/sessions/${summary.sessionId}/flags`, change);
-        Object.assign(summary, { pinned: r.pinned, archived: r.archived, test: r.test });
+        const next = {
+            pinned: r.pinned, archived: r.archived, test: r.test,
+            ...(r.title ? { title: r.title, titleSource: r.titleSource } : {}),
+        };
+        Object.assign(summary, next);
         if (state.current && state.current.sessionId === summary.sessionId) {
-            Object.assign(state.current, { pinned: r.pinned, archived: r.archived, test: r.test });
+            Object.assign(state.current, next);
+            // Not while a subagent is open: the header is naming the agent then,
+            // and the back button picks the new name up on the way out.
+            if (r.title && !state.agent) dom.convTitle.textContent = r.title;
             renderHeaderActions();
         }
         renderRail();
     } catch (err) {
         toast(`Could not update the session: ${err.message}`, 'error');
     }
+}
+
+// ── rename ───────────────────────────────────────────────────────────────
+// A name given from the rail. The bridge keeps it beside the pin, not in the
+// transcript, and an empty one hands the session back to what the transcript
+// calls it. The draft lives in `state` because web/rail.js re-renders the row on
+// every `sessions-changed`, and a draft held anywhere else would be typed over.
+
+export function startRename(summary) {
+    // Start from what the row says, so a small correction is a small edit.
+    state.railRename = { id: summary.sessionId, draft: summary.title || '' };
+    renderRail();
+}
+
+export function cancelRename() {
+    if (!state.railRename) return;
+    state.railRename = null;
+    renderRail();
+}
+
+export async function commitRename(summary) {
+    const r = state.railRename;
+    if (!r || r.id !== summary.sessionId) return;
+    // Cleared before the request, so the blur that follows Enter finds nothing
+    // to commit a second time.
+    state.railRename = null;
+    const name = r.draft.replace(/\s+/g, ' ').trim();
+    const unchanged = name === (summary.title || '').trim();
+    renderRail();
+    if (unchanged) return;
+    // Empty clears the name; an unnamed session asked to be empty is a no-op.
+    if (!name && summary.titleSource !== 'user') return;
+    await setFlags(summary, { title: name || null });
 }
 
 function saveCollapsed() {

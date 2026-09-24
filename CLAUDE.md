@@ -297,7 +297,7 @@ The suite is `auth`, `temp`, `recent`, `pulls`, `pr-store`, `taskboard`, `ports`
 `notifications`, `schedule`, `usage`, `harvester`, `runner`, `host`, `titles`,
 `tasks`, `prefs`, `paths`, `logwidth`, `platform`, `preview`, `claude-config`,
 `claude-docs`, `ask-result`, `commands`, `message-date`, `folded`,
-`claude-version`, `wispr`, `legacy`, `suggestions` and `mcp` on their own — no bridge needed
+`claude-version`, `wispr`, `legacy`, `suggestions`, `mcp` and `flags` on their own — no bridge needed
 — plus four that want a live one: `gate`, `browser`, `refusals`, `unpaired`.
 Between them they cover the token, what a remote caller is refused, what an
 unpaired remote device sees before and after pairing, and what the nightly restart

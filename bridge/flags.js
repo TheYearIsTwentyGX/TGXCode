@@ -1,6 +1,6 @@
 'use strict';
 
-// Per-session flags the user sets: pinned, archived, and test.
+// Per-session flags the user sets: pinned, archived, test, and a title.
 //
 // This is the only state the app owns. Everything else it shows is derived from
 // Claude Code's own transcripts, which we never write to — so these live in
@@ -16,6 +16,12 @@
 // pile up in the everyday window alongside real work. A test session is listed
 // by the development bridge only, so the everyday instance never shows it — see
 // SessionIndex#list.
+//
+// `title` is a name given from the rail. It is kept here rather than appended to
+// the transcript as a `custom-title` entry, and not only because of the rule
+// above: a running `claude` holds its own title in memory and writes it back, so
+// a line appended under it can be silently outvoted. Clearing it hands the
+// session back to whatever the transcript calls it.
 
 const fs = require('fs');
 const path = require('path');
@@ -30,6 +36,7 @@ class Flags {
         this.pinned = new Set();
         this.archived = new Set();
         this.test = new Set();
+        this.titles = new Map();
         this._saveTimer = null;
         this.load();
     }
@@ -47,6 +54,14 @@ class Flags {
             // empty, which is why it did not need a version bump — bumping
             // would have thrown away everybody's pins to gain nothing.
             this.test = new Set(Array.isArray(data.test) ? data.test : []);
+            // The same again for `titles`: an object of id → name.
+            this.titles = new Map();
+            if (data.titles && typeof data.titles === 'object') {
+                for (const [id, t] of Object.entries(data.titles)) {
+                    const clean = cleanTitle(t);
+                    if (clean) this.titles.set(id, clean);
+                }
+            }
         } catch (err) {
             console.error(`[tgxcode] ignoring unreadable ${STATE_FILE}: ${err.message}`);
         }
@@ -65,6 +80,7 @@ class Flags {
                     pinned: [...this.pinned],
                     archived: [...this.archived],
                     test: [...this.test],
+                    titles: Object.fromEntries(this.titles),
                 }, null, 2));
                 fs.renameSync(tmp, STATE_FILE);
             } catch (err) {
@@ -79,6 +95,7 @@ class Flags {
             pinned: this.pinned.has(sessionId),
             archived: this.archived.has(sessionId),
             test: this.test.has(sessionId),
+            title: this.titles.get(sessionId) || null,
         };
     }
 
@@ -87,7 +104,7 @@ class Flags {
      * for a session to sit at the top and be tucked away at once is a
      * contradiction, and pinning is the more deliberate of the two.
      */
-    set(sessionId, { pinned, archived, test } = {}) {
+    set(sessionId, { pinned, archived, test, title } = {}) {
         if (typeof pinned === 'boolean') {
             if (pinned) { this.pinned.add(sessionId); this.archived.delete(sessionId); }
             else this.pinned.delete(sessionId);
@@ -103,6 +120,13 @@ class Flags {
             if (test) this.test.add(sessionId);
             else this.test.delete(sessionId);
         }
+        // A string names it; `null` or a blank string clears the name, and
+        // absence leaves it alone.
+        if (title !== undefined) {
+            const clean = cleanTitle(title);
+            if (clean) this.titles.set(sessionId, clean);
+            else this.titles.delete(sessionId);
+        }
         this.save();
         return this.get(sessionId);
     }
@@ -110,8 +134,8 @@ class Flags {
     /** Forget flags for transcripts that no longer exist. */
     prune(liveIds) {
         let changed = false;
-        for (const set of [this.pinned, this.archived, this.test]) {
-            for (const id of [...set]) {
+        for (const set of [this.pinned, this.archived, this.test, this.titles]) {
+            for (const id of [...set.keys()]) {
                 if (!liveIds.has(id)) { set.delete(id); changed = true; }
             }
         }
@@ -120,4 +144,14 @@ class Flags {
     }
 }
 
-module.exports = { Flags, STATE_FILE };
+/** Longest name kept. Long enough for a sentence; short enough for a row. */
+const TITLE_MAX = 200;
+
+/** A usable name, or null. Collapses whitespace so a pasted newline is not a row break. */
+function cleanTitle(t) {
+    if (typeof t !== 'string') return null;
+    const clean = t.replace(/\s+/g, ' ').trim().slice(0, TITLE_MAX).trim();
+    return clean || null;
+}
+
+module.exports = { Flags, STATE_FILE, cleanTitle, TITLE_MAX };

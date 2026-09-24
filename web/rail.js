@@ -42,7 +42,7 @@ import { html, render } from './vendor/preact.js';
 import {
     state, dom, BOOT_PREFS, ICON, PR_ICON, projectColor, ago, clip, hhmm,
     elsewhere, awayWords, prWords, prUnknownWhy, inProjectCard, groupKeyOf, rankOf,
-    openSession, setFlags, askDelete, toggleGroup, onRailDragStart, onRailDragEnd,
+    openSession, setFlags, askDelete, startRename, cancelRename, commitRename, toggleGroup, onRailDragStart, onRailDragEnd,
     showProjMenu, closeProjMenu, renderRail,
 } from './app.js';
 
@@ -312,6 +312,7 @@ function strip(s) {
     const queued = (s.runner && s.runner.queued) || 0;
     const away = elsewhere(s);
     const when = ago(s.lastUserTs || s.lastTs);
+    const renaming = !!state.railRename && state.railRename.id === s.sessionId;
 
     // A row, not a button: it holds its own pin and archive controls, and
     // nesting buttons is not allowed.
@@ -326,16 +327,7 @@ function strip(s) {
     // the list is ordered by, so the order reads as sorted. A queue count goes
     // ahead of the activity because the activity is the one part of the row that
     // may be cut short — it is the least specific thing on it.
-    return html`
-        <div key=${s.sessionId} class="strip"
-            data-id=${s.sessionId}
-            data-state=${stripState(s)}
-            title=${away ? awayWords(away) : null}
-            data-pinned=${String(!!s.pinned)}
-            data-archived=${String(!!s.archived)}
-            aria-current=${current ? 'true' : null}>
-            <button class="strip-main" type="button" onClick=${() => openSession(s.sessionId)}>
-                <span class="strip-title">${s.title}</span>
+    const meta = html`
                 <span class="strip-meta">
                     ${s.pinned ? html`<span class="tag-pin" title="Pinned">${icon('pin', 11)}</span>` : null}
                     ${s.test ? html`<span class="tag-test">test</span>` : null}
@@ -350,9 +342,27 @@ function strip(s) {
                     ${queued ? queuedBadge(queued) : null}
                     ${dueBadge(s.sessionId)}
                     ${activityBits(running ? s.runner : null)}
-                </span>
-            </button>
+                </span>`;
+
+    // Renaming swaps the button for a plain box around the input: an input inside
+    // a button is not something the browser will let you type into.
+    return html`
+        <div key=${s.sessionId} class="strip"
+            data-id=${s.sessionId}
+            data-state=${stripState(s)}
+            title=${away ? awayWords(away) : null}
+            data-pinned=${String(!!s.pinned)}
+            data-archived=${String(!!s.archived)}
+            data-renaming=${renaming ? 'true' : null}
+            aria-current=${current ? 'true' : null}>
+            ${renaming
+                ? html`<div class="strip-main">${renameInput(s)}${meta}</div>`
+                : html`<button class="strip-main" type="button" onClick=${() => openSession(s.sessionId)}>
+                    <span class="strip-title">${s.title}</span>${meta}</button>`}
             <div class="strip-actions">
+                <button class="mini" type="button" title="Rename"
+                    onClick=${(e) => { e.stopPropagation(); startRename(s); }}
+                >${icon('pencil')}</button>
                 <button class=${'mini' + (s.pinned ? ' on' : '')} type="button"
                     title=${s.pinned ? 'Unpin' : 'Pin to the top'}
                     aria-pressed=${String(!!s.pinned)}
@@ -367,6 +377,40 @@ function strip(s) {
                 >${icon('trash')}</button>
             </div>
         </div>`;
+}
+
+/**
+ * The title's place while it is being renamed. Enter and a click away both keep
+ * the name; Escape drops it. Emptying it gives the transcript's name back.
+ *
+ * The value is read from `state.railRename` and written back on every keystroke,
+ * so the `sessions-changed` renders that arrive mid-word pass the same value and
+ * leave the node, its caret and its focus where they were.
+ */
+function renameInput(s) {
+    return html`<input class="strip-rename" type="text" maxlength="200"
+        aria-label=${`Rename ${s.title}`}
+        placeholder="Name this session"
+        value=${state.railRename.draft}
+        ref=${focusOnce}
+        onInput=${(e) => { if (state.railRename) state.railRename.draft = e.currentTarget.value; }}
+        onKeyDown=${(e) => {
+            if (e.key === 'Enter') { e.preventDefault(); commitRename(s); }
+            else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancelRename(); }
+        }}
+        onBlur=${() => commitRename(s)} />`;
+}
+
+// Inputs already focused, so a re-render's ref call does not select the text
+// out from under somebody typing. A WeakSet rather than a mark on the node,
+// which Preact owns.
+const focused = new WeakSet();
+
+function focusOnce(node) {
+    if (!node || focused.has(node)) return;
+    focused.add(node);
+    node.focus();
+    node.select();
 }
 
 /** Three states where there used to be two. `active` is the mtime fallback. */
