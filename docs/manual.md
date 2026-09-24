@@ -1647,7 +1647,9 @@ worktree-isolated session is refused `git -C` against a directory outside its ow
 tree. If the merge changed `bridge/`, it then restarts the everyday bridge so the
 new code is what is running. Turns in the session host survive that; if any turn
 would not, the restart is refused and land says so rather than forcing it.
-`--no-restart` stops after the pull.
+`--no-restart` stops after the pull. Run from the **Land** button, the pane closes
+along with the old bridge — the restart carries on without it, and its outcome is
+the last line of `~/.cache/tgxcode/restart-45888.log`.
 
 Two other things that trip agents up here:
 
