@@ -1272,8 +1272,12 @@ nothing a browser can show, and the chip says so:
 - a **dev-server chip** above the conversation;
 - a **port chip on a Live card** — over the board, or over that card's session
   with the board still docked beside it (*Open over the Live board*);
-- a **project task** in the conversation header. Clicking one that is running
-  shows its page. Clicking one that is not starts it and shows its log as
+- a **project task** — its **Preview** button, beside *Stop* in the task's
+  terminal tab, or the task's own button in the conversation header once it is
+  running (its tooltip ends in what a click will do). Preview is blue when the
+  page is ready. While the server is still coming up it waits, and a click
+  there opens the page by itself once it answers. Clicking a task that is
+  not running starts it and shows its log as
   before, then opens the page once the server answers — in this window only:
   a server finishing its compile never launches DevBrowser by itself.
   The app keeps asking until the server answers, however long its first page
