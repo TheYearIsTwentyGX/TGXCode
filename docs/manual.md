@@ -13,15 +13,16 @@ it, and how the pieces fit together. Start there if you have not already.
 | | |
 |---|---|
 | **Left rail** | Every session on disk, grouped by project. Worktrees fold under the checkout that owns them. Sessions a schedule started fold into a **Scheduled** section inside their project's card, shut until you open it — they are the same work in the same directory, but a fortnight of nightly reviews between you and the conversation you want is what the rail exists to prevent. Each is named after the schedule and the day it ran. A green dot means the transcript changed in the last 90 seconds — something is working. |
-| **Ordering** | By when *you* last wrote, not by last activity. Sorting on activity meant a busy agent kept bumping its session to the top and shuffling the rest out from under the cursor. The timestamp on each row is the one it sorts by. |
+| **Ordering** | Sessions within a project go by when *you* last wrote, not by last activity. Sorting on activity meant a busy agent kept bumping its session to the top and shuffling the rest out from under the cursor. The timestamp on each row is the one it sorts by. The project cards themselves are ordered by the button beside *Hide finished*: most recent and then held still (the default), most recent and moving up when something happens, alphabetical, or custom — drag a project's heading. See *The rail is sorted on load*. |
+| **Hide finished** | The filter at the head of the rail hides sessions whose pull requests are all merged or closed, with a count of how many it is hiding — the rail's standing question is what is still going on. Remembered per browser. |
 | **Pin / archive** | Hover a row for its two buttons, or use the ones beside the session title. Pinned sessions sit in their own group at the top, across projects. Archived ones collapse into a group at the bottom. |
 | **Conversation** | Your turns, Claude's replies with syntax-highlighted code, and one collapsible block per tool call. A run of tool calls between one message and the next folds into a single row — *16 tool calls · Bash ×6 · Read ×7* — which opens to the rows themselves; see *Folded tool calls*. Edits render as diffs, and output too large to inline loads on demand. |
 | **Plans & questions** | When Claude presents a plan or asks a multiple-choice question, the turn stops on a card at the foot of the transcript. A plan can be approved, approved with a note to bear in mind, or sent back with what to change; approving picks the mode the work continues in. Questions are answered by picking, with an *Other* row for none-of-the-above. |
 | **Subagents** | The first chip row under the title, one per subagent, with a light for how it is going and a line of what it is doing. Click to switch the pane over to it; `Esc` or the breadcrumb comes back. |
 | **Pull requests** | Every PR the session raised, on the line under the title, each with a glyph and a colour for where it has got to — draft, open, approved, changes requested, checks running or failing, conflicting, merged, closed. Hover for the status in words, the title, and how the checks stand. Merged and closed ones stay, dimmed, so the line is the session's whole PR history rather than only its newest. |
 | **Dev servers** | The second chip row. Green means the port is answering right now; click to show its page — in DevBrowser, starting it if it isn't running, or in the window's own browser preview, as Settings → DevBrowser says. See *The browser preview*. The button on the end shuts the server down — one click arms it, the next signals. |
-| **Task board** | `Ctrl+2`, or *Tasks* in the top bar with a count of how many sessions are blocked on you. Four columns over everything outstanding: **Needs you** (a permission, a plan or a question waiting, or a turn that failed), **Working**, **Suggested** — every open task from every session, not only the conversation you have open — and **Idle**. Archived sessions are not on it; that is what archiving is for. A task card starts the work or opens it to read; a session card opens the conversation, and the button that appears on hover archives it. Idle leads with what has moved today and *Show all* pages in the rest. Nothing on it reorders while you read — see *The rail is sorted on load*. |
-| **Dashboard** | The button in the top bar, with a count of how many places are unfinished. It lists, per project, every directory holding uncommitted changes and every pull request still open, with the sessions that worked there as links back into the conversation. |
+| **Task board** | `Ctrl+2`, or *Tasks* in the top bar (unless you moved or hid it — see *The bar*) with a count of how many sessions are blocked on you. Four columns over everything outstanding: **Needs you** (a permission, a plan or a question waiting, or a turn that failed), **Working**, **Suggested** — every open task from every session, not only the conversation you have open — and **Idle**. Archived sessions are not on it; that is what archiving is for. A task card starts the work or opens it to read; a session card opens the conversation, and the button that appears on hover archives it. Idle leads with what has moved today and *Show all* pages in the rest. Nothing on it reorders while you read — see *The rail is sorted on load*. |
+| **Dashboard** | `Ctrl+4`, or its button in the top bar, with a count of how many places are unfinished. It lists, per project, every directory holding uncommitted changes and every pull request still open, with the sessions that worked there as links back into the conversation. |
 | **Open folder** | The folder button by the title shows the session's working directory in the host's file manager — on Linux whatever `xdg-open` picks, and from WSL, Windows File Explorer through the `\\wsl.localhost` share. |
 | **Composer** | Sends to the session, resuming it in place — the same transcript a terminal would append to. |
 | **Snippets** | Messages you send often, behind the icon beside *Send* — and on the Start-a-session box too. Each one says where it lands (replace the box, add to the end, insert at the cursor), whether it sends itself, and which permission mode it sends under; `{{placeholders}}` in the text become a small form to fill in first. They sit in coloured groups, in an order you set by dragging or with the arrows, and any of them can be **pinned** to a button of its own. **LGTM** ships pinned: it sends a written instruction to put the change on a pull request if it is not on one already, run the project's checks, merge once they pass, and file anything it noticed along the way as a suggested task — and to stop and say so if something blocks it. One click, no confirmation over the top; the session still asks for what its permission mode makes it ask for, and a half-typed message in the box survives the press. **Right-click any snippet** — a row in the list or a pinned button — to use it once some other way than the way it is set up: the LGTM text in the box to edit rather than sent, or a snippet that normally just sits there sent as it is. It changes nothing about the snippet. Edit them under *Snippets* in Settings. |
@@ -32,8 +33,10 @@ it, and how the pieces fit together. Start there if you have not already.
 Shortcuts: `Enter` send (or `Ctrl+Enter`, and *Settings → Keyboard* swaps the
 two), `Ctrl+1`–`Ctrl+8` the eight things the main pane can show, `Ctrl+F` find
 in the conversation with `F3`/`Shift+F3` for the next and previous match,
-`Ctrl+K` filter, `Ctrl+N` new session, `Esc` leave a subagent or close whatever
-is on top, `Ctrl+R` reload, `Ctrl+±` zoom, `F12` devtools.
+`Ctrl+K` filter, `Ctrl+N` new session, ``Ctrl+` `` the terminal, `Ctrl+/`
+snippets, `Ctrl+P` / `Ctrl+M` cycle the composer's permission mode and model
+(`Shift` for backwards), `Esc` leave a subagent or close whatever is on top,
+`Ctrl+R` reload, `Ctrl+±` zoom, `F12` devtools.
 
 Every one of those but the last three can be remapped — see *Settings*. The last
 three belong to the Electron shell rather than the page, which is why they
@@ -373,7 +376,8 @@ left at midnight is the agent that reads it.
 The bridge returns sessions ordered by when *you* last wrote in them, and it
 recomputes that whenever anything changes. The rail takes that order once, at
 load, and then holds it: a session taking a message does not climb past its
-neighbours, and it does not drag its project card to the top of the rail either.
+neighbours, and — under the default project order, *Most recent — static* — it
+does not drag its project card to the top of the rail either.
 Rows staying where you last saw them matters more than the list being perfectly
 ordered at every instant — the alternative moves things out from under the
 cursor while you are reading them. Reload to re-sort.
@@ -382,6 +386,17 @@ A session that appears *after* that first load is genuinely new rather than
 merely busy, so it goes to the top of its group, and a project with no sessions
 in it yet gets a new card at the top of the rail. Neither disturbs the position
 of anything already placed.
+
+**The project order is yours to change**, with the button beside *Hide finished*
+(`projects.sort`, and its other keys in *Settings → Projects*). *Most recent —
+dynamic* starts the same way but lets a card move to the top when something
+happens in it — by default a session starting or a message from you, and
+optionally any line written, a turn finishing or a pull request changing; the
+last few move cards constantly while agents run, which is why they are off.
+*Alphabetical* is by project name. *Custom* is the order you drag the project
+headings into, with a new project drawn at the top or the bottom as
+`projects.newAt` says. The rows *inside* a card keep the held-still rule in every
+mode.
 
 **The task board holds the same rule, per column.** It has the stronger version of
 the same problem: a board with every session on it, redrawn every three seconds
@@ -644,9 +659,12 @@ in the rail for the same reason — the groups enabled by default are all short.
 
 ### Settings
 
-**Settings** in the bar, or `Ctrl+8`. Every key in `~/.tgxcode/settings.json`
-with a control in front of it — the reading settings above, the live board,
-project colours, the spinner, the quota beacon, and the keyboard — plus two
+**Settings** in the bar (or the ⋯ menu, if you moved it there), or `Ctrl+8`.
+Every key in `~/.tgxcode/settings.json` with a control in front of it — the
+reading settings above, the live board, the browser preview and DevBrowser,
+project colours, the spinner, the quota beacon, the keyboard, the toolbar and
+Wispr Flow — alongside editors for Claude Code's own settings and memory and for
+the project's commands, plus two
 groups that are not in that file: **Notifications**, which is per-browser, and
 **Connect a phone**, which is a task rather than a setting. Both used to be
 buttons in the top bar.
@@ -674,21 +692,31 @@ set. It also means two windows editing different settings do not clobber each
 other, and a save reaches the other window over the live channel rather than
 waiting for a reload.
 
-**Two things on this page do have a Save button**, and they are the same
-exception rather than two: the JSON tab in *Claude Code*, and the text box in
-*Claude Code · Memory*. The rule above is about a **control** — a checkbox that
-reads "on" for a setting that is off is what it prevents. A document somebody is
-typing into is a draft by nature; there is no keystroke at which a paragraph is
-finished, and saving per keystroke would write broken JSON forty times a minute
-and half-sentences into a file every session reads. Both keep the rule's intent
-the other way round, by saying at all times whether what you are looking at is
-what is on disk.
+**Four things on this page do have a Save button.** Two are documents: the JSON
+tab in *Claude Code*, and the text box in *Claude Code · Memory*. The rule above
+is about a **control** — a checkbox that reads "on" for a setting that is off is
+what it prevents. A document somebody is typing into is a draft by nature; there
+is no keystroke at which a paragraph is finished, and saving per keystroke would
+write broken JSON forty times a minute and half-sentences into a file every
+session reads.
 
-**Three sections are yours alone** — the quota beacon, the keyboard and project
-colours — and a project file that sets one is ignored and says so. What directory
-this app starts `claude` in is not a repository's business, and a repository that
-could rebind your keys could make the window unusable with hand-editing a file as
-the only way back. Colours are yours for a different reason: the list is keyed by
+The other two are structured records whose half-typed state would *run*:
+**Hooks** in *Claude Code*, and **Project commands**. A hook with half a command
+in it is a hook that fires; a `commands.json` that does not parse contributes no
+buttons at all. So both are drafts with *Revert* and *Save* — Hooks' Save is
+*Review and save*, which first lists what will start and stop running — see
+*Hooks* and *Project commands* below. All four keep the rule's intent the other
+way round, by saying at all times whether what you are looking at is what is on
+disk.
+
+**Seven sections are yours alone** — the quota beacon, the keyboard, project
+colours, the toolbar, Wispr Flow, the browser preview and DevBrowser — and a
+project file that sets one is ignored and says so. What directory this app starts
+`claude` in is not a repository's business, and a repository that could rebind
+your keys could make the window unusable with hand-editing a file as the only way
+back. The toolbar is the same argument applied to your buttons, and Wispr Flow a
+sharper one: its transforms name chords the bridge presses on your desktop. The
+preview and DevBrowser decide which browser on this machine you look at pages in. Colours are yours for a different reason: the list is keyed by
 directory, so it names *other* projects, and a repository setting one would be a
 repository colouring its neighbours.
 
@@ -735,8 +763,8 @@ Start on a suggested task — so only the guessing went.
 
 #### Keys
 
-The *Keyboard* group holds two settings that each swap a pair of keys, and then
-the shortcut table.
+The *Keyboard* group holds three settings — two that each swap a pair of keys,
+and the order the composer pickers cycle in — and then the shortcut table.
 
 **Contextual Ctrl+C in the terminal.** Off by default. On, `Ctrl+C` copies the
 selection and clears it when the terminal has one, and interrupts as always when
@@ -752,8 +780,18 @@ this app has always done — or the reverse, for when a message is three
 paragraphs and `Enter` sending it halfway through is a real cost.
 `Ctrl+Enter` sends under both.
 
-**The shortcut table** covers the eight views, the two rail shortcuts and the
-three find shortcuts. *Change* listens for a chord and swallows it, so binding
+**Picker cycle order.** `Ctrl+P` steps the composer's permission mode and `Ctrl+M`
+its model, with `Shift` walking backwards. By default they step in the order the
+dropdown lists them; *Alphabetical* sorts by the label you read instead, keeping
+the model's empty "inherit" first, since it is the absence of a choice. The
+dropdowns themselves keep their own order either way. The permission cycle skips
+`dontAsk` and `bypassPermissions` — a chord pressed by accident should not hand
+a session everything — though from either one it still steps out. The model is
+remembered per session.
+
+**The shortcut table** covers all nineteen: the eight views; *Start a session*,
+*Filter sessions* and the *Terminal* (``Ctrl+` ``); the composer's *Snippets*
+(`Ctrl+/`) and the four picker cycles; and the three find shortcuts. *Change* listens for a chord and swallows it, so binding
 `Ctrl+4` does not open the dashboard on the way past; *Unbind* leaves a command
 with no shortcut, which is a thing you can ask for and is not the same as
 resetting it; *Reset* puts it back to the default by removing the override
@@ -838,10 +876,23 @@ what is on disk now and leaves the decision to you.
 
 The JSON tab is not a fallback bolted on. It is what makes the rest honest —
 with it there, no key in those files is beyond reach, and it is the only thing
-in the app that can repair a settings file that no longer parses. It is also the
-one control on this page with a **Save** button: a document being typed into is
-a draft by nature, and the no-drafts rule exists to stop a *control* disagreeing
-with what is in force.
+in the app that can repair a settings file that no longer parses. It has a
+**Save** button: a document being typed into is a draft by nature, and the
+no-drafts rule exists to stop a *control* disagreeing with what is in force.
+
+**Hooks** are editable here too, and are the group's other draft. They were
+read-only at first, on the grounds that writing a shell command that runs on
+every tool call should not be as casual as ticking a box — and that is still the
+answer, so the editor keeps an explicit save. *Review and save* turns the footer
+into the list of what will start and stop running, `Event · matcher → command`,
+so the command is read once, deliberately, before it is armed; a hook that only
+moved is not reported as removed and re-added. The draft is seeded from the file
+you are editing, never the merged view — hooks from every scope all run, so a
+merged seed would make each inherited hook fire twice — and the other scopes'
+hooks are listed read-only underneath as *also run*. If the hooks change on disk
+while you edit, a banner offers *keep mine* or *take theirs*. The bridge checks
+only shape: a group with no hooks, a hook with no type, a command hook with no
+command. See `docs/plans/20-claude-config.md`.
 
 Two things stay out. `~/.claude.json` is sixty-six kilobytes whose largest key
 is a feature-flag cache — app state, not a settings file. And a project's
@@ -890,6 +941,28 @@ delete the rest on the first save.
 `CLAUDE.local.md` and a project's `.claude/CLAUDE.md` are not here. Neither
 exists on this machine, and the route is shaped to take another scope when one
 does.
+
+#### Project commands
+
+The buttons a project declares in `.tgxcode/commands.json` (or the gitignored
+`commands.local.json` beside it) used to be editable only in a text editor, and
+a file that did not parse contributed *nothing* — a header with no buttons and
+the reason in a tooltip. This group edits either file, as a form or as JSON, and
+validates against the same rules the reader applies, so a mistake is named
+before it is saved rather than discovered as missing buttons. Like Hooks it is a
+draft: *Revert*, and *Save* — or *Create the file* when there is none yet. Each
+command folds to its name. See `docs/plans/21-command-editor.md`.
+
+#### Wispr Flow
+
+Only on a host where Wispr Flow can be reached (Windows, via WSL); elsewhere the
+group and the composer button are not drawn. Wispr's *transforms* rewrite the
+selected text in the focused window when you press the chord you gave each one.
+List them here — a name and the chord, written like `Win+Alt+2` — and the
+composer's Wispr button offers them: pick one, and the page selects the message
+box's text and the bridge presses that chord on your desktop. The bridge only
+ever presses a chord configured here, never one a request names, which is also
+why this section is user-only.
 
 #### The two groups that are not settings-file settings
 

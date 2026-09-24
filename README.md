@@ -186,7 +186,7 @@ one in `%APPDATA%\tgxcode\` (on Linux, `~/.config/tgxcode/`):
 
 | | |
 |---|---|
-| **Left rail** | Every session on disk, grouped by project, sorted by when *you* last wrote. A green dot means the transcript moved in the last 90 seconds. |
+| **Left rail** | Every session on disk, grouped by project, sorted by when *you* last wrote; the project cards can be ordered four ways, and *Hide finished* drops sessions whose PRs have all landed. A green dot means the transcript moved in the last 90 seconds. |
 | **Conversation** | Your turns and Claude's, with a collapsible block per tool call; edits render as diffs. |
 | **Task board** | `Ctrl+2` — four columns over everything outstanding. |
 | **Dashboard** | Uncommitted work and open pull requests, per project. |
@@ -194,7 +194,8 @@ one in `%APPDATA%\tgxcode\` (on Linux, `~/.config/tgxcode/`):
 | **Snippets** | Canned messages with `{{placeholders}}`, pinnable to buttons of their own. |
 
 Shortcuts: `Enter` send, `Ctrl+1`–`Ctrl+8` switch panes, `Ctrl+F` find, `Ctrl+K`
-filter, `Ctrl+N` new session, `Esc` back out. Nearly all are rebindable.
+filter, `Ctrl+N` new session, ``Ctrl+` `` terminal, `Ctrl+P` / `Ctrl+M` cycle
+permission mode and model, `Esc` back out. Nearly all are rebindable.
 
 **[`docs/manual.md`](docs/manual.md) is the real documentation** — the panes in
 full, the settings, permissions, notifications, scheduling, and the rules that
