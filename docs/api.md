@@ -376,7 +376,23 @@ process's label), or `none`.
 **`worktree` is an object, not a name.** `{name, branch, path, originalCwd}`, where
 `originalCwd` is the checkout the worktree was branched from — which is what makes a
 worktree session belong to its owning project in a rail rather than becoming a project
-of its own. Null for a session that is not in one.
+of its own. Null for a session that has never been in one.
+
+**It is not only `EnterWorktree`.** A worktree is also recognised from the working
+directory Claude Code stamps on each entry, for an agent that ran `git worktree add` and
+`cd`'d into it without telling Claude Code — which writes no record of its own. Only
+directories under `<project>/.claude/worktrees/` count, and only worktrees of the
+session's own `projectCwd`. The latest evidence wins: a later `cd` into another worktree
+beats an older `EnterWorktree`, and a *prompt* given back in the main checkout reads as
+having left (a tool call that merely visits the checkout mid-turn does not). A session
+that has left keeps `worktree` as the record of where it was, and `cwd` then equals
+`projectCwd` — so `cwd === worktree.path` is the test for "in it now", not the presence
+of `worktree`. `worktree.branch` is read from the worktree's `HEAD` on disk when the
+worktree still exists.
+
+**`gitBranch` is the latest branch recorded, not the first.** Claude Code refreshes that
+field lazily and it can trail a branch change by hundreds of entries, so for a session in
+a worktree prefer `worktree.branch`.
 
 **`live` is Claude Code's own process-registry entry, not a flag.** Present as an
 object when there is a process — including one running in a terminal or VS Code, which
