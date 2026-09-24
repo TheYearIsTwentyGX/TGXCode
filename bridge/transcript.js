@@ -33,6 +33,11 @@ const WORKTREE_DIR_RE = /^(.*)\/\.claude\/worktrees\/(.+)$/;
 // of megabytes, for a field that is not in it, would cost more than the whole scan.
 const CWD_PARSE_LIMIT = 5;
 
+// The cwd and branch Claude Code stamps on every entry. Both sit near the *end* of
+// a line, after `message`, so a search from the front finds whatever a prompt or a
+// tool result quoted first; the scan reads them with lastIndexOf instead.
+const CWD_FIELD = '"cwd":"';
+
 // How many pull requests to keep per session. A session raises one or two; this
 // is only here so that a transcript which somehow names dozens cannot inflate
 // every summary the session list sends.
@@ -148,8 +153,48 @@ function scanMeta(filePath) {
     const peerIds = new Set();
     let cwdTries = 0;
 
+    // Where the session has been working, as evidence rather than a verdict. An
+    // agent that makes its own worktree — `git worktree add` and a `cd` in Bash,
+    // which the LTCDataPlus instructions used to recommend — writes no
+    // worktree-state entry, so the only record of it is the cwd on every entry
+    // that follows. Three kinds of evidence, each kept with the line it was on,
+    // and the latest one wins after the loop:
+    //
+    //   inAt       the last entry recorded inside a worktree
+    //   outAt      the last *prompt* recorded outside every worktree
+    //   explicitAt the last worktree-state entry, which says it outright
+    //
+    // Only a prompt counts as leaving. The shell wanders mid-turn — into the main
+    // checkout to find a file, into ~/.claude/plans — and comes back, and a row
+    // that flipped to the checkout because the transcript happened to end on one
+    // of those would be the bug this is here to fix, the other way round.
+    const trail = { in: null, inAt: -1, outAt: -1, outCwd: null, explicitAt: -1 };
+    let lineNo = -1;
+    let lineCwd = null;
+    let lineWorktree = null;
+
     for (const line of text.split('\n')) {
+        lineNo++;
         if (!line) continue;
+
+        // The cwd this entry was recorded in. Ahead of everything else because
+        // attachments carry one too, and the classification below skips them.
+        // The substring is only a candidate; a change is confirmed with a real
+        // parse, and changes are rare, so nearly every line costs one lastIndexOf.
+        if (line.includes(CWD_FIELD) && !line.includes('"isSidechain":true')) {
+            const cand = lastField(line, 'cwd');
+            if (cand !== lineCwd) {
+                const o = safeParse(line);
+                if (o && typeof o.cwd === 'string' && o.cwd !== lineCwd) {
+                    lineCwd = o.cwd;
+                    lineWorktree = worktreeRootOf(lineCwd);
+                }
+            }
+            if (lineWorktree) {
+                trail.inAt = lineNo;
+                trail.in = { path: lineWorktree, branch: lastField(line, 'gitBranch') || null };
+            }
+        }
 
         // A message from another session, in either of the shapes peerOriginOf
         // describes. Ahead of the conversation classification because one of
@@ -243,7 +288,12 @@ function scanMeta(filePath) {
                 const o = safeParse(line);
                 if (o && o.cwd) meta.cwd = o.cwd;
             }
-            if (!meta.gitBranch) meta.gitBranch = matchField(line, 'gitBranch');
+            // The latest, not the first: a session that started on one branch and
+            // moved to another is on the second. Claude Code refreshes this field
+            // lazily, so it can trail a move by hundreds of entries — which is why
+            // a worktree's branch is read off disk below rather than from here.
+            const branch = lastField(line, 'gitBranch');
+            if (branch) meta.gitBranch = branch;
             if (!meta.version) meta.version = matchField(line, 'version');
             if (!meta.sessionKind) meta.sessionKind = matchField(line, 'sessionKind');
 
@@ -279,6 +329,12 @@ function scanMeta(filePath) {
                     if (parsed && isHandoff(userText(parsed))) continue;
                 }
                 meta.userMessages++;
+                // A prompt given outside every worktree: the one kind of entry
+                // that says the session has come home. See `trail` above.
+                if (lineCwd && !lineWorktree) {
+                    trail.outAt = lineNo;
+                    trail.outCwd = lineCwd;
+                }
                 // A real parse rather than matchField: the field sits after
                 // `message` on the line, so a prompt that quoted one — this
                 // app's own transcripts talk about permission modes — would win
@@ -328,6 +384,7 @@ function scanMeta(filePath) {
                     // A null session is the record of *leaving* one. Which worktree
                     // it was is still worth keeping — it names the project — so
                     // only the "in it now" part is cleared.
+                    trail.explicitAt = lineNo;
                     meta.inWorktree = Boolean(o.worktreeSession);
                     if (o.worktreeSession) {
                         meta.worktree = {
@@ -393,6 +450,34 @@ function scanMeta(filePath) {
         }
     }
 
+    // Then whether it is in a worktree *now*, which is a different question from
+    // which project it belongs to and is answered by the latest evidence rather
+    // than the first. `trailCheckout` stops at the first checkout on the trail, so
+    // a session launched in its project and walked into a worktree by Bash — no
+    // EnterWorktree, so no worktree-state — was filed as the main checkout on the
+    // launch branch for the rest of its life.
+    //
+    // Evidence from another project is dropped: a session here that `cd`s into
+    // some other repository's worktree to review it must not start wearing it.
+    const inAt = trail.in && projectRootOf(trail.in.path) === meta.projectCwd ? trail.inAt : -1;
+    const outAt = trail.outCwd && isUnder(trail.outCwd, meta.projectCwd) ? trail.outAt : -1;
+    const inferred = () => ({
+        name: worktreeNameOf(trail.in.path),
+        branch: branchOf(trail.in.path) || trail.in.branch,
+        path: trail.in.path,
+        originalCwd: meta.projectCwd,
+    });
+    if (inAt > trail.explicitAt && inAt > outAt) {
+        meta.worktree = inferred();
+        meta.inWorktree = true;
+    } else if (outAt > trail.explicitAt && outAt > inAt) {
+        // Left, and the worktree is kept as the record of where it was — the
+        // same thing an explicit exit does above. Only the one it was last in:
+        // an older record for some other worktree is not where it came from.
+        if (inAt > trail.explicitAt) meta.worktree = inferred();
+        meta.inWorktree = false;
+    }
+
     // The worktree while the session is in one — the row should say which — and the
     // project once it has left. Whether it has left is the one thing the transcript
     // states outright, which beats guessing it from a directory the shell may have
@@ -419,6 +504,67 @@ function matchField(line, key) {
     if (end === -1) return null;
     const v = line.slice(start, end);
     return v.includes('\\') ? null : v;
+}
+
+// The same, from the *last* occurrence: for the fields Claude Code writes after
+// `message`, where the first one on the line may be something a prompt quoted.
+function lastField(line, key) {
+    const needle = '"' + key + '":"';
+    const i = line.lastIndexOf(needle);
+    if (i === -1) return null;
+    const start = i + needle.length;
+    const end = line.indexOf('"', start);
+    if (end === -1) return null;
+    const v = line.slice(start, end);
+    return v.includes('\\') ? null : v;
+}
+
+/** Whether `dir` is `root` or somewhere below it. */
+function isUnder(dir, root) {
+    return Boolean(dir && root) && (dir === root || dir.startsWith(root + '/'));
+}
+
+/**
+ * The root of the worktree a directory sits in, or null if it is in none.
+ *
+ * Walks up to the nearest `.git` without leaving `.claude/worktrees/`, because a
+ * worktree's name may hold slashes — `.claude/worktrees/a/b` is one worktree, and
+ * taking the first segment would call it `a`. A worktree that has since been
+ * removed has no `.git` to find, and falls back to the first segment, which is
+ * right for every name without a slash.
+ */
+function worktreeRootOf(dir) {
+    const m = WORKTREE_DIR_RE.exec(dir || '');
+    if (!m || !dir.startsWith('/')) return null;
+    const base = path.join(m[1], '.claude', 'worktrees');
+    let at = path.resolve(dir);
+    for (let i = 0; i < 16 && at.startsWith(base + '/'); i++) {
+        if (isCheckout(at)) return at;
+        at = path.dirname(at);
+    }
+    return path.join(base, m[2].split('/')[0]);
+}
+
+/**
+ * The branch a checkout has out, read from its HEAD file rather than by running
+ * git: a worktree's `.git` is a file naming its git directory, a clone's is the
+ * directory itself. Null for a detached HEAD, or a checkout that is gone.
+ */
+function branchOf(dir) {
+    try {
+        const dotGit = path.join(dir, '.git');
+        let gitDir = dotGit;
+        if (fs.statSync(dotGit).isFile()) {
+            const m = /^gitdir:\s*(.+)$/m.exec(fs.readFileSync(dotGit, 'utf8'));
+            if (!m) return null;
+            gitDir = path.resolve(dir, m[1].trim());
+        }
+        const head = fs.readFileSync(path.join(gitDir, 'HEAD'), 'utf8');
+        const ref = /^ref:\s*refs\/heads\/(.+)$/m.exec(head);
+        return ref ? ref[1].trim() : null;
+    } catch {
+        return null;
+    }
 }
 
 /** The checkout a worktree directory belongs to, or null if it is not one. */
