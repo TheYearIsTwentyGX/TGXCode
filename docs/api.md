@@ -430,7 +430,10 @@ separately because a client that draws the transcript before the settings arrive
 has drawn it the wrong way, and nothing re-renders history.
 
 `suggestions` maps the id of a `suggestion` event to what was already done about
-it — `{status: "started"|"dismissed", startedId, at}`. The suggestion itself is in
+it — `{status: "started"|"dismissed"|"completed", startedId: string|null,
+via: "session"|"subagent"|null, note: string|null, at: ms}`. An entry written by a
+bridge from before `via` and `note` existed has neither key, so read a missing one
+as null. The suggestion itself is in
 the transcript; only the decision is the app's, so only the decision is sent
 separately. See `POST /api/sessions/:id/suggestions/:toolUseId`.
 
@@ -1852,6 +1855,7 @@ expression and an optional gate, held and fired by the bridge itself.
       "lastError": null,
       "lastMarker": "c9e5dcd56a7031f2b0f8e4a1d9c7b6e5f4a3b2c1",
       "runs": 14,
+      "createdBy": null,
       "createdAt": 1787328400891, "updatedAt": 1787641203118 }
   ],
   "counts": { "total": 1, "enabled": 1 }
@@ -1914,6 +1918,7 @@ right thing to show and edit; it is just not byte-for-byte what the session is s
 | **`lastError`** | **string or null** — the message behind an `error` or `missed` skip |
 | **`lastMarker`** | **string or null** — the full SHA reviewed up to, and the `since` half of `{{range}}`. **Seeded when the schedule is created**, so the first run covers what arrives afterwards rather than the repository's whole history. Advanced **only** when a session actually starts: a skip, a refusal or a failed spawn leaves it exactly where it was |
 | `runs` | number — sessions actually started, ever. Skips do not count |
+| **`createdBy`** | **object or null** — `{sessionId: string, title: string or null}`, the session that made this schedule through `POST /api/schedules` with `from` (the `schedule_session` agent tool). `null` for one made in the dialog. Set once, at create; `PATCH` never changes it. `title` is the session's title *when the schedule was made* and may since have changed — link by `sessionId` |
 | `createdAt`, `updatedAt` | numbers, epoch ms. `createdAt` never moves |
 
 Ordered **newest `updatedAt` first**. Note that a *run* bumps `updatedAt`, so the order
@@ -2205,7 +2210,7 @@ not be for the log, because the file is merged in before it is replaced and the 
 of two timestamps always wins. Watermarks older than the log's own 14 days are dropped
 on load; every surviving row is newer than one of those, so it could not have applied.
 
-### `GET /api/suggestions?session=&project=&status=&limit=`
+### `GET /api/suggestions?session=&project=&status=&q=&limit=`
 
 `{ suggestions: [task], ready: bool }`, newest first. A task is
 
@@ -2214,7 +2219,7 @@ on load; every surviving row is newer than one of those, so it could not have ap
   "id": "toolu_…", "kind": "suggestion", "sessionId": "…",
   "ts": "2026-08-19T15:53:51.009Z",
   "title": "Task persistence", "why": "…", "prompt": "…", "cwd": "/home/…",
-  "status": "open", "startedId": null, "at": 0,
+  "status": "open", "startedId": null, "via": null, "note": null, "at": 0,
   "archived": false,
   "session": { "title": "…", "projectName": "claude-sessions",
                "projectCwd": "/home/…", "worktree": null, "test": false }
@@ -2223,10 +2228,28 @@ on load; every surviving row is newer than one of those, so it could not have ap
 
 Everything down to `cwd` is the offer, and is exactly what the `suggestion` event
 carries — same fields, same parse, so a client can draw a row and an event with
-one code path. Everything below it is the join: `status` is `open`, `started` or
-`dismissed`, with `startedId` and `at` present only for a decision that was
-actually taken. `?status=` filters on it and takes a comma-separated list
-(`?status=open,started`); an unknown value is a 400 naming the three.
+one code path. Everything below it is the join: `status` is `open`, `started`,
+`completed` or `dismissed`, with `startedId`, `via`, `note` and `at` meaningful only
+for a decision that was actually taken. `?status=` filters on it and takes a
+comma-separated list (`?status=open,started`); an unknown value is a 400 naming the
+four.
+
+- `startedId` is a string or null. It is the session doing the work, and it is kept
+  when a started task is marked `completed`. With `via: "subagent"` it is the session
+  that *claimed* the task and ran it inside itself, not a session of its own.
+- `via` is `"session"`, `"subagent"` or null. Null covers a dismissal, and a task
+  started by a bridge from before this field existed.
+- `note` is a string of up to 500 characters, or null. On a completion it usually
+  holds a pull request URL. It came from an agent, so show it as text, and make it
+  a link only if the whole note is a URL.
+
+**`completed` is said, not detected.** Nothing can tell that a started session's
+work is finished — a turn ending is not the task ending — so it is recorded when the
+agent that did the work says so (the `set_task_status` tool), or when you do.
+
+`?q=` is a text search. It keeps a task only if **every** whitespace-separated word
+of it appears, in any case, somewhere in the task's `title`, `prompt`, `why` or its
+source session's title. This is the task board's search box, run on the bridge.
 
 `?session=<id>` narrows to one conversation, which is what the aside beside a
 transcript asks for — it reads these rows rather than lifting them out of the
@@ -2255,6 +2278,45 @@ actual complaint — not that it outlives the conversation existing.
 There is no push for a task being *filed*. A client watching one conversation
 sees the `suggestion` event on its tail; anything watching all of them refetches,
 and `sessions-changed` is the signal that the index moved.
+
+### `POST /api/suggestions/:sessionId/:toolUseId/start`
+
+`{permissionMode?, cwd?, extra?, model?, test?, prompt?, from?}` →
+`{sessionId, …, test: bool, task}`. It takes up a task as a session of its own:
+`:sessionId` is the session that filed the task and `:toolUseId` is the task's `id`.
+The response carries what `POST /api/sessions` returns, and `task` is the row as
+`GET /api/suggestions` would now return it, with `status: "started"`.
+
+It creates the session **and** records `{status: "started", startedId, via:
+"session"}` in one step. Doing this as `POST /api/sessions` followed by
+`POST /api/sessions/:id/suggestions/:toolUseId` leaves the task offered beside the
+session already doing it whenever the second call fails. The web client's Start
+button uses this route for that reason. A `suggestion-changed` push follows.
+
+- `permissionMode` defaults to **`plan`**, which is what the Start button does. The
+  remote refusal on `bypassPermissions` and `dontAsk` applies here too: `403` with
+  `{error, remote: true}`.
+- `cwd` defaults to the task's `cwd`, and after that to its source session's
+  project. It is resolved against the allowed roots; a directory outside them, or
+  one that does not exist, is a `400`.
+- `extra` (string) is added after the task's prompt, separated by a line holding
+  only `---`. The task's own prompt stays at the top of the new session's first
+  message.
+- `prompt` is **only a fallback**. Send the prompt the card is showing. It is used
+  only when the bridge has not yet indexed the task, which is what happens with a
+  task filed a moment ago, and even then the decision store is still asked whether
+  the task is taken.
+- The new session is a test session when the source session is one, or when
+  `test: true` is sent.
+
+Refusals:
+
+- `404 {error}`: no such task.
+- `409 {error, status, startedId}`: the task is not `open`. The message names what
+  it is and who has it. This is the guard against a scheduled run starting the same
+  task twice; to start a task again anyway, undo it first (`status` absent on the
+  per-session route).
+- `429`: more than the per-minute session-create limit.
 
 ### `GET /api/slash-commands?session=<id>` · `GET /api/slash-commands?cwd=<path>`
 
@@ -2545,7 +2607,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `prs-changed` | **the whole `GET /api/prs` payload** — `{sessions, gh, checkedAt}` — so a rail has nothing to refetch. Ungated, exactly as `drafts-changed` is, and like `schedules-changed` it fires **without anybody having done anything**: it is a background refresher noticing that a review landed, a build finished, or somebody merged. Fires only when the answer actually moved, so a pass that re-lists a quiet repository and finds it unchanged pushes nothing — this is not a heartbeat and must not be treated as one. It is the *only* signal that PR status changed; there was none before, and clients polled. A client wanting per-PR detail for one session should refetch `GET /api/sessions/:id/prs` on this event, which is cheap and does not shell out |
 | `peer-message` | `{at, sessionId, from, count}` — another session messaged this one. The message itself is in the transcript, so a client tailing it has already drawn it; this is for everything that is not the open pane |
 | `handoff` | `{at, sessionId, from, count}` — another session handed this one work, and it was resumed to deal with it. Same shape and same reasoning as above; watched in the transcript rather than reported by the route, so it fires when the message *arrived* rather than when it was queued |
-| `suggestion-changed` | `{at, sessionId, toolUseId}` — a suggested follow-up was started, dismissed, or undone, possibly in another window |
+| `suggestion-changed` | `{at, sessionId, toolUseId}` — a suggested follow-up was started, completed, dismissed, or undone, possibly in another window |
 | `session-deleted` | `{sessionId, title}` |
 | `prefs` | the **user-level** settings, in the same shape as the `cs-prefs` `<meta>` tag: `{version, transcript, live, projects, quota, spinner, keyboard, toolbar, wispr}`, with no `sources` or `problems`. Fired on every `PUT /api/prefs` including your own, so a second window does not sit on a stale copy — two are routinely open here. A project's answer is deliberately not sent: it is the open session's business and arrives with `GET /api/sessions/:id` |
 | `claude-config` | `{at: number, scope: 'user'\|'project'\|'project-local'\|'managed', file: string}` — the *fact* that one of Claude Code's settings files changed, and deliberately **not** its content. Unlike `prefs` there is no `<meta>` copy for a page to keep in sync and nothing in this app behaves differently because of those files, so the event is a nudge to re-read; pushing the contents of a file whose route is local-only down every open channel would be a poor trade for saving a fetch. Fired on every successful `PUT /api/claude-config`, including your own — **and on a change this bridge did not make**: `claude` writes these files itself, so `theme` or `editorMode` from `/config`, `enabledPlugins` from a plugin toggle, and a rule appended to `settings.local.json` when somebody approves a permission mid-turn all arrive here too. `scope` may then be `managed`, which no `PUT` can produce. **Two caveats a client has to hold.** It is best-effort: the bridge watches directories with `fs.watch`, which throws on some filesystems and silently does nothing on others, so a change can go unannounced — keep treating `409 {code:'stale'}` from `PUT /api/claude-config` as the guarantee, and this only as the convenience that usually saves you from meeting it. And a project's two files are watched only once `GET /api/claude-config?cwd=<dir>` has been called for that directory, only for a small number of directories at a time (least-recently-read dropped first), and not after ten minutes without another read of it; the user file and the managed file are watched throughout. So poll or re-`GET` if you need certainty about a directory you have not asked about |
@@ -3005,8 +3067,34 @@ notice.
 
 ### `POST /api/schedules`
 
-`{cwd, prompt, cron, once?, gate?, title?, model?, permissionMode?, test?, enabled?,
-seed?, fromDraft?}` → `{schedule}`, the row as `GET /api/schedules` returns it.
+`{cwd, prompt, cron | at, once?, gate?, title?, model?, permissionMode?, test?,
+enabled?, seed?, fromDraft?, from?}` → `{schedule}`, the row as `GET /api/schedules`
+returns it.
+
+**`at` stands in for `cron` for a one-time run.** It is an ISO local date-time
+string such as `"2026-09-25T09:00"`; a string with an offset, or epoch ms, also
+works. The bridge turns it into the dated cron plus `once: true` that a one-time
+schedule is made of, so the stored row looks exactly like one saved by the dialog
+and has no `at` field. Seconds are dropped. Sending both `at` and `cron` is a `400`.
+So is an `at` that is:
+
+- in the past;
+- a date with no time (`"2026-09-25"`);
+- more than a year away, which a cron with no year cannot express;
+- the repeated hour on the night the clocks go back.
+
+Each of these refusals carries an `error` that says which it was. `PATCH` accepts
+`at` the same way.
+
+**`from` is the session asking**, as a session id. The agent tools send it, and it
+does three things:
+
+- It is recorded as `createdBy: {sessionId, title}` on the row.
+- It stands in for a missing `cwd`: the session's project directory.
+- The schedule is marked `test` when that session is a test session. That means a
+  probe made on a dev bridge can never be fired by the everyday one.
+
+`createdBy` cannot be set from the body directly, and `PATCH` does not change it.
 
 Validated exactly as `POST /api/drafts` is — `cwd` resolved and checked against the
 allowed roots, `permissionMode` normalised — plus the two of its own:
@@ -3910,7 +3998,8 @@ nobody to ask.
 | `POST /api/sessions/:id/queue/reorder` | `{ids}` | |
 | `POST /api/sessions/:id/flags` | `{pinned?, archived?, test?}` | |
 | `GET /api/sessions/:id/suggestions` | | `{sessionId, suggestions}` — the decisions alone. `GET /api/suggestions?session=` is the offers *and* the decisions |
-| `POST /api/sessions/:id/suggestions/:toolUseId` | `{status, startedId?}` | `status` of `started`, `dismissed`, or absent to undo |
+| `POST /api/sessions/:id/suggestions/:toolUseId` | `{status, startedId?, via?, note?, ifOpen?}` | `status` of `started`, `completed`, `dismissed`, or absent to undo. `completed` keeps the earlier `startedId`/`via` when none is sent. `note` is a string capped at 500 characters. `ifOpen: true` turns the write into a claim: it gets `409 {error, status, startedId}` when a decision is already recorded |
+| `POST /api/suggestions/:sessionId/:toolUseId/start` | `{permissionMode?, cwd?, extra?, …}` | start a task as its own session and mark it started, in one call — see above |
 | `DELETE /api/sessions/:id` | | hard delete; `409` if a turn is running |
 | `GET /api/fs?path=` | | directory picker; roots-scoped |
 | `POST /api/fs/mkdir` | `{parent, name}` | one new folder; roots-scoped, local callers only |

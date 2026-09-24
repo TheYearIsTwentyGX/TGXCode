@@ -2878,9 +2878,28 @@ function taskActions(ev) {
                 onclick: () => actOnSuggestion(ev, null) }, 'offer again'),
         );
     }
+    // Said by whoever did the work, usually an agent through `set_task_status`,
+    // with a note that is most often the pull request. A URL is made a link and
+    // anything else is shown as text: the note came off an agent, not a person.
+    if (acted && acted.status === 'completed') {
+        const note = acted.note || '';
+        const url = /^https?:\/\/\S+$/.test(note) ? note : null;
+        return el('div', { class: 'task-done' },
+            el('span', {}, 'Done'),
+            url ? el('a', { class: 'linky', href: url, target: '_blank', rel: 'noopener' }, url)
+                : (note ? el('span', {}, note) : null),
+            acted.startedId
+                ? el('button', { class: 'linky', type: 'button',
+                    onclick: () => { closeTaskDialog(); openSession(acted.startedId); } }, 'open it')
+                : null,
+            el('button', { class: 'linky', type: 'button',
+                onclick: () => actOnSuggestion(ev, null) }, 'offer again'),
+        );
+    }
     if (acted && acted.status === 'dismissed') {
         return el('div', { class: 'task-done' },
             el('span', {}, 'Dismissed'),
+            acted.note ? el('span', {}, acted.note) : null,
             el('button', { class: 'linky', type: 'button',
                 onclick: () => actOnSuggestion(ev, null) }, 'undo'),
         );
@@ -2953,19 +2972,29 @@ function closeTaskDialog() {
  * Start dialog defaults to.
  */
 async function startSuggestion(ev, btn) {
+    const sessionId = taskSessionId(ev);
+    if (!sessionId) return;
     if (btn) { btn.disabled = true; btn.textContent = 'Starting'; }
     try {
-        const r = await post('/api/sessions', {
+        // One call that starts the session *and* records it, so a failure
+        // cannot leave the task offered beside the session already doing it —
+        // the route's comment in bridge/server.js has the rest.
+        const r = await post(`/api/suggestions/${sessionId}/${ev.id}/start`, {
             cwd: ev.cwd || (state.current && state.current.cwd),
+            // Only used when the bridge has not indexed the task yet.
             prompt: ev.prompt,
             permissionMode: 'plan',
-            // A task raised inside a test session is scratch work too. A row
-            // from /api/suggestions says so itself, because the task board draws
-            // tasks from conversations nobody has open.
+            // A task raised inside a test session is scratch work too. The
+            // bridge knows that from the source session's flag; this covers a
+            // suggestion event read off a tail before the index has the flag.
             test: state.dev && !!(ev.session ? ev.session.test
                 : (state.current && state.current.test)),
         });
-        await actOnSuggestion(ev, 'started', r.sessionId);
+        state.suggestions.set(ev.id, {
+            status: 'started', startedId: r.sessionId, via: 'session', at: Date.now(),
+        });
+        state.taskOpen.delete(ev.id);
+        renderTasks();
         closeTaskDialog();
         toast('Session started.', 'ok');
         openSessionSoon(r.sessionId);
@@ -10922,6 +10951,15 @@ function schedCard(s) {
                     'no posting') : null,
             s.gate && s.gate.kind === 'open-prs' && !s.gate.includeDrafts
                 ? el('span', { title: 'draft pull requests are skipped' }, 'ready only') : null,
+            // An agent made this one (`schedule_session`), so there is a
+            // conversation that says why. Nobody remembers setting up a run
+            // they asked for in passing a week ago.
+            s.createdBy ? el('span', { class: 'dot' }, '·') : null,
+            s.createdBy ? el('button', {
+                class: 'sched-open', type: 'button',
+                title: 'Open the session that set this up',
+                onclick: () => { showSched(false); openSession(s.createdBy.sessionId); },
+            }, `made by ${s.createdBy.title || 'a session'}`) : null,
         ),
         // The line the panel exists for. Its own row rather than another chip in
         // the meta line, because "this stopped working three days ago" should not

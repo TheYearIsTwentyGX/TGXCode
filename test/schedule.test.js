@@ -27,7 +27,8 @@ process.env.XDG_DATA_HOME = home;
 
 const {
     Schedules, STATE_FILE, RUNS_FILE, MAX_SCHEDULES, CATCHUP_MS,
-    parseCron, matches, nextSlot, isSpent, dueSlot, describeCron, cronForm, fillPrompt,
+    parseCron, matches, nextSlot, isSpent, dueSlot, describeCron, cronForm, cronForDate,
+    fillPrompt,
     unattended, UNATTENDED_NOTE,
     verdictOf, reviewKey, unreviewedPulls, pruneReviews, capReviews, MAX_REVIEWED,
     scheduleTitle, promptPrefix,
@@ -513,7 +514,7 @@ const show = (ms) => (ms == null ? 'null' : new Date(ms).toString().slice(0, 21)
 // --- the store ----------------------------------------------------------
 
 const FIELDS = ['id', 'enabled', 'title', 'cwd', 'prompt', 'model', 'permissionMode',
-    'test', 'cron', 'once', 'gate', 'lastSlotAt', 'lastFiredAt', 'lastSessionId',
+    'test', 'cron', 'once', 'gate', 'createdBy', 'lastSlotAt', 'lastFiredAt', 'lastSessionId',
     'lastOutcome', 'lastSkipReason', 'lastError', 'lastMarker', 'reviewed',
     'sweepSlotAt', 'sweepUntil', 'runs', 'createdAt', 'updatedAt'];
 
@@ -1392,6 +1393,65 @@ const pr = (number, over = {}) => ({
     assert.strictEqual(scheduleTitle({ title: null, prompt: '\n\n  spaced  \n' }), 'spaced');
     assert.strictEqual(scheduleTitle({ title: null, prompt: '' }), 'a schedule');
     ok('scheduleTitle falls back through the prompt to a name that is never empty');
+}
+
+{
+    // A moment as a one-time schedule, for callers with a date rather than an
+    // expression (schedule_session in bridge/mcp.js). The round trip through
+    // nextSlot is the whole check, so each refusal below is a different way of
+    // failing it.
+    const now = at(2026, 9, 24, 12, 0);
+
+    const d = cronForDate('2026-09-25T09:00', now);
+    assert.deepStrictEqual(d, { cron: '0 9 25 9 *', once: true, at: at(2026, 9, 25, 9, 0) });
+    assert.strictEqual(nextSlot(parseCron(d.cron), now), d.at, 'the cron names that minute');
+
+    // Seconds are dropped rather than refused — a cron has no second field.
+    assert.strictEqual(cronForDate('2026-09-25T09:00:42', now).cron, '0 9 25 9 *');
+    // A Date and epoch ms are the same moment.
+    assert.strictEqual(cronForDate(new Date(at(2026, 10, 1, 7, 5)), now).cron, '5 7 1 10 *');
+    assert.strictEqual(cronForDate(at(2026, 10, 1, 7, 5), now).cron, '5 7 1 10 *');
+    // Across a year end, which is where a month written 0-based goes wrong.
+    assert.strictEqual(cronForDate('2027-01-01T00:30', now).cron, '30 0 1 1 *');
+
+    assert.match(cronForDate('2026-09-24T11:59', now).error, /in the past/);
+    assert.match(cronForDate('2026-09-24T12:00', now).error, /in the past/, 'now is not ahead');
+    assert.match(cronForDate('2027-10-01T09:00', now).error, /more than a year/,
+        'a year out would fire at the first occurrence instead');
+    assert.match(cronForDate('2026-09-25', now).error, /no time of day/,
+        'a bare date is not silently midnight UTC');
+    assert.match(cronForDate('soon', now).error, /cannot read/);
+    assert.match(cronForDate(null, now).error, /cannot read/);
+
+    // Just past a spring-forward gap still works: 03:30 exists on that day in
+    // every zone that has one. Not the gap itself — what a zone does with a
+    // minute that does not exist is its own business.
+    const spring = cronForDate('2027-03-14T03:30', at(2027, 3, 1));
+    assert.ok(!spring.error, spring.error);
+    ok('cronForDate makes a dated one-time cron, and refuses past, far and ambiguous dates');
+}
+
+{
+    // Who made a schedule: stored at create, survives a reload, and a PATCH
+    // cannot rewrite it — it is history, not configuration.
+    const s = fresh();
+    const row = s.create({
+        cwd: '/a', prompt: 'p', cron: '0 9 25 9 *', once: true,
+        createdBy: { sessionId: 'sess-a', title: 'Port it', extra: 'dropped' },
+    });
+    assert.deepStrictEqual(row.createdBy, { sessionId: 'sess-a', title: 'Port it' });
+    s.flush();
+    assert.deepStrictEqual(new Schedules().get(row.id).createdBy,
+        { sessionId: 'sess-a', title: 'Port it' }, 'survives a reload');
+
+    const patched = s.update(row.id, { createdBy: { sessionId: 'other' }, title: 't' });
+    assert.strictEqual(patched.createdBy.sessionId, 'sess-a', 'a PATCH cannot rewrite it');
+
+    const plain = s.create({ cwd: '/a', prompt: 'p', cron: '0 2 * * *' });
+    assert.strictEqual(plain.createdBy, null, 'absent is null, not missing');
+    assert.strictEqual(s.create({ cwd: '/a', prompt: 'p', cron: '0 2 * * *',
+        createdBy: { title: 'no id' } }).createdBy, null, 'no session id, no provenance');
+    ok('createdBy is kept through clean(), a reload and a PATCH');
 }
 
 fs.rmSync(home, { recursive: true, force: true });

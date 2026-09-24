@@ -729,6 +729,53 @@ function verdictOf(text) {
     return m ? m[1].toUpperCase() : null;
 }
 
+/**
+ * A moment as a one-time schedule: the dated cron that names it, plus `once`.
+ *
+ * For a caller that has a date and not an expression — an agent asked to "run
+ * this at 9 tomorrow" should not have to write `0 9 25 9 *`, and getting the
+ * month off by one is the classic way to write it wrong. The row it produces is
+ * exactly what the dialog's one-time form saves, so nothing downstream knows
+ * the difference.
+ *
+ * **Verified by round trip rather than trusted.** The expression is built from
+ * the date's local fields and then asked for its own next slot; if that is not
+ * the minute that was asked for, the date is refused. That single check covers
+ * every way this goes wrong without naming any of them: a moment already past
+ * (the next match is next year), one more than a year out (cron has no year, so
+ * it would fire at the first occurrence instead), and the second 1:30 on the
+ * night the clocks go back, which no cron expression can pick out.
+ *
+ * `at` is an ISO string, a Date or epoch milliseconds. A string with no offset
+ * is local time, which is `Date`'s own rule for a date-time form and what
+ * anybody typing a time means. A date with no time is refused rather than read
+ * as midnight UTC, which is `Date`'s rule for *that* form and nobody's intent.
+ *
+ * @returns {{cron: string, once: true, at: number} | {error: string}}
+ */
+function cronForDate(at, now = Date.now()) {
+    if (typeof at === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(at.trim())) {
+        return { error: `"${at}" has no time of day — give one, e.g. ${at.trim()}T09:00` };
+    }
+    const date = at instanceof Date ? new Date(at.getTime()) : new Date(at);
+    if (at == null || at === '' || Number.isNaN(date.getTime())) {
+        return { error: `cannot read "${at}" as a date and time; use e.g. 2026-09-25T09:00` };
+    }
+    date.setSeconds(0, 0);
+    const when = date.getTime();
+    if (when <= now) return { error: `${date.toString()} is in the past` };
+
+    const cron = `${date.getMinutes()} ${date.getHours()} ${date.getDate()} `
+        + `${date.getMonth() + 1} *`;
+    if (nextSlot(parseCron(cron), now) !== when) {
+        return {
+            error: `${date.toString()} cannot be scheduled as a one-time run: it is more `
+                + 'than a year away, or it is a wall-clock time the clocks repeat',
+        };
+    }
+    return { cron, once: true, at: when };
+}
+
 // ---------------------------------------------------------------------------
 // The store
 // ---------------------------------------------------------------------------
@@ -738,6 +785,19 @@ function orNull(v) {
     if (typeof v !== 'string') return null;
     const s = v.trim();
     return s || null;
+}
+
+/**
+ * `{sessionId, title}` or null. Set once, at create: `update` has no branch for
+ * it, because who made a schedule is history and a PATCH is about what it will
+ * do next.
+ */
+function cleanCreatedBy(v) {
+    if (!v || typeof v !== 'object') return null;
+    const sessionId = orNull(v.sessionId);
+    if (!sessionId) return null;
+    const title = orNull(v.title);
+    return { sessionId, title: title ? title.slice(0, 200) : null };
 }
 
 function numOrNull(v) {
@@ -905,6 +965,11 @@ function clean(row) {
         // the 29th of August, and this is what stops that meaning "every year".
         once: row.once,
         gate: row.gate,
+        // Which session made it, when an agent did: `{sessionId, title}` or
+        // null. Provenance, not permission — the card says where an
+        // unattended run came from, so a schedule nobody remembers making has
+        // a conversation to go and read.
+        createdBy: row.createdBy || null,
         // What has happened. Kept on the row rather than derived from the
         // notification log because the card must be able to say "last run 3 days
         // ago, nothing new" after a log rotation.
@@ -978,6 +1043,7 @@ function read() {
                 // is a repeating schedule, which is what every row was then.
                 once: !!row.once,
                 gate: cleanGate(row.gate),
+                createdBy: cleanCreatedBy(row.createdBy),
                 lastSlotAt: numOrNull(row.lastSlotAt),
                 lastFiredAt: numOrNull(row.lastFiredAt),
                 lastSessionId: orNull(row.lastSessionId),
@@ -1379,6 +1445,7 @@ class Schedules {
             cron: String(fields.cron),
             once: !!fields.once,
             gate: cleanGate(fields.gate),
+            createdBy: cleanCreatedBy(fields.createdBy),
             // **Seeded, not zero.** The caller resolves the gate's ref before
             // creating and passes the SHA, so the first run reviews what arrives
             // *after* you set the schedule up. Without this the first run's range
@@ -1689,6 +1756,7 @@ module.exports = {
     dueSlot,
     describeCron,
     cronForm,
+    cronForDate,
     fillPrompt,
     unattended,
     UNATTENDED_NOTE,

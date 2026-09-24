@@ -32,8 +32,22 @@ const { STATE_DIR } = require('./config');
 const STATE_FILE = path.join(STATE_DIR, 'suggestions.json');
 const VERSION = 1;
 
-/** What can have happened to a suggestion. Anything else is ignored on load. */
-const STATUSES = new Set(['started', 'dismissed']);
+/**
+ * What can have happened to a suggestion. Anything else is ignored on load.
+ *
+ * `completed` is said, not detected. Nothing here can tell that a started
+ * session's work is finished — a turn ending is not the task ending, and a merged
+ * pull request is one repository's idea of done — so it is recorded when the
+ * agent that did the work (or you) says so, through `set_task_status`.
+ */
+const STATUSES = new Set(['started', 'dismissed', 'completed']);
+
+/** How a task was taken up: a session of its own, or inside the caller's. */
+const VIAS = new Set(['session', 'subagent']);
+
+// A note is a pointer — the pull request, one line on what was left — not a
+// report. Capped so this file stays something you can open and read.
+const MAX_NOTE = 500;
 
 class Suggestions {
     constructor() {
@@ -60,6 +74,8 @@ class Suggestions {
                     clean[toolUseId] = {
                         status: entry.status,
                         startedId: typeof entry.startedId === 'string' ? entry.startedId : null,
+                        via: VIAS.has(entry.via) ? entry.via : null,
+                        note: cleanNote(entry.note),
                         at: Number.isFinite(entry.at) ? entry.at : 0,
                     };
                 }
@@ -105,14 +121,27 @@ class Suggestions {
      *
      * `startedId` is the session that got started, so the card can become a link
      * into it rather than just going quiet. It is meaningless on a dismissal and
-     * is dropped there rather than stored as a lie.
+     * is dropped there rather than stored as a lie. On a completion it is kept
+     * from the start that preceded it when none is given: finishing a task does
+     * not change who did it, and the link is still the useful part of the card.
+     * `via` carries over the same way.
      */
-    set(sessionId, toolUseId, { status, startedId = null } = {}) {
+    set(sessionId, toolUseId, { status, startedId = null, via = null, note = null } = {}) {
         if (!sessionId || !toolUseId || !STATUSES.has(status)) return null;
         const acted = this.bySession.get(sessionId) || {};
+        const prior = acted[toolUseId] || null;
+        const keeps = status === 'started' || status === 'completed';
+        const given = typeof startedId === 'string' && startedId ? startedId : null;
         acted[toolUseId] = {
             status,
-            startedId: status === 'started' && typeof startedId === 'string' ? startedId : null,
+            startedId: keeps
+                ? (given || (status === 'completed' && prior ? prior.startedId : null))
+                : null,
+            via: keeps
+                ? (VIAS.has(via) ? via
+                    : (status === 'completed' && prior ? prior.via : null))
+                : null,
+            note: cleanNote(note),
             at: Date.now(),
         };
         this.bySession.set(sessionId, acted);
@@ -147,4 +176,11 @@ class Suggestions {
     }
 }
 
-module.exports = { Suggestions, STATE_FILE, STATUSES };
+/** A short string or null. Trimmed and capped rather than refused. */
+function cleanNote(v) {
+    if (typeof v !== 'string') return null;
+    const s = v.trim();
+    return s ? s.slice(0, MAX_NOTE) : null;
+}
+
+module.exports = { Suggestions, STATE_FILE, STATUSES, VIAS, MAX_NOTE };

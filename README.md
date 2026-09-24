@@ -282,7 +282,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/usage.js` | How much of the 5-hour window and the week are gone, merged from turn events and the status line |
 | `bridge/beacon.js` | A `claude` started for four seconds and killed, so the quota percentages refresh with no terminal open |
 | `bridge/schedule.js` | Sessions that start on a clock — the store, the cron, and what counts as new since last time |
-| `bridge/mcp.js` | The tools this app gives a session: offer the next piece of work, find the other sessions, hand one of them a fact |
+| `bridge/mcp.js` | The tools this app gives a session: offer the next piece of work, find the other sessions, hand one of them a fact, search and take up suggested tasks, schedule a session |
 | `bridge/handoff.js` | The rules a handoff has to pass: the loop guard, and what waking a session would run into |
 | `bridge/slash-commands.js` | What slash commands a directory has, for composer completion |
 | `bridge/auth.js` | The access token, and telling local from remote apart |
