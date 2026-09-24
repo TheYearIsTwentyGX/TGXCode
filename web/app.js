@@ -2058,8 +2058,9 @@ function headerPrs() {
     if (s.prs) return s.prs;
     // A bridge older than the `prs` field still sends one PR as `pr`, and that pairing
     // is not hypothetical — it is the normal state of this app for a while after every
-    // merge. `npm run land` deliberately leaves the running bridge on old code, while
-    // web/ is read from disk per request and so is new on the next refresh. Renaming
+    // merge. `npm run land` restarts the bridge only when bridge/ changed, and not at
+    // all when the restart is refused or skipped, while web/ is read from disk per
+    // request and so is new on the next refresh. Renaming
     // the field without this made the whole feature vanish in that window rather than
     // degrade, which is worse than the single unstyled link it replaced. Safe to delete
     // once no bridge that predates `prs` can still be running.

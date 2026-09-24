@@ -1443,7 +1443,10 @@ Four guards, arranged so that no single one has to hold:
 | `app/main.js` | Verifies `root` against its configured `bridgeDir` before adopting a bridge on 45888, and takes the port back if it does not match. |
 
 Taking the port back goes through `/api/shutdown`, never a kill, because that
-endpoint answers 409 while a turn is in flight. A squatter with work running is
+endpoint answers 409 while a turn is in flight. That is stricter than a restart,
+which only counts turns outside the session host (`atRisk`), and on purpose: a
+restart puts a new bridge in front of those turns straight away, while a window
+closing leaves nobody to answer an approval they raise. A squatter with work running is
 waited for — the window says what it is waiting for and how many turns — and the
 port is claimed the moment that work lands. A development instance is exempt from
 the check: it is pointed at a port deliberately and serves whichever checkout
@@ -1452,12 +1455,15 @@ started it, which is the entire point of having one.
 ### Picking up new code
 
 The bridge runs whatever was on disk when it started, so it keeps running old
-code until you restart it.
+code until you restart it. `npm run land` now does that for you when the merge it
+lands touched `bridge/` — see *Working on this with agents* below — so this is mostly for
+changes that reached the checkout some other way.
 
 **The quickest way is at the foot of the quota popover** — click the quota pill
 in the header, then *Restart bridge*: it fast-forwards the checkout this bridge
 is serving and restarts it, and the row says which checkout that is. When something
-is in the way it says so rather than doing half of it — turns in flight, a pull
+is in the way it says so rather than doing half of it — turns running outside the
+session host, a pull
 that would not fast-forward, uncommitted `bridge/` code — and offers to cancel,
 to hand the checkout to a session, or to go ahead anyway. That third choice is
 the confirmation the script asks for at a terminal, moved somewhere it can be

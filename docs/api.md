@@ -4107,8 +4107,9 @@ should not stop a server starting. So `port` in the record is stable across a
 stop and start, and a client should not assume the bottom of the declared range.
 See `bridge/ports.js`.
 
-**Runs die with their bridge**, like terminals and unlike nothing else here. The
-child's stdout is a pipe whose only reader is the bridge, so one that outlived it
+**Runs die with their bridge**, like terminals — and unlike `claude` sessions,
+which since the session host (`bridge/host.js`) outlive a bridge restart and are
+adopted by the next one. The child's stdout is a pipe whose only reader is the bridge, so one that outlived it
 would fill the buffer, block on `write()` and go on holding its port while hung.
 A client should say so rather than imply otherwise.
 

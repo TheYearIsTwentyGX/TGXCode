@@ -5,11 +5,13 @@
 #   restart-bridge              restart from the local checkout
 #   restart-bridge --pull       fast-forward from origin first, then restart
 #   restart-bridge --yes        load uncommitted bridge/ changes without asking
-#   restart-bridge --force      restart even with a turn in flight (implies --yes)
+#   restart-bridge --force      restart even with a turn running outside the session
+#                               host (implies --yes); hosted turns survive anyway
 #   restart-bridge --status     say what is running and exit
 #
 #   exit 0   restarted — also --status and --help
-#   exit 3   deliberately did not restart: a turn was in flight, or bridge/ had
+#   exit 3   deliberately did not restart: a turn was running outside the
+#            session host (`atRisk`), or bridge/ had
 #            uncommitted changes and there was no terminal to confirm on
 #   exit 1   tried and could not: bad option, a worktree, a failed pull, or a
 #            bridge that never came back
