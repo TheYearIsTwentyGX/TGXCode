@@ -98,6 +98,12 @@ let queueSeq = 0;
 function sessionEnv() {
     const env = { ...process.env, CLAUDE_CODE_ENTRYPOINT: 'tgxcode' };
     deleteBoth(env, 'PORT');
+    // terminal.js sets this on a session's own terminal pane, and devservers.js
+    // reads it ahead of CLAUDE_CODE_SESSION_ID. A bridge started from that pane
+    // would pass it to every agent it runs, and each server those agents started
+    // would be attributed to the pane's session. `claude` sets
+    // CLAUDE_CODE_SESSION_ID itself.
+    delete env.TGXCODE_SESSION_ID;
     // And this one goes the same way as the entrypoint: the app shows a
     // session's own task list, and current models are not offered the tools that
     // keep one unless this is set. See cfg.TODO_TOOLS for the opt-out.

@@ -196,3 +196,23 @@ hitting an app's root on a timer is not always harmless.
 - ✅ Stopping a server shows which pid and command will be killed before doing it.
 - A server started by a worktree session gets a DevBrowser tab named for the
   worktree.
+
+## Addendum: attribution by session, not by title
+
+Chips kept showing up in the wrong session. There were two causes. DevBrowser's
+tab titles still counted toward attribution: a title naming another worktree hid
+the port, a title matching this one raised its rank, and `devbrowser title` was
+the strongest detection score of all. Titles are keyed by port, and ports get
+reused, so a name left behind by yesterday's server hid today's server from the
+session running it. The second cause was that cwd attribution could not tell
+apart two sessions in the same checkout.
+
+The fix is `/proc/<pid>/environ`. `claude` puts `CLAUDE_CODE_SESSION_ID` in
+the environment of every command an agent runs, and a server keeps it after it is
+reparented to init. It is the ancestry walk this document rejected, only without
+the chain that walk needed. `bridge/devservers.js` now attributes by that id, and
+falls back to cwd only for a holder with no session. It also finds a session's
+servers straight from the socket table, whether or not the transcript named the
+port. Titles only label chips now. Session terminal panes set
+`TGXCODE_SESSION_ID`, so a bridge's inherited id cannot claim what is typed
+there. `test/devservers.test.js` covers all of this.
