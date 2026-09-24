@@ -357,7 +357,7 @@ TGXCODE_PREFS_DIR=$(mktemp -d) npm run dev:headless
 ```
 
 It stands in for the whole directory, so the spinner's `verbs/` is seeded there
-too. Rewriting the `cs-prefs` `<meta>` tag with Playwright's `page.route` only
+too. Rewriting the `tgx-prefs` `<meta>` tag with Playwright's `page.route` only
 tests reading a setting and never exercises the save.
 
 **A `test` schedule never writes to GitHub.** The pull-request gate comments on

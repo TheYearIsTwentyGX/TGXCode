@@ -19,9 +19,10 @@ These come out of how the app already works, and every plan respects them.
    as far as this app is concerned. State the app owns goes in
    `~/.local/share/tgxcode/`.
 3. **The bridge does the work; the shell is a window.** Anything touching the
-   filesystem, `claude`, or the network belongs in `bridge/`. Anything needing
-   Windows — tray, notifications, Explorer, protocol handlers — belongs in
-   `app/main.js`. Keeping that line clean is why `bridge/` and `web/` need no
+   filesystem, `claude`, or the network belongs in `bridge/`. Anything that is
+   the shell's own — tray, notifications, protocol handlers, the window — belongs
+   in `app/main.js`; revealing a file on the host desktop is the bridge's, through
+   `bridge/explorer.js`, on WSL and Linux alike. Keeping that line clean is why `bridge/` and `web/` need no
    rebuild.
 
 ## Tier 1 — felt daily
@@ -136,4 +137,4 @@ rebuild it, build a view over it.**
   over `pool.ensure` and `claude --resume`, which is machinery this app already
   drove for every message typed into a stopped session. Same need, no socket, and
   the recipient is resumed in plan mode so what comes back is a plan rather than an
-  edit. See README §And they can hand each other work.
+  edit. See `docs/manual.md` §And they can hand each other work.

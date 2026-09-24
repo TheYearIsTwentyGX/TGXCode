@@ -233,6 +233,14 @@ reachable by an agent.
   `bridge/mcp.js`. The list is the counterpart to the `@` menu above and answers
   the opposite question: not "who can receive a message right now" but "who could
   be *given* work", which is nearly everybody.
+- **Suggested tasks can be picked up by agents too.** `find_tasks` searches every
+  session's suggestions with what became of each — *open*, *started* (naming the
+  session doing it), *completed* or *dismissed*. `start_task` takes one up, either
+  as a new session of its own or claimed for the caller to run as a subagent;
+  `set_task_status` marks it completed (with a note — usually the PR), dismissed,
+  or open again; and `schedule_session` starts a session later, once or on a cron,
+  where it appears in the Schedules panel marked as made by that session. A
+  completed task reads *Done* with its note, the pull request made a link.
 - **The woken session resumes in plan mode.** It reads the message, checks the
   claim against the files it names, and comes back with a plan — so it lands in
   *needs you* on the board, with something to approve, rather than having edited a
@@ -909,8 +917,10 @@ app for — from the window you sit in to watch those sessions run.
 A text box in a monospace font, a **Preview** that renders it, a byte count
 against the limit, and **Expand** for a full-height editor, because twenty-three
 kilobytes of markdown in a settings column is a keyhole. That editor closes by
-its ✕ or *Close* and nothing else, like every other dialog here — it is holding
-a file you are part-way through writing, which is the case that rule is for. Not a vendored code
+its ✕, *Close*, or a whole click outside it — press *and* release on the
+backdrop, so a text selection dragged past the edge does not count — and never by
+`Escape`, like every other dialog here: it is holding a file you are part-way
+through writing, which is the case that rule is for. Not a vendored code
 editor: a few hundred kilobytes of one, with no build step to prune it, to edit
 a markdown file is a poor trade, and the one thing it would have earned — seeing
 the headings as headings — is the Preview toggle.
@@ -1423,7 +1433,7 @@ document rather than a page in `web/`. There was a phone-shaped web page at `/m`
 while and it has been removed — it had drifted behind the API, and maintaining a
 second web UI to sit beside a native one bought nothing.
 
-**Getting there.** Press the phone button in the top bar for a pairing link, and paste
+**Getting there.** Open *Settings → Connect a phone* for a pairing link, and paste
 it into the app. It keeps the token and sends it as a header; the link is only how the
 token travels.
 

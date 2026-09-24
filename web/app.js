@@ -8315,7 +8315,7 @@ function takePendingJump() {
 //
 // **Nothing on it moves while you are reading.** This is the constraint that
 // shapes the whole renderer, and it is the rail's rule for the rail's reason —
-// see README, "The rail is sorted on load, and then left alone". A board of
+// see docs/manual.md, "The rail is sorted on load, and then left alone". A board of
 // agents working would otherwise reshuffle every three seconds under the cursor
 // of somebody trying to read one card. So position within a column is taken once
 // and then held, and the only thing that moves a card is changing column, which

@@ -252,7 +252,7 @@ reaching past the app into the machine.
 
 `GET /api/sessions/:id/diff` is the same shape of asymmetry one route further
 down: `POST /api/sessions/:id/open-file` beside it is refused and the diff is not,
-because launching a Windows program is reaching past the app into the machine and
+because launching a program on the host desktop is reaching past the app into the machine and
 reading a diff is not. It is repository-scoped rather than only roots-scoped, which
 is what makes that safe to say.
 
@@ -4311,7 +4311,7 @@ transcript, but an exiting `claude` may then write its bookkeeping (`last-prompt
 chunk. Anything keyed on first sight, or handling only the first of those two shapes,
 will show a permanently spinning tool. See §*A tool call resolves in one of two ways*.
 
-**`runner` on a session summary is not the `runner-status` payload.** Four fields, and
+**`runner` on a session summary is not the `runner-status` payload.** Five fields, and
 `pendingPermission` is not among them. See §`GET /api/sessions`.
 
 **A bridge restart does not end a turn.** When `/api/health` reports a `sessionHost`,

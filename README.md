@@ -54,8 +54,9 @@ every open pull request, linked back to the session that did it. PR status —
 draft, approved, checks failing, conflicting, merged — sits on the session title.
 
 **Dev servers, found not configured.** When a session brings a port up it appears
-as a chip; one click switches [DevBrowser](https://github.com/TheYearIsTwentyGX/dev-browser)
-to that tab, and one more shuts the server down.
+as a chip; one click shows its page — in the window's own browser preview, or in
+[DevBrowser](https://github.com/TheYearIsTwentyGX/dev-browser), as Settings says —
+and one more shuts the server down.
 
 **Sessions on a clock.** Nightly review of open pull requests, a catch-up on a
 branch's new commits — scheduled work that starts itself and lands in its own
