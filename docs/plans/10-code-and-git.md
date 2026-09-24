@@ -143,7 +143,9 @@ Guard rails:
 ## Acceptance
 
 - The panel lists every file a session edited, with per-file counts, and
-  clicking one jumps to the edit.
+  clicking one jumps to the edit. *(Superseded: a click now opens the file's diff,
+  and jumping to the edit moved to the row's right-click menu — see the status note
+  above.)*
 - Clicking `bridge/runner.js:147` in a tool summary opens that file at that line
   in the existing VS Code window.
 - A path outside the session's directory tree is refused by the bridge.

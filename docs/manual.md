@@ -1263,15 +1263,22 @@ blocks. It holds two lists, and **they are meant to disagree**:
   files edited in a directory that has since been removed, and it is right about a
   session that ran in a terminal months ago. The line counts are the ones the diffs
   in the conversation show — the patch Claude Code recorded with the call — not a
-  re-diff of a file that has moved on. Clicking a file jumps to the first edit that
-  touched it, which makes a long transcript navigable by file rather than by time.
+  re-diff of a file that has moved on.
 - **Working tree** is `git status` in the session's directory, so it is about the
   directory. It holds whatever anybody else changed, and it drops what this
   session changed and then reverted.
 
+**Clicking a row in either list opens its diff** in the app's own viewer
+(`GET /api/sessions/:id/diff`, drawn with diff2html). **Right-click** a row for the
+other two things: **Open** launches the file in the host's default program, and
+**Jump To** scrolls the conversation to the first edit that touched it — which is
+what a click used to do, and what makes a long transcript navigable by file rather
+than by time. A working-tree row offers Jump To only when this session edited that
+file.
+
 A session that delegates its work to `Task` subagents has no `Edit` calls of its
 own — those are in the agents' own transcripts — so those are folded in and marked
-*agent*; clicking one opens that agent's pane, since there is no call in this
+*agent*; Jump To on one opens that agent's pane, since there is no call in this
 conversation to jump to. What no list can hold is a `Bash` running `sed -i`:
 nothing in the transcript says which file it touched, which is one more reason the
 tree is shown beside the transcript's answer rather than instead of it.
