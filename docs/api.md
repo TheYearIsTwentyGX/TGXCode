@@ -1305,50 +1305,83 @@ capability worth refusing a phone.
 
 ### `GET /api/sessions/:id/devservers`
 
-`{ports: [...], total, elsewhere}` — the localhost ports this session's agent
-brought up, for the chip strip above the conversation.
+Returns `{ports: [...], total, elsewhere}`: the localhost ports this session's
+agent brought up, for the chip strip above the conversation.
 
-A port is shown when it belongs to **this session's workspace**, and that is
-decided by the kernel rather than by the transcript: `ss` says which pid holds
-the port, `/proc/<pid>/cwd` says where that process is running, and the worktree
-or checkout above it is the workspace. `ours: true` means that matched.
+Which session a port belongs to is decided by the kernel, not by the transcript.
+`ss` gives the pid holding the port, and from that pid:
 
-This matters because the obvious alternative does not work. Evidence scraped
-from a transcript can only say a session *mentioned* a port, and "is it
-listening" is a fact about the machine — so a `curl localhost:5001` in one
-session used to light up green the moment another worktree's server took 5001.
-Ports bled across sessions constantly. Walking the holder's parents to find the
-owning `claude` does not work either: a backgrounded dev server is reparented to
-init as soon as its launching shell exits.
+1. **`/proc/<pid>/environ` names a session.** `claude` sets
+   `CLAUDE_CODE_SESSION_ID` for every command an agent runs, and a server keeps
+   that environment after its launching shell has exited. A session's own
+   terminal pane sets `TGXCODE_SESSION_ID`, which takes precedence. When a
+   session is named, the port is `ours` exactly when it is this session. Two
+   sessions in the same checkout are told apart this way.
+2. **No session is named** (a server started by hand outside any agent). The port
+   is `ours` when `/proc/<pid>/cwd` lies inside this session's workspace, meaning
+   the worktree or checkout above it.
 
-Each port carries `port`, `title`, `listening`, `stopped`, `evidence`, plus the
-attribution: `workspace` (where its process runs, or null), `ours`, `foreign`
-(held by another workspace), `unverified`, `protectedBy` and `titledElsewhere`.
+A port this session's processes hold is found **even if the transcript never
+mentions it**. Such a port comes back with `source: "process"`. There is one
+exception: a port inside the kernel's ephemeral range
+(`/proc/sys/net/ipv4/ip_local_port_range`, typically 32768–60999) is not picked up
+from the socket table alone. Browsers, debuggers and MCP servers that
+`listen(0)` land there, and none of them is a dev server. Ports the transcript
+does name are not subject to that rule.
 
-`http` (**bool**) says whether the port answers HTTP — a `GET /` on 127.0.0.1 that
-got any status line back, `404` and `500` included, within about 600 ms. It is what
-decides whether a browser preview can show the port: `listening` is only a TCP
-connect, and a database or a language server accepts connections too. Always
-`false` for a port that is not listening. Answers are cached per port for about
-ten seconds, so a server that has just started can read `false` briefly.
+Why neither simpler approach works:
+
+- **Transcript evidence alone.** It can only say that a session *mentioned* a
+  port, while "is it listening" is a fact about the whole machine. A
+  `curl localhost:5001` in one session used to light up green as soon as another
+  worktree's server took 5001.
+- **Walking the holder's parents to find the owning `claude`.** A backgrounded
+  dev server is reparented to init as soon as its launching shell exits.
+
+Each port carries these fields:
+
+- `port`, `title`, `listening`, `stopped`, `source`, `evidence`.
+- `session` (**string or null**): the session id in the holder's environment.
+- `workspace` (**string or null**): where the holder is running.
+- `ours`.
+- `foreign`: held by another session or workspace, or, for a dead port, last seen
+  held by another session.
+- `unverified`, `protectedBy`.
+- `titledElsewhere`: **deprecated, always `false`.**
+
+`title` is DevBrowser's name for the port when it has one, otherwise the name from
+a `devbrowser title` command in the transcript. **It is only a label.** Titles are
+keyed by port and ports get reused, so titles no longer affect whether a port is
+shown or how it ranks.
+
+`http` (**bool**) says whether the port answers HTTP. The check is a `GET /` on
+127.0.0.1 that got any status line back, `404` and `500` included, within about
+600 ms. It decides whether a browser preview can show the port, because
+`listening` is only a TCP connect and a database or a language server accepts
+connections too. `http` is always `false` for a port that is not listening.
+Answers are cached per port for about ten seconds, so a server that has just
+started can read `false` briefly.
 
 Two cases the kernel cannot settle:
 
-- **No Linux process holds it.** WSL mirrored networking means a Windows-side
-  server answers on 127.0.0.1 with no pid this side. Those fall back to the
-  session's own transcript and only to its strong end — a startup banner or a
-  devbrowser call, never a bare mention — and come back `unverified: true`.
-- **The port is dead.** Nothing holds it, so nothing can speak for it. A dead
-  port is kept only if this session has strong evidence *and* DevBrowser's name
-  for it does not belong to another worktree (`titledElsewhere`).
+- **No Linux process holds it.** Under WSL mirrored networking, a Windows-side
+  server answers on 127.0.0.1 with no pid on this side. These ports fall back to
+  the session's own transcript, and only to its strong evidence: a startup banner
+  or a `--port` it passed, never a bare mention. They come back with
+  `unverified: true`.
+- **The port is dead.** Nothing holds it any more. A dead port is kept only if
+  this session has strong evidence for it, and only if the bridge did not last see
+  it held by another session. The bridge keeps that last holder in memory for as
+  long as it runs.
 
-`protectedBy` marks a port held by a bridge or a `claude` process. Those are
-never offered at all: the everyday instance runs in the main checkout, so a
-session there would otherwise be shown a green chip — and a stop button — for
-the app it is being displayed in.
+`protectedBy` marks a port held by a bridge or by a `claude` process. These ports
+are never offered. The everyday instance runs in the main checkout, so without
+this rule a session there would be shown a green chip, and a stop button, for the
+app it is being displayed in.
 
-`elsewhere` counts the live ports this session mentioned that another workspace
-is holding. The UI says so rather than leaving the strip looking empty.
+`elsewhere` counts the live ports this session mentioned that another session or
+workspace is holding. The UI shows that count instead of leaving the strip
+looking empty.
 
 ### `POST /api/devbrowser/open`
 
@@ -1437,7 +1470,7 @@ waiting, running }`, already ordered needs-you-first. A card is:
 | **`ask`** | **object or null** — the *whole* ask (`runner.pendingPermission`), so a tool ask is answerable from the card. Same shape as `permission-request` |
 | **`headlines[]`** | **array of objects**, not strings — `{text, ts}`, oldest first, up to three |
 | `tasks` | object or null — **five fields, and no items**: `{done: number, total: number, current: string\|null, idle: boolean, ts: string\|null}`. `current` is the in-progress task's `activeForm`. `idle` is true when work is left and *nothing* is in progress — a list that has stopped, not one between steps. `ts` is ISO 8601 and non-null only when the answer came from a `TodoWrite` in the transcript rather than from `~/.claude/tasks`. **The items are not here** — `GET /api/sessions/:id/tasks` has them. (Previously documented as `{done, total, current, ts}`, which was true of only one of the two sources: the directory returned `idle` and no `ts`, the transcript the reverse.) |
-| **`devservers`** | **array of objects or null** — `{port, title, owned, http}`, listening ports only (`http` as on `/api/sessions/:id/devservers`); `null` until the first probe has run |
+| **`devservers`** | **array of objects or null** — `{port, title, owned, http}`, listening ports only, attributed and probed exactly as on `/api/sessions/:id/devservers`. `owned` means DevBrowser's title for the port is this session's worktree or project name. It is a hint for whether opening a tab should also name it, and says nothing about whose server it is; `null` until the first probe has run |
 | `sig` | string — see below |
 
 Every card also carries `sig`, a short hash of the rest of the card. The board is pushed

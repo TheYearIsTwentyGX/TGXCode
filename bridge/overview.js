@@ -25,6 +25,7 @@
 // session. It refreshes on its own ~15s cycle and every build in between reads
 // whatever that last left behind.
 
+const fs = require('fs');
 const { recentActivity } = require('./transcript');
 const { cached, keepOnly } = require('./memo');
 const tasks = require('./tasks');
@@ -389,6 +390,8 @@ async function refreshDevServers(index, ids) {
                 if (!summary) return null;
                 const found = await devservers.enrich(
                     [...ports.values()], titles, {
+                        id: sessionId,
+                        workspace: workingDir(summary),
                         worktreeName: summary.worktree && summary.worktree.name,
                         projectName: summary.projectName,
                         lastTs: summary.lastTs,
@@ -404,6 +407,12 @@ async function refreshDevServers(index, ids) {
         } catch { /* a transcript that vanished mid-read; the next pass retries */ }
     }
     return moved;
+}
+
+/** The directory a session works in, as server.js reads it for the conversation view. */
+function workingDir(summary) {
+    return [summary.cwd, summary.worktree && summary.worktree.path, summary.projectCwd]
+        .find(d => d && fs.existsSync(d)) || null;
 }
 
 /** Yield to the event loop, so a long pass is not one long block. */

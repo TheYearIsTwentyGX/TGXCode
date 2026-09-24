@@ -157,6 +157,15 @@ class Terminal {
         // A declared `npm run dev` in *this* repo is the same accident with
         // nobody typing anything, which is why it is unconditional.
         deleteBoth(env, 'PORT');
+        // devservers.js attributes a listening port to the session named in its
+        // holder's environment. The bridge's own CLAUDE_CODE_SESSION_ID, when it
+        // was started from a session, belongs to that session and not to this
+        // pane, so it goes. A session's own pane says whose it is. A run's pane
+        // belongs to a directory rather than a session, so it gets no session id
+        // and falls back to its cwd.
+        delete env.CLAUDE_CODE_SESSION_ID;
+        delete env.TGXCODE_SESSION_ID;
+        if (sessionId) env.TGXCODE_SESSION_ID = sessionId;
         // Nothing to delete for the API token: auth.js reads it from TOKEN_FILE
         // and never puts it in the environment, so a child cannot inherit it.
 

@@ -4,10 +4,10 @@
 // conversation view can offer a button that shows each one — in DevBrowser or in
 // the window's own preview — and says whether it is a web page at all (isHttp).
 //
-// Evidence comes from the transcript's Bash traffic. The strongest signal is the
-// agent naming a port through the devbrowser CLI, which this machine's
-// conventions ask it to do whenever it starts a dev server; framework startup
-// banners and explicit --port flags fill in the rest.
+// Evidence comes from two places. The socket table says which session's process
+// holds a port right now. The transcript's Bash traffic remembers ports a session
+// started and has since lost. Framework startup banners and explicit --port flags
+// are the strong end of the transcript's evidence.
 //
 // The hard part is not finding ports — a long session mentions dozens — but
 // deciding which one the user means *now*. A transcript accumulates ports that
@@ -23,10 +23,20 @@
 // session-scoped one.
 //
 // So attribution comes from the kernel instead. `ss` says which pid holds a
-// port; /proc/<pid>/cwd says where that process is running; workspaceOf() turns
-// that into a worktree or a checkout. A port belongs to the workspace its
-// process is actually in, and a session sees it only if that is *its* workspace.
-// No inference, nothing to keep in sync, and it cannot drift.
+// port, and /proc/<pid>/environ says which session started it. `claude` puts
+// CLAUDE_CODE_SESSION_ID in the environment of every command an agent runs, and a
+// server keeps that environment for life, whoever it is reparented to. That tells
+// two sessions sharing one checkout apart, which a directory cannot.
+//
+// Some holders have no session in their environment, because they were started
+// by hand outside any agent. Those fall back to /proc/<pid>/cwd, which
+// workspaceOf() turns into a worktree or a checkout. The port then belongs to the
+// workspace its process is running in.
+//
+// DevBrowser's tab names used to vote on this too, and they caused most of the
+// wrong answers. They are keyed by port, and ports get reused across worktrees,
+// so a name left behind by yesterday's server hid today's server from the session
+// actually running it. A title now only names a chip.
 //
 // Ancestry would have been the obvious alternative — walk the holder's parents
 // until you reach the session's `claude` — and it does not work: a backgrounded
@@ -37,7 +47,7 @@
 // What the kernel cannot answer is a port with no Linux process behind it. WSL
 // runs with mirrored networking, so a server on the Windows side answers on
 // 127.0.0.1 with no pid this side. Those fall back to the transcript, and only
-// to its strong end — a startup banner or a devbrowser call, never a mention.
+// to its strong end — a startup banner or a --port it passed, never a mention.
 
 const fs = require('fs');
 const http = require('http');
@@ -53,9 +63,7 @@ const DEV_COMMAND = /\b(?:pnpm|npm|yarn|bun)\s+(?:run\s+)?(?:dev|start|serve|pre
 const KILL_COMMAND = /\b(?:pkill|kill|killall|fuser)\b/;
 
 const SCORES = {
-    devbrowserTitle: 100,  // the agent explicitly named this port
-    devbrowserTab: 90,     // the agent opened a tab for it
-    banner: 85,            // a framework printed its startup banner
+    banner: 85,           // a framework printed its startup banner
     portFlag: 70,          // an explicit --port on a dev-server command
     url: 45,               // a localhost URL in output
     mention: 30,           // a bare localhost:port anywhere
@@ -111,15 +119,18 @@ function detect(events, prior) {
         const kills = KILL_COMMAND.test(command);
         const ts = ev.ts;
 
-        // -- the devbrowser CLI: the agent telling us directly ---------------
+        // -- the devbrowser CLI ------------------------------------------------
+        // Naming a tab is not evidence of starting anything. Sessions title ports
+        // they only looked at, and a title outlives its server. So this counts as
+        // a mention, and its only other use is to supply the chip's name.
         for (const m of matchAll(command, /devbrowser\s+title\s+(\d{2,5})\s+(?:--clear|(["'])([^"']{1,64})\2|(\S+))/g)) {
             const clearing = /--clear/.test(m[0]);
-            record(m[1], SCORES.devbrowserTitle, 'devbrowser-title', ts,
+            record(m[1], SCORES.mention, 'devbrowser-title', ts,
                 { command: clip(command), from: 'command' },
                 { title: clearing ? null : (m[3] || m[4] || null), killed: clearing });
         }
         for (const m of matchAll(command, /devbrowser\s+(?:open|go|reload)\s+(\d{2,5})/g)) {
-            record(m[1], SCORES.devbrowserTab, 'devbrowser-tab', ts,
+            record(m[1], SCORES.mention, 'devbrowser-tab', ts,
                 { command: clip(command), from: 'command' }, {});
         }
 
@@ -247,71 +258,135 @@ function isHttp(port, timeout = 600, { fresh = false } = {}) {
 }
 
 // Evidence at or above this is a session saying it *started* something: a
-// startup banner it printed, a --port it passed, a devbrowser call it made.
+// startup banner it printed, a --port it passed.
 // Below it are mentions and stray URLs, which say only that a port was talked
 // about. The ladder already drew that line; this is where it gets used.
 const STARTED_IT = SCORES.portFlag;
+
+/**
+ * Which sessions last held each port.
+ *
+ * A dead port has no holder left to ask, and the transcript cannot settle it
+ * either: `pgrep -f "vite dev --port 5002"` looks like a start command to any
+ * regex hunting for one. Without this, a session that only checked whether
+ * another session's server was up gets a "stopped" chip for that server once it
+ * goes down. The map lives as long as the bridge process and is updated on
+ * every sweep, so it holds the last answer the kernel gave while the port was
+ * still up.
+ *
+ * @type {Map<number, string[]>}
+ */
+const lastHolder = new Map();
+
+function noteHolders(held) {
+    for (const [port, h] of held) {
+        if (h.sessions.length) lastHolder.set(port, h.sessions);
+        else lastHolder.delete(port);
+    }
+}
+
+/**
+ * The kernel's range for ports handed out to `listen(0)` and outgoing sockets.
+ *
+ * An agent's session starts a lot of processes that listen on some random port:
+ * browsers under Playwright, debuggers, MCP servers. None of them is a dev
+ * server. A port nobody chose falls in this range, and a port somebody typed
+ * almost never does. So a port found only in the socket table has to be outside
+ * this range to count. A port the transcript also names is exempt.
+ */
+function ephemeralRange() {
+    try {
+        const [lo, hi] = fs.readFileSync('/proc/sys/net/ipv4/ip_local_port_range', 'utf8')
+            .trim().split(/\s+/).map(Number);
+        if (Number.isInteger(lo) && Number.isInteger(hi)) return [lo, hi];
+    } catch { /* not Linux, or no /proc */ }
+    return [32768, 60999];
+}
 
 /**
  * Rank detected ports for display, and drop the ones that are not this
  * session's.
  *
  * The ranking is a preference among things worth showing. The attribution below
- * it is a rule about what is worth showing at all, and it comes first: a port
- * held by a process in another worktree is not this session's dev server, however
- * strong the evidence that this session once mentioned it.
+ * it is a rule about what is worth showing at all, and it comes first. A port
+ * held by a process another session started, or running in another worktree, is
+ * not this session's dev server, however strong the evidence that this session
+ * once mentioned it.
+ *
+ * Attribution, strongest first:
+ *   1. The holder's environment names a session. It is ours iff that is us.
+ *   2. The holder names no session (started by hand). It is ours iff its cwd
+ *      is in our workspace.
+ *   3. Nothing on this side holds it (a Windows-side server). It is ours on
+ *      the transcript's word, if the transcript says we started it.
  *
  * @param {Array}  candidates  the values of the map from detect()
- * @param {object} titles      DevBrowser's port -> name map
- * @param {object} session     {workspace, worktreeName, projectName, lastTs}
+ * @param {object} titles      DevBrowser's port -> name map; names chips, decides nothing
+ * @param {object} session     {id, workspace, worktreeName, projectName, lastTs}
  */
 async function enrich(candidates, titles = {}, session = {}) {
-    const [live, held] = await Promise.all([
-        Promise.all(candidates.map(c => isListening(c.port))),
-        heldPorts(),
-    ]);
+    const held = await heldPorts();
+    noteHolders(held);
+    const me = session.id || null;
     const mine = workspaceOf(session.workspace);
     const sessionNames = [session.worktreeName, session.projectName]
         .filter(Boolean).map(s => s.toLowerCase());
 
+    // Servers this session's own processes are holding. The transcript never
+    // has to name them in a form the regexes above recognise.
+    if (me) {
+        const known = new Set(candidates.map(c => c.port));
+        const [elo, ehi] = ephemeralRange();
+        const extra = [];
+        for (const [port, h] of held) {
+            if (known.has(port) || h.protectedBy || !h.sessions.includes(me)) continue;
+            if (PORT_DENYLIST.has(port) || port < 1024 || (port >= elo && port <= ehi)) continue;
+            extra.push({ port, score: STARTED_IT, title: null, source: 'process', ts: null,
+                evidence: null, background: false, startedTs: null, killedTs: null });
+        }
+        candidates = candidates.concat(extra);
+    }
+
+    const live = await Promise.all(candidates.map(c => isListening(c.port)));
+
     let elsewhere = 0;
 
     const ranked = candidates.map((c, i) => {
-        const listening = live[i];
+        // Who actually holds it, according to the kernel. No entry means nothing
+        // on this side does: a Windows-side server, or a port that has just gone.
+        const holder = held.get(c.port) || null;
+        const sessions = holder ? holder.sessions : [];
+        const workspaces = holder ? holder.workspaces : [];
+        const protectedBy = holder ? holder.protectedBy : null;
+        // `ss` lists only listening sockets, so a holder is proof enough. The
+        // connect probe matters when nothing on this side holds the port, and
+        // for a server bound to an address that 127.0.0.1 does not reach.
+        const listening = live[i] || Boolean(holder);
+
         const dbTitle = titles[String(c.port)] || null;
         const title = dbTitle || c.title || null;
 
-        // Who actually holds it, according to the kernel. An empty list means
-        // nothing on this side does — a Windows-side server, or a port that has
-        // just gone — and there is nothing to attribute either way.
-        const holder = held.get(c.port) || null;
-        const workspaces = holder ? holder.workspaces : [];
-        const protectedBy = holder ? holder.protectedBy : null;
-        const ours = Boolean(mine) && !protectedBy && workspaces.includes(mine);
+        let ours;
+        if (me && sessions.length) ours = sessions.includes(me);
+        else ours = Boolean(mine) && workspaces.includes(mine);
+        ours = ours && !protectedBy;
         // Held, and not by us. This is the bleed, named.
-        const foreign = !protectedBy && workspaces.length > 0 && !ours;
+        const foreign = !protectedBy && (sessions.length > 0 || workspaces.length > 0) && !ours;
         if (foreign && listening) elsewhere++;
+
+        // A dead port some other session was last seen holding.
+        const last = !listening ? lastHolder.get(c.port) : null;
+        const heldElsewhere = Boolean(last && !(me && last.includes(me)));
 
         let rank = c.score;
         if (listening) rank += 120;
-        // Worth far more than any textual signal, because it is not a signal:
-        // it is the directory the process is running in.
+        // Worth far more than any textual signal, because it is not a signal. It
+        // is the session the process was started by.
         if (ours) rank += 200;
 
-        // DevBrowser's name for the port matching this session's worktree used
-        // to be the strongest association available. It is a tie-break now.
+        // Only kept for the UI, which uses it to decide whether opening a tab
+        // should also name it. It no longer affects the rank.
         const owned = Boolean(dbTitle && sessionNames.includes(dbTitle.toLowerCase()));
-        if (owned) rank += 30;
-        else if (dbTitle) rank += 20;
-
-        // …but a name belonging to somebody *else's* worktree is still worth
-        // something, as a refusal. Nothing holds a dead port, so cwd cannot
-        // speak for it, and the transcript is no help either: `pgrep -f "vite
-        // dev --port 5002"` reads as a start command to any regex looking for
-        // one, so a session that merely checked whether another worktree's
-        // server was up ends up with a chip named after it. DevBrowser's own
-        // name for the port is the one piece of evidence that disagrees.
-        const titledElsewhere = Boolean(dbTitle) && !owned && sessionNames.length > 0;
 
         // The agent's last action on this port was to kill it. Something
         // answering on the port overrules that — it is evidently back up.
@@ -340,32 +415,34 @@ async function enrich(candidates, titles = {}, session = {}) {
             evidence: c.evidence,
             // Attribution, for the UI and for anyone debugging why a chip is or
             // is not there.
+            session: sessions[0] || null,
             workspace: workspaces[0] || null,
             ours,
-            foreign,
+            foreign: foreign || heldElsewhere,
             protectedBy,
-            titledElsewhere,
-            // Held by nothing this side, so shown on this session's own word.
-            unverified: listening && workspaces.length === 0 && !protectedBy,
+            // Deprecated: DevBrowser titles no longer veto anything. Still sent,
+            // always false, so older clients see no missing field.
+            titledElsewhere: false,
+            // Nothing this side vouches for it either way, so it is shown on
+            // this session's own word.
+            unverified: listening && !ours && !foreign && !protectedBy,
             pids: holder ? holder.pids : [],
         };
     });
 
     ranked.sort((a, b) => b.rank - a.rank);
 
-    // A live chip means "your dev server, right now". It has to be ours by cwd,
-    // or — when nothing on this side holds the port — backed by this session
-    // having started it rather than merely named it.
+    // A live chip means "your dev server, right now". Either the kernel says it
+    // is ours, or nothing vouches for it either way and this session started it
+    // rather than just naming it.
     const liveOnes = ranked.filter(p => p.listening && !p.protectedBy
-        && (p.ours
-            || (p.workspace === null && !p.titledElsewhere && p.score >= STARTED_IT)));
+        && (p.ours || (p.unverified && p.score >= STARTED_IT)));
 
     // Dead ports are history worth keeping ("the server you started is gone"),
-    // but only for a session that did start one. A bare mention that is not even
-    // running is nothing at all.
+    // but only for a session that did start one. A bare mention of a port that
+    // is not even running is nothing.
     const deadOnes = ranked
-        .filter(p => !p.listening && !p.foreign && !p.protectedBy && !p.titledElsewhere
-            && p.score >= STARTED_IT)
+        .filter(p => !p.listening && !p.foreign && !p.protectedBy && p.score >= STARTED_IT)
         .slice(0, liveOnes.length ? 2 : 4);
 
     // Only the ports that survive get an HTTP probe; the ranking above may look
@@ -449,18 +526,44 @@ function cwdOf(pid) {
 }
 
 /**
- * Which workspace each listening port belongs to, from the kernel.
+ * Which session started a process, from the environment it was started with.
+ *
+ * `claude` sets CLAUDE_CODE_SESSION_ID for every command its agent runs, and a
+ * process keeps the environment it was exec'd with even after its parent exits,
+ * so this outlives the reparenting that defeats walking the process tree.
+ * TGXCODE_SESSION_ID comes first: terminal.js sets it on a session's own
+ * terminal pane, where the bridge's inherited CLAUDE_CODE_SESSION_ID (if the
+ * bridge was itself started from a session) would name the wrong session.
+ *
+ * Reading another user's environ is EACCES, and a pid can be gone by the time
+ * it is read. Both give null, and the caller falls back to the cwd.
+ */
+function sessionOf(pid) {
+    let environ;
+    try { environ = fs.readFileSync(`/proc/${pid}/environ`, 'utf8'); } catch { return null; }
+    let claude = null;
+    for (const kv of environ.split('\0')) {
+        if (kv.startsWith('TGXCODE_SESSION_ID=')) return kv.slice(19) || null;
+        if (kv.startsWith('CLAUDE_CODE_SESSION_ID=')) claude = kv.slice(23) || null;
+    }
+    return claude;
+}
+
+/**
+ * Which session and workspace each listening port belongs to, from the kernel.
  *
  * A port with no entry here is either not listening or held by something with
  * no Linux pid — the two are told apart by isListening(), and the caller has to
  * treat the second case differently because there is nothing to attribute.
  *
- * @returns {Promise<Map<number, {pids: number[], workspaces: string[]}>>}
+ * @returns {Promise<Map<number, {pids: number[], sessions: string[],
+ *     workspaces: string[], protectedBy: string|null}>>}
  */
 async function heldPorts() {
     const byPort = await ssListening();
     const out = new Map();
     for (const [port, pids] of byPort) {
+        const sessions = [...new Set(pids.map(sessionOf).filter(Boolean))];
         const workspaces = [...new Set(
             pids.map(cwdOf).filter(Boolean).map(workspaceOf).filter(Boolean))];
         // A bridge or a `claude` is never somebody's dev server, however
@@ -470,7 +573,7 @@ async function heldPorts() {
         // is being displayed in. protectedAs already refuses to signal these;
         // this stops them being presented as yours in the first place.
         const protectedBy = pids.map(protectedOf).find(Boolean) || null;
-        out.set(port, { pids, workspaces, protectedBy });
+        out.set(port, { pids, sessions, workspaces, protectedBy });
     }
     return out;
 }
@@ -499,6 +602,7 @@ async function owners(port) {
         return {
             pid,
             cwd: cwdOf(pid),
+            session: sessionOf(pid),
             command: clip(cmdline.split('\0').filter(Boolean).join(' '), 120),
             protectedAs: pid === process.pid || pid === process.ppid
                 ? 'this bridge' : protectedAs(cmdline),
@@ -557,4 +661,4 @@ async function stop(port, { graceMs = 2500, hardMs = 1500 } = {}) {
     };
 }
 
-module.exports = { detect, enrich, isListening, isHttp, owners, heldPorts, stop };
+module.exports = { detect, enrich, isListening, isHttp, owners, heldPorts, sessionOf, stop };

@@ -6188,10 +6188,10 @@ function renderChannels() {
         chips.push(el('span', {
             class: 'chan-note',
             title: n > 1
-                ? `${n} ports this session mentioned are held by processes in other `
-                    + 'workspaces, so they are not shown here.'
-                : 'A port this session mentioned is held by a process in another '
-                    + 'workspace, so it is not shown here.',
+                ? `${n} ports this session mentioned are held by processes another `
+                    + 'session started, so they are not shown here.'
+                : 'A port this session mentioned is held by a process another '
+                    + 'session started, so it is not shown here.',
         }, `${n} elsewhere`));
     }
     dom.channels.replaceChildren(...chips);
@@ -6204,12 +6204,13 @@ function renderChannels() {
 function channelChip(p) {
     const go = el('span', { class: 'go' }, p.listening ? 'Open' : 'Gone');
     // Why this chip is here, which is the question the strip used to be unable
-    // to answer. `ours` is the kernel's word — the process holding the port runs
-    // in this session's directory. `unverified` is nobody's word but this
+    // to answer. `ours` is the kernel's word: the process holding the port was
+    // started by this session (`session`), or, if no session started it, runs in
+    // this session's directory. `unverified` is nobody's word but this
     // session's own output: nothing on the Linux side holds the port, which on
     // this machine means a server on the Windows side of the mirror.
     const why = p.ours
-        ? `Running in ${p.workspace}`
+        ? (p.session ? 'Started by this session' : `Running in ${p.workspace}`)
         : (p.unverified ? 'No local process holds this port — shown because this '
             + 'session started it' : '');
     const chip = el('div', {
