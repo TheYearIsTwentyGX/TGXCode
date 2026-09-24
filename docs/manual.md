@@ -13,35 +13,41 @@ it, and how the pieces fit together. Start there if you have not already.
 | | |
 |---|---|
 | **Left rail** | Every session on disk, grouped by project. Worktrees fold under the checkout that owns them. Sessions a schedule started fold into a **Scheduled** section inside their project's card, shut until you open it — they are the same work in the same directory, but a fortnight of nightly reviews between you and the conversation you want is what the rail exists to prevent. Each is named after the schedule and the day it ran. A green dot means the transcript changed in the last 90 seconds — something is working. |
-| **Ordering** | By when *you* last wrote, not by last activity. Sorting on activity meant a busy agent kept bumping its session to the top and shuffling the rest out from under the cursor. The timestamp on each row is the one it sorts by. |
+| **Ordering** | Sessions within a project go by when *you* last wrote, not by last activity. Sorting on activity meant a busy agent kept bumping its session to the top and shuffling the rest out from under the cursor. The timestamp on each row is the one it sorts by. The project cards themselves are ordered by the button beside *Hide finished*: most recent and then held still (the default), most recent and moving up when something happens, alphabetical, or custom — drag a project's heading. See *The rail is sorted on load*. |
+| **Hide finished** | The filter at the head of the rail hides sessions whose pull requests are all merged or closed, with a count of how many it is hiding — the rail's standing question is what is still going on. Remembered per browser. |
 | **Pin / archive** | Hover a row for its two buttons, or use the ones beside the session title. Pinned sessions sit in their own group at the top, across projects. Archived ones collapse into a group at the bottom. |
 | **Conversation** | Your turns, Claude's replies with syntax-highlighted code, and one collapsible block per tool call. A run of tool calls between one message and the next folds into a single row — *16 tool calls · Bash ×6 · Read ×7* — which opens to the rows themselves; see *Folded tool calls*. Edits render as diffs, and output too large to inline loads on demand. |
 | **Plans & questions** | When Claude presents a plan or asks a multiple-choice question, the turn stops on a card at the foot of the transcript. A plan can be approved, approved with a note to bear in mind, or sent back with what to change; approving picks the mode the work continues in. Questions are answered by picking, with an *Other* row for none-of-the-above. |
 | **Subagents** | The first chip row under the title, one per subagent, with a light for how it is going and a line of what it is doing. Click to switch the pane over to it; `Esc` or the breadcrumb comes back. |
 | **Pull requests** | Every PR the session raised, on the line under the title, each with a glyph and a colour for where it has got to — draft, open, approved, changes requested, checks running or failing, conflicting, merged, closed. Hover for the status in words, the title, and how the checks stand. Merged and closed ones stay, dimmed, so the line is the session's whole PR history rather than only its newest. |
 | **Dev servers** | The second chip row. Green means the port is answering right now; click to show its page — in DevBrowser, starting it if it isn't running, or in the window's own browser preview, as Settings → DevBrowser says. See *The browser preview*. The button on the end shuts the server down — one click arms it, the next signals. |
-| **Task board** | `Ctrl+2`, or *Tasks* in the top bar with a count of how many sessions are blocked on you. Four columns over everything outstanding: **Needs you** (a permission, a plan or a question waiting, or a turn that failed), **Working**, **Suggested** — every open task from every session, not only the conversation you have open — and **Idle**. Archived sessions are not on it; that is what archiving is for. A task card starts the work or opens it to read; a session card opens the conversation, and the button that appears on hover archives it. Idle leads with what has moved today and *Show all* pages in the rest. Nothing on it reorders while you read — see *The rail is sorted on load*. |
-| **Dashboard** | The button in the top bar, with a count of how many places are unfinished. It lists, per project, every directory holding uncommitted changes and every pull request still open, with the sessions that worked there as links back into the conversation. |
+| **Task board** | `Ctrl+2`, or *Tasks* in the top bar (unless you moved or hid it — see *The bar*) with a count of how many sessions are blocked on you. Four columns over everything outstanding: **Needs you** (a permission, a plan or a question waiting, or a turn that failed), **Working**, **Suggested** — every open task from every session, not only the conversation you have open — and **Idle**. Archived sessions are not on it; that is what archiving is for. A task card starts the work or opens it to read; a session card opens the conversation, and the button that appears on hover archives it. Idle leads with what has moved today and *Show all* pages in the rest. Nothing on it reorders while you read — see *The rail is sorted on load*. |
+| **Dashboard** | `Ctrl+4`, or its button in the top bar, with a count of how many places are unfinished. It lists, per project, every directory holding uncommitted changes and every pull request still open, with the sessions that worked there as links back into the conversation. |
 | **Open folder** | The folder button by the title shows the session's working directory in the host's file manager — on Linux whatever `xdg-open` picks, and from WSL, Windows File Explorer through the `\\wsl.localhost` share. |
 | **Composer** | Sends to the session, resuming it in place — the same transcript a terminal would append to. |
 | **Snippets** | Messages you send often, behind the icon beside *Send* — and on the Start-a-session box too. Each one says where it lands (replace the box, add to the end, insert at the cursor), whether it sends itself, and which permission mode it sends under; `{{placeholders}}` in the text become a small form to fill in first. They sit in coloured groups, in an order you set by dragging or with the arrows, and any of them can be **pinned** to a button of its own. **LGTM** ships pinned: it sends a written instruction to put the change on a pull request if it is not on one already, run the project's checks, merge once they pass, and file anything it noticed along the way as a suggested task — and to stop and say so if something blocks it. One click, no confirmation over the top; the session still asks for what its permission mode makes it ask for, and a half-typed message in the box survives the press. **Right-click any snippet** — a row in the list or a pinned button — to use it once some other way than the way it is set up: the LGTM text in the box to edit rather than sent, or a snippet that normally just sits there sent as it is. It changes nothing about the snippet. Edit them under *Snippets* in Settings. |
-| **Send queue** | Write while an agent is working and the message waits, listed above the composer in send order. Each one can be expanded, reordered, pulled back for editing, or dropped, right up until its turn starts. `Shift+Tab` out of the composer to work through them without the mouse. |
+| **Send queue** | Write while an agent is working and the message waits, listed above the composer in send order. When the agent next starts a tool call it is handed to the running turn, which reads it after that step — the chip is marked ↳ and the header says *read after the current step*. A waiting message can be expanded, reordered, pulled back for editing, or dropped; a handed one can still be pulled back or dropped until the turn reads it, but no longer reordered. `Shift+Tab` out of the composer to work through them without the mouse. |
 | **Suggested** | The panel beside the transcript. An agent that notices work outside what it was asked to do files it there, with the prompt already written. Each one folds to its title, and the ⤢ on a row opens it at full width to read; *Start* runs it, *Edit first* opens it in the Start dialog, *Dismiss* puts it away. *Hide* collapses the whole panel to a strip. |
+| **Quota pill** | The 5-hour and weekly windows in the header, yellow near a limit and red at one. When a window gets worse it flashes a ring in that colour rather than toasting — `claude` reports a limit on every turn while it holds, and a toast per turn was a column of identical warnings. The *resets in* figure counts down every second, in seconds inside the last hour. The pill stays up with no reading, because its popover holds **Restart bridge**. |
+| **Claude version** | A yellow badge that appears only when Claude Code is behind — `Claude ↑ <version>` when a newer one is out on your update channel, or *N on old Claude* when sessions are still running a binary older than the one installed. Its popover links those sessions and has **Update now** (`claude update`, on this machine only); right-click it for *Update to …* or *Open changelog*. Running sessions keep their binary until their process ends. |
 | **Mentions** | `@` in the composer lists the other sessions running on this machine and inserts the one you pick as `@[name]` — the name an agent addresses it by. |
 
 Shortcuts: `Enter` send (or `Ctrl+Enter`, and *Settings → Keyboard* swaps the
 two), `Ctrl+1`–`Ctrl+8` the eight things the main pane can show, `Ctrl+F` find
 in the conversation with `F3`/`Shift+F3` for the next and previous match,
-`Ctrl+K` filter, `Ctrl+N` new session, `Esc` leave a subagent or close whatever
-is on top, `Ctrl+R` reload, `Ctrl+±` zoom, `F12` devtools.
+`Ctrl+K` filter, `Ctrl+N` new session, ``Ctrl+` `` the terminal, `Ctrl+/`
+snippets, `Ctrl+P` / `Ctrl+M` cycle the composer's permission mode and model
+(`Shift` for backwards), `Esc` leave a subagent or close whatever is on top,
+`Ctrl+R` reload, `Ctrl+±` zoom, `F12` devtools.
 
 Every one of those but the last three can be remapped — see *Settings*. The last
 three belong to the Electron shell rather than the page, which is why they
 cannot.
 
 In the send queue, `Shift+Tab` from the composer reaches the message you wrote
-last, and from there: `↑`/`↓` pick, `Alt+↑`/`Alt+↓` move it, `Space` show it in
-full, `Enter` take it back to the composer to reword, `Esc` drop it.
+last, and from there: `↑`/`↓` pick, `Alt+↑`/`Alt+↓` move it (not once it has
+been handed to the running turn), `Space` show it in full, `Enter` take it back to
+the composer to reword, `Esc` drop it.
 
 ### Subagents are sessions too
 
@@ -229,6 +235,14 @@ reachable by an agent.
   `bridge/mcp.js`. The list is the counterpart to the `@` menu above and answers
   the opposite question: not "who can receive a message right now" but "who could
   be *given* work", which is nearly everybody.
+- **Suggested tasks can be picked up by agents too.** `find_tasks` searches every
+  session's suggestions with what became of each — *open*, *started* (naming the
+  session doing it), *completed* or *dismissed*. `start_task` takes one up, either
+  as a new session of its own or claimed for the caller to run as a subagent;
+  `set_task_status` marks it completed (with a note — usually the PR), dismissed,
+  or open again; and `schedule_session` starts a session later, once or on a cron,
+  where it appears in the Schedules panel marked as made by that session. A
+  completed task reads *Done* with its note, the pull request made a link.
 - **The woken session resumes in plan mode.** It reads the message, checks the
   claim against the files it names, and comes back with a plan — so it lands in
   *needs you* on the board, with something to approve, rather than having edited a
@@ -273,19 +287,33 @@ ends. The CLI would accept several messages down its stdin at once — but the
 moment one is written it is gone: it cannot be reordered, taken back, or even
 looked at. That is why nothing was ever shown for it.
 
-So the bridge keeps them instead. One message is in flight at a time; the rest sit
-in `Runner.queue` until the turn that was holding them up lands, and only then is
-the next one handed over. What you get for that is a queue you can actually work
-with — expand a message, drag it earlier, pull it back into the box to reword, or
-drop it — because until it is written, it is still yours.
+So the bridge keeps them instead, in `Runner.queue`. What you get for that is a
+queue you can actually work with — expand a message, drag it earlier, pull it back
+into the box to reword, or drop it.
 
-The line the app will not cross is pretending. Once a message has gone to the
-process it leaves the list, because it is on its way to the transcript and no
-button here can recall it. Everything that stays visible is genuinely still
-cancellable:
+**It reaches the running turn at the next tool step.** A terminal folds a message
+typed mid-turn into that turn when the current tool round ends, so the model reads
+"stop, wrong file" beside the tool result rather than after every wrong file has
+been edited. The bridge does the same: when the agent starts a tool call, it writes
+every waiting message to the CLI's own queue (`_handOver` in `bridge/runner.js`).
+While the model is only writing text nothing is handed over — the message would just
+be the next turn, and keeping it here keeps it editable for longer. When the turn
+ends with messages still waiting, the next one starts a turn of its own.
+
+A handed message stays on the list, marked ↳, until the CLI says it started it.
+Until then it is still yours: dropping it or pulling it back asks the CLI to cancel
+it (`cancel_async_message`), and only removes the chip if the CLI agrees. If the
+turn got there first the route answers 409 and the chip stays — a chip that vanished
+for a message Claude then read anyway would be the one lie this list must not tell.
+It can no longer be reordered, because the CLI's queue has no order to change.
+
+The line the app will not cross is pretending. Once the turn has read a message it
+leaves the list, because it is in the transcript and no button here can recall it.
+Everything that stays visible is genuinely still cancellable:
 
 - **Reordering** is committed to the bridge on drop, and a message that flushed
   mid-drag keeps its place rather than dragging the rest of the queue with it.
+  Handed messages cannot be dragged.
 - **Stop** drops the queue whichever way it ends the turn, soft interrupt or hard
   kill, since stopping means stopping — but the messages were never sent anywhere,
   so they come back to the composer instead of vanishing.
@@ -343,7 +371,8 @@ Three things it will not do:
 - **End a turn to deliver one.** If the session is mid-turn and the message would
   change its permission mode, delivering would replace the process and kill the
   turn. It waits for idle instead. A message that would not change anything simply
-  joins the queue behind the turn, which is what you want.
+  joins the send queue, and reaches the running turn at its next tool step like
+  anything you typed.
 - **Send one twice.** If the bridge stops between taking a message and hearing
   back, the message is marked *failed* rather than retried — `claude` writes your
   message to the transcript the moment it is submitted, so it may well have
@@ -357,7 +386,8 @@ left at midnight is the agent that reads it.
 The bridge returns sessions ordered by when *you* last wrote in them, and it
 recomputes that whenever anything changes. The rail takes that order once, at
 load, and then holds it: a session taking a message does not climb past its
-neighbours, and it does not drag its project card to the top of the rail either.
+neighbours, and — under the default project order, *Most recent — static* — it
+does not drag its project card to the top of the rail either.
 Rows staying where you last saw them matters more than the list being perfectly
 ordered at every instant — the alternative moves things out from under the
 cursor while you are reading them. Reload to re-sort.
@@ -366,6 +396,17 @@ A session that appears *after* that first load is genuinely new rather than
 merely busy, so it goes to the top of its group, and a project with no sessions
 in it yet gets a new card at the top of the rail. Neither disturbs the position
 of anything already placed.
+
+**The project order is yours to change**, with the button beside *Hide finished*
+(`projects.sort`, and its other keys in *Settings → Projects*). *Most recent —
+dynamic* starts the same way but lets a card move to the top when something
+happens in it — by default a session starting or a message from you, and
+optionally any line written, a turn finishing or a pull request changing; the
+last few move cards constantly while agents run, which is why they are off.
+*Alphabetical* is by project name. *Custom* is the order you drag the project
+headings into, with a new project drawn at the top or the bottom as
+`projects.newAt` says. The rows *inside* a card keep the held-still rule in every
+mode.
 
 **The task board holds the same rule, per column.** It has the stronger version of
 the same problem: a board with every session on it, redrawn every three seconds
@@ -628,9 +669,12 @@ in the rail for the same reason — the groups enabled by default are all short.
 
 ### Settings
 
-**Settings** in the bar, or `Ctrl+8`. Every key in `~/.tgxcode/settings.json`
-with a control in front of it — the reading settings above, the live board,
-project colours, the spinner, the quota beacon, and the keyboard — plus two
+**Settings** in the bar (or the ⋯ menu, if you moved it there), or `Ctrl+8`.
+Every key in `~/.tgxcode/settings.json` with a control in front of it — the
+reading settings above, the live board, the browser preview and DevBrowser,
+project colours, the spinner, the quota beacon, the keyboard, the toolbar and
+Wispr Flow — alongside editors for Claude Code's own settings and memory and for
+the project's commands, plus two
 groups that are not in that file: **Notifications**, which is per-browser, and
 **Connect a phone**, which is a task rather than a setting. Both used to be
 buttons in the top bar.
@@ -658,21 +702,31 @@ set. It also means two windows editing different settings do not clobber each
 other, and a save reaches the other window over the live channel rather than
 waiting for a reload.
 
-**Two things on this page do have a Save button**, and they are the same
-exception rather than two: the JSON tab in *Claude Code*, and the text box in
-*Claude Code · Memory*. The rule above is about a **control** — a checkbox that
-reads "on" for a setting that is off is what it prevents. A document somebody is
-typing into is a draft by nature; there is no keystroke at which a paragraph is
-finished, and saving per keystroke would write broken JSON forty times a minute
-and half-sentences into a file every session reads. Both keep the rule's intent
-the other way round, by saying at all times whether what you are looking at is
-what is on disk.
+**Four things on this page do have a Save button.** Two are documents: the JSON
+tab in *Claude Code*, and the text box in *Claude Code · Memory*. The rule above
+is about a **control** — a checkbox that reads "on" for a setting that is off is
+what it prevents. A document somebody is typing into is a draft by nature; there
+is no keystroke at which a paragraph is finished, and saving per keystroke would
+write broken JSON forty times a minute and half-sentences into a file every
+session reads.
 
-**Three sections are yours alone** — the quota beacon, the keyboard and project
-colours — and a project file that sets one is ignored and says so. What directory
-this app starts `claude` in is not a repository's business, and a repository that
-could rebind your keys could make the window unusable with hand-editing a file as
-the only way back. Colours are yours for a different reason: the list is keyed by
+The other two are structured records whose half-typed state would *run*:
+**Hooks** in *Claude Code*, and **Project commands**. A hook with half a command
+in it is a hook that fires; a `commands.json` that does not parse contributes no
+buttons at all. So both are drafts with *Revert* and *Save* — Hooks' Save is
+*Review and save*, which first lists what will start and stop running — see
+*Hooks* and *Project commands* below. All four keep the rule's intent the other
+way round, by saying at all times whether what you are looking at is what is on
+disk.
+
+**Seven sections are yours alone** — the quota beacon, the keyboard, project
+colours, the toolbar, Wispr Flow, the browser preview and DevBrowser — and a
+project file that sets one is ignored and says so. What directory this app starts
+`claude` in is not a repository's business, and a repository that could rebind
+your keys could make the window unusable with hand-editing a file as the only way
+back. The toolbar is the same argument applied to your buttons, and Wispr Flow a
+sharper one: its transforms name chords the bridge presses on your desktop. The
+preview and DevBrowser decide which browser on this machine you look at pages in. Colours are yours for a different reason: the list is keyed by
 directory, so it names *other* projects, and a repository setting one would be a
 repository colouring its neighbours.
 
@@ -686,8 +740,10 @@ no tell until it had already run.
 So a project can be given a colour, and everything that names a project wears
 it: the rail's project cards, the drafts board's and task board's project
 columns, the dashboard's project cards, and — where it matters most — the dialog
-that starts a session or writes a schedule, which takes it on its heading, its
-top edge, the row you picked, and the screen behind it.
+that starts a session or writes a schedule, which takes it on its heading, the
+row you picked, and the screen behind it. That backdrop tint can be turned off or
+made stronger or fainter under *Settings → Projects* (`projects.backdropTint`,
+`projects.backdropStrength`).
 
 Two ways to set one, and they are the same picker:
 
@@ -719,8 +775,8 @@ Start on a suggested task — so only the guessing went.
 
 #### Keys
 
-The *Keyboard* group holds two settings that each swap a pair of keys, and then
-the shortcut table.
+The *Keyboard* group holds three settings — two that each swap a pair of keys,
+and the order the composer pickers cycle in — and then the shortcut table.
 
 **Contextual Ctrl+C in the terminal.** Off by default. On, `Ctrl+C` copies the
 selection and clears it when the terminal has one, and interrupts as always when
@@ -736,8 +792,18 @@ this app has always done — or the reverse, for when a message is three
 paragraphs and `Enter` sending it halfway through is a real cost.
 `Ctrl+Enter` sends under both.
 
-**The shortcut table** covers the eight views, the two rail shortcuts and the
-three find shortcuts. *Change* listens for a chord and swallows it, so binding
+**Picker cycle order.** `Ctrl+P` steps the composer's permission mode and `Ctrl+M`
+its model, with `Shift` walking backwards. By default they step in the order the
+dropdown lists them; *Alphabetical* sorts by the label you read instead, keeping
+the model's empty "inherit" first, since it is the absence of a choice. The
+dropdowns themselves keep their own order either way. The permission cycle skips
+`dontAsk` and `bypassPermissions` — a chord pressed by accident should not hand
+a session everything — though from either one it still steps out. The model is
+remembered per session.
+
+**The shortcut table** covers all nineteen: the eight views; *Start a session*,
+*Filter sessions* and the *Terminal* (``Ctrl+` ``); the composer's *Snippets*
+(`Ctrl+/`) and the four picker cycles; and the three find shortcuts. *Change* listens for a chord and swallows it, so binding
 `Ctrl+4` does not open the dashboard on the way past; *Unbind* leaves a command
 with no shortcut, which is a thing you can ask for and is not the same as
 resetting it; *Reset* puts it back to the default by removing the override
@@ -822,10 +888,23 @@ what is on disk now and leaves the decision to you.
 
 The JSON tab is not a fallback bolted on. It is what makes the rest honest —
 with it there, no key in those files is beyond reach, and it is the only thing
-in the app that can repair a settings file that no longer parses. It is also the
-one control on this page with a **Save** button: a document being typed into is
-a draft by nature, and the no-drafts rule exists to stop a *control* disagreeing
-with what is in force.
+in the app that can repair a settings file that no longer parses. It has a
+**Save** button: a document being typed into is a draft by nature, and the
+no-drafts rule exists to stop a *control* disagreeing with what is in force.
+
+**Hooks** are editable here too, and are the group's other draft. They were
+read-only at first, on the grounds that writing a shell command that runs on
+every tool call should not be as casual as ticking a box — and that is still the
+answer, so the editor keeps an explicit save. *Review and save* turns the footer
+into the list of what will start and stop running, `Event · matcher → command`,
+so the command is read once, deliberately, before it is armed; a hook that only
+moved is not reported as removed and re-added. The draft is seeded from the file
+you are editing, never the merged view — hooks from every scope all run, so a
+merged seed would make each inherited hook fire twice — and the other scopes'
+hooks are listed read-only underneath as *also run*. If the hooks change on disk
+while you edit, a banner offers *keep mine* or *take theirs*. The bridge checks
+only shape: a group with no hooks, a hook with no type, a command hook with no
+command. See `docs/plans/20-claude-config.md`.
 
 Two things stay out. `~/.claude.json` is sixty-six kilobytes whose largest key
 is a feature-flag cache — app state, not a settings file. And a project's
@@ -842,8 +921,10 @@ app for — from the window you sit in to watch those sessions run.
 A text box in a monospace font, a **Preview** that renders it, a byte count
 against the limit, and **Expand** for a full-height editor, because twenty-three
 kilobytes of markdown in a settings column is a keyhole. That editor closes by
-its ✕ or *Close* and nothing else, like every other dialog here — it is holding
-a file you are part-way through writing, which is the case that rule is for. Not a vendored code
+its ✕, *Close*, or a whole click outside it — press *and* release on the
+backdrop, so a text selection dragged past the edge does not count — and never by
+`Escape`, like every other dialog here: it is holding a file you are part-way
+through writing, which is the case that rule is for. Not a vendored code
 editor: a few hundred kilobytes of one, with no build step to prune it, to edit
 a markdown file is a poor trade, and the one thing it would have earned — seeing
 the headings as headings — is the Preview toggle.
@@ -874,6 +955,28 @@ delete the rest on the first save.
 `CLAUDE.local.md` and a project's `.claude/CLAUDE.md` are not here. Neither
 exists on this machine, and the route is shaped to take another scope when one
 does.
+
+#### Project commands
+
+The buttons a project declares in `.tgxcode/commands.json` (or the gitignored
+`commands.local.json` beside it) used to be editable only in a text editor, and
+a file that did not parse contributed *nothing* — a header with no buttons and
+the reason in a tooltip. This group edits either file, as a form or as JSON, and
+validates against the same rules the reader applies, so a mistake is named
+before it is saved rather than discovered as missing buttons. Like Hooks it is a
+draft: *Revert*, and *Save* — or *Create the file* when there is none yet. Each
+command folds to its name. See `docs/plans/21-command-editor.md`.
+
+#### Wispr Flow
+
+Only on a host where Wispr Flow can be reached (Windows, via WSL); elsewhere the
+group and the composer button are not drawn. Wispr's *transforms* rewrite the
+selected text in the focused window when you press the chord you gave each one.
+List them here — a name and the chord, written like `Win+Alt+2` — and the
+composer's Wispr button offers them: pick one, and the page selects the message
+box's text and the bridge presses that chord on your desktop. The bridge only
+ever presses a chord configured here, never one a request names, which is also
+why this section is user-only.
 
 #### The two groups that are not settings-file settings
 
@@ -1247,15 +1350,22 @@ blocks. It holds two lists, and **they are meant to disagree**:
   files edited in a directory that has since been removed, and it is right about a
   session that ran in a terminal months ago. The line counts are the ones the diffs
   in the conversation show — the patch Claude Code recorded with the call — not a
-  re-diff of a file that has moved on. Clicking a file jumps to the first edit that
-  touched it, which makes a long transcript navigable by file rather than by time.
+  re-diff of a file that has moved on.
 - **Working tree** is `git status` in the session's directory, so it is about the
   directory. It holds whatever anybody else changed, and it drops what this
   session changed and then reverted.
 
+**Clicking a row in either list opens its diff** in the app's own viewer
+(`GET /api/sessions/:id/diff`, drawn with diff2html). **Right-click** a row for the
+other two things: **Open** launches the file in the host's default program, and
+**Jump To** scrolls the conversation to the first edit that touched it — which is
+what a click used to do, and what makes a long transcript navigable by file rather
+than by time. A working-tree row offers Jump To only when this session edited that
+file.
+
 A session that delegates its work to `Task` subagents has no `Edit` calls of its
 own — those are in the agents' own transcripts — so those are folded in and marked
-*agent*; clicking one opens that agent's pane, since there is no call in this
+*agent*; Jump To on one opens that agent's pane, since there is no call in this
 conversation to jump to. What no list can hold is a `Bash` running `sed -i`:
 nothing in the transcript says which file it touched, which is one more reason the
 tree is shown beside the transcript's answer rather than instead of it.
@@ -1327,7 +1437,7 @@ document rather than a page in `web/`. There was a phone-shaped web page at `/m`
 while and it has been removed — it had drifted behind the API, and maintaining a
 second web UI to sit beside a native one bought nothing.
 
-**Getting there.** Press the phone button in the top bar for a pairing link, and paste
+**Getting there.** Open *Settings → Connect a phone* for a pairing link, and paste
 it into the app. It keeps the token and sends it as a header; the link is only how the
 token travels.
 
@@ -1420,7 +1530,10 @@ Four guards, arranged so that no single one has to hold:
 | `app/main.js` | Verifies `root` against its configured `bridgeDir` before adopting a bridge on 45888, and takes the port back if it does not match. |
 
 Taking the port back goes through `/api/shutdown`, never a kill, because that
-endpoint answers 409 while a turn is in flight. A squatter with work running is
+endpoint answers 409 while a turn is in flight. That is stricter than a restart,
+which only counts turns outside the session host (`atRisk`), and on purpose: a
+restart puts a new bridge in front of those turns straight away, while a window
+closing leaves nobody to answer an approval they raise. A squatter with work running is
 waited for — the window says what it is waiting for and how many turns — and the
 port is claimed the moment that work lands. A development instance is exempt from
 the check: it is pointed at a port deliberately and serves whichever checkout
@@ -1429,12 +1542,15 @@ started it, which is the entire point of having one.
 ### Picking up new code
 
 The bridge runs whatever was on disk when it started, so it keeps running old
-code until you restart it.
+code until you restart it. `npm run land` now does that for you when the merge it
+lands touched `bridge/` — see *Working on this with agents* below — so this is mostly for
+changes that reached the checkout some other way.
 
 **The quickest way is at the foot of the quota popover** — click the quota pill
 in the header, then *Restart bridge*: it fast-forwards the checkout this bridge
 is serving and restarts it, and the row says which checkout that is. When something
-is in the way it says so rather than doing half of it — turns in flight, a pull
+is in the way it says so rather than doing half of it — turns running outside the
+session host, a pull
 that would not fast-forward, uncommitted `bridge/` code — and offers to cancel,
 to hand the checkout to a session, or to go ahead anyway. That third choice is
 the confirmation the script asks for at a terminal, moved somewhere it can be

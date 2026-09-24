@@ -48,8 +48,8 @@ Tailscale is exposed, and only to your own devices.
 `tailscale serve --bg --https=443 http://127.0.0.1:45888` runs on the machine the
 bridge is on, proxying to the same loopback socket. Everything below that says
 "from PowerShell" is then just a shell, and `tailscale.exe` is `tailscale` —
-`/api/pairing` already looks on `PATH` before it looks on the Windows host, so the
-phone button needs no change.
+`/api/pairing` already looks on `PATH` before it looks on the Windows host, so
+*Settings → Connect a phone* needs no change.
 
 ### Setup
 
@@ -95,7 +95,7 @@ phone button needs no change.
 
 4. **Install Tailscale on the phone** and sign in to the same tailnet.
 
-5. **Pair the phone.** In the desktop window, press the phone button in the top bar.
+5. **Pair the phone.** In the desktop window, open *Settings → Connect a phone*.
    It asks the bridge what this machine is actually called — `/api/pairing` shells
    out to `tailscale` on `PATH`, or `tailscale.exe` on the Windows host when there
    is none — so the link comes prefilled and correct, and the note
@@ -275,7 +275,7 @@ To rebuild from nothing:
    systemctl status cloudflared
    ```
 
-6. **Pair the phone** exactly as with Tailscale — the phone button in the top bar,
+6. **Pair the phone** exactly as with Tailscale — *Settings → Connect a phone*,
    with `https://tgxcode.com` in *Reachable at*.
 
 ### Put something in front of it
@@ -331,8 +331,10 @@ time so it cannot be turned into a fan of processes.
 | `bypassPermissions`, `dontAsk` | Runs everything unasked. A deliberate choice at the desk, not one tap away on a device that might be in someone else's hand. Refused on send too, so a session cannot be escalated after the fact. |
 | `/api/terminals/*` | A raw pty. Everything else is mediated by the app; this is a shell, and a leaked token that reaches it has the machine. |
 | `/api/shutdown`, `/api/devservers/stop` | Acts on processes the person at the desk is using. |
+| `/api/restart`, **both methods** | Restarts the bridge, pulling the checkout first — the same processes, plus a `git pull` into the checkout the desk is running. The GET is refused too: it is the restart journal, which names the checkout and what a restart decided about it, and a phone has no use for it. |
+| `POST /api/claude-version/update` | Runs Claude Code's updater on this machine, replacing the binary every session here starts. `GET /api/claude-version` stays open: which version is installed is harmless, and a phone is a reasonable place to notice sessions running an old one. |
 | `POST /api/wispr/press` | Types on this machine's keyboard — a Wispr Flow chord, into whichever window has the focus. From anywhere else that is a keyboard nobody is at, and `GET /api/wispr` answers `available: false` to a remote caller so its page never draws the button. |
-| `/api/sessions/:id/reveal`, `POST /api/fs/open`, `/api/devbrowser/*` | Drives windows on the host's desktop — Windows' under WSL, the local one on a Linux machine; the refusal does not care which. Pointless from a phone either way — and `/api/fs/open` hands that desktop a path out of a transcript to launch, which is a thing to do while sitting in front of it or not at all. It is also the reason a remote page is served no `cs-host` meta tag: with nowhere for a path to point, the transcript draws it as text rather than as a link whose click would 403. |
+| `/api/sessions/:id/reveal`, `POST /api/fs/open`, `/api/devbrowser/*` | Drives windows on the host's desktop — Windows' under WSL, the local one on a Linux machine; the refusal does not care which. Pointless from a phone either way — and `/api/fs/open` hands that desktop a path out of a transcript to launch, which is a thing to do while sitting in front of it or not at all. It is also the reason a remote page is served no `tgx-host` meta tag: with nowhere for a path to point, the transcript draws it as text rather than as a link whose click would 403. |
 | `POST /api/sessions/:id/handoff` | Starts a turn in a session nobody is looking at, and wakes one that has no process at all. Reasonable for an agent on this machine that just changed something the other session depends on; not reasonable to reach in for from a phone, where a leaked token would mean every session on the machine spending tokens on words nobody typed. Note that a phone *may* still send to a session through `/send` — the difference is that a person is choosing the session and the words, one at a time. |
 | `POST /api/sessions/:id/open-file` | Opens a repository file in its default program — a window on this machine's desktop, which is the row above's reason. It has a second one the others do not: pointed at a `.ps1` or an `.exe` in the checkout, Windows will run it, and at a `.desktop` or an `.AppImage`, so will a Linux desktop. That is strictly less than `/api/terminals/*` already grants and is refused for the same reason. Its sibling `GET /api/sessions/:id/diff` is **not** refused — a diff is a read, its bytes already reach a phone inside the tool results it renders, and it is scoped to the session's own repository root rather than only to the allowed roots. A file extension denylist was once considered and rejected here, on the grounds that it would refuse opening the script you were editing; that was wrong about what the denylist costs, and the route now applies `isLaunchable` — see `docs/api.md`. It refuses nothing, it *reveals* the file in its folder instead of launching it, so the cost is a click. The remote refusal on this route stands regardless: it is about whose desktop the window appears on, not about what the file is. |
 | `POST /api/fs/mkdir` | Writes to the filesystem. `GET /api/fs` stays allowed, and the asymmetry is the point: reading the tree answers "where could a session start", and a phone may already start one. Creating a directory is reaching past the app into the machine. |

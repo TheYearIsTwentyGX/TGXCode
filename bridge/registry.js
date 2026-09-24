@@ -6,7 +6,7 @@
 //
 //   {"pid":311333,"sessionId":"abe2de97-…","cwd":"/home/dylan_hays/Other/claude-sessions",
 //    "startedAt":1786481652527,"procStart":"17877786","version":"2.1.227",
-//    "kind":"interactive","entrypoint":"claude-sessions","name":"claude-sessions-76"}
+//    "kind":"interactive","entrypoint":"tgxcode","name":"claude-sessions-76"}
 //
 // That answers the question the index was approximating with file mtime — a
 // session thinking for two minutes without writing looked dead, and one that

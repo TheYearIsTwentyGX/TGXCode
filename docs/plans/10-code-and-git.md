@@ -31,7 +31,7 @@
 >
 > §B's `"explorer"` option and its containment check are now both written.
 > `POST /api/sessions/:id/open-file` launches a repository file in its default
-> Windows program, and `sessionFilePath` in `bridge/server.js` is the containment
+> program on the host desktop (`explorer.exe` under WSL, `xdg-open` on Linux), and `sessionFilePath` in `bridge/server.js` is the containment
 > check — the shape §B asks for below, with a symlink re-check added and scoped to
 > the session's *repository root* rather than its `cwd`. It is session-addressed
 > rather than the global `POST /api/open-file` proposed below, deliberately: with
@@ -143,7 +143,9 @@ Guard rails:
 ## Acceptance
 
 - The panel lists every file a session edited, with per-file counts, and
-  clicking one jumps to the edit.
+  clicking one jumps to the edit. *(Superseded: a click now opens the file's diff,
+  and jumping to the edit moved to the row's right-click menu — see the status note
+  above.)*
 - Clicking `bridge/runner.js:147` in a tool summary opens that file at that line
   in the existing VS Code window.
 - A path outside the session's directory tree is refused by the bridge.

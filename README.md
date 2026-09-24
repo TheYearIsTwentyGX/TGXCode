@@ -43,16 +43,20 @@ and pass work along with enough context to resume it. An agent that notices
 something outside its brief files it as a suggested task with the prompt already
 written, and you start it with one click.
 
-**A queue that waits its turn.** Write while an agent is busy and the message
-holds until the turn ends. Reorder, edit or drop anything still pending.
+**A queue that reaches the turn at its next step.** Write while an agent is busy
+and the message waits above the composer; the next time the agent runs a tool, the
+running turn reads it after that step, the way a terminal does. Reorder, edit or
+drop anything still waiting — and drop or reword a handed message right up until
+the turn reads it.
 
 **What actually changed.** Per project: every directory with uncommitted work and
 every open pull request, linked back to the session that did it. PR status —
 draft, approved, checks failing, conflicting, merged — sits on the session title.
 
 **Dev servers, found not configured.** When a session brings a port up it appears
-as a chip; one click switches [DevBrowser](https://github.com/TheYearIsTwentyGX/dev-browser)
-to that tab, and one more shuts the server down.
+as a chip; one click shows its page — in the window's own browser preview, or in
+[DevBrowser](https://github.com/TheYearIsTwentyGX/dev-browser), as Settings says —
+and one more shuts the server down.
 
 **Sessions on a clock.** Nightly review of open pull requests, a catch-up on a
 branch's new commits — scheduled work that starts itself and lands in its own
@@ -183,7 +187,7 @@ one in `%APPDATA%\tgxcode\` (on Linux, `~/.config/tgxcode/`):
 
 | | |
 |---|---|
-| **Left rail** | Every session on disk, grouped by project, sorted by when *you* last wrote. A green dot means the transcript moved in the last 90 seconds. |
+| **Left rail** | Every session on disk, grouped by project, sorted by when *you* last wrote; the project cards can be ordered four ways, and *Hide finished* drops sessions whose PRs have all landed. A green dot means the transcript moved in the last 90 seconds. |
 | **Conversation** | Your turns and Claude's, with a collapsible block per tool call; edits render as diffs. |
 | **Task board** | `Ctrl+2` — four columns over everything outstanding. |
 | **Dashboard** | Uncommitted work and open pull requests, per project. |
@@ -191,7 +195,8 @@ one in `%APPDATA%\tgxcode\` (on Linux, `~/.config/tgxcode/`):
 | **Snippets** | Canned messages with `{{placeholders}}`, pinnable to buttons of their own. |
 
 Shortcuts: `Enter` send, `Ctrl+1`–`Ctrl+8` switch panes, `Ctrl+F` find, `Ctrl+K`
-filter, `Ctrl+N` new session, `Esc` back out. Nearly all are rebindable.
+filter, `Ctrl+N` new session, ``Ctrl+` `` terminal, `Ctrl+P` / `Ctrl+M` cycle
+permission mode and model, `Esc` back out. Nearly all are rebindable.
 
 **[`docs/manual.md`](docs/manual.md) is the real documentation** — the panes in
 full, the settings, permissions, notifications, scheduling, and the rules that
@@ -216,7 +221,8 @@ are easier to read than to infer.
 | `npm run dev:headless` | The same, bridge only. The fastest loop for UI work: edit `web/`, hit refresh. |
 | `npm run bridge` | The bridge in the foreground on 45888. |
 | `npm test` | Starts a bridge on a free port, runs everything, stops it. `npm test -- 45901` uses one you already have. |
-| `npm run restart` | Restart the everyday bridge to pick up new code. Refuses while a turn is in flight. |
+| `npm run restart` | Restart the everyday bridge to pick up new code. Turns in the session host survive it; refuses only while a turn is running outside the host. |
+| `npm run land` | From a worktree: merge its pull request, fast-forward the main checkout, and restart the everyday bridge if the merge touched `bridge/`. `-- --status` / `-- --dry-run` to look first. |
 | `npm run build` | Package the app — electron-builder on Linux, `install.ps1` from WSL. |
 
 Two rules worth knowing before you send a patch:
@@ -288,11 +294,22 @@ Two rules worth knowing before you send a patch:
 | `bridge/auth.js` | The access token, and telling local from remote apart |
 | `bridge/tailscale.js` | What this machine is reachable as, for pairing |
 | `bridge/launch.sh` | Finds a node, then starts the bridge |
+| `bridge/legacy-env.js` | Reads the pre-rename `CLAUDE_SESSIONS_<X>` variables as fallbacks for `TGXCODE_<X>` |
+| `bridge/legacy-dirs.js` | Moves `…/claude-sessions` state and cache directories to `…/tgxcode`, leaving a symlink behind |
+| `scripts/dev.js` | `npm run dev` — a development bridge and window that refuse the everyday port |
+| `scripts/start.js` | `npm start` — finds the built app and launches it, on WSL or Linux |
+| `scripts/build.js` | `npm run build` — `install.ps1` from WSL, electron-builder on Linux |
+| `scripts/win.js` | Helpers for reaching the Windows side from WSL |
+| `scripts/restart-bridge.sh` | `npm run restart` — restart the everyday bridge onto new code, and the nightly cron's entry point |
+| `scripts/land.sh` | `npm run land` — merge a worktree's PR, fast-forward the main checkout, restart the bridge if `bridge/` changed |
 | `scripts/import-spinner-verbs.js` | Rebuilds the verb catalogue from upstream |
 | `scripts/quota-statusline.py` | Claude Code's status line, harvesting the quota percentages on the way past |
 | `scripts/install-quota-statusline.js` | Points `~/.claude/settings.json` at that script, and refuses to clobber one you already have |
 | `web/` | The UI. No build step: edit a file and refresh |
 | `web/terminal.js` | The terminal pane — a shell, or a run's output |
+| `web/markdown.js` | The transcript's markdown renderer |
+| `web/highlight.js` | The syntax highlighter behind it |
+| `web/sw.js` | A service worker for one thing only: buttons on a notification. No `fetch` handler |
 | `web/preview.js` | The browser preview — a dev server's page in the window, with DevBrowser's toolbar |
 | `web/preview-picker.js` | The preview's element picker, copied from DevBrowser; runs inside the previewed page |
 | `web/keys.js` | Which chord means which command, and the one function that decides it |
