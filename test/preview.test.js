@@ -18,6 +18,8 @@ const path = require('path');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-sessions-preview-'));
 process.env.TGXCODE_HOST_KIND = 'linux';
 process.env.XDG_CONFIG_HOME = tmp;
+process.env.XDG_DATA_HOME = tmp;
+process.env.XDG_CACHE_HOME = tmp;
 
 const assert = require('assert');
 const http = require('http');
@@ -25,6 +27,7 @@ const net = require('net');
 
 const { isHttp } = require('../bridge/devservers.js');
 const devbrowser = require('../bridge/devbrowser.js');
+const { Run } = require('../bridge/runs.js');
 
 let pass = 0;
 const ok = (name) => { pass++; console.log(`  ok  ${name}`); };
@@ -75,6 +78,49 @@ const close = (server) => new Promise(r => server.close(() => r()));
     assert.deepStrictEqual(out, { ok: false, running: false, launched: false });
     assert.ok(Date.now() - t1 < 4000, 'launch: false still waited for a launch');
     ok('openTab with launch: false reports DevBrowser closed and starts nothing');
+
+    // A task's probe, against a server whose first page takes longer than the
+    // 1.5 s one try used to allow. The LTCDataPlus dev server takes about 4 s,
+    // and the old probe gave up on it for good, so its button never opened the
+    // preview. Driven through a Run-shaped stub: a real Run spawns a pty.
+    let served = 0;
+    const slow = http.createServer((req, res) => {
+        served++;
+        setTimeout(() => { res.statusCode = 200; res.end('late'); }, served === 1 ? 2500 : 0);
+    });
+    const slowPort = await listen(slow);
+    let changes = 0;
+    const run = { port: slowPort, state: 'listening', exitedAt: 0, http: undefined,
+        changed() { changes++; } };
+    Run.prototype.probeHttp.call(run);
+    const t2 = Date.now();
+    while (!run.http && Date.now() - t2 < 8000) await new Promise(r => setTimeout(r, 100));
+    assert.strictEqual(run.http, true, 'a slow first page was never taken as HTTP');
+    assert.strictEqual(changes, 1, 'the yes was announced other than once');
+    assert.strictEqual(run.timer, null, 'the probe left a timer behind after its yes');
+    await close(slow);
+    ok('a task whose first page is slow is still found to answer HTTP');
+
+    // A listener that never speaks: the probe keeps its timer while the run is
+    // up, and lets go of it once the run ends.
+    const held = [];
+    const mute2 = net.createServer((sock) => { sock.on('error', () => {}); held.push(sock); });
+    const mute2Port = await listen(mute2);
+    const quiet = { port: mute2Port, state: 'listening', exitedAt: 0, http: undefined,
+        changed() { throw new Error('a silent listener was announced'); } };
+    Run.prototype.probeHttp.call(quiet);
+    // Let the first try connect and sit there.
+    await new Promise(r => setTimeout(r, 300));
+    assert.ok(held.length >= 1, 'the probe never connected');
+    // End the run, then drop the connection the try is sitting on so it
+    // returns now rather than after its 10 s.
+    quiet.exitedAt = Date.now();
+    for (const sock of held) sock.destroy();
+    mute2.close();
+    await new Promise(r => setTimeout(r, 300));
+    assert.notStrictEqual(quiet.http, true, 'a silent listener was taken as HTTP');
+    assert.strictEqual(quiet.timer, null, 'the probe kept going after the run ended');
+    ok('a silent task stays unpreviewable, and its probe stops when the run ends');
 
     fs.rmSync(tmp, { recursive: true, force: true });
     console.log(`\n${pass} preview checks passed`);

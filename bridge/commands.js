@@ -199,6 +199,13 @@ function validate(raw, file, override = false) {
         out.devbrowser = raw.devbrowser;
     }
 
+    // Only means something beside a port, but a local file may add the port to
+    // a command the shared file declares without one, so that is not checked here.
+    if (raw.web !== undefined) {
+        if (typeof raw.web !== 'boolean') return bad('web must be true or false', 'web');
+        out.web = raw.web;
+    }
+
     if (raw.disabled !== undefined) {
         if (typeof raw.disabled !== 'boolean') return bad('disabled must be true or false', 'disabled');
         out.disabled = raw.disabled;
@@ -481,6 +488,7 @@ function load(dir) {
                 cwd: r.cwd,
                 port: c.port || null,
                 devbrowser: devbrowserTitle(c, context),
+                web: c.web === true && !!c.port,
                 from: c.from,
             };
         });
@@ -932,6 +940,7 @@ function prepare(dir, id, port) {
         env: r.env,
         port: raw.port || null,
         devbrowser: devbrowserTitle(raw, context),
+        web: raw.web === true && !!raw.port,
         workspace: read.workspace,
     };
 }
