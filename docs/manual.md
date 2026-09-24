@@ -25,7 +25,7 @@ it, and how the pieces fit together. Start there if you have not already.
 | **Open folder** | The folder button by the title shows the session's working directory in the host's file manager — on Linux whatever `xdg-open` picks, and from WSL, Windows File Explorer through the `\\wsl.localhost` share. |
 | **Composer** | Sends to the session, resuming it in place — the same transcript a terminal would append to. |
 | **Snippets** | Messages you send often, behind the icon beside *Send* — and on the Start-a-session box too. Each one says where it lands (replace the box, add to the end, insert at the cursor), whether it sends itself, and which permission mode it sends under; `{{placeholders}}` in the text become a small form to fill in first. They sit in coloured groups, in an order you set by dragging or with the arrows, and any of them can be **pinned** to a button of its own. **LGTM** ships pinned: it sends a written instruction to put the change on a pull request if it is not on one already, run the project's checks, merge once they pass, and file anything it noticed along the way as a suggested task — and to stop and say so if something blocks it. One click, no confirmation over the top; the session still asks for what its permission mode makes it ask for, and a half-typed message in the box survives the press. **Right-click any snippet** — a row in the list or a pinned button — to use it once some other way than the way it is set up: the LGTM text in the box to edit rather than sent, or a snippet that normally just sits there sent as it is. It changes nothing about the snippet. Edit them under *Snippets* in Settings. |
-| **Send queue** | Write while an agent is working and the message waits, listed above the composer in send order. Each one can be expanded, reordered, pulled back for editing, or dropped, right up until its turn starts. `Shift+Tab` out of the composer to work through them without the mouse. |
+| **Send queue** | Write while an agent is working and the message waits, listed above the composer in send order. When the agent next starts a tool call it is handed to the running turn, which reads it after that step — the chip is marked ↳ and the header says *read after the current step*. A waiting message can be expanded, reordered, pulled back for editing, or dropped; a handed one can still be pulled back or dropped until the turn reads it, but no longer reordered. `Shift+Tab` out of the composer to work through them without the mouse. |
 | **Suggested** | The panel beside the transcript. An agent that notices work outside what it was asked to do files it there, with the prompt already written. Each one folds to its title, and the ⤢ on a row opens it at full width to read; *Start* runs it, *Edit first* opens it in the Start dialog, *Dismiss* puts it away. *Hide* collapses the whole panel to a strip. |
 | **Mentions** | `@` in the composer lists the other sessions running on this machine and inserts the one you pick as `@[name]` — the name an agent addresses it by. |
 
@@ -40,8 +40,9 @@ three belong to the Electron shell rather than the page, which is why they
 cannot.
 
 In the send queue, `Shift+Tab` from the composer reaches the message you wrote
-last, and from there: `↑`/`↓` pick, `Alt+↑`/`Alt+↓` move it, `Space` show it in
-full, `Enter` take it back to the composer to reword, `Esc` drop it.
+last, and from there: `↑`/`↓` pick, `Alt+↑`/`Alt+↓` move it (not once it has
+been handed to the running turn), `Space` show it in full, `Enter` take it back to
+the composer to reword, `Esc` drop it.
 
 ### Subagents are sessions too
 
@@ -273,19 +274,33 @@ ends. The CLI would accept several messages down its stdin at once — but the
 moment one is written it is gone: it cannot be reordered, taken back, or even
 looked at. That is why nothing was ever shown for it.
 
-So the bridge keeps them instead. One message is in flight at a time; the rest sit
-in `Runner.queue` until the turn that was holding them up lands, and only then is
-the next one handed over. What you get for that is a queue you can actually work
-with — expand a message, drag it earlier, pull it back into the box to reword, or
-drop it — because until it is written, it is still yours.
+So the bridge keeps them instead, in `Runner.queue`. What you get for that is a
+queue you can actually work with — expand a message, drag it earlier, pull it back
+into the box to reword, or drop it.
 
-The line the app will not cross is pretending. Once a message has gone to the
-process it leaves the list, because it is on its way to the transcript and no
-button here can recall it. Everything that stays visible is genuinely still
-cancellable:
+**It reaches the running turn at the next tool step.** A terminal folds a message
+typed mid-turn into that turn when the current tool round ends, so the model reads
+"stop, wrong file" beside the tool result rather than after every wrong file has
+been edited. The bridge does the same: when the agent starts a tool call, it writes
+every waiting message to the CLI's own queue (`_handOver` in `bridge/runner.js`).
+While the model is only writing text nothing is handed over — the message would just
+be the next turn, and keeping it here keeps it editable for longer. When the turn
+ends with messages still waiting, the next one starts a turn of its own.
+
+A handed message stays on the list, marked ↳, until the CLI says it started it.
+Until then it is still yours: dropping it or pulling it back asks the CLI to cancel
+it (`cancel_async_message`), and only removes the chip if the CLI agrees. If the
+turn got there first the route answers 409 and the chip stays — a chip that vanished
+for a message Claude then read anyway would be the one lie this list must not tell.
+It can no longer be reordered, because the CLI's queue has no order to change.
+
+The line the app will not cross is pretending. Once the turn has read a message it
+leaves the list, because it is in the transcript and no button here can recall it.
+Everything that stays visible is genuinely still cancellable:
 
 - **Reordering** is committed to the bridge on drop, and a message that flushed
   mid-drag keeps its place rather than dragging the rest of the queue with it.
+  Handed messages cannot be dragged.
 - **Stop** drops the queue whichever way it ends the turn, soft interrupt or hard
   kill, since stopping means stopping — but the messages were never sent anywhere,
   so they come back to the composer instead of vanishing.
@@ -343,7 +358,8 @@ Three things it will not do:
 - **End a turn to deliver one.** If the session is mid-turn and the message would
   change its permission mode, delivering would replace the process and kill the
   turn. It waits for idle instead. A message that would not change anything simply
-  joins the queue behind the turn, which is what you want.
+  joins the send queue, and reaches the running turn at its next tool step like
+  anything you typed.
 - **Send one twice.** If the bridge stops between taking a message and hearing
   back, the message is marked *failed* rather than retried — `claude` writes your
   message to the transcript the moment it is submitted, so it may well have

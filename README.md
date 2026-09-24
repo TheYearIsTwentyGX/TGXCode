@@ -43,8 +43,11 @@ and pass work along with enough context to resume it. An agent that notices
 something outside its brief files it as a suggested task with the prompt already
 written, and you start it with one click.
 
-**A queue that waits its turn.** Write while an agent is busy and the message
-holds until the turn ends. Reorder, edit or drop anything still pending.
+**A queue that reaches the turn at its next step.** Write while an agent is busy
+and the message waits above the composer; the next time the agent runs a tool, the
+running turn reads it after that step, the way a terminal does. Reorder, edit or
+drop anything still waiting — and drop or reword a handed message right up until
+the turn reads it.
 
 **What actually changed.** Per project: every directory with uncommitted work and
 every open pull request, linked back to the session that did it. PR status —
