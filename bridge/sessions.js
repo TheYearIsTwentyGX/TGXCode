@@ -293,14 +293,16 @@ class SessionIndex extends EventEmitter {
             if (q) {
                 // The schedule's name too, or filtering on the name shown in
                 // the rail would fail to find the very rows showing it — the
-                // title is composed in `_summary` and is not on `meta`.
+                // title is composed in `_summary` and is not on `meta`. A name
+                // given in the rail is the same case.
                 const sched = this.schedules
                     ? this.schedules.forSession({
                         sessionId: m.sessionId, cwd: m.cwd, firstPrompt: m.firstPrompt,
                     })
                     : null;
                 const hay = [m.title, m.firstPrompt, m.lastPrompt, m.cwd,
-                    m.worktree && m.worktree.name, m.sessionId, sched && sched.title]
+                    m.worktree && m.worktree.name, m.sessionId, sched && sched.title,
+                    this.flags && this.flags.titles.get(m.sessionId)]
                     .filter(Boolean).join(' ').toLowerCase();
                 if (!hay.includes(q)) continue;
             }
@@ -352,7 +354,7 @@ class SessionIndex extends EventEmitter {
             if (inTemp(m)) continue;
             const flags = this.flags
                 ? this.flags.get(m.sessionId)
-                : { pinned: false, archived: false, test: false };
+                : { pinned: false, archived: false, test: false, title: null };
             if (!includeTest && flags.test) continue;
 
             const acted = this.suggestions ? this.suggestions.forSession(m.sessionId) : {};
@@ -361,7 +363,7 @@ class SessionIndex extends EventEmitter {
                 const state = decision ? decision.status : 'open';
                 if (wanted && !wanted.has(state)) continue;
                 if (words.length) {
-                    const hay = [s.title, s.prompt, s.why, m.title]
+                    const hay = [s.title, s.prompt, s.why, m.title, flags.title]
                         .filter(Boolean).join('\n').toLowerCase();
                     if (!words.every(w => hay.includes(w))) continue;
                 }
@@ -378,7 +380,7 @@ class SessionIndex extends EventEmitter {
                     // call. Not the whole summary: this list is read whole and
                     // the fields a board labels a row with are these.
                     session: {
-                        title: m.title,
+                        title: flags.title || m.title,
                         projectName: projectName(m.projectCwd || m.cwd),
                         projectCwd: m.projectCwd,
                         worktree: m.worktree,
@@ -400,7 +402,7 @@ class SessionIndex extends EventEmitter {
         const m = rec.meta;
         const flags = this.flags
             ? this.flags.get(m.sessionId)
-            : { pinned: false, archived: false, test: false };
+            : { pinned: false, archived: false, test: false, title: null };
         const live = this.registry ? this.registry.for(m.sessionId) : null;
         const schedule = this.schedules
             ? this.schedules.forSession({
@@ -413,7 +415,11 @@ class SessionIndex extends EventEmitter {
         const named = (m.titleSource === 'none' && live && live.name)
             ? { title: live.name, source: 'registry' }
             : { title: m.title, source: m.titleSource };
-        const fromSchedule = scheduledTitle(m, schedule);
+        // A name given in the rail beats all three, schedule included — the same
+        // rule scheduledTitle applies to `custom-title`, one level further out.
+        const fromSchedule = flags.title ? null : scheduledTitle(m, schedule);
+        const title = flags.title || fromSchedule || named.title;
+        const titleSource = flags.title ? 'user' : fromSchedule ? 'schedule' : named.source;
         return {
             sessionId: m.sessionId,
             pinned: flags.pinned,
@@ -422,8 +428,8 @@ class SessionIndex extends EventEmitter {
             // `registry` is the live process's own label, for a session whose
             // transcript produced no title at all — scanMeta falls back to
             // "Untitled session", and a name Claude Code derived beats that.
-            title: fromSchedule || named.title,
-            titleSource: fromSchedule ? 'schedule' : named.source,
+            title,
+            titleSource,
             // The schedule that started this session, if one did — `{id, title}`
             // with the title already resolved, since a schedule's own `title` is
             // nullable. Null for everything else, which is nearly everything.

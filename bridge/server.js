@@ -5322,10 +5322,20 @@ async function api(req, res, url, pathname, who) {
                 pinned: typeof body.pinned === 'boolean' ? body.pinned : undefined,
                 archived: typeof body.archived === 'boolean' ? body.archived : undefined,
                 test: typeof body.test === 'boolean' ? body.test : undefined,
+                // A string names the session and `null` or `""` clears the name.
+                title: (typeof body.title === 'string' || body.title === null) ? body.title : undefined,
             });
             const stopped = next.archived ? archiveStoppedRuns(summary) : 0;
             broadcast('sessions-changed', { at: Date.now() });
-            return send(res, 200, { ok: true, sessionId, ...next, runsStopped: stopped });
+            // `title` is the name the session now shows, not the flag: with the
+            // name cleared, that is whatever the transcript or schedule calls it,
+            // which the caller has no other cheap way to learn.
+            const after = index.summary(sessionId) || summary;
+            return send(res, 200, {
+                ok: true, sessionId, ...next,
+                title: after.title, titleSource: after.titleSource,
+                runsStopped: stopped,
+            });
         }
 
         // Just the decisions, for a client that has the conversation already and

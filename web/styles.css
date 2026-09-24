@@ -856,6 +856,25 @@ a:hover { text-decoration: underline; }
    line instead, which costs a glyph rather than a third of the row's width. */
 .strip:hover .strip-actions,
 .strip:focus-within .strip-actions { opacity: 1; }
+/* While a row is being renamed its buttons would sit over the end of the name. */
+.strip[data-renaming="true"] .strip-actions { display: none; }
+
+/* Sized to the title it stands in for, so the row does not change height. */
+.strip-rename {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    margin: -2px 0 0 -5px;
+    padding: 1px 4px;
+    font: inherit;
+    font-size: 13.5px;
+    line-height: 1.4;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--blue);
+    border-radius: var(--r-xs);
+    outline: none;
+}
 
 .strip-meta .tag-pin {
     display: grid;

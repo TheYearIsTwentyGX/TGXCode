@@ -350,7 +350,8 @@ is indistinguishable. **A title the user set by hand wins** — `custom-title` a
 `agent-name` are left alone, and the field is then absent from `titleSource` while
 `schedule` is still there. A client that wants the schedule's name without the date
 reads `schedule.title`; one that wants to group scheduled runs tests `schedule` for
-null and needs nothing else.
+null and needs nothing else. A name given through `POST /api/sessions/:id/flags`
+(`titleSource: "user"`) wins over the composed one too.
 
 **`later` is the count and the clock, not the messages.** `{pending, nextAt}` when this
 session has messages waiting to be delivered to it — the number still `pending`, and the
@@ -365,8 +366,9 @@ badge from this field and never refetches will show a message that has already g
 `web/app.js` draws its badge from the `later-changed` payload instead and leaves this
 field for clients that fetch sessions and nothing else.
 
-`titleSource` says where `title` came from: `custom-title`, `agent-name`, `ai-title`
-(Claude Code's own entries), `schedule` (composed as above), `prompt` (the first line
+`titleSource` says where `title` came from: `user` (a name set through
+`POST /api/sessions/:id/flags`, which beats everything below), `custom-title`,
+`agent-name`, `ai-title` (Claude Code's own entries), `schedule` (composed as above), `prompt` (the first line
 of the first user message, with a slash-command invocation unwrapped to
 `/name args` rather than left as its `<command-message>` tags), `registry` (the live
 process's label), or `none`.
@@ -3996,7 +3998,7 @@ nobody to ask.
 | `POST /api/sessions/:id/stop` | `{hard?}` | `{ok, how, dropped[]}` — see below |
 | `GET/DELETE /api/sessions/:id/queue[/:qid]` | | inspect, drop one, clear. Dropping one answers `{ok, removed, status}`, or `409` if the message has already been sent — including a `handed` one the running turn read first. Clearing answers `{ok, dropped[]}` with only what was actually dropped, so a handed message that lost that race stays out of the list |
 | `POST /api/sessions/:id/queue/reorder` | `{ids}` | |
-| `POST /api/sessions/:id/flags` | `{pinned?, archived?, test?}` | |
+| `POST /api/sessions/:id/flags` | `{pinned?, archived?, test?, title?}` | `title` is a string to name the session or `null`/`""` to clear the name; it is trimmed, whitespace runs become one space, and it is cut to 200 characters. The name is the bridge's own and is never written to the transcript, so Claude Code's `/resume` does not see it. Answers `{ok, sessionId, pinned, archived, test, title, titleSource, runsStopped}` — **`title` is the name the session now shows**, not the flag: after a clear it is the transcript's or schedule's title again. The name is set when `titleSource` is `"user"` |
 | `GET /api/sessions/:id/suggestions` | | `{sessionId, suggestions}` — the decisions alone. `GET /api/suggestions?session=` is the offers *and* the decisions |
 | `POST /api/sessions/:id/suggestions/:toolUseId` | `{status, startedId?, via?, note?, ifOpen?}` | `status` of `started`, `completed`, `dismissed`, or absent to undo. `completed` keeps the earlier `startedId`/`via` when none is sent. `note` is a string capped at 500 characters. `ifOpen: true` turns the write into a claim: it gets `409 {error, status, startedId}` when a decision is already recorded |
 | `POST /api/suggestions/:sessionId/:toolUseId/start` | `{permissionMode?, cwd?, extra?, …}` | start a task as its own session and mark it started, in one call — see above |
