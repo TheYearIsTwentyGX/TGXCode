@@ -28,6 +28,8 @@ it, and how the pieces fit together. Start there if you have not already.
 | **Snippets** | Messages you send often, behind the icon beside *Send* — and on the Start-a-session box too. Each one says where it lands (replace the box, add to the end, insert at the cursor), whether it sends itself, and which permission mode it sends under; `{{placeholders}}` in the text become a small form to fill in first. They sit in coloured groups, in an order you set by dragging or with the arrows, and any of them can be **pinned** to a button of its own. **LGTM** ships pinned: it sends a written instruction to put the change on a pull request if it is not on one already, run the project's checks, merge once they pass, and file anything it noticed along the way as a suggested task — and to stop and say so if something blocks it. One click, no confirmation over the top; the session still asks for what its permission mode makes it ask for, and a half-typed message in the box survives the press. **Right-click any snippet** — a row in the list or a pinned button — to use it once some other way than the way it is set up: the LGTM text in the box to edit rather than sent, or a snippet that normally just sits there sent as it is. It changes nothing about the snippet. Edit them under *Snippets* in Settings. |
 | **Send queue** | Write while an agent is working and the message waits, listed above the composer in send order. When the agent next starts a tool call it is handed to the running turn, which reads it after that step — the chip is marked ↳ and the header says *read after the current step*. A waiting message can be expanded, reordered, pulled back for editing, or dropped; a handed one can still be pulled back or dropped until the turn reads it, but no longer reordered. `Shift+Tab` out of the composer to work through them without the mouse. |
 | **Suggested** | The panel beside the transcript. An agent that notices work outside what it was asked to do files it there, with the prompt already written. Each one folds to its title, and the ⤢ on a row opens it at full width to read; *Start* runs it, *Edit first* opens it in the Start dialog, *Dismiss* puts it away. *Hide* collapses the whole panel to a strip. |
+| **Quota pill** | The 5-hour and weekly windows in the header, yellow near a limit and red at one. When a window gets worse it flashes a ring in that colour rather than toasting — `claude` reports a limit on every turn while it holds, and a toast per turn was a column of identical warnings. The *resets in* figure counts down every second, in seconds inside the last hour. The pill stays up with no reading, because its popover holds **Restart bridge**. |
+| **Claude version** | A yellow badge that appears only when Claude Code is behind — `Claude ↑ <version>` when a newer one is out on your update channel, or *N on old Claude* when sessions are still running a binary older than the one installed. Its popover links those sessions and has **Update now** (`claude update`, on this machine only); right-click it for *Update to …* or *Open changelog*. Running sessions keep their binary until their process ends. |
 | **Mentions** | `@` in the composer lists the other sessions running on this machine and inserts the one you pick as `@[name]` — the name an agent addresses it by. |
 
 Shortcuts: `Enter` send (or `Ctrl+Enter`, and *Settings → Keyboard* swaps the
@@ -738,8 +740,10 @@ no tell until it had already run.
 So a project can be given a colour, and everything that names a project wears
 it: the rail's project cards, the drafts board's and task board's project
 columns, the dashboard's project cards, and — where it matters most — the dialog
-that starts a session or writes a schedule, which takes it on its heading, its
-top edge, the row you picked, and the screen behind it.
+that starts a session or writes a schedule, which takes it on its heading, the
+row you picked, and the screen behind it. That backdrop tint can be turned off or
+made stronger or fainter under *Settings → Projects* (`projects.backdropTint`,
+`projects.backdropStrength`).
 
 Two ways to set one, and they are the same picker:
 

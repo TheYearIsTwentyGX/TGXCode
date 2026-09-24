@@ -294,11 +294,22 @@ Two rules worth knowing before you send a patch:
 | `bridge/auth.js` | The access token, and telling local from remote apart |
 | `bridge/tailscale.js` | What this machine is reachable as, for pairing |
 | `bridge/launch.sh` | Finds a node, then starts the bridge |
+| `bridge/legacy-env.js` | Reads the pre-rename `CLAUDE_SESSIONS_<X>` variables as fallbacks for `TGXCODE_<X>` |
+| `bridge/legacy-dirs.js` | Moves `…/claude-sessions` state and cache directories to `…/tgxcode`, leaving a symlink behind |
+| `scripts/dev.js` | `npm run dev` — a development bridge and window that refuse the everyday port |
+| `scripts/start.js` | `npm start` — finds the built app and launches it, on WSL or Linux |
+| `scripts/build.js` | `npm run build` — `install.ps1` from WSL, electron-builder on Linux |
+| `scripts/win.js` | Helpers for reaching the Windows side from WSL |
+| `scripts/restart-bridge.sh` | `npm run restart` — restart the everyday bridge onto new code, and the nightly cron's entry point |
+| `scripts/land.sh` | `npm run land` — merge a worktree's PR, fast-forward the main checkout, restart the bridge if `bridge/` changed |
 | `scripts/import-spinner-verbs.js` | Rebuilds the verb catalogue from upstream |
 | `scripts/quota-statusline.py` | Claude Code's status line, harvesting the quota percentages on the way past |
 | `scripts/install-quota-statusline.js` | Points `~/.claude/settings.json` at that script, and refuses to clobber one you already have |
 | `web/` | The UI. No build step: edit a file and refresh |
 | `web/terminal.js` | The terminal pane — a shell, or a run's output |
+| `web/markdown.js` | The transcript's markdown renderer |
+| `web/highlight.js` | The syntax highlighter behind it |
+| `web/sw.js` | A service worker for one thing only: buttons on a notification. No `fetch` handler |
 | `web/preview.js` | The browser preview — a dev server's page in the window, with DevBrowser's toolbar |
 | `web/preview-picker.js` | The preview's element picker, copied from DevBrowser; runs inside the previewed page |
 | `web/keys.js` | Which chord means which command, and the one function that decides it |
