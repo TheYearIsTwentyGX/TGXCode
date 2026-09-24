@@ -3532,6 +3532,12 @@ select.flash { animation: flash-select 1.3s var(--ease); }
 }
 .term-btn:hover { background: var(--s3); color: var(--text); }
 .term-btn[hidden] { display: none; }
+/* A task's page is the thing most people start one for, and the button that
+   shows it would otherwise look exactly like Hide. */
+#term-preview:not(:disabled) { color: var(--blue); }
+#term-preview:not(:disabled):hover { background: var(--s3); }
+.term-btn:disabled { opacity: .5; cursor: default; }
+.term-btn:disabled:hover { background: none; color: var(--text-3); }
 
 /* The shell, then a run per declared command that has been started. Absent
    entirely until there is a run, so a project that declares nothing sees the

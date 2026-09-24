@@ -756,7 +756,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'checklist-count', 'checklist-collapse', 'checklist-body', 'btn-checklist',
     'conv-main', 'conv-body',
     'term-pane', 'term-grip', 'term-dir', 'term-moved', 'term-body', 'term-restart', 'term-close',
-    'term-tabs', 'term-stop', 'cmds',
+    'term-tabs', 'term-stop', 'term-preview', 'cmds',
     'tasks', 'tasks-strip', 'tasks-strip-count', 'tasks-open', 'tasks-count',
     'tasks-collapse', 'tasks-list',
     'task-scrim', 'task-dlg-title', 'task-dlg-why', 'task-dlg-prompt', 'task-dlg-cwd',
@@ -20890,6 +20890,11 @@ function commandButton(cmd) {
     const bits = [`${cmd.command}`, `in ${cmd.cwd}`];
     if (run && run.port) bits.push(up ? `on port ${run.port}` : `port ${run.port}`);
     if (failed) bits.push(`exited ${run.exit.signal || run.exit.code}`);
+    // What a click does, since it depends on the run: start it, show its log,
+    // or show its page. See clickCommand().
+    bits.push(runPreviewable(run) ? 'Click to show its page'
+        : run && run.state !== 'exited' ? 'Click to show its output'
+        : 'Click to start');
 
     return el('button', {
         class: `cmd-btn${up ? ' on' : ''}${failed ? ' failed' : ''}`
@@ -20972,8 +20977,10 @@ async function clickCommand(cmd) {
  * wait for a probe: the preview goes up at once and the page loads in front of
  * you, rather than the button only showing the log.
  */
-const runPreviewable = (run) => !!run && run.state === 'listening' && !!run.port
-    && (run.http === true || run.web === true);
+function runPreviewable(run) {
+    return !!run && run.state === 'listening' && !!run.port
+        && (run.http === true || run.web === true);
+}
 
 /** A task's page, by the same rule as any other port. */
 function openRunPreview(run) {
@@ -21095,6 +21102,7 @@ function paintTermHead(info) {
 
     dom.termRestart.hidden = false;
     dom.termStop.hidden = true;
+    dom.termPreview.hidden = true;
 
     const shellCwd = (info && info.cwd) || '';
     dom.termDir.textContent = homely(shellCwd);
@@ -21125,6 +21133,7 @@ function paintRunHead() {
         dom.termDir.textContent = '';
         dom.termMoved.hidden = true;
         dom.termStop.hidden = true;
+        dom.termPreview.hidden = true;
         return;
     }
 
@@ -21156,6 +21165,33 @@ function paintRunHead() {
     dom.termStop.title = live
         ? `Stop ${run.label} — SIGHUP to the whole job, then SIGKILL`
         : `Run ${run.command} again`;
+    paintRunPreview(run, live);
+}
+
+/**
+ * The run's Preview button, the one control that says out loud that a task's
+ * page can be shown. Clicking the task's own header button does the same once
+ * it is up, but nothing about a button that started something says so.
+ *
+ * Up and answering: it opens the page. Still coming up: it waits, and a click
+ * arms the same one-shot a click on a starting task does, so the page opens
+ * once the server answers. Never armed toward DevBrowser, for the reason
+ * applyRunChange() gives, so in that mode it just waits.
+ */
+function paintRunPreview(run, live) {
+    const b = dom.termPreview;
+    b.hidden = !live || !run.port;
+    if (b.hidden) return;
+    const ready = runPreviewable(run);
+    const toDevBrowser = opensInDevBrowser();
+    const armed = !toDevBrowser && state.previewWhenUp === run.id;
+    b.disabled = !ready && (armed || toDevBrowser);
+    b.textContent = toDevBrowser ? 'Open in DevBrowser'
+        : !ready && armed ? 'Preview when up' : 'Preview';
+    b.title = ready ? openTitle({ port: run.port, title: run.label, http: true })
+        : armed ? `Opens by itself once :${run.port} answers`
+        : opensInDevBrowser() ? `Waiting for :${run.port} to answer`
+        : `:${run.port} has not answered yet — open its page once it does`;
 }
 
 /**
@@ -21239,6 +21275,7 @@ function syncTerm() {
     } else {
         dom.termRestart.hidden = false;
         dom.termStop.hidden = true;
+        dom.termPreview.hidden = true;
         dom.termDir.textContent = homely(state.current.cwd);
         dom.termDir.title = state.current.cwd || '';
         dom.termMoved.hidden = true;
@@ -22787,6 +22824,13 @@ dom.termStop.addEventListener('click', async () => {
     // slot, and the bridge has already dropped the log with it.
     state.runs.delete(run.id);
     clickCommand(cmd);
+});
+dom.termPreview.addEventListener('click', () => {
+    const run = state.runs.get(state.termTab);
+    if (!run) return;
+    if (runPreviewable(run)) { openRunPreview(run); return; }
+    state.previewWhenUp = run.id;
+    paintRunHead();
 });
 dom.termGrip.addEventListener('pointerdown', startTermDrag);
 // Keyboard equivalent of the drag, so the pane is not mouse-only.
