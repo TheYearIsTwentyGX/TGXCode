@@ -3689,7 +3689,7 @@ function jumpFromDiff() {
  * opens and shuts on the same click. Kept in one place because the listener and the
  * handlers are 18,000 lines apart and the failure looks like the handler not firing.
  */
-const CTX_OWNERS = '.ch-row, .turn-tick, .snip-row, .btn-pin-snip';
+const CTX_OWNERS = '.ch-row, .turn-tick, .snip-row, .btn-pin-snip, #cv-pill';
 
 /**
  * Open a menu at the pointer.
@@ -17670,6 +17670,37 @@ function cvSettingsNote() {
 dom.cvPill.addEventListener('click', (e) => {
     e.stopPropagation();
     showCv(dom.cvMenu.hidden);
+});
+/**
+ * The release notes for a version. GitHub anchors each CHANGELOG.md heading by
+ * its text with the dots dropped, so 2.1.281 is #21281.
+ */
+const cvChangelogUrl = (v) =>
+    `https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md#${String(v).replace(/\./g, '')}`;
+
+// The two things the pill is for, without opening the panel first. The
+// changelog points at the version on offer when there is one, and at the
+// installed one when the pill is only up for sessions on an older binary.
+dom.cvPill.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    showCv(false);
+    const cv = state.cv || {};
+    const busy = state.cvBusy || cv.updating;
+    const ver = cv.behind ? cv.latest : cv.installed;
+    openContextMenu(e, [
+        {
+            label: busy ? 'Updating…' : cv.latest ? `Update to ${cv.latest}` : 'Update now',
+            onClick: updateClaudeNow,
+            disabled: busy ? 'An update is already running'
+                : !cv.behind && 'Already on the newest version',
+        },
+        {
+            label: ver ? `Open changelog (${ver})` : 'Open changelog',
+            // Electron's window-open handler hands this to the default browser.
+            onClick: () => window.open(cvChangelogUrl(ver), '_blank', 'noreferrer'),
+            disabled: !ver && 'No version known yet',
+        },
+    ]);
 });
 dom.cvCheck.addEventListener('click', async (e) => {
     e.stopPropagation();
