@@ -290,9 +290,12 @@ function askShutdown(pid) {
  * Take the everyday port back from a bridge serving the wrong checkout.
  *
  * Only ever through /api/shutdown, never a kill: that endpoint answers 409 while
- * a turn is in flight, and killing a bridge kills its turns — measured, and the
- * reason this app has a separate development port at all. So a squatter with work
- * running is waited for rather than shot, with the reason on screen. Three minutes
+ * a turn is in flight. A turn running in the session host would survive the
+ * bridge going (bridge/host.js), but the shutdown gate is deliberately the
+ * stricter `busy` rather than `atRisk` — a window closing means nobody is left to
+ * answer an approval — and a turn started with no host still dies with its bridge.
+ * So a squatter with work running is waited for rather than shot, with the reason
+ * on screen. Three minutes
  * is long enough for an ordinary turn to land and short enough that a stuck one
  * does not leave a window saying nothing.
  */

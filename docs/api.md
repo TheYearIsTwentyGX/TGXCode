@@ -125,10 +125,10 @@ was `/m` until the phone web view was removed, so do not key on it.
 ### Local browsers
 
 A page fetched over loopback with no `Origin` is served with the cookie set and the
-token injected as `<meta name="cs-token" content="…">`. That is why nothing in
+token injected as `<meta name="tgx-token" content="…">`. That is why nothing in
 `web/` sends an explicit credential.
 
-A local page is also served `<meta name="cs-host" content="…">`: URI-encoded JSON
+A local page is also served `<meta name="tgx-host" content="…">`: URI-encoded JSON
 `{distro: string, home: string}` — the name of the WSL distribution the bridge runs
 in, and its home directory. It is there so a client can build the
 `\\wsl.localhost\<distro>\home\…` form of a Linux path for a link's `href` and hover
@@ -155,13 +155,13 @@ same, and four routes differ because of it:
 | Opens a file with | `explorer.exe` | `xdg-open` |
 | Reveals a folder with | `explorer.exe` | `xdg-open`, or `org.freedesktop.FileManager1` to select a file |
 | Path handed over | `wslpath -w` output | the Linux path unchanged |
-| `cs-host` meta tag | served | not served |
+| `tgx-host` meta tag | served | not served |
 | Unregistered file type | `200`, Windows shows its own dialog | `502`, nothing opened |
 
 **There is no route that reports which host this is**, and adding one has been
-deliberately avoided: `cs-host` already distinguishes them for the only purpose a
+deliberately avoided: `tgx-host` already distinguishes them for the only purpose a
 client has — whether to draw a Windows path — and a second signal would be one more
-thing to keep true. A client should branch on the presence of `cs-host`, or better,
+thing to keep true. A client should branch on the presence of `tgx-host`, or better,
 on nothing at all: every field above is well-defined on both hosts, and a client that
 renders `path`/`winPath` as opaque text is correct on either.
 
@@ -252,7 +252,7 @@ reaching past the app into the machine.
 
 `GET /api/sessions/:id/diff` is the same shape of asymmetry one route further
 down: `POST /api/sessions/:id/open-file` beside it is refused and the diff is not,
-because launching a Windows program is reaching past the app into the machine and
+because launching a program on the host desktop is reaching past the app into the machine and
 reading a diff is not. It is repository-scoped rather than only roots-scoped, which
 is what makes that safe to say.
 
@@ -997,7 +997,7 @@ without touching the real file; no field changes because of it.
 
 A value that is not what the key allows is dropped and reported in `problems`
 rather than taken at face value; the default stands. Without `?cwd=` you get the
-user-level answer, which is also what every page is served in a `cs-prefs`
+user-level answer, which is also what every page is served in a `tgx-prefs`
 `<meta>` tag (minus `sources` and `problems`).
 
 **Seven sections may only be set in the user's own file**: `quota`, `keyboard`,
@@ -1256,8 +1256,8 @@ the composer — a `<textarea>` — has the focus, so binding a bare letter woul
 make that letter untypeable with hand-editing the settings file as the only way
 back. `Shift+F3` is legal; `Shift+K` is not.
 
-The same catalogue is in a `cs-keymap` `<meta>` tag on every page, percent-encoded
-like `cs-prefs`, because the first key somebody presses can land before a fetch
+The same catalogue is in a `tgx-keymap` `<meta>` tag on every page, percent-encoded
+like `tgx-prefs`, because the first key somebody presses can land before a fetch
 could answer.
 
 ### `GET /api/spinner/groups?cwd=<path>&verbs=1`
@@ -2611,7 +2611,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `handoff` | `{at, sessionId, from, count}` — another session handed this one work, and it was resumed to deal with it. Same shape and same reasoning as above; watched in the transcript rather than reported by the route, so it fires when the message *arrived* rather than when it was queued |
 | `suggestion-changed` | `{at, sessionId, toolUseId}` — a suggested follow-up was started, completed, dismissed, or undone, possibly in another window |
 | `session-deleted` | `{sessionId, title}` |
-| `prefs` | the **user-level** settings, in the same shape as the `cs-prefs` `<meta>` tag: `{version, transcript, live, projects, quota, spinner, keyboard, toolbar, wispr}`, with no `sources` or `problems`. Fired on every `PUT /api/prefs` including your own, so a second window does not sit on a stale copy — two are routinely open here. A project's answer is deliberately not sent: it is the open session's business and arrives with `GET /api/sessions/:id` |
+| `prefs` | the **user-level** settings, in the same shape as the `tgx-prefs` `<meta>` tag: `{version, transcript, live, projects, quota, spinner, keyboard, toolbar, wispr}`, with no `sources` or `problems`. Fired on every `PUT /api/prefs` including your own, so a second window does not sit on a stale copy — two are routinely open here. A project's answer is deliberately not sent: it is the open session's business and arrives with `GET /api/sessions/:id` |
 | `claude-config` | `{at: number, scope: 'user'\|'project'\|'project-local'\|'managed', file: string}` — the *fact* that one of Claude Code's settings files changed, and deliberately **not** its content. Unlike `prefs` there is no `<meta>` copy for a page to keep in sync and nothing in this app behaves differently because of those files, so the event is a nudge to re-read; pushing the contents of a file whose route is local-only down every open channel would be a poor trade for saving a fetch. Fired on every successful `PUT /api/claude-config`, including your own — **and on a change this bridge did not make**: `claude` writes these files itself, so `theme` or `editorMode` from `/config`, `enabledPlugins` from a plugin toggle, and a rule appended to `settings.local.json` when somebody approves a permission mid-turn all arrive here too. `scope` may then be `managed`, which no `PUT` can produce. **Two caveats a client has to hold.** It is best-effort: the bridge watches directories with `fs.watch`, which throws on some filesystems and silently does nothing on others, so a change can go unannounced — keep treating `409 {code:'stale'}` from `PUT /api/claude-config` as the guarantee, and this only as the convenience that usually saves you from meeting it. And a project's two files are watched only once `GET /api/claude-config?cwd=<dir>` has been called for that directory, only for a small number of directories at a time (least-recently-read dropped first), and not after ten minutes without another read of it; the user file and the managed file are watched throughout. So poll or re-`GET` if you need certainty about a directory you have not asked about |
 | `claude-docs` | `{at, scope, file}` — the same trade for a `CLAUDE.md`: the fact one was written, never its contents. `scope` is `"user"` or `"project"`. Fired on every successful `PUT /api/claude-docs`, including your own. **A client holding an unsaved draft must not reload on this** — show a conflict and keep what the person typed; the whole draft here is somebody's prose rather than one key |
 | `notification` | a whole notification row, just filed — the same shape `GET /api/notifications` returns, `read` included — plus `unread`, the badge count after this row. So an open history view need not refetch, and need not guess whether the new row counts |
@@ -3933,9 +3933,9 @@ the path as handed to the file manager:
 | WSL | the `\\wsl.localhost\…` or `C:\…` form `wslpath -w` produced |
 | Linux | the resolved Linux path — the same string as `path` |
 
-Under WSL it is the authoritative translation, and the `cs-host` meta tag exists only
+Under WSL it is the authoritative translation, and the `tgx-host` meta tag exists only
 so a client can *display* an approximation of it before asking. On a Linux host there
-is no translation to be authoritative about, `cs-host` is not served at all, and a
+is no translation to be authoritative about, `tgx-host` is not served at all, and a
 client should render the path as it stands. It is `null` only when the opener was
 never reached.
 
@@ -4109,8 +4109,9 @@ should not stop a server starting. So `port` in the record is stable across a
 stop and start, and a client should not assume the bottom of the declared range.
 See `bridge/ports.js`.
 
-**Runs die with their bridge**, like terminals and unlike nothing else here. The
-child's stdout is a pipe whose only reader is the bridge, so one that outlived it
+**Runs die with their bridge**, like terminals — and unlike `claude` sessions,
+which since the session host (`bridge/host.js`) outlive a bridge restart and are
+adopted by the next one. The child's stdout is a pipe whose only reader is the bridge, so one that outlived it
 would fill the buffer, block on `write()` and go on holding its port while hung.
 A client should say so rather than imply otherwise.
 
@@ -4312,7 +4313,7 @@ transcript, but an exiting `claude` may then write its bookkeeping (`last-prompt
 chunk. Anything keyed on first sight, or handling only the first of those two shapes,
 will show a permanently spinning tool. See §*A tool call resolves in one of two ways*.
 
-**`runner` on a session summary is not the `runner-status` payload.** Four fields, and
+**`runner` on a session summary is not the `runner-status` payload.** Five fields, and
 `pendingPermission` is not among them. See §`GET /api/sessions`.
 
 **A bridge restart does not end a turn.** When `/api/health` reports a `sessionHost`,

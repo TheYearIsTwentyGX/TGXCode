@@ -19,9 +19,10 @@ These come out of how the app already works, and every plan respects them.
    as far as this app is concerned. State the app owns goes in
    `~/.local/share/tgxcode/`.
 3. **The bridge does the work; the shell is a window.** Anything touching the
-   filesystem, `claude`, or the network belongs in `bridge/`. Anything needing
-   Windows — tray, notifications, Explorer, protocol handlers — belongs in
-   `app/main.js`. Keeping that line clean is why `bridge/` and `web/` need no
+   filesystem, `claude`, or the network belongs in `bridge/`. Anything that is
+   the shell's own — tray, notifications, protocol handlers, the window — belongs
+   in `app/main.js`; revealing a file on the host desktop is the bridge's, through
+   `bridge/explorer.js`, on WSL and Linux alike. Keeping that line clean is why `bridge/` and `web/` need no
    rebuild.
 
 ## Tier 1 — felt daily
@@ -47,7 +48,7 @@ These come out of how the app already works, and every plan respects them.
 
 | | Plan | Why |
 |---|---|---|
-| 10 | [Code and git](docs/plans/10-code-and-git.md) | §A is **built**: the header's Changed drawer, two lists that are meant to disagree — `bridge/changes.js` derives what the session edited from its transcript *and* its subagents', `bridge/git.js` (the extraction this row used to recommend) answers for the working tree, and clicking a file jumps to the edit that made it. §B (open in editor) and §C (worktree creation) still stand. |
+| 10 | [Code and git](docs/plans/10-code-and-git.md) | §A is **built**: the header's Changed drawer, two lists that are meant to disagree — `bridge/changes.js` derives what the session edited from its transcript *and* its subagents', `bridge/git.js` (the extraction this row used to recommend) answers for the working tree, and clicking a file opens its diff in the app (right-click → *Jump To* for the edit that made it). §B (open in editor) and §C (worktree creation) still stand. |
 | 11 | [Labels and session info](docs/plans/11-labels-and-session-info.md) | Auto-titles are often bad, and the `system/init` message knows exactly which config produced a session's behaviour. |
 | 12 | [Export](docs/plans/12-export.md) | Sharing what an agent did without screenshotting it. |
 | 13 | [Dev servers](docs/plans/13-dev-servers.md) | We detect ports but can't act on them. §A's start half and §B are **superseded by 17** — a declared command beats one scraped from Bash traffic. §C and §D still stand. Attribution is no longer guessed: a chip is shown only when the kernel says the port's process runs in this session's workspace. |
@@ -136,4 +137,4 @@ rebuild it, build a view over it.**
   over `pool.ensure` and `claude --resume`, which is machinery this app already
   drove for every message typed into a stopped session. Same need, no socket, and
   the recipient is resumed in plan mode so what comes back is a plan rather than an
-  edit. See README §And they can hand each other work.
+  edit. See `docs/manual.md` §And they can hand each other work.

@@ -30,7 +30,8 @@ also the variable a run started from the app never receives.
 The **Dev instance** button in the conversation header does all of this for you —
 it is `.tgxcode/commands.json` in this repo, and it picks a free port in
 45899–45918, names the DevBrowser tab for your worktree, and gives the name back
-when you stop it.
+when you stop it. The **Land** button beside it runs `npm run land` from the
+worktree you are in — see *Landing what you finished*.
 
 `pkill -f bridge/server.js` matches *every* bridge including the user's. If you
 must stop your own, Ctrl-C the `npm run dev` you started, or kill it by port:
@@ -164,7 +165,7 @@ Three habits follow from that:
   reader can act on; `command {name, args}` is not. An object, an array of
   objects, "a string or null" — say which.
 - **Say when a route is narrower than it looks.** `/api/sessions` and
-  `/api/dashboard` carry a *four-field* `runner`, not the full `runner-status`
+  `/api/dashboard` carry a *five-field* `runner`, not the full `runner-status`
   payload; a client that reads `runner.pendingPermission` there gets `undefined`
   forever and no error. The same goes for a response that is eventually consistent:
   `POST /api/sessions` returns an id that `GET /api/sessions/:id` 404s on for a
@@ -291,10 +292,12 @@ npm test -- 45901      # run against a bridge you already have on that port
 start and delete sessions, so pointing them at the everyday instance is exactly
 the accident the rest of this file is about.
 
-The suite is `auth`, `temp`, `recent`, `pulls`, `taskboard`, `ports`, `spinner`,
-`changes`, `restart`, `handoff`, `drafts`, `snippets`, `notifications`, `schedule`,
-`usage`, `titles`, `tasks`, `prefs`, `paths`, `logwidth`, `legacy`, `claude-config`,
-`claude-docs`, `ask-result`, `runner`, `wispr`, `preview`, `suggestions`, `mcp` and `flags` on their own — no bridge needed
+The suite is `auth`, `temp`, `recent`, `pulls`, `pr-store`, `taskboard`, `ports`,
+`spinner`, `changes`, `restart`, `handoff`, `drafts`, `later`, `snippets`,
+`notifications`, `schedule`, `usage`, `harvester`, `runner`, `host`, `titles`,
+`tasks`, `prefs`, `paths`, `logwidth`, `platform`, `preview`, `claude-config`,
+`claude-docs`, `ask-result`, `commands`, `message-date`, `folded`,
+`claude-version`, `wispr`, `legacy`, `suggestions`, `mcp` and `flags` on their own — no bridge needed
 — plus four that want a live one: `gate`, `browser`, `refusals`, `unpaired`.
 Between them they cover the token, what a remote caller is refused, what an
 unpaired remote device sees before and after pairing, and what the nightly restart
@@ -357,7 +360,7 @@ TGXCODE_PREFS_DIR=$(mktemp -d) npm run dev:headless
 ```
 
 It stands in for the whole directory, so the spinner's `verbs/` is seeded there
-too. Rewriting the `cs-prefs` `<meta>` tag with Playwright's `page.route` only
+too. Rewriting the `tgx-prefs` `<meta>` tag with Playwright's `page.route` only
 tests reading a setting and never exercises the save.
 
 **A `test` schedule never writes to GitHub.** The pull-request gate comments on
@@ -411,8 +414,8 @@ code. The one place that argument has lost is `web/vendor/`.
 
 ### How to vendor one
 
-`web/vendor/` holds **prebuilt bundles, committed** — xterm, and diff2html for the
-diff viewer. Fetched with `npm pack`, which writes a tarball and leaves no
+`web/vendor/` holds **prebuilt bundles, committed** — xterm, diff2html for the
+diff viewer, and Preact for the rail. Fetched with `npm pack`, which writes a tarball and leaves no
 `node_modules`, never with `npm install`:
 
 ```bash
