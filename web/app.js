@@ -15070,7 +15070,12 @@ const CMD_FIELDS = [
         note: 'Name the tab for this port once something answers on it. Empty falls back to the worktree, then the branch, then the project.' },
     { key: 'env', kind: 'env', label: 'Environment',
         note: 'Extra variables, on top of the ones a terminal here already gets.' },
-    { key: 'disabled', kind: 'bool', label: 'Visibility',
+    { key: 'web', kind: 'bool', label: 'Web app', choices: ['Once it answers', 'Straight away'],
+        note: 'When to show its page in the preview. Once it answers waits until the port '
+            + 'answers HTTP. Straight away opens the preview as soon as the port is taken '
+            + 'and lets the page load there, for a server whose first page is slow. '
+            + 'Needs a port.' },
+    { key: 'disabled', kind: 'bool', label: 'Visibility', choices: ['Shown', 'Hidden'],
         note: 'Hiding one keeps the declaration and takes away the button. Worth '
             + 'setting explicitly on the local tab: a project can ship a command '
             + 'hidden, and showing it again means writing the opposite rather than '
@@ -15598,7 +15603,7 @@ function cmdField(field, entry, i, ctx) {
 function cmdBlank(field) {
     if (field.kind === 'port') return { range: [3000, 3009] };
     if (field.kind === 'env') return {};
-    // Ticking "Set here" on the visibility row means "I want to decide this",
+    // Ticking "Set here" on a yes/no row means "I want to decide this",
     // and the answer somebody wants by default is the one that changes nothing.
     if (field.kind === 'bool') return false;
     return '';
@@ -15617,10 +15622,10 @@ function cmdControl(field, entry, o) {
     if (field.kind === 'bool') {
         return el('select', {
             class: 'settings-select', disabled: o.disabled || null,
-            onchange: (e) => { entry[field.key] = e.target.value === 'hidden'; cmdDirty(); },
+            onchange: (e) => { entry[field.key] = e.target.value === 'on'; cmdDirty(); },
         },
-        el('option', { value: 'shown', selected: value !== true || null }, 'Shown'),
-        el('option', { value: 'hidden', selected: value === true || null }, 'Hidden'));
+        el('option', { value: 'off', selected: value !== true || null }, field.choices[0]),
+        el('option', { value: 'on', selected: value === true || null }, field.choices[1]));
     }
 
     if (field.kind === 'area') {
@@ -20931,7 +20936,7 @@ async function clickCommand(cmd) {
         // Up and serving pages: the page is what the button is for. The log is
         // one click away, on the preview's toolbar, and the pane is left as it
         // was rather than opened underneath where nobody can see it.
-        if (existing.state === 'listening' && existing.http && existing.port) {
+        if (runPreviewable(existing)) {
             openRunPreview(existing);
             return;
         }
@@ -20960,13 +20965,23 @@ async function clickCommand(cmd) {
     }
 }
 
+/**
+ * Whether a task's page is worth showing yet: its port is taken, and either it
+ * has answered HTTP or the command says it is a web app (`"web": true`). The
+ * second is for a server whose first page takes longer than anyone wants to
+ * wait for a probe: the preview goes up at once and the page loads in front of
+ * you, rather than the button only showing the log.
+ */
+const runPreviewable = (run) => !!run && run.state === 'listening' && !!run.port
+    && (run.http === true || run.web === true);
+
 /** A task's page, by the same rule as any other port. */
 function openRunPreview(run) {
     openPreview({
         port: run.port,
         title: run.label || null,
         runId: run.id,
-        http: run.http,
+        http: run.http || run.web,
     }).catch((err) => toast(`Could not open :${run.port}. ${err.message}`, 'error'));
 }
 
@@ -20981,7 +20996,7 @@ function applyRunChange(e) {
         // window only: raising DevBrowser because a server finished compiling
         // is the window-on-the-Windows-host that bridge/runs.js name() refuses
         // to open, and a click that happened a minute ago is not consent to it.
-        if (state.previewWhenUp === e.runId && e.state === 'listening' && e.http) {
+        if (state.previewWhenUp === e.runId && runPreviewable(run)) {
             state.previewWhenUp = null;
             if (!opensInDevBrowser() && run.workspace === cmdDir()) openRunPreview(run);
         }

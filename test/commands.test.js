@@ -204,6 +204,18 @@ reset();
     ok('validate() carries a field and its messages are unchanged');
 }
 
+{
+    // `web` is a boolean or a refusal. A string "true" would read as a web app to
+    // anybody glancing at the file and as nothing to the reader.
+    const v = (web) => commands.validate({ id: 'a', label: 'x', run: 'y', web }, SHARED);
+    assert.strictEqual(v(true).command.web, true);
+    assert.strictEqual(v(false).command.web, false);
+    assert.strictEqual(v('true').problem.message, 'web must be true or false');
+    assert.strictEqual(v('true').problem.field, 'web');
+    assert.ok(!('web' in commands.validate({ id: 'a', label: 'x', run: 'y' }, SHARED).command));
+    ok('validate() takes web as a boolean and nothing else');
+}
+
 // ── writing ────────────────────────────────────────────────────────────────
 
 reset();

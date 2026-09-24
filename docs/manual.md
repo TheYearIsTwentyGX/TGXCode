@@ -1276,6 +1276,12 @@ nothing a browser can show, and the chip says so:
   shows its page. Clicking one that is not starts it and shows its log as
   before, then opens the page once the server answers — in this window only:
   a server finishing its compile never launches DevBrowser by itself.
+  The app keeps asking until the server answers, however long its first page
+  takes. A task that shows its log when you expected the page has not answered
+  yet, and the page opens by itself once it does. For a server whose first page
+  is slow, set *Web app* to *Straight away* on the command (`"web": true` in
+  `commands.json`). The preview then opens as soon as the port is taken, and the
+  page loads in front of you.
 
 Home keeps the page loaded. Come back inside *Minutes to keep a page you left*
 (Settings → Browser preview, default 10) and it is as you left it — scroll, form

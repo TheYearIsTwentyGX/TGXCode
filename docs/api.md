@@ -2661,7 +2661,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `send-failed` | `{sessionId, kind, message, unsent: [text]}` — a send that never became a turn; hand the text back to the user. `unsent` is an array of **strings**, in send order, and may be empty — the event still means the send failed, and `message` is then the whole of it. `kind` is one of `busy-elsewhere` (the session is running somewhere else; offer to branch), `no-claude`, `missing`, `unknown`, `exited` (the process ended without answering) or `retired` (the bridge shut the process down with messages still queued). Treat an unrecognised kind as `unknown`. Attachments are **not** carried: a message that had files comes back as its text alone |
 | `session-forked` | `{from, to}` — follow the new id |
 | `slash-commands` | `{cwd, at}` — that directory's slash commands changed; drop what you cached |
-| `run-changed` | `{runId, workspace, commandId, label, state, port, http, exit, stopped, at}` — a project command moved; state only, never output. `http` (bool) as in the run record; it can turn `true` in an event of its own, a second or so after the one that said `listening` |
+| `run-changed` | `{runId, workspace, commandId, label, state, port, http, exit, stopped, at}` — a project command moved; state only, never output. `http` (bool) as in the run record; it can turn `true` in an event of its own, any time after the one that said `listening`, seconds or minutes later. `web` (bool) as in the run record |
 | `commands-config` | `{at, scope, project, file}` — a project's `.tgxcode/` command file was written through `PUT /api/commands-config`. The fact of a change, never its content: these files carry `env` values the route classifies as local-only, and this channel reaches a paired phone. Re-read the file, and re-read `GET /api/commands` for any directory inside `project` — a renamed command's button does not change on its own. It does **not** fire for a hand edit; nothing watches these files, and the `409` on save is what catches that |
 
 `runner-status` is the full shape — the one the two narrower `runner` objects are cut
@@ -4104,7 +4104,7 @@ and `docs/plans/17-project-commands.md` for why.
 
 `GET /api/commands` answers `{workspace, project, projectName, worktree, branch,
 commands[], problems[]}`. Each command is `{id, label, command, cwd, port,
-devbrowser, from, run}` — `command` is the string that will run, with everything
+devbrowser, web, from, run}` — `command` is the string that will run, with everything
 expanded *except* `${port}`, which is not known until one is allocated. `run` is
 the live or last record for that command in that directory, or null.
 
@@ -4114,13 +4114,19 @@ its siblings survive. Both are worth showing: silently offering fewer buttons
 than the file asks for is how a typo goes unnoticed for a week.
 
 A run record is `{id, workspace, commandId, label, command, cwd, port, http,
-devbrowser, state, pid, startedAt, listeningAt, exitedAt, exit, stopped,
+web, devbrowser, state, pid, startedAt, listeningAt, exitedAt, exit, stopped,
 terminalId}` with `state ∈ starting | listening | running | stopping | exited`.
 `http` (**bool**) is whether the port answers HTTP, so whether a browser preview
-can show it. It is probed after the run reaches `listening`, a few times over about
-six seconds because plenty of dev servers bind before their first compile answers,
-so a run can be `listening` with `http: false` for a moment and then flip — watch
-`run-changed` for it. Always `false` once the run has exited.
+can show it. It is probed from the moment the run reaches `listening` until the
+first answer, each try waiting up to 10 s. Tries come every second for the first 30 s,
+then back off to one every 30 s. Plenty of dev servers bind before their first compile
+answers, and a server-rendered page can take seconds to produce its first response. So
+a run can be `listening` with `http: false` for a while and then flip. Watch
+`run-changed` for it. Once `true`, it stays `true` until the run exits, and it is
+always `false` after that.
+`web` (**bool**) copies the command's `web` field. `true` means the client should show
+the page as soon as the run is `listening`, without waiting for `http`. Both web
+clients treat a run as previewable when `state` is `listening` and `http || web`.
 `stopped` says somebody pressed Stop, as against the process ending on its own —
 worth distinguishing, because SIGHUP escalates to SIGKILL for anything that
 shrugs it off, so the signal a run died of says nothing about whether it was
@@ -4193,7 +4199,7 @@ than behind a pointer at `bridge/commands.js`.
     "id": "dev", "label": "Dev server", "run": "npm run dev -- --port=${port}",
     "cwd": "web", "env": {"DEBUG": "1"},
     "port": { "range": [5000, 5099], "env": "PORT" },
-    "devbrowser": "${worktree}", "disabled": false
+    "devbrowser": "${worktree}", "web": true, "disabled": false
 }]}
 ```
 
@@ -4208,6 +4214,7 @@ than behind a pointer at `bridge/commands.js`.
 | `env` | `{NAME: string}` | optional | ≤ 32 keys, each `^[A-Z_][A-Z0-9_]*$`, values strings |
 | `port` | `{range: [lo, hi], env?: string}` | optional | integers 1024–65535, `lo ≤ hi`, span ≤ 1000 |
 | `devbrowser` | string | optional | empty falls back to worktree, then branch, then project |
+| `web` | boolean | optional | a web app: preview its page once the port is taken, without waiting for it to answer HTTP. Ignored without a `port`, and reported back as `false` |
 | `disabled` | boolean | optional | declared, but no button |
 
 Keys not in that table are **kept as written**, by both the reader and the
