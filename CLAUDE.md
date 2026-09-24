@@ -165,7 +165,7 @@ Three habits follow from that:
   reader can act on; `command {name, args}` is not. An object, an array of
   objects, "a string or null" — say which.
 - **Say when a route is narrower than it looks.** `/api/sessions` and
-  `/api/dashboard` carry a *four-field* `runner`, not the full `runner-status`
+  `/api/dashboard` carry a *five-field* `runner`, not the full `runner-status`
   payload; a client that reads `runner.pendingPermission` there gets `undefined`
   forever and no error. The same goes for a response that is eventually consistent:
   `POST /api/sessions` returns an id that `GET /api/sessions/:id` 404s on for a
