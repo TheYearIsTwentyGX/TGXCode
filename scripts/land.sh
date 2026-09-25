@@ -32,6 +32,12 @@
 # while no host was reachable, so a restart really would end it — and that
 # refusal is reported, never overridden. It does not start a bridge that was not
 # already running. --no-restart keeps the old behaviour: say, do not act.
+#
+# The restart runs in its own session (setsid), because the Land button runs
+# this script as a run of the bridge it is about to restart, and the bridge
+# kills its runs on the way out. Without that, the restart died halfway and the
+# everyday bridge stayed down. From the button the pane still ends with the old
+# bridge; what happened next is in ~/.cache/tgxcode/restart-45888.log.
 
 set -uo pipefail
 
@@ -271,12 +277,37 @@ say "Restarting the everyday bridge…"
 # still carry a TGXCODE_PORT it never chose, and letting that aim the
 # restart somewhere else is the trap CLAUDE.md spends a section on.
 #
+# setsid, and output to a file rather than to us, because of the Land button.
+# That button is a run of the very bridge being restarted, and a run dies with
+# its bridge — bridge/runs.js SIGKILLs its whole process group on the way out.
+# restart-bridge.sh used to be in that group, so it was killed between stopping
+# the old bridge and starting the new one, and the everyday bridge simply
+# stayed down. In its own session the teardown cannot reach it, and writing to a
+# file means a pane that has gone away cannot SIGPIPE it either. From a
+# terminal nothing is different: the output is streamed back as it arrives.
+#
 # Its status is worth reading. It exits 3 when it deliberately did not restart,
 # and swallowing that would leave you thinking the merge you just landed is
-# running when it is not.
-( cd "$MAIN" && env -u TGXCODE_PORT -u CLAUDE_SESSIONS_PORT bash scripts/restart-bridge.sh )
-RC=$?
-if [ "$RC" != 0 ]; then
+# running when it is not. It comes back through a file because `wait` would not
+# survive us being killed, and the file is what tells a run that finished from
+# one that never got there.
+STATE="${XDG_CACHE_HOME:-$HOME/.cache}/tgxcode"
+if [ ! -e "$STATE" ] && [ -e "${XDG_CACHE_HOME:-$HOME/.cache}/claude-sessions" ]; then
+    STATE="${XDG_CACHE_HOME:-$HOME/.cache}/claude-sessions"
+fi
+mkdir -p "$STATE" 2>/dev/null
+OUT="$STATE/land-restart.out"; RC_FILE="$STATE/land-restart.rc"
+: >"$OUT"; rm -f "$RC_FILE"
+say "  (From the Land button this pane closes with the bridge. The outcome is"
+say "   journalled in $STATE/restart-45888.log either way.)"
+( cd "$MAIN" && exec env -u TGXCODE_PORT -u CLAUDE_SESSIONS_PORT \
+    setsid -w bash -c 'bash scripts/restart-bridge.sh; echo $? >"$1"' _ "$RC_FILE" \
+    >"$OUT" 2>&1 </dev/null ) &
+RESTARTER=$!
+tail -n +1 -f --pid="$RESTARTER" "$OUT" 2>/dev/null
+wait "$RESTARTER" 2>/dev/null
+RC="$(cat "$RC_FILE" 2>/dev/null)"
+if [ "${RC:-1}" != 0 ]; then
     say ""
     say "  The restart did not happen — see above. $MAIN is merged either way;"
     say "  the running bridge is still on the code it started with."
