@@ -28,7 +28,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'quota-wrap', 'quota-pill', 'quota-pill-body', 'quota-menu', 'quota-windows',
     'quota-events', 'quota-note', 'quota-refresh', 'quota-live',
     'quota-restart', 'quota-restart-label', 'quota-restart-sub',
-    'cv-wrap', 'cv-pill', 'cv-menu', 'cv-check', 'cv-body', 'cv-update', 'cv-update-label',
+    'cv-wrap', 'cv-pill', 'cv-menu', 'cv-changelog', 'cv-check', 'cv-body', 'cv-update', 'cv-update-label',
     'btn-pin', 'btn-changes', 'btn-folder', 'btn-term', 'btn-archive', 'btn-delete',
     'turns', 'turn-pop',
     'find', 'find-input', 'find-count', 'find-prev', 'find-next',

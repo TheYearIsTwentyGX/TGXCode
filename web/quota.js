@@ -819,6 +819,10 @@ function renderCvPanel() {
     dom.cvUpdate.classList.toggle('busy', busy);
     dom.cvUpdateLabel.textContent = busy ? 'Updating…'
         : cv.latest ? `Update to ${cv.latest}` : 'Update now';
+
+    const ver = cvChangelogVersion();
+    dom.cvChangelog.hidden = !ver;
+    dom.cvChangelog.title = ver ? `What changed in Claude Code ${ver}` : '';
 }
 
 export function showCv(on) {
@@ -891,15 +895,25 @@ dom.cvPill.addEventListener('click', (e) => {
 const cvChangelogUrl = (v) =>
     `https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md#${String(v).replace(/\./g, '')}`;
 
-// The two things the pill is for, without opening the panel first. The
-// changelog points at the version on offer when there is one, and at the
-// installed one when the pill is only up for sessions on an older binary.
+/**
+ * Which version's notes to open: the one on offer when there is one, and the
+ * installed one when the pill is only up for sessions on an older binary.
+ */
+function cvChangelogVersion() {
+    const cv = state.cv || {};
+    return (cv.behind ? cv.latest : cv.installed) || null;
+}
+
+// Electron's window-open handler hands this to the default browser.
+const openCvChangelog = (v) => window.open(cvChangelogUrl(v), '_blank', 'noreferrer');
+
+// The two things the pill is for, without opening the panel first.
 dom.cvPill.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     showCv(false);
     const cv = state.cv || {};
     const busy = state.cvBusy || cv.updating;
-    const ver = cv.behind ? cv.latest : cv.installed;
+    const ver = cvChangelogVersion();
     openContextMenu(e, [
         {
             label: busy ? 'Updating…' : cv.latest ? `Update to ${cv.latest}` : 'Update now',
@@ -909,11 +923,15 @@ dom.cvPill.addEventListener('contextmenu', (e) => {
         },
         {
             label: ver ? `Open changelog (${ver})` : 'Open changelog',
-            // Electron's window-open handler hands this to the default browser.
-            onClick: () => window.open(cvChangelogUrl(ver), '_blank', 'noreferrer'),
+            onClick: () => openCvChangelog(ver),
             disabled: !ver && 'No version known yet',
         },
     ]);
+});
+dom.cvChangelog.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const ver = cvChangelogVersion();
+    if (ver) openCvChangelog(ver);
 });
 dom.cvCheck.addEventListener('click', async (e) => {
     e.stopPropagation();
