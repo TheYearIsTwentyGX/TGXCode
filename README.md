@@ -331,16 +331,16 @@ Two rules worth knowing before you send a patch:
 | `web/snippets/pins.js` | The pinned buttons beside the composer's snippets icon |
 | `web/snippets/settings.js` | The Snippets group in Settings — groups, rows, drag and arrow reordering held in `state.snippets.order` — and the arm-then-confirm delete button other Settings groups borrow |
 | `web/snippets/editor.js` | One snippet in the editor dialog, as a component whose state is the form |
-| `web/settings/` | The Settings panel, one module per group. Every module here evaluates before app.js's body, so none may read an app.js `const` at top level |
-| `web/settings/index.js` | Opening and closing the panel, loading and saving `~/.tgxcode/settings.json` a key at a time, the head and the table of contents |
-| `web/settings/general.js` | `SETTINGS`, one row per key, and the builders that turn a row into a control |
+| `web/settings/` | The Settings panel, one module per group. Drawn with Preact on web/rail.js's pattern, except the editor groups (Claude Code, hooks, Memory, Project commands) and the groups written out in index.html, which are still built with `el()` and hung in the tree as foreign DOM. Every module here evaluates before app.js's body, so none may read an app.js `const` at top level |
+| `web/settings/index.js` | Opening and closing the panel, loading and saving `~/.tgxcode/settings.json` a key at a time, the head and the table of contents, and `Foreign` — how a hand-built group sits in the Preact body |
+| `web/settings/general.js` | `SETTINGS`, one row per key, and the builders that turn a row into a control (Preact vnodes; typed-into boxes are uncontrolled and keyed on the stored value) |
 | `web/settings/claude-config.js` | The Claude Code group — `~/.claude/settings.json` and a project's own, as controls and as JSON |
 | `web/settings/hooks.js` | The hooks editor inside the Claude Code group |
 | `web/settings/memory.js` | The Memory group — the CLAUDE.md files — and the full-height dialog on the same file |
 | `web/settings/project-commands.js` | The Commands group — a project's `.tgxcode/commands.json`, as a form and as JSON |
-| `web/settings/toolbar.js` | The top bar's layout and More menu, and the Toolbar group that edits them |
+| `web/settings/toolbar.js` | The top bar's layout and More menu, and the Toolbar group that edits them (a component that holds a drag's order until its save is over) |
 | `web/settings/shortcuts.js` | The Shortcuts group, and the key hints in every title that names a binding |
-| `web/settings/notifications.js` | The Notifications group — this browser's switches for `web/notifications.js` |
+| `web/settings/notifications.js` | The Notifications group — this browser's switches for `web/notifications.js`, as a component (no longer markup in index.html) |
 | `web/transcript/` | The open conversation, kept imperative on purpose: rows are append-only, streamed from SSE, with scroll, width and find marks managed by hand. Like `settings/`, every module here evaluates before app.js's body, so none may read an imported binding at top level |
 | `web/transcript/conversation.js` | Opening a session, its header, and appending events to the log through a view — `SESSION_VIEW` or `AGENT_VIEW` — so the main log and the subagent pane share one renderer; folding runs of tool calls |
 | `web/transcript/rows.js` | One row per event — the row shell and its copy button, user, assistant and thinking rows, peer messages, handoffs and system lines |

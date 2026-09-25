@@ -1,5 +1,6 @@
 // The Shortcuts group: remapping a command's key, and putting the bindings into
-// every bit of chrome that names one. Moved out of app.js as it was.
+// every bit of chrome that names one. The list of shortcuts is drawn with
+// Preact, as part of the Keyboard group — see general.js for how Settings is.
 //
 // Imports from app.js, which imports this — safe because nothing here reads an
 // app.js binding while the module evaluates, only when a function is called.
@@ -7,7 +8,8 @@
 // because every module under web/settings/ evaluates before app.js's body runs.
 
 import { BOOT_PREFS } from '../boot.js';
-import { dom, el, toast } from '../dom.js';
+import { html } from '../vendor/preact.js';
+import { dom, toast } from '../dom.js';
 import * as keys from '../keys.js';
 import { state } from '../state.js';
 import {
@@ -42,52 +44,48 @@ export function renderKeymap(locked) {
         groups[groups.length - 1].rows.push(c);
     }
 
-    return el('div', { class: 'settings-keys' },
-        el('div', { class: 'settings-keys-head' },
-            el('span', { text: 'Shortcuts' }),
-            el('span', { class: 'settings-keys-note' },
+    // The clash line is only reachable from a hand-edited file — the recorder
+    // refuses a chord that is already taken — so it says which and leaves the
+    // fixing to you.
+    return html`<div key="keymap" class="settings-keys">
+        <div class="settings-keys-head">
+            <span>Shortcuts</span>
+            <span class="settings-keys-note">${
                 'Every one needs Ctrl or Alt, or a function key — the composer is a '
-                + 'text box and these have to work while you are typing in it.')),
-        // Only reachable from a hand-edited file — the recorder refuses a chord
-        // that is already taken — so it says which and leaves the fixing to you.
-        clashes.length ? el('div', { class: 'settings-row-warn' },
+                + 'text box and these have to work while you are typing in it.'}</span>
+        </div>
+        ${clashes.length ? html`<div class="settings-row-warn">${
             clashes.map(c => `${c.combo} is asked for by both ${c.labels.join(' and ')}; `
-                + `${c.labels[0]} wins.`).join(' ')) : null,
-        groups.map(g => el('div', { class: 'settings-keys-group' },
-            el('div', { class: 'settings-keys-group-name', text: g.name }),
-            g.rows.map(c => keymapRow(c, locked, s.recording === c.id,
-                clashed.has(keys.binding(c.id)))))),
-    );
+                + `${c.labels[0]} wins.`).join(' ')}</div>` : null}
+        ${groups.map(g => html`<div key=${g.name} class="settings-keys-group">
+            <div class="settings-keys-group-name">${g.name}</div>
+            ${g.rows.map(c => keymapRow(c, locked, s.recording === c.id,
+                clashed.has(keys.binding(c.id))))}
+        </div>`)}
+    </div>`;
 }
 
 function keymapRow(cmd, locked, recording, clashed) {
     const combo = keys.binding(cmd.id);
     const isDefault = keys.isDefault(cmd.id);
-    return el('div', {
-        class: 'settings-key-row', 'data-recording': recording || null,
-        'data-clash': clashed || null,
-    },
-        el('span', { class: 'settings-key-label', text: cmd.label }),
-        recording
-            ? el('span', { class: 'settings-key-recording', text: 'Press a chord — Esc to cancel' })
-            : el('kbd', { class: 'settings-key-combo', text: combo || 'unbound' }),
-        el('div', { class: 'settings-key-acts' },
-            el('button', {
-                class: 'linkish', type: 'button', disabled: locked || null,
-                onclick: () => startRecording(recording ? null : cmd.id),
-            }, recording ? 'Cancel' : 'Change'),
-            combo ? el('button', {
-                class: 'linkish', type: 'button', disabled: locked || null,
-                title: 'Leave this command with no shortcut',
-                onclick: () => saveBinding(cmd.id, null),
-            }, 'Unbind') : null,
-            isDefault ? null : el('button', {
-                class: 'linkish', type: 'button',
-                disabled: locked || null,
-                title: `Back to ${cmd.default}`,
-                onclick: () => saveBinding(cmd.id, undefined),
-            }, 'Reset')),
-    );
+    return html`<div key=${cmd.id} class="settings-key-row"
+        data-recording=${recording ? '' : undefined} data-clash=${clashed ? '' : undefined}>
+        <span class="settings-key-label">${cmd.label}</span>
+        ${recording
+            ? html`<span class="settings-key-recording">Press a chord — Esc to cancel</span>`
+            : html`<kbd class="settings-key-combo">${combo || 'unbound'}</kbd>`}
+        <div class="settings-key-acts">
+            <button class="linkish" type="button" disabled=${locked}
+                onClick=${() => startRecording(recording ? null : cmd.id)}
+                >${recording ? 'Cancel' : 'Change'}</button>
+            ${combo ? html`<button class="linkish" type="button" disabled=${locked}
+                title="Leave this command with no shortcut"
+                onClick=${() => saveBinding(cmd.id, null)}>Unbind</button>` : null}
+            ${isDefault ? null : html`<button class="linkish" type="button" disabled=${locked}
+                title=${`Back to ${cmd.default}`}
+                onClick=${() => saveBinding(cmd.id, undefined)}>Reset</button>`}
+        </div>
+    </div>`;
 }
 
 function startRecording(id) {

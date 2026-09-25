@@ -7,8 +7,9 @@
 // because every module under web/settings/ evaluates before app.js's body runs.
 
 import { BOOT_PREFS } from '../boot.js';
-import { dom, el } from '../dom.js';
-import { icon } from '../icons.js';
+import { html, useRef, useState } from '../vendor/preact.js';
+import { dom } from '../dom.js';
+import { icon } from '../boards/parts.js';
 import { showCv, showQuota } from '../quota.js';
 import { devBrowserShown } from '../app.js';
 import { showNewMenu } from '../new-session/recent.js';
@@ -213,114 +214,156 @@ export function wireToolbar() {
 // bar, the More menu or nowhere, and with its text on or off. Every change
 // saves the whole list, because `toolbar.items` is one key — see the note on
 // saveBinding() for why a map, or here a list, goes over whole.
+//
+// A Preact component inside the Toolbar card (see general.js). **The order
+// during a drag is the component's, not the DOM's.** The hand-built list let a
+// drag move rows with `insertBefore` and read the order back out of the DOM,
+// which cannot be done to nodes Preact owns: it diffs against its last render
+// and would put them back. So a drag holds an order of ids, draws from it, and
+// saves it on release — the snippet editor's arrangement (web/snippets/
+// settings.js), smaller. The held order is let go of once its save is over,
+// success or not, so what is drawn after that is what the file says.
 
-let barDrag = null;
-
+/** The Toolbar group's list, as a vnode for settingsCard(). */
 export function renderToolbarSettings(locked) {
-    const layout = toolbarLayout();
-    const list = el('div', {
-        class: 'settings-bar',
-        ondragover: (e) => onBarDragOver(e, list),
-        ondrop: (e) => e.preventDefault(),
-    }, layout.map((o, i) => toolbarRow(o, i, layout, locked)));
-    const saved = (BOOT_PREFS.toolbar.items || []).length > 0;
-    return el('div', {},
-        list,
-        saved ? el('div', { class: 'settings-bar-foot' },
-            el('button', {
-                class: 'linkish', type: 'button', disabled: locked || null,
-                onclick: () => saveSetting('toolbar', 'items', null),
-            }, 'Reset to default')) : null);
+    return html`<${ToolbarSettings} key="toolbar" locked=${locked} />`;
 }
 
-function toolbarRow(o, i, layout, locked) {
+function ToolbarSettings({ locked }) {
+    // `{ id, order }` while a drag is live (`id` is the row in the air) or while
+    // the save it ended in is running (`id` is null). A ref, because dragover
+    // and dragend read it faster than a render lands; `redraw` draws it.
+    const drag = useRef(null);
+    const [, redraw] = useState(0);
+    const hold = (next) => { drag.current = next; redraw(n => n + 1); };
+
+    const saved = toolbarLayout();
+    const layout = drag.current ? heldLayout(saved, drag.current.order) : saved;
+    const commit = (next) => saveSetting('toolbar', 'items', toolbarItems(next));
+
+    const onDragStart = (e, id) => {
+        hold({ id, order: layout.map(o => o.def.id) });
+        e.dataTransfer.effectAllowed = 'move';
+        // Firefox will not start a drag without something on the transfer.
+        e.dataTransfer.setData('text/plain', id);
+    };
+
+    // The row under the cursor moves as the drag goes — the snippet list's idiom.
+    // Where it lands is measured off the rows on screen (reading the DOM is fine;
+    // writing it is what is not), and a redraw happens only when that changed.
+    const onDragOver = (e) => {
+        const d = drag.current;
+        if (!d || !d.id) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        const after = [...e.currentTarget.querySelectorAll('.settings-bar-row')]
+            .filter(n => n.dataset.id !== d.id)
+            .find((n) => {
+                const box = n.getBoundingClientRect();
+                return e.clientY < box.top + box.height / 2;
+            });
+        const order = d.order.filter(x => x !== d.id);
+        const at = after ? order.indexOf(after.dataset.id) : order.length;
+        order.splice(at < 0 ? order.length : at, 0, d.id);
+        if (order.join() === d.order.join()) return;
+        hold({ ...d, order });
+    };
+
+    // Save the order the drag ended on, if it changed. Held (with no row in the
+    // air) until the save is over, so the list does not flick back to the old
+    // order between the release and the file answering.
+    const onDragEnd = () => {
+        const d = drag.current;
+        if (!d) return;
+        if (d.order.join() === saved.map(o => o.def.id).join()) { hold(null); return; }
+        hold({ id: null, order: d.order });
+        commit(heldLayout(saved, d.order)).finally(() => hold(null));
+    };
+
+    const hasSaved = (BOOT_PREFS.toolbar.items || []).length > 0;
+    return html`<div>
+        <div class="settings-bar" onDragOver=${onDragOver} onDrop=${(e) => e.preventDefault()}>
+            ${layout.map((o, i) => toolbarRow(o, i, layout, locked, {
+                commit, onDragStart, onDragEnd,
+                dragging: !!(drag.current && drag.current.id === o.def.id),
+            }))}
+        </div>
+        ${hasSaved ? html`<div class="settings-bar-foot">
+            <button class="linkish" type="button" disabled=${locked}
+                onClick=${() => saveSetting('toolbar', 'items', null)}>Reset to default</button>
+        </div>` : null}
+    </div>`;
+}
+
+/**
+ * A held order of ids, laid over the layout the file gives. Anything the held
+ * order does not name goes on the end, so a row cannot vanish while held.
+ */
+function heldLayout(saved, order) {
+    const byId = new Map(saved.map(o => [o.def.id, o]));
+    const out = order.map(id => byId.get(id)).filter(Boolean);
+    for (const o of saved) if (!out.includes(o)) out.push(o);
+    return out;
+}
+
+/**
+ * The button's own icon, copied out of the bar as a vnode — the same glyph the
+ * bar shows, without a second copy of every icon here. DevBrowser's pill
+ * carries a light rather than an icon; the blank keeps its name in the same
+ * column as the rest.
+ */
+function barGlyph(def) {
+    const svg = dom[def.node].querySelector('svg');
+    if (!svg) return html`<span class="settings-bar-noglyph"></span>`;
+    const attrs = {};
+    for (const a of svg.attributes) attrs[a.name] = a.value;
+    return html`<svg ...${attrs} dangerouslySetInnerHTML=${{ __html: svg.innerHTML }}></svg>`;
+}
+
+function toolbarRow(o, i, layout, locked, { commit, onDragStart, onDragEnd, dragging }) {
     const { def } = o;
     const places = def.places || TOOLBAR_PLACES.map(([v]) => v);
-    const glyph = dom[def.node].querySelector('svg');
     const edit = (change) => {
         const next = layout.map(x => ({ ...x }));
         Object.assign(next[i], change);
-        saveSetting('toolbar', 'items', toolbarItems(next));
+        commit(next);
     };
     const move = (step) => {
         const j = i + step;
         if (j < 0 || j >= layout.length) return;
         const next = layout.slice();
         [next[i], next[j]] = [next[j], next[i]];
-        saveSetting('toolbar', 'items', toolbarItems(next));
+        commit(next);
     };
 
-    return el('div', {
-        class: 'settings-bar-row', 'data-id': def.id, 'data-place': o.place,
-        draggable: locked ? null : 'true',
-        ondragstart: (e) => {
-            barDrag = def.id;
-            e.currentTarget.classList.add('dragging');
-            e.dataTransfer.effectAllowed = 'move';
-            // Firefox will not start a drag without something on the transfer.
-            e.dataTransfer.setData('text/plain', def.id);
-        },
-        ondragend: (e) => {
-            e.currentTarget.classList.remove('dragging');
-            commitBarOrder(e.currentTarget.parentElement, layout);
-        },
-    },
-        el('span', { class: 'snip-grip', title: 'Drag to reorder' }, icon('grip', 14)),
-        el('span', { class: 'settings-bar-name' },
-            // DevBrowser's pill carries a light rather than an icon; the blank
-            // keeps its name in the same column as the rest.
-            glyph ? glyph.cloneNode(true) : el('span', { class: 'settings-bar-noglyph' }),
-            el('span', { text: def.name })),
-        def.icon
-            ? el('label', { class: 'settings-check settings-bar-label' },
-                el('input', {
-                    type: 'checkbox', checked: o.label || null, disabled: locked || null,
-                    onchange: (e) => edit({ label: e.target.checked }),
-                }),
-                el('span', { class: 'settings-box' }),
-                el('span', { text: 'Show label' }))
-            : el('span', { class: 'settings-bar-label' }),
-        places.length > 1
-            ? el('select', {
-                class: 'settings-select settings-bar-place', disabled: locked || null,
-                'aria-label': `Where ${def.name} goes`,
-                title: def.why || null,
-                onchange: (e) => edit({ place: e.target.value }),
-            }, TOOLBAR_PLACES.filter(([v]) => places.includes(v)).map(([v, text]) =>
-                el('option', { value: v, selected: v === o.place || null }, text)))
-            : el('span', { class: 'settings-bar-fixed', title: def.why || null, text: 'Always on the bar' }),
-        [-1, 1].map(step => el('button', {
-            class: 'snip-move', type: 'button',
-            disabled: locked || (step < 0 ? i === 0 : i === layout.length - 1) || null,
-            'aria-label': `Move ${def.name} ${step < 0 ? 'earlier' : 'later'}`,
-            title: step < 0 ? 'Earlier in the bar' : 'Later in the bar',
-            onclick: () => move(step),
-        }, step < 0 ? '↑' : '↓')));
-}
-
-/** The row under the cursor moves as the drag goes — the snippet list's idiom. */
-function onBarDragOver(e, list) {
-    if (!barDrag) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    const moving = list.querySelector(`.settings-bar-row[data-id="${CSS.escape(barDrag)}"]`);
-    if (!moving) return;
-    const after = [...list.querySelectorAll('.settings-bar-row')]
-        .filter(n => n !== moving)
-        .find((n) => {
-            const box = n.getBoundingClientRect();
-            return e.clientY < box.top + box.height / 2;
-        });
-    if (after) list.insertBefore(moving, after);
-    else list.append(moving);
-}
-
-/** Read back the order the DOM now shows, and save it if it changed. */
-function commitBarOrder(list, layout) {
-    barDrag = null;
-    if (!list) return;
-    const ids = [...list.querySelectorAll('.settings-bar-row')].map(n => n.dataset.id);
-    if (ids.join() === layout.map(o => o.def.id).join()) return;
-    const next = ids.map(id => layout.find(o => o.def.id === id)).filter(Boolean);
-    saveSetting('toolbar', 'items', toolbarItems(next));
+    return html`<div key=${def.id} class=${dragging ? 'settings-bar-row dragging' : 'settings-bar-row'}
+        data-id=${def.id} data-place=${o.place}
+        draggable=${locked ? undefined : 'true'}
+        onDragStart=${(e) => onDragStart(e, def.id)}
+        onDragEnd=${onDragEnd}>
+        <span class="snip-grip" title="Drag to reorder">${icon('grip', 14)}</span>
+        <span class="settings-bar-name">${barGlyph(def)}<span>${def.name}</span></span>
+        ${def.icon
+            ? html`<label class="settings-check settings-bar-label">
+                <input type="checkbox" checked=${o.label} disabled=${locked}
+                    onChange=${(e) => edit({ label: e.target.checked })} />
+                <span class="settings-box"></span>
+                <span>Show label</span>
+            </label>`
+            : html`<span class="settings-bar-label"></span>`}
+        ${places.length > 1
+            ? html`<select class="settings-select settings-bar-place" disabled=${locked}
+                aria-label=${`Where ${def.name} goes`} title=${def.why || undefined}
+                value=${o.place}
+                onChange=${(e) => edit({ place: e.target.value })}>
+                ${TOOLBAR_PLACES.filter(([v]) => places.includes(v)).map(([v, text]) =>
+                    html`<option key=${v} value=${v}>${text}</option>`)}
+            </select>`
+            : html`<span class="settings-bar-fixed" title=${def.why || undefined}>Always on the bar</span>`}
+        ${[-1, 1].map(step => html`<button key=${step} class="snip-move" type="button"
+            disabled=${locked || (step < 0 ? i === 0 : i === layout.length - 1)}
+            aria-label=${`Move ${def.name} ${step < 0 ? 'earlier' : 'later'}`}
+            title=${step < 0 ? 'Earlier in the bar' : 'Later in the bar'}
+            onClick=${() => move(step)}>${step < 0 ? '↑' : '↓'}</button>`)}
+    </div>`;
 }

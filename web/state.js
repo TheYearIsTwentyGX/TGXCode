@@ -396,6 +396,12 @@ export const state = {
         // The order the verb groups are drawn in, fixed on the way in. See
         // settingGroups().
         groupOrder: null,
+        // Bumped to remount the typed-into boxes (numbers, paths, weights, the
+        // range) from the stored value when a save did not move it — a refused
+        // or dropped save, or a number that is not one. See settingControl().
+        rev: 0,
+        // Which group the contents list lights. See markSettingsToc().
+        toc: null,
     },
     // Claude Code's own settings, which are a different four files with a
     // different owner — see the Claude Code section below. Its own `scope`

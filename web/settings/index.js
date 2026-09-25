@@ -1,17 +1,28 @@
 // The Settings panel: opening and closing it, loading what it shows, saving one
 // key at a time, and drawing the head, the table of contents and the groups.
 // The controls themselves are in general.js, and each of the other files here
-// is one group with an editor of its own. Moved out of app.js as it was.
+// is one group with an editor of its own.
+//
+// Drawn with Preact the way web/rail.js settled — htm templates, no build step,
+// keyed children, no hand edits to nodes Preact owns. What is Preact so far:
+// the head's file line, problems and project list, the contents, the body, and
+// every group built from rows (general.js) plus Keyboard's shortcuts
+// (shortcuts.js), Toolbar (toolbar.js) and Notifications (notifications.js).
+// Still built by hand with el() and hung in the tree as foreign DOM: Claude
+// Code, its Memory, Project commands, and the groups written out in
+// web/index.html (Projects' colour list, Snippets' shell, Wispr Flow, Connect a
+// phone). Snippets' list is Preact of its own (web/snippets/settings.js).
 //
 // Imports from app.js, which imports this — safe because nothing here reads an
 // app.js binding while the module evaluates, only when a function is called.
 // Keep it that way: a module-level `const` built from an app.js `const` throws,
 // because every module under web/settings/ evaluates before app.js's body runs.
 
+import { html, useLayoutEffect, useRef } from '../vendor/preact.js';
 import { get, put } from '../api.js';
 import { BOOT_PREFS, PREFS_FALLBACK } from '../boot.js';
 import { renderChannels } from '../channels.js';
-import { dom, el, toast } from '../dom.js';
+import { dom, toast } from '../dom.js';
 import { noteHome, shortPath } from '../format.js';
 import * as keys from '../keys.js';
 import { state } from '../state.js';
@@ -24,11 +35,12 @@ import {
 import { paintComposerHint } from '../composer/send.js';
 import { openSession } from '../transcript/conversation.js';
 import { loadClaudeConfig } from './claude-config.js';
-import { settingAllRow, settingHeading, settingRow, SETTINGS } from './general.js';
+import { settingsCard, SETTINGS } from './general.js';
 import { loadClaudeDocs } from './memory.js';
 import { loadCmdConfig } from './project-commands.js';
-import { paintShortcutHints, renderKeymap } from './shortcuts.js';
-import { paintToolbar, renderToolbarSettings } from './toolbar.js';
+import { paintShortcutHints } from './shortcuts.js';
+import { paintToolbar } from './toolbar.js';
+import { paint } from '../boards/parts.js';
 
 // ── settings ─────────────────────────────────────────────────────────────
 //
@@ -208,7 +220,11 @@ export function saveSetting(section, key, value) {
  */
 export async function saveSettings(section, patch) {
     const s = state.settings;
-    if (s.saving) return;
+    // Dropped while another save runs, as it always was. The typed-into boxes
+    // are uncontrolled, so the one this came from would go on showing the value
+    // that was never sent: bumping `rev` remounts them from the stored value
+    // when the running save redraws. See settingsRevert() in general.js.
+    if (s.saving) { s.rev++; return; }
     s.saving = true;
     renderSettings();
     try {
@@ -226,6 +242,9 @@ export async function saveSettings(section, patch) {
         if (section === 'spinner') await loadSpinnerGroups(dir);
     } catch (err) {
         toast(`Could not save that setting: ${err.message}`, 'error');
+        // The stored value did not move, so nothing else would remount the box
+        // that still shows the refused one.
+        s.rev++;
     }
     s.saving = false;
     renderSettings();
@@ -293,6 +312,21 @@ export function settingsTargetRow() {
     return files.find(f => f.scope === state.settings.scope && f.target) || null;
 }
 
+/**
+ * Draw the panel: the file line and problems in the pinned head, the groups in
+ * the body, the contents down the left.
+ *
+ * All three are Preact renders into containers from web/index.html, so a
+ * redraw is a diff rather than a rebuild — which matters because this runs
+ * twice for every save and again whenever an editor group finishes loading,
+ * and a rebuild threw away the focus, the hover and any half-typed number in
+ * every group each time. The groups are keyed by section, so each keeps its
+ * nodes across a redraw however the others change.
+ *
+ * Groups still built by hand with el() (a `render` or a `node` in SETTINGS)
+ * are handed over as foreign DOM — see Foreign below — and are rebuilt or
+ * re-hung exactly as before.
+ */
 export function renderSettings() {
     if (!state.settings.open) return;
     const s = state.settings;
@@ -305,66 +339,68 @@ export function renderSettings() {
     paintSettingsFile();
     paintSettingsProblems();
 
-    dom.setBody.replaceChildren();
     if (s.error) {
-        dom.setToc.replaceChildren();
-        dom.setBody.append(el('div', { class: 'settings-error' },
-            `Could not read the settings: ${s.error}`));
+        paint(dom.setToc, null);
+        paint(dom.setBody, html`<div key="error" class="settings-error">${
+            `Could not read the settings: ${s.error}`}</div>`);
         return;
     }
     if (!s.data) {
-        dom.setToc.replaceChildren();
-        dom.setBody.append(el('div', { class: 'settings-empty', text: 'Reading settings…' }));
+        paint(dom.setToc, null);
+        paint(dom.setBody, html`<div key="empty" class="settings-empty">Reading settings…</div>`);
         return;
     }
 
-    for (const group of SETTINGS) {
-        if (group.when && !group.when()) continue;
-        // A group whose markup already exists is moved rather than rebuilt: its
-        // controls were wired at load and would lose their listeners to a
-        // replaceChildren. Detaching and re-appending keeps them.
-        if (group.node) {
-            dom.setBody.append(dom[group.node]);
-            if (group.after) group.after();
-            continue;
-        }
-        // A group that builds itself. One card or several — the contents list
-        // still gets one entry, and the first card carries the id it scrolls to.
-        if (group.render) {
-            dom.setBody.append(...group.render());
-            continue;
-        }
-        const locked = group.userOnly && s.scope !== 'user';
-        const card = el('section', {
-            class: 'settings-group', id: `set-g-${group.section}`,
-            'data-locked': locked || null,
-        },
-            el('h2', { class: 'settings-group-title', text: group.title }),
-            group.note ? el('p', { class: 'settings-group-note', text: group.note }) : null,
-            locked ? el('p', { class: 'settings-locked' },
-                'Set for you alone, in ', el('code', { text: '~/.tgxcode/settings.json' }),
-                ' — a checked-in file cannot change these. ',
-                el('button', {
-                    class: 'linkish', type: 'button',
-                    onclick: () => { s.scope = 'user'; renderSettings(); },
-                }, 'Switch to User')) : null);
-
-        // A row's own `when` leaves it out while another setting makes it
-        // meaningless, and is asked of the merged answer rather than of the
-        // file being edited — a choice nothing would consult is not worth a row.
-        // renderSettings runs again after every save, which is what brings it
-        // back the moment the setting it depends on changes.
-        for (const row of group.rows) {
-            if (row.when && !row.when(s.data)) continue;
-            card.append(row.type === 'heading' ? settingHeading(row)
-                : row.type === 'all' ? settingAllRow(group, row, locked)
-                : settingRow(group, row, locked));
-        }
-        if (group.keymap) card.append(renderKeymap(locked));
-        if (group.toolbar) card.append(renderToolbarSettings(locked));
-        dom.setBody.append(card);
-    }
+    paint(dom.setBody, SETTINGS.filter(g => !g.when || g.when()).map(settingsGroup));
     renderSettingsToc();
+}
+
+/** One entry of SETTINGS, as whatever kind of group it is. */
+function settingsGroup(group) {
+    // A group whose markup already exists is moved rather than rebuilt: its
+    // controls were wired at load and would lose their listeners.
+    if (group.node) {
+        return html`<${Foreign} key=${group.section} nodes=${[dom[group.node]]} after=${group.after} />`;
+    }
+    // A group that builds itself with el(). One card or several — the contents
+    // list still gets one entry, and the first card carries the id it scrolls to.
+    if (group.render) {
+        return html`<${Foreign} key=${group.section} nodes=${[...group.render()].filter(Boolean)} />`;
+    }
+    // A group that draws itself as a component.
+    if (group.card) return group.card();
+    return settingsCard(group);
+}
+
+/**
+ * Hand-built DOM, hung in a Preact tree.
+ *
+ * Preact must not be given nodes it did not make as children, and must not
+ * have its own nodes edited by hand — so the foreign nodes go inside a host
+ * element Preact renders empty, and are put there by a layout effect, which
+ * runs synchronously inside the render call. Anything that queries the panel
+ * right after renderSettings() returns finds them in place, as it did when
+ * renderSettings built everything itself. Preact never looks inside the host,
+ * because as far as it knows the host has no children.
+ *
+ * `display: contents` takes the host out of the layout, so the cards inside it
+ * are flex items of `.settings-body` exactly as before and its `gap` still
+ * spaces them — no rule in styles.css had to change. Nothing there selects
+ * `.settings-body > …`, which is the one thing the host would have broken.
+ *
+ * `after` runs once the nodes are in place, every render — the `node` groups'
+ * painters, which fill their markup from state the way they always did.
+ */
+function Foreign({ nodes, after }) {
+    const host = useRef(null);
+    useLayoutEffect(() => {
+        const box = host.current;
+        const same = box.childNodes.length === nodes.length
+            && nodes.every((n, i) => box.childNodes[i] === n);
+        if (!same) box.replaceChildren(...nodes);
+        if (after) after();
+    });
+    return html`<div class="settings-foreign" style="display: contents" ref=${host}></div>`;
 }
 
 /**
@@ -375,14 +411,21 @@ export function renderSettings() {
  * scrolling with the body, for the same reason.
  */
 function renderSettingsToc() {
-    dom.setToc.replaceChildren(...SETTINGS.filter(g => !g.when || g.when()).map(group => el('button', {
-        class: 'settings-toc-link', type: 'button', 'data-for': group.section,
-        onclick: () => {
+    // Which one is lit is measured off the cards just drawn, so it is worked
+    // out before the list is, and the list drawn once.
+    state.settings.toc = activeSettingsGroup();
+    paintSettingsToc();
+}
+
+function paintSettingsToc() {
+    const active = state.settings.toc;
+    paint(dom.setToc, SETTINGS.filter(g => !g.when || g.when()).map(group => html`<button
+        key=${group.section} class=${group.section === active ? 'settings-toc-link on' : 'settings-toc-link'}
+        type="button" data-for=${group.section}
+        onClick=${() => {
             const card = document.getElementById(`set-g-${group.section}`);
             if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        },
-    }, group.title)));
-    markSettingsToc();
+        }}>${group.title}</button>`));
 }
 
 /**
@@ -393,8 +436,7 @@ function renderSettingsToc() {
  * they are looking at — the alternative, "whichever card covers the most
  * pixels", flickers between two of them on a long group.
  */
-export function markSettingsToc() {
-    if (!state.settings.open) return;
+function activeSettingsGroup() {
     // The foot of the pinned head, not the top of the pane: a card scrolled
     // under the head is out of sight, so it is not the one being read.
     const top = dom.setTop.getBoundingClientRect().bottom;
@@ -403,11 +445,23 @@ export function markSettingsToc() {
         const card = document.getElementById(`set-g-${group.section}`);
         if (card && card.getBoundingClientRect().top - top <= 24) active = group.section;
     }
-    for (const link of dom.setToc.children) {
-        link.classList.toggle('on', link.dataset.for === active);
-    }
+    return active;
 }
 
+/** On scroll: light the group being read, and redraw the list only if it moved. */
+export function markSettingsToc() {
+    if (!state.settings.open) return;
+    const active = activeSettingsGroup();
+    if (active === state.settings.toc) return;
+    state.settings.toc = active;
+    paintSettingsToc();
+}
+
+/**
+ * The projects in the selector. The select itself is markup with its listener
+ * in app.js — which puts its value back by hand when a draft refuses the change
+ * — so only its options are drawn here.
+ */
 function paintSettingsProjects() {
     const s = state.settings;
     const here = settingsProject();
@@ -415,47 +469,41 @@ function paintSettingsProjects() {
     // /api/projects only knows directories a session has run in, and a brand
     // new one has not been indexed.
     const dirs = [...new Set([here, ...s.projects.map(p => p.cwd)].filter(Boolean))];
-    dom.setProject.replaceChildren(...dirs.map(d => el('option', {
-        value: d, selected: d === here || null,
-    }, shortPath(d))));
-    if (!dirs.length) {
-        dom.setProject.replaceChildren(el('option', { value: '', text: 'No projects yet' }));
-    }
+    paint(dom.setProject, dirs.length
+        ? dirs.map(d => html`<option key=${d} value=${d} selected=${d === here}>${shortPath(d)}</option>`)
+        : html`<option key="" value="">No projects yet</option>`);
 }
 
 function paintSettingsFile() {
     const s = state.settings;
     const row = settingsTargetRow();
     const file = row ? row.file : '';
-    dom.setFile.replaceChildren();
     if (!file) {
-        dom.setFile.append(el('span', { class: 'settings-file-none' },
-            'No settings file for that scope — pick a project above.'));
+        paint(dom.setFile, html`<span class="settings-file-none"
+            >No settings file for that scope — pick a project above.</span>`);
         return;
     }
-    // Filtered, because `append` stringifies a null into the literal word
-    // rather than skipping it the way el()'s children do.
-    dom.setFile.append(...[
-        el('span', { class: 'settings-file-lede', text: 'Writing to' }),
-        el('button', {
-            class: 'settings-file-path', type: 'button', title: 'Copy this path',
-            onclick: () => navigator.clipboard.writeText(file)
+    paint(dom.setFile, [
+        html`<span key="lede" class="settings-file-lede">Writing to</span>`,
+        html`<button key="path" class="settings-file-path" type="button" title="Copy this path"
+            onClick=${() => navigator.clipboard.writeText(file)
                 .then(() => toast('Path copied.'))
-                .catch(() => toast('Could not copy that path.', 'error')),
-        }, file),
-        !row.exists && el('span', { class: 'settings-file-tag', text: 'will be created' }),
-        row.exists && !row.parsed
-            && el('span', { class: 'settings-file-tag bad', text: 'does not parse — saving is refused' }),
-        !row.writable && el('span', { class: 'settings-file-tag bad', text: 'not writable' }),
-        s.saving && el('span', { class: 'settings-file-tag', text: 'saving…' }),
-    ].filter(Boolean));
+                .catch(() => toast('Could not copy that path.', 'error'))}>${file}</button>`,
+        !row.exists ? html`<span key="new" class="settings-file-tag">will be created</span>` : null,
+        row.exists && !row.parsed ? html`<span key="parse" class="settings-file-tag bad"
+            >does not parse — saving is refused</span>` : null,
+        !row.writable ? html`<span key="ro" class="settings-file-tag bad">not writable</span>` : null,
+        s.saving ? html`<span key="saving" class="settings-file-tag">saving…</span>` : null,
+    ]);
 }
 
 function paintSettingsProblems() {
     const files = (state.settings.data && state.settings.data.files) || [];
     const rows = [];
     for (const f of files) for (const m of f.problems || []) rows.push({ file: f.file, message: m });
+    // The container's own `hidden` is markup's, not Preact's — only its
+    // children are rendered — so it is set by hand as before.
     dom.setProblems.hidden = !rows.length;
-    dom.setProblems.replaceChildren(...rows.map(r => el('div', { class: 'settings-problem' },
-        el('code', { text: shortPath(r.file) }), ' ', r.message)));
+    paint(dom.setProblems, rows.map((r, i) => html`<div key=${`${r.file}:${i}`} class="settings-problem">
+        <code>${shortPath(r.file)}</code>${' '}${r.message}</div>`));
 }
