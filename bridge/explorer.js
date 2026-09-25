@@ -18,7 +18,7 @@
 //     only opening its folder.
 //
 // bridge/platform.js decides which, and the exported shape is identical either
-// way so that bridge/server.js does not branch.
+// way so that the routes that call it do not branch.
 //
 // One thing genuinely differs and is worth knowing before reading the code: on
 // Windows an exit code tells us nothing (see handToExplorer), while xdg-open has

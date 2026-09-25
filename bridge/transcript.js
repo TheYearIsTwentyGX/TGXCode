@@ -1200,8 +1200,9 @@ function parsePeerMessage(text, entry) {
 // would have rendered and never notified. Half-working silently is worse than a
 // parallel path, and the format is not ours to imitate anyway.
 //
-// The wrapper is written by the handoff route in bridge/server.js; the two halves
-// of one format live in one file for the same reason the attachment note does.
+// The wrapper is written by the handoff route in bridge/routes/session.js; the
+// two halves of one format live in one file for the same reason the attachment
+// note does.
 const HANDOFF_TAG = '<session-handoff';
 
 /**
@@ -1798,8 +1799,8 @@ module.exports = {
     // session is worth interrupting you for, and needs to recognise one first.
     parsePeerMessage,
     // The two halves of the handoff wrapper. `handoffEnvelope` is written by the
-    // handoff route in bridge/server.js and read back by `parseHandoff` here, so
-    // they are exported together — one format, one file, the same rule the
+    // handoff route in bridge/routes/session.js and read back by `parseHandoff`
+    // here, so they are exported together — one format, one file, the same rule the
     // attachment note follows below.
     handoffEnvelope, parseHandoff, isHandoff, HANDOFF_TAG,
     // Exported for bridge/commands.js, which has to answer the same question
