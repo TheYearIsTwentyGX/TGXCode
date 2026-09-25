@@ -259,6 +259,84 @@ function zombie(windows) {
     ok('an unchanged reading does not rewrite the file or refresh its age');
 }
 
+// --- a number that is still true ------------------------------------------
+
+/** A file holding five_hour at 100%, learned `ago` seconds before now. */
+function seedCapped(t, ago) {
+    write({
+        version: 1,
+        windows: { five_hour: { used_percentage: 100, resets_at: t + 2 * HOUR } },
+        observedAt: { five_hour: t - ago },
+        capturedAt: t - ago,
+    });
+}
+
+{
+    // The bug this was written for. A five-hour window at its limit stays at
+    // 100% until it resets, so every fresh reading matches the file. The stamp
+    // froze at the last change, and after half an hour the pill greyed a
+    // number the beacon had confirmed seconds earlier.
+    reset();
+    const t = now();
+    seedCapped(t, 45 * 60);
+
+    // A beacon: a new session, no API calls, up for a few seconds.
+    const { file } = render({
+        session_id: 'beacon-session',
+        cost: { total_duration_ms: 4_000, total_api_duration_ms: 0 },
+        rate_limits: { five_hour: { used_percentage: 100, resets_at: t + 2 * HOUR } },
+    });
+
+    assert.strictEqual(file.windows.five_hour.used_percentage, 100);
+    assert.ok(Math.abs(file.observedAt.five_hour - t) <= 10,
+        'a fresh observation of the same number makes it fresh');
+    assert.strictEqual(file.capturedAt, file.observedAt.five_hour);
+
+    ok('a fresh reading of an unchanged number refreshes its age');
+}
+
+{
+    // And the rule that made the old one exist: a terminal that has learned
+    // nothing since still cannot pass an old number off as new, even when the
+    // number is the same.
+    reset();
+    const t = now();
+    seedCapped(t, 45 * 60);
+    fs.writeFileSync(path.join(STATE, 'quota-session.terminal-a.json'),
+        JSON.stringify({ api: 500, at: t - 4 * HOUR }));
+
+    const { file } = render({
+        session_id: 'terminal-a',
+        cost: { total_duration_ms: 5 * HOUR * 1000, total_api_duration_ms: 500 },
+        rate_limits: { five_hour: { used_percentage: 100, resets_at: t + 2 * HOUR } },
+    });
+
+    assert.strictEqual(file.observedAt.five_hour, t - 45 * 60,
+        'an idle terminal re-confirming is not an observation');
+
+    ok('an idle terminal re-confirming a number does not refresh its age');
+}
+
+{
+    // Not every render: a re-confirmation only a few seconds newer is not worth
+    // a write.
+    reset();
+    const t = now();
+    seedCapped(t, 20);
+    const mtime = fs.statSync(FILE).mtimeMs;
+
+    render({
+        session_id: 'beacon-session',
+        cost: { total_duration_ms: 1_000, total_api_duration_ms: 0 },
+        rate_limits: { five_hour: { used_percentage: 100, resets_at: t + 2 * HOUR } },
+    });
+
+    assert.strictEqual(fs.statSync(FILE).mtimeMs, mtime, 'not rewritten');
+    assert.strictEqual(read().observedAt.five_hour, t - 20);
+
+    ok('a re-confirmation within a minute does not rewrite the file');
+}
+
 // --- windows that have expired -------------------------------------------
 
 {

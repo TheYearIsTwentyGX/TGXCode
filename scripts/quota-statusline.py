@@ -228,6 +228,12 @@ def prune_sessions(now):
             pass
 
 
+# How much newer an observation of an unchanged value has to be before it is
+# worth rewriting the file to say so. Far below web/quota.js's thirty-minute
+# staleness line, far above the render debounce.
+RECONFIRM_STEP = 60
+
+
 def save(found, seen_at, now):
     """Merge this reading into the shared file, newest observation per window.
 
@@ -243,10 +249,17 @@ def save(found, seen_at, now):
         by the CLI) deleted everybody else's good five-hour reading. That is
         precisely why the pill showed "5h" with no percentage at all.
 
-      - **An unchanged value does not move its timestamp.** Re-confirming 3% is
-        not learning anything, and stamping it fresh is how a number nobody has
-        updated goes on looking current. It also keeps `capturedAt` meaning what
-        web/quota.js's staleness greying has always assumed.
+      - **An unchanged value moves its timestamp only on a newer observation.**
+        This used to be "never": re-confirming a number was treated as learning
+        nothing, because every writer then stamped with the current time and a
+        stale renderer re-confirming was indistinguishable from a live one. That
+        defence now lives in observed_at(), which says when the CLI actually
+        learned the numbers, so a re-confirmation carrying a newer `seen_at` is
+        real news — "still 100%, as of now". Without it, a five-hour window
+        pinned at its limit greyed out as stale after half an hour while the
+        beacon confirmed it every five minutes. An idle terminal's `seen_at`
+        does not move, so it still refreshes nothing, and RECONFIRM_STEP keeps
+        a live one from rewriting the file on every render.
     """
     prev = {}
     try:
@@ -277,10 +290,12 @@ def save(found, seen_at, now):
         stamps[name] = int(st if st is not None else fallback)
 
     for name, win in found.items():
-        if merged.get(name) == win:
-            continue                                  # nothing learned
         if name in stamps and seen_at < stamps[name]:
             continue                                  # we are the stale one
+        if merged.get(name) == win:
+            if name in stamps and seen_at - stamps[name] >= RECONFIRM_STEP:
+                stamps[name] = seen_at                # still true, as of now
+            continue
         merged[name] = win
         stamps[name] = seen_at
 
