@@ -11,9 +11,10 @@ import { get } from '../api.js';
 import { dom, el, toast } from '../dom.js';
 import { ago, clip, dur, shortModel } from '../format.js';
 import { state } from '../state.js';
-import {
-    applyRunner, enableSend, rememberView, renderLater, renderQueue, subscribe,
-} from '../app.js';
+import { applyRunner, rememberView, subscribe } from '../app.js';
+import { renderLater } from '../composer/later.js';
+import { renderQueue } from '../composer/queue.js';
+import { enableSend } from '../composer/send.js';
 import { renderAsk } from './approvals.js';
 import { AGENT_VIEW, appendEvents, renderHeader } from './conversation.js';
 import { markFindDirty, syncFindSubs } from './find.js';

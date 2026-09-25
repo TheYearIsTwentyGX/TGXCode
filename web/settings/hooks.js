@@ -10,7 +10,8 @@ import { put } from '../api.js';
 import { dom, el, toast } from '../dom.js';
 import { shortPath } from '../format.js';
 import { icon } from '../icons.js';
-import { grow, snipDeleteButton } from '../app.js';
+import { snipDeleteButton } from '../app.js';
+import { grow } from '../composer/send.js';
 import {
     CLAUDE_SCOPES, claudeDir, claudeJsonLink, claudeSavedNote, claudeState, claudeTargetRow,
     loadClaudeConfig,

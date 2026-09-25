@@ -295,17 +295,20 @@ const TODOS = [
     // collapsed summary counted the *characters* of that string and offered
     // "1041 items", and iterating it walked the list one character at a time.
     //
-    // The call sites are spread across web/transcript/ (tools.js and find.js
-    // today), so every file there is scanned, plus web/app.js for anything that
-    // stayed behind — a guard that reads one file stops guarding the moment a
-    // call site moves to another.
+    // The call sites are in web/transcript/ today (tools.js and find.js), but
+    // app.js has been split into directories more than once, so every module
+    // under web/ is scanned, bar the vendored bundles — a guard that reads one
+    // file, or one directory, stops guarding the moment a call site moves.
     const webDir = path.join(__dirname, '..', 'web');
-    const transcriptDir = path.join(webDir, 'transcript');
-    const scanned = [
-        path.join(webDir, 'app.js'),
-        ...fs.readdirSync(transcriptDir).filter(f => f.endsWith('.js')).sort()
-            .map(f => path.join(transcriptDir, f)),
-    ];
+    const scanned = [];
+    (function walk(dir) {
+        for (const e of fs.readdirSync(dir, { withFileTypes: true })
+            .sort((a, b) => a.name.localeCompare(b.name))) {
+            const full = path.join(dir, e.name);
+            if (e.isDirectory()) { if (e.name !== 'vendor') walk(full); }
+            else if (e.name.endsWith('.js')) scanned.push(full);
+        }
+    })(webDir);
     const src = scanned.map(f => fs.readFileSync(f, 'utf8')).join('\n');
 
     assert.ok(src.includes('function todoItemsOf('),
@@ -314,7 +317,7 @@ const TODOS = [
     // string shape a bug in three places at once.
     const raw = src.match(/i\.tasks \|\| i\.todos/g) || [];
     assert.strictEqual(raw.length, 1,
-        'across web/app.js and every web/transcript/*.js, only the comment in ' +
+        'across every module under web/, only the comment in ' +
         'tools.js explaining the trap may still name the raw keys');
 
     ok('the transcript renderer repairs a stringified list too, not just the bridge');

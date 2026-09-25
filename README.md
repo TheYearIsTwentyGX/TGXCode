@@ -306,7 +306,7 @@ Two rules worth knowing before you send a patch:
 | `scripts/quota-statusline.py` | Claude Code's status line, harvesting the quota percentages on the way past |
 | `scripts/install-quota-statusline.js` | Points `~/.claude/settings.json` at that script, and refuses to clobber one you already have |
 | `web/` | The UI. No build step: edit a file and refresh |
-| `web/app.js` | Everything not yet moved out of it: the event stream, the composer and every surface but Settings and the transcript. Imports the modules below |
+| `web/app.js` | Everything not yet moved out of it: the event stream, the rail's data, the dashboard, boards, snippets and schedules, and the boot and event wiring that calls every module's `wire*()` at the point its listeners always registered. Imports the modules below |
 | `web/api.js` | `get`, `post`, `patch`, `put`, `del`, `postFile` — the fetch wrappers every call to the bridge goes through, and the CSRF header they send |
 | `web/boot.js` | What the page was handed in `<meta>` tags — `BOOT_PREFS` and its fallback, the host paths, the pairing token — read synchronously at load |
 | `web/state.js` | `state`, the page's one mutable store, and `DEFAULT_PERM`. What a surface remembers goes on here, not in a module-level `let` |
@@ -342,6 +342,21 @@ Two rules worth knowing before you send a patch:
 | `web/transcript/turn-rail.js` | The turn rail, and revealing and flashing a row in the log |
 | `web/transcript/find.js` | Ctrl+F over the transcript and its subagents |
 | `web/terminal.js` | The terminal pane — a shell, or a run's output |
+| `web/composer/` | The message boxes — the one under a conversation and the Start-a-session dialog's — and everything that sends from them. Like `transcript/`, none may read an imported binding at top level; load-time listeners are in a `wire*()` that app.js calls |
+| `web/composer/slash.js` | `makeComposer`, the live composer (`live`), the popover machinery `/` and `@` share — selection, paging, the capture-phase keyboard map — and `/` completion |
+| `web/composer/mentions.js` | `@` completion over the other running sessions, and inserting a mention |
+| `web/composer/send.js` | Sizing the box, enabling the send controls, the optimistic chip a message shows until the transcript has it, and whether Enter sends |
+| `web/composer/queue.js` | The send queue's chips — messages typed while a turn runs — reordered, edited back or dropped |
+| `web/composer/later.js` | Send later: the popover, the held messages' chips, and delivering one now or cancelling it |
+| `web/composer/attachments.js` | Files pasted, dropped or picked into either composer, as chips, uploaded or held until the session exists |
+| `web/composer/wispr.js` | The Wispr Flow transform buttons, their Settings group, and `wisprAvailable` |
+| `web/new-session/` | The Start-a-session dialog. Same top-level rule as `composer/` |
+| `web/new-session/dialog.js` | Opening and closing it, the working-directory box, the values Start and Save send, and its first-message box (`newC`) |
+| `web/new-session/picker.js` | The Recent and Browse tabs over one directory, and the New-folder row |
+| `web/new-session/recent.js` | The recent-directories menu on the New button's split half |
+| `web/new-session/trigger.js` | The schedule picker that composes cron, the gate fields, and the Start, Save-draft and Schedule buttons |
+| `web/commands.js` | The header's project-command buttons — `.tgxcode/commands.json` for the session's directory — and the runs they start |
+| `web/term-pane.js` | The app's side of the terminal pane: the one `TerminalPane`, open per session, its height and head, and the shell/run tabs |
 | `web/markdown.js` | The transcript's markdown renderer |
 | `web/highlight.js` | The syntax highlighter behind it |
 | `web/sw.js` | A service worker for one thing only: buttons on a notification. No `fetch` handler |

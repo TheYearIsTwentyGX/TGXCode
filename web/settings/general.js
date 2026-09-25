@@ -10,10 +10,10 @@ import { el } from '../dom.js';
 import { shortPath } from '../format.js';
 import { state } from '../state.js';
 import {
-    paintBackdropTint, refreshPairUrl, renderProjectBackdrop,
-    renderProjectColors, renderProjectOrder, renderSnipSettings, renderWisprSettings,
-    wisprAvailable,
+    paintBackdropTint, refreshPairUrl, renderProjectBackdrop, renderProjectColors,
+    renderProjectOrder, renderSnipSettings,
 } from '../app.js';
+import { renderWisprSettings, wisprAvailable } from '../composer/wispr.js';
 import { renderClaudeConfig } from './claude-config.js';
 import {
     renderSettings, saveSetting, saveSettings, SCOPE_NAMES, settingOrigin, settingsTargetRow,

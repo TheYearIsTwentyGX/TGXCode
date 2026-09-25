@@ -14,7 +14,7 @@ import { clip, dur, shortModel } from '../format.js';
 import { escapeHtml, highlight } from '../highlight.js';
 import { renderMarkdown } from '../markdown.js';
 import { state } from '../state.js';
-import { peerByName } from '../app.js';
+import { peerByName } from '../composer/mentions.js';
 import { statusMark } from './checklist.js';
 import { openSession } from './conversation.js';
 import { markFindDirty } from './find.js';
