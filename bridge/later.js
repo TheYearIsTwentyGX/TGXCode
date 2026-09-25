@@ -148,7 +148,7 @@ function clean(row) {
         // Never defaulted at delivery. /send's documented trap is that an absent
         // mode normalises to `auto`; doing that silently, six hours after the
         // message was written, would pick the one mode that cannot work when
-        // nobody is watching — see the delivery notes in server.js.
+        // nobody is watching — see the delivery notes in bridge/later-delivery.js.
         permissionMode: row.permissionMode,
         at: row.at,
         state: row.state,

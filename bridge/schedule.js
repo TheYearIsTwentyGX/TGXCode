@@ -1083,7 +1083,7 @@ function read() {
  *
  * **Why it exists at all**, given `lastSessionId`: that field holds one id and
  * is overwritten by the next run, so it can only ever group the newest session
- * of each schedule. `scheduledRuns` in server.js holds the rest, and is an
+ * of each schedule. `scheduledRuns` in bridge/scheduler.js holds the rest, and is an
  * in-memory Map emptied by every restart. Nothing survived a restart, which is
  * what `docs/plans/15-scheduling.md` §A means by "missing a `scheduleId` on the
  * session".
@@ -1092,7 +1092,7 @@ const RUNS_FILE = path.join(STATE_DIR, 'schedule-runs.json');
 const RUNS_VERSION = 1;
 
 // Ids kept before the oldest is dropped. Matches SCHEDULED_RUNS_KEPT in
-// server.js: a PR sweep can start a dozen in a night, and a session old enough
+// bridge/scheduler.js: a PR sweep can start a dozen in a night, and a session old enough
 // to fall off this list is old enough that the prompt matcher can have it.
 const RUNS_KEPT = 400;
 
