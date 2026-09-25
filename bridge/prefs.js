@@ -160,6 +160,14 @@ const DEFAULTS = {
         // Off by default, because a session you cannot drive from here is still
         // a session you may want to know is running.
         hideElsewhere: false,
+        // How the Live group is ordered. `needs-you` is the bridge's rank —
+        // blocked on you first, then whatever moved most recently — which means
+        // every message a session writes can move its card. `arrival` holds a
+        // card where it joined: new work goes on the bottom and climbs only as
+        // the sessions above it leave the group. Read by the web board alone;
+        // the payload's order does not change, because the phone's "needs you"
+        // list and the card cap both lean on it.
+        order: 'needs-you',
         // Whether the board stays on screen while one of the whole-screen
         // panels is up, one key per panel. `hidden` is how it always was — the
         // panel covers the board without closing it. `always` docks the board
@@ -387,6 +395,7 @@ const SHAPE = {
     live: {
         compact: (v) => typeof v === 'boolean',
         hideElsewhere: (v) => typeof v === 'boolean',
+        order: (v) => v === 'needs-you' || v === 'arrival',
         overTasks: isLiveOver,
         overDashboard: isLiveOver,
         overHistory: isLiveOver,
