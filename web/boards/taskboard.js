@@ -586,7 +586,7 @@ function tbAskWords(ask) {
 
 /**
  * The same rule the live board uses: a click on a control is not "take me there".
- * The drafts and schedules panels in app.js use it too.
+ * The drafts and schedules panels (web/drafts.js, web/schedules.js) use it too.
  */
 export function tbCardClickOpens(e) {
     if (e.target.closest('button, a, input, textarea, select, label')) return false;

@@ -306,7 +306,7 @@ Two rules worth knowing before you send a patch:
 | `scripts/quota-statusline.py` | Claude Code's status line, harvesting the quota percentages on the way past |
 | `scripts/install-quota-statusline.js` | Points `~/.claude/settings.json` at that script, and refuses to clobber one you already have |
 | `web/` | The UI. No build step: edit a file and refresh |
-| `web/app.js` | Everything not yet moved out of it: the event stream, the rail's data, the panel machinery the boards open and close through, drafts, snippets and schedules, and the boot and event wiring that calls every module's `wire*()` at the point its listeners always registered. Imports the modules below |
+| `web/app.js` | Everything not yet moved out of it: the event stream, the rail's data, the panel machinery the boards open and close through, and the boot and event wiring that calls every module's `wire*()` at the point its listeners always registered. Imports the modules below |
 | `web/api.js` | `get`, `post`, `patch`, `put`, `del`, `postFile` — the fetch wrappers every call to the bridge goes through, and the CSRF header they send |
 | `web/boot.js` | What the page was handed in `<meta>` tags — `BOOT_PREFS` and its fallback, the host paths, the pairing token — read synchronously at load |
 | `web/state.js` | `state`, the page's one mutable store, and `DEFAULT_PERM`. What a surface remembers goes on here, not in a module-level `let` |
@@ -323,6 +323,14 @@ Two rules worth knowing before you send a patch:
 | `web/boards/dashboard.js` | Work in flight — fetching it, the badge, and the projects, workspaces and session chips |
 | `web/boards/history.js` | The notification history list. Its read state stays in app.js, which openSession and the stream reach into |
 | `web/boards/taskboard.js` | The task board — the held order (`tbRememberOrder`/`tbHold`), the four columns, the focused view and acting on a card |
+| `web/drafts.js` | The drafts panel — sessions set up but not started — in Preact: opening it, the badge, a column per project once there are two, and Start, Edit and Delete on a card |
+| `web/schedules.js` | The schedules panel — sessions that start on a clock — in Preact: opening it, the badge, Active/Paused/Done bands in a column per project, and Run now, Pause, Edit and Delete on a card |
+| `web/snippets/` | Canned messages and the buttons that send them, one module per surface, in Preact on web/rail.js's pattern. Same top-level rule as `composer/`; load-time listeners are in `wireSnippets()` |
+| `web/snippets/index.js` | The list — loading it, the `snippets-changed` push that repaints every surface — the rules they share (project scoping, filling placeholders), and `wireSnippets` |
+| `web/snippets/popover.js` | The popover on each composer and its keyboard map, choosing a snippet (where the text goes, whether it sends, the right-click overrides), and the fill-in dialog |
+| `web/snippets/pins.js` | The pinned buttons beside the composer's snippets icon |
+| `web/snippets/settings.js` | The Snippets group in Settings — groups, rows, drag and arrow reordering held in `state.snippets.order` — and the arm-then-confirm delete button other Settings groups borrow |
+| `web/snippets/editor.js` | One snippet in the editor dialog, as a component whose state is the form |
 | `web/settings/` | The Settings panel, one module per group. Every module here evaluates before app.js's body, so none may read an app.js `const` at top level |
 | `web/settings/index.js` | Opening and closing the panel, loading and saving `~/.tgxcode/settings.json` a key at a time, the head and the table of contents |
 | `web/settings/general.js` | `SETTINGS`, one row per key, and the builders that turn a row into a control |

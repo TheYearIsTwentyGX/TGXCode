@@ -25,7 +25,7 @@ import { dom, el } from '../dom.js';
 import { clip } from '../format.js';
 import { showQuota } from '../quota.js';
 import { state } from '../state.js';
-import { closeSnips, positionSnips } from '../app.js';
+import { closeSnips, positionSnips } from '../snippets/popover.js';
 import { showNewMenu } from '../new-session/recent.js';
 import { showBarMore } from '../settings/toolbar.js';
 import { wireAttachments } from './attachments.js';

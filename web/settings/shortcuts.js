@@ -11,9 +11,10 @@ import { dom, el, toast } from '../dom.js';
 import * as keys from '../keys.js';
 import { state } from '../state.js';
 import {
-    paintDashBadge, paintDraftsBadge, paintLiveBadge, paintNotesBadge, paintSchedBadge,
-    paintTaskboardBadge,
+    paintDashBadge, paintLiveBadge, paintNotesBadge, paintTaskboardBadge,
 } from '../app.js';
+import { paintDraftsBadge } from '../drafts.js';
+import { paintSchedBadge } from '../schedules.js';
 import { renderHeaderActions } from '../transcript/conversation.js';
 import { renderSettings, saveSetting } from './index.js';
 
