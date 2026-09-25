@@ -16,6 +16,7 @@ import {
     CLAUDE_SCOPES, claudeDir, claudeJsonLink, claudeSavedNote, claudeState, claudeTargetRow,
     loadClaudeConfig,
 } from './claude-config.js';
+import { foldLabel, isOpen, setFold } from './fold.js';
 import { renderSettings } from './index.js';
 import { clone, hasOwn } from './project-commands.js';
 
@@ -338,17 +339,32 @@ function hkEventCard(ev, i, editable, problems) {
     const info = hkEventInfo(ev.event);
     const draft = hkDraft();
     const bad = problems.filter(p => p.k === ev._k);
-    const card = el('div', { class: `cmd-card hk-event${bad.length ? ' bad' : ''}` },
+    // Folds to its head line — see fold.js. A file with more than a few events
+    // starts with them shut, since each card is several fields per hook; one
+    // that the review found a problem in is drawn open whatever was chosen,
+    // because a Save refused over something you cannot see is no answer.
+    const key = `hook:${ev.event}`;
+    const inside = bad.length || ev.groups.some(g => problems.some(p => p.k === g._k
+        || g.hooks.some(h => p.k === h._k)));
+    const open = inside || isOpen(key, draft.length > 3);
+    const hooks = ev.groups.reduce((n, g) => n + g.hooks.length, 0);
+    const card = el('div', { class: `cmd-card hk-event${bad.length ? ' bad' : ''}${open ? '' : ' is-folded'}` },
         el('div', { class: 'cmd-card-head' },
-            el('code', { class: 'cmd-card-id', text: ev.event }),
+            foldLabel(key, open, el('code', { class: 'cmd-card-id', text: ev.event }), 'set-fold is-card'),
             info ? el('span', { class: 'cmd-card-name', text: info.blurb.replace(/`/g, '') })
                 : el('span', { class: 'cfg-tab-tag', title: 'Kept as it is — Claude Code may know it even if this page does not' },
                     'an event this page does not know'),
+            !open
+                ? el('span', { class: 'set-fold-sum is-inline' },
+                    `${ev.groups.length} ${ev.groups.length === 1 ? 'group' : 'groups'} · `
+                    + `${hooks} ${hooks === 1 ? 'hook' : 'hooks'}`)
+                : null,
             el('div', { class: 'cmd-card-spacer' }),
             editable ? snipDeleteButton(`Remove every ${ev.event} hook`, () => {
                 draft.splice(i, 1);
                 hkChanged();
             }) : null));
+    if (!open) return card;
     for (const p of bad) card.append(el('p', { class: 'cmd-field-bad hk-problem', text: p.message }));
     ev.groups.forEach((g, gi) => card.append(hkGroup(ev, g, gi, info, editable, problems)));
     if (editable) {
@@ -706,6 +722,8 @@ function hkAddEvent(draft) {
         if (!name) return;
         if (have.has(name)) { toast(`${name} is already here — add a matcher to it instead.`, 'warn'); return; }
         draft.push({ _k: hkKey(), event: name, groups: [hkNewGroup()] });
+        // Open, or the event you just added would arrive folded shut.
+        setFold(`hook:${name}`, true);
         hkChanged();
     };
     return el('div', { class: 'cfg-list-add hk-add' },
@@ -736,10 +754,13 @@ function hkElsewhere() {
     const s = claudeState();
     const rows = (s.data.hooks || []).filter(h => h.scope !== s.scope);
     if (!rows.length) return el('span', { hidden: true });
+    const open = isOpen('hook:elsewhere', true);
     return el('div', { class: 'cfg-inherit' },
         el('div', { class: 'cfg-inherit-head' },
-            `${rows.length} more ${rows.length === 1 ? 'hook runs' : 'hooks run'} from other files — these add to yours`),
-        rows.map(h => el('div', { class: 'cfg-inherit-row hk-inherit-row' },
+            foldLabel('hook:elsewhere', open,
+                `${rows.length} more ${rows.length === 1 ? 'hook runs' : 'hooks run'} from other files — these add to yours`,
+                'set-fold is-quiet')),
+        !open ? null : rows.map(h => el('div', { class: 'cfg-inherit-row hk-inherit-row' },
             el('span', { class: 'hk-inherit-scope', text: CLAUDE_SCOPES[h.scope] || h.scope }),
             ` ${h.event}${h.matcher ? ` · ${h.matcher}` : ''} → ${h.target || h.type || '—'}`,
             h.script && !h.script.exists

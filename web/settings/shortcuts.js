@@ -18,6 +18,7 @@ import {
 import { paintDraftsBadge } from '../drafts.js';
 import { paintSchedBadge } from '../schedules.js';
 import { renderHeaderActions } from '../transcript/conversation.js';
+import { foldLabelV, isOpen, LONG } from './fold.js';
 import { renderSettings, saveSetting } from './index.js';
 
 // ── remapping a shortcut ─────────────────────────────────────────────────
@@ -57,11 +58,20 @@ export function renderKeymap(locked) {
         ${clashes.length ? html`<div class="settings-row-warn">${
             clashes.map(c => `${c.combo} is asked for by both ${c.labels.join(' and ')}; `
                 + `${c.labels[0]} wins.`).join(' ')}</div>` : null}
-        ${groups.map(g => html`<div key=${g.name} class="settings-keys-group">
-            <div class="settings-keys-group-name">${g.name}</div>
-            ${g.rows.map(c => keymapRow(c, locked, s.recording === c.id,
-                clashed.has(keys.binding(c.id))))}
-        </div>`)}
+        ${groups.map((g) => {
+            // Each group folds on its own — see fold.js. One holding the chord
+            // being recorded, or a clash, is drawn open whatever was chosen.
+            const key = `keys:${g.name}`;
+            const busy = g.rows.some(c => s.recording === c.id || clashed.has(keys.binding(c.id)));
+            const open = busy || isOpen(key, g.rows.length > LONG);
+            return html`<div key=${g.name} class="settings-keys-group">
+                <div class="settings-keys-group-name">${foldLabelV(key, open, g.name)}${
+                    !open ? html`<span class="set-fold-sum is-inline">${
+                        `${g.rows.length} ${g.rows.length === 1 ? 'shortcut' : 'shortcuts'}`}</span>` : null}</div>
+                ${open ? g.rows.map(c => keymapRow(c, locked, s.recording === c.id,
+                    clashed.has(keys.binding(c.id)))) : null}
+            </div>`;
+        })}
     </div>`;
 }
 

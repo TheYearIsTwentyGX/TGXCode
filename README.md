@@ -366,6 +366,7 @@ Two rules worth knowing before you send a patch:
 | `web/settings/toolbar.js` | The top bar's layout and More menu, and the Toolbar group that edits them (a component that holds a drag's order until its save is over) |
 | `web/settings/shortcuts.js` | The Shortcuts group, and the key hints in every title that names a binding |
 | `web/settings/notifications.js` | The Notifications group — this browser's switches for `web/notifications.js`, as a component (no longer markup in index.html) |
+| `web/settings/fold.js` | Folding the long rows — permission lists, hooks, plugins, verb groups, shortcuts. Shut once a list is long, open while short; an explicit choice is kept per browser in localStorage |
 | `web/transcript/` | The open conversation, kept imperative on purpose: rows are append-only, streamed from SSE, with scroll, width and find marks managed by hand. Like `settings/`, every module here evaluates before app.js's body, so none may read an imported binding at top level |
 | `web/transcript/conversation.js` | Opening a session, its header, and appending events to the log through a view — `SESSION_VIEW` or `AGENT_VIEW` — so the main log and the subagent pane share one renderer; folding runs of tool calls |
 | `web/transcript/rows.js` | One row per event — the row shell and its copy button, user, assistant and thinking rows, peer messages, handoffs and system lines |
