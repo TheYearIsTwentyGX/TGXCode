@@ -295,11 +295,12 @@ clear();
 write(userFile, { version: VERSION });
 prefs.cache.clear();
 got = prefs.forCwd();
-assert.deepStrictEqual(got.preview, { keepAliveMinutes: 10, overLive: true });
+assert.deepStrictEqual(got.preview,
+    { keepAliveMinutes: 10, overLive: true, links: false, listMode: 'block', list: [] });
 assert.deepStrictEqual(got.devbrowser, { show: true, openIn: 'devbrowser', whenClosed: 'launch' });
 clear();
 write(userFile, { version: VERSION,
-    preview: { keepAliveMinutes: '5', overLive: 1 },
+    preview: { keepAliveMinutes: '5', overLive: 1, links: 'yes', listMode: 'deny', list: 'github.com' },
     devbrowser: { show: 'no', openIn: 'window', whenClosed: 'ask' } });
 prefs.cache.clear();
 got = prefs.forCwd();
@@ -315,6 +316,29 @@ assert.strictEqual(kept.prefs.preview.keepAliveMinutes, 0, '0 is "recycle at onc
 assert.strictEqual(kept.prefs.devbrowser.openIn, 'inline');
 assert.strictEqual(kept.prefs.devbrowser.whenClosed, 'nothing');
 ok('the preview keys default to the old behaviour and take only their closed sets');
+
+// preview.list: one bad line in a hand-edited file costs that line, a repeat is
+// dropped quietly because it means nothing new, and a PUT with a bad line is
+// refused whole like any other bad value.
+clear();
+write(userFile, { version: VERSION,
+    preview: { links: true, listMode: 'allow', list: [' github.com ', 'github.com', '', 7, 'x'.repeat(201), 'a\nb', '*.corp.test'] } });
+prefs.cache.clear();
+got = prefs.forCwd();
+assert.strictEqual(got.preview.links, true);
+assert.strictEqual(got.preview.listMode, 'allow');
+assert.deepStrictEqual(got.preview.list, ['github.com', '*.corp.test']);
+assert.strictEqual(got.problems.filter(p => /preview\.list/.test(JSON.stringify(p))).length, 4,
+    'each bad line is its own problem, and the repeat is none');
+assert.throws(() => prefs.save({ scope: 'user', patch: { preview: { list: ['ok.test', ''] } } }),
+    (e) => e.code === 'value', 'a blank entry was saved');
+assert.throws(() => prefs.save({ scope: 'user', patch: { preview: { listMode: 'deny' } } }),
+    (e) => e.code === 'value', 'an unknown list mode was saved');
+const listSaved = prefs.save({ scope: 'user', patch: { preview: { list: ['a.test', 'a.test', ' b.test'] } } });
+assert.deepStrictEqual(listSaved.prefs.preview.list, ['a.test', 'b.test'], 'saved as spelled canonically');
+const emptied = prefs.save({ scope: 'user', patch: { preview: { list: null } } });
+assert.deepStrictEqual(emptied.prefs.preview.list, [], 'null puts the default back');
+ok('the preview link list drops bad lines from a file and refuses them in a save');
 
 // --- the rail's project order -----------------------------------------------
 // `sort` and `newAt` are closed sets; the bumpOn* switches are booleans; and

@@ -127,6 +127,26 @@ export const SETTINGS = [
                 note: 'A port clicked on a Live card covers the board, and Home brings '
                     + 'it back. Off opens that card’s session and previews over it, '
                     + 'with the board still docked beside it.' },
+            { key: 'links', type: 'bool',
+                label: 'Open links from chat in the preview',
+                note: 'A link in a message opens here instead of in your browser. '
+                    + 'Ctrl-, Shift- or middle-click still sends it to the browser. '
+                    + 'A site other than a local port needs the desktop app, and a '
+                    + 'link it leads to on another site still leaves for the browser.' },
+            { key: 'listMode', type: 'radio',
+                when: (p) => p.preview && p.preview.links === true,
+                label: 'Which links',
+                options: [['block', 'All but the list'], ['allow', 'Only the list']],
+                note: 'The list below is a blocklist or an allowlist. An empty '
+                    + 'allowlist previews nothing.' },
+            { key: 'list', type: 'list', wide: true,
+                when: (p) => p.preview && p.preview.links === true,
+                label: 'Domains and URLs',
+                placeholder: 'github.com\n*.internal.example\nlocalhost:5173/admin',
+                note: 'One per line. example.com is that site and its subdomains, '
+                    + '*.example.com subdomains only, and anything with a / is a URL '
+                    + 'prefix. Lines starting with # are ignored. Saved when you '
+                    + 'leave the box.' },
         ],
     },
     {
@@ -540,6 +560,18 @@ function settingControl(row, value, disabled, save, saveKey) {
     if (row.type === 'range') {
         return html`<${SettingRange} key=${`range:${rev}:${value ?? ''}`}
             row=${row} value=${value} disabled=${disabled} save=${save} />`;
+    }
+    if (row.type === 'list') {
+        // One entry per line, committed on blur like a path. An empty box is
+        // the default rather than an empty list written into the file.
+        const text = Array.isArray(value) ? value.join('\n') : '';
+        return html`<textarea key=${`list:${rev}:${text}`} class="settings-text settings-list"
+            spellcheck=${false} rows=${Math.min(12, Math.max(4, text.split('\n').length + 1))}
+            defaultValue=${text} disabled=${disabled} placeholder=${row.placeholder || ''}
+            onChange=${(e) => {
+                const lines = e.target.value.split('\n').map(l => l.trim()).filter(Boolean);
+                save(lines.length ? lines : null);
+            }}></textarea>`;
     }
     if (row.type === 'groups') return settingGroups(value, disabled, save, saveKey);
     return html`<span>${String(value)}</span>`;

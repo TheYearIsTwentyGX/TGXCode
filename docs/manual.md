@@ -1306,6 +1306,34 @@ forward, captured or inspected, so those four buttons are greyed out with a
 tooltip saying why. Everything else works the same. F12 inside a `<webview>`
 opens DevTools for the page being previewed, not for the app.
 
+#### Links from chat
+
+*Open links from chat in the preview* (Settings → Browser preview, off by
+default) sends a link clicked in a message, a plan or a review to the preview
+instead of your browser. A link to a local port — `http://localhost:5173/admin`
+— opens that port's page, the same one its chip opens. Ctrl-, Shift- or
+middle-click still goes to the browser.
+
+*Which links* makes the list under it a blocklist (*All but the list*, the
+default) or an allowlist (*Only the list*; empty, it previews nothing). One entry
+per line:
+
+- `example.com` — that site and its subdomains;
+- `*.example.com` — subdomains only;
+- anything with a `/` — a URL prefix, e.g. `github.com/TheYearIsTwentyGX/`, with
+  or without `https://`;
+- `localhost:5173` — a port, where it matters;
+- a line starting with `#` is a note.
+
+A link the list keeps out goes to the browser; nothing is refused outright.
+
+**A site that is not a local port needs the rebuilt desktop app.** The shell
+refuses to load anything but loopback in the preview unless the page has told it
+the site was asked for, and only a shell built with this change can be told. In
+an older shell or a plain browser tab those links go to the browser as before.
+Once a site is open you can browse around it; a link from it to another site
+still leaves for the browser, and so does a sign-in that hops through one.
+
 ### What the dashboard counts
 
 A finished conversation is not finished work. The rail is full of sessions that

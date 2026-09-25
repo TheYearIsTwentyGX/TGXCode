@@ -6,6 +6,7 @@
 
 import { configurePaths } from './markdown.js';
 import { PreviewPane } from './preview.js';
+import { opensInPreview } from './link-policy.js';
 import * as keys from './keys.js';
 import { drawRail } from './rail.js';
 import { liveStrip, renderLive } from './boards/live.js';
@@ -884,6 +885,17 @@ function showPortInline(o) {
     }
     previewPane.open({ port: o.port, title: o.title || null, path: o.path || null, runId: o.runId || null });
     showPreview(true, { from: o.from || 'session' });
+}
+
+/**
+ * A link clicked in chat, in the preview — when Settings says so for this URL
+ * (web/link-policy.js). Anything the pane cannot show goes to the browser, which
+ * is where it would have gone without the setting.
+ */
+async function openLinkInPreview(href) {
+    const shown = previewAvailable() && await previewPane.openUrl(href);
+    if (shown) showPreview(true);
+    else window.open(href, '_blank', 'noreferrer');
 }
 
 /**
@@ -3953,6 +3965,18 @@ document.addEventListener('click', (e) => {
     // click ends at a folder — the path is a directory, or Windows would run it —
     // are the bridge's to decide, being the only side that can see the disk.
     openPath(a.dataset.path, { reveal: e.ctrlKey || e.metaKey || e.shiftKey });
+});
+
+// A link in rendered markdown — a message, a plan, a review — goes to the
+// preview when `preview.links` and its list say so. A modified or middle click
+// is somebody asking for the browser, and never reaches here as a plain click.
+document.addEventListener('click', (e) => {
+    if (e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+    const a = e.target.closest('.prose a[href]');
+    if (!a || a.classList.contains('fs-path')) return;
+    if (!opensInPreview(a.href, BOOT_PREFS.preview)) return;
+    e.preventDefault();
+    openLinkInPreview(a.href);
 });
 
 // Middle-click would open a tab on a file: URL Chrome refuses, i.e. a blank one.

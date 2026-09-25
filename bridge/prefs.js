@@ -112,6 +112,7 @@ const MAX_COLORS = 200;
 // because every project that has ever been dragged lands in the list, coloured
 // or not, but bounded for the same reason.
 const MAX_ORDER = 500;
+const MAX_LINK_PATTERNS = 200;
 
 // What the top bar is made of, in the order it has always been drawn. The page
 // holds the same list — see TOOLBAR in web/app.js — and this copy exists so a
@@ -320,6 +321,14 @@ const DEFAULTS = {
         // brings the board back. Off opens it over that session instead, as
         // though you had opened the session and clicked the chip there.
         overLive: true,
+        // Links clicked in chat open in the preview rather than the system
+        // browser. Off is how every link has always behaved.
+        links: false,
+        // What `list` is: 'block' previews everything but what matches it,
+        // 'allow' previews only what matches. web/link-policy.js has the
+        // pattern syntax.
+        listMode: 'block',
+        list: [],
     },
     devbrowser: {
         // Whether the app mentions DevBrowser at all: the status pill, "open in
@@ -468,6 +477,10 @@ const SHAPE = {
         // whatever its dev server's HMR socket is holding.
         keepAliveMinutes: (v) => Number.isInteger(v) && v >= 0 && v <= 240,
         overLive: (v) => typeof v === 'boolean',
+        links: (v) => typeof v === 'boolean',
+        listMode: (v) => v === 'block' || v === 'allow',
+        list: (v) => Array.isArray(v) && v.length <= MAX_LINK_PATTERNS
+            && v.every((s) => typeof s === 'string' && s.length > 0 && s.length <= 200),
     },
     devbrowser: {
         show: (v) => typeof v === 'boolean',
@@ -682,8 +695,38 @@ function cleanToolbar(value, note) {
     return out;
 }
 
+/**
+ * `preview.list`, entry by entry. Matching is web/link-policy.js's job; all
+ * that is checked here is that each entry is one line of sensible length. A
+ * repeat is dropped without a note — it changes nothing, and refusing a save
+ * over it would be refusing a list that means exactly what it says.
+ *
+ * @returns {string[]|undefined} the cleaned list, or undefined to leave the
+ *   default alone — which is what a value that is not a list at all gets.
+ */
+function cleanLinkList(value, note) {
+    if (!Array.isArray(value)) return undefined;
+    const out = [];
+    const seen = new Set();
+    for (const raw of value) {
+        const s = typeof raw === 'string' ? raw.trim() : raw;
+        if (typeof s !== 'string' || !s || s.length > 200 || /[\r\n]/.test(s)) {
+            note(`${JSON.stringify(raw)} is not a domain or URL pattern`);
+            continue;
+        }
+        if (seen.has(s)) continue;
+        if (out.length >= MAX_LINK_PATTERNS) {
+            note(`more than ${MAX_LINK_PATTERNS} link patterns — the rest dropped`);
+            break;
+        }
+        seen.add(s);
+        out.push(s);
+    }
+    return out;
+}
+
 // Section keys whose value is a map or list and so gets the treatment above, before
-// SHAPE sees it. Six entries; the table exists so the next one does not have
+// SHAPE sees it. Seven entries; the table exists so the next one does not have
 // to special-case merge().
 const SANITIZE = {
     keyboard: { bindings: cleanBindings },
@@ -691,6 +734,7 @@ const SANITIZE = {
     projects: { colors: cleanColors, order: cleanOrder },
     toolbar: { items: cleanToolbar },
     wispr: { transforms: wispr.cleanTransforms },
+    preview: { list: cleanLinkList },
 };
 
 /**
@@ -872,7 +916,7 @@ class Prefs {
             keyboard: { ...DEFAULTS.keyboard, bindings: { ...DEFAULTS.keyboard.bindings } },
             toolbar: { ...DEFAULTS.toolbar, items: [...DEFAULTS.toolbar.items] },
             wispr: { transforms: [...DEFAULTS.wispr.transforms] },
-            preview: { ...DEFAULTS.preview },
+            preview: { ...DEFAULTS.preview, list: [...DEFAULTS.preview.list] },
             devbrowser: { ...DEFAULTS.devbrowser },
             sources: [],
             problems: [],

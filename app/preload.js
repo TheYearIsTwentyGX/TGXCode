@@ -12,7 +12,9 @@
 // page cannot make on its own: an image of a <webview> guest, which only the
 // main process can capture, and the element picker's text, which is produced
 // inside the guest after the click that would have granted clipboard access
-// has already been swallowed. Neither returns anything but a status.
+// has already been swallowed. Neither returns anything but a status. A third
+// tells the main process a site from a chat link may be loaded in a guest,
+// which it otherwise refuses for anything but loopback.
 //
 // A preload is a hole in the wall between the page and the shell, and each door
 // here is sized to the single thing on the other side of it. Anything the page
@@ -25,4 +27,5 @@ contextBridge.exposeInMainWorld('claudeShell', {
     revealWindow: () => ipcRenderer.send('reveal-window'),
     capturePreview: (webContentsId) => ipcRenderer.invoke('preview-capture', webContentsId),
     copyText: (text) => ipcRenderer.invoke('preview-copy-text', String(text)),
+    allowPreviewOrigin: (origin) => ipcRenderer.invoke('preview-allow-origin', String(origin)),
 });

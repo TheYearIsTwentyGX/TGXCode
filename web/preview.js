@@ -12,7 +12,8 @@
 //  - **<webview>**, in the packaged shell. It is its own renderer in its own
 //    partition, so everything on the toolbar works: history, capturePage for the
 //    screenshot, executeJavaScript for the picker. app/main.js decides what a
-//    guest may be (loopback only, no preload, no Node) in will-attach-webview.
+//    guest may be (loopback or a granted origin, no preload, no Node) in
+//    will-attach-webview.
 //  - **<iframe>**, anywhere else — a shell built before this existed, or the
 //    page opened in a plain browser from `npm run dev:headless`. A cross-origin
 //    frame cannot be sent back, captured or scripted, so those four buttons are
@@ -24,6 +25,13 @@
 // same. Coming back inside the window finds the page as you left it — scroll,
 // form state, an HMR socket still connected. Past it the element is removed,
 // which is what actually frees the renderer.
+//
+// A page is keyed by its port, or — for a link opened from chat
+// (web/link-policy.js) — by its origin, a string, so the two never collide.
+// A site that is not a local port needs the <webview> and a shell that can be
+// told the origin is wanted (allowPreviewOrigin): app/main.js refuses any guest
+// that is neither loopback nor granted. Without both, canPreviewUrls is false
+// and the link goes to the browser as it always did.
 
 import { PICKER_SOURCE } from './preview-picker.js';
 
@@ -39,6 +47,12 @@ const HAS_WEBVIEW = typeof window.claudeShell?.capturePreview === 'function'
 // cookie jars. (A <webview> has its own partition and would be fine either way.)
 const PREVIEW_HOST = location.hostname === 'localhost' ? '127.0.0.1' : 'localhost';
 
+/** Whether a site that is not a local port can be shown here at all. */
+export const canPreviewUrls = HAS_WEBVIEW
+    && typeof window.claudeShell?.allowPreviewOrigin === 'function';
+
+const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
+
 const VIEWPORTS = {
     fit: null,
     phone: { w: 375, h: 812 },
@@ -48,6 +62,12 @@ const VIEWPORTS = {
 
 export function previewUrl(port, path = '') {
     return `http://${PREVIEW_HOST}:${port}/${String(path || '').replace(/^\/+/, '')}`;
+}
+
+/** How a toast names a page: `:5173` for a port, the host for a site. */
+function nameOf(entry) {
+    if (entry.port) return `:${entry.port}`;
+    try { return new URL(entry.base).host; } catch { return entry.base; }
 }
 
 export class PreviewPane {
@@ -85,7 +105,7 @@ export class PreviewPane {
             badge: q('[data-pv="badge"]'),
             empty: q('[data-pv="empty"]'),
         };
-        this.entries = new Map();   // port -> entry
+        this.entries = new Map();   // port or origin -> entry
         this.active = null;         // the entry on screen, or null
         this.visible = false;
         this.device = 'fit';
@@ -140,7 +160,7 @@ export class PreviewPane {
         port = Number(port);
         let entry = this.entries.get(port);
         if (!entry) {
-            entry = this.create(port, path);
+            entry = this.create({ key: port, port, url: previewUrl(port, path) });
             this.entries.set(port, entry);
         } else if (path != null) {
             this.load(entry, previewUrl(port, path));
@@ -151,13 +171,43 @@ export class PreviewPane {
         return entry;
     }
 
+    /**
+     * Show any http(s) URL. A plain-http local port goes to open(), so a link to
+     * a running dev server finds the page its chip opened. Anything else is a
+     * page of its own, keyed by origin, once the shell has agreed to it.
+     *
+     * @returns {Promise<boolean>} false when it could not be shown here, and
+     *   the caller should send it to the browser instead.
+     */
+    async openUrl(url) {
+        let u;
+        try { u = new URL(url); } catch { return false; }
+        if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+        if (u.protocol === 'http:' && u.port && LOOPBACK.has(u.hostname)) {
+            this.open({ port: Number(u.port), path: u.pathname + u.search + u.hash });
+            return true;
+        }
+        if (!canPreviewUrls) return false;
+        const r = await window.claudeShell.allowPreviewOrigin(u.origin).catch(() => null);
+        if (!(r && r.ok)) return false;
+        let entry = this.entries.get(u.origin);
+        if (!entry) {
+            entry = this.create({ key: u.origin, base: u.origin, url: u.href });
+            this.entries.set(u.origin, entry);
+        } else {
+            this.load(entry, u.href);
+        }
+        this.select(entry);
+        return true;
+    }
+
     /** Drop a page now, whatever its keep-alive says — its server has gone. */
-    discard(port) {
-        const entry = this.entries.get(Number(port));
+    discard(key) {
+        const entry = this.entries.get(typeof key === 'string' && !/^\d+$/.test(key) ? key : Number(key));
         if (!entry) return;
         clearTimeout(entry.timer);
         entry.node.remove();
-        this.entries.delete(entry.port);
+        this.entries.delete(entry.key);
         if (this.active === entry) { this.active = null; this.paintToolbar(); }
     }
 
@@ -183,9 +233,9 @@ export class PreviewPane {
 
     // ── pages ─────────────────────────────────────────────────────────────
 
-    create(port, path) {
-        const url = previewUrl(port, path);
-        const entry = { port, title: null, runId: null, url, timer: null, node: null, ready: false };
+    /** `port` for a dev server's page, `base` (an origin) for a site's. */
+    create({ key, port = null, base = null, url }) {
+        const entry = { key, port, base, title: null, runId: null, url, timer: null, node: null, ready: false };
         if (HAS_WEBVIEW) {
             const v = document.createElement('webview');
             // The partition is enforced again in app/main.js; saying it here too
@@ -200,7 +250,7 @@ export class PreviewPane {
             v.addEventListener('did-fail-load', (ev) => {
                 // -3 is ERR_ABORTED: a navigation replaced by another, not a failure.
                 if (ev.isMainFrame && ev.errorCode !== -3 && this.active === entry) {
-                    this.o.toast(`:${port} did not load — ${ev.errorDescription || 'no answer'}.`, 'error');
+                    this.o.toast(`${nameOf(entry)} did not load — ${ev.errorDescription || 'no answer'}.`, 'error');
                 }
             });
             entry.node = v;
@@ -243,8 +293,8 @@ export class PreviewPane {
     release(entry) {
         clearTimeout(entry.timer);
         const minutes = Number(this.o.keepAliveMinutes()) || 0;
-        if (minutes <= 0) { this.discard(entry.port); return; }
-        entry.timer = setTimeout(() => this.discard(entry.port), minutes * 60_000);
+        if (minutes <= 0) { this.discard(entry.key); return; }
+        entry.timer = setTimeout(() => this.discard(entry.key), minutes * 60_000);
     }
 
     load(entry, url) {
@@ -257,7 +307,10 @@ export class PreviewPane {
 
     go(path) {
         if (!this.active) return;
-        this.load(this.active, previewUrl(this.active.port, path));
+        const a = this.active;
+        this.load(a, a.base
+            ? `${a.base}/${String(path || '').replace(/^\/+/, '')}`
+            : previewUrl(a.port, path));
     }
 
     reload() {
@@ -302,7 +355,7 @@ export class PreviewPane {
         e.pick.title = 'Pick an element and copy what it is (Esc cancels)' + why;
         e.path.disabled = !a;
         e.output.hidden = !(a && a.runId && this.o.onOutput);
-        e.devbrowser.hidden = !(a && this.o.onDevBrowser && this.o.showDevBrowser && this.o.showDevBrowser());
+        e.devbrowser.hidden = !(a && a.port && this.o.onDevBrowser && this.o.showDevBrowser && this.o.showDevBrowser());
         e.empty.hidden = Boolean(a);
         this.paintAddress();
     }
@@ -312,7 +365,7 @@ export class PreviewPane {
         const a = this.active;
         e.title.hidden = !(a && a.title);
         e.title.textContent = a && a.title ? a.title : '';
-        e.host.textContent = a ? `${PREVIEW_HOST}:${a.port}/` : '';
+        e.host.textContent = !a ? '' : a.base ? `${a.base}/` : `${PREVIEW_HOST}:${a.port}/`;
         if (document.activeElement === e.path) return;   // do not type over the user
         let path = '';
         if (a) {
@@ -377,9 +430,9 @@ export class PreviewPane {
         try {
             const r = await window.claudeShell.capturePreview(a.node.getWebContentsId());
             if (r && r.ok) this.o.toast(`Screenshot copied — ${r.width} × ${r.height}.`, 'ok');
-            else this.o.toast(`Could not capture :${a.port}${r && r.error ? ` (${r.error})` : ''}.`, 'error');
+            else this.o.toast(`Could not capture ${nameOf(a)}${r && r.error ? ` (${r.error})` : ''}.`, 'error');
         } catch (err) {
-            this.o.toast(`Could not capture :${a.port}. ${err.message}`, 'error');
+            this.o.toast(`Could not capture ${nameOf(a)}. ${err.message}`, 'error');
         }
     }
 
