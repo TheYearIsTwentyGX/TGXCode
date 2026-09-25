@@ -77,6 +77,8 @@ const PR_FIELDS = 'number,title,url,headRefName,headRefOid,baseRefName,labels,'
 const cache = {
     /** @type {Map<string, {value?: any, pending?: Promise<any>, at: number}>} checkout -> owner/name */
     repo: new Map(),
+    /** @type {Map<string, {value?: any, pending?: Promise<any>, at: number}>} checkout -> web URL of origin */
+    origin: new Map(),
 };
 
 /**
@@ -130,6 +132,34 @@ const repoOf = (dir) => cached(cache.repo, dir, REPO_TTL_MS, async () => {
     const r = await run('git', ['-C', dir, 'remote', 'get-url', 'origin'],
         { timeout: GIT_TIMEOUT_MS });
     return r.ok ? githubRepo(r.stdout) : null;
+});
+
+/**
+ * The page a browser should open for a remote, or null when it has none.
+ *
+ * Any host, not only GitHub — the rail's "Open origin" is about wherever the
+ * code lives. scp-style (`git@host:o/r.git`) and `ssh://` remotes become
+ * `https://host/o/r`, since the ssh port is not the web one. Credentials in an
+ * `https://user:token@` remote are dropped: this string goes to a browser and,
+ * over the API, possibly to a phone. A local path or `file://` has no page.
+ */
+function originWebUrl(url) {
+    const s = String(url || '').trim();
+    let host, rest;
+    let m = /^(?:ssh|git|https?):\/\/(?:[^@/]*@)?([^/:]+)(?::\d+)?\/(.+)$/.exec(s);
+    if (m) [, host, rest] = m;
+    else if ((m = /^(?:[^@/:]+@)?([^/:]+):(?!\/)(.+)$/.exec(s))) [, host, rest] = m;
+    else return null;
+    // A drive letter (`C:\repo`) reads as scp-style to the second pattern.
+    if (host.length === 1) return null;
+    rest = rest.replace(/\/+$/, '').replace(/\.git$/, '');
+    return rest ? `https://${host}/${rest}` : null;
+}
+
+const originUrlOf = (dir) => cached(cache.origin, dir, REPO_TTL_MS, async () => {
+    const r = await run('git', ['-C', dir, 'remote', 'get-url', 'origin'],
+        { timeout: GIT_TIMEOUT_MS });
+    return r.ok ? originWebUrl(r.stdout) : null;
 });
 
 /** One gh PR object, in this app's shape. */
@@ -550,7 +580,7 @@ async function setVerdictLabel(repo, number, want, present = []) {
 }
 
 module.exports = {
-    githubRepo, repoOf, openPulls, pullState, resolveStatus, checkSummary,
+    githubRepo, repoOf, originWebUrl, originUrlOf, openPulls, pullState, resolveStatus, checkSummary,
     resolveBatch, aggregate, ATTENTION_ORDER,
     comment, ensureLabel, setVerdictLabel, VERDICT_LABELS,
 };

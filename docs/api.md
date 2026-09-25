@@ -731,6 +731,25 @@ round of `gh` calls and loses nothing.
 `?refresh=1` on `GET /api/dashboard` is the only way to make the refresher run out
 of turn. There is no per-route refresh here.
 
+### `GET /api/origin?cwd=<dir>`
+
+`{ url: string | null }` — the web page for the `origin` remote of the checkout at
+`cwd`, for an "open in browser" action. The desktop rail's project ⋮ menu is the
+caller.
+
+- `url` is always `https://host/owner/repo`, whatever the remote is spelt as: an
+  scp-style `git@host:owner/repo.git` or an `ssh://` remote is rewritten to https
+  (the ssh port is dropped — it is not the web one), a trailing `.git` or `/` is
+  removed, and **credentials in an `https://user:token@host/…` remote are
+  stripped**. Any host, not only GitHub.
+- `null` when there is no `origin`, `cwd` is not a git checkout, or the remote has
+  no web page (a local path, `file://`). Not an error: a 200 either way.
+- `403 {"error": "that directory is outside the allowed roots"}` when `cwd` is
+  missing or outside the bridge's allowed roots.
+- Allowed to remote callers.
+- Memoised per directory for ten minutes, so a remote changed with `git remote
+  set-url` can take that long to show here.
+
 ### `GET /api/sessions/:id/tasks`
 
 The session's own task list — the checklist the agent keeps for itself, with

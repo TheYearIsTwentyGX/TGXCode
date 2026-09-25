@@ -14,6 +14,7 @@
 const cfg = require('../config');
 const dashboard = require('../dashboard');
 const { NEXT, send } = require('../http');
+const pulls = require('../pulls');
 const { prsPayload, tickPrs } = require('../pr-refresh');
 
 // Handed over by server.js — see the note above ROUTES there.
@@ -70,6 +71,18 @@ async function handle(req, res, url, pathname, seg, who) {
     // a client that has not received an event yet needs somewhere to start.
     if (pathname === '/api/prs' && req.method === 'GET') {
         return send(res, 200, await prsPayload());
+    }
+
+    // Where a project's `origin` lives, as a page to open — the rail's ⋮ menu.
+    // Asked on demand rather than carried on every session: it is one menu's
+    // question, and `git remote` is memoised for ten minutes in pulls.js, so a
+    // remote you just changed can take that long to show.
+    if (pathname === '/api/origin' && req.method === 'GET') {
+        const cwd = url.searchParams.get('cwd') || '';
+        if (!cfg.withinRoots(cwd)) {
+            return send(res, 403, { error: 'that directory is outside the allowed roots' });
+        }
+        return send(res, 200, { url: await pulls.originUrlOf(cwd) });
     }
 
     return NEXT;
