@@ -287,7 +287,7 @@ function applyPrefsLive(prefs, section) {
     if (section === 'transcript') { applyClock(); renderRail(); }
     if (section === 'transcript' && state.current) {
         // Re-read the conversation so the new folding rule applies to what is
-        // already on screen. keepDash so going and looking does not close this.
+        // already on screen. keepPanels so going and looking does not close this.
         //
         // Forgetting `current` first, as the Try again button does: openSession
         // returns early for the session you are already in, so without it this
@@ -297,7 +297,7 @@ function applyPrefsLive(prefs, section) {
         const id = state.current.sessionId;
         saveDraft(id, dom.input.value);
         state.current = null;
-        openSession(id, { keepDash: true, quiet: true });
+        openSession(id, { keepPanels: true, quiet: true });
     }
 }
 

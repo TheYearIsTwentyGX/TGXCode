@@ -1353,6 +1353,21 @@ function liveKeptOver() {
     return kept ? panel : null;
 }
 
+/**
+ * Close whichever whole-screen panel is up, through its own show…(false).
+ *
+ * Not by flipping `open`: each close also stops a watch, catches up a board that
+ * was ignoring its pushes, refits the terminal and rewrites the address. The
+ * panels are exclusive, so at most one of these runs.
+ */
+export function closePanels() {
+    const close = {
+        taskboard: showTaskboard, dash: showDash, notes: showNotes,
+        drafts: showDrafts, sched: showSched, settings: showSettings,
+    };
+    for (const p of PANELS) if (state[p].open) close[p](false);
+}
+
 /** Shut every whole-screen panel but this one. */
 export function closeOtherPanels(keep) {
     for (const p of PANELS) if (p !== keep) state[p].open = false;
@@ -4181,9 +4196,9 @@ function restoreView() {
     const agentId = q.get('agent');
     // Not quiet: the address is the only thing being restored from, and it is in
     // front of you. A conversation that has gone should say so rather than leave
-    // an empty window with no account of itself. And keepDash, because the
+    // an empty window with no account of itself. And keepPanels, because the
     // session arriving is the restore finishing, not a session being chosen.
-    const opening = openSession(id, { keepDash: true });
+    const opening = openSession(id, { keepPanels: true });
     opening.then((ok) => {
         // A failed open never reached beginOpen, so nothing has written the
         // address down; drop the dead id rather than retry it every refresh.
