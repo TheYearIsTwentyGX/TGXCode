@@ -33,6 +33,7 @@ import { renderClaudeConfig } from './claude-config.js';
 import {
     renderSettings, saveSetting, saveSettings, SCOPE_NAMES, settingOrigin, settingsTargetRow,
 } from './index.js';
+import { foldLabelV, isOpen, LONG } from './fold.js';
 import { renderClaudeDocs } from './memory.js';
 import { notifyCard } from './notifications.js';
 import { renderCmdConfig } from './project-commands.js';
@@ -373,9 +374,15 @@ export function settingRow(group, row, locked) {
     // and not a change to what `save` means.
     const saveKey = (key, v) => saveSetting(section, key, v);
 
+    // A wide row folds — the verb groups are a hundred-odd pills. See fold.js.
+    const fold = row.wide ? settingFoldSummary(row, value) : null;
+    const foldKey = `general:${section}.${row.key}`;
+    const open = !fold || isOpen(foldKey, fold.long);
+
     const text = html`<div class="settings-row-text">
-        <div class="settings-row-label">${row.label}</div>
-        ${row.note ? html`<div class="settings-row-note">${row.note}</div>` : null}
+        <div class="settings-row-label">${fold ? foldLabelV(foldKey, open, row.label) : row.label}</div>
+        ${!open ? html`<div class="set-fold-sum">${fold.text}</div>` : null}
+        ${row.note && open ? html`<div class="settings-row-note">${row.note}</div>` : null}
         ${overridden ? html`<div class="settings-row-warn">${
             `Overridden by ${SCOPE_NAMES[origin.scope]} — `}<code>${shortPath(origin.file)}</code>${
             ' wins, so this has no effect here.'}</div>` : null}
@@ -388,18 +395,27 @@ export function settingRow(group, row, locked) {
         : html`<span class="settings-row-from">${
             origin ? `from ${SCOPE_NAMES[origin.scope]}` : 'default'}</span>`}</div>`;
 
-    const control = settingControl(row, value, disabled, save, saveKey);
-
     if (row.wide) {
-        return html`<div key=${row.key} class="settings-row is-wide">
+        return html`<div key=${row.key} class=${open ? 'settings-row is-wide' : 'settings-row is-wide is-folded'}>
             <div class="settings-row-head">${text}${side}</div>
-            <div class="settings-row-wide">${control}</div>
+            ${open ? html`<div class="settings-row-wide">${
+                settingControl(row, value, disabled, save, saveKey)}</div>` : null}
         </div>`;
     }
+    const control = settingControl(row, value, disabled, save, saveKey);
     return html`<div key=${row.key} class="settings-row">
         ${text}
         <div class="settings-row-ctl">${control}${side}</div>
     </div>`;
+}
+
+/** What a folded wide row says in place of its control. Only the verb groups are wide. */
+function settingFoldSummary(row, value) {
+    if (row.type !== 'groups') return null;
+    const cat = state.settings.spinner;
+    const total = cat && cat.groups ? cat.groups.length : 0;
+    const on = Array.isArray(value) ? value.length : 0;
+    return { long: total > LONG, text: `${on} of ${total} chosen` };
 }
 
 /** A title partway down a group, for a run of rows that belong together. */
