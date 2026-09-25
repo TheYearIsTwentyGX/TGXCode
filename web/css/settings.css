@@ -112,9 +112,33 @@
 }
 .settings-toc-link.on { color: var(--text); }
 .settings-toc-link.on::before { background: var(--blue); }
+/* A category over its groups. The same small capitals as .settings-cat in the
+   body, so the two read as one heading seen twice; the groups under it are
+   indented by their padding rather than by a margin, so the lit bar still sits
+   on the list's left edge and lines up down the whole column. */
+.settings-toc-cat {
+    background: none;
+    border: 0;
+    border-radius: var(--r-sm);
+    margin-top: 12px;
+    padding: 5px 11px 3px;
+    font: 500 10.5px/1.3 var(--sans);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-4);
+    text-align: left;
+    cursor: pointer;
+}
+.settings-toc-cat:first-child { margin-top: 0; }
+.settings-toc-cat:hover, .settings-toc-cat.on { color: var(--text-2); }
+.settings-toc-cat + .settings-toc-link, .settings-toc-link + .settings-toc-link { padding-left: 19px; }
+.settings-toc-link { padding-top: 5px; padding-bottom: 5px; }
 
-.settings-picks { display: flex; gap: 10px; margin-top: 14px; }
+.settings-picks { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
 .settings-pick { display: flex; flex-direction: column; gap: 4px; }
+/* The Descriptions picker is about this page rather than the file, so it
+   stands apart from the two that choose what gets written. */
+.settings-pick-end { margin-left: auto; }
 .settings-pick > span { font-size: 11px; letter-spacing: 0.02em; color: var(--text-4); }
 .settings-pick select {
     appearance: none;
@@ -184,12 +208,47 @@
     padding: 0 0 40px;
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: 12px;
 }
 .settings-empty, .settings-error { padding: 8px 0; font-size: 13px; color: var(--text-3); }
 .settings-error { color: var(--red); }
 
-.settings-group { background: var(--s1); border-radius: var(--r-lg); padding: 18px 20px 8px; }
+/* Each group is a card, one step up the surface ramp from the pane. It used to
+   be painted --s1 on an --s1 pane, which is a card nobody can see, and the rows
+   inside it were the only structure left to read.
+
+   **Everything inside a card moves up the ramp with it.** The rules below this
+   point were written against the pane — a pill on --s2, a field on --s3 — and
+   on an --s2 card half of them would vanish. So the card redefines the ramp for
+   its own subtree, one step up, and none of them has to change. The --set-*
+   copies are taken at :root, where var() resolves to the real tokens: written
+   as `--s2: var(--s3)` on the card itself the chain would resolve through the
+   card's own redefinitions and every step would come out --s5. A sub-card
+   (.cfg-sub) is also a .settings-group, so it takes the same ramp from :root
+   rather than stepping twice. */
+:root { --set-s2: var(--s2); --set-s3: var(--s3); --set-s4: var(--s4); --set-s5: var(--s5); }
+.settings-group {
+    --s1: var(--set-s2);
+    --s2: var(--set-s3);
+    --s3: var(--set-s4);
+    --s4: var(--set-s5);
+    background: var(--s1);
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-lg);
+    padding: 18px 22px 8px;
+}
+/* The heading over a run of cards — Workspace, Input, and the rest; see
+   SETTINGS_CATEGORIES. Quiet on purpose: it is a signpost, and the card titles
+   are what you read. The margin is larger than the gap between cards so the
+   heading belongs to what follows it. */
+.settings-cat {
+    margin: 18px 0 -4px 2px;
+    font: 500 11px/1.3 var(--sans);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-4);
+}
+.settings-cat:first-child { margin-top: 0; }
 .settings-group[data-locked] .settings-row { opacity: 0.5; }
 .settings-group-title { margin: 0; font: 400 15px/1.3 var(--sans); color: var(--text); }
 .settings-group-note {
@@ -230,6 +289,79 @@
 }
 .settings-row-side { font-size: 12px; text-align: right; }
 .settings-row-from { color: var(--text-4); }
+/* Where a value came from, only for the row you are at. `visibility` rather
+   than `display`, so the row does not change height or reflow as the pointer
+   crosses it; `:focus-within` is what brings it back for the keyboard, since
+   Clear is a button you have to be able to reach. The "Overridden by" line is
+   not in here — that one is a problem, and stays in view. */
+.settings-row-side.is-origin { visibility: hidden; opacity: 0; transition: opacity var(--t-fast) var(--ease); }
+.settings-row:hover .settings-row-side.is-origin,
+.settings-row:focus-within .settings-row-side.is-origin { visibility: visible; opacity: 1; }
+/* And beside the control rather than under it: under it, the hidden line still
+   held its height, and every row carried an empty line's worth of padding. */
+.settings-row-ctl:has(> .settings-row-side.is-origin) {
+    flex-direction: row-reverse;
+    align-items: center;
+    gap: 12px;
+}
+
+/* A description behind an ⓘ — settingTip() in general.js. The popover is the
+   button's own ::after, off `data-tip`, so the hand-written groups in
+   web/index.html get one with no script. It is positioned against the row's
+   text column rather than the button, so it opens under the label at the
+   label's own left edge and can use the width of the column, rather than
+   starting wherever a long label happened to end. */
+.settings-row-text, .settings-subhead-title, .settings-group-title { position: relative; }
+.set-tip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 15px;
+    height: 15px;
+    margin: 0 0 0 7px;
+    padding: 0;
+    border: 1.5px solid currentColor;
+    border-radius: 50%;
+    background: none;
+    color: var(--text-4);
+    font: italic 600 10px/1 Georgia, serif;
+    vertical-align: -2px;
+    cursor: help;
+}
+.set-tip::before { content: "i"; }
+.set-tip:hover, .set-tip:focus-visible { color: var(--text-2); }
+.set-tip:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.set-tip::after {
+    content: attr(data-tip);
+    position: absolute;
+    z-index: 4;
+    left: 0;
+    top: calc(100% + 6px);
+    width: max-content;
+    max-width: min(420px, 100%);
+    min-width: min(240px, 100%);
+    padding: 9px 12px;
+    background: var(--set-s5);
+    border-radius: var(--r-sm);
+    box-shadow: 0 6px 20px rgb(0 0 0 / 0.45);
+    font: 400 12px/1.6 var(--sans);
+    font-style: normal;
+    color: var(--text-2);
+    text-align: left;
+    white-space: normal;
+    pointer-events: none;
+    visibility: hidden;
+    opacity: 0;
+    transition: opacity var(--t-fast) var(--ease);
+}
+.set-tip:hover::after, .set-tip:focus-visible::after { visibility: visible; opacity: 1; }
+
+/* Which of the two shows is the Descriptions picker's — `data-notes` on
+   #settings, set by paintSettingsNotes(). Anything marked `settings-desc` is a
+   description that has an ⓘ twin; a note without the class is a state (a
+   warning, a count) and shows either way. */
+.settings[data-notes="tips"] .settings-desc { display: none; }
+.settings:not([data-notes="tips"]) .set-tip { display: none; }
 
 /* The exception: a control no right-hand column is the right width for. The
    text and the Clear go across the top and the control gets the whole measure
@@ -517,14 +649,15 @@
 
 /* ── Claude Code's own settings ───────────────────────────────────────────
    One group in the panel, several cards deep, because it stands for four files
-   and nine sections rather than one block of keys. The sub-cards sit inside the
-   group's own column with a slightly darker ground, so "everything under this
-   heading is about somebody else's settings" reads at a glance rather than
-   needing the heading to be re-read. */
+   and nine sections rather than one block of keys. The sub-cards are cards like
+   any other, stepped in from the left edge, so "everything under this heading
+   is about somebody else's settings" reads at a glance rather than needing the
+   heading to be re-read. They used to be the one lighter ground on the page,
+   back when the groups themselves were the colour of the pane; now that every
+   group is a card, a lighter one read as a different kind of thing. */
 
-.cfg-sub { background: var(--s2); padding: 16px 18px 6px; }
+.cfg-sub { margin-left: 18px; padding: 16px 20px 6px; }
 .cfg-sub .settings-group-title { font-size: 14px; color: var(--text-2); }
-.cfg-sub .settings-row + .settings-row { border-top-color: var(--outline); }
 
 /* Which of the four files, and which of the two ways of looking at it. One row,
    with the view toggle pushed to the far end: the left half picks a *file* and

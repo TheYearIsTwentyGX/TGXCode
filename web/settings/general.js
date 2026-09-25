@@ -71,9 +71,37 @@ const LIVE_OVER_ROWS = [
     ['overDrafts', 'Drafts'], ['overSchedules', 'Schedules'], ['overSettings', 'Settings'],
 ].map(([key, label]) => ({ key, type: 'radio', label, options: LIVE_OVER_OPTIONS }));
 
+// The headings the groups below are filed under — in the contents list, where
+// each is a label over its groups, and in the body, where each is a heading
+// between the cards. Seventeen groups in one flat list was a column of names to
+// read down; six headings are something to scan.
+//
+// A group names its heading with `category`, and SETTINGS keeps each heading's
+// groups together, because the body is drawn in SETTINGS order and a heading
+// is drawn before the first group of each run. `tocTitle` is the shorter name a
+// group takes in the contents, where its heading already says the rest.
+export const SETTINGS_CATEGORIES = [
+    { key: 'workspace', title: 'Workspace' },
+    { key: 'input', title: 'Input' },
+    { key: 'browsers', title: 'Browsers' },
+    { key: 'claude', title: 'Claude Code' },
+    { key: 'projects', title: 'Projects' },
+    { key: 'connect', title: 'Connections' },
+];
+
+// Most groups are built from `rows`. The rest are not, and say how they are
+// drawn instead: `render` (built by hand with el() — Claude Code, its Memory,
+// Project commands, whose content only the bridge has), `node` (written out in
+// web/index.html, because none is backed by the settings file — one is a store
+// of its own, one is per-browser storage and the last is a task rather than a
+// setting; renderSettings moves the markup into place, so it takes its turn in
+// this order), or `card` (a Preact component of its own).
+//
+// `render` and `node` are handed to Preact as foreign DOM (see Foreign in
+// index.js). `card` and `rows` groups are Preact all the way down.
 export const SETTINGS = [
     {
-        title: 'Reading', section: 'transcript',
+        title: 'Reading', section: 'transcript', category: 'workspace',
         note: 'How a transcript folds the work between one message and the next.',
         rows: [
             { key: 'groupToolCalls', type: 'bool',
@@ -89,7 +117,7 @@ export const SETTINGS = [
         ],
     },
     {
-        title: 'Live board', section: 'live',
+        title: 'Live board', section: 'live', category: 'workspace',
         note: 'The board behind Live — every session running right now.',
         rows: [
             { key: 'compact', type: 'bool',
@@ -113,7 +141,91 @@ export const SETTINGS = [
         ],
     },
     {
-        title: 'Browser preview', section: 'preview', userOnly: true,
+        title: 'Spinner', section: 'spinner', category: 'workspace',
+        note: 'What a turn in progress calls itself while it works.',
+        rows: [
+            { key: 'randomize', type: 'bool',
+                label: 'A themed verb in front of the work',
+                note: 'Off gives back the literal “Thinking…”.' },
+            { key: 'rerollMs', type: 'int', min: 0, max: 600000, step: 1000,
+                label: 'Milliseconds a verb stands for',
+                note: '0 pins one for the whole turn. Otherwise 1000 to 600000.' },
+            { key: 'groups', type: 'groups', wide: true,
+                label: 'Verb groups in play',
+                note: 'From ~/.tgxcode/verbs/, and a project’s own. Enabling all of '
+                    + 'them is a soup; the point of the groups is to choose a voice. '
+                    + 'Hover a group to read what is in it. The number on a group '
+                    + 'chosen is how often it gets to speak against the others — '
+                    + 'leave it at 1 for an even split, or 0 to mute it without '
+                    + 'giving it up.' },
+        ],
+    },
+    {
+        title: 'Quota', section: 'quota', category: 'workspace', userOnly: true,
+        note: 'Keeping the percentages current with no terminal open, by starting a '
+            + '`claude` for a few seconds and killing it.',
+        rows: [
+            { key: 'beacon', type: 'bool',
+                label: 'Refresh quota in the background',
+                note: 'Does nothing until a directory is named below.' },
+            { key: 'beaconDir', type: 'path',
+                label: 'Directory it runs in',
+                note: 'Open Claude Code there yourself at least once first — the beacon '
+                    + 'never answers the trust prompt, so an untrusted directory just '
+                    + 'makes every run time out.' },
+            { key: 'beaconEveryMinutes', type: 'int', min: 5, max: 1440,
+                label: 'How often, in minutes',
+                note: 'Each run is a CLI start and one tiny API call. Floor of five.' },
+        ],
+    },
+    {
+        title: 'Toolbar', section: 'toolbar', category: 'workspace', userOnly: true, toolbar: true,
+        note: 'The buttons along the top: their order, which of them fold into the '
+            + 'More menu, and which show their name beside the icon. A hidden view '
+            + 'still opens from its shortcut.',
+        rows: [],
+    },
+    {
+        title: 'Keyboard', section: 'keyboard', category: 'input', userOnly: true, keymap: true,
+        note: 'How a few keys behave, and then every shortcut this window '
+            + 'answers to.',
+        rows: [
+            { key: 'contextualTerminalCopy', type: 'bool',
+                label: 'Contextual Ctrl+C in the terminal',
+                note: 'With a selection, Ctrl+C copies it and clears it — so a second '
+                    + 'Ctrl+C still interrupts. With no selection it interrupts as '
+                    + 'always. Turning this on also makes plain Ctrl+V paste, instead '
+                    + 'of Ctrl+Shift+V. Only while the terminal has the focus.' },
+            { key: 'composerSend', type: 'choice',
+                label: 'Composer send',
+                options: [
+                    ['enter', 'Enter sends · Shift+Enter for a newline'],
+                    ['ctrl-enter', 'Enter for a newline · Ctrl+Enter sends'],
+                ],
+                note: 'Ctrl+Enter sends either way.' },
+            { key: 'cycleOrder', type: 'choice',
+                label: 'Picker cycle order',
+                options: [
+                    ['default', 'As the dropdown lists them'],
+                    ['alphabetical', 'Alphabetical'],
+                ],
+                note: 'The order Ctrl+P and Ctrl+M step through Permissions and Model, '
+                    + 'and Shift walks it backwards. The dropdowns keep their own order.' },
+        ],
+    },
+    {
+        title: 'Snippets', section: 'snippets', category: 'input', node: 'setGSnippets',
+        after: () => renderSnipSettings(),
+    },
+    // `when` leaves a group out, contents entry and all: on a host with no Wispr
+    // Flow there is nothing for these to configure.
+    {
+        title: 'Wispr Flow', section: 'wispr', category: 'input', node: 'setGWispr',
+        when: () => wisprAvailable,
+        after: () => renderWisprSettings(),
+    },
+    {
+        title: 'Browser preview', section: 'preview', category: 'browsers', userOnly: true,
         note: 'The page behind a port or a running task, shown in this window with '
             + 'DevBrowser’s toolbar.',
         rows: [
@@ -151,7 +263,7 @@ export const SETTINGS = [
         ],
     },
     {
-        title: 'DevBrowser', section: 'devbrowser', userOnly: true,
+        title: 'DevBrowser', section: 'devbrowser', category: 'browsers', userOnly: true,
         note: 'The separate browser app on this machine that shows one tab per port.',
         rows: [
             { key: 'show', type: 'bool',
@@ -174,86 +286,14 @@ export const SETTINGS = [
                 note: 'Starting it opens a window; “do nothing” only says it is closed.' },
         ],
     },
-    {
-        title: 'Spinner', section: 'spinner',
-        note: 'What a turn in progress calls itself while it works.',
-        rows: [
-            { key: 'randomize', type: 'bool',
-                label: 'A themed verb in front of the work',
-                note: 'Off gives back the literal “Thinking…”.' },
-            { key: 'rerollMs', type: 'int', min: 0, max: 600000, step: 1000,
-                label: 'Milliseconds a verb stands for',
-                note: '0 pins one for the whole turn. Otherwise 1000 to 600000.' },
-            { key: 'groups', type: 'groups', wide: true,
-                label: 'Verb groups in play',
-                note: 'From ~/.tgxcode/verbs/, and a project’s own. Enabling all of '
-                    + 'them is a soup; the point of the groups is to choose a voice. '
-                    + 'Hover a group to read what is in it. The number on a group '
-                    + 'chosen is how often it gets to speak against the others — '
-                    + 'leave it at 1 for an even split, or 0 to mute it without '
-                    + 'giving it up.' },
-        ],
-    },
-    {
-        title: 'Quota', section: 'quota', userOnly: true,
-        note: 'Keeping the percentages current with no terminal open, by starting a '
-            + '`claude` for a few seconds and killing it.',
-        rows: [
-            { key: 'beacon', type: 'bool',
-                label: 'Refresh quota in the background',
-                note: 'Does nothing until a directory is named below.' },
-            { key: 'beaconDir', type: 'path',
-                label: 'Directory it runs in',
-                note: 'Open Claude Code there yourself at least once first — the beacon '
-                    + 'never answers the trust prompt, so an untrusted directory just '
-                    + 'makes every run time out.' },
-            { key: 'beaconEveryMinutes', type: 'int', min: 5, max: 1440,
-                label: 'How often, in minutes',
-                note: 'Each run is a CLI start and one tiny API call. Floor of five.' },
-        ],
-    },
-    {
-        title: 'Keyboard', section: 'keyboard', userOnly: true, keymap: true,
-        note: 'How a few keys behave, and then every shortcut this window '
-            + 'answers to.',
-        rows: [
-            { key: 'contextualTerminalCopy', type: 'bool',
-                label: 'Contextual Ctrl+C in the terminal',
-                note: 'With a selection, Ctrl+C copies it and clears it — so a second '
-                    + 'Ctrl+C still interrupts. With no selection it interrupts as '
-                    + 'always. Turning this on also makes plain Ctrl+V paste, instead '
-                    + 'of Ctrl+Shift+V. Only while the terminal has the focus.' },
-            { key: 'composerSend', type: 'choice',
-                label: 'Composer send',
-                options: [
-                    ['enter', 'Enter sends · Shift+Enter for a newline'],
-                    ['ctrl-enter', 'Enter for a newline · Ctrl+Enter sends'],
-                ],
-                note: 'Ctrl+Enter sends either way.' },
-            { key: 'cycleOrder', type: 'choice',
-                label: 'Picker cycle order',
-                options: [
-                    ['default', 'As the dropdown lists them'],
-                    ['alphabetical', 'Alphabetical'],
-                ],
-                note: 'The order Ctrl+P and Ctrl+M step through Permissions and Model, '
-                    + 'and Shift walks it backwards. The dropdowns keep their own order.' },
-        ],
-    },
-    {
-        title: 'Toolbar', section: 'toolbar', userOnly: true, toolbar: true,
-        note: 'The buttons along the top: their order, which of them fold into the '
-            + 'More menu, and which show their name beside the icon. A hidden view '
-            + 'still opens from its shortcut.',
-        rows: [],
-    },
     // Claude Code's own settings — a different owner's files, and the one group
     // built by a `render` rather than from `rows` or from markup. It has to be:
     // what it draws comes from the bridge at load time rather than from a table
     // here, because the whole point is that a key this app has never heard of
     // still gets a control. See renderClaudeConfig().
     {
-        title: 'Claude Code', section: 'claude', render: () => renderClaudeConfig(),
+        title: 'Claude Code', section: 'claude', category: 'claude', tocTitle: 'Settings',
+        render: () => renderClaudeConfig(),
     },
     // The same owner's other files, and a `render` for the same reason: what it
     // draws is a document that only the bridge has. Directly under the group
@@ -261,29 +301,11 @@ export const SETTINGS = [
     // precedence chain and these are instructions that add up — one control
     // cannot mean both things. See renderClaudeDocs().
     {
-        title: 'Claude Code · Memory', section: 'memory', render: () => renderClaudeDocs(),
+        title: 'Claude Code · Memory', section: 'memory', category: 'claude', tocTitle: 'Memory',
+        render: () => renderClaudeDocs(),
     },
-    // The commands this project declares, which are the buttons in the
-    // conversation header. A `render` for the same reason the two above use
-    // one — what it draws is a pair of files only the bridge has read — and
-    // placed here, with the other things that are about a project rather than
-    // about this window, above the three that are backed by no file at all.
     {
-        title: 'Project commands', section: 'commands', render: () => renderCmdConfig(),
-    },
-    // The next few are not built from rows, because none is backed by the
-    // settings file — one is a store of its own, one is per-browser storage and
-    // the last is a task rather than a setting. Those still written out in
-    // web/index.html name their element in `node`, which renderSettings moves
-    // into place, so they take their turn in this order instead of being stuck
-    // wherever the markup put them. Notifications draws itself as a component
-    // (`card`).
-    //
-    // `render` and `node` are the groups still built by hand with el(); they
-    // are handed to Preact as foreign DOM (see Foreign in index.js). `card` and
-    // `rows` groups are Preact all the way down.
-    {
-        title: 'Projects', section: 'projects', node: 'setGProjects',
+        title: 'Projects', section: 'projects', category: 'projects', node: 'setGProjects',
         userOnly: true,
         // The rail's project order, drawn above the colours — see
         // renderProjectOrder(). Separate from `rows` because some of these are
@@ -334,22 +356,19 @@ export const SETTINGS = [
         ],
         after: () => { renderProjectOrder(); renderProjectBackdrop(); renderProjectColors(); },
     },
+    // The commands this project declares, which are the buttons in the
+    // conversation header. A `render` for the same reason Claude Code's two use
+    // one — what it draws is a pair of files only the bridge has read — and
+    // filed with Projects, because it is about a project rather than this window.
     {
-        title: 'Snippets', section: 'snippets', node: 'setGSnippets',
-        after: () => renderSnipSettings(),
-    },
-    // `when` leaves a group out, contents entry and all: on a host with no Wispr
-    // Flow there is nothing for these to configure.
-    {
-        title: 'Wispr Flow', section: 'wispr', node: 'setGWispr',
-        when: () => wisprAvailable,
-        after: () => renderWisprSettings(),
+        title: 'Project commands', section: 'commands', category: 'projects', tocTitle: 'Commands',
+        render: () => renderCmdConfig(),
     },
     {
-        title: 'Notifications', section: 'notify', card: () => notifyCard(),
+        title: 'Notifications', section: 'notify', category: 'connect', card: () => notifyCard(),
     },
     {
-        title: 'Connect a phone', section: 'pair', node: 'setGPair',
+        title: 'Connect a phone', section: 'pair', category: 'connect', node: 'setGPair',
         after: () => refreshPairUrl(),
     },
 ];
@@ -400,15 +419,19 @@ export function settingRow(group, row, locked) {
     const open = !fold || isOpen(foldKey, fold.long);
 
     const text = html`<div class="settings-row-text">
-        <div class="settings-row-label">${fold ? foldLabelV(foldKey, open, row.label) : row.label}</div>
+        <div class="settings-row-label">${fold ? foldLabelV(foldKey, open, row.label) : row.label}${
+            settingTip(row.note)}</div>
         ${!open ? html`<div class="set-fold-sum">${fold.text}</div>` : null}
-        ${row.note && open ? html`<div class="settings-row-note">${row.note}</div>` : null}
+        ${open ? settingDesc(row.note) : null}
         ${overridden ? html`<div class="settings-row-warn">${
             `Overridden by ${SCOPE_NAMES[origin.scope]} — `}<code>${shortPath(origin.file)}</code>${
             ' wins, so this has no effect here.'}</div>` : null}
     </div>`;
 
-    const side = html`<div class="settings-row-side">${explicit
+    // `is-origin` is what settings.css keeps out of sight until the row is
+    // hovered or focused: at User scope nearly every row says Clear, and forty
+    // of them down the right edge were most of the noise on the page.
+    const side = html`<div class="settings-row-side is-origin">${explicit
         ? html`<button class="linkish" type="button" disabled=${disabled}
             title="Remove this key so the value falls back"
             onClick=${() => save(null)}>Clear</button>`
@@ -438,11 +461,31 @@ function settingFoldSummary(row, value) {
     return { long: total > LONG, text: `${on} of ${total} chosen` };
 }
 
+/**
+ * A row's description, as the ⓘ beside its label and as the line under it.
+ *
+ * Both are always drawn, and the Descriptions picker in the panel's head says
+ * which one shows — by `data-notes` on #settings, read by settings.css — so
+ * switching is a class flip rather than a redraw, and the groups built by hand
+ * (web/index.html, notifications.js) take part by carrying the same two classes
+ * without knowing about the picker at all. See paintSettingsNotes() in index.js.
+ *
+ * The tip is CSS off `data-tip` rather than a `title`: a native tooltip takes a
+ * second to appear and never appears for the keyboard, and this one does both.
+ */
+export function settingTip(note) {
+    return note ? html`<button class="set-tip" type="button" aria-label=${note} data-tip=${note}></button>` : null;
+}
+
+export function settingDesc(note) {
+    return note ? html`<div class="settings-row-note settings-desc">${note}</div>` : null;
+}
+
 /** A title partway down a group, for a run of rows that belong together. */
 export function settingHeading(row) {
     return html`<div key=${`heading:${row.label}`} class="settings-subhead">
-        <h3 class="settings-subhead-title">${row.label}</h3>
-        ${row.note ? html`<p class="settings-group-note">${row.note}</p>` : null}
+        <h3 class="settings-subhead-title">${row.label}${settingTip(row.note)}</h3>
+        ${row.note ? html`<p class="settings-group-note settings-desc">${row.note}</p>` : null}
     </div>`;
 }
 
@@ -462,8 +505,8 @@ export function settingAllRow(group, row, locked) {
     });
     return html`<div key=${`all:${row.label}`} class="settings-row">
         <div class="settings-row-text">
-            <div class="settings-row-label">${row.label}</div>
-            ${row.note ? html`<div class="settings-row-note">${row.note}</div>` : null}
+            <div class="settings-row-label">${row.label}${settingTip(row.note)}</div>
+            ${settingDesc(row.note)}
         </div>
         <div class="settings-row-ctl">
             <div class="seg" role="group" aria-label=${row.label}>

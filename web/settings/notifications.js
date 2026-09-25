@@ -11,6 +11,7 @@
 import { html, useState } from '../vendor/preact.js';
 import { toast } from '../dom.js';
 import { announce, chime, notify, notifyPermission, wakeAudio } from '../notifications.js';
+import { settingDesc, settingTip } from './general.js';
 
 // ── notification settings ────────────────────────────────────────────────
 //
@@ -36,6 +37,9 @@ const NOTE = {
         + 'stopped until you answer. A turn finishing only does if it ran over '
         + '30 seconds. Never for the session already in front of you.',
 };
+const DESKTOP_NOTE = 'Ticking this is what asks the browser for permission — nothing '
+    + 'else does, because a prompt no gesture invited is the one people press Block on.';
+const SOUND_NOTE = 'A short chime, synthesised in the page rather than fetched.';
 
 /** The group, as a vnode for renderSettings. */
 export function notifyCard() {
@@ -100,10 +104,8 @@ function NotifyGroup() {
 
         <div class="settings-row">
             <div class="settings-row-text">
-                <div class="settings-row-label">Show a desktop notification</div>
-                <div class="settings-row-note">Ticking this is what asks the
-                    browser for permission — nothing else does, because a prompt
-                    no gesture invited is the one people press Block on.</div>
+                <div class="settings-row-label">Show a desktop notification${settingTip(DESKTOP_NOTE)}</div>
+                ${settingDesc(DESKTOP_NOTE)}
             </div>
             <div class="settings-row-ctl">
                 <label class="settings-check">
@@ -117,9 +119,8 @@ function NotifyGroup() {
 
         <div class="settings-row">
             <div class="settings-row-text">
-                <div class="settings-row-label">Play a sound</div>
-                <div class="settings-row-note">A short chime, synthesised in the
-                    page rather than fetched.</div>
+                <div class="settings-row-label">Play a sound${settingTip(SOUND_NOTE)}</div>
+                ${settingDesc(SOUND_NOTE)}
             </div>
             <div class="settings-row-ctl">
                 <label class="settings-check">

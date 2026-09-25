@@ -35,7 +35,7 @@ import {
 import { paintComposerHint } from '../composer/send.js';
 import { openSession } from '../transcript/conversation.js';
 import { loadClaudeConfig } from './claude-config.js';
-import { settingsCard, SETTINGS } from './general.js';
+import { settingsCard, SETTINGS, SETTINGS_CATEGORIES } from './general.js';
 import { loadClaudeDocs } from './memory.js';
 import { loadCmdConfig } from './project-commands.js';
 import { paintShortcutHints } from './shortcuts.js';
@@ -335,6 +335,7 @@ export function renderSettings() {
     // a disabled one beside "User" is a control that appears broken.
     dom.setProjectWrap.hidden = s.scope === 'user';
     dom.setScope.value = s.scope;
+    paintSettingsNotes();
     paintSettingsProjects();
     paintSettingsFile();
     paintSettingsProblems();
@@ -351,8 +352,50 @@ export function renderSettings() {
         return;
     }
 
-    paint(dom.setBody, SETTINGS.filter(g => !g.when || g.when()).map(settingsGroup));
+    // A heading in front of the first group of each category — SETTINGS keeps
+    // a category's groups together, so the first of a run is the first of all.
+    const body = [];
+    let cat = null;
+    for (const group of visibleSettings()) {
+        if (group.category !== cat) {
+            cat = group.category;
+            const c = SETTINGS_CATEGORIES.find(x => x.key === cat);
+            body.push(html`<h2 key=${`cat:${cat}`} class="settings-cat" id=${`set-c-${cat}`}
+                >${c ? c.title : cat}</h2>`);
+        }
+        body.push(settingsGroup(group));
+    }
+    paint(dom.setBody, body);
     renderSettingsToc();
+}
+
+/** The groups this host has, in the order they are drawn. */
+function visibleSettings() {
+    return SETTINGS.filter(g => !g.when || g.when());
+}
+
+/**
+ * Descriptions under each label, or behind an ⓘ beside it.
+ *
+ * Every row draws both (settingTip and settingDesc in general.js), and this
+ * attribute is what settings.css reads to show one — so the hand-built groups
+ * take part without a redraw of their own, and switching is instant. Kept in
+ * localStorage beside the folds, because like them it is how this page is laid
+ * out for you rather than how the app behaves: it has no business in a file a
+ * project can check in.
+ */
+export function paintSettingsNotes() {
+    dom.settings.dataset.notes = state.settings.notes;
+    dom.setNotes.value = state.settings.notes;
+}
+
+export function setSettingsNotes(mode) {
+    state.settings.notes = mode === 'inline' ? 'inline' : 'tips';
+    try { localStorage.setItem('settingsNotes', state.settings.notes); } catch { /* per-session then */ }
+    paintSettingsNotes();
+    // The groups move under the pinned head when their height changes, so the
+    // contents has to light whichever one is now at the top.
+    markSettingsToc();
 }
 
 /** One entry of SETTINGS, as whatever kind of group it is. */
@@ -404,11 +447,12 @@ function Foreign({ nodes, after }) {
 }
 
 /**
- * Contents down the left, one entry per group.
+ * Contents down the left: each category, and its groups under it.
  *
- * Worth the space because the panel is five groups and about forty controls,
- * and the thing you came for is rarely the one on screen. Sticky rather than
- * scrolling with the body, for the same reason.
+ * Worth the space because the panel is seventeen groups and about sixty
+ * controls, and the thing you came for is rarely the one on screen. Sticky
+ * rather than scrolling with the body, for the same reason. The categories are
+ * what make it scannable — a flat list that long is read, not glanced at.
  */
 function renderSettingsToc() {
     // Which one is lit is measured off the cards just drawn, so it is worked
@@ -419,13 +463,26 @@ function renderSettingsToc() {
 
 function paintSettingsToc() {
     const active = state.settings.toc;
-    paint(dom.setToc, SETTINGS.filter(g => !g.when || g.when()).map(group => html`<button
-        key=${group.section} class=${group.section === active ? 'settings-toc-link on' : 'settings-toc-link'}
-        type="button" data-for=${group.section}
-        onClick=${() => {
-            const card = document.getElementById(`set-g-${group.section}`);
-            if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }}>${group.title}</button>`));
+    const groups = visibleSettings();
+    const activeCat = (groups.find(g => g.section === active) || {}).category;
+    const jump = (id) => {
+        const node = document.getElementById(id);
+        if (node) node.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
+    const items = [];
+    for (const cat of SETTINGS_CATEGORIES) {
+        const mine = groups.filter(g => g.category === cat.key);
+        if (!mine.length) continue;
+        items.push(html`<button key=${`cat:${cat.key}`} type="button"
+            class=${cat.key === activeCat ? 'settings-toc-cat on' : 'settings-toc-cat'}
+            onClick=${() => jump(`set-c-${cat.key}`)}>${cat.title}</button>`);
+        for (const group of mine) {
+            items.push(html`<button key=${group.section} type="button" data-for=${group.section}
+                class=${group.section === active ? 'settings-toc-link on' : 'settings-toc-link'}
+                onClick=${() => jump(`set-g-${group.section}`)}>${group.tocTitle || group.title}</button>`);
+        }
+    }
+    paint(dom.setToc, items);
 }
 
 /**

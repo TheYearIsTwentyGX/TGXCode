@@ -90,6 +90,10 @@
     .settings-toc-link { flex: none; background: var(--s2); }
     .settings-toc-link.on { background: var(--blue-cont); }
     .settings-toc-link::before { display: none; }
+    /* The strip is one row of chips; a category label in it would be a chip
+       that goes nowhere useful. The headings are still in the body. */
+    .settings-toc-cat { display: none; }
+    .settings-toc-cat + .settings-toc-link, .settings-toc-link + .settings-toc-link { padding-left: 11px; }
     .settings-key-row { flex-wrap: wrap; }
     .settings-key-label { flex-basis: 100%; }
     .settings-key-combo, .settings-key-recording { width: auto; min-width: 110px; }
