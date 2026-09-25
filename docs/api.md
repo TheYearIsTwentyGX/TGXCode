@@ -1216,12 +1216,15 @@ User file only. In a file a bad entry is dropped alone with one `problems` line;
 `PUT` it refuses the whole call, as every value does. The array is one key, so a
 `PUT` naming it replaces the list whole — send all of it, and `null` to empty it.
 
-`preview` is the desktop page's in-window browser preview, and is two keys:
+`preview` is the desktop page's in-window browser preview, and is five keys:
 
 | Key | Type | |
 |---|---|---|
 | `keepAliveMinutes` | **integer 0–240**, default `10` | how long a preview page stays loaded after you leave it. Coming back inside that finds it as you left it; after it the page is discarded and the next open loads it fresh. `0` discards it as soon as you leave. |
 | `overLive` | **bool**, default `true` | a port clicked on a Live card opens its preview over the Live board. `false` opens that card's session and previews over it, leaving a docked board beside it. |
+| `links` | **bool**, default `false` | a link clicked in rendered markdown (a message, a plan, a review) opens in the preview rather than the system browser, subject to `listMode` and `list`. |
+| `listMode` | **`"block"` or `"allow"`**, default `"block"` | what `list` is: `"block"` previews every link except those matching it, `"allow"` only those matching it. An empty allowlist previews nothing. |
+| `list` | **array of strings**, default `[]`, at most 200, each 1–200 characters with no line break | domain and URL patterns. `example.com` matches that host and its subdomains, `*.example.com` subdomains only, and an entry containing `/` is a URL prefix with an optional scheme. `#` entries are comments. Entries are trimmed and repeats dropped silently; in a file a bad entry is dropped alone with one `problems` line, in a `PUT` it refuses the whole call. The array is one key: a `PUT` replaces it whole, and `null` empties it. Matching is the client's (`web/link-policy.js`); the bridge only checks shape. |
 
 `devbrowser` is whether DevBrowser is part of the app, and where a "show me this
 port" click goes. Three keys:

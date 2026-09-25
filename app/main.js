@@ -469,8 +469,8 @@ function createWindow() {
         },
     });
 
-    // Every guest is a loopback page in its own partition, with no preload and
-    // no Node. The page asks for this already; this is where it is enforced,
+    // Every guest is a loopback page, or a site the shell's page asked for
+    // (preview-allow-origin), in its own partition, with no preload and no Node. The page asks for this already; this is where it is enforced,
     // because a page that can create a <webview> can also set its attributes.
     mainWindow.webContents.on('will-attach-webview', (event, webPreferences, params) => {
         delete webPreferences.preload;
@@ -479,7 +479,7 @@ function createWindow() {
         webPreferences.contextIsolation = true;
         webPreferences.webSecurity = true;
         params.partition = PREVIEW_PARTITION;
-        if (!isLoopbackUrl(params.src) && params.src !== 'about:blank') event.preventDefault();
+        if (!isPreviewable(params.src) && params.src !== 'about:blank') event.preventDefault();
     });
 
     Menu.setApplicationMenu(null);
@@ -653,17 +653,30 @@ function isLoopbackUrl(url) {
     }
 }
 
+// Sites the shell's page has opened in the preview from a chat link
+// (web/link-policy.js decides which). Held for the life of the process: an
+// origin granted once may be navigated within, and a link from it to anywhere
+// else still goes to the browser. Capped so a page gone wrong cannot grow it.
+const previewOrigins = new Set();
+const MAX_PREVIEW_ORIGINS = 200;
+
+function isPreviewable(url) {
+    if (isLoopbackUrl(url)) return true;
+    try { return previewOrigins.has(new URL(url).origin); } catch { return false; }
+}
+
 app.on('web-contents-created', (_event, contents) => {
     if (contents.getType() !== 'webview') return;
 
-    // A link that leaves loopback is somewhere else on the internet, and that
-    // belongs in the real browser, exactly as it does for the shell itself.
+    // A link that leaves loopback, or the site a chat link opened, is somewhere
+    // else on the internet, and that belongs in the real browser, exactly as it
+    // does for the shell itself.
     contents.setWindowOpenHandler(({ url }) => {
         if (/^https?:/.test(url)) shell.openExternal(url);
         return { action: 'deny' };
     });
     contents.on('will-navigate', (event, url) => {
-        if (isLoopbackUrl(url)) return;
+        if (isPreviewable(url)) return;
         event.preventDefault();
         if (/^https?:/.test(url)) shell.openExternal(url);
     });
@@ -702,6 +715,20 @@ ipcMain.handle('preview-capture', async (event, id) => {
     } catch (e) {
         return { ok: false, error: e.message };
     }
+});
+
+ipcMain.handle('preview-allow-origin', (event, origin) => {
+    if (!fromShell(event) || typeof origin !== 'string') return { ok: false, error: 'refused' };
+    let u;
+    try { u = new URL(origin); } catch { return { ok: false, error: 'refused' }; }
+    if ((u.protocol !== 'http:' && u.protocol !== 'https:') || u.origin !== origin) {
+        return { ok: false, error: 'refused' };
+    }
+    if (!previewOrigins.has(origin)) {
+        if (previewOrigins.size >= MAX_PREVIEW_ORIGINS) return { ok: false, error: 'full' };
+        previewOrigins.add(origin);
+    }
+    return { ok: true };
 });
 
 ipcMain.handle('preview-copy-text', (event, text) => {

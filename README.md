@@ -401,6 +401,7 @@ Two rules worth knowing before you send a patch:
 | `web/highlight.js` | The syntax highlighter behind it |
 | `web/sw.js` | A service worker for one thing only: buttons on a notification. No `fetch` handler |
 | `web/preview.js` | The browser preview — a dev server's page in the window, with DevBrowser's toolbar |
+| `web/link-policy.js` | Which chat links open in the browser preview — the `preview.list` pattern matcher, pure so a test can import it |
 | `web/preview-picker.js` | The preview's element picker, copied from DevBrowser; runs inside the previewed page |
 | `web/keys.js` | Which chord means which command, and the one function that decides it |
 | `web/rail.js` | The sessions rail, drawn with Preact — keyed by session and by group, so an update keeps the rows it did not change. The first surface moved off `app.js`'s rebuild-everything rendering, and the pattern for the next |

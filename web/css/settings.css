@@ -342,6 +342,8 @@
    remembered host is a URL — both belong in a field the width of the row rather
    than one you scroll sideways through. */
 .settings-text.is-long { width: 100%; }
+/* A list typed one entry per line — the preview's domains and URLs. */
+.settings-list { display: block; width: 100%; resize: vertical; line-height: 1.5; }
 
 /* The notification rules, and the sentence that replaces them when the browser
    is refusing. Same slot, so the group does not change height. */
