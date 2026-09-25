@@ -87,6 +87,22 @@ function toWindowsPath(dir) {
 }
 
 /**
+ * The other direction: a path written the way Windows reaches it -
+ * `\\wsl.localhost\Ubuntu\...`, `C:\...` - as the Linux one, for
+ * POST /api/fs/open, whose paths are copied out of transcripts.
+ *
+ * Null on a Linux host, and null when wslpath refuses it (a share for a distro
+ * that is not this one, say). Either way there is no Linux path to act on.
+ */
+function toLinuxPath(win) {
+    return new Promise((resolve) => {
+        if (!isWsl()) return resolve(null);
+        execFile('wslpath', ['-u', win], { timeout: 5000 },
+            (err, stdout) => resolve(err ? null : stdout.trim() || null));
+    });
+}
+
+/**
  * Hand a path to explorer.exe.
  *
  * explorer.exe reports exit code 1 even when it opens the window perfectly well,
@@ -227,4 +243,4 @@ async function openFile(file) {
     return handToXdgOpen(resolved);
 }
 
-module.exports = { openInExplorer, openFile, toWindowsPath, isLaunchable };
+module.exports = { openInExplorer, openFile, toWindowsPath, toLinuxPath, isLaunchable };

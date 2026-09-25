@@ -46,6 +46,7 @@ process.removeAllListeners('warning');
     // reach must render as text rather than as a link that fails.
     assert.ok(!renderMarkdown('see /home/x/y.md').includes('fs-path'));
     assert.ok(!renderMarkdown('see `/home/x/y.md`').includes('fs-path'));
+    assert.ok(!renderMarkdown('see C:\\x\\y.md').includes('fs-path'));
     ok('paths stay plain text until configurePaths is called');
 
     configurePaths({ distro: 'Ubuntu', home: '/home/tester' });
@@ -150,6 +151,48 @@ process.removeAllListeners('warning');
     assert.strictEqual(tilde.text, '~/Other/x/README.md');
     assert.strictEqual(tilde.href, 'file://wsl.localhost/Ubuntu/home/tester/Other/x/README.md');
     ok('a ~ path is displayed expanded and sent unexpanded');
+
+    // --- paths written the Windows way -----------------------------------
+    // The case this exists for, verbatim from a transcript: an agent telling you
+    // where to find a build from the Windows side.
+    const exe = '\\\\wsl.localhost\\Ubuntu\\home\\dylan_hays\\Other\\Paycom-Agency-Hours-Import'
+        + '\\AgencyHours\\bin\\Release\\net10.0\\win-x64\\publish\\AgencyHours.exe';
+    const share = one(`run "${exe}" from Windows`);
+    assert.strictEqual(share.path, exe, 'the path was not sent as written');
+    assert.strictEqual(share.text, exe);
+    assert.strictEqual(share.title, '/home/dylan_hays/Other/Paycom-Agency-Hours-Import'
+        + '/AgencyHours/bin/Release/net10.0/win-x64/publish/AgencyHours.exe');
+    assert.ok(share.href.startsWith('file://wsl.localhost/Ubuntu/home/dylan_hays/'), share.href);
+    ok('a \\\\wsl.localhost path is a link, sent verbatim, with its Linux form on hover');
+
+    const old = one('see `\\\\wsl$\\Ubuntu\\tmp\\a.log`.');
+    assert.strictEqual(old.path, '\\\\wsl$\\Ubuntu\\tmp\\a.log');
+    assert.strictEqual(old.title, '/tmp/a.log');
+    ok('the older \\\\wsl$ share is a link too, inside a code span');
+
+    const win = one('at C:\\Users\\x\\a.txt:12, then.');
+    assert.strictEqual(win.path, 'C:\\Users\\x\\a.txt');
+    assert.strictEqual(win.text, 'C:\\Users\\x\\a.txt:12');
+    assert.strictEqual(win.title, '/mnt/c/Users/x/a.txt');
+    assert.strictEqual(win.href, 'file:///C:/Users/x/a.txt');
+    assert.ok(renderMarkdown('ends at D:\\a.log.').includes('</a>.'),
+        'the full stop was swallowed into the path');
+    ok('a drive path is a link, with its line number and full stop handled like a POSIX one');
+
+    // Some other distro's share has no Linux path here, so it hovers as written.
+    const other = one('\\\\wsl.localhost\\Debian\\home\\x.md');
+    assert.strictEqual(other.title, '\\\\wsl.localhost\\Debian\\home\\x.md');
+    ok('a share for another distribution is linked but not translated');
+
+    const mixed = links('both /home/x/a.md and D:\\stuff\\ here');
+    assert.deepStrictEqual(mixed.map(l => l.path), ['/home/x/a.md', 'D:\\stuff\\']);
+    ok('a POSIX and a Windows path in one line are two links');
+
+    for (const src of ['foo\\\\wsl.localhost\\Ubuntu\\x', 'ABC:\\x', '[x](C:\\a.txt)',
+        '[C:\\a.txt](https://example.com)']) {
+        assert.strictEqual(links(src).length, 0, `linked something in ${JSON.stringify(src)}`);
+    }
+    ok('a Windows path mid-word or in a markdown link is left alone');
 
     // --- what the host must not be asked to launch -------------------------
     for (const f of ['/home/x/a.exe', '/home/x/a.EXE', '/home/x/a.lnk', '/home/x/a.url',

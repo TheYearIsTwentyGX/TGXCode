@@ -283,9 +283,26 @@ const PATH_ROOTS = /^(?:~|\/(?:home|root|mnt|tmp|var|etc|usr|opt|srv))(?:\/|$)/;
 const PATH_EXT = /\/[^/]*[A-Za-z0-9]\.[A-Za-z0-9]{1,8}$/;
 
 /**
+ * The same thing written the way Windows reaches it: `\\wsl.localhost\<distro>\…`,
+ * the older `\\wsl$\<distro>\…`, or a drive, `C:\…`.
+ *
+ * Agents write this form when they are telling you where to find something from
+ * the Windows side - a build output, a published .exe - so it is as much a path
+ * as the POSIX one and deserves the same link. The prefix is the evidence, so
+ * there is no PATH_ROOTS/PATH_EXT gate after it; the character class and the
+ * no-spaces rule are PATH_RE's, for PATH_RE's reasons.
+ *
+ * `data-path` carries it exactly as written. Turning it back into a Linux path is
+ * `wslpath -u` on the bridge, which knows what the share is really called.
+ */
+const WIN_PATH_RE = /(?<!\]\()(?<![\w:@~.\-/\\])(?:\\\\wsl(?:\.localhost|\$)\\[A-Za-z0-9._\-]+|[A-Za-z]:)\\[A-Za-z0-9._~+@\-\\]*(?::\d+(?::\d+)?)?/g;
+
+const isWinPath = (p) => /^(?:\\\\|[A-Za-z]:\\)/.test(p);
+
+/**
  * Split a candidate into what to open and what to show, or null for "not a path".
  */
-function pathParts(raw) {
+function pathParts(raw, win = false) {
     let p = raw;
     let suffix = '';
     // `file.js:120` and `file.js:120:5` are how every tool in this app writes a
@@ -297,7 +314,7 @@ function pathParts(raw) {
     let tail = '';
     while (p.endsWith('.')) { p = p.slice(0, -1); tail += '.'; }
     if (p.length < 2) return null;
-    if (!PATH_ROOTS.test(p) && !PATH_EXT.test(p)) return null;
+    if (!win && !PATH_ROOTS.test(p) && !PATH_EXT.test(p)) return null;
     return { path: p, text: p + suffix, tail };
 }
 
@@ -315,6 +332,8 @@ function absolute(p) {
  * `wslpath -w` on the bridge; see POST /api/fs/open.
  */
 function uncPath(p) {
+    // Already the Windows form, so the useful thing to hover is the Linux one.
+    if (isWinPath(p)) return linuxPath(p);
     const abs = absolute(p);
     const drive = /^\/mnt\/([a-z])(?=\/|$)/.exec(abs);
     if (drive) {
@@ -323,8 +342,27 @@ function uncPath(p) {
     return '\\\\wsl.localhost\\' + HOST.distro + abs.replace(/\//g, '\\');
 }
 
+/**
+ * A Windows-form path as the Linux one, for the hover title only - the same
+ * conventions uncPath assumes, run backwards. A share for some other distro has
+ * no Linux path here, so it is shown as written.
+ */
+function linuxPath(p) {
+    const share = /^\\\\wsl(?:\.localhost|\$)\\([^\\]+)(\\.*|$)/.exec(p);
+    if (share) {
+        if (share[1].toLowerCase() !== HOST.distro.toLowerCase()) return p;
+        return share[2].replace(/\\/g, '/') || '/';
+    }
+    return '/mnt/' + p[0].toLowerCase() + p.slice(2).replace(/\\/g, '/');
+}
+
 /** The same place as a URL, for `href`. Never navigated to - see the click handler. */
 function fileUrl(p) {
+    if (isWinPath(p)) {
+        return encodeURI(p.startsWith('\\\\')
+            ? 'file:' + p.replace(/\\/g, '/')
+            : 'file:///' + p[0].toUpperCase() + p.slice(1).replace(/\\/g, '/'));
+    }
     const abs = absolute(p);
     const drive = /^\/mnt\/([a-z])(?=\/|$)/.exec(abs);
     return encodeURI(drive
@@ -359,13 +397,16 @@ function pathAnchor(it) {
  */
 function linkPaths(src, park) {
     if (!HOST) return null;
-    return src.replace(PATH_RE, (m, off, whole) => {
+    const link = (win) => (m, off, whole) => {
         // The other half of the markdown-link guard: `[/home/x.md](url)` would
         // otherwise nest an anchor inside an anchor.
         if (whole.slice(off + m.length, off + m.length + 2) === '](') return m;
-        const it = pathParts(m);
+        const it = pathParts(m, win);
         return it ? park(pathAnchor(it)) + it.tail : m;
-    });
+    };
+    // Two passes can not find the same run twice: the two forms share no
+    // separator, and a parked anchor is a placeholder by the second pass.
+    return src.replace(PATH_RE, link(false)).replace(WIN_PATH_RE, link(true));
 }
 
 /**

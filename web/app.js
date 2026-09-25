@@ -65,7 +65,7 @@ import {
 import {
     collapseChecklist, renderChecklist, resetChecklist, showChecklist,
 } from './transcript/checklist.js';
-import { closeContextMenu, CTX_OWNERS } from './transcript/context-menu.js';
+import { closeContextMenu, CTX_OWNERS, openContextMenu } from './transcript/context-menu.js';
 import {
     AGENT_VIEW, appendEvents, closeRun, isBusy, loadPrStatus, openSession, openSessionSoon,
     renderHeaderActions, SESSION_VIEW,
@@ -3966,11 +3966,47 @@ document.addEventListener('click', (e) => {
     const a = e.target.closest('a.fs-path');
     if (!a) return;
     e.preventDefault();
-    // Ctrl or Shift asks for the folder instead of the file. The other two ways a
-    // click ends at a folder — the path is a directory, or Windows would run it —
-    // are the bridge's to decide, being the only side that can see the disk.
-    openPath(a.dataset.path, { reveal: e.ctrlKey || e.metaKey || e.shiftKey });
+    // Ctrl or Shift asks for the folder straight away, skipping the menu below.
+    if (e.ctrlKey || e.metaKey || e.shiftKey) return openPath(a.dataset.path, { reveal: true });
+    choosePathAction(a, e);
 });
+
+/**
+ * A plain click on a path: a folder opens, a file asks whether you want the file
+ * or the folder it is in.
+ *
+ * Which of the two it is comes from the bridge, being the only side that can see
+ * the disk — `Makefile` has no extension and `v1.2` is a folder. The probe opens
+ * nothing. A file Windows would run keeps its Open row, greyed with the reason,
+ * because the bridge would only reveal it anyway and a row that did the same
+ * thing as the one under it would be a lie.
+ */
+async function choosePathAction(a, e) {
+    const p = a.dataset.path;
+    // Taken before the await: the event's coordinates are all a menu has to go
+    // on, and a keyboard Enter reports 0,0, which openContextMenu answers with
+    // the anchor's own rectangle.
+    const at = { clientX: e.clientX, clientY: e.clientY, currentTarget: a };
+    let probe;
+    try {
+        probe = await post('/api/fs/open', { path: p, probe: true });
+    } catch (err) {
+        return toast(`Could not open ${p}: ${err.message}`, 'warn');
+    }
+    // As a reveal, which for a folder is the same Explorer window, so openPath
+    // does not toast that the folder you clicked turned out to be a folder.
+    if (probe.kind === 'directory') return openPath(p, { reveal: true });
+    if (!a.isConnected) return;
+    openContextMenu(at, [
+        {
+            label: 'Open',
+            onClick: () => openPath(p),
+            disabled: probe.launchable
+                ? 'Windows would run this file, so it is not opened from a link.' : false,
+        },
+        { label: 'Explore here...', onClick: () => openPath(p, { reveal: true }) },
+    ]);
+}
 
 // A link in rendered markdown — a message, a plan, a review — goes to the
 // preview when `preview.links` and its list say so. A modified or middle click

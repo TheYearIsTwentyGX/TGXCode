@@ -142,6 +142,10 @@ render paths as plain text rather than guess a distribution name.
 
 The translation that is *acted* on is never this one — see `POST /api/fs/open`.
 
+The web client also links paths an agent wrote the Windows way —
+`\\wsl.localhost\<distro>\…`, `\\wsl$\<distro>\…` and `C:\…` — and hands them to
+`POST /api/fs/open` verbatim; `tgx-host` is used only to show their Linux form on hover.
+
 ### The host the bridge opens files on
 
 The bridge runs on Linux either way — it is a Linux process under WSL too, so
@@ -4008,14 +4012,31 @@ answered them. It takes about 0.6 s, most of it PowerShell starting.
 
 ### `POST /api/fs/open`
 
-`{path: string, reveal?: boolean}` →
-`{ok: true, how: "open" | "reveal", path: string, winPath: string | null, why?: "directory" | "executable"}`.
+`{path: string, reveal?: boolean, probe?: boolean}` →
+`{ok: true, how: "open" | "reveal", path: string, winPath: string | null, why?: "directory" | "executable"}`,
+or with `probe: true`
+`{ok: true, how: "probe", path: string, kind: "file" | "directory", launchable: boolean}`.
 
 Opens a path on the host desktop: the file, in whatever the host opens that kind of
 file with, or — with `reveal: true` — the folder holding it, in the file manager.
 `path` is a Linux path on the machine the bridge runs on and a leading `~` means
 `$HOME`, as everywhere else. `path` in the answer is the resolved Linux path, not the
 one you sent. Local callers only.
+
+**`path` may also be the Windows form** — anything starting `\\` (such as
+`\\wsl.localhost\Ubuntu\home\…` or `\\wsl$\Ubuntu\…`) or a drive, `C:\…`. Under WSL it
+is translated with `wslpath -u` before anything else happens, so every rule below
+applies to the Linux path it becomes. It is `400` when the translation fails — a share
+for a distribution other than the bridge's, say — and always `400`
+(`"Windows paths can only be opened under WSL"`) on a Linux host. Send it exactly as a
+transcript wrote it; do not translate it yourself.
+
+**`probe: true` opens nothing.** It resolves and stats the path and says what is
+there: `kind` is `"directory"` or `"file"`, and `launchable` is `true` for a file with
+an extension on the list below — one that `open` would only reveal. The web client
+uses it to decide what a click on a path does: a folder opens; a file offers **Open**
+and **Explore here...** (`reveal: true`), with Open greyed when `launchable`. A probe
+takes precedence over `reveal` and is `404` for a missing path, like any other call.
 
 Under WSL the opener is `explorer.exe`; on a Linux host it is `xdg-open`, and a
 `reveal` of a *file* is handed to the `org.freedesktop.FileManager1` D-Bus interface
