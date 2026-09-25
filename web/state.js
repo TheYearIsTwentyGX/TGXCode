@@ -296,14 +296,6 @@ export const state = {
         // Half-written messages per card, held here rather than in the DOM so
         // they outlive the redraws the board does while agents work.
         drafts: new Map(),
-        // The cards already on screen, by session, with the `sig` the bridge
-        // stamped them with. This is what stops a push that moved one card from
-        // rebuilding all of them; see `liveCardFor`.
-        nodes: new Map(),
-        // The group sections, by key. Kept for the same reason and one more:
-        // re-parenting a card blurs whatever is focused inside it, so the
-        // containers have to stay put for the cards to be able to.
-        groups: new Map(),
         // Which way the board and the conversation divide the window:
         // 'bottom' stacks them, 'side' puts them next to each other. A property
         // of the window rather than of a session, like the terminal pane, so it
