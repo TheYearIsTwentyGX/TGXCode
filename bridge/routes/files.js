@@ -29,6 +29,15 @@ const {
     NEXT, declaredOverMax, overMax, readBinary, readJson, refuseUpload, send,
 } = require('../http');
 const { resolveWorkdir } = require('../runner');
+const { sessionRoot, workingDir } = require('./session-workspace');
+
+// Handed over by server.js — see the note above ROUTES there. Only
+// POST /api/fs/open reads it, to resolve a relative path against a session.
+let index = null;
+
+function init(deps) {
+    ({ index } = deps);
+}
 
 /**
  * Refuse an upload for a reason that has nothing to do with where it was going.
@@ -446,6 +455,29 @@ async function handle(req, res, url, pathname, seg, who) {
             }
             given = linux;
         }
+
+        // A relative path - `migrations/0042-add-index.sql` - is relative to the
+        // session that wrote it, so it needs one. Its working directory first,
+        // which for a session that entered a worktree is the worktree; then the
+        // repository root, because agents in a subdirectory still name files
+        // from the top. No bound on `..`: this route has no roots check to keep
+        // (see above), and a relative path cannot reach anything an absolute one
+        // could not.
+        if (!path.isAbsolute(given)) {
+            const summary = body.sessionId ? index.summary(String(body.sessionId)) : null;
+            if (!summary) {
+                return send(res, 400, {
+                    error: body.sessionId ? 'session not found'
+                        : 'a relative path needs the sessionId it is relative to',
+                });
+            }
+            const dir = workingDir(summary);
+            if (!dir) return send(res, 404, { error: 'no directory for this session' });
+            const root = await sessionRoot(dir);
+            const found = [dir, root].map(d => path.resolve(d, given)).find(f => fs.existsSync(f));
+            if (!found) return send(res, 404, { error: `${given} does not exist in ${dir}` });
+            given = found;
+        }
         const target = path.resolve(given);
 
         // Asked here rather than left to explorer.js so a path that is simply gone
@@ -494,4 +526,4 @@ async function handle(req, res, url, pathname, seg, who) {
     return NEXT;
 }
 
-module.exports = { handle, attachmentPath, attachmentRefused, receiveAttachment, resolveAttachments };
+module.exports = { init, handle, attachmentPath, attachmentRefused, receiveAttachment, resolveAttachments };

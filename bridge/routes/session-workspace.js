@@ -418,4 +418,4 @@ async function handle(req, res, url, pathname, seg, who) {
     return NEXT;
 }
 
-module.exports = { init, handle, archiveStoppedRuns };
+module.exports = { init, handle, archiveStoppedRuns, workingDir, sessionRoot };

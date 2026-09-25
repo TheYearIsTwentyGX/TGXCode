@@ -3981,9 +3981,21 @@ document.addEventListener('click', (e) => {
     if (!a) return;
     e.preventDefault();
     // Ctrl or Shift asks for the folder straight away, skipping the menu below.
-    if (e.ctrlKey || e.metaKey || e.shiftKey) return openPath(a.dataset.path, { reveal: true });
+    if (e.ctrlKey || e.metaKey || e.shiftKey) return openPath(pathTarget(a), { reveal: true });
     choosePathAction(a, e);
 });
+
+/**
+ * What to send for a path link: the path as written, and for a relative one the
+ * session it is relative to. Every transcript on screen is the current
+ * session's, subagents included, so that is the one; the bridge resolves it
+ * against that session's working directory, worktree and all.
+ */
+function pathTarget(a) {
+    const p = a.dataset.path;
+    const relative = !/^(?:[/~]|\\\\|[A-Za-z]:\\)/.test(p);
+    return relative && state.current ? { path: p, sessionId: state.current.sessionId } : p;
+}
 
 /**
  * A plain click on a path: a folder opens, a file asks whether you want the file
@@ -3996,16 +4008,16 @@ document.addEventListener('click', (e) => {
  * thing as the one under it would be a lie.
  */
 async function choosePathAction(a, e) {
-    const p = a.dataset.path;
+    const p = pathTarget(a);
     // Taken before the await: the event's coordinates are all a menu has to go
     // on, and a keyboard Enter reports 0,0, which openContextMenu answers with
     // the anchor's own rectangle.
     const at = { clientX: e.clientX, clientY: e.clientY, currentTarget: a };
     let probe;
     try {
-        probe = await post('/api/fs/open', { path: p, probe: true });
+        probe = await post('/api/fs/open', { ...pathBody(p), probe: true });
     } catch (err) {
-        return toast(`Could not open ${p}: ${err.message}`, 'warn');
+        return toast(`Could not open ${a.dataset.path}: ${err.message}`, 'warn');
     }
     // As a reveal, which for a folder is the same Explorer window, so openPath
     // does not toast that the folder you clicked turned out to be a folder.
@@ -4045,9 +4057,10 @@ document.addEventListener('auxclick', (e) => {
  * No session id: the route is about the machine rather than a conversation,
  * which is what lets a path on the board work with nothing in focus.
  */
-export async function openPath(p, { reveal = false } = {}) {
+export async function openPath(target, { reveal = false } = {}) {
+    const p = typeof target === 'string' ? target : target.path;
     try {
-        const out = await post('/api/fs/open', { path: p, reveal });
+        const out = await post('/api/fs/open', { ...pathBody(target), reveal });
         // The bridge answers what it actually did. A silent reveal when the click
         // asked for the file would look like the click had missed.
         if (!reveal && out.how === 'reveal') {
@@ -4059,6 +4072,11 @@ export async function openPath(p, { reveal = false } = {}) {
     } catch (err) {
         toast(`Could not open ${p}: ${err.message}`, 'warn');
     }
+}
+
+/** A path, or `{path, sessionId}` for a relative one, as the route's body. */
+function pathBody(target) {
+    return typeof target === 'string' ? { path: target } : target;
 }
 
 function debounce(fn, ms) {

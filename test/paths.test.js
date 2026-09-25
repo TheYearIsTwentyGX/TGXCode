@@ -68,14 +68,53 @@ process.removeAllListeners('warning');
     for (const src of [
         'POST /api/sessions/:id/reveal is refused',
         'and/or, TODO/FIXME, 50/50',
-        'web/app.js:14744 is relative and stays text',
-        'docs/api.md is relative too',
         'https://example.com/home/foo.md',
         'see http://127.0.0.1:45899/api/fs for the listing',
     ]) {
         assert.strictEqual(links(src).length, 0, `linked something in ${JSON.stringify(src)}`);
     }
-    ok('routes, prose slashes, relative paths and URLs are left alone');
+    ok('routes, prose slashes and URLs are left alone');
+
+    // --- relative paths --------------------------------------------------
+    // The case this exists for: "Run `migrations/…sql`" from an agent working in
+    // a worktree you would otherwise have to go and find.
+    const mig = one('Run `migrations/some-ddl-change.sql`, then restart.');
+    assert.strictEqual(mig.path, 'migrations/some-ddl-change.sql', 'sent as written');
+    assert.strictEqual(mig.href, '#', 'a relative path has no URL of its own');
+    assert.strictEqual(mig.title, 'In this session&#39;s working directory');
+    ok('a relative path in a code span is a link, sent as written');
+
+    const rel = links('see web/app.js:14744 and docs/api.md.');
+    assert.deepStrictEqual(rel.map(l => [l.path, l.text]),
+        [['web/app.js', 'web/app.js:14744'], ['docs/api.md', 'docs/api.md']]);
+    assert.deepStrictEqual(links('`./scripts/land.sh` or ../x/y.md').map(l => l.path),
+        ['./scripts/land.sh', '../x/y.md']);
+    assert.deepStrictEqual(links('`.claude/settings.json` in `bridge/`').map(l => l.path),
+        ['.claude/settings.json', 'bridge/']);
+    assert.strictEqual(one('my_dir/my_file_name.py').path, 'my_dir/my_file_name.py');
+    ok('bare, dotted, ./ and ../ relative paths are links, with line numbers and full stops handled');
+
+    // Prose is full of slashes. Each of these would be a link under a looser rule.
+    for (const src of [
+        'and/or, TODO/FIXME, 50/50, origin/main, 1/2.5, km/h',
+        'text/html and image/png', 'e.g./i.e. text', 'the feat/v2.0 branch',
+        'state.current and package.json',
+        'www.example.com/foo.html', '127.0.0.1:45899/api/x.json', 'localhost:3000/a/b.html',
+        '[docs](docs/api.md)', '[docs/api.md](https://example.com)',
+    ]) {
+        assert.strictEqual(links(src).length, 0, `linked something in ${JSON.stringify(src)}`);
+    }
+    ok('slashes in prose, bare hosts and markdown links do not become relative paths');
+
+    // The later passes must not take a bite out of what an earlier one linked.
+    assert.deepStrictEqual(links('/home/x/a/b.md and \\\\wsl$\\Ubuntu\\a\\b.md').map(l => l.path),
+        ['/home/x/a/b.md', '\\\\wsl$\\Ubuntu\\a\\b.md']);
+    ok('an absolute or Windows path is one link, not a relative one inside it');
+
+    // The guard that keeps `Files/thing.pdf` out of `/mnt/c/Program Files/…` must
+    // not also swallow a relative path that just follows a code span.
+    assert.strictEqual(one('run `npm test` web/app.js').path, 'web/app.js');
+    ok('a relative path right after a code span is still a link');
 
     // --- punctuation and line numbers ------------------------------------
     const lc = one('at /home/d/x/my_file.py:123:5, ok');
