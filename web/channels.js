@@ -9,7 +9,8 @@
 import { get, post } from './api.js';
 import { state } from './state.js';
 import { dom, el, toast } from './dom.js';
-import { icon, openPreview, openTitle } from './app.js';
+import { icon } from './icons.js';
+import { openPreview, openTitle } from './app.js';
 
 // ── dev-server channel strip ─────────────────────────────────────────────
 
