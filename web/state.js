@@ -402,6 +402,12 @@ export const state = {
         rev: 0,
         // Which group the contents list lights. See markSettingsToc().
         toc: null,
+        // Where a setting's description shows: 'tips' (behind an ⓘ) or
+        // 'inline' (under the label). Per-browser; see paintSettingsNotes().
+        notes: (() => {
+            try { return localStorage.getItem('settingsNotes') === 'inline' ? 'inline' : 'tips'; }
+            catch { return 'tips'; }
+        })(),
         // The long rows somebody folded or opened, by key. See settings/fold.js.
         folds: (() => {
             try {

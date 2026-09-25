@@ -45,8 +45,8 @@ import {
 import { claudeMayLeave, claudeTargetRow, loadClaudeConfig } from './settings/claude-config.js';
 import { RAIL_SORTS, settingRow, SETTINGS } from './settings/general.js';
 import {
-    loadSettings, markSettingsToc, openSettingsAt, renderSettings, saveSetting, settingsProject,
-    showSettings,
+    loadSettings, markSettingsToc, openSettingsAt, renderSettings, saveSetting, setSettingsNotes,
+    settingsProject, showSettings,
 } from './settings/index.js';
 import {
     closeMemoDialog, docsClearDraft, docsRow, loadClaudeDocs, paintMemoDialog, saveClaudeDocs,
@@ -3691,6 +3691,8 @@ dom.setScope.addEventListener('change', () => {
     state.settings.groupOrder = null;
     renderSettings();
 });
+// Where a setting's description shows — a class flip, see paintSettingsNotes().
+dom.setNotes.addEventListener('change', () => setSettingsNotes(dom.setNotes.value));
 dom.setProject.addEventListener('change', () => {
     state.settings.project = dom.setProject.value;
     state.settings.recording = null;

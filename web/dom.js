@@ -53,7 +53,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'tb-search', 'tb-unfocus',
     'btn-drafts', 'dr-badge', 'drafts', 'dr-sub', 'dr-body', 'dr-new',
     'btn-sched', 'sched-badge', 'sched', 'sched-sub', 'sched-body', 'sched-new',
-    'btn-settings', 'settings', 'set-scope', 'set-project', 'set-project-wrap',
+    'btn-settings', 'settings', 'set-scope', 'set-project', 'set-project-wrap', 'set-notes',
     'set-file', 'set-problems', 'set-body', 'set-shell', 'set-toc', 'set-top', 'composer-hint',
     'memo-scrim', 'memo-title', 'memo-big', 'memo-note', 'memo-count',
     'memo-close', 'memo-save',

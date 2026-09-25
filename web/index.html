@@ -1097,6 +1097,16 @@
                 <span>Project</span>
                 <select id="set-project"></select>
               </label>
+              <!-- How a setting's description shows. Per-browser, like the
+                   folds, because it is how this page is laid out for you rather
+                   than how the app behaves — see paintSettingsNotes(). -->
+              <label class="settings-pick settings-pick-end">
+                <span>Descriptions</span>
+                <select id="set-notes">
+                  <option value="tips">In tooltips</option>
+                  <option value="inline">Inline</option>
+                </select>
+              </label>
             </div>
           </header>
           <div id="set-file" class="settings-file"></div>
@@ -1196,8 +1206,9 @@
                 <div class="settings-row is-wide">
                   <div class="settings-row-head">
                     <div class="settings-row-text">
-                      <div class="settings-row-label">Reachable at</div>
-                      <div class="settings-row-note">This page is served on
+                      <div class="settings-row-label">Reachable at<button class="set-tip"
+                        type="button" aria-label="This page is served on 127.0.0.1, which is the one address useless to a phone, and the bridge cannot know what name a proxy in front of it answers to. So this is a guess you can edit." data-tip="This page is served on 127.0.0.1, which is the one address useless to a phone, and the bridge cannot know what name a proxy in front of it answers to. So this is a guess you can edit."></button></div>
+                      <div class="settings-row-note settings-desc">This page is served on
                         127.0.0.1, which is the one address useless to a phone, and
                         the bridge cannot know what name a proxy in front of it
                         answers to. So this is a guess you can edit.</div>
@@ -1215,8 +1226,9 @@
                 <div class="settings-row is-wide">
                   <div class="settings-row-head">
                     <div class="settings-row-text">
-                      <div class="settings-row-label">Pairing link</div>
-                      <div class="settings-row-note">43 characters of token, so the
+                      <div class="settings-row-label">Pairing link<button class="set-tip"
+                        type="button" aria-label="43 characters of token, so the useful thing to do with it is copy it rather than read it out." data-tip="43 characters of token, so the useful thing to do with it is copy it rather than read it out."></button></div>
+                      <div class="settings-row-note settings-desc">43 characters of token, so the
                         useful thing to do with it is copy it rather than read it
                         out.</div>
                     </div>
