@@ -291,7 +291,7 @@ function groupCard(key, label, list, opts = {}) {
                 onDragEnd=${drag ? onRailDragEnd : null}>
                 ${drag ? html`<span class="group-grip">${icon('grip', 13)}</span>` : null}
                 <span class="twist">${icon('caret', 13)}</span>
-                <span class="group-label">${label}</span>
+                <span class="group-label" title=${label}>${label}</span>
                 ${live ? html`<span class="live">${`${live} live`}</span>` : null}
                 <span class="count">${String(counted.length)}</span>
             </button>

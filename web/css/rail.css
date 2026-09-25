@@ -188,7 +188,19 @@
     transition: background var(--t-fast) var(--ease);
 }
 .group-head:hover { background: var(--s2); color: var(--text-2); }
-.group-head .group-label { text-transform: capitalize; }
+/* One line, whatever the name. A long directory name used to wrap into a
+   centred block and push "1 live" onto two lines; now the name gives way with an
+   ellipsis (full name on hover) and everything around it keeps its size. */
+.group-head .group-label {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: left;
+    text-transform: capitalize;
+}
+.group-head > span:not(.group-label) { flex-shrink: 0; white-space: nowrap; }
 .group-head .count { margin-left: auto; color: var(--text-4); font-variant-numeric: tabular-nums; }
 .group-head .live { color: var(--green); }
 .group-head .twist {
