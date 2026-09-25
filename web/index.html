@@ -1092,12 +1092,14 @@
               <div id="set-toc" class="settings-toc-list"></div>
             </nav>
             <div id="set-body" class="settings-body">
-              <!-- The two groups below are written out here rather than built by
-                   renderSettings, because neither is backed by the settings
-                   file: their controls are wired once at load and have to keep
-                   their listeners. renderSettings moves them into place in the
-                   order SETTINGS lists them, so they are not rebuilt and not
-                   pinned to the end either. -->
+              <!-- The groups below are written out here rather than built by
+                   renderSettings, because none is backed by the settings file:
+                   their controls are wired once at load and have to keep their
+                   listeners. renderSettings hangs them in its Preact tree as
+                   foreign DOM, in the order SETTINGS lists them, so they are not
+                   rebuilt and not pinned to the end either. Notifications used
+                   to be one of them; it is a component now, in
+                   web/settings/notifications.js. -->
 
               <!-- A colour per project, worn by the rail, the boards and the
                    dialog that scopes a new session. Written out here rather than
@@ -1156,65 +1158,6 @@
                 <div id="wispr-list"></div>
                 <div class="snip-settings-acts">
                   <button id="wispr-add" class="btn small" type="button">Add a transform</button>
-                </div>
-              </section>
-
-              <!-- What reaches you when the window is not the thing you are
-                   looking at. The rules it obeys are in announceTurn(); the note
-                   says them out loud, because a notification you cannot predict
-                   is one you switch off.
-
-                   Per-browser, and the group says so: a permission granted in
-                   one browser tells you nothing about another, and the sound
-                   needs an AudioContext this page had to be touched to start. -->
-              <section id="set-g-notify" class="settings-group">
-                <h2 class="settings-group-title">Notifications</h2>
-                <p class="settings-group-note">What reaches you when this window is
-                   not the thing you are looking at. <strong>This browser only</strong>
-                   — unlike everything above, these live in its own storage rather
-                   than in the settings file, because whether a notification can
-                   fire at all is something each browser decides for itself.</p>
-
-                <div class="settings-row">
-                  <div class="settings-row-text">
-                    <div class="settings-row-label">Show a desktop notification</div>
-                    <div class="settings-row-note">Ticking this is what asks the
-                      browser for permission — nothing else does, because a prompt
-                      no gesture invited is the one people press Block on.</div>
-                  </div>
-                  <div class="settings-row-ctl">
-                    <label class="settings-check">
-                      <input id="opt-desktop" type="checkbox">
-                      <span class="settings-box"></span>
-                    </label>
-                  </div>
-                </div>
-
-                <div class="settings-row">
-                  <div class="settings-row-text">
-                    <div class="settings-row-label">Play a sound</div>
-                    <div class="settings-row-note">A short chime, synthesised in the
-                      page rather than fetched.</div>
-                  </div>
-                  <div class="settings-row-ctl">
-                    <label class="settings-check">
-                      <input id="opt-sound" type="checkbox">
-                      <span class="settings-box"></span>
-                    </label>
-                  </div>
-                </div>
-
-                <div class="settings-row">
-                  <div class="settings-row-text">
-                    <div class="settings-row-label">When one fires</div>
-                    <div id="notify-note" class="settings-row-note"></div>
-                  </div>
-                  <div class="settings-row-ctl">
-                    <!-- Worth having: Focus Assist and Do Not Disturb drop
-                         notifications without a word, so "did that work" is
-                         otherwise unanswerable until a turn ends. -->
-                    <button id="notify-try" class="btn" type="button">Try it</button>
-                  </div>
                 </div>
               </section>
 

@@ -9,7 +9,8 @@ import { PreviewPane } from './preview.js';
 import * as keys from './keys.js';
 import { drawRail } from './rail.js';
 import { liveStrip, renderLive } from './boards/live.js';
-import { tickCardClocks } from './boards/parts.js';
+import { html } from './vendor/preact.js';
+import { paint, tickCardClocks } from './boards/parts.js';
 import { loadDash, paintDashBadge, renderDash } from './boards/dashboard.js';
 import { renderNotes } from './boards/history.js';
 import { applyDrafts, loadDrafts, renderDrafts, showDrafts } from './drafts.js';
@@ -49,7 +50,6 @@ import {
 import {
     closeMemoDialog, docsClearDraft, docsRow, loadClaudeDocs, paintMemoDialog, saveClaudeDocs,
 } from './settings/memory.js';
-import { wireNotifySettings } from './settings/notifications.js';
 import { cmdClearDrafts, loadCmdConfig } from './settings/project-commands.js';
 import { paintShortcutHints, wireShortcuts } from './settings/shortcuts.js';
 import { paintToolbar, showBarMore, wireToolbar } from './settings/toolbar.js';
@@ -2088,6 +2088,11 @@ const cssEscape = (v) => (window.CSS && CSS.escape
     ? CSS.escape(v) : String(v).replace(/["\\]/g, '\\$&'));
 
 // --- the Settings group --------------------------------------------------
+//
+// The group's card is markup in web/index.html (Settings hangs it in its tree
+// as foreign DOM), but the three lists inside it are Preact renders into its
+// three containers — the rows are Settings' own settingRow() vnodes, so they
+// have to be.
 
 /**
  * Every project the bridge knows, with its colour.
@@ -2102,38 +2107,30 @@ export function renderProjectColors() {
     const colors = BOOT_PREFS.projects.colors || {};
     const projects = state.settings.projects || [];
     if (!projects.length) {
-        dom.pcolorList.replaceChildren(el('div', { class: 'settings-row-note' },
-            'No projects yet — a directory appears here once a session has run in it.'));
+        paint(dom.pcolorList, html`<div key="none" class="settings-row-note"
+            >No projects yet — a directory appears here once a session has run in it.</div>`);
         return;
     }
-    dom.pcolorList.replaceChildren(...projects.map((p) => {
+    paint(dom.pcolorList, projects.map((p) => {
         const hex = hexAccent(colors[p.cwd]);
-        return el('div', {
-            class: 'pcolor-row', 'data-tinted': hex ? '1' : null,
-            style: hex ? `--proj-accent: ${hex}` : null,
-        },
-            el('button', {
-                class: 'pcolor-swatch' + (hex ? '' : ' none'), type: 'button',
-                style: hex ? `--pcolor: ${hex}` : null,
-                'aria-label': `Set the colour for ${p.name}`,
-                onclick: () => openPcolor({ cwd: p.cwd, name: p.name }),
-            }),
-            el('div', { class: 'pcolor-row-text' },
-                el('div', { class: 'pcolor-row-name' }, p.name),
-                el('div', { class: 'pcolor-row-path' }, p.cwd),
-            ),
-            hex
-                ? el('button', {
-                    class: 'btn small', type: 'button',
-                    onclick: () => saveProjectColor(p.cwd, null),
-                }, 'Clear')
-                : null,
-        );
+        return html`<div key=${p.cwd} class="pcolor-row" data-tinted=${hex ? '1' : undefined}
+            style=${hex ? `--proj-accent: ${hex}` : undefined}>
+            <button class=${'pcolor-swatch' + (hex ? '' : ' none')} type="button"
+                style=${hex ? `--pcolor: ${hex}` : undefined}
+                aria-label=${`Set the colour for ${p.name}`}
+                onClick=${() => openPcolor({ cwd: p.cwd, name: p.name })}></button>
+            <div class="pcolor-row-text">
+                <div class="pcolor-row-name">${p.name}</div>
+                <div class="pcolor-row-path">${p.cwd}</div>
+            </div>
+            ${hex ? html`<button class="btn small" type="button"
+                onClick=${() => saveProjectColor(p.cwd, null)}>Clear</button>` : null}
+        </div>`;
     }));
 }
 
 /**
- * The two backdrop rows above the colour list.
+ * The rail-order rows at the head of the group.
  *
  * settingRow() rather than hand-built controls, so they get the Clear, the
  * "default" and the override line every other setting has. Locked at a project
@@ -2144,33 +2141,36 @@ export function renderProjectOrder() {
     const group = SETTINGS.find(g => g.section === 'projects');
     const locked = state.settings.scope !== 'user';
     const data = state.settings.data;
-    if (!data) { dom.pcolorOrder.replaceChildren(); return; }
+    if (!data) { paint(dom.pcolorOrder, null); return; }
     const mode = (data.projects && data.projects.sort) || 'recent';
     const custom = (data.projects && data.projects.order) || [];
-    dom.pcolorOrder.replaceChildren(
+    paint(dom.pcolorOrder, [
         ...group.orderRows.map(row =>
             settingRow(group, row, locked || (row.mode && row.mode !== mode))),
         mode === 'custom' && custom.length
-            ? el('div', { class: 'settings-row' },
-                el('div', { class: 'settings-row-text' },
-                    el('div', { class: 'settings-row-label', text: 'Custom order' }),
-                    el('div', { class: 'settings-row-note',
-                        text: `${custom.length} project${custom.length === 1 ? '' : 's'} placed by hand.` })),
-                el('div', { class: 'settings-row-ctl' },
-                    el('button', {
-                        class: 'linkish', type: 'button', disabled: locked || null,
-                        onclick: () => saveSetting('projects', 'order', []),
-                    }, 'Reset custom order')))
+            ? html`<div key="custom" class="settings-row">
+                <div class="settings-row-text">
+                    <div class="settings-row-label">Custom order</div>
+                    <div class="settings-row-note">${
+                        `${custom.length} project${custom.length === 1 ? '' : 's'} placed by hand.`}</div>
+                </div>
+                <div class="settings-row-ctl">
+                    <button class="linkish" type="button" disabled=${locked}
+                        onClick=${() => saveSetting('projects', 'order', [])}>Reset custom order</button>
+                </div>
+            </div>`
             : null,
-    );
+    ]);
 }
 
+/** The two backdrop rows above the colour list — settingRow() for the same reason. */
 export function renderProjectBackdrop() {
     const group = SETTINGS.find(g => g.section === 'projects');
     const locked = state.settings.scope !== 'user';
-    if (!state.settings.data) { dom.pcolorBackdrop.replaceChildren(); return; }
-    dom.pcolorBackdrop.replaceChildren(...group.rows.map(row => settingRow(group, row, locked)));
+    if (!state.settings.data) { paint(dom.pcolorBackdrop, null); return; }
+    paint(dom.pcolorBackdrop, group.rows.map(row => settingRow(group, row, locked)));
 }
+
 
 // --- wiring --------------------------------------------------------------
 
@@ -2273,11 +2273,11 @@ document.addEventListener('keydown', (e) => {
 window.addEventListener('resize', closeSortMenu);
 paintRailSort();
 
-// The Settings panel and everything it draws are in web/settings/. These three
+// The Settings panel and everything it draws are in web/settings/. These two
 // wire listeners that used to be registered here, and run at the same point.
+// (Notifications had a third; its controls carry their own handlers now.)
 wireToolbar();
 wireShortcuts();
-wireNotifySettings();
 
 // ── streaming ────────────────────────────────────────────────────────────
 

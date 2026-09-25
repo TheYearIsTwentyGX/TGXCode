@@ -1,12 +1,26 @@
 // The SETTINGS table — one row per key in `~/.tgxcode/settings.json` — and the
-// row builders that turn a row into a control. Moved out of app.js as it was.
+// row builders that turn a row into a control.
+//
+// The builders return Preact vnodes, written the way web/rail.js settled (htm
+// templates, keyed list children, no hand edits to a node Preact owns), and
+// renderSettings draws them into the panel's body. Every control still saves on
+// change and the redraw after the save is still what shows the stored answer;
+// what changed is that the redraw is a diff, so a click, a focus or a
+// half-typed number survives a save of some other key.
+//
+// **Two kinds of control.** A checkbox, a radio or a select is controlled —
+// Preact compares `checked` and a select's `value` with the DOM, so the redraw
+// after a refused save puts the old answer back. A box you type into (a number,
+// a path, a weight) is uncontrolled, keyed on the stored value, because a
+// controlled one would be reset under your hands by any unrelated redraw; see
+// settingsRevert() for the cases where the key has to be moved by hand.
 //
 // Imports from app.js, which imports this — safe because nothing here reads an
 // app.js binding while the module evaluates, only when a function is called.
 // Keep it that way: a module-level `const` built from an app.js `const` throws,
 // because every module under web/settings/ evaluates before app.js's body runs.
 
-import { el } from '../dom.js';
+import { html, useState } from '../vendor/preact.js';
 import { shortPath } from '../format.js';
 import { state } from '../state.js';
 import {
@@ -20,8 +34,10 @@ import {
     renderSettings, saveSetting, saveSettings, SCOPE_NAMES, settingOrigin, settingsTargetRow,
 } from './index.js';
 import { renderClaudeDocs } from './memory.js';
-import { paintNotifyRows } from './notifications.js';
+import { notifyCard } from './notifications.js';
 import { renderCmdConfig } from './project-commands.js';
+import { renderKeymap } from './shortcuts.js';
+import { renderToolbarSettings } from './toolbar.js';
 
 // Here rather than beside paintRailSort() in app.js, which draws the rail head's
 // menu from it, because SETTINGS below reads it while this module evaluates —
@@ -234,12 +250,17 @@ export const SETTINGS = [
     {
         title: 'Project commands', section: 'commands', render: () => renderCmdConfig(),
     },
-    // The last three are written out in web/index.html rather than built from
-    // rows, because none is backed by the settings file — one is a store of its
-    // own, one is per-browser storage and the last is a task rather than a
-    // setting. `node` names the element renderSettings moves into place, which is
-    // what lets them take their turn in this order instead of being stuck wherever
-    // the markup put them.
+    // The next few are not built from rows, because none is backed by the
+    // settings file — one is a store of its own, one is per-browser storage and
+    // the last is a task rather than a setting. Those still written out in
+    // web/index.html name their element in `node`, which renderSettings moves
+    // into place, so they take their turn in this order instead of being stuck
+    // wherever the markup put them. Notifications draws itself as a component
+    // (`card`).
+    //
+    // `render` and `node` are the groups still built by hand with el(); they
+    // are handed to Preact as foreign DOM (see Foreign in index.js). `card` and
+    // `rows` groups are Preact all the way down.
     {
         title: 'Projects', section: 'projects', node: 'setGProjects',
         userOnly: true,
@@ -304,8 +325,7 @@ export const SETTINGS = [
         after: () => renderWisprSettings(),
     },
     {
-        title: 'Notifications', section: 'notify', node: 'setGNotify',
-        after: () => paintNotifyRows(),
+        title: 'Notifications', section: 'notify', card: () => notifyCard(),
     },
     {
         title: 'Connect a phone', section: 'pair', node: 'setGPair',
@@ -325,6 +345,10 @@ export const SETTINGS = [
  * hundred-odd checkboxes and no right-hand column is the right width for them,
  * so the text and the Clear go across the top and the control gets the full
  * width underneath.
+ *
+ * A vnode keyed by the row's key, since every caller puts it in a list — the
+ * Projects group draws its rows with this too, into containers of its own
+ * (renderProjectOrder in app.js).
  */
 export function settingRow(group, row, locked) {
     const s = state.settings;
@@ -349,40 +373,41 @@ export function settingRow(group, row, locked) {
     // and not a change to what `save` means.
     const saveKey = (key, v) => saveSetting(section, key, v);
 
-    const text = el('div', { class: 'settings-row-text' },
-        el('div', { class: 'settings-row-label', text: row.label }),
-        row.note ? el('div', { class: 'settings-row-note', text: row.note }) : null,
-        overridden ? el('div', { class: 'settings-row-warn' },
-            `Overridden by ${SCOPE_NAMES[origin.scope]} — `,
-            el('code', { text: shortPath(origin.file) }),
-            ' wins, so this has no effect here.') : null);
+    const text = html`<div class="settings-row-text">
+        <div class="settings-row-label">${row.label}</div>
+        ${row.note ? html`<div class="settings-row-note">${row.note}</div>` : null}
+        ${overridden ? html`<div class="settings-row-warn">${
+            `Overridden by ${SCOPE_NAMES[origin.scope]} — `}<code>${shortPath(origin.file)}</code>${
+            ' wins, so this has no effect here.'}</div>` : null}
+    </div>`;
 
-    const side = el('div', { class: 'settings-row-side' },
-        explicit
-            ? el('button', {
-                class: 'linkish', type: 'button', disabled: disabled || null,
-                title: 'Remove this key so the value falls back',
-                onclick: () => save(null),
-            }, 'Clear')
-            : el('span', { class: 'settings-row-from', text: origin ? `from ${SCOPE_NAMES[origin.scope]}` : 'default' }));
+    const side = html`<div class="settings-row-side">${explicit
+        ? html`<button class="linkish" type="button" disabled=${disabled}
+            title="Remove this key so the value falls back"
+            onClick=${() => save(null)}>Clear</button>`
+        : html`<span class="settings-row-from">${
+            origin ? `from ${SCOPE_NAMES[origin.scope]}` : 'default'}</span>`}</div>`;
 
     const control = settingControl(row, value, disabled, save, saveKey);
 
     if (row.wide) {
-        return el('div', { class: 'settings-row is-wide' },
-            el('div', { class: 'settings-row-head' }, text, side),
-            el('div', { class: 'settings-row-wide' }, control));
+        return html`<div key=${row.key} class="settings-row is-wide">
+            <div class="settings-row-head">${text}${side}</div>
+            <div class="settings-row-wide">${control}</div>
+        </div>`;
     }
-    return el('div', { class: 'settings-row' },
-        text,
-        el('div', { class: 'settings-row-ctl' }, control, side));
+    return html`<div key=${row.key} class="settings-row">
+        ${text}
+        <div class="settings-row-ctl">${control}${side}</div>
+    </div>`;
 }
 
 /** A title partway down a group, for a run of rows that belong together. */
 export function settingHeading(row) {
-    return el('div', { class: 'settings-subhead' },
-        el('h3', { class: 'settings-subhead-title', text: row.label }),
-        row.note ? el('p', { class: 'settings-group-note', text: row.note }) : null);
+    return html`<div key=${`heading:${row.label}`} class="settings-subhead">
+        <h3 class="settings-subhead-title">${row.label}</h3>
+        ${row.note ? html`<p class="settings-group-note">${row.note}</p>` : null}
+    </div>`;
 }
 
 /**
@@ -399,89 +424,148 @@ export function settingAllRow(group, row, locked) {
         if (own && own[key] !== undefined) return own[key];
         return state.settings.data[group.section] ? state.settings.data[group.section][key] : undefined;
     });
-    return el('div', { class: 'settings-row' },
-        el('div', { class: 'settings-row-text' },
-            el('div', { class: 'settings-row-label', text: row.label }),
-            row.note ? el('div', { class: 'settings-row-note', text: row.note }) : null),
-        el('div', { class: 'settings-row-ctl' },
-            el('div', { class: 'seg', role: 'group', 'aria-label': row.label },
-                row.options.map(([v, text]) => el('button', {
-                    class: 'seg-btn', type: 'button', disabled: disabled || null,
-                    'aria-pressed': String(values.every(x => x === v)),
-                    onclick: () => saveSettings(group.section,
-                        Object.fromEntries(row.keys.map(k => [k, v]))),
-                }, text)))));
+    return html`<div key=${`all:${row.label}`} class="settings-row">
+        <div class="settings-row-text">
+            <div class="settings-row-label">${row.label}</div>
+            ${row.note ? html`<div class="settings-row-note">${row.note}</div>` : null}
+        </div>
+        <div class="settings-row-ctl">
+            <div class="seg" role="group" aria-label=${row.label}>
+                ${row.options.map(([v, text]) => html`<button key=${v} class="seg-btn" type="button"
+                    disabled=${disabled} aria-pressed=${String(values.every(x => x === v))}
+                    onClick=${() => saveSettings(group.section,
+                        Object.fromEntries(row.keys.map(k => [k, v])))}>${text}</button>`)}
+            </div>
+        </div>
+    </div>`;
+}
+
+/**
+ * One group that is built from `rows`, as a card. The groups with a `render`
+ * or a `node` are put in place by renderSettings instead.
+ */
+export function settingsCard(group) {
+    const s = state.settings;
+    const locked = group.userOnly && s.scope !== 'user';
+    // A row's own `when` leaves it out while another setting makes it
+    // meaningless, and is asked of the merged answer rather than of the
+    // file being edited — a choice nothing would consult is not worth a row.
+    // renderSettings runs again after every save, which is what brings it
+    // back the moment the setting it depends on changes.
+    const rows = group.rows.filter(row => !row.when || row.when(s.data)).map(row =>
+        (row.type === 'heading' ? settingHeading(row)
+            : row.type === 'all' ? settingAllRow(group, row, locked)
+                : settingRow(group, row, locked)));
+    return html`<section key=${group.section} class="settings-group"
+        id=${`set-g-${group.section}`} data-locked=${locked ? '' : undefined}>
+        <h2 class="settings-group-title">${group.title}</h2>
+        ${group.note ? html`<p class="settings-group-note">${group.note}</p>` : null}
+        ${locked ? html`<p class="settings-locked">${'Set for you alone, in '}<code>~/.tgxcode/settings.json</code>${
+            ' — a checked-in file cannot change these. '}<button class="linkish" type="button"
+            onClick=${() => { s.scope = 'user'; renderSettings(); }}>Switch to User</button></p>` : null}
+        ${rows}
+        ${group.keymap ? renderKeymap(locked) : null}
+        ${group.toolbar ? renderToolbarSettings(locked) : null}
+    </section>`;
+}
+
+/**
+ * Remount every typed-into box from what is stored.
+ *
+ * Those boxes are uncontrolled (`defaultValue`) so that an unrelated redraw —
+ * renderSettings runs twice for every save, and again whenever one of the
+ * editor groups finishes loading — cannot put the stored value back over what
+ * somebody is typing. They are keyed on the stored value, so a save that moves
+ * it remounts them with the new one; this is for the saves that did not move
+ * it: refused, dropped because another was running, or a number that was not
+ * one. The snippet editor's `revs` is the same idea (web/snippets/settings.js).
+ */
+export function settingsRevert() {
+    state.settings.rev++;
+    renderSettings();
 }
 
 /** The input itself, by type. Each one saves on change; none of them is a draft. */
 function settingControl(row, value, disabled, save, saveKey) {
+    const rev = state.settings.rev;
     if (row.type === 'bool') {
-        return el('label', { class: 'settings-check' },
-            el('input', {
-                type: 'checkbox', checked: value === true || null, disabled: disabled || null,
-                onchange: (e) => save(e.target.checked),
-            }),
-            el('span', { class: 'settings-box' }));
+        // Controlled: Preact compares `checked` with the DOM rather than with
+        // its last render, so the redraw after a refused save puts it back.
+        return html`<label class="settings-check">
+            <input type="checkbox" checked=${value === true} disabled=${disabled}
+                onChange=${(e) => save(e.target.checked)} />
+            <span class="settings-box"></span>
+        </label>`;
     }
     if (row.type === 'int') {
-        return el('input', {
-            class: 'settings-num', type: 'number', value: value ?? '',
-            min: row.min, max: row.max, step: row.step || 1, disabled: disabled || null,
-            onchange: (e) => {
+        return html`<input key=${`int:${rev}:${value ?? ''}`} class="settings-num" type="number"
+            defaultValue=${value ?? ''} min=${row.min} max=${row.max} step=${row.step || 1}
+            disabled=${disabled}
+            onChange=${(e) => {
                 const n = Number(e.target.value);
-                if (!Number.isInteger(n)) { renderSettings(); return; }
+                if (!Number.isInteger(n)) { settingsRevert(); return; }
                 save(n);
-            },
-        });
+            }} />`;
     }
     if (row.type === 'path') {
-        return el('input', {
-            class: 'settings-text', type: 'text', spellcheck: 'false',
-            value: value || '', disabled: disabled || null,
-            placeholder: 'not set',
-            // A path is the one field somebody types rather than picks, so it
-            // commits on blur or Enter instead of per keystroke.
-            onchange: (e) => save(e.target.value.trim() || null),
-        });
+        // A path is the one field somebody types rather than picks, so it
+        // commits on blur or Enter instead of per keystroke.
+        return html`<input key=${`path:${rev}:${value || ''}`} class="settings-text" type="text"
+            spellcheck=${false} defaultValue=${value || ''} disabled=${disabled}
+            placeholder="not set"
+            onChange=${(e) => save(e.target.value.trim() || null)} />`;
     }
     if (row.type === 'choice') {
-        return el('select', {
-            class: 'settings-select', disabled: disabled || null,
-            onchange: (e) => save(e.target.value),
-        }, row.options.map(([v, text]) => el('option', {
-            value: v, selected: v === value || null,
-        }, text)));
+        // `value` on the select rather than `selected` on an option: Preact
+        // compares a select's value with the DOM, but an option's `selected`
+        // only with its last render, which would leave a refused choice showing.
+        // A value no option has falls to the first, as the browser would.
+        const known = row.options.some(([v]) => v === value);
+        return html`<select class="settings-select" disabled=${disabled}
+            value=${known ? value : row.options[0][0]}
+            onChange=${(e) => save(e.target.value)}>
+            ${row.options.map(([v, text]) => html`<option key=${v} value=${v}>${text}</option>`)}
+        </select>`;
     }
     if (row.type === 'radio') {
-        return el('div', { class: 'settings-radios', role: 'radiogroup', 'aria-label': row.label },
-            row.options.map(([v, text]) => el('label', { class: 'settings-radio' },
-                el('input', {
-                    type: 'radio', name: `set-${row.key}`, value: v,
-                    checked: v === value || null, disabled: disabled || null,
-                    onchange: () => save(v),
-                }),
-                el('span', { text }))));
+        return html`<div class="settings-radios" role="radiogroup" aria-label=${row.label}>
+            ${row.options.map(([v, text]) => html`<label key=${v} class="settings-radio">
+                <input type="radio" name=${`set-${row.key}`} value=${v}
+                    checked=${v === value} disabled=${disabled}
+                    onChange=${() => save(v)} />
+                <span>${text}</span>
+            </label>`)}
+        </div>`;
     }
     if (row.type === 'range') {
-        const out = el('output', { text: `${value ?? row.min}${row.unit || ''}` });
-        return el('label', { class: 'settings-range' },
-            el('input', {
-                type: 'range', min: row.min, max: row.max, step: row.step || 1,
-                value: value ?? row.min, disabled: disabled || null,
-                'aria-label': row.label,
-                // Dragging shows the number and, where the row has one, what it
-                // does — but saves only on release, so a drag across the track
-                // is one write and not forty.
-                oninput: (e) => {
-                    out.textContent = `${e.target.value}${row.unit || ''}`;
-                    if (row.preview) row.preview(Number(e.target.value));
-                },
-                onchange: (e) => save(Number(e.target.value)),
-            }),
-            out);
+        return html`<${SettingRange} key=${`range:${rev}:${value ?? ''}`}
+            row=${row} value=${value} disabled=${disabled} save=${save} />`;
     }
     if (row.type === 'groups') return settingGroups(value, disabled, save, saveKey);
-    return el('span', { text: String(value) });
+    return html`<span>${String(value)}</span>`;
+}
+
+/**
+ * A slider and the number beside it.
+ *
+ * Dragging shows the number and, where the row has one, what it does — but
+ * saves only on release, so a drag across the track is one write and not
+ * forty. The number shown mid-drag is this component's own; the key its caller
+ * gives it puts it back to the stored value whenever that moves.
+ */
+function SettingRange({ row, value, disabled, save }) {
+    const [live, setLive] = useState(null);
+    const shown = live ?? value ?? row.min;
+    return html`<label class="settings-range">
+        <input type="range" min=${row.min} max=${row.max} step=${row.step || 1}
+            defaultValue=${value ?? row.min} disabled=${disabled} aria-label=${row.label}
+            onInput=${(e) => {
+                setLive(e.target.value);
+                if (row.preview) row.preview(Number(e.target.value));
+            }}
+            onChange=${(e) => save(Number(e.target.value))} />
+        <output>${`${shown}${row.unit || ''}`}</output>
+    </label>`;
 }
 
 /**
@@ -545,13 +629,15 @@ function shareLabel(share) {
  * changing project or scope — and held in `state.settings.groupOrder` for as
  * long as you are working in it. A group ticked now goes to the top the next
  * time you come in, which is soon enough.
+ *
+ * Each pill is keyed by its group's name, so a tick keeps the pill — and its
+ * focus — rather than drawing a new one in its place.
  */
 function settingGroups(value, disabled, save, saveKey) {
     const cat = state.settings.spinner;
     const enabled = new Set(Array.isArray(value) ? value : []);
     if (!cat || !cat.groups || !cat.groups.length) {
-        return el('div', { class: 'settings-groups-none' },
-            'No verb groups found for this directory.');
+        return html`<div class="settings-groups-none">No verb groups found for this directory.</div>`;
     }
     const weights = (cat && cat.weights) || {};
     const st = state.settings;
@@ -587,43 +673,42 @@ function settingGroups(value, disabled, save, saveKey) {
         saveKey('weights', Object.keys(next).length ? next : null);
     };
     const weighed = cat.groups.some(g => enabled.has(g.name) && g.weight !== 1 && g.weight !== null);
-    return el('div', { class: 'settings-groups' },
-        ordered.map(g => {
-            const on = enabled.has(g.name);
-            return el('div', { class: 'settings-group-pick', title: verbTooltip(g) },
-                el('label', { class: 'settings-group-toggle' },
-                    el('input', {
-                        type: 'checkbox', checked: on || null, disabled: disabled || null,
-                        onchange: (e) => toggle(g.name, e.target.checked),
-                    }),
-                    el('span', { class: 'settings-box' }),
-                    el('span', { class: 'settings-group-name', text: g.name }),
-                    el('span', { class: 'settings-group-count', text: `${g.count}` })),
-                // Committed on blur or Enter rather than per keystroke, like the
-                // path field: typing "12" through "1" would otherwise save a
-                // weight of 1 on the way past and re-render under your hands.
-                on ? el('input', {
-                    class: 'settings-group-weight', type: 'number', min: 0, max: 1000, step: 'any',
-                    value: g.weight === null || g.weight === undefined ? '' : `${g.weight}`,
-                    disabled: disabled || null, title: 'How often this group speaks, against the others',
-                    onchange: (e) => weigh(g.name, e.target.value.trim()),
-                }) : null,
-                on ? el('span', {
-                    class: `settings-group-share${g.share ? '' : ' is-muted'}`,
-                    text: shareLabel(g.share),
-                }) : null);
-        }),
-        // What the spinner will actually draw from, which is not the same as
-        // what is enabled when a name matches no file — or when a group is
-        // enabled and weighed 0.
-        el('div', { class: 'settings-groups-foot' },
-            `${cat.pool} verb${cat.pool === 1 ? '' : 's'} in the pool.`,
-            // The row's own Clear covers `groups`; without this there is no way
-            // to put every weight back to 1 from the page.
-            weighed ? ' ' : null,
-            weighed ? el('button', {
-                class: 'linkish', type: 'button', disabled: disabled || null,
-                title: 'Put every group back to an even share',
-                onclick: () => saveKey('weights', null),
-            }, 'Even them out') : null));
+    const rev = st.rev;
+
+    // The weight box commits on blur or Enter rather than per keystroke, like
+    // the path field: typing "12" through "1" would otherwise save a weight of
+    // 1 on the way past and re-render under your hands.
+    const pick = (g) => {
+        const on = enabled.has(g.name);
+        const weight = g.weight === null || g.weight === undefined ? '' : `${g.weight}`;
+        return html`<div key=${g.name} class="settings-group-pick" title=${verbTooltip(g)}>
+            <label class="settings-group-toggle">
+                <input type="checkbox" checked=${on} disabled=${disabled}
+                    onChange=${(e) => toggle(g.name, e.target.checked)} />
+                <span class="settings-box"></span>
+                <span class="settings-group-name">${g.name}</span>
+                <span class="settings-group-count">${`${g.count}`}</span>
+            </label>
+            ${on ? html`<input key=${`w:${rev}:${weight}`} class="settings-group-weight"
+                type="number" min="0" max="1000" step="any" defaultValue=${weight}
+                disabled=${disabled} title="How often this group speaks, against the others"
+                onChange=${(e) => weigh(g.name, e.target.value.trim())} />` : null}
+            ${on ? html`<span class=${`settings-group-share${g.share ? '' : ' is-muted'}`}
+                >${shareLabel(g.share)}</span>` : null}
+        </div>`;
+    };
+
+    // The foot says what the spinner will actually draw from, which is not the
+    // same as what is enabled when a name matches no file — or when a group is
+    // enabled and weighed 0. The row's own Clear covers `groups`; without Even
+    // them out there is no way to put every weight back to 1 from the page.
+    return html`<div class="settings-groups">
+        ${ordered.map(pick)}
+        <div key="foot" class="settings-groups-foot">${
+            `${cat.pool} verb${cat.pool === 1 ? '' : 's'} in the pool.`}${
+            weighed ? ' ' : null}${
+            weighed ? html`<button class="linkish" type="button" disabled=${disabled}
+                title="Put every group back to an even share"
+                onClick=${() => saveKey('weights', null)}>Even them out</button>` : null}</div>
+    </div>`;
 }
