@@ -23,7 +23,8 @@ const fs = require('fs');
 const path = require('path');
 const attachments = require('../attachments');
 const cfg = require('../config');
-const { isLaunchable, openFile, openInExplorer } = require('../explorer');
+const { isLaunchable, openFile, openInExplorer, toLinuxPath } = require('../explorer');
+const { isWsl } = require('../platform');
 const {
     NEXT, declaredOverMax, overMax, readBinary, readJson, refuseUpload, send,
 } = require('../http');
@@ -430,8 +431,21 @@ async function handle(req, res, url, pathname, seg, who) {
     // board with nothing in focus.
     if (pathname === '/api/fs/open' && req.method === 'POST') {
         const body = await readJson(req);
-        const given = cfg.expandHome(String(body.path == null ? '' : body.path).trim());
+        let given = cfg.expandHome(String(body.path == null ? '' : body.path).trim());
         if (!given) return send(res, 400, { error: 'path is required' });
+        // The Windows form - `\\wsl.localhost\Ubuntu\…` or `C:\…` - is how an
+        // agent writes a path it means you to find from the Windows side. wslpath
+        // turns it back; nothing on this side guesses what the share is called.
+        if (/^(?:\\\\|[A-Za-z]:\\)/.test(given)) {
+            const linux = await toLinuxPath(given);
+            if (!linux) {
+                return send(res, 400, {
+                    error: isWsl() ? `${given} is not a path this machine can reach`
+                        : 'Windows paths can only be opened under WSL',
+                });
+            }
+            given = linux;
+        }
         const target = path.resolve(given);
 
         // Asked here rather than left to explorer.js so a path that is simply gone
@@ -440,6 +454,18 @@ async function handle(req, res, url, pathname, seg, who) {
         let st;
         try { st = fs.statSync(target); } catch {
             return send(res, 404, { error: `${target} does not exist` });
+        }
+
+        // What a click needs before it can decide anything: a folder opens, a
+        // file asks whether you want it or the folder it is in. Nothing is opened.
+        if (body.probe) {
+            return send(res, 200, {
+                ok: true,
+                how: 'probe',
+                path: target,
+                kind: st.isDirectory() ? 'directory' : 'file',
+                launchable: !st.isDirectory() && isLaunchable(target),
+            });
         }
 
         const answer = (out, how, why) => send(res, out.ok ? 200 : 502, {
