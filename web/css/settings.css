@@ -73,7 +73,11 @@
    it is a contents list *of*.
 
    Full height rather than hugging its links, because the sticky thing is the
-   list inside it and a sticky element only travels within its parent's box. */
+   list inside it and a sticky element only travels within its parent's box.
+
+   The list sticks at the offset it opens at — the pinned head's height plus the
+   head's 14px margin-bottom — so it holds still from the first scroll rather
+   than sliding up beside the title once the head is pinned. */
 .settings-cols { position: relative; }
 .settings-toc {
     position: absolute;
@@ -83,7 +87,7 @@
     width: calc(var(--set-aside) - 20px);
     margin-right: 20px;
 }
-.settings-toc-list { position: sticky; top: 8px; display: flex; flex-direction: column; gap: 1px; }
+.settings-toc-list { position: sticky; top: calc(var(--set-top-h, 0px) + 14px); display: flex; flex-direction: column; gap: 1px; }
 /* Wide enough for the longest entry on one line — "Connect a phone" wrapping
    into two was the whole reason `--set-aside` is 172px rather than 152px. */
 .settings-toc-link {
