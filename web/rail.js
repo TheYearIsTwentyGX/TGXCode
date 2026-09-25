@@ -39,8 +39,12 @@
 // an app.js binding at module top level, only when a function is called.
 
 import { html, render } from './vendor/preact.js';
+import { state } from './state.js';
+import { dom } from './dom.js';
+import { BOOT_PREFS } from './boot.js';
+import { ago, clip, hhmm } from './format.js';
 import {
-    state, dom, BOOT_PREFS, ICON, PR_ICON, projectColor, ago, clip, hhmm,
+    ICON, PR_ICON, projectColor,
     elsewhere, awayWords, prWords, prUnknownWhy, inProjectCard, groupKeyOf, rankOf,
     openSession, setFlags, askDelete, startRename, cancelRename, commitRename, toggleGroup, onRailDragStart, onRailDragEnd,
     showProjMenu, closeProjMenu, renderRail,
