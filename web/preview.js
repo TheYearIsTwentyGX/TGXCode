@@ -5,7 +5,9 @@
 // window over there. This is the same toolbar, left to right — Home, Back,
 // Forward, Reload, Screenshot, Pick, the address bar, the viewport presets and
 // the orientation toggle — without DevBrowser's OS-window presets, which resize
-// the whole window and make no sense for a pane inside this one.
+// the whole window and make no sense for a pane inside this one. At the far
+// right, after Maximize, a Close ×: the same thing Home does, but where a
+// window's exit is looked for, since a house did not read as "get me out".
 //
 // Two ways to hold a page, chosen once per load:
 //
@@ -86,6 +88,7 @@ export class PreviewPane {
         const q = (sel) => o.root.querySelector(sel);
         this.el = {
             home: q('[data-pv="home"]'),
+            close: q('[data-pv="close"]'),
             back: q('[data-pv="back"]'),
             forward: q('[data-pv="forward"]'),
             reload: q('[data-pv="reload"]'),
@@ -115,6 +118,7 @@ export class PreviewPane {
 
         const e = this.el;
         e.home.onclick = () => o.onHome();
+        e.close.onclick = () => o.onHome();
         e.back.onclick = () => this.withView(v => v.canGoBack() && v.goBack());
         e.forward.onclick = () => this.withView(v => v.canGoForward() && v.goForward());
         e.reload.onclick = () => this.reload();

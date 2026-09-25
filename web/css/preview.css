@@ -20,6 +20,9 @@
     flex: 1;
     min-height: 0;
     min-width: 0;
+    /* The bar's width is the pane's, not the window's: a Live board docked
+       beside it takes a share the viewport never hears about. */
+    container-type: inline-size;
 }
 .preview[hidden] { display: none; }
 
@@ -120,6 +123,18 @@
 /* The presets' label is the first thing a narrow window can do without — the
    buttons say Phone, Tablet and Desktop on their own. */
 @media (max-width: 1480px) { .pv-label { display: none; } }
+
+/* Past that, the presets go, and then Screenshot and Pick. The right-hand group
+   ends in Close, and `.main` clips what overflows — so anything that does not
+   fit takes the way out of the preview with it. Close is the one control this
+   bar may never lose. */
+@container (max-width: 900px) {
+    .pv-sizes, .pv-sizes + .pv-divider { display: none; }
+}
+@container (max-width: 600px) {
+    .pv-nav:first-child .pv-divider,
+    .pv-btn:is([data-pv="shot"], [data-pv="pick"]) { display: none; }
+}
 
 .pv-canvas {
     position: relative;
