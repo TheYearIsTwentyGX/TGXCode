@@ -56,7 +56,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'btn-settings', 'settings', 'set-scope', 'set-project', 'set-project-wrap', 'set-notes',
     'set-file', 'set-problems', 'set-body', 'set-shell', 'set-toc', 'set-top', 'composer-hint',
     'memo-scrim', 'memo-title', 'memo-big', 'memo-note', 'memo-count',
-    'memo-close', 'memo-save',
+    'memo-close', 'memo-save', 'memo-views', 'memo-body', 'memo-preview',
     'set-g-pair', 'set-g-projects', 'pcolor-list', 'pcolor-backdrop',
     'proj-menu', 'pcolor-order', 'pcolor-scrim', 'pcolor-name', 'pcolor-path', 'pcolor-swatches',
     'pcolor-input', 'pcolor-done', 'new-project',

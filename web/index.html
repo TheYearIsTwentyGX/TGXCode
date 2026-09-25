@@ -1858,12 +1858,14 @@
   <div class="modal tall" role="dialog" aria-modal="true" aria-labelledby="memo-title">
     <div class="modal-head">
       <span id="memo-title" class="memo-title">CLAUDE.md</span>
+      <div id="memo-views" class="cfg-tabs memo-views"></div>
       <button class="modal-close" data-close-memo type="button" aria-label="Close">&#10005;</button>
     </div>
-    <div class="modal-body">
+    <div id="memo-body" class="modal-body" data-view="split">
       <textarea id="memo-big" class="cfg-md big" spellcheck="false"
                 autocapitalize="off" autocorrect="off"
                 aria-labelledby="memo-title"></textarea>
+      <div id="memo-preview" class="cfg-md-preview prose big"></div>
     </div>
     <div class="modal-foot">
       <div id="memo-note" class="cfg-json-note"></div>

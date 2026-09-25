@@ -50,6 +50,7 @@ import {
 } from './settings/index.js';
 import {
     closeMemoDialog, docsClearDraft, docsRow, loadClaudeDocs, paintMemoDialog, saveClaudeDocs,
+    syncPreviewScroll,
 } from './settings/memory.js';
 import { cmdClearDrafts, loadCmdConfig } from './settings/project-commands.js';
 import { paintShortcutHints, wireShortcuts } from './settings/shortcuts.js';
@@ -3191,6 +3192,7 @@ dom.memoBig.addEventListener('input', () => {
     s.dirty = s.draft !== (row && row.text !== null ? row.text : '');
     paintMemoDialog();
 });
+dom.memoBig.addEventListener('scroll', () => syncPreviewScroll(dom.memoBig, dom.memoPreview));
 dom.memoSave.addEventListener('click', () => saveClaudeDocs());
 // The prompt is the thing worth having elsewhere — pasted into a terminal, into
 // another tool, into a message to somebody. The rendered markdown is not it, so

@@ -959,9 +959,9 @@
 .cfg-md:focus { outline: 0; box-shadow: inset 0 0 0 2px var(--blue); }
 .cfg-md:disabled { color: var(--text-4); }
 
-/* The rendered view, in place of the box rather than beside it: the panel is a
-   column and two of these side by side would be two keyholes. Capped and
-   scrolling on its own, because .prose sets no height of its own. */
+/* The rendered view — in place of the box under Preview, beside it under
+   Split. Capped and scrolling on its own, because .prose sets no height of its
+   own. */
 .cfg-md-preview {
     margin-top: 12px;
     max-height: 60vh;
@@ -971,6 +971,27 @@
     border-radius: var(--r-sm);
 }
 .cfg-md-preview > :first-child { margin-top: 12px; }
+
+/* Split: the box and what it renders to, side by side and the same height.
+   Fixed rather than grown — see docsEditorCard — so the two tops line up and
+   each pane scrolls on its own. `min-width: 0` because a grid track otherwise
+   refuses to shrink below a long unbroken line in the preview. The panel is a
+   column, so this is two halves of it; Expand is where there is room, and the
+   narrow-window rule stacks them. */
+.cfg-md-split {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 12px;
+    margin-top: 12px;
+}
+.cfg-md-split > .cfg-md,
+.cfg-md-split > .cfg-md-preview {
+    height: 60vh;
+    min-height: 220px;
+    max-height: none;
+    margin-top: 0;
+    resize: none;
+}
 
 /* The other file, which also applies. Quieter than the yellow reach note above
    it — it is orientation rather than a warning. */
@@ -1006,6 +1027,27 @@
     margin-top: 0;
     font-size: 13px;
 }
+/* The dialog's two panes are both always in the DOM and `data-view` picks
+   which show, so switching never rebuilds the textarea — its caret and its
+   undo history survive the trip. `flex-basis: 0` splits the width evenly
+   whatever either pane holds. */
+.cfg-md-preview.big {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 0;
+    max-height: none;
+    margin-top: 0;
+}
+.modal.tall .modal-body[data-view="split"] { gap: 12px; }
+.modal.tall .modal-body[data-view="split"] > .cfg-md.big { flex: 1 1 0; min-width: 0; }
+.modal.tall .modal-body[data-view="edit"] > .cfg-md-preview { display: none; }
+.modal.tall .modal-body[data-view="preview"] > .cfg-md { display: none; }
+/* The view tabs sit at the right of the head beside the ✕. The ✕'s own
+   `margin-left: auto` is what normally pushes it right; the tabs take that job
+   over, so the two stay together. */
+.memo-views { margin: 0 12px 0 auto; flex-wrap: nowrap; }
+.memo-views + .modal-close { margin-left: 0; }
+.memo-views .cfg-tab { font-size: 12px; }
 
 @media (prefers-reduced-motion: reduce) {
     .cfg-tab, .cfg-list-x, .set-fold-caret { transition: none; }

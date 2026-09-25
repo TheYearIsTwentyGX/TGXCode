@@ -113,6 +113,10 @@
     .hk-group { padding-left: 8px; }
     .cfg-json { min-height: 200px; }
     .cfg-md { min-height: 180px; }
+    /* Two halves of a narrow panel are two slivers; stacked, each is still a
+       pane somebody can read. */
+    .cfg-md-split { grid-template-columns: minmax(0, 1fr); }
+    .cfg-md-split > .cfg-md, .cfg-md-split > .cfg-md-preview { height: 40vh; }
     /* The dialog is the whole window at this width, so the wrapper's padding
        is the only thing left holding it off the edges. */
     .modal.tall { height: 100%; max-height: 100%; }
