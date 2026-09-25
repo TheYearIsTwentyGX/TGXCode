@@ -11,6 +11,15 @@
 // agree about what "no mode was chosen" means.
 export const DEFAULT_PERM = 'auto';
 
+/** A CLAUDE.md editor's remembered Edit / Split / Preview, Split when unknown. */
+function storedMemoView(key) {
+    try {
+        const v = localStorage.getItem(key);
+        if (v === 'edit' || v === 'split' || v === 'preview') return v;
+    } catch { /* no storage: the default, every time */ }
+    return 'split';
+}
+
 export const state = {
     clientId: null,
     dev: false,             // talking to a development bridge
@@ -441,10 +450,15 @@ export const state = {
     // a draft: the whole control is one document being typed into, so `draft`
     // is not an exception here the way it is above but the normal case.
     // `caret` survives the trip through Preview, which is a re-render and would
-    // otherwise put the cursor back at the top of a 23KB file.
+    // otherwise put the cursor back at the top of a 23KB file. `view` is the
+    // panel's Edit / Split / Preview and `dialogView` the Expand dialog's —
+    // two, because the dialog is the surface with room for Split and the panel
+    // is the one somebody may want to keep narrow. Per-browser, in
+    // localStorage, like the folds: how this page is laid out, not a setting.
     claudeDocs: {
         scope: 'user', data: null, loading: false, error: null, saving: false,
-        draft: null, dirty: false, stale: null, preview: false, caret: 0,
+        draft: null, dirty: false, stale: null, caret: 0,
+        view: storedMemoView('memoView'), dialogView: storedMemoView('memoDialogView'),
         expanded: false,
     },
     // And the commands a project declares, which are two files again but ours

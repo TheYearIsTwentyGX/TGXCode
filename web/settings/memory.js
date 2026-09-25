@@ -206,24 +206,58 @@ function docsScopeTabs() {
             row && row.symlink ? el('span', { class: 'cfg-tab-tag', text: 'symlink' }) : null);
         }),
         el('div', { class: 'cfg-tabs-spacer' }),
-        el('button', {
-            class: `cfg-tab${!s.preview ? ' on' : ''}`, type: 'button',
-            onclick: () => {
-                s.preview = false;
-                renderSettings();
-            },
-        }, 'Edit'),
-        el('button', {
-            class: `cfg-tab${s.preview ? ' on' : ''}`, type: 'button',
-            onclick: () => {
-                // Where the caret was, so coming back does not drop somebody at
-                // the top of a twenty-thousand-character file.
-                const box = dom.setBody.querySelector('.cfg-md');
-                if (box) s.caret = box.selectionStart || 0;
-                s.preview = true;
-                renderSettings();
-            },
-        }, 'Preview'));
+        ...viewTabs(s.view, (view) => {
+            // Where the caret was, so coming back does not drop somebody at
+            // the top of a twenty-thousand-character file. Split has a box
+            // too, so this is any move away from one, not only to Preview.
+            const box = dom.setBody.querySelector('.cfg-md');
+            if (box) s.caret = box.selectionStart || 0;
+            s.view = view;
+            try { localStorage.setItem('memoView', view); } catch { /* per-session then */ }
+            renderSettings();
+        }));
+}
+
+const MEMO_VIEWS = [['edit', 'Edit'], ['split', 'Split'], ['preview', 'Preview']];
+
+/** Edit · Split · Preview, for the panel and the dialog alike. */
+export function viewTabs(current, pick) {
+    return MEMO_VIEWS.map(([view, label]) => el('button', {
+        class: `cfg-tab${view === current ? ' on' : ''}`, type: 'button',
+        'aria-pressed': view === current ? 'true' : 'false',
+        onclick: () => { if (view !== current) pick(view); },
+    }, label));
+}
+
+/**
+ * Render `s.draft` into `node`, at most once a frame.
+ *
+ * Split re-renders on every keystroke, and a 23KB file through renderMarkdown
+ * is a few milliseconds — fine once, not fine queued behind a held key. A
+ * frame is the natural batch: nothing drawn more often could be seen.
+ */
+const previewPending = new WeakSet();
+export function schedulePreview(node) {
+    if (previewPending.has(node)) return;
+    previewPending.add(node);
+    requestAnimationFrame(() => {
+        previewPending.delete(node);
+        node.innerHTML = renderMarkdown(docsState().draft || '');
+    });
+}
+
+/**
+ * Keep the preview beside a box at the same place in the document.
+ *
+ * Proportional, and one way — box to preview. Rendered markdown is not the same
+ * height as its source line for line, so a ratio is an approximation, but for
+ * prose it lands on the paragraph being typed. Syncing back the other way makes
+ * each scroll trigger the other's and the two fight.
+ */
+export function syncPreviewScroll(box, preview) {
+    const room = box.scrollHeight - box.clientHeight;
+    const ratio = room > 0 ? box.scrollTop / room : 0;
+    preview.scrollTop = ratio * (preview.scrollHeight - preview.clientHeight);
 }
 
 /** The path being written, and everything true about it worth saying. */
@@ -339,7 +373,7 @@ function docsEditorCard() {
         discard: foot.querySelector('.cfg-md-discard'),
     };
 
-    if (s.preview) {
+    if (s.view === 'preview') {
         card.append(
             el('p', { class: 'settings-group-note' },
                 s.dirty
@@ -351,18 +385,24 @@ function docsEditorCard() {
         return card;
     }
 
+    const split = s.view === 'split';
+    const preview = split
+        ? el('div', { class: 'cfg-md-preview prose', html: renderMarkdown(s.draft) })
+        : null;
     const box = el('textarea', {
         class: 'cfg-md', spellcheck: 'false', autocapitalize: 'off',
         autocorrect: 'off', disabled: !editable || null,
         // The foot's three nodes are mutated by hand rather than re-rendered: a
         // renderSettings() here would replace the textarea and take the caret
-        // with it, mid-word.
+        // with it, mid-word. The preview beside it is the same kind of node.
         oninput: (e) => {
             s.draft = e.target.value;
             s.dirty = s.draft !== onDisk;
             docsPaintFoot(parts, editable);
-            grow(e.target, 220, 560);
+            if (preview) schedulePreview(preview);
+            else grow(e.target, 220, 560);
         },
+        onscroll: preview ? (e) => syncPreviewScroll(e.target, preview) : null,
     }, s.draft);
 
     card.append(
@@ -371,19 +411,26 @@ function docsEditorCard() {
                 ? 'Saved exactly as typed — no reformatting, and the trailing newline is '
                 + 'yours to get right.'
                 : 'Read-only.'),
-        box,
+        // Split is two panes of one fixed height rather than a box that grows:
+        // grow() would lengthen the left one on every new line while the right
+        // one stayed put, and the two would stop lining up at the top.
+        split ? el('div', { class: 'cfg-md-split' }, box, preview) : box,
         foot);
 
     // Sized on the way in as well as on input. Without this the box opens at
     // its CSS height and jumps on the first keystroke, which is a wart the JSON
     // tab next door still has.
-    grow(box, 220, 560);
+    if (!split) grow(box, 220, 560);
     docsPaintFoot(parts, editable);
     if (s.caret) {
         // Coming back from Preview. Deferred because the node is not in the
         // document until renderSettings() appends what this returned.
         const at = Math.min(s.caret, s.draft.length);
-        setTimeout(() => { box.focus(); box.setSelectionRange(at, at); }, 0);
+        setTimeout(() => {
+            box.focus();
+            box.setSelectionRange(at, at);
+            if (preview) syncPreviewScroll(box, preview);
+        }, 0);
     }
     return card;
 }
@@ -508,9 +555,22 @@ function openMemoDialog() {
     if (box) s.caret = box.selectionStart || 0;
     dom.memoScrim.hidden = false;
     paintMemoDialog();
-    dom.memoBig.focus();
+    // The preview is rendered now rather than on the next frame, so the
+    // scroll sync below has a height to work with.
+    dom.memoPreview.innerHTML = renderMarkdown(s.draft);
     const at = Math.min(s.caret || 0, s.draft.length);
     dom.memoBig.setSelectionRange(at, at);
+    if (s.dialogView !== 'preview') dom.memoBig.focus();
+    syncPreviewScroll(dom.memoBig, dom.memoPreview);
+}
+
+/** The dialog's Edit / Split / Preview. It keeps its own, apart from the panel's. */
+function setMemoDialogView(view) {
+    const s = docsState();
+    s.dialogView = view;
+    try { localStorage.setItem('memoDialogView', view); } catch { /* per-session then */ }
+    paintMemoDialog();
+    if (view !== 'preview') dom.memoBig.focus();
 }
 
 export function closeMemoDialog() {
@@ -534,6 +594,11 @@ export function paintMemoDialog() {
     dom.memoTitle.textContent = shortPath(row.file);
     // Only when it differs, so a repaint mid-typing does not move the caret.
     if (dom.memoBig.value !== s.draft) dom.memoBig.value = s.draft || '';
+    // Which panes show is CSS off this one attribute, so the textarea is never
+    // rebuilt and switching views keeps the caret and the undo history.
+    dom.memoBody.dataset.view = s.dialogView;
+    dom.memoViews.replaceChildren(...viewTabs(s.dialogView, setMemoDialogView));
+    if (s.dialogView !== 'edit') schedulePreview(dom.memoPreview);
     dom.memoBig.disabled = !editable;
     dom.memoCount.textContent = docsCount(bytes, cap);
     dom.memoNote.className = `cfg-json-note${over ? ' bad' : ''}`;
