@@ -42,7 +42,7 @@ import { html, render } from './vendor/preact.js';
 import { state } from './state.js';
 import { dom } from './dom.js';
 import { BOOT_PREFS } from './boot.js';
-import { ago, clip, hhmm } from './format.js';
+import { ago, clip, hhmm, hourOpts } from './format.js';
 import { ICON, PR_ICON } from './icons.js';
 import {
     projectColor,
@@ -479,7 +479,7 @@ function dueBadge(sessionId) {
     if (!pending) return null;
     return html`<span class="due"
         title=${`${pending} message${pending === 1 ? '' : 's'} scheduled; the next at `
-            + new Date(nextAt).toLocaleString()}
+            + new Date(nextAt).toLocaleString(undefined, hourOpts())}
         >${`\u{1F550} ${hhmm(nextAt)}${pending > 1 ? ` +${pending - 1}` : ''}`}</span>`;
 }
 

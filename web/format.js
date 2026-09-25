@@ -7,10 +7,29 @@
 
 export const pad = (n) => String(n).padStart(2, '0');
 
+// Whether a wall clock reads 12-hour — `transcript.clock` in bridge/prefs.js.
+// Set from outside, the way noteHome sets `homeDir`, so this file stays free of
+// `state`: web/app.js's applyClock() calls setClock at boot and on every save.
+let clock12 = false;
+export const setClock = (fmt) => { clock12 = fmt === '12h'; };
+
+// For the few clocks drawn by `toLocale*String` rather than by hand, so they
+// follow the setting instead of the locale.
+export const hourOpts = () => ({ hour12: clock12 });
+
+// `3:04` or `15:04`, and the meridiem to go after it, if any.
+function hourMinute(d) {
+    const h = d.getHours();
+    return clock12
+        ? [`${h % 12 || 12}:${pad(d.getMinutes())}`, h < 12 ? ' AM' : ' PM']
+        : [`${pad(h)}:${pad(d.getMinutes())}`, ''];
+}
+
 export function clockOf(ts) {
     if (!ts) return '';
     const d = new Date(ts);
-    return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    const [hm, meridiem] = hourMinute(d);
+    return `${hm}:${pad(d.getSeconds())}${meridiem}`;
 }
 
 // The date a message was recorded, or '' when the clock alone places it.
@@ -95,4 +114,4 @@ export function clip(s, n) {
  * be — you pick a time to the minute and the tick finds it within thirty — so the
  * extra digits are noise on every chip and badge this section draws.
  */
-export const hhmm = (ts) => (ts ? `${pad(new Date(ts).getHours())}:${pad(new Date(ts).getMinutes())}` : '');
+export const hhmm = (ts) => (ts ? hourMinute(new Date(ts)).join('') : '');

@@ -28,8 +28,8 @@ import * as keys from '../keys.js';
 import { state } from '../state.js';
 import { termPane } from '../term-pane.js';
 import {
-    closeOtherPanels, liveVisible, loadPairing, paintBackdropTint, paintDevBrowserPresence,
-    paintPanels, paintRailSort, rememberView, renderLive, renderRail, syncBoardWatch,
+    applyClock, closeOtherPanels, liveVisible, loadPairing, paintBackdropTint, paintDevBrowserPresence,
+    paintPanels, paintRailSort, rememberView, renderLive, renderRail, saveDraft, syncBoardWatch,
     syncTaskboardWatch,
 } from '../app.js';
 import { paintComposerHint } from '../composer/send.js';
@@ -282,10 +282,22 @@ function applyPrefsLive(prefs, section) {
     // The pill, its poll, and every chip's tooltip say which browser a click
     // means, and all of them were drawn under the old answer.
     if (section === 'devbrowser') { paintDevBrowserPresence(); renderChannels(); }
+    // Every clock on the page reads `transcript.clock`, the rail's scheduled
+    // badge among them; the transcript's own are redrawn by the re-read below.
+    if (section === 'transcript') { applyClock(); renderRail(); }
     if (section === 'transcript' && state.current) {
         // Re-read the conversation so the new folding rule applies to what is
         // already on screen. keepDash so going and looking does not close this.
-        openSession(state.current.sessionId, { keepDash: true, quiet: true });
+        //
+        // Forgetting `current` first, as the Try again button does: openSession
+        // returns early for the session you are already in, so without it this
+        // re-read has quietly done nothing. The draft is saved by hand because
+        // openSession only saves it for a `current` it is leaving, and it then
+        // loads the saved one into the box.
+        const id = state.current.sessionId;
+        saveDraft(id, dom.input.value);
+        state.current = null;
+        openSession(id, { keepDash: true, quiet: true });
     }
 }
 

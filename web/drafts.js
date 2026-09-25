@@ -46,7 +46,7 @@ import { html, useState } from './vendor/preact.js';
 import { del, get, post } from './api.js';
 import { state } from './state.js';
 import { dom, toast } from './dom.js';
-import { ago } from './format.js';
+import { ago, hourOpts } from './format.js';
 import * as keys from './keys.js';
 import {
     closeOtherPanels, paintPanels, projectColor, rememberView, syncBoardWatch,
@@ -303,7 +303,7 @@ function DraftCard({ d }) {
                 <span class="dot">·</span>
                 <span>${d.permissionMode}</span>
                 <span class="dot">·</span>
-                <span title=${new Date(d.updatedAt).toLocaleString()}>${
+                <span title=${new Date(d.updatedAt).toLocaleString(undefined, hourOpts())}>${
                     ago(new Date(d.updatedAt).toISOString())}</span>
             </div>
             <p class="dr-prompt">${clipLines(d.prompt, 600)}</p>

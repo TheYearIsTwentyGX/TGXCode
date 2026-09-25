@@ -93,6 +93,12 @@ assert.ok(fs.existsSync(userFile), 'the defaults were not written out');
 assert.deepStrictEqual(read(userFile), DEFAULTS, 'the seeded file is not the defaults');
 ok('a first run writes the defaults where they can be found and edited');
 
+// --- transcript.clock -----------------------------------------------------
+assert.strictEqual(DEFAULTS.transcript.clock, '24h', 'the clock must default to what it always was');
+assert.ok(SHAPE.transcript.clock('24h') && SHAPE.transcript.clock('12h'));
+assert.ok(!SHAPE.transcript.clock('12') && !SHAPE.transcript.clock(true) && !SHAPE.transcript.clock(''));
+ok('transcript.clock is 24h or 12h and nothing else');
+
 // --- keyboard: what the shape allows ------------------------------------
 const kb = SHAPE.keyboard;
 assert.ok(kb.contextualTerminalCopy(true) && kb.contextualTerminalCopy(false));
