@@ -145,6 +145,9 @@ The translation that is *acted* on is never this one — see `POST /api/fs/open`
 The web client also links paths an agent wrote the Windows way —
 `\\wsl.localhost\<distro>\…`, `\\wsl$\<distro>\…` and `C:\…` — and hands them to
 `POST /api/fs/open` verbatim; `tgx-host` is used only to show their Linux form on hover.
+It links relative paths too (`migrations/x.sql`, `web/app.js:120` — a slash and a file
+extension, or a trailing slash, are required), and sends those with the `sessionId` of
+the transcript on screen.
 
 ### The host the bridge opens files on
 
@@ -4012,7 +4015,7 @@ answered them. It takes about 0.6 s, most of it PowerShell starting.
 
 ### `POST /api/fs/open`
 
-`{path: string, reveal?: boolean, probe?: boolean}` →
+`{path: string, sessionId?: string, reveal?: boolean, probe?: boolean}` →
 `{ok: true, how: "open" | "reveal", path: string, winPath: string | null, why?: "directory" | "executable"}`,
 or with `probe: true`
 `{ok: true, how: "probe", path: string, kind: "file" | "directory", launchable: boolean}`.
@@ -4030,6 +4033,15 @@ applies to the Linux path it becomes. It is `400` when the translation fails —
 for a distribution other than the bridge's, say — and always `400`
 (`"Windows paths can only be opened under WSL"`) on a Linux host. Send it exactly as a
 transcript wrote it; do not translate it yourself.
+
+**A relative `path` needs `sessionId`** — `migrations/0042.sql`, `./x.sh`, `web/app.js`.
+It is resolved against that session's current working directory (for a session that
+entered a worktree, the worktree), and failing that against the repository root that
+directory is in; the first that exists wins. `400` when `sessionId` is missing
+(`"a relative path needs the sessionId it is relative to"`) or names no session
+(`"session not found"`); `404` when the path is in neither directory, with an `error`
+naming the working directory it looked in. `sessionId` is ignored for an absolute path.
+The answer's `path` is the resolved absolute one either way.
 
 **`probe: true` opens nothing.** It resolves and stats the path and says what is
 there: `kind` is `"directory"` or `"file"`, and `launchable` is `true` for a file with

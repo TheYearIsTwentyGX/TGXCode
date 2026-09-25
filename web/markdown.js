@@ -300,9 +300,33 @@ const WIN_PATH_RE = /(?<!\]\()(?<![\w:@~.\-/\\])(?:\\\\wsl(?:\.localhost|\$)\\[A
 const isWinPath = (p) => /^(?:\\\\|[A-Za-z]:\\)/.test(p);
 
 /**
+ * A relative path - `migrations/0042-add-index.sql`, `web/app.js:120`,
+ * `./scripts/land.sh` - which is how an agent names a file in the checkout it is
+ * working in. The session it is relative to is the click handler's to supply
+ * and the bridge's to resolve against; this side only has to recognise one.
+ *
+ * Recognising one is where the risk is, because prose is full of slashes that
+ * are not paths. So a relative path needs all of:
+ *
+ *   - a slash, so a lone `package.json` or `state.current` never matches;
+ *   - a last segment with a letter-led extension, or a trailing slash (REL_EXT),
+ *     which keeps out `and/or`, `TODO/FIXME`, `origin/main` and `1/2.5`;
+ *   - no dot in the first segment beyond a leading one, which is what keeps a
+ *     bare `www.example.com/x.html` or `127.0.0.1:45899/api/x.json` out while
+ *     letting `.claude/settings.json` in.
+ *
+ * The lookbehind is PATH_RE's plus the backslash, so nothing inside a URL, an
+ * absolute path or a Windows path can start a run.
+ */
+const REL_PATH_RE = /(?<!\]\()(?<![\w:@~.\-/\\])(?:\.{1,2}\/)*\.?[A-Za-z0-9_][A-Za-z0-9._+@\-]*\/[A-Za-z0-9._~+@\-/]*(?::\d+(?::\d+)?)?/g;
+const REL_EXT = /(?:\/[^/]*[A-Za-z0-9]\.[A-Za-z][A-Za-z0-9]{0,7}|\/)$/;
+
+const isRelPath = (p) => !/^(?:[/~]|\\\\|[A-Za-z]:\\)/.test(p);
+
+/**
  * Split a candidate into what to open and what to show, or null for "not a path".
  */
-function pathParts(raw, win = false) {
+function pathParts(raw, kind = 'posix') {
     let p = raw;
     let suffix = '';
     // `file.js:120` and `file.js:120:5` are how every tool in this app writes a
@@ -314,7 +338,11 @@ function pathParts(raw, win = false) {
     let tail = '';
     while (p.endsWith('.')) { p = p.slice(0, -1); tail += '.'; }
     if (p.length < 2) return null;
-    if (!win && !PATH_ROOTS.test(p) && !PATH_EXT.test(p)) return null;
+    if (kind === 'posix' && !PATH_ROOTS.test(p) && !PATH_EXT.test(p)) return null;
+    if (kind === 'rel') {
+        const first = p.replace(/^(?:\.{1,2}\/)+/, '').split('/')[0];
+        if (!REL_EXT.test(p) || first.slice(1).includes('.')) return null;
+    }
     return { path: p, text: p + suffix, tail };
 }
 
@@ -382,8 +410,12 @@ function fileUrl(p) {
  * something pasteable, and so this is a real link to a screen reader.
  */
 function pathAnchor(it) {
-    return '<a class="fs-path" href="' + escapeHtml(fileUrl(it.path)) + '"'
-        + ' title="' + escapeHtml(uncPath(it.path)) + '"'
+    // A relative path has no place of its own until a session is chosen, so it
+    // has no URL to copy and its title says what it will be resolved against.
+    const rel = isRelPath(it.path);
+    return '<a class="fs-path" href="' + escapeHtml(rel ? '#' : fileUrl(it.path)) + '"'
+        + ' title="' + escapeHtml(rel ? 'In this session\'s working directory'
+            : uncPath(it.path)) + '"'
         + ' data-path="' + escapeHtml(it.path) + '">' + escapeHtml(it.text) + '</a>';
 }
 
@@ -397,16 +429,26 @@ function pathAnchor(it) {
  */
 function linkPaths(src, park) {
     if (!HOST) return null;
-    const link = (win) => (m, off, whole) => {
+    const link = (kind) => (m, off, whole) => {
         // The other half of the markdown-link guard: `[/home/x.md](url)` would
         // otherwise nest an anchor inside an anchor.
         if (whole.slice(off + m.length, off + m.length + 2) === '](') return m;
-        const it = pathParts(m, win);
-        return it ? park(pathAnchor(it)) + it.tail : m;
+        // `/mnt/c/Program Files/x.pdf` is linked as far as the space; the rest
+        // is that same path, not a relative one. An absolute path's anchor then
+        // one space is the shape that says so, and \u0002 marks where one ended
+        // - its own mark, because a code span's placeholder looks the same and
+        // "`npm test` in web/app.js" is a real relative path.
+        if (kind === 'rel' && whole.slice(Math.max(0, off - 2), off) === '\u0002 ') return m;
+        const it = pathParts(m, kind);
+        return it ? park(pathAnchor(it)) + (kind === 'rel' ? '' : '\u0002') + it.tail : m;
     };
-    // Two passes can not find the same run twice: the two forms share no
-    // separator, and a parked anchor is a placeholder by the second pass.
-    return src.replace(PATH_RE, link(false)).replace(WIN_PATH_RE, link(true));
+    // No pass can find a run an earlier one took: an anchor is parked as a
+    // placeholder by the time the next pass looks, and the relative pass goes
+    // last because its lookbehind is what keeps it out of the other two forms.
+    return src.replace(PATH_RE, link('posix'))
+        .replace(WIN_PATH_RE, link('win'))
+        .replace(REL_PATH_RE, link('rel'))
+        .replace(/\u0002/g, '');
 }
 
 /**
