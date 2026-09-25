@@ -223,8 +223,8 @@ const NOTE = '\n\n## Note from the user\nLeave the migration alone.\n';
 // once: it used to search the whole string for a label, which marked an option
 // that had been quoted mid-sentence to argue *against* it.
 //
-// It lives in web/app.js, which the Node suite cannot require — that file is a
-// browser module with a `dom` and a `state` behind it. So the function is cut
+// It lives in web/transcript/tools.js, which the Node suite cannot import — it
+// is a browser module with a `dom` and a `state` behind it. So the function is cut
 // out by name and evaluated on its own. That is a liberty, and it is taken for
 // exactly one reason: this function is pure, it is the part a wrong answer is
 // silently wrong in, and the alternative on offer was not testing it. The
@@ -233,11 +233,11 @@ const NOTE = '\n\n## Note from the user\nLeave the migration alone.\n';
 const fs = require('fs');
 const path = require('path');
 
-/** Cut one top-level function out of web/app.js by name, by counting braces. */
+/** Cut one top-level function out of web/transcript/tools.js by name, by counting braces. */
 function lift(name) {
-    const src = fs.readFileSync(path.join(__dirname, '..', 'web', 'app.js'), 'utf8');
+    const src = fs.readFileSync(path.join(__dirname, '..', 'web', 'transcript', 'tools.js'), 'utf8');
     const at = src.indexOf(`function ${name}(`);
-    assert.notStrictEqual(at, -1, `${name} is gone from web/app.js — this test is stale`);
+    assert.notStrictEqual(at, -1, `${name} is gone from web/transcript/tools.js — this test is stale`);
     let depth = 0;
     let i = src.indexOf('{', at);
     for (; i < src.length; i++) {

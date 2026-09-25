@@ -47,9 +47,10 @@ import { ICON, PR_ICON } from './icons.js';
 import {
     projectColor,
     elsewhere, awayWords, prWords, prUnknownWhy, inProjectCard, groupKeyOf, rankOf,
-    openSession, setFlags, askDelete, startRename, cancelRename, commitRename, toggleGroup, onRailDragStart, onRailDragEnd,
+    setFlags, askDelete, startRename, cancelRename, commitRename, toggleGroup, onRailDragStart, onRailDragEnd,
     showProjMenu, closeProjMenu, renderRail,
 } from './app.js';
+import { openSession } from './transcript/conversation.js';
 
 /**
  * Draw the rail into #rail. Called only by renderRail() in app.js, which paints

@@ -12,8 +12,9 @@ import * as keys from '../keys.js';
 import { state } from '../state.js';
 import {
     paintDashBadge, paintDraftsBadge, paintLiveBadge, paintNotesBadge, paintSchedBadge,
-    paintTaskboardBadge, renderHeaderActions,
+    paintTaskboardBadge,
 } from '../app.js';
+import { renderHeaderActions } from '../transcript/conversation.js';
 import { renderSettings, saveSetting } from './index.js';
 
 // ── remapping a shortcut ─────────────────────────────────────────────────

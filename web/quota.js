@@ -16,9 +16,9 @@ import { state } from './state.js';
 import { dom, el, toast } from './dom.js';
 import { pad, shortPath } from './format.js';
 import { pullAndRestart } from './restart.js';
-import {
-    openSession, openContextMenu, renderHeader, showNewMenu,
-} from './app.js';
+import { showNewMenu } from './app.js';
+import { openSession, renderHeader } from './transcript/conversation.js';
+import { openContextMenu } from './transcript/context-menu.js';
 import { showBarMore } from './settings/toolbar.js';
 
 // ── quota ────────────────────────────────────────────────────────────────

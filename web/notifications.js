@@ -13,7 +13,8 @@
 
 import { state } from './state.js';
 import { clip, dur } from './format.js';
-import { openSession, toolSummary } from './app.js';
+import { openSession } from './transcript/conversation.js';
+import { toolSummary } from './transcript/tools.js';
 
 // ── notifications ────────────────────────────────────────────────────────
 //
