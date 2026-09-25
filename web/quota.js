@@ -476,9 +476,9 @@ function quotaClockNodes() {
  * countdown is renderQuota on a one-second interval, and that is wrong twice
  * over: renderQuotaPill empties #quota-pill-body and rebuilds it, so anything
  * decorating a window group would be destroyed roughly once a second, and it
- * redraws two bars and a whole panel to move one digit. Shaped after
- * tickCardClocks instead — find the marked nodes, rewrite their text, touch
- * nothing else.
+ * redraws two bars and a whole panel to move one digit. Shaped after what the
+ * live board's tickCardClocks did before that board moved to Preact — find the
+ * marked nodes, rewrite their text, touch nothing else.
  *
  * `title` and `aria-label` are deliberately left to the thirty-second repaint.
  * They are the pill's accessible name, and a name that changes every second is

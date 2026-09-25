@@ -16,7 +16,7 @@ import { get } from '../api.js';
 import { dom, el, toast } from '../dom.js';
 import { ago } from '../format.js';
 import { state } from '../state.js';
-import { statusWord } from '../app.js';
+import { statusWord } from '../boards/dashboard.js';
 import { closeMenus, live } from '../composer/slash.js';
 import { closeContextMenu, fileTarget, openFileMenu } from './context-menu.js';
 import { renderHeaderActions } from './conversation.js';

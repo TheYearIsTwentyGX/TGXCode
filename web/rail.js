@@ -452,7 +452,7 @@ function activityBits(runner) {
     ];
 }
 
-/** The rail's copy of app.js's queuedBadge(), which the live board still uses as DOM. */
+/** The rail's copy of web/boards/parts.js's queuedBadge(); keep the two saying the same thing. */
 function queuedBadge(queued) {
     return html`<span class="wait"
         title=${`${queued} message${queued === 1 ? '' : 's'} waiting to be sent`}
