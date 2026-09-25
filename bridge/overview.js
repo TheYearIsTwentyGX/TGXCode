@@ -409,7 +409,7 @@ async function refreshDevServers(index, ids) {
     return moved;
 }
 
-/** The directory a session works in, as server.js reads it for the conversation view. */
+/** The directory a session works in, as bridge/routes/session-workspace.js reads it. */
 function workingDir(summary) {
     return [summary.cwd, summary.worktree && summary.worktree.path, summary.projectCwd]
         .find(d => d && fs.existsSync(d)) || null;

@@ -119,7 +119,7 @@ function attachmentsDirFor(cwd) {
  * Why this name cannot be used, or null.
  *
  * Refused rather than sanitised — the same choice `folderNameProblem` makes in
- * server.js: a name repaired after the fact is a name nobody checked, and the repair
+ * bridge/routes/files.js: a name repaired after the fact is a name nobody checked, and the repair
  * is where the separator you missed gets through.
  *
  * One deliberate difference from that function: a leading dot is fine here. It

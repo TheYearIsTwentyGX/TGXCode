@@ -5,9 +5,10 @@
 // One session handing work to another is the only thing in this app that starts a
 // turn nobody asked for — `POST /api/sessions/:id/handoff` resumes an idle session
 // and its message becomes the next turn. Everything that decides *whether* that
-// happens lives here rather than inline in server.js, because it is the part with
-// rules in it and therefore the part worth a test around it. server.js keeps the
-// I/O: read the body, look the session up, wrap the message, send it.
+// happens lives here rather than inline in the route, because it is the part with
+// rules in it and therefore the part worth a test around it. The route, in
+// bridge/routes/session.js, keeps the I/O: read the body, look the session up,
+// wrap the message, send it.
 //
 // The wrapper itself is not here. It lives beside its parser in
 // bridge/transcript.js, so the two halves of one format cannot drift apart.

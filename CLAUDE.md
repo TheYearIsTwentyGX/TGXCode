@@ -555,8 +555,12 @@ reasoning behind the local/remote split; `docs/plans/` holds the design notes th
 features were built from.
 
 Every module under `bridge/` opens with a header comment saying why it exists and
-what it decided — read that before grepping the body. `server.js` is 71KB and
-sectioned by comment headers, so search for the section name rather than scrolling.
+what it decided — read that before grepping the body. `server.js` is now the
+plumbing and wiring; each `/api/` route family is a module under `bridge/routes/`,
+tried in the order of the `ROUTES` list in `server.js` (the order matters — it is a
+first-match chain), and the feature sections live in their own modules
+(`events.js`, `scheduler.js`, `pr-gate.js`, `later-delivery.js`, …). README §Layout
+names them all.
 
 ## Notes that save time
 

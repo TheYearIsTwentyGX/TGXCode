@@ -242,7 +242,26 @@ Two rules worth knowing before you send a patch:
 
 | Path | |
 |---|---|
-| `bridge/server.js` | HTTP, routing, static files, and the wiring that hands the modules below their instances |
+| `bridge/server.js` | HTTP, the gate every request passes (origin, host, client header, token, `remoteRefusal`), the order the route modules are asked in, static files, and the wiring that hands the modules below their instances |
+| `bridge/http.js` | The plumbing every route shares: a JSON reply, a JSON or binary body, and the `NEXT` a route module returns for a request that is not its own |
+| `bridge/routes/events.js` | `/api/events` and `/api/subscribe`, and the polled `/api/peers`, `/api/overview`, `/api/taskboard` |
+| `bridge/routes/bridge.js` | The process itself: health, shutdown, restart, the installed Claude Code and updating it, `/api/pairing` |
+| `bridge/routes/settings.js` | `/api/prefs`, `/api/keymap`, `/api/spinner/groups`, and Claude Code's own settings and memory files |
+| `bridge/routes/notifications.js` | The notification history, marking it read, clearing it |
+| `bridge/routes/sessions.js` | Sessions as a collection: listing, `addressable`, starting one, `/api/slash-commands`. Asked before `session.js`, which is load-bearing |
+| `bridge/routes/suggestions.js` | Suggested follow-ups across every session, and taking one up |
+| `bridge/routes/drafts.js` | `/api/drafts`, and the validation a draft shares with a create |
+| `bridge/routes/later.js` | `/api/later`, and the wire shape and validation `POST /api/sessions/:id/later` shares |
+| `bridge/routes/snippets.js` | `/api/snippets` and `/api/snippet-groups` |
+| `bridge/routes/schedules.js` | `/api/schedules` |
+| `bridge/routes/dashboard.js` | `/api/dashboard` and `/api/prs` |
+| `bridge/routes/quota.js` | `/api/quota` and refreshing it |
+| `bridge/routes/session.js` | One session's conversation: read, delete, send, later, handoff, stop, queue, permission, flags, attachments, suggestions, tasks, subagents |
+| `bridge/routes/session-workspace.js` | One session's directory: dev servers, changes, diff, pull requests, reveal, open-file, its terminal |
+| `bridge/routes/commands.js` | A project's commands, their runs, and the editor's view of the files that declare them |
+| `bridge/routes/terminals.js` | A terminal pane's stream, input, size and close — all refused remotely |
+| `bridge/routes/machine.js` | Dev servers, DevBrowser and Wispr Flow — the machine outside the app |
+| `bridge/routes/files.js` | `/api/fs`, `mkdir`, `open`, `/api/attachments`, and the attachment helpers the session routes share |
 | `bridge/events.js` | The `/api/events` stream: connections, the fan-out, the live board's and task board's ticks, transcript follows, the peer list |
 | `bridge/pairing.js` | `/pair` and `/pair/forget` — a pasted link becoming a cookie |
 | `bridge/config.js` | Paths, ports, allowed roots — every constant with a reason attached, and the two containment checks that decide whether a path is one a caller may name |
