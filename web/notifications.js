@@ -3,7 +3,7 @@
 // puts Allow and Deny on a notification. Moved out of app.js as it was.
 //
 // The switches for all of this are drawn by the notification settings group,
-// which is still in app.js and reads and writes `notify` from here.
+// web/settings/notifications.js, which reads and writes `notify` from here.
 // `window.claudeShell` is the Electron preload (app/preload.js); a browser has
 // none, so every use of it stays guarded.
 //

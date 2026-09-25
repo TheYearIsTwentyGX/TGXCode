@@ -43,8 +43,9 @@ import { state } from './state.js';
 import { dom } from './dom.js';
 import { BOOT_PREFS } from './boot.js';
 import { ago, clip, hhmm } from './format.js';
+import { ICON, PR_ICON } from './icons.js';
 import {
-    ICON, PR_ICON, projectColor,
+    projectColor,
     elsewhere, awayWords, prWords, prUnknownWhy, inProjectCard, groupKeyOf, rankOf,
     openSession, setFlags, askDelete, startRename, cancelRename, commitRename, toggleGroup, onRailDragStart, onRailDragEnd,
     showProjMenu, closeProjMenu, renderRail,
@@ -231,7 +232,7 @@ function isOpen(key, nested) {
     return nested ? state.schedOpen.has(key) : !state.collapsed.has(key);
 }
 
-/** One of app.js's ICON glyphs, as a vnode. app.js's icon() is the DOM twin. */
+/** One of web/icons.js's ICON glyphs, as a vnode. Its icon() is the DOM twin. */
 function icon(name, size = 15) {
     return html`<svg width=${size} height=${size} viewBox="0 0 24 24" fill="none"
         aria-hidden="true" dangerouslySetInnerHTML=${{ __html: ICON[name] }}></svg>`;
