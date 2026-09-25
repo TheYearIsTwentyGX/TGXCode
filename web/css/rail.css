@@ -257,12 +257,15 @@
 
 /* Pin and archive stay out of the way until the row is hovered — except a pin,
    which is a state worth seeing at a glance. They float over the row rather
-   than sitting in the flow, so the title and meta keep the full width. */
+   than sitting in the flow, so the title and meta keep the full width.
+   They sit at the foot of the row, over the meta line, rather than centred:
+   centred they covered the end of the title, which is the part that says which
+   session this is, while the tail of the meta line is the activity text that is
+   allowed to be cut short anyway. */
 .strip-actions {
     position: absolute;
     right: 6px;
-    top: 50%;
-    transform: translateY(-50%);
+    bottom: 3px;
     display: flex;
     align-items: center;
     gap: 1px;
