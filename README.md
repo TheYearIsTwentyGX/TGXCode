@@ -269,6 +269,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/git.js` | Every question the bridge asks git about a directory, cached once for all of them |
 | `bridge/restart.js` | Pulling this checkout and handing over to `scripts/restart-bridge.sh` — the one mutating git call |
 | `bridge/changes.js` | What a session changed, out of its transcript and its subagents' |
+| `bridge/scratchpad.js` | A session's scratchpad directories under `/tmp/claude-<uid>/` (one per worktree it entered), listed and read with containment |
 | `bridge/pulls.js` | Everything this app asks GitHub about a pull request, what its status *is*, and the review it leaves behind |
 | `bridge/pr-store.js` | When to ask, and last time's answer kept on disk — so no route ever waits on GitHub |
 | `bridge/pr-refresh.js` | The clock that fills it: one pass over the repositories in play, and `prs-changed` when the answer moved |
@@ -375,7 +376,7 @@ Two rules worth knowing before you send a patch:
 | `web/transcript/review.js` | Reviewing a plan or a question after the fact |
 | `web/transcript/subagents.js` | The subagent list and the pane that opens one's transcript |
 | `web/transcript/suggestions.js` | Suggested follow-ups — the panel, the dialog that shows one at a readable width, and starting or dismissing one |
-| `web/transcript/changes.js` | What this session changed, and the diff viewer (diff2html, read as `window.Diff2Html`, never imported) |
+| `web/transcript/changes.js` | What this session changed, its scratchpad, and the diff viewer (diff2html, read as `window.Diff2Html`, never imported), which also shows a scratchpad file |
 | `web/transcript/checklist.js` | The session's own task list, the column left of the transcript |
 | `web/transcript/layout.js` | The width the log lays itself out at, the composer's insets, and sliding a side column in and out |
 | `web/transcript/context-menu.js` | The right-click menu, and the file menu on a changed file |

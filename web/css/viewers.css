@@ -74,6 +74,8 @@
 }
 .diff-bar .spacer { flex: 1; }
 .diff-seg { display: flex; background: var(--s1); border-radius: var(--pill); padding: 2px; }
+/* Both are hidden while a scratchpad file is up, and both set a display. */
+.diff-seg[hidden], .diff-opt[hidden] { display: none; }
 .diff-seg-btn {
     height: 26px;
     padding: 0 14px;
@@ -197,6 +199,13 @@
 /* See paintDiff: for the tree's single block the header is the dialog title
    repeated, so it goes. */
 .diff-body.one-file .d2h-file-header { display: none; }
+/* A scratchpad file, drawn as one whole-file addition (see wholeFile in
+   web/transcript/changes.js). Being all-new is how it got here, not something
+   about the file, so the green, the `+` and the empty old-side gutter go. */
+.diff-body.file-view .d2h-ins { background: var(--bg); border-color: transparent; }
+.diff-body.file-view .d2h-code-line-prefix { display: none; }
+.diff-body.file-view .line-num1 { display: none; }
+.diff-body.file-view .d2h-info { display: none; }
 .diff-body .d2h-file-side-diff { overflow-x: auto; }
 .diff-body .d2h-file-list-wrapper { margin-bottom: 14px; }
 .diff-body .d2h-file-list-title { font: 500 12.5px/1.4 var(--sans); color: var(--text-3); }

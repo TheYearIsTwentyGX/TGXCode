@@ -256,6 +256,12 @@ because launching a program on the host desktop is reaching past the app into th
 reading a diff is not. It is repository-scoped rather than only roots-scoped, which
 is what makes that safe to say.
 
+`GET /api/sessions/:id/scratchpad` and `…/scratchpad/file` are readable remotely on
+the same argument. They are outside the roots, because the scratchpad is under
+`/tmp`, but they are scoped more tightly than roots would scope them: to the
+scratchpad directories of that one session id, re-derived on every read, with
+symlinks refused.
+
 `GET /api/slash-commands` is readable remotely for the same reason, and is a
 different route from `GET /api/commands` despite the name — one is what the CLI
 will accept in the composer, the other is what the repository declares in
@@ -913,6 +919,69 @@ again.
 is deliberate: it is a read, its bytes already reach a phone inside the tool results
 it renders, and it is scoped to the session's own repository so a leaked token cannot
 walk it to `~/.ssh`.
+
+### `GET /api/sessions/:id/scratchpad`
+
+This lists the files in the session's scratchpad, where the agent keeps its probe
+scripts, SQL, PR bodies and message drafts. Most of those files never show up in
+`/changes`, because an agent usually writes them with `Bash` rather than an edit
+tool.
+
+```
+{ checkedAt,
+  dirs:  [{ key, path, where }],
+  files: [{ dir, path, size, mtimeMs }],
+  truncated }
+```
+
+- **`dirs`** lists every scratchpad this session has, and there can be several. A
+  scratchpad lives at `<tmp>/claude-<uid>/<project-slug>/<sessionId>/scratchpad`.
+  A session that entered a worktree is running under a new project slug, so it gets
+  one scratchpad per worktree.
+  - `key` is the slug. It is what the client sends back to name a directory.
+  - `path` is the absolute directory.
+  - `where` is the worktree name, or `null` for the main checkout.
+  - The main checkout comes first, then the worktrees alphabetically.
+- **`files[].dir`** is a `key` from `dirs`. `path` is relative to that directory,
+  `/`-separated, and may contain subdirectories.
+  - Newest first.
+  - Capped at 400 files, which sets `truncated: true`.
+  - Walked at most 4 levels deep.
+  - Symlinks are not listed.
+  - The sibling `tasks/` directory holds background-agent output and is not listed.
+- **Empty `dirs` is normal.** `/tmp` does not survive a reboot, so any session
+  older than the last restart has no scratchpad. Neither does a session that never
+  wrote one.
+- `404` means the session id is unknown.
+
+### `GET /api/sessions/:id/scratchpad/file?dir=<key>&path=<rel>`
+
+This returns one file's contents.
+
+```
+{ path, dir, checkedAt, ok,
+  absPath, size, mtimeMs, binary, truncated, text }
+```
+
+- **The client never sends an absolute path.** `dir` must be one of this session's
+  `key`s, and `path` must resolve inside that directory, both lexically and
+  through `realpath`.
+- **Missing parameters are a `400`.** That is `{error: "path is required"}` or
+  `{error: "dir is required"}`, checked before the session lookup. An unknown
+  session is a `404`.
+- **Other failures are a `200` with `ok: false`,** the same as `/diff`:
+  - `reason: "outside"` means `../`, an absolute path, or a symlink out of the
+    directory.
+  - `reason: "no-such-file"` means an unknown `dir` key, a missing file, or a
+    directory.
+  - `reason: "read-failed"` also carries `error`.
+- **`binary: true`** means a NUL byte appeared in the first 8 KB. It comes with
+  `text: ""`.
+- **`text` is capped at 1 MB,** decoded as UTF-8. `truncated: true` means the file
+  (whose full size is in `size`) was longer than that.
+- **There is no open route here.** To open a scratchpad file on the host, post its
+  `absPath` to `POST /api/fs/open`, which skips the roots check for exactly this
+  kind of path and is local-only.
 
 ### `POST /api/sessions/:id/open-file`
 

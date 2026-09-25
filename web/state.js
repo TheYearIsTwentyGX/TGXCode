@@ -220,7 +220,7 @@ export const state = {
     changes: {
         on: localStorage.getItem('changesOn') === '1',
         shut: localStorage.getItem('changesShut') === '1',
-        sessionId: null, data: null, at: 0, loading: false, error: null,
+        sessionId: null, data: null, scratch: null, at: 0, loading: false, error: null,
     },
     // The file on screen in the diff viewer.
     //
@@ -239,7 +239,7 @@ export const state = {
         open: false, sessionId: null, kind: null,
         path: null, absPath: null, status: null, root: null,
         mode: 'worktree', source: null, text: null, meta: null,
-        toolId: null, agent: null,
+        toolId: null, agent: null, scratchKey: null,
         loading: false, error: null, stale: false, req: 0,
         split: localStorage.getItem('diffSplit') === '1',
         words: localStorage.getItem('diffWords') !== '0',

@@ -13,12 +13,13 @@
 // and throws in the temporal dead zone, and only loading the page shows it.
 
 import { get } from '../api.js';
+import { openPath } from '../app.js';
 import { dom, el, toast } from '../dom.js';
 import { ago } from '../format.js';
 import { state } from '../state.js';
 import { statusWord } from '../boards/dashboard.js';
 import { closeMenus, live } from '../composer/slash.js';
-import { closeContextMenu, fileTarget, openFileMenu } from './context-menu.js';
+import { closeContextMenu, fileTarget, openContextMenu, openFileMenu } from './context-menu.js';
 import { renderHeaderActions } from './conversation.js';
 import { slidePane, syncPaneInsets } from './layout.js';
 import { openAgent } from './subagents.js';
@@ -86,6 +87,7 @@ export function resetChanges() {
     // edit would resolve against the new session's tool map.
     closeDiff();
     state.changes.data = null;
+    state.changes.scratch = null;
     state.changes.sessionId = null;
     state.changes.at = 0;
     state.changes.error = null;
@@ -100,11 +102,18 @@ export async function loadChanges({ refresh = false } = {}) {
     state.changes.error = null;
     renderChanges();
     try {
-        const d = await get(`/api/sessions/${id}/changes${refresh ? '?refresh=1' : ''}`);
+        // The scratchpad is asked alongside and allowed to fail on its own: it is
+        // the third section, and a bridge that predates the route should still
+        // draw the other two.
+        const [d, scratch] = await Promise.all([
+            get(`/api/sessions/${id}/changes${refresh ? '?refresh=1' : ''}`),
+            get(`/api/sessions/${id}/scratchpad`).catch(() => null),
+        ]);
         // Another conversation was opened while this was in flight; that one owns
         // the drawer now.
         if (!state.current || state.current.sessionId !== id) return;
         state.changes.data = d;
+        state.changes.scratch = scratch;
         state.changes.sessionId = id;
         state.changes.at = Date.now();
         // A turn ending refetches this, and the dialog must not redraw under
@@ -159,7 +168,8 @@ export function renderChanges() {
         return;
     }
 
-    dom.changesBody.replaceChildren(editsSection(d), treeSection(d.git));
+    dom.changesBody.replaceChildren(editsSection(d), treeSection(d.git),
+        scratchSection(state.changes.scratch));
 }
 
 /** The transcript's answer. */
@@ -293,6 +303,64 @@ function treeReason(g) {
 }
 
 /**
+ * The session's scratchpad — see bridge/scratchpad.js for where it lives.
+ *
+ * Its own section rather than rows folded into the edits list, because most of
+ * what is in there was never an `Edit`: a probe written by `Bash` with a heredoc
+ * is the ordinary case, and the transcript cannot see it. A session that crossed
+ * into worktrees has one scratchpad per worktree, so the rows are grouped under
+ * which one only when there is more than one to tell apart.
+ */
+function scratchSection(s) {
+    const head = el('div', { class: 'ch-head' },
+        el('span', { class: 'ch-title' }, 'Scratchpad'),
+        s && s.files.length ? el('span', { class: 'ch-tally' }, String(s.files.length)) : null);
+    if (!s) return el('section', { class: 'ch-sec' }, head,
+        el('p', { class: 'ch-note' }, 'The bridge could not list the scratchpad.'));
+    if (!s.files.length) return el('section', { class: 'ch-sec' }, head,
+        el('p', { class: 'ch-note' },
+            'No scratchpad files — this session never wrote one, or a restart cleared /tmp.'));
+
+    const byKey = new Map(s.dirs.map(d => [d.key, d]));
+    const rows = [];
+    for (const d of s.dirs) {
+        const mine = s.files.filter(f => f.dir === d.key);
+        if (!mine.length) continue;
+        if (s.dirs.length > 1) {
+            rows.push(el('li', { class: 'ch-group', title: d.path }, d.where || 'main checkout'));
+        }
+        rows.push(...mine.map(f => scratchRow(f, byKey.get(f.dir))));
+    }
+    return el('section', { class: 'ch-sec' }, head,
+        el('ul', { class: 'ch-list' }, rows,
+            s.truncated ? el('li', { class: 'ch-note' }, 'and more, not listed') : null));
+}
+
+function scratchRow(f, dir) {
+    const absPath = `${dir.path}/${f.path}`;
+    return el('li', {},
+        el('button', {
+            class: 'ch-row', type: 'button',
+            title: `${absPath}\n${size(f.size)} · ${new Date(f.mtimeMs).toLocaleString()}`,
+            onclick: () => openScratch({ key: f.dir, path: f.path, absPath, size: f.size }),
+            oncontextmenu: (e) => openContextMenu(e, [
+                { label: 'Open', onClick: () => openPath(absPath) },
+                { label: 'Show in folder', onClick: () => openPath(absPath, { reveal: true }) },
+            ]),
+        },
+            filePath(f.path),
+            el('span', { class: 'ch-meta' }, size(f.size)),
+            el('span', { class: 'ch-meta' }, ago(f.mtimeMs)),
+        ));
+}
+
+function size(n) {
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+    return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/**
  * A path as two pieces, so the drawer can drop the directory and keep the file.
  *
  * A trailing slash — an untracked directory — belongs with the part that gets
@@ -358,6 +426,7 @@ function openDiff(row, kind) {
     d.status = row.status || null;
     d.toolId = row.toolId || null;
     d.agent = row.agent || null;
+    d.scratchKey = row.key || null;
     d.mode = 'worktree';
     d.source = null;
     d.text = null;
@@ -394,6 +463,7 @@ export function closeDiff() {
 
 export async function fetchDiff() {
     const d = state.diff;
+    if (d.kind === 'scratch') return fetchScratch();
     const seq = ++d.req;
     d.loading = true;
     d.error = null;
@@ -453,6 +523,54 @@ export async function fetchDiff() {
         d.text = '';
     }
     paintDiff();
+}
+
+// ── a scratchpad file ──────────────────────────────────────────────────────
+//
+// The same dialog, showing a file rather than a change to one. Not a second
+// viewer: the content is drawn as one whole-file addition — the shape
+// transcriptDiff already uses for a Write that created a file — so it gets
+// diff2html's line numbers and wrapping for nothing, and `.file-view` in
+// viewers.css takes the green and the `+` back off. The controls that only mean
+// something for a diff are hidden while it is up.
+
+function openScratch(f) {
+    openDiff({ path: f.path, absPath: f.absPath, key: f.key }, 'scratch');
+}
+
+async function fetchScratch() {
+    const d = state.diff;
+    const seq = ++d.req;
+    d.loading = true;
+    d.error = null;
+    paintDiff();
+
+    const q = new URLSearchParams({ dir: d.scratchKey, path: d.path });
+    let answer;
+    try {
+        answer = await get(`/api/sessions/${d.sessionId}/scratchpad/file?${q}`);
+    } catch (err) {
+        if (d.req !== seq || !d.open) return;
+        d.loading = false;
+        d.error = err.message;
+        return paintDiff();
+    }
+    if (d.req !== seq || !d.open) return;
+
+    d.loading = false;
+    d.source = 'scratch';
+    d.meta = { binary: !!answer.binary, reason: answer.ok ? null : answer.reason,
+        fileTruncated: !!answer.truncated };
+    d.text = answer.ok && !answer.binary ? answer.text : '';
+    paintDiff();
+}
+
+/** A whole file as one addition, for diff2html to draw. */
+function wholeFile(rel, text) {
+    const lines = text.split('\n');
+    if (lines.length && lines[lines.length - 1] === '') lines.pop();
+    return [`diff --git a/${rel} b/${rel}`, 'new file mode 100644', '--- /dev/null', `+++ b/${rel}`,
+        `@@ -0,0 +1,${lines.length} @@`, ...lines.map(l => `+${l}`)].join('\n') + '\n';
 }
 
 /**
@@ -524,12 +642,13 @@ function diffConfig() {
     // not be able to strand somebody in two unreadable columns.
     const roomForTwo = window.innerWidth > 900;
     return {
-        outputFormat: d.split && !heavy && roomForTwo ? 'side-by-side' : 'line-by-line',
+        outputFormat: d.split && !heavy && roomForTwo && d.kind !== 'scratch'
+            ? 'side-by-side' : 'line-by-line',
         // Only once there is more than one block to index. The transcript's
         // answer is one block per edit and they all name the same file, so for a
         // single edit the list is the filename a third time.
         drawFileList: d.source === 'transcript' && !!(d.meta && d.meta.edits > 1),
-        matching: d.words && !heavy ? 'words' : 'none',
+        matching: d.words && !heavy && d.kind !== 'scratch' ? 'words' : 'none',
         matchWordsThreshold: 0.25,
         diffStyle: 'word',
         colorScheme: 'dark',
@@ -561,11 +680,17 @@ function paintDiff() {
     // the header is the same string twice. The transcript's answer is one block
     // per edit, where the header is what separates them, so it stays.
     dom.diffBody.classList.toggle('one-file', d.source !== 'transcript');
+    const file = d.kind === 'scratch';
+    dom.diffBody.classList.toggle('file-view', file);
+    dom.diffUnified.parentElement.hidden = file;
+    dom.diffWords.parentElement.hidden = file;
+    dom.diffOpen.hidden = !file;
+    dom.diffCopy.textContent = file ? 'Copy' : 'Copy diff';
 
     // Only for a file that is staged and modified, where the three answers are
     // genuinely three. Anywhere else they are three names for one.
     const bothSides = !!d.status && d.status[0] !== '.' && d.status[1] !== '.' && d.status !== '??';
-    dom.diffSource.hidden = !bothSides;
+    dom.diffSource.hidden = !bothSides || file;
     dom.diffSource.value = d.mode;
 
     dom.diffJump.hidden = !(d.toolId || d.agent);
@@ -574,7 +699,8 @@ function paintDiff() {
     dom.diffNote.textContent = diffNote();
 
     if (d.loading) {
-        return dom.diffBody.replaceChildren(el('p', { class: 'ch-note' }, 'Asking git…'));
+        return dom.diffBody.replaceChildren(el('p', { class: 'ch-note' },
+            file ? 'Reading…' : 'Asking git…'));
     }
     if (d.error) {
         return dom.diffBody.replaceChildren(el('p', { class: 'ch-note bad' }, d.error));
@@ -591,7 +717,7 @@ function paintDiff() {
     // diff2html escapes the content it is given, the same guarantee renderMarkdown
     // and el()'s `html` rely on. Its word-level <ins>/<del> markup is where an
     // escaping bug would land, so it is worth knowing that is what this trusts.
-    dom.diffBody.innerHTML = d2h.html(d.text, diffConfig());
+    dom.diffBody.innerHTML = d2h.html(file ? wholeFile(d.path, d.text) : d.text, diffConfig());
     syncSideScroll(dom.diffBody);
 }
 
@@ -605,11 +731,12 @@ function diffNote() {
         bits.push(n ? `From the conversation — ${n} ${n === 1 ? 'edit' : 'edits'}, in order.`
             : 'From the conversation.');
     }
+    if (d.meta && d.meta.fileTruncated) bits.push('Showing the first 1 MB of a larger file.');
     if (d.meta && d.meta.truncated) {
         bits.push(`Showing the first ${Math.round(d.meta.truncated / 1024) > 0
             ? '2 MB' : 'part'} of a larger diff.`);
     }
-    if ((d.text || '').length > DIFF_HEAVY) {
+    if ((d.text || '').length > DIFF_HEAVY && d.kind !== 'scratch') {
         bits.push('Large diff — shown unified, without word matching.');
     }
     if (d.stale) bits.push('The tree has changed since this was read.');
@@ -619,6 +746,12 @@ function diffNote() {
 function diffEmptyReason() {
     const d = state.diff;
     const meta = d.meta || {};
+    if (d.kind === 'scratch') {
+        if (meta.binary) return 'A binary file — use Open to see it.';
+        if (meta.reason === 'no-such-file') return 'That file is no longer in the scratchpad.';
+        if (meta.reason) return `Could not read that file (${meta.reason}).`;
+        return 'That file is empty.';
+    }
     if (meta.binary) return 'git calls this a binary file.';
     if (meta.reason === 'no-such-file') return 'That file is no longer on disk.';
     if (meta.reason === 'outside-repo') {
