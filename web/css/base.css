@@ -483,6 +483,10 @@ a:hover { text-decoration: underline; }
     cursor: pointer;
 }
 .quota-refresh:hover:not(:disabled) { background: var(--s3); color: var(--text-2); }
+/* Two in one head (the version panel's Changelog and Check again): the first
+   takes the push to the right edge and the second sits beside it. */
+.quota-refresh + .quota-refresh { margin-left: 0; }
+.quota-refresh[hidden] { display: none; }
 /* A run takes a few seconds, and the only honest thing to do is look busy for
    them. `wait` rather than `not-allowed`: nothing is disallowed, it is working. */
 .quota-refresh:disabled { opacity: 0.45; cursor: default; }
