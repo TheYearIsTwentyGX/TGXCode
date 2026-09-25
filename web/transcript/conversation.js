@@ -28,9 +28,10 @@ import { loadCommands } from '../commands.js';
 import { showTerm, termOpen } from '../term-pane.js';
 import {
     applyRunner, grouping, loadAttach, loadDraft, loadSessions, markSessionNotesRead,
-    paintPanels, prUnknownWhy, rememberView, renderPins, renderRail, saveDraft, scrollToEnd,
+    paintPanels, prUnknownWhy, rememberView, renderRail, saveDraft, scrollToEnd,
     showDash, showPreview, showTaskboard, subscribe, takePendingJump,
 } from '../app.js';
+import { renderPins } from '../snippets/pins.js';
 import { clearAttach, renderAttach } from '../composer/attachments.js';
 import { closeLater, renderLater } from '../composer/later.js';
 import { autoGrow, clearPendingSend } from '../composer/send.js';

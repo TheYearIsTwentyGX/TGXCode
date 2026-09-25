@@ -23,7 +23,8 @@ import { get } from '../api.js';
 import { closeOnClickOutside, dom, el, toast } from '../dom.js';
 import { clip } from '../format.js';
 import { state } from '../state.js';
-import { closeSnips, projectColor } from '../app.js';
+import { projectColor } from '../app.js';
+import { closeSnips } from '../snippets/popover.js';
 import { clearAttach } from '../composer/attachments.js';
 import { grow } from '../composer/send.js';
 import {

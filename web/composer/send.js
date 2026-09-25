@@ -18,6 +18,7 @@ import { applyRunner, lockedNow, restoreToComposer, saveDraft, scrollToEnd } fro
 import { renderUser } from '../transcript/rows.js';
 import { clearAttach, readyAttachments, revokePreviews } from './attachments.js';
 import { live } from './slash.js';
+import { renderPins } from '../snippets/pins.js';
 
 // ── composer ─────────────────────────────────────────────────────────────
 
@@ -48,7 +49,9 @@ export const autoGrow = () => grow(dom.input, 38, 220);
 export function enableSend(on) {
     dom.btnSend.disabled = !on;
     dom.btnSnippets.disabled = !on;
-    for (const b of dom.pins.children) b.disabled = !on;
+    // Drawn by Preact, so turned off by a render that reads dom.btnSend rather
+    // than by writing to its buttons.
+    renderPins();
     // Attaching needs a session for the same reason sending does — the file goes into
     // *that* session's checkout — so it turns on and off with them.
     dom.btnAttach.disabled = !on;

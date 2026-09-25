@@ -1708,93 +1708,9 @@
      beside a body textarea does not fit in 640px. -->
 <div id="snip-edit-scrim" class="scrim" hidden>
   <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="snip-edit-title">
-    <div class="modal-head">
-      <span id="snip-edit-title">New snippet</span>
-      <button class="modal-close" data-close-snip type="button" aria-label="Close">✕</button>
-    </div>
-    <div class="modal-body">
-      <div class="field">
-        <label for="snip-title">Title</label>
-        <input id="snip-title" type="text" autocomplete="off"
-               placeholder="What this says, in a few words">
-      </div>
-      <div class="field">
-        <label for="snip-group">Group</label>
-        <select id="snip-group"></select>
-      </div>
-      <div class="field">
-        <label for="snip-body">Message</label>
-        <textarea id="snip-body" class="grow" rows="6"
-                  placeholder="What to send. Write {{name}} where a parameter goes."></textarea>
-        <!-- What the body and the parameters say about each other. A note rather
-             than a refusal, in both directions: an undeclared {{x}} is left in the
-             message verbatim, and a parameter nothing references is a field you
-             have not wired up yet. -->
-        <div id="snip-placeholders" class="note" hidden></div>
-      </div>
-      <div class="field">
-        <label>Parameters</label>
-        <div id="snip-params" class="snip-params"></div>
-        <div>
-          <button id="snip-param-add" class="btn small" type="button">Add a parameter</button>
-        </div>
-      </div>
-      <div class="field">
-        <label for="snip-insert">Where it goes</label>
-        <select id="snip-insert">
-          <option value="overwrite">Replace what is in the box</option>
-          <option value="append">Add it to the end</option>
-          <option value="cursor">Insert at the cursor</option>
-        </select>
-      </div>
-      <div class="field">
-        <label class="snip-check">
-          <input id="snip-auto" type="checkbox">
-          <span class="settings-box"></span>
-          <span>Send it straight away</span>
-        </label>
-        <div id="snip-perm-row" class="snip-sub" hidden>
-          <label for="snip-perm">Permissions</label>
-          <select id="snip-perm">
-            <!-- Inherit is first and is the default: the button this feature
-                 replaced never moved the selector, and a snippet that silently
-                 changed the permission mode of the next thing you send would be
-                 the one surprise here worth avoiding. -->
-            <option value="">inherit — leave it where it is</option>
-            <option value="acceptEdits">acceptEdits</option>
-            <option value="auto">auto</option>
-            <option value="manual">manual</option>
-            <option value="plan">plan</option>
-            <option value="dontAsk">dontAsk</option>
-            <option value="bypassPermissions">bypassPermissions</option>
-          </select>
-        </div>
-      </div>
-      <div class="field">
-        <label class="snip-check">
-          <input id="snip-pinned" type="checkbox">
-          <span class="settings-box"></span>
-          <span>Give it a button on the composer</span>
-        </label>
-      </div>
-      <div class="field">
-        <label>Only in these projects</label>
-        <div id="snip-projects" class="snip-projects"></div>
-        <div class="snip-project-add">
-          <input id="snip-project" type="text" spellcheck="false" autocomplete="off"
-                 list="snip-project-list" placeholder="A directory, or leave empty for everywhere">
-          <datalist id="snip-project-list"></datalist>
-          <button id="snip-project-go" class="btn small" type="button">Add</button>
-        </div>
-        <div class="note">A snippet with none of these shows everywhere. With one,
-          it shows in that directory and anything under it.</div>
-      </div>
-    </div>
-    <div class="modal-foot">
-      <span class="spacer"></span>
-      <button class="btn" data-close-snip type="button">Cancel</button>
-      <button id="snip-save" class="btn primary" type="button">Save</button>
-    </div>
+    <!-- Drawn by web/snippets/editor.js on open, and emptied on close: the form
+         is that component's state. The frame stays here so the stacking order
+         every .scrim relies on is still the document's. -->
   </div>
 </div>
 

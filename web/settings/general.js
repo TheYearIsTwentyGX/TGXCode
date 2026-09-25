@@ -11,8 +11,9 @@ import { shortPath } from '../format.js';
 import { state } from '../state.js';
 import {
     paintBackdropTint, refreshPairUrl, renderProjectBackdrop, renderProjectColors,
-    renderProjectOrder, renderSnipSettings,
+    renderProjectOrder,
 } from '../app.js';
+import { renderSnipSettings } from '../snippets/settings.js';
 import { renderWisprSettings, wisprAvailable } from '../composer/wispr.js';
 import { renderClaudeConfig } from './claude-config.js';
 import {

@@ -352,9 +352,14 @@ export const state = {
     // `fill` is what the parameter dialog is asking about, held from the click
     // that opened it until the insert that consumes it — it carries the composer
     // and the caret, because by then the focus has moved twice.
+    // `order` is an arrangement the Settings editor is holding — `{groups: [id],
+    // lists: {groupId or '': [snippetId]}}` — while a drag or an arrow is being
+    // saved; the editor draws from it rather than from the rows until the push
+    // answers it. `committing` says that save is still in flight. See
+    // web/snippets/settings.js.
     snippets: {
         rows: [], groups: [], at: 0, loading: false, error: null,
-        editing: null, fill: null, drag: null,
+        editing: null, fill: null, drag: null, order: null, committing: false,
     },
     // Schedules, on exactly the same terms as drafts above — an unconditional
     // push, held as sent. `editing` is the id the dialog has open, which is also
