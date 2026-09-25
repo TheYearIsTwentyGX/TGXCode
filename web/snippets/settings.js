@@ -29,7 +29,7 @@ import { state } from '../state.js';
 import { dom, el, toast } from '../dom.js';
 import { icon as domIcon } from '../icons.js';
 import { icon, paint } from '../boards/parts.js';
-import { snipAccent, snipById, snipPreview } from './index.js';
+import { applySnippets, snipAccent, snipById, snipPreview } from './index.js';
 import { openSnipEditor } from './editor.js';
 
 /** How long a delete button offers to be sure. armForce's window and its idea. */
@@ -116,7 +116,13 @@ function snipSettingsGroup(g, rows) {
             html`<span class="snip-grip" title="Drag to reorder">${icon('grip', 14)}</span>`,
             html`<input class="snip-set-name" type="text" defaultValue=${g.name}
                 aria-label="Group name"
-                onChange=${(e) => saveSnipGroup(g.id, { name: e.target.value.trim() || g.name })} />`,
+                onChange=${(e) => {
+                    const name = e.target.value.trim();
+                    // A cleared name is not saved, so do not leave it looking cleared:
+                    // the input is uncontrolled, and nothing else would put it back.
+                    if (!name) { e.target.value = g.name; return; }
+                    saveSnipGroup(g.id, { name });
+                }} />`,
             html`<input class="snip-set-accent" type="color" defaultValue=${accent || '#9aa0a6'}
                 aria-label="Group colour" title="Group colour"
                 onChange=${(e) => saveSnipGroup(g.id, { accent: e.target.value })} />`,
@@ -254,10 +260,23 @@ function onSnipDragOver(e, key) {
  * patched first: its `groupId` is part of where it is, and reordering it into a
  * group it does not belong to would put it back on the next redraw.
  *
- * `committing` keeps the arrangement held across the pushes those patches
- * provoke on the way, which would otherwise redraw the old order for a moment
- * between the first write and the last.
+ * `committing` counts the saves in flight, and keeps the arrangement held across
+ * the pushes their patches provoke on the way, which would otherwise redraw the
+ * old order for a moment between the first write and the last. A count rather
+ * than a flag because two quick arrow presses overlap, and the first to finish
+ * must not let go of the second's arrangement.
+ *
+ * When the last one finishes the arrangement is let go of, success or failure.
+ * The push answering a reorder is broadcast before the HTTP response, so it
+ * usually lands while this is still counting and cannot drop the order itself —
+ * and a reorder that moved nothing sends no push at all. Left held, it would mask
+ * whatever another window changed since and send that stale arrangement back on
+ * the next arrow. The reorder route answers with the whole payload, which is laid
+ * down only if it is newer than what the pushes already brought: a push from
+ * another window can arrive between the broadcast and this response.
  */
+let freshest = null;
+
 async function commitSnipOrder() {
     state.snippets.drag = null;
     const held = state.snippets.order || holdArrangement();
@@ -274,10 +293,11 @@ async function commitSnipOrder() {
         }
     }
 
-    state.snippets.committing = true;
+    state.snippets.committing++;
     try {
         for (const m of moves) await patch(`/api/snippets/${m.id}`, { groupId: m.groupId });
-        await post('/api/snippets/reorder', { snippets: ids, groups: held.groups });
+        const payload = await post('/api/snippets/reorder', { snippets: ids, groups: held.groups });
+        if (payload && (!freshest || payload.at >= freshest.at)) freshest = payload;
     } catch (err) {
         toast(`Could not save the order: ${err.message}`, 'error');
         // Back to what the bridge has, rather than leaving the screen claiming an
@@ -285,7 +305,17 @@ async function commitSnipOrder() {
         state.snippets.order = null;
         renderSnipSettings();
     } finally {
-        state.snippets.committing = false;
+        state.snippets.committing = Math.max(0, state.snippets.committing - 1);
+        if (!state.snippets.committing) {
+            const answer = freshest;
+            freshest = null;
+            if (answer && answer.at > state.snippets.at) {
+                applySnippets(answer);
+            } else if (!state.snippets.drag) {
+                state.snippets.order = null;
+                renderSnipSettings();
+            }
+        }
     }
 }
 

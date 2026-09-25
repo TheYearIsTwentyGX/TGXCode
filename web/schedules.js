@@ -504,6 +504,11 @@ async function schedRun(s, setRunning) {
         openSessionSoon(r.sessionId);
     } catch (err) {
         toast(`Could not run the schedule: ${err.message}`, 'error');
+    } finally {
+        // On success too. Unlike a draft, a schedule outlives its run, and the
+        // keyed card survives the panel closing and every push after it — so a
+        // button left saying "Starting" would stay that way until a reload. The
+        // panel is already closed by then, so there is no second press to guard.
         setRunning(false);
     }
 }
