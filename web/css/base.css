@@ -1,0 +1,613 @@
+/* web/css/base.css
+ *
+ * The tokens, the resets, and the shell around everything: the palette and
+ * radii on :root, the top bar and its menus, and the quota pill. First, because
+ * every other file reads these variables.
+ *
+ * Linked from web/index.html in the order the sections had in the old
+ * web/styles.css, and concatenated in that order they reproduce it exactly, so
+ * the cascade is unchanged. A rule that moves between these files moves in the
+ * cascade too: check what it now comes before and after.
+ */
+
+/* TGXCode — a console for concurrent coding agents.
+ *
+ * Visual language follows Google's current system: tonal surfaces rather than
+ * borders, generous corner radii, pill-shaped controls, and a restrained blue
+ * primary. Separation comes from surface elevation and space, not hairlines, so
+ * a dense screen still reads calm. Dark is the designed default.
+ */
+
+:root {
+    /* Tonal surface ramp — each step is a lift, not a line. */
+    --bg:      #131314;
+    --s1:      #1b1c1d;
+    --s2:      #202124;
+    --s3:      #282a2c;
+    --s4:      #303134;
+    --s5:      #3c3e41;
+
+    --outline:      #444746;
+    --outline-soft: #2b2d2f;
+
+    --text:   #e3e3e3;
+    --text-2: #c4c7c5;
+    --text-3: #9aa0a6;
+    --text-4: #6f7579;
+
+    --blue:      #a8c7fa;
+    --blue-deep: #0b57d0;
+    --blue-cont: #1f3760;   /* tonal container behind selected items */
+    --blue-tint: #16233a;
+
+    --green:  #6dd58c;
+    --yellow: #fdd663;
+    --red:    #f28b82;
+    --purple: #d0bcff;
+    --peach:  #f8b995;
+
+    --r-xs: 6px;
+    --r-sm: 8px;
+    --r:    12px;
+    --r-lg: 16px;
+    --r-xl: 24px;
+    --pill: 999px;
+
+    --gutter: 68px;
+    --rail: 304px;
+    --turns: 30px;
+
+    --sans: "Google Sans Text", "Google Sans", Roboto, "Segoe UI Variable Text",
+            "Segoe UI", system-ui, -apple-system, sans-serif;
+    --mono: "Google Sans Mono", "Roboto Mono", "Cascadia Code", "JetBrains Mono",
+            Consolas, ui-monospace, SFMono-Regular, monospace;
+
+    --t-fast: 110ms;
+    --t-med: 200ms;
+    --ease: cubic-bezier(0.2, 0, 0, 1);
+}
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; margin: 0; }
+
+body {
+    background: var(--bg);
+    color: var(--text);
+    font: 400 14px/1.6 var(--sans);
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+}
+
+::selection { background: #2e4a75; color: #fff; }
+
+/* Text for a screen reader and nothing else. Clipped rather than `display:none`
+   or `visibility:hidden`, either of which takes it out of the accessibility tree
+   along with the pixels, which is the whole thing it is for. */
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
+::-webkit-scrollbar { width: 12px; height: 12px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+    background: #3a3d40;
+    border: 3.5px solid transparent;
+    border-radius: var(--pill);
+    background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background: #4d5155; background-clip: content-box; }
+
+button, input, textarea, select { font: inherit; color: inherit; background: none; border: none; }
+button { cursor: pointer; }
+
+:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: var(--r-xs); }
+
+a { color: var(--blue); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ── shell ───────────────────────────────────────────────────────────── */
+
+.app {
+    display: grid;
+    grid-template-rows: 52px 1fr;
+    grid-template-columns: var(--rail) 1fr;
+    grid-template-areas: "bar bar" "rail main";
+    height: 100vh;
+    background: var(--bg);
+}
+
+.bar {
+    grid-area: bar;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 0 14px 0 18px;
+    -webkit-app-region: drag;
+}
+.bar > * { -webkit-app-region: no-drag; }
+
+.wordmark {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font: 500 15px/1 var(--sans);
+    color: var(--text-2);
+    white-space: nowrap;
+    letter-spacing: 0.01em;
+}
+.wordmark b { color: var(--blue); font-size: 11px; }
+
+/* Only present on a development instance — the everyday window has no badge. */
+.dev-badge {
+    margin-left: 4px;
+    padding: 3px 9px;
+    border-radius: var(--pill);
+    background: #46331a;
+    color: var(--yellow);
+    font: 500 11px/1 var(--mono);
+    letter-spacing: 0.02em;
+}
+
+.bar-search {
+    flex: 1;
+    max-width: 520px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 40px;
+    padding: 0 16px;
+    background: var(--s2);
+    border-radius: var(--pill);
+    transition: background var(--t-fast) var(--ease);
+}
+.bar-search:hover { background: var(--s3); }
+.bar-search:focus-within { background: var(--s3); }
+.bar-search svg { flex: none; color: var(--text-3); }
+.bar-search input { flex: 1; min-width: 0; font-size: 14px; }
+.bar-search input::placeholder { color: var(--text-3); }
+
+.bar-spacer { flex: 1; }
+
+/* Shares the shape of the DevBrowser pill next to it — both are window-level
+   state, and a bar of matching lozenges reads as one control group. */
+.bar-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 34px;
+    padding: 0 14px;
+    font: 500 12.5px/1 var(--sans);
+    color: var(--text-2);
+    background: var(--s2);
+    border-radius: var(--pill);
+    white-space: nowrap;
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.bar-btn:hover { background: var(--s3); color: var(--text); }
+.bar-btn svg { color: var(--text-3); }
+.bar-btn.on { background: var(--blue-cont); color: #dbe6fb; }
+.bar-btn.on svg { color: var(--blue); }
+
+/* A square button for a setup step you do once per device, rather than one that
+   spends a word of the bar on itself forever. */
+.bar-btn.icon-only { padding: 0; width: 34px; justify-content: center; gap: 0; }
+/* The label goes; a count stays, since it is the reason to look at the button.
+   With one showing, the square widens to a pill around the icon and the count. */
+.bar-btn.icon-only > span:not(.bar-badge) { display: none; }
+.bar-btn.icon-only:has(> .bar-badge:not([hidden])) { width: auto; padding: 0 10px; gap: 6px; }
+
+
+/* A count, not an alert: unfinished work is the normal state of this machine. */
+.bar-badge {
+    min-width: 19px;
+    height: 19px;
+    padding: 0 6px;
+    border-radius: var(--pill);
+    background: var(--s4);
+    color: var(--text-2);
+    font: 500 11px/19px var(--mono);
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+}
+.bar-badge[hidden] { display: none; }
+.bar-btn.on .bar-badge { background: #2f4d80; color: #e6eefb; }
+
+.db-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 34px;
+    padding: 0 14px;
+    font: 500 12.5px/1 var(--sans);
+    color: var(--text-2);
+    background: var(--s2);
+    border-radius: var(--pill);
+    transition: background var(--t-fast) var(--ease);
+}
+.db-status:hover { background: var(--s3); color: var(--text); }
+.db-status .led { width: 7px; height: 7px; border-radius: 50%; background: var(--text-4); }
+.db-status[data-up="true"] .led { background: var(--green); }
+
+/* The bar's overflow. The buttons in it are the bar's own, moved here by
+   paintToolbar() rather than copied, so these rules restyle a pill as a menu
+   row: full width, always labelled, and the count pushed to the far edge. */
+.bar-more-wrap { position: relative; }
+.bar-more-wrap[hidden] { display: none; }
+.bar [data-bar-hidden] { display: none; }
+#bar-more { position: relative; }
+/* A count on a square button would push the dots off-centre, so it rides the
+   corner instead. */
+#bar-more .bar-badge {
+    position: absolute;
+    top: -5px;
+    right: -6px;
+    min-width: 17px;
+    height: 17px;
+    padding: 0 5px;
+    font-size: 10px;
+    line-height: 17px;
+}
+#bar-more[aria-expanded="true"] { background: var(--s3); color: var(--text); }
+
+.bar-more-menu {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    z-index: 60;
+    min-width: 200px;
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    background: var(--s3);
+    border-radius: var(--r);
+    box-shadow: 0 10px 30px #000a;
+    animation: menu-in var(--t-fast) var(--ease);
+    transform-origin: top right;
+}
+.bar-more-menu[hidden] { display: none; }
+.bar-more-menu .bar-btn,
+.bar-more-menu .db-status {
+    width: 100%;
+    height: 34px;
+    padding: 0 10px;
+    gap: 10px;
+    justify-content: flex-start;
+    background: transparent;
+    border-radius: var(--r-xs);
+}
+.bar-more-menu .bar-btn:hover,
+.bar-more-menu .db-status:hover { background: var(--s4); }
+.bar-more-menu .bar-btn.on { background: var(--blue-cont); }
+/* A button whose label you turned off on the bar still needs one in a list. */
+.bar-more-menu .bar-btn.icon-only > span:not(.bar-badge) { display: inline; }
+.bar-more-menu .bar-badge { margin-left: auto; }
+@media (prefers-reduced-motion: reduce) { .bar-more-menu { animation: none; } }
+
+/* ── quota ───────────────────────────────────────────────────────────── */
+
+.quota-wrap { position: relative; }
+.quota-wrap[hidden] { display: none; }
+
+.quota-pill {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    height: 34px;
+    padding: 0 13px;
+    font: 500 12.5px/1 var(--sans);
+    color: var(--text-2);
+    background: var(--s2);
+    border-radius: var(--pill);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.quota-pill:hover { background: var(--s3); color: var(--text); }
+.quota-pill[aria-expanded="true"] { background: var(--s3); color: var(--text); }
+
+/* A window just went from fine to not-fine. This was a toast until it wasn't,
+   and a toast was the wrong shape for it twice over: `rate_limit_event` arrives
+   on *every* turn for as long as the limit holds, so it stacked identical
+   warnings over the composer, and the thing it was about is already drawn a few
+   pixels away in the header. So the pill says it about itself. See quotaFlash()
+   in web/app.js.
+
+   These rules sit after `:hover` and `[aria-expanded]` on purpose — all three
+   are specificity (0,2,0), so source order is what decides the flash still shows
+   while the pointer is over the pill.
+
+   The ring is a spread `box-shadow` for the reason flash-settings-row gives
+   further down this file: the pill has `padding: 0 13px` and a background of its
+   own, so a highlight has to be carried out past it by something that takes no
+   part in layout. The shadow inherits `border-radius: var(--pill)`, so it comes
+   out as a ring around a capsule rather than as a rectangle clipped to the text.
+
+   Tinted with color-mix into --s2 rather than two new hex values, so the colour
+   the pill settles back to is the one it actually lives on rather than a
+   near-miss somebody has to notice later. */
+.quota-pill.q-flash {
+    background: var(--q-flash-tint);
+    animation: flash-quota-pill 0.7s var(--ease) 3;
+}
+.quota-pill.q-flash[data-flash="warn"] {
+    --q-flash-tint: color-mix(in srgb, var(--yellow) 22%, var(--s2));
+    --q-flash-ring: color-mix(in srgb, var(--yellow) 55%, transparent);
+}
+.quota-pill.q-flash[data-flash="bad"] {
+    --q-flash-tint: color-mix(in srgb, var(--red) 24%, var(--s2));
+    --q-flash-ring: color-mix(in srgb, var(--red) 60%, transparent);
+}
+
+/* Three rings rather than one fade. A single 1.3s wash in the corner of a wide
+   window is exactly what the toast was covering for, and this is now the only
+   thing on screen that moves when a limit is hit.
+
+   The ring reaches its full spread in the first third and then fades *in place*,
+   rather than fading as it expands. The obvious radar-ping shape — grow and fade
+   together — does not work here: a shadow with no spread sits entirely behind an
+   opaque pill, so the ring is at its most transparent exactly when it first
+   becomes visible, and --ease is cubic-bezier(0.2, 0, 0, 1), which front-loads
+   hard enough that it is all but gone by the time it clears the edge. Measured
+   at 8% alpha before it was split in two. */
+@keyframes flash-quota-pill {
+    0%   { box-shadow: 0 0 0 0 var(--q-flash-ring); }
+    35%  { box-shadow: 0 0 0 5px var(--q-flash-ring); }
+    100% { box-shadow: 0 0 0 5px transparent; }
+}
+
+/* Not `animation: none`, which is what every other flash in this file does.
+   Those are a nicety over something the user is already looking at; this one is
+   the only channel left now the toast is gone, so switching it off switches the
+   feature off for anybody who asked for less motion. The tint and a static ring
+   are held instead for the 2.1s the class is applied, and .quota-pill's existing
+   `transition: background` fades them in and out — a colour crossfade, which is
+   not the problem this query is about. */
+@media (prefers-reduced-motion: reduce) {
+    .quota-pill.q-flash {
+        animation: none;
+        box-shadow: 0 0 0 5px var(--q-flash-ring);
+    }
+}
+
+.quota-pill #quota-pill-body { display: flex; align-items: center; gap: 9px; }
+
+/* One window's worth: a label, a bar, a number. */
+.q-win { display: flex; align-items: center; gap: 5px; }
+.q-win .q-label { color: var(--text-4); font-size: 11.5px; }
+
+.q-bar {
+    position: relative;
+    width: 34px;
+    height: 4px;
+    border-radius: var(--pill);
+    background: var(--s4);
+    overflow: hidden;
+}
+.q-bar i {
+    position: absolute;
+    inset: 0 auto 0 0;
+    display: block;
+    border-radius: var(--pill);
+    background: var(--green);
+    transition: width var(--t-fast) var(--ease);
+}
+.q-win[data-status="allowed_warning"] .q-bar i { background: var(--yellow); }
+.q-win[data-status="rejected"] .q-bar i { background: var(--red); }
+
+/* Aged out. The number is still the last thing we know, and saying so quietly
+   is the whole point of the feature — a stale percentage rendered as current is
+   the failure this is designed against. */
+.q-win.stale .q-bar i { background: var(--text-4); }
+.q-win.stale .q-num { color: var(--text-4); }
+
+.q-num { font-variant-numeric: tabular-nums; }
+
+/* When the window comes back. Set apart by a rule rather than another dot:
+   the groups before it are percentages and this is a duration, and the eye
+   should not have to read the units to tell them apart. */
+.q-reset {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding-left: 9px;
+    border-left: 1px solid var(--s4);
+    color: var(--text-4);
+    font-variant-numeric: tabular-nums;
+    /* "8m 05s" has a space in it and the header bar is a tight flex row, so
+       without this the countdown breaks after the minutes and the pill grows
+       to two lines — which it did the moment seconds were added. */
+    white-space: nowrap;
+}
+.q-reset svg { flex: none; }
+
+/* The shared open of every popover in this window — the quota panel, the
+   recent-directories menu and the slash/mention menus. It was `bell-in` while
+   the notification bell was the first thing to use it; the bell has since moved
+   into the settings page and the name was the only thing left of it.
+
+   Not `pop-in`, which is already taken further down by `.turn-pop` and moves on
+   a different axis — renaming into that would have quietly changed all three of
+   these. */
+@keyframes menu-in {
+    from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .quota-menu, .new-menu, .slash-menu { animation: none; }
+}
+
+.quota-menu {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    z-index: 60;
+    width: 306px;
+    padding: 13px 15px 12px;
+    background: var(--s3);
+    border-radius: var(--r);
+    box-shadow: 0 10px 30px #000a;
+    animation: menu-in var(--t-fast) var(--ease);
+    transform-origin: top right;
+}
+.quota-menu[hidden] { display: none; }
+
+.quota-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+    font: 500 11px/1 var(--sans);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-4);
+}
+
+/* Sibling of .tasks-collapse, which is the same affordance in the changes
+   panel. Not uppercase like the label beside it: it is a verb, not a heading. */
+.quota-refresh {
+    margin-left: auto;
+    padding: 2px 7px;
+    border: 0;
+    border-radius: var(--r-xs);
+    background: none;
+    color: var(--text-4);
+    font: 400 11.5px/1.5 var(--sans);
+    letter-spacing: normal;
+    text-transform: none;
+    cursor: pointer;
+}
+.quota-refresh:hover:not(:disabled) { background: var(--s3); color: var(--text-2); }
+/* A run takes a few seconds, and the only honest thing to do is look busy for
+   them. `wait` rather than `not-allowed`: nothing is disallowed, it is working. */
+.quota-refresh:disabled { opacity: 0.45; cursor: default; }
+.quota-refresh.busy { cursor: wait; }
+
+.q-row { padding: 7px 0; border-top: 1px solid var(--s2); }
+.q-row:first-child { border-top: 0; padding-top: 0; }
+
+.q-row-top {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    font: 400 13px/1.4 var(--sans);
+    color: var(--text-2);
+}
+.q-row-top .q-pct { font: 500 13px/1.4 var(--sans); color: var(--text); font-variant-numeric: tabular-nums; }
+.q-row.stale .q-row-top .q-pct { color: var(--text-4); }
+
+.q-row .q-bar { width: 100%; height: 5px; margin: 6px 0 5px; }
+
+/* tabular-nums because the right-hand half of this row is a countdown that
+   ticks every second (tickQuotaClocks), and proportional digits make the whole
+   row shuffle sideways once a second. */
+.q-row-sub {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    font: 400 11.5px/1.5 var(--sans);
+    color: var(--text-4);
+    font-variant-numeric: tabular-nums;
+}
+.q-row-sub .warn { color: var(--yellow); }
+.q-row-sub .bad { color: var(--red); }
+
+.quota-events {
+    margin-top: 10px;
+    font: 400 11.5px/1.6 var(--sans);
+    color: var(--text-4);
+}
+.quota-events:empty { display: none; }
+.quota-events .q-ev-head {
+    font: 500 11px/1 var(--sans);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-4);
+    margin-bottom: 5px;
+}
+.quota-events div + .q-ev-head { margin-top: 9px; }
+
+.quota-note {
+    margin-top: 10px;
+    font: 400 11.5px/1.55 var(--sans);
+    color: var(--text-4);
+}
+.quota-note:empty { display: none; }
+.quota-note div + div { margin-top: 7px; }
+.quota-note .warn { color: var(--yellow); }
+.quota-note code {
+    font: 400 11px/1.5 var(--mono);
+    color: var(--text-3);
+    word-break: break-all;
+}
+
+/* The foot of the popover rather than a widget inside it: the menu has
+   `padding: 13px 15px 12px`, so a row that stopped short of those edges would
+   read as a card within a card. The negative margins bleed it back out to the
+   corners and the bottom radius finishes them.
+
+   Busy and disabled are lifted from .quota-refresh above, which is the point of
+   moving this control here at all — there is no `.bar-btn.busy` rule anywhere in
+   this file, so the old header button looked inert for the whole 45 seconds a
+   restart can take. */
+.quota-restart {
+    display: flex;
+    /* Not centred: the sub line wraps to two on a worktree path, and a centred
+       icon then sits beside the path rather than beside the label it belongs to. */
+    align-items: flex-start;
+    gap: 9px;
+    width: calc(100% + 30px);
+    margin: 11px -15px -12px;
+    padding: 9px 15px 10px;
+    border: 0;
+    border-top: 1px solid var(--s2);
+    border-radius: 0 0 var(--r) var(--r);
+    background: none;
+    color: var(--text-3);
+    text-align: left;
+    cursor: pointer;
+}
+.quota-restart[hidden] { display: none; }
+.quota-restart:hover:not(:disabled) { background: var(--s4); color: var(--text); }
+.quota-restart:disabled { opacity: 0.45; cursor: default; }
+.quota-restart.busy { cursor: wait; }
+.quota-restart svg { flex: none; margin-top: 2px; }
+
+.qr-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.qr-label { font: 400 12.5px/1.3 var(--sans); }
+/* A worktree checkout is a long path with no spaces in it, and this popover is
+   306px wide — without this it runs off the edge rather than wrapping. */
+.qr-sub { font: 400 11px/1.4 var(--sans); color: var(--text-4); overflow-wrap: anywhere; }
+.qr-sub:empty { display: none; }
+
+@media (prefers-reduced-motion: reduce) { .quota-menu { animation: none; } }
+
+/* The Claude Code version badge — the quota pill's shape, and only drawn when
+   something is behind, so it carries the one tint that says so. See renderCv()
+   in web/app.js. */
+.cv-wrap { flex: none; }
+.cv-pill { color: var(--yellow); white-space: nowrap; }
+.cv-pill:hover, .cv-pill[aria-expanded="true"] { color: var(--yellow); }
+.cv-row { display: flex; justify-content: space-between; gap: 12px;
+    font: 400 12.5px/1.4 var(--sans); color: var(--text-3); }
+.cv-row b { font: 500 12.5px/1.4 var(--mono); color: var(--text); }
+.cv-stale-head { font: 400 12.5px/1.4 var(--sans); color: var(--text-3); margin-bottom: 4px; }
+.cv-stale {
+    display: flex; justify-content: space-between; gap: 10px;
+    width: 100%; padding: 4px 6px; margin: 0 -6px;
+    border: 0; border-radius: var(--r-xs);
+    background: none; color: var(--text-2); text-align: left; cursor: pointer;
+    font: 400 12px/1.4 var(--sans);
+}
+.cv-stale:hover { background: var(--s4); color: var(--text); }
+.cv-stale-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cv-stale-ver { flex: none; font: 400 11px/1.6 var(--mono); color: var(--text-4); }
+.cv-old { color: var(--yellow); }
+
+

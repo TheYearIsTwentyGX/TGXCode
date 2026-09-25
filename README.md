@@ -378,6 +378,21 @@ Two rules worth knowing before you send a patch:
 | `web/preview-picker.js` | The preview's element picker, copied from DevBrowser; runs inside the previewed page |
 | `web/keys.js` | Which chord means which command, and the one function that decides it |
 | `web/rail.js` | The sessions rail, drawn with Preact — keyed by session and by group, so an update keeps the rows it did not change. The first surface moved off `app.js`'s rebuild-everything rendering, and the pattern for the next |
+| `web/css/` | The stylesheets, by area — once one `styles.css`, split along its section headers so a surface can be worked on without loading the rest. `index.html` links them in the order below, which *is* the cascade: in that order they concatenate back to the old file section for section, so moving a rule between files moves it in the cascade too |
+| `web/css/base.css` | The `:root` tokens (palette, radii, fonts, timings), the resets, the top bar and its menus, and the quota pill. First, because every other file reads its variables |
+| `web/css/rail.css` | The sessions rail, and the pull-request vocabulary its rows share with the rest of the app |
+| `web/css/transcript.css` | The main pane and the conversation: header, log, loading skeleton, suggested follow-ups, what this session changed, the task list, the turn rail, find |
+| `web/css/prompts.css` | A blocked turn: the approval card, the plan view, the question dock, the review dialog |
+| `web/css/tools.css` | Tool calls, the prose of an answer, and the terminal pane |
+| `web/css/composer.css` | The message box, the send queue, slash completion, the unclippable popover, snippets |
+| `web/css/dashboard.css` | The empty state, the dashboard, and the live board wherever it docks |
+| `web/css/dialogs.css` | Scrims, modals and the fields, pickers and buttons in them; notification history, the delete and restart confirmations, toasts |
+| `web/css/boards.css` | The task board, drafts, the schedule builder and the schedules panel |
+| `web/css/settings.css` | Settings — its groups, the shortcut table, Claude Code's settings and memory files, project commands, the snippet editor and dialogs |
+| `web/css/narrow.css` | The narrow-desktop-window `@media` block, which reaches into several areas and so comes after the transcript, composer, dialogs, boards and Settings it overrides — but before `viewers.css`, `colours.css` and `preview.css`, so a narrow override for those loses to them at equal specificity. Not phone CSS |
+| `web/css/viewers.css` | The right-click menu and the diff viewer's re-theming of `vendor/diff2html.css`, which is linked before every file here so no `!important` is needed |
+| `web/css/colours.css` | Project colours across the surfaces above, and Wispr Flow transforms. Late because it overrides them |
+| `web/css/preview.css` | The browser preview pane |
 | `web/vendor/` | The libraries worth not writing — xterm; diff2html for the diff viewer; and `preact.js`, htm's standalone build (Preact 10 + hooks + htm in one ESM file) for components written without JSX. Checked-in prebuilt bundles, not a `node_modules` |
 | `app/main.js` | The Electron shell, and the rules for what a preview `<webview>` may load |
 | `app/preload.js` | The page's only doors into the shell: raise the window, and the preview's two clipboard writes |

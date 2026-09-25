@@ -1,0 +1,1002 @@
+/* web/css/composer.css
+ *
+ * The message box and everything that hangs off it (web/composer/): the
+ * send queue, slash-command completion, the unclippable popover and snippets.
+ *
+ * Linked from web/index.html in the order the sections had in the old
+ * web/styles.css, and concatenated in that order they reproduce it exactly, so
+ * the cascade is unchanged. A rule that moves between these files moves in the
+ * cascade too: check what it now comes before and after.
+ */
+
+/* ── composer ────────────────────────────────────────────────────────── */
+
+/* The extra right padding is the turn rail's width: it keeps the composer on
+   the same centre line as the transcript, which the rail narrows. */
+/* Inset by whatever the side columns are using, so the 1000px inner below is
+   centred over the transcript and not over the whole pane — see `--pane-left`
+   on .conv-main. */
+/* The same duration and easing the columns use, started by the same click, so
+   the composer and the transcript travel together instead of one arriving first.
+   `syncPaneInsets` writes the insets once, to where the column is *going* —
+   driving them frame by frame from a ResizeObserver instead left the composer
+   one frame behind for the length of the animation, which is a rubber-band on
+   exactly the interaction this is meant to fix. */
+.composer {
+    flex: none;
+    padding: 4px calc(28px + var(--pane-right)) 18px calc(28px + var(--pane-left));
+    transition: padding var(--t-fast) var(--ease);
+}
+@media (prefers-reduced-motion: reduce) { .composer { transition: none; } }
+.composer-inner { max-width: 1000px; margin: 0 auto; }
+
+.status-line {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    height: 22px;
+    margin-bottom: 8px;
+    padding-left: 4px;
+    font: 400 12.5px/1 var(--sans);
+    color: var(--text-3);
+}
+.status-line .led { width: 7px; height: 7px; border-radius: 50%; background: var(--text-4); flex: none; }
+.status-line[data-state="busy"] .led { background: var(--yellow); animation: breathe 1.6s var(--ease) infinite; }
+.status-line[data-state="error"] .led { background: var(--red); }
+.status-line[data-state="idle"] .led { background: var(--green); }
+/* Still running, but something is wrong — an API call being retried. */
+.status-line[data-state="stalled"] .led {
+    background: var(--yellow);
+    animation: breathe 1.6s var(--ease) infinite;
+}
+.status-line .err { color: var(--red); }
+.status-line .warn { color: var(--yellow); }
+.status-line .muted { color: var(--text-4); }
+
+@keyframes breathe {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .status-line[data-state="busy"] .led,
+    .status-line[data-state="ask"] .led,
+    :is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="checks-pending"] svg,
+    .tool[data-status="pending"] > summary::before,
+    .strip[data-state="running"] .strip-meta::before { animation: none; }
+}
+
+.btn-stop {
+    margin-left: auto;
+    height: 28px;
+    padding: 0 14px;
+    font: 500 12px/1 var(--sans);
+    color: var(--red);
+    border-radius: var(--pill);
+    transition: background var(--t-fast) var(--ease);
+}
+.btn-stop:hover { background: #33201f; }
+
+/* ── send queue ───────────────────────────────────────────────────────────
+   Sits directly above the box you type in, so the panel and the composer read
+   as one column in send order: what is waiting, then what you are writing. */
+
+.queue[hidden] { display: none; }
+.queue {
+    margin-bottom: 8px;
+    padding: 8px 8px 9px;
+    background: var(--s1);
+    border-radius: var(--r-lg);
+}
+
+.queue-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 6px 7px 8px;
+    font: 400 11.5px/1 var(--sans);
+    color: var(--text-4);
+}
+.queue-count { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The key map appears when the keyboard is actually in the queue, and takes the
+   count's place rather than pushing the row wider. */
+.queue-keys {
+    display: none;
+    flex: none;
+    gap: 4px;
+    white-space: nowrap;
+    color: var(--text-4);
+}
+.queue-keys b {
+    margin-left: 7px;
+    font: 500 10.5px/1 var(--mono);
+    color: var(--text-3);
+}
+.queue-keys b:first-child { margin-left: 0; }
+.queue:focus-within .queue-keys { display: block; }
+.queue-clear {
+    flex: none;
+    padding: 3px 9px;
+    border-radius: var(--pill);
+    font: 400 11.5px/1 var(--sans);
+    color: var(--text-3);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.queue-clear:hover { background: #33201f; color: var(--red); }
+
+.queue-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    /* Four chips before it scrolls: enough to see a plan, not enough to eat the
+       transcript. */
+    max-height: 168px;
+    overflow-y: auto;
+}
+
+.queue-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 6px 5px 4px;
+    background: var(--s2);
+    border-radius: var(--r);
+    transition: background var(--t-fast) var(--ease), opacity var(--t-fast) var(--ease);
+}
+.queue-item:hover { background: var(--s3); }
+.queue-item.dragging { opacity: 0.4; }
+
+/* The roving focus is the only thing telling you which message Enter and Esc are
+   about to act on, so it is styled on :focus rather than :focus-visible — it has
+   to be unmistakable every time, not only when the browser judges it earned. */
+.queue-item:focus {
+    outline: none;
+    background: var(--blue-cont);
+}
+.queue-item:focus .queue-text { color: #e6edff; }
+.queue-item:focus .queue-n { background: var(--blue); color: #062e6f; }
+.queue-item:focus .queue-act { color: #b3c7ea; }
+
+.queue-grip {
+    flex: none;
+    width: 14px;
+    color: var(--text-4);
+    font-size: 12px;
+    text-align: center;
+    cursor: grab;
+}
+.queue-item.dragging .queue-grip { cursor: grabbing; }
+/* Handed to the running turn: fixed in place, so no grab cursor, and the arrow
+   says it is on its way in rather than waiting. */
+.queue-item.handed .queue-grip { cursor: default; color: var(--blue); }
+
+/* The send order, which is the whole point of showing the queue at all. */
+.queue-n {
+    flex: none;
+    width: 17px; height: 17px;
+    border-radius: 50%;
+    background: var(--s4);
+    color: var(--text-3);
+    font: 500 10.5px/17px var(--mono);
+    text-align: center;
+}
+
+/* A queued message carrying files. Sits next to the send-order badge because it is
+   the same kind of fact about the chip: not its content, but what happens to it. */
+.queue-files {
+    flex: none;
+    font: 400 10.5px/17px var(--sans);
+    color: var(--text-3);
+    cursor: default;
+}
+
+.queue-text {
+    flex: 1;
+    min-width: 0;
+    padding: 0;
+    text-align: left;
+    font: 400 12.5px/1.5 var(--sans);
+    color: var(--text-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+}
+.queue-item.open .queue-text {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 132px;
+    overflow-y: auto;
+}
+.queue-text:hover { color: var(--text); }
+
+.queue-acts { flex: none; display: flex; align-items: center; gap: 2px; }
+.queue-act {
+    padding: 3px 8px;
+    border-radius: var(--pill);
+    font: 400 11.5px/1.3 var(--sans);
+    color: var(--text-4);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.queue-act:hover { background: var(--s4); color: var(--text-2); }
+.queue-act.danger { font-size: 14px; line-height: 1; padding: 3px 8px 4px; }
+.queue-act.danger:hover { background: #33201f; color: var(--red); }
+
+/* Files staged for the next message.
+   ---------------------------------------------------------------------------
+   Built on the queue-chip tokens above rather than on a set of its own: the two
+   strips sit one above the other in the same composer, and a second visual
+   vocabulary between them would read as two unrelated features that happen to be
+   adjacent. Same surface, same pill, same act buttons. */
+.attach {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-bottom: 8px;
+    padding: 7px 8px;
+    background: var(--s1);
+    border-radius: var(--r-lg);
+}
+
+.attach-chip {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    /* Room for a name without letting one long one push the rest off the row. */
+    max-width: 260px;
+    padding: 4px 4px 4px 5px;
+    background: var(--s2);
+    border-radius: var(--r);
+    transition: background var(--t-fast) var(--ease), opacity var(--t-fast) var(--ease);
+}
+.attach-chip:hover { background: var(--s3); }
+/* Not yet on disk, so not yet something a message can carry. Dimmed rather than
+   hidden: it is the evidence that the paste landed at all. */
+.attach-chip.uploading { opacity: 0.6; }
+.attach-chip.failed { background: #33201f; }
+
+.attach-thumb {
+    flex: none;
+    width: 26px; height: 26px;
+    border-radius: var(--r-xs);
+    object-fit: cover;
+    background: var(--s4);
+}
+
+/* For everything that is not an image: the extension, which is the most useful
+   three characters available and the one people actually scan for. */
+.attach-glyph {
+    flex: none;
+    width: 26px; height: 26px;
+    border-radius: var(--r-xs);
+    background: var(--s4);
+    color: var(--text-3);
+    font: 500 9px/26px var(--mono);
+    text-align: center;
+    text-transform: uppercase;
+    overflow: hidden;
+}
+
+.attach-name {
+    flex: 1;
+    min-width: 0;
+    font: 400 12px/1.4 var(--sans);
+    color: var(--text-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.attach-size {
+    flex: none;
+    font: 400 10.5px/1.4 var(--mono);
+    color: var(--text-4);
+}
+
+.attach-act {
+    flex: none;
+    padding: 2px 7px;
+    border-radius: var(--pill);
+    font: 400 11px/1.3 var(--sans);
+    color: var(--text-4);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.attach-act:hover { background: var(--s4); color: var(--text-2); }
+.attach-act.danger { font-size: 14px; line-height: 1; padding: 3px 7px 4px; }
+.attach-act.danger:hover { background: #33201f; color: var(--red); }
+
+/* Drag a file anywhere over the composer and the whole thing is the target, not a
+   strip you have to hit. Inset so it does not shift anything: an outline that
+   changed the layout would make the box jump under the pointer mid-drag. */
+.composer.drop-target .composer-inner {
+    outline: 1.5px dashed var(--blue);
+    outline-offset: -4px;
+    border-radius: var(--r-lg);
+    background: var(--blue-tint);
+}
+
+/* The paperclip. Quieter than Send and the snippet buttons on either side of it —
+   pasting and
+   dropping are the gestures this feature is really for, and this is the fallback
+   for when there is nothing to drag from. */
+.btn-attach {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px; height: 38px;
+    color: var(--text-3);
+    background: transparent;
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--pill);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
+                border-color var(--t-fast) var(--ease);
+}
+.btn-attach:hover:not(:disabled) {
+    background: var(--s3);
+    color: var(--text);
+    border-color: var(--outline);
+}
+.btn-attach:disabled { color: var(--text-4); border-color: var(--s3); cursor: default; }
+
+/* Send later.
+   ---------------------------------------------------------------------------
+   The button borrows .btn-attach's shape rather than .btn-snippets' — it sits in
+   the same run as Attach, on the left of Send, and the two should read as one
+   pair of ways in rather than as a bordered one and a borderless one.
+
+   A pending chip is amber throughout. The queue's chips are neutral because they
+   are about to go; these are about to go *in six hours*, in a mode that may be
+   bypassPermissions, and they should not look like the same fact. */
+
+.later-wrap { position: relative; flex: none; }
+
+.btn-later {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px; height: 38px;
+    color: var(--text-3);
+    background: transparent;
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--pill);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
+                border-color var(--t-fast) var(--ease);
+}
+.btn-later:hover:not(:disabled),
+.btn-later[aria-expanded="true"] {
+    background: var(--s3);
+    color: var(--text);
+    border-color: var(--outline);
+}
+.btn-later:disabled { color: var(--text-4); border-color: var(--s3); cursor: default; }
+
+/* The popover shares .snip-menu's box, animation and positioning; this is only
+   what differs. Written as `.snip-menu.later-menu` because .snip-menu is defined
+   further down this file and would otherwise win on order — it lays its children
+   out as side-by-side grid columns, which is right for snippet groups and wrong
+   for a list of times. */
+.snip-menu.later-menu {
+    display: block;
+    width: auto;
+    padding: 5px;
+    min-width: 236px;
+}
+.later-row {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    width: 100%;
+    padding: 6px 9px;
+    border-radius: var(--r);
+    text-align: left;
+    font: 400 12.5px/1.4 var(--sans);
+    color: var(--text-2);
+}
+.later-row:hover, .later-row.on { background: var(--s4); color: var(--text); }
+/* The absolute time, beside the relative one that names the row. Muted and in the
+   mono face, because it is the thing you check rather than the thing you read. */
+.later-row .at { margin-left: auto; font: 400 11px/1.4 var(--mono); color: var(--text-4); }
+.later-row:hover .at, .later-row.on .at { color: var(--text-3); }
+
+.later-sep { height: 1px; margin: 5px 4px; background: var(--outline-soft); }
+
+/* Picking an exact time, and the mode it will be delivered in. Not rows: both are
+   fields, and a field that looks like a row you can press is a field people press
+   and then wonder why nothing happened. */
+.later-fields { padding: 4px 9px 7px; display: flex; flex-direction: column; gap: 7px; }
+.later-fields label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font: 400 11.5px/1.4 var(--sans);
+    color: var(--text-3);
+}
+.later-fields input, .later-fields select {
+    flex: 1;
+    min-width: 0;
+    padding: 4px 6px;
+    background: var(--s2);
+    color: var(--text);
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r);
+    font: 400 11.5px/1.4 var(--sans);
+}
+.later-fields .go {
+    align-self: flex-end;
+    padding: 4px 12px;
+    border-radius: var(--pill);
+    background: var(--blue-cont);
+    color: #e6edff;
+    font: 500 11.5px/1.4 var(--sans);
+}
+.later-fields .go:hover { background: var(--blue); color: #062e6f; }
+
+/* The chips, above the queue. */
+.later[hidden] { display: none; }
+.later {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 8px;
+}
+
+.later-chip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 6px 5px 8px;
+    background: var(--s2);
+    border-left: 2px solid var(--yellow);
+    border-radius: var(--r);
+    transition: background var(--t-fast) var(--ease);
+}
+.later-chip:hover { background: var(--s3); }
+/* Delivered, missed or failed: it is a record now, not a plan, so the accent goes
+   and the row steps back. A failure keeps a colour, because it is the one you have
+   to do something about. */
+.later-chip.done { border-left-color: var(--outline-soft); opacity: 0.72; }
+.later-chip.bad { border-left-color: var(--red); }
+
+.later-when {
+    flex: none;
+    font: 400 11px/17px var(--mono);
+    color: var(--yellow);
+    white-space: nowrap;
+}
+.later-chip.done .later-when { color: var(--text-4); }
+.later-chip.bad .later-when { color: var(--red); }
+
+/* The mode is on the face of the chip and not in its expansion, because
+   bypassPermissions arriving at 2am is the single most consequential thing about
+   a scheduled message and it must not be something you have to click to find. */
+.later-mode {
+    flex: none;
+    padding: 1px 7px 2px;
+    border-radius: var(--pill);
+    background: var(--s4);
+    font: 400 10.5px/1.4 var(--mono);
+    color: var(--text-3);
+    cursor: default;
+}
+/* bypassPermissions and dontAsk, which is what this pill is really for. */
+.later-mode.loud { background: #3a2f16; color: var(--yellow); }
+
+.later-text {
+    flex: 1;
+    min-width: 0;
+    padding: 0;
+    text-align: left;
+    font: 400 12.5px/1.5 var(--sans);
+    color: var(--text-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+}
+.later-chip.open .later-text {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 132px;
+    overflow-y: auto;
+}
+.later-text:hover { color: var(--text); }
+
+/* Images a turn carried, inline. Was two inline properties on the <img> itself, which
+   was enough while one image per turn was the only shape there was. */
+.ev-images {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.ev-image {
+    max-width: 100%;
+    /* Several on a turn should read as several, so none of them takes the full width
+       on its own. One is unconstrained, which is the case that matters most: a
+       screenshot you pasted to be looked at. */
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-xs);
+}
+.ev-images .ev-image:not(:only-child) { max-width: calc(50% - 4px); }
+
+/* Files on a turn in the transcript.
+   ---------------------------------------------------------------------------
+   A card and not a preview. Knowing a file is there and being able to open it is
+   the whole job; rendering a PDF or a spreadsheet inline would be a viewer this
+   app has no business being. */
+.ev-files {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+}
+
+.ev-file {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    max-width: 300px;
+    padding: 6px 11px 6px 7px;
+    background: var(--s2);
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r);
+    text-align: left;
+    transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+}
+.ev-file:hover:not(:disabled) { background: var(--s3); border-color: var(--outline); }
+/* No session in view means no directory to resolve the path against. */
+.ev-file:disabled { cursor: default; opacity: 0.6; }
+
+.ev-file-glyph {
+    flex: none;
+    width: 24px; height: 24px;
+    border-radius: var(--r-xs);
+    background: var(--s4);
+    color: var(--text-3);
+    font: 500 8.5px/24px var(--mono);
+    text-align: center;
+    text-transform: uppercase;
+    overflow: hidden;
+}
+
+.ev-file-name {
+    flex: 1;
+    min-width: 0;
+    font: 400 12.5px/1.4 var(--sans);
+    color: var(--text-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ev-file-size {
+    flex: none;
+    font: 400 10.5px/1.4 var(--mono);
+    color: var(--text-4);
+}
+
+/* The live-elsewhere lock, directly above the box it is holding shut. Sits where
+   the queue sits, in the warning colour, because it is the one thing between a
+   message and two processes writing to one transcript. */
+/* Setting `display` here is what makes the guard below necessary: a class beats
+   the browser's own `[hidden] { display: none }`, so without it the bar is on
+   screen for every session however the attribute is set. */
+.lock[hidden] { display: none; }
+
+.lock {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+    padding: 9px 10px 9px 14px;
+    background: var(--s1);
+    border-radius: var(--r-lg);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--yellow) 26%, transparent);
+    font: 400 12.5px/1.4 var(--sans);
+    color: var(--text-2);
+}
+.lock-text { flex: 1; min-width: 0; }
+
+.lock-btn {
+    flex: none;
+    padding: 6px 12px;
+    border: 0;
+    border-radius: var(--pill);
+    background: var(--s4);
+    color: var(--text-2);
+    font: 500 12.5px/1 var(--sans);
+    cursor: pointer;
+    transition: background var(--t-fast) var(--ease);
+}
+.lock-btn:hover { background: var(--s5); }
+.lock-btn.primary { background: var(--blue-cont); color: var(--blue); }
+
+/* ── slash-command completion ─────────────────────────────────────────────
+   The new-session menu's shape, anchored the other way up: it hangs off the
+   bottom of the input row and grows into the log, because the composer is
+   already at the foot of the window and a menu below it would be off-screen. */
+.slash-menu {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 0;
+    right: 0;
+    z-index: 60;
+    /* Every matching command is rendered — `/` on its own is a request to see
+       what there is — so this is the window onto the list rather than the whole
+       of it. Tall enough that a dozen are in view and paging feels like paging,
+       short enough to leave the turn you are replying to on screen. */
+    /* A token, because a floating menu is told at draw time how much room there
+       actually is between its box and the edge of the window. The fallback is
+       what the anchored one has always used — get it wrong and the live menu
+       grows without limit up the transcript. */
+    max-height: var(--menu-max, 400px);
+    overflow-y: auto;
+    /* The keys move a highlight the scrollbar has to follow, so the jumps are
+       driven by scrollIntoView and should not be animated on top of that. */
+    scroll-behavior: auto;
+    overscroll-behavior: contain;
+    padding: 6px;
+    background: var(--s3);
+    border-radius: var(--r);
+    box-shadow: 0 10px 30px #000a;
+    animation: menu-in var(--t-fast) var(--ease);
+    transform-origin: bottom left;
+}
+.slash-menu[hidden] { display: none; }
+
+.slash-menu .picker-row { gap: 10px; padding: 7px 10px; }
+.slash-menu .picker-row:hover { background: var(--s4); }
+/* aria-selected, not aria-current: the folder picker already claims that one
+   for "where the input points", which is a different question from "which row
+   would Enter take". Both can be on screen at once. */
+.slash-menu .picker-row[aria-selected="true"] { background: var(--blue-cont); color: var(--blue); }
+.slash-menu .picker-row .name { font-family: var(--mono); font-size: 12.5px; flex: none; }
+.slash-menu .picker-row .desc {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: 12px;
+    color: var(--text-4);
+}
+.slash-menu .picker-row .hint {
+    margin-left: auto;
+    flex: none;
+    padding-left: 8px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--text-4);
+}
+.slash-menu .menu-note {
+    padding: 9px 10px;
+    font: 400 12px/1.5 var(--sans);
+    color: var(--text-4);
+}
+
+/* A heading between groups. Deliberately not a `.picker-row`: the keyboard map
+   counts those, so a heading that were one would be a row you could land on. */
+.slash-menu .menu-group {
+    padding: 8px 10px 4px;
+    font: 500 10.5px/1.4 var(--sans);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-4);
+}
+.slash-menu .menu-group:first-child { padding-top: 3px; }
+
+/* A session is found by its title and sent to by its name, so the row leads
+   with the title in the reading face and follows with the name in the mono one
+   — which is also the shape of what gets inserted.
+
+   By class rather than by the id this used to hang off: there are two mention
+   menus now, and rows that look the same in one composer and not the other is
+   the kind of difference nobody reports and everybody notices. */
+.slash-menu.mention .picker-row .name {
+    font-family: var(--sans);
+    font-size: 13px;
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+.slash-menu.mention .picker-row .desc {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    flex: none;
+}
+
+/* ── a popover that cannot be clipped ─────────────────────────────────────
+   The anchored menu above hangs off `.input-row`, which works because the
+   composer sits in open page. Inside the new-session dialog it cannot: `.modal`
+   is `overflow: hidden` and `.modal-body` scrolls, so an absolutely positioned
+   popover is cut by both — and the box it belongs to is the last field in the
+   dialog, so "cut" means "mostly gone".
+
+   Fixed leaves every ancestor's overflow out of it. The cost is that the anchor
+   moves — the textarea grows as you type, and the modal body scrolls — so
+   `left`, `width` and one of `top`/`bottom` are written from script on every
+   redraw. Same idea and the same z-index as `.turn-pop`. */
+.slash-menu.floating {
+    position: fixed;
+    left: auto;
+    right: auto;
+    bottom: auto;
+    transform-origin: top left;
+}
+/* Opening upward when there is more room above. The transform-origin is what
+   makes the entry animation grow from the edge nearest the box. */
+.slash-menu.floating.up { transform-origin: bottom left; }
+
+/* Nothing but a positioning context and a hit-test target for the
+   click-outside rule; the popovers inside it are `position: fixed`. */
+.composer-field { position: relative; }
+/* The strip sits above the box, so its gap belongs underneath it. */
+.composer-field .attach { margin-bottom: 8px; }
+/* The paperclip row under the box. Wraps rather than squeezing the note, which is
+   the half that can be truncated without losing the affordance. */
+.compose-foot {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 8px;
+}
+.compose-foot .note { margin-top: 0; flex: 1 1 12ch; }
+/* `display: flex` above beats the browser's own `[hidden] { display: none }`, so
+   without this the row that openNew() hides for a draft or a schedule stayed on
+   screen — offering an Attach files button in the two modes whose stores do not
+   carry attachments, where the files would have been dropped on save with
+   nothing said. The same `.x[hidden]` pattern the rest of this file uses. */
+.compose-foot[hidden] { display: none; }
+/* Same treatment the live composer gets, so a drop reads as a drop in both. */
+.composer-field.drop-target { outline: 2px dashed var(--blue); outline-offset: 4px; }
+
+@media (prefers-reduced-motion: reduce) { .slash-menu { animation: none; } }
+
+.input-row {
+    /* The menu above is absolute against this. */
+    position: relative;
+    display: flex;
+    align-items: flex-end;
+    gap: 10px;
+    background: var(--s2);
+    border-radius: var(--r-xl);
+    padding: 10px 10px 10px 20px;
+    transition: background var(--t-fast) var(--ease);
+}
+.input-row:focus-within { background: var(--s3); }
+
+.input-row textarea {
+    flex: 1;
+    /* 22 line + 8 padding top and bottom = 38, the height of the Send button, so
+       a single line sits on the button's centre line. Growing past one line keeps
+       the button pinned to the bottom via the row's align-items. */
+    min-height: 38px;
+    max-height: 220px;
+    resize: none;
+    font-size: 14px;
+    line-height: 22px;
+    padding: 8px 0;
+    overflow-y: auto;
+}
+.input-row textarea::placeholder { color: var(--text-3); }
+.input-row textarea:disabled { opacity: 0.5; }
+
+/* ── snippets ──────────────────────────────────────────────────────────────
+   The pinned buttons and the popover behind them. Quieter than Send and beside
+   it rather than anywhere else: each is a way of sending, and the thing it sends
+   is not something to hit by accident.
+
+   `--snip-accent` carries a group's colour down from the row that sets it, and
+   everything below is mixed from that one value — `.sig.pr`'s idiom, which is
+   already how this stylesheet turns one hue into a ground and an edge. Defaulted
+   here so an ungrouped snippet is a colourless version of the same button rather
+   than an unstyled one. */
+.pins { display: contents; }
+
+.btn-pin-snip {
+    --snip-accent: var(--text-2);
+    flex: none;
+    height: 38px;
+    padding: 0 14px;
+    color: var(--snip-accent);
+    background: transparent;
+    border: 1px solid color-mix(in srgb, var(--snip-accent) 32%, transparent);
+    font: 500 12.5px/1 var(--sans);
+    letter-spacing: 0.04em;
+    border-radius: var(--pill);
+    white-space: nowrap;
+    transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+}
+.btn-pin-snip:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--snip-accent) 12%, transparent);
+    border-color: var(--snip-accent);
+}
+.btn-pin-snip:disabled { color: var(--text-4); border-color: var(--s4); cursor: default; }
+
+/* Holds nothing but the popover's anchor: the popover itself is fixed, so this
+   exists to keep the button and its menu together for the click-outside rule. */
+.snip-wrap { position: relative; flex: none; }
+
+.btn-snippets {
+    display: grid;
+    place-items: center;
+    width: 38px;
+    height: 38px;
+    color: var(--text-3);
+    background: transparent;
+    border-radius: var(--pill);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.btn-snippets:hover:not(:disabled),
+.btn-snippets[aria-expanded="true"] { background: var(--s4); color: var(--text); }
+.btn-snippets:disabled { color: var(--text-4); cursor: default; }
+
+/* The row the dialog's button sits in. Its own row rather than a place in the
+   attach row, which is hidden in draft and schedule mode. */
+.snip-foot { margin-top: 8px; }
+
+.snip-menu {
+    /* Fixed for both composers, positioned from script — see positionSnips. The
+       dialog's copy has to be, because .modal is `overflow: hidden`; this way the
+       arithmetic lives in one place instead of two. */
+    position: fixed;
+    z-index: 60;
+    max-height: var(--snip-max, 460px);
+    overflow: auto;
+    padding: 10px;
+    background: var(--s3);
+    border-radius: var(--r);
+    box-shadow: 0 10px 30px #000a;
+    animation: menu-in var(--t-fast) var(--ease);
+    transform-origin: top right;
+    /* Groups beside each other, in columns as wide as they need. Auto-flow rather
+       than a fixed template because the number of groups *is* the data, and
+       columns rather than a wrapping grid because a wrapped fourth card lands
+       below the fold of a popover this tall — which is the one thing putting them
+       side by side was for. It scrolls sideways instead. */
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(210px, 1fr);
+    gap: 10px;
+    align-items: start;
+}
+.snip-menu.up { transform-origin: bottom right; }
+/* An author `display` beats the UA rule for the `hidden` attribute, so every class
+   in this file that sets one carries its own guard — .quota-menu, .new-menu,
+   .scrim, .tasks. Without it closeSnips() empties the popover and leaves the box:
+   padding, background and the width positionSnips left on the inline style, with
+   nothing in it. */
+.snip-menu[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) { .snip-menu { animation: none; } }
+
+.snip-card {
+    --snip-accent: var(--text-3);
+    /* Mixed into this popover's own surface rather than into transparent: a card
+       that mixed to transparent would take the ground behind it and read as no
+       card at all wherever the accent is close to grey. */
+    background: color-mix(in srgb, var(--snip-accent) 10%, var(--s2));
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--snip-accent) 45%, transparent);
+    border-radius: var(--r);
+    padding: 8px;
+    /* Without this a grid child refuses to shrink below its content, and every
+       ellipsis below stops working. */
+    min-width: 0;
+    /* And this is the backstop behind that: whatever a row inside gets up to, it
+       cannot paint outside its own card and onto the one beside it. The row's own
+       track should make it unnecessary — it is here because the failure it catches
+       is silent, and lands on the neighbouring column where it is somebody else's
+       text that looks broken. */
+    overflow: hidden;
+}
+/* Loose snippets are not a group, so they must not look like one. */
+.snip-card.is-loose { background: none; box-shadow: none; }
+
+.snip-card-name {
+    margin: 2px 4px 6px;
+    font: 600 13.5px/1.2 var(--sans);
+    letter-spacing: 0.01em;
+    color: color-mix(in srgb, var(--snip-accent) 70%, var(--text));
+}
+
+/* A one-column grid rather than a flex column, and the track is `minmax(0, 1fr)`
+   rather than `1fr` — which is the whole reason this is a grid.
+
+   A flex column stretches its items to the container's width, but only once that
+   width is definite, and this row is a <button>: an element with enough intrinsic
+   sizing of its own that `width: 100%` on it is not the guarantee it looks like.
+   Where that resolved to max-content instead, the preview line grew to the length
+   of the text, `text-overflow` had nothing to clip against, and a long body ran
+   out of its card and across the one beside it. A `minmax(0, 1fr)` track cannot
+   be grown by its contents, so the ellipsis always has a width to land at. */
+.snip-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1px;
+    width: 100%;
+    min-width: 0;
+    text-align: left;
+    background: none;
+    border: 0;
+    border-radius: var(--r-sm);
+    padding: 6px 8px;
+    cursor: pointer;
+}
+.snip-row:hover { background: var(--s4); }
+/* Where the keyboard is, which is *not* `[aria-selected]`. That attribute is set
+   on the first row the moment the popover opens, so styling it painted a row that
+   looked permanently hovered under the pointer. `:focus-visible` is the browser's
+   own answer to "is this person navigating by keyboard", so the marker appears for
+   Ctrl+/ and the arrows and stays away for a mouse. The attribute is still there
+   for the listbox semantics; it just no longer decides how this looks. */
+.snip-row:focus-visible {
+    outline: none;
+    background: var(--s4);
+    box-shadow: inset 0 0 0 2px var(--blue);
+}
+.snip-row-title {
+    font: 400 13px/1.35 var(--sans);
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* One line of what it says, and only one: the body is cut to 120 characters in
+   script so a long single-line snippet never reaches the DOM, and clipped here so
+   the ellipsis lands at the real width. */
+.snip-row-preview {
+    font: 400 11.5px/1.4 var(--sans);
+    color: var(--text-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.snip-empty {
+    padding: 10px 8px;
+    font: 400 12.5px/1.5 var(--sans);
+    color: var(--text-3);
+    max-width: 320px;
+}
+
+.btn-send {
+    flex: none;
+    height: 38px;
+    padding: 0 22px;
+    background: var(--blue);
+    color: #062e6f;
+    font: 500 13.5px/1 var(--sans);
+    border-radius: var(--pill);
+    transition: filter var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+}
+.btn-send:hover:not(:disabled) { filter: brightness(1.08); }
+.btn-send:disabled { background: var(--s4); color: var(--text-4); cursor: default; }
+
+.opts {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    padding-left: 4px;
+    font: 400 12px/1 var(--sans);
+    color: var(--text-4);
+}
+.opts select {
+    background: var(--s2);
+    border-radius: var(--pill);
+    padding: 6px 11px;
+    font: 400 12px/1.2 var(--sans);
+    color: var(--text-3);
+    cursor: pointer;
+    transition: background var(--t-fast) var(--ease);
+}
+.opts select:hover { background: var(--s3); color: var(--text); }
+.opts .hint { margin-left: auto; color: var(--text-4); }
+

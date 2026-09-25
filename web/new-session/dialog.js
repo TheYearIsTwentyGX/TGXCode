@@ -240,7 +240,7 @@ export function setNewCwd(value) {
  *
  * `data-tinted` rather than a bare custom property is what keeps the uncoloured
  * dialog identical to the one this app has always drawn: every tint rule in
- * web/styles.css hangs off that attribute, so without it not one of them
+ * web/css/colours.css hangs off that attribute, so without it not one of them
  * applies — rather than all of them applying through a colour-mix that happens
  * to land near the blue they replace.
  */

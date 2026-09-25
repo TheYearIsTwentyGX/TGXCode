@@ -1,0 +1,1194 @@
+/* web/css/settings.css
+ *
+ * Settings (web/settings/): its groups, the shortcut table, Claude Code's
+ * own settings and memory files, a project's commands, and the snippet editor
+ * and dialogs.
+ *
+ * Linked from web/index.html in the order the sections had in the old
+ * web/styles.css, and concatenated in that order they reproduce it exactly, so
+ * the cascade is unchanged. A rule that moves between these files moves in the
+ * cascade too: check what it now comes before and after.
+ */
+
+/* ── settings ────────────────────────────────────────── */
+/* A column of grouped rows rather than a board, because this is the one panel
+   read top to bottom instead of scanned: you arrive knowing which setting you
+   came for, and the group titles are how you find it.
+
+   The control goes on the *left* of its label, which is the opposite of the
+   rest of this app and deliberate: every row here is a control, so the left
+   edge is a column of them and the eye runs down it. Putting them on the right
+   would leave a ragged column that moves with the length of each label. */
+
+/* One scroll container, one centred column. The panel is read rather than
+   scanned, so it gets a measure — the head, the file it writes and the groups
+   all line up inside the same one, instead of the title sitting at the far left
+   of the window with the scope pickers at the far right.
+
+   **The contents list takes no part in the centring.** It hangs outside the
+   column (see `.settings-toc`), so the settings are centred on the pane and the
+   aside occupies the space that leaves — rather than the *pair* being centred,
+   which puts the thing you are reading right of centre.
+
+   Which means the column has to leave room for it on both sides, because equal
+   gutters is what centred means. `--set-aside` is that room, and the `min()` is
+   what spends it: the column takes its measure when the pane is wide enough and
+   gives width back when it is not, so the aside stays put instead of vanishing
+   at some particular window size. Below the narrow breakpoint the aside becomes
+   a strip above and `--set-aside` goes to zero, which hands the width back. */
+.settings-shell {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    --set-aside: 172px;
+    /* So a contents jump lands a group under the pinned head rather than behind
+       it. --set-top-h is measured by a ResizeObserver in app.js, because the
+       head's height moves with the project picker and the file line's tags. */
+    scroll-padding-top: var(--set-top-h, 0px);
+}
+.settings-col {
+    width: min(880px, calc(100% - 2 * var(--set-aside)));
+    margin: 0 auto;
+    padding: 0 28px;
+}
+
+/* The head and the file line, pinned. Sticky inside .settings-col, which spans
+   the whole scroll height, so it has the full length of the pane to travel. It
+   paints the pane's own surface so the groups pass underneath rather than
+   through it; the rule under it is what says "this stays". */
+.settings-top {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    background: var(--s1);
+    border-bottom: 1px solid var(--outline-soft);
+    margin-bottom: 14px;
+}
+.settings-head { padding: 22px 0 14px; }
+.settings-title { margin: 0; font: 400 21px/1.3 var(--sans); color: var(--text); }
+.settings-sub { margin: 5px 0 0; max-width: 560px; font-size: 13px; line-height: 1.6; color: var(--text-3); }
+
+/* Contents beside the groups, and deliberately out of flow: `right: 100%` puts
+   it entirely to the left of the centred column, so its width cannot shift what
+   it is a contents list *of*.
+
+   Full height rather than hugging its links, because the sticky thing is the
+   list inside it and a sticky element only travels within its parent's box. */
+.settings-cols { position: relative; }
+.settings-toc {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 100%;
+    width: calc(var(--set-aside) - 20px);
+    margin-right: 20px;
+}
+.settings-toc-list { position: sticky; top: 8px; display: flex; flex-direction: column; gap: 1px; }
+/* Wide enough for the longest entry on one line — "Connect a phone" wrapping
+   into two was the whole reason `--set-aside` is 172px rather than 152px. */
+.settings-toc-link {
+    position: relative;
+    background: none;
+    border: 0;
+    border-radius: var(--r-sm);
+    padding: 7px 11px;
+    font: 400 13px var(--sans);
+    color: var(--text-3);
+    text-align: left;
+    cursor: pointer;
+}
+.settings-toc-link:hover { background: var(--s2); color: var(--text); }
+/* A square bar, not an inset shadow: on a rounded button the shadow follows the
+   corner radius and comes out as a curved sliver that reads as a stray glyph. */
+.settings-toc-link::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 5px;
+    bottom: 5px;
+    width: 2px;
+    border-radius: 1px;
+    background: transparent;
+}
+.settings-toc-link.on { color: var(--text); }
+.settings-toc-link.on::before { background: var(--blue); }
+
+.settings-picks { display: flex; gap: 10px; margin-top: 14px; }
+.settings-pick { display: flex; flex-direction: column; gap: 4px; }
+.settings-pick > span { font-size: 11px; letter-spacing: 0.02em; color: var(--text-4); }
+.settings-pick select {
+    appearance: none;
+    background: var(--s3);
+    color: var(--text);
+    border: 0;
+    border-radius: var(--pill);
+    padding: 7px 14px;
+    font: 400 13px var(--sans);
+    max-width: 260px;
+    cursor: pointer;
+}
+.settings-pick select:hover { background: var(--s4); }
+
+/* The file being written, named out loud. The panel is a better way into a file
+   that is still the interface, so it says which one — and clicking copies it,
+   which is the whole of what a "reveal" button would have been for. */
+.settings-file {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 0 0 14px;
+    font-size: 12px;
+    color: var(--text-4);
+}
+.settings-file-lede { color: var(--text-4); }
+.settings-file-path {
+    background: none;
+    border: 0;
+    padding: 0;
+    font: 400 12px var(--mono);
+    color: var(--text-2);
+    cursor: pointer;
+    text-align: left;
+}
+.settings-file-path:hover { color: var(--blue); text-decoration: underline; }
+.settings-file-none { font-style: italic; }
+.settings-file-tag {
+    background: var(--s3);
+    border-radius: var(--pill);
+    padding: 2px 9px;
+    font-size: 11px;
+    color: var(--text-3);
+}
+.settings-file-tag.bad { background: var(--s2); color: var(--red); }
+
+/* Values a file carried that a key does not allow. Above the controls rather
+   than beside them, because the file is what has the problem and the control
+   showing the default is behaving correctly. */
+.settings-problems {
+    margin: 0 0 14px;
+    padding: 10px 14px;
+    background: var(--s2);
+    border-radius: var(--r);
+    box-shadow: inset 3px 0 0 var(--yellow);
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-3);
+    max-width: 860px;
+}
+.settings-problem + .settings-problem { margin-top: 4px; }
+.settings-problems code { font: 400 11px var(--mono); color: var(--text-4); }
+
+.settings-body {
+    min-width: 0;
+    padding: 0 0 40px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+.settings-empty, .settings-error { padding: 8px 0; font-size: 13px; color: var(--text-3); }
+.settings-error { color: var(--red); }
+
+.settings-group { background: var(--s1); border-radius: var(--r-lg); padding: 18px 20px 8px; }
+.settings-group[data-locked] .settings-row { opacity: 0.5; }
+.settings-group-title { margin: 0; font: 400 15px/1.3 var(--sans); color: var(--text); }
+.settings-group-note {
+    margin: 5px 0 0;
+    max-width: 620px;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-4);
+}
+.settings-locked {
+    margin: 10px 0 0;
+    padding: 9px 12px;
+    background: var(--s2);
+    border-radius: var(--r-sm);
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-3);
+}
+.settings-locked code { font: 400 11px var(--mono); color: var(--text-2); }
+
+/* Label down the left, control at the right edge, and the "Clear" or "default"
+   line under the control. The controls then form one column the eye can run
+   down — which they cannot when each one starts where its own label ended. */
+.settings-row { display: flex; align-items: flex-start; gap: 24px; padding: 14px 0; }
+.settings-row + .settings-row { border-top: 1px solid var(--outline-soft); }
+.settings-row-text { flex: 1; min-width: 0; }
+.settings-row-label { font-size: 13px; color: var(--text); }
+.settings-row-note { margin-top: 3px; font-size: 12px; line-height: 1.6; color: var(--text-4); }
+.settings-row-warn { margin-top: 6px; font-size: 12px; line-height: 1.6; color: var(--yellow); }
+.settings-row-warn code { font: 400 11px var(--mono); }
+.settings-row-ctl {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 5px;
+    padding-top: 1px;
+}
+.settings-row-side { font-size: 12px; text-align: right; }
+.settings-row-from { color: var(--text-4); }
+
+/* The exception: a control no right-hand column is the right width for. The
+   text and the Clear go across the top and the control gets the whole measure
+   underneath — which for the verb groups is the difference between four pills
+   per line and a list you scroll. */
+.settings-row.is-wide { flex-direction: column; gap: 0; }
+.settings-row-head { display: flex; align-items: flex-start; gap: 24px; width: 100%; }
+.settings-row-head .settings-row-side { flex: none; padding-top: 1px; }
+.settings-row-wide { width: 100%; margin-top: 12px; }
+
+/* No stripe on a row this scope has set, though there was one. At User scope
+   almost every row is set, so the bar ran the whole length of every group and
+   read as a border somebody had drawn badly rather than as a fact about a row.
+   The right-hand column already says it in a word — "Clear" against
+   "default" — and that word is beside the control it belongs to. */
+
+.settings-check { flex: none; position: relative; display: inline-flex; cursor: pointer; }
+.settings-check input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.settings-check input:disabled { cursor: default; }
+.settings-box {
+    position: relative;
+    width: 17px;
+    height: 17px;
+    border-radius: 5px;
+    border: 2px solid var(--outline);
+    transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+}
+/* The tick is drawn rather than shipped: an inline SVG per checkbox is a lot of
+   nodes for one glyph, and two borders of a rotated box are the same picture.
+   It has to be a tick and not a filled square — a filled square reads the same
+   whether it means "on" or "this control is busy", and the first version of
+   this was an inset ring that read as neither. */
+.settings-box::after {
+    content: "";
+    position: absolute;
+    left: 4px;
+    top: 0;
+    width: 4px;
+    height: 8px;
+    border: solid var(--bg);
+    border-width: 0 2px 2px 0;
+    transform: rotate(40deg) scale(0.4);
+    opacity: 0;
+    transition: transform var(--t-fast) var(--ease), opacity var(--t-fast) var(--ease);
+}
+.settings-check input:checked + .settings-box,
+.settings-group-pick input:checked + .settings-box {
+    background: var(--blue);
+    border-color: var(--blue);
+}
+.settings-check input:checked + .settings-box::after,
+.settings-group-pick input:checked + .settings-box::after {
+    transform: rotate(40deg) scale(1);
+    opacity: 1;
+}
+.settings-check input:focus-visible + .settings-box,
+.settings-group-pick input:focus-visible + .settings-box { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+.settings-num, .settings-text, .settings-select {
+    flex: none;
+    background: var(--s3);
+    color: var(--text);
+    border: 0;
+    border-radius: var(--r-sm);
+    padding: 6px 10px;
+    font: 400 13px var(--sans);
+}
+.settings-num { width: 88px; text-align: right; font-family: var(--mono); }
+/* A width, not a max-width: an <input type=text> defaults to about twenty
+   characters, and the one field here is a filesystem path — so it came out
+   clipped at exactly the point where reading it matters. */
+.settings-text { width: 340px; max-width: 100%; font-family: var(--mono); font-size: 12px; }
+/* The pairing link is 43 characters of token on top of a hostname, and the
+   remembered host is a URL — both belong in a field the width of the row rather
+   than one you scroll sideways through. */
+.settings-text.is-long { width: 100%; }
+
+/* The notification rules, and the sentence that replaces them when the browser
+   is refusing. Same slot, so the group does not change height. */
+.settings-row-note.is-warn { color: var(--yellow); }
+.settings-select { max-width: 320px; cursor: pointer; }
+
+/* A run of rows inside a group that belong together — the live board's
+   visibility over each screen. Ruled off from the rows above like a row is. */
+.settings-subhead { padding: 18px 0 4px; border-top: 1px solid var(--outline-soft); }
+.settings-subhead-title { margin: 0; font: 500 13.5px/1.3 var(--sans); color: var(--text); }
+.settings-subhead + .settings-row { border-top: 0; }
+.settings-row-ctl .seg-btn:disabled { color: var(--text-4); cursor: default; }
+
+/* One choice of a few, all in view — radios rather than a select, so a column
+   of them reads as a table of what each screen does. */
+.settings-radios { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 16px; }
+.settings-radio { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-2); cursor: pointer; }
+.settings-radio input { margin: 0; accent-color: var(--blue); cursor: pointer; }
+.settings-radio input:disabled, .settings-radio input:disabled + span { cursor: default; color: var(--text-4); }
+.settings-num:disabled, .settings-text:disabled, .settings-select:disabled { color: var(--text-4); cursor: default; }
+
+/* A slider, for the one setting that is a strength rather than a count. The
+   readout beside it is what makes it a setting rather than a guess, and it is
+   tabular so the row does not twitch as the number changes width. */
+.settings-range { display: flex; align-items: center; gap: 10px; flex: none; }
+.settings-range input { width: 160px; accent-color: var(--blue); }
+.settings-range input:disabled { cursor: default; }
+.settings-range output {
+    width: 36px;
+    text-align: right;
+    font: 400 12.5px var(--mono);
+    color: var(--text-2);
+    font-variant-numeric: tabular-nums;
+}
+
+/* The spinner groups. A wrapping row of pills across the full measure, because
+   there are over a hundred of them: down one column they are a page and a half
+   to scroll.
+
+   Wrapping flex rather than a grid, which was tried first and is worse here.
+   A grid gives every pill one width, so the column has to be as wide as
+   "Theater / Stage Manager Phrases" or that name gets clipped — and at a width
+   that fits it, "Pirate" is mostly empty space. Letting each pill be its own
+   size packs more per line *and* clips nothing, which is the rare case where
+   the denser layout is also the more readable one. */
+.settings-groups { display: flex; flex-wrap: wrap; gap: 4px 6px; }
+.settings-groups-none, .settings-groups-foot { font-size: 12px; color: var(--text-4); }
+.settings-groups-foot { flex-basis: 100%; margin-top: 6px; }
+.settings-group-pick {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    background: var(--s2);
+    border-radius: var(--pill);
+    padding: 4px 11px 4px 8px;
+}
+/* The pill stopped being one `<label>` when the chosen ones grew a number box.
+   The checkbox is an invisible overlay filling its label, which is what makes
+   the whole pill clickable — so anything the overlay covers cannot be reached,
+   and the weight box has to sit outside the label rather than inside it. */
+.settings-group-toggle {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    cursor: pointer;
+}
+/* Never wrapped mid-name: a pill is one label, and the line breaks between
+   pills instead. Nothing is clipped, because each pill is as wide as its name. */
+.settings-group-name { white-space: nowrap; }
+.settings-group-pick:hover { background: var(--s3); }
+.settings-group-toggle input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.settings-group-pick .settings-box { width: 14px; height: 14px; border-radius: 4px; }
+.settings-group-name { font-size: 12px; color: var(--text-2); }
+.settings-group-count { font: 400 11px var(--mono); color: var(--text-4); }
+/* Wide enough for three digits and no wider: it holds 0 to 1000, and every
+   pill on the line is competing for the same row. */
+.settings-group-weight {
+    flex: none;
+    width: 38px;
+    padding: 1px 5px;
+    text-align: right;
+    font: 400 11px var(--mono);
+    color: var(--text);
+    background: var(--s4);
+    border: 0;
+    border-radius: var(--r-sm);
+}
+.settings-group-weight:disabled { color: var(--text-4); }
+.settings-group-share { font: 400 11px var(--mono); color: var(--text-3); min-width: 24px; }
+.settings-group-share.is-muted { color: var(--text-4); }
+
+/* ── the shortcut table ───────────────────────────────── */
+/* Rows rather than cards: thirteen of them, all the same shape, read by looking
+   for one name. The chord sits in a fixed column so the whole set can be
+   scanned for a collision without reading a single label. */
+
+.settings-keys { padding: 14px 0 6px; border-top: 1px solid var(--outline-soft); }
+.settings-keys-head { display: flex; flex-direction: column; gap: 4px; padding-bottom: 8px; }
+.settings-keys-head > span:first-child { font-size: 13px; color: var(--text); }
+.settings-keys-note { max-width: 620px; font-size: 12px; line-height: 1.6; color: var(--text-4); }
+.settings-keys-group { padding-top: 6px; }
+.settings-keys-group-name {
+    padding: 6px 0 2px;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-4);
+}
+
+.settings-key-row { display: flex; align-items: center; gap: 12px; padding: 5px 0; }
+.settings-key-label { flex: 1; min-width: 0; font-size: 13px; color: var(--text-2); }
+.settings-key-combo {
+    flex: none;
+    width: 150px;
+    background: var(--s3);
+    border-radius: var(--r-xs);
+    padding: 4px 9px;
+    font: 400 12px var(--mono);
+    color: var(--text);
+    text-align: center;
+}
+.settings-key-row[data-clash] .settings-key-combo { background: var(--s2); color: var(--yellow); }
+.settings-key-recording {
+    flex: none;
+    width: 150px;
+    padding: 4px 9px;
+    font-size: 11px;
+    color: var(--blue);
+    text-align: center;
+}
+.settings-key-row[data-recording] { background: var(--blue-tint); border-radius: var(--r-xs); }
+.settings-key-acts { flex: none; display: flex; gap: 10px; min-width: 150px; justify-content: flex-end; }
+
+/* The Toolbar group: one row per bar button, dragged or stepped into order. */
+.settings-bar { display: flex; flex-direction: column; gap: 2px; padding-top: 6px; }
+.settings-bar-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 5px 8px;
+    border-radius: var(--r-xs);
+}
+.settings-bar-row:hover { background: var(--s2); }
+.settings-bar-row.dragging { opacity: 0.4; }
+.settings-bar-row[draggable="true"]:active .snip-grip { cursor: grabbing; }
+.settings-bar-row[data-place="hidden"] .settings-bar-name { color: var(--text-4); }
+.settings-bar-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px;
+    font-size: 13px; color: var(--text-2); }
+.settings-bar-name svg { flex: none; color: var(--text-3); }
+.settings-bar-noglyph { flex: none; width: 14px; }
+.settings-bar-row .snip-move:disabled { opacity: 0.3; cursor: default; background: transparent; }
+.settings-bar-label { flex: none; display: flex; align-items: center; gap: 6px;
+    width: 110px; font-size: 12px; color: var(--text-3); }
+.settings-bar-place { flex: none; width: 130px; }
+.settings-bar-fixed { flex: none; width: 130px; font-size: 11px; color: var(--text-4); }
+.settings-bar-foot { display: flex; justify-content: flex-end; padding-top: 8px; }
+
+/* A text-only button, for the actions inside a row where a pill would be three
+   times the weight of the word in it. */
+.linkish {
+    background: none;
+    border: 0;
+    padding: 0;
+    font: 400 12px var(--sans);
+    color: var(--blue);
+    cursor: pointer;
+}
+.linkish:hover { text-decoration: underline; }
+.linkish:disabled { color: var(--text-4); cursor: default; text-decoration: none; }
+
+/* ── Claude Code's own settings ───────────────────────────────────────────
+   One group in the panel, several cards deep, because it stands for four files
+   and nine sections rather than one block of keys. The sub-cards sit inside the
+   group's own column with a slightly darker ground, so "everything under this
+   heading is about somebody else's settings" reads at a glance rather than
+   needing the heading to be re-read. */
+
+.cfg-sub { background: var(--s2); padding: 16px 18px 6px; }
+.cfg-sub .settings-group-title { font-size: 14px; color: var(--text-2); }
+.cfg-sub .settings-row + .settings-row { border-top-color: var(--outline); }
+
+/* Which of the four files, and which of the two ways of looking at it. One row,
+   with the view toggle pushed to the far end: the left half picks a *file* and
+   the right half picks a *lens*, and a gap says so better than a label would. */
+.cfg-tabs { display: flex; align-items: center; gap: 4px; margin: 14px 0 0; flex-wrap: wrap; }
+.cfg-tabs-spacer { flex: 1; min-width: 12px; }
+.cfg-tab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--s3);
+    color: var(--text-3);
+    border: 0;
+    border-radius: var(--pill);
+    padding: 5px 12px;
+    font: 400 12px var(--sans);
+    cursor: pointer;
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.cfg-tab:hover { background: var(--s4); color: var(--text-2); }
+.cfg-tab.on { background: var(--blue-cont); color: var(--text); }
+.cfg-tab-tag {
+    font: 400 10px var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-4);
+}
+.cfg-tab.on .cfg-tab-tag { color: var(--text-3); }
+
+/* The sentence that answers "I changed it and nothing happened" before it is
+   asked. Yellow-tinted rather than plain, because it is a caveat about every
+   control below it and not a note about one. */
+.cfg-reach {
+    margin: 12px 0 0;
+    padding: 9px 12px;
+    background: var(--s2);
+    border-left: 2px solid var(--yellow);
+    border-radius: 0 var(--r-sm) var(--r-sm) 0;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-3);
+}
+.cfg-sub .cfg-reach { background: var(--s3); }
+.cfg-reach strong { color: var(--text-2); font-weight: 400; }
+.cfg-reach-more { color: var(--text-4); }
+
+/* A conflict. Red-edged and on the page rather than in a toast: it is the one
+   message here that says a write did *not* happen, and it has to survive being
+   looked away from. */
+.cfg-stale {
+    margin: 12px 0 0;
+    padding: 11px 13px;
+    background: var(--s2);
+    border-left: 2px solid var(--red);
+    border-radius: 0 var(--r-sm) var(--r-sm) 0;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-3);
+}
+.cfg-stale-head { color: var(--text); }
+.cfg-stale p { margin: 5px 0 0; color: var(--text-4); }
+.cfg-stale summary { margin-top: 7px; cursor: pointer; color: var(--text-3); }
+.cfg-stale-text {
+    margin: 7px 0 0;
+    max-height: 220px;
+    overflow: auto;
+    padding: 9px 11px;
+    background: var(--bg);
+    border-radius: var(--r-sm);
+    font: 400 11px/1.6 var(--mono);
+    color: var(--text-3);
+    white-space: pre-wrap;
+}
+
+/* The key's real name beside its label. Everything on this page maps to a line
+   in a file somebody may have to open, and a label alone does not say which. */
+.cfg-path {
+    margin-left: 8px;
+    font: 400 11px var(--mono);
+    color: var(--text-4);
+}
+.cfg-merged { color: var(--text-3); }
+.cfg-raw-value {
+    font: 400 11px var(--mono);
+    color: var(--text-3);
+    overflow-wrap: anywhere;
+}
+
+/* A list of opaque strings — permission rules, directories, model names. One
+   row per entry rather than a textarea of lines: a textarea makes
+   twenty-eight rules into one draft where a single bad paste replaces the lot,
+   and per row a delete is one write and a mistake loses one rule. Each row is
+   a textarea because an entry is not always short. */
+.cfg-list { display: flex; flex-direction: column; gap: 4px; width: 100%; }
+.cfg-list-row { display: flex; align-items: flex-start; gap: 6px; }
+.cfg-list-value {
+    flex: 1;
+    min-width: 0;
+    resize: none;
+    overflow: hidden;
+    background: var(--bg);
+    color: var(--text-2);
+    border: 0;
+    border-radius: var(--r-xs);
+    padding: 5px 9px;
+    font: 400 12px/1.5 var(--mono);
+}
+.cfg-list-value:focus { outline: 0; box-shadow: inset 0 0 0 2px var(--blue); }
+.cfg-list-value:disabled { color: var(--text-4); }
+.cfg-list-x {
+    flex: none;
+    width: 26px;
+    height: 26px;
+    background: transparent;
+    color: var(--text-4);
+    border: 0;
+    border-radius: var(--r-xs);
+    font: 400 15px/1 var(--sans);
+    cursor: pointer;
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.cfg-list-x:hover { background: var(--s4); color: var(--red); }
+.cfg-list-x:disabled { color: var(--s5); cursor: default; background: transparent; }
+.cfg-list-none { padding: 6px 0; font-size: 12px; color: var(--text-4); }
+.cfg-list-add { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+/* Same trap as .cfg-kv-newvalue below: `is-long` means 100% of the row, which
+   in a flex row is 100% *and* whatever it sits next to. */
+.cfg-list-add > .settings-text.is-long { width: auto; flex: 1 1 200px; min-width: 0; }
+
+/* What the other files in the chain contribute. Indented and dimmed rather
+   than mixed in with the editable rows, because these lists add up across
+   files and an entry another file owns is not one this scope can remove —
+   showing it as an editable row with no × would be a worse lie than not
+   showing it at all. */
+.cfg-inherit { margin-top: 10px; padding-left: 10px; border-left: 1px solid var(--outline); }
+.cfg-inherit-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: 11px;
+    color: var(--text-4);
+}
+.cfg-inherit-head code { font: 400 10px var(--mono); color: var(--text-4); }
+.cfg-inherit-row {
+    margin-top: 3px;
+    font: 400 11px/1.6 var(--mono);
+    color: var(--text-4);
+    overflow-wrap: anywhere;
+}
+
+/* Name and value rows — `env`, and anything shaped like it. */
+.cfg-kv { display: flex; flex-direction: column; gap: 4px; width: 100%; }
+.cfg-kv-row { display: flex; align-items: center; gap: 8px; }
+.cfg-kv-name {
+    flex: none;
+    width: 180px;
+    font: 400 12px var(--mono);
+    color: var(--text-2);
+    overflow-wrap: anywhere;
+}
+.cfg-kv-add { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+.cfg-kv-newname { width: 180px; flex: none; }
+/* `is-long` is `width: 100%`, which inside a flex row means "as wide as the row"
+   *plus* whatever sits beside it — so the name field and the Add button pushed
+   the row past the column and gave the whole panel a horizontal scrollbar.
+   Flexing into what is left is what that class means here. */
+.cfg-kv-newvalue { width: auto; flex: 1 1 160px; min-width: 0; }
+
+/* The hooks editor. An event is a card (the command editor's), a matcher group
+   an indented block inside it, and a hook a lighter card inside that — three
+   levels because the file has three, and flattening them would hide which
+   hooks share a matcher and so run together, in order. */
+.hk { width: 100%; }
+.hk-off {
+    margin-bottom: 10px;
+    padding: 8px 10px;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-3);
+    background: var(--s3);
+    border-left: 2px solid var(--yellow);
+    border-radius: var(--r-sm);
+}
+.hk-off strong { color: var(--text-2); font-weight: 400; }
+.hk-event .cmd-card-name { flex: 0 1 auto; min-width: 0; }
+.hk-group {
+    margin-top: 12px;
+    padding: 10px 0 0 12px;
+    border-left: 1px solid var(--outline);
+}
+.hk-group-head { display: flex; align-items: center; gap: 8px; }
+.hk-matcher { display: flex; align-items: center; gap: 8px; flex: 1 1 260px; min-width: 0; }
+.hk-matcher .settings-text { flex: 1; min-width: 0; }
+.hk-hook {
+    margin-top: 8px;
+    padding: 10px 12px 12px;
+    background: var(--s3);
+    border: 1px solid transparent;
+    border-radius: var(--r-sm);
+}
+.hk-hook.bad { border-color: var(--red); }
+.hk-hook-head { display: flex; align-items: center; gap: 8px; }
+.hk-hook-head .settings-select { width: auto; flex: none; }
+.hk-hook-head .cfg-script { flex: 0 1 auto; min-width: 0; }
+.hk-hook .cmd-area, .hk-hook .settings-text { background: var(--s2); }
+.hk-field { padding-top: 8px; margin-top: 8px; border-top: 0; }
+.hk-inline { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+.hk-inline > .hk-field { flex: 1 1 160px; min-width: 0; }
+.hk-check { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.hk-mini { font-size: 12px; }
+.hk-mini:disabled { opacity: 0.35; cursor: default; }
+.hk-more { margin-top: 10px; }
+.hk-more > summary { font-size: 11px; color: var(--text-4); cursor: pointer; }
+.hk-json { min-height: 40px; }
+.hk-add { margin-top: 12px; }
+.hk-inherit-scope { color: var(--text-3); }
+.hk-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+
+/* The review. It replaces the footer rather than opening a dialog, so what is
+   about to run sits under the hooks it came from. */
+.hk-foot.is-review { display: block; }
+.hk-review ul { margin: 4px 0 8px; padding-left: 18px; }
+.hk-review li { margin: 2px 0; font-size: 12px; line-height: 1.6; color: var(--text-3); }
+.hk-review code { font: 400 11px var(--mono); color: var(--text-2); overflow-wrap: anywhere; }
+.hk-review-lede {
+    margin-top: 8px;
+    font: 400 11px var(--sans);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-4);
+}
+
+/* Whether the script a hook names is still there — the one question a text
+   editor cannot answer. */
+.cfg-script { font-size: 11px; color: var(--green); overflow-wrap: anywhere; }
+.cfg-script.bad { color: var(--red); }
+
+.cfg-statusline { width: 100%; }
+.cfg-statusline .settings-row-note { max-width: 620px; }
+.cfg-statusline code { font: 400 11px var(--mono); }
+
+/* The file itself. A textarea, deliberately — see claudeRawCard() for why a
+   vendored editor was the wrong trade. */
+.cfg-json {
+    width: 100%;
+    min-height: 260px;
+    max-height: 70vh;
+    resize: vertical;
+    margin-top: 12px;
+    background: var(--bg);
+    color: var(--text-2);
+    border: 0;
+    border-radius: var(--r-sm);
+    padding: 12px 14px;
+    font: 400 12px/1.7 var(--mono);
+    tab-size: 2;
+}
+.cfg-json:focus { outline: 0; box-shadow: inset 0 0 0 2px var(--blue); }
+.cfg-json:disabled { color: var(--text-4); }
+.cfg-json-foot {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 0 12px;
+}
+.cfg-json-note { flex: 1; min-width: 0; font-size: 12px; line-height: 1.5; color: var(--text-4); }
+.cfg-json-note.bad { color: var(--red); font-family: var(--mono); font-size: 11px; }
+.cfg-json-acts { display: flex; align-items: center; gap: 12px; flex: none; }
+
+/* ── Claude Code's memory files ───────────────────────────────────────────
+   The same group furniture as the settings above it — tabs, file line, stale
+   banner, foot — so only the box, the rendered view and the full-height dialog
+   are new. */
+
+/* Prose, not JSON: `pre-wrap` because a paragraph in a CLAUDE.md is one long
+   line and horizontal scrolling to read a sentence is not editing. Otherwise
+   the same box as .cfg-json, and shorter, because the panel's own scroll has to
+   stay usable with a 23KB file in here — Expand is where the height is. */
+.cfg-md {
+    width: 100%;
+    min-height: 220px;
+    max-height: 60vh;
+    resize: vertical;
+    margin-top: 12px;
+    background: var(--bg);
+    color: var(--text-2);
+    border: 0;
+    border-radius: var(--r-sm);
+    padding: 12px 14px;
+    font: 400 12px/1.7 var(--mono);
+    white-space: pre-wrap;
+    tab-size: 2;
+}
+.cfg-md:focus { outline: 0; box-shadow: inset 0 0 0 2px var(--blue); }
+.cfg-md:disabled { color: var(--text-4); }
+
+/* The rendered view, in place of the box rather than beside it: the panel is a
+   column and two of these side by side would be two keyholes. Capped and
+   scrolling on its own, because .prose sets no height of its own. */
+.cfg-md-preview {
+    margin-top: 12px;
+    max-height: 60vh;
+    overflow: auto;
+    padding: 4px 14px 12px;
+    background: var(--bg);
+    border-radius: var(--r-sm);
+}
+.cfg-md-preview > :first-child { margin-top: 12px; }
+
+/* The other file, which also applies. Quieter than the yellow reach note above
+   it — it is orientation rather than a warning. */
+.cfg-md-both code { font: 400 11px var(--mono); color: var(--text-3); }
+
+.cfg-md-count { flex: none; font: 400 11px var(--mono); color: var(--text-4); }
+
+/* The full-height editor. `.tall` is the modal shape this needs and nothing
+   else does: as wide as the window sensibly allows and as tall, because the
+   whole reason to open it is that 60vh in a column was not enough. */
+.modal.tall {
+    width: min(1000px, 100%);
+    max-height: 94vh;
+    height: 94vh;
+}
+/* `flex: 1` and `min-height: 0` together are what make the box fill the
+   dialog: .modal is already a column, but .modal-body does not grow on its
+   own, and without min-height a flex child refuses to shrink below its
+   content — which for a 23KB file is the whole point. */
+.modal.tall .modal-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    overflow: hidden;
+    padding-bottom: 12px;
+}
+.memo-title { font: 400 14px/1.4 var(--mono); color: var(--text-2); }
+.cfg-md.big {
+    flex: 1;
+    min-height: 0;
+    max-height: none;
+    resize: none;
+    margin-top: 0;
+    font-size: 13px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .cfg-tab, .cfg-list-x { transition: none; }
+}
+
+/* ── the commands a project declares ──────────────────────────────────────
+   The same group furniture again — tabs, file line, stale banner, foot — so
+   what is new here is the card per command and the field inside it. A field is
+   a row rather than the label-left/control-right shape the settings rows use:
+   a command's values are long (a shell line, a range, a list of variables) and
+   there is no right-hand column wide enough for them that is not also mostly
+   empty for `cwd`. */
+
+.cmd-card {
+    padding: 12px 14px 14px;
+    margin-top: 10px;
+    background: var(--s2);
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r);
+}
+.cmd-card.bad { border-color: var(--red); }
+.cmd-card-head { display: flex; align-items: center; gap: 8px; }
+/* Collapsed by default: a file of eight commands was eight screens of fields
+   before you could see the list. The toggle is everything in the head but the
+   delete button, which stays a sibling — a button cannot hold a button. */
+.cmd-card:not(.open) { padding-bottom: 12px; }
+.cmd-card-toggle {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: none;
+    border: 0;
+    padding: 0;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.cmd-card-toggle::before {
+    content: "";
+    flex: none;
+    width: 6px;
+    height: 6px;
+    margin: 0 3px 0 1px;
+    border-right: 1.5px solid var(--text-4);
+    border-bottom: 1.5px solid var(--text-4);
+    transform: rotate(-45deg);
+    transition: transform 0.12s;
+}
+.cmd-card-toggle[aria-expanded="true"]::before { transform: rotate(45deg); }
+.cmd-card-toggle:hover .cmd-card-id { color: var(--text); }
+.cmd-card-spacer { flex: 1; min-width: 0; }
+.cmd-card-id { font: 400 12px var(--mono); color: var(--text-2); }
+.cmd-card-name { font-size: 12px; color: var(--text-4); }
+.cfg-tab-tag.bad { color: var(--red); }
+
+.cmd-orphan {
+    margin: 8px 0 0;
+    padding: 8px 10px;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-3);
+    background: var(--s3);
+    border-radius: var(--r-sm);
+}
+.cmd-orphan strong { color: var(--text-2); font-weight: 400; }
+
+.cmd-field { padding-top: 12px; margin-top: 12px; border-top: 1px solid var(--outline-soft); }
+/* An unset override is still readable — greyed rather than hidden, because a
+   field that vanishes when you untick it takes the inherited value with it and
+   the placeholder is the whole point. */
+.cmd-field.unset .cmd-field-label { color: var(--text-4); }
+.cmd-field-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.cmd-field-label { font-size: 12px; color: var(--text-2); }
+.cmd-field-from {
+    font-size: 11px;
+    color: var(--text-4);
+    padding: 1px 6px;
+    background: var(--s3);
+    border-radius: var(--pill);
+}
+.cmd-field-note { margin: 5px 0 0; font-size: 11px; line-height: 1.6; color: var(--text-4); }
+.cmd-field-bad { margin: 5px 0 0; font: 400 11px var(--mono); line-height: 1.6; color: var(--red); }
+.cmd-field .settings-text,
+.cmd-field .cmd-area { width: 100%; }
+.cmd-mono { font-family: var(--mono); }
+.cmd-set { flex: none; }
+
+/* A textarea rather than an input, and not for length: `validate()` refuses
+   only a NUL byte, so a newline is legal in a command — and a single-line input
+   drops one silently, which eats half of somebody's command on the first save. */
+.cmd-area {
+    display: block;
+    min-height: 26px;
+    padding: 6px 10px;
+    font: 400 12px/1.6 var(--mono);
+    color: var(--text);
+    background: var(--s3);
+    border: 1px solid transparent;
+    border-radius: var(--r-sm);
+    resize: none;
+    overflow: hidden;
+}
+.cmd-area:focus { outline: 0; border-color: var(--blue); }
+.cmd-area:disabled { color: var(--text-4); }
+
+.cmd-port { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cmd-port .settings-num { width: 88px; }
+.cmd-port-dash { color: var(--text-4); }
+.cmd-port-env { width: 160px; flex: none; }
+
+.cmd-env-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.cmd-env-name { width: 170px; flex: none; }
+.cmd-env-value { flex: 1; min-width: 0; }
+
+/* What the template comes to in this directory. Only drawn when expanding
+   actually changed something, so a command with no placeholders does not carry
+   a line repeating itself. */
+.cmd-preview {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    flex-wrap: wrap;
+    margin: 12px 0 0;
+    padding-top: 10px;
+    border-top: 1px dashed var(--outline-soft);
+    font-size: 11px;
+    color: var(--text-4);
+}
+.cmd-preview-lede { flex: none; }
+.cmd-preview code { font: 400 11px var(--mono); color: var(--text-3); word-break: break-all; }
+
+.cmd-foot {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 0 4px;
+    margin-top: 12px;
+    border-top: 1px solid var(--outline-soft);
+}
+.cmd-foot-note { font-size: 12px; color: var(--text-4); }
+.cmd-foot-note.bad { color: var(--red); }
+
+/* A file the form cannot show, and the way through to the one thing that can
+   repair it. */
+.cmd-broken { font-size: 12px; line-height: 1.6; color: var(--text-3); }
+.cmd-broken strong { color: var(--text-2); font-weight: 400; }
+.cmd-broken .btn { margin-top: 10px; }
+
+/* ── the snippet editor, in Settings ───────────────────────────────────── */
+
+.snip-settings-acts { display: flex; gap: 8px; margin: 4px 0 14px; }
+
+.snip-set-group {
+    --snip-accent: var(--text-3);
+    background: color-mix(in srgb, var(--snip-accent) 8%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--snip-accent) 38%, transparent);
+    border-radius: var(--r);
+    padding: 8px 10px 4px;
+    margin-bottom: 10px;
+}
+/* Ungrouped is not a group, and must not look like one — but it keeps the
+   padding, because it is still a place a drag has to be able to land. */
+.snip-set-group.is-loose { background: none; box-shadow: none; padding-left: 0; padding-right: 0; }
+
+.snip-set-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.snip-set-name {
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--r-sm);
+    padding: 4px 6px;
+    color: color-mix(in srgb, var(--snip-accent) 70%, var(--text));
+    font: 600 13.5px/1.2 var(--sans);
+}
+.snip-set-name:hover { border-color: var(--outline-soft); }
+.snip-set-name:focus { border-color: var(--outline); background: var(--s1); }
+.snip-set-accent {
+    flex: none;
+    width: 28px;
+    height: 24px;
+    padding: 0;
+    background: none;
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-xs);
+    cursor: pointer;
+}
+.snip-set-loose {
+    flex: 1;
+    font: 600 12px/1.2 var(--sans);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-4);
+}
+
+/* A minimum height so an empty group is still somewhere a drag can be dropped. */
+.snip-set-list { min-height: 12px; }
+
+.snip-set-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 4px;
+    border-radius: var(--r-sm);
+}
+.snip-set-row:hover { background: var(--s2); }
+.snip-set-text { flex: 1; min-width: 0; }
+.snip-set-title {
+    font: 400 13px/1.35 var(--sans);
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.snip-set-preview {
+    font: 400 11.5px/1.4 var(--sans);
+    color: var(--text-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.snip-set-badges { display: flex; gap: 4px; flex: none; }
+.snip-badge {
+    font: 500 10.5px/1.6 var(--sans);
+    letter-spacing: 0.03em;
+    color: var(--text-3);
+    background: var(--s3);
+    border-radius: var(--pill);
+    padding: 0 7px;
+    white-space: nowrap;
+}
+.snip-set-foot { padding: 2px 4px 6px; }
+
+.snip-grip { flex: none; color: var(--text-4); cursor: grab; display: grid; place-items: center; }
+.snip-set-row[draggable="true"]:active .snip-grip { cursor: grabbing; }
+
+.snip-move {
+    flex: none;
+    width: 22px;
+    height: 22px;
+    color: var(--text-3);
+    background: transparent;
+    border-radius: var(--r-xs);
+    font-size: 12px;
+    line-height: 1;
+}
+.snip-move:hover { background: var(--s4); color: var(--text); }
+
+.snip-del {
+    flex: none;
+    display: grid;
+    place-items: center;
+    min-width: 24px;
+    height: 24px;
+    padding: 0 6px;
+    color: var(--text-3);
+    background: transparent;
+    border-radius: var(--r-xs);
+    font: 500 11px/1 var(--sans);
+}
+.snip-del:hover { background: var(--s4); color: var(--red); }
+/* Armed, which is the confirmation — see snipDeleteButton. */
+.snip-del.armed { color: var(--red); background: color-mix(in srgb, var(--red) 16%, transparent); }
+
+/* ── the snippet dialogs ───────────────────────────────────────────────── */
+
+.snip-fill-form .field:last-child { margin-bottom: 6px; }
+
+.snip-check { position: relative; display: flex; align-items: center; gap: 8px; cursor: pointer; }
+/* `.field > label` sets `display: block` at a higher specificity than a bare
+   class, so a checkbox label inside a field has to out-specify it rather than
+   merely come after it — and take its own type back, since that rule also styles
+   these as the small grey caption above a control rather than a line to read. */
+.field > label.snip-check {
+    display: flex;
+    margin-bottom: 0;
+    font: 400 13.5px/1.4 var(--sans);
+    color: var(--text);
+}
+.snip-check input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+/* The box is a flex child here, unlike in the settings rows where it is not, and
+   without this it is squeezed to a sliver by the label beside it. */
+.snip-check .settings-box { flex: none; }
+.snip-check input:checked + .settings-box { background: var(--blue); border-color: var(--blue); }
+.snip-check input:checked + .settings-box::after { transform: rotate(40deg) scale(1); opacity: 1; }
+.snip-check input:focus-visible + .settings-box { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+.snip-sub { margin: 10px 0 0 26px; display: flex; align-items: center; gap: 10px; }
+/* An author `display` beats the UA rule for `hidden`, so every class in this file
+   that sets one carries its own — see .quota-menu[hidden] and its neighbours. */
+.snip-sub[hidden] { display: none; }
+.snip-sub label { font: 400 12.5px/1 var(--sans); color: var(--text-3); }
+
+/* The three plain pickers in this dialog — Group, Where it goes, Permissions.
+   Styled for the same reason every other select in this file is, which is not
+   only appearance: the reset at the top sets `background: none`, and Chromium
+   draws the popup list from the element's own background, so a select left
+   transparent gets a white popup with unreadable options inside a dark dialog.
+   The closed control looks right anyway — transparent over a dark modal, with
+   `color: inherit` — which is what makes this easy to miss until somebody opens
+   one. `.opts select`, `.when-args select` and `.settings-select` all carry a
+   background for the same reason.
+
+   The child combinator is load-bearing: it keeps this off the type pickers in
+   the parameter rows, which sit deeper and have their own rule below. Without it
+   this selector's id would out-specify that one and repaint them. */
+#snip-edit-scrim .field > select,
+#snip-edit-scrim .snip-sub select {
+    background: var(--bg);
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-sm);
+    padding: 8px 10px;
+    color: var(--text);
+    font: 400 13px/1.2 var(--sans);
+    cursor: pointer;
+}
+
+.snip-params { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.snip-param { display: flex; align-items: center; gap: 6px; }
+.snip-param input[type="text"], .snip-param select {
+    background: var(--s1);
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-sm);
+    padding: 6px 8px;
+    color: var(--text);
+    font: 400 12.5px/1.2 var(--sans);
+    min-width: 0;
+}
+.snip-param-name { flex: 0 1 130px; font-family: var(--mono) !important; }
+.snip-param-label { flex: 1 1 130px; }
+.snip-param-type { flex: 0 1 110px; }
+.snip-param-default { flex: 1 1 110px; }
+.snip-param-req { font: 400 11.5px/1 var(--sans); color: var(--text-3); }
+
+.snip-projects { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.snip-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--s3);
+    border-radius: var(--pill);
+    padding: 3px 6px 3px 10px;
+    font: 400 12px/1.4 var(--mono);
+    color: var(--text-2);
+}
+.snip-chip-x { color: var(--text-4); background: none; font-size: 11px; padding: 0 3px; }
+.snip-chip-x:hover { color: var(--red); }
+.snip-project-add { display: flex; gap: 6px; }
+.snip-project-add input {
+    flex: 1;
+    background: var(--s1);
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-sm);
+    padding: 7px 9px;
+    color: var(--text);
+    font: 400 12.5px/1.2 var(--mono);
+}
+

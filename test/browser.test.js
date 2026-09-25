@@ -192,8 +192,19 @@ function check(name, got, want) {
     check('and says hello', /event: hello/.test(es.first || ''), true);
 
     // The static assets the page pulls in.
-    for (const asset of ['/app.js', '/styles.css', '/markdown.js', '/highlight.js', '/sw.js']) {
+    for (const asset of ['/app.js', '/markdown.js', '/highlight.js', '/sw.js']) {
         check(`GET ${asset}`, (await call(asset)).status, 200);
+    }
+    // Every stylesheet the page links, read from the page rather than listed
+    // here, so a file added to web/css/ is covered without anyone remembering.
+    // A sheet that 404s or arrives as anything but text/css is dropped without a
+    // word, and the page draws with that area unstyled.
+    const sheets = [...page.body.matchAll(/<link rel="stylesheet" href="\.(\/[^"]+)">/g)].map(m => m[1]);
+    check('the page links its own stylesheets', sheets.filter(s => s.startsWith('/css/')).length > 0, true);
+    for (const sheet of sheets) {
+        const r = await call(sheet);
+        check(`GET ${sheet}`, r.status, 200);
+        check(`${sheet} is served as CSS`, /^text\/css/.test(r.headers['content-type'] || ''), true);
     }
     // The rail's module and the Preact bundle it imports. The type matters as much
     // as the status: a module script served as anything but JavaScript is refused,

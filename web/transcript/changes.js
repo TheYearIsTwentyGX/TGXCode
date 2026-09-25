@@ -519,7 +519,7 @@ function transcriptDiff(absPath) {
 function diffConfig() {
     const d = state.diff;
     const heavy = (d.text || '').length > DIFF_HEAVY;
-    // Matches the media query in styles.css that hides the layout control: below
+    // Matches the media query in web/css/viewers.css that hides the layout control: below
     // that width there is no room for two panes, so a remembered preference must
     // not be able to strand somebody in two unreadable columns.
     const roomForTwo = window.innerWidth > 900;

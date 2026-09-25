@@ -5,7 +5,7 @@
 // The function that decides the number is pure, and it is the half of this
 // feature whose mistakes are silent. A log a step *wider* than its pane stops
 // being a frozen width at all: `min()` falls through to the `100%` floor in
-// styles.css, the width resolves from the pane again, and every column that
+// web/css/transcript.css, the width resolves from the pane again, and every column that
 // slides in is back to re-laying out two thousand rows a frame. That reads as
 // "the fix did nothing" rather than as a bug, so it is worth a test.
 //
@@ -77,7 +77,7 @@ ok('a pane narrower than a step still gets a step, not zero');
 // `.composer-inner` and `.ask-dock-inner` sit inside 28px of padding a side, so
 // they resolve 56px below the log. The step has to stay under that or a drag
 // could make the log the narrower of the two and the pair would read as
-// crooked — see the comment on `.log` in web/styles.css.
+// crooked — see the comment on `.log` in web/css/transcript.css.
 assert.ok(LOG_STEP < 56, 'LOG_STEP has grown past the composer inset');
 ok('the step is smaller than the composer inset it must not cross');
 

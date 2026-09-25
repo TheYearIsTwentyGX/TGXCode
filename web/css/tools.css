@@ -1,0 +1,462 @@
+/* web/css/tools.css
+ *
+ * What a turn is made of once it is drawn: tool calls, the prose of an
+ * answer (markdown), and the terminal pane.
+ *
+ * Linked from web/index.html in the order the sections had in the old
+ * web/styles.css, and concatenated in that order they reproduce it exactly, so
+ * the cascade is unchanged. A rule that moves between these files moves in the
+ * cascade too: check what it now comes before and after.
+ */
+
+/* ── tool calls ──────────────────────────────────────────────────────── */
+
+.tool {
+    margin: 3px 0;
+    background: var(--s2);
+    border-radius: var(--r);
+    overflow: hidden;
+    transition: background var(--t-fast) var(--ease);
+}
+.tool[open] { background: var(--s2); }
+
+/* The row itself is shared with the fold a run of tool calls collapses into
+   (.trow, below) — one more row of the same kind, and it should be impossible
+   for the two to drift apart by editing only one of them. */
+:is(.tool > summary, .trow) {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    padding: 8px 15px;
+    cursor: pointer;
+    list-style: none;
+    font: 400 13px/1.5 var(--sans);
+    color: var(--text-3);
+    border-radius: var(--r);
+    transition: background var(--t-fast) var(--ease);
+}
+.tool > summary::-webkit-details-marker { display: none; }
+:is(.tool > summary, .trow):hover { background: var(--s3); }
+
+/* Status is a dot, not a coloured slab. */
+:is(.tool > summary, .trow)::before {
+    content: "";
+    flex: none;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--text-4);
+}
+:is(.tool[data-status="ok"] > summary, .trow[data-status="ok"])::before { background: #4d5052; }
+:is(.tool[data-status="error"] > summary, .trow[data-status="error"])::before { background: var(--red); }
+.tool[data-status="pending"] > summary::before {
+    background: var(--yellow);
+    animation: breathe 1.6s var(--ease) infinite;
+}
+
+:is(.tool, .trow) .tname {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--text-2);
+    flex: none;
+}
+:is(.tool[data-status="error"], .trow[data-status="error"]) .tname { color: var(--red); }
+
+:is(.tool, .trow) .targ {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-4);
+}
+
+:is(.tool, .trow) .tmeta {
+    flex: none;
+    font-size: 11.5px;
+    color: var(--text-4);
+    font-variant-numeric: tabular-nums;
+}
+
+:is(.tool, .trow) .caret {
+    flex: none;
+    width: 10px;
+    font-size: 9px;
+    color: var(--text-4);
+    transition: transform var(--t-fast) var(--ease);
+}
+.tool[open] .caret { transform: rotate(90deg); }
+
+/* A run of tool calls, folded into one row once a message closed it.
+   The <summary> is display:block and the grid lives inside it, so the rows the
+   fold holds stay top-level .ev grids: nesting them inside an .ev-body would
+   indent every one of them by a gutter they already have. */
+.trun { display: block; }
+.trun > summary {
+    display: block;
+    cursor: pointer;
+    list-style: none;
+}
+.trun > summary::-webkit-details-marker { display: none; }
+.trow {
+    margin: 3px 0;
+    background: var(--s2);
+}
+/* `> summary`, not a descendant: the fold holds tool blocks with carets of
+   their own, and those answer to their own open state. */
+.trun[open] > summary .caret { transform: rotate(90deg); }
+
+.tool-body { padding: 4px 15px 14px; }
+
+.tool-section { margin-top: 12px; }
+.tool-section > h4 {
+    margin: 0 0 6px;
+    font: 500 11.5px/1 var(--sans);
+    color: var(--text-4);
+    letter-spacing: 0.02em;
+}
+
+.io {
+    margin: 0;
+    padding: 12px 14px;
+    background: var(--bg);
+    border-radius: var(--r-sm);
+    font: 400 12.5px/1.6 var(--mono);
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-x: auto;
+    max-height: 420px;
+    overflow-y: auto;
+    color: var(--text-2);
+}
+.io.err { color: #f4a9a3; }
+
+.kv {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 4px 16px;
+    font: 400 12.5px/1.6 var(--mono);
+    padding: 12px 14px;
+    background: var(--bg);
+    border-radius: var(--r-sm);
+}
+.kv dt { color: var(--text-4); }
+.kv dd { margin: 0; color: var(--text-2); word-break: break-all; }
+
+.more-btn {
+    margin-top: 10px;
+    height: 32px;
+    padding: 0 16px;
+    font: 500 12.5px/1 var(--sans);
+    color: var(--blue);
+    background: transparent;
+    border-radius: var(--pill);
+    transition: background var(--t-fast) var(--ease);
+}
+.more-btn:hover { background: var(--blue-tint); }
+.more-btn:disabled { color: var(--text-4); background: none; }
+
+/* diff */
+.diff {
+    background: var(--bg);
+    border-radius: var(--r-sm);
+    font: 400 12.5px/1.6 var(--mono);
+    overflow-x: auto;
+    padding: 6px 0;
+}
+.diff .hunk {
+    padding: 4px 14px;
+    color: var(--text-4);
+    font-size: 11.5px;
+}
+.diff .dl { padding: 0 14px; white-space: pre; }
+/* Kept low-saturation: a long diff should not become a wall of colour. */
+.diff .dl.add { background: #14211a; color: #9ad8b2; }
+.diff .dl.del { background: #241819; color: #e8a9a4; }
+.diff .dl.ctx { color: var(--text-4); }
+
+/* subagent */
+.subagent-log {
+    margin-top: 10px;
+    padding-left: 16px;
+    border-left: 2px solid var(--outline-soft);
+}
+.subagent-log .ev { grid-template-columns: 44px 1fr; column-gap: 12px; }
+
+.subagent-meta {
+    font: 400 11.5px/1.6 var(--mono);
+    color: var(--text-3);
+}
+.subagent[data-status="running"] .subagent-meta { color: var(--yellow); }
+.subagent[data-status="failed"] .subagent-meta { color: var(--red); }
+
+.subagent-btns { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.more-btn.primary { background: var(--blue-tint); }
+.more-btn.primary:hover { background: var(--blue-deep); color: #fff; }
+
+/* A subagent has nothing to send to, so the composer reads as unavailable
+   rather than merely inert. */
+.conv[data-scope="agent"] .composer { opacity: 0.55; }
+.conv[data-scope="agent"] .input-row textarea { cursor: not-allowed; }
+
+/* ── prose ───────────────────────────────────────────────────────────── */
+
+.prose { font-size: 14px; line-height: 1.72; color: var(--text-2); }
+.prose > *:first-child { margin-top: 0; }
+.prose > *:last-child { margin-bottom: 0; }
+.prose p { margin: 0 0 0.8em; }
+.prose h1, .prose h2, .prose h3, .prose h4, .prose h5, .prose h6 {
+    margin: 1.5em 0 0.55em;
+    line-height: 1.35;
+    font-weight: 500;
+    color: var(--text);
+    letter-spacing: -0.002em;
+}
+.prose h1 { font-size: 1.35em; }
+.prose h2 { font-size: 1.2em; }
+.prose h3 { font-size: 1.08em; }
+.prose h4, .prose h5, .prose h6 { font-size: 1em; color: var(--text-2); }
+.prose ul, .prose ol { margin: 0 0 0.8em; padding-left: 1.45em; }
+.prose li { margin: 0.22em 0; }
+.prose li::marker { color: var(--text-4); }
+.prose li.task { list-style: none; margin-left: -1.3em; display: flex; gap: 9px; }
+.prose li.task input { margin-top: 5px; accent-color: var(--blue); }
+.prose li > p { margin: 0 0 0.35em; }
+.prose blockquote {
+    margin: 0 0 0.8em;
+    padding: 2px 0 2px 16px;
+    border-left: 3px solid var(--outline);
+    color: var(--text-3);
+}
+.prose hr { border: none; border-top: 1px solid var(--outline-soft); margin: 1.5em 0; }
+.prose img { max-width: 100%; border-radius: var(--r-sm); }
+.prose strong { color: var(--text); font-weight: 500; }
+.prose em { color: var(--text-2); }
+.prose del { color: var(--text-4); }
+
+/* A path in prose opens the file on the Windows host. A dotted rule rather than
+   the link blue: half of these sit inside a code span, where blue would fight the
+   peach that says "this is code" — and a URL and a path visibly going to
+   different places is worth more than both of them being loud. `color: inherit`
+   is what makes the nested case need no second rule. */
+.prose a.fs-path {
+    color: inherit;
+    text-decoration: underline dotted var(--text-4);
+    text-underline-offset: 2px;
+    text-decoration-thickness: 1px;
+    cursor: pointer;
+}
+.prose a.fs-path:hover { text-decoration: underline solid currentColor; }
+
+.prose code {
+    font: 400 0.87em/1.5 var(--mono);
+    background: var(--s3);
+    border-radius: var(--r-xs);
+    padding: 0.12em 0.4em;
+    color: var(--peach);
+    word-break: break-word;
+}
+
+.table-wrap { overflow-x: auto; margin: 0 0 1em; border-radius: var(--r-sm); }
+.prose table { border-collapse: collapse; font-size: 13px; min-width: 100%; }
+.prose th, .prose td { padding: 8px 14px; text-align: left; }
+.prose th {
+    background: var(--s3);
+    font-weight: 500;
+    color: var(--text);
+    white-space: nowrap;
+}
+.prose td { background: var(--s2); }
+.prose tbody tr:not(:last-child) td { box-shadow: inset 0 -1px 0 var(--outline-soft); }
+
+/* code blocks */
+.code-block {
+    margin: 0 0 1em;
+    background: var(--bg);
+    border-radius: var(--r);
+    overflow: hidden;
+}
+.code-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 8px 6px 16px;
+    min-height: 34px;
+}
+.code-lang {
+    font: 400 11.5px/1 var(--sans);
+    color: var(--text-4);
+    letter-spacing: 0.02em;
+}
+.copy-btn {
+    margin-left: auto;
+    height: 26px;
+    padding: 0 12px;
+    border-radius: var(--pill);
+    font: 500 11.5px/1 var(--sans);
+    color: var(--text-3);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.copy-btn:hover { color: var(--text); background: var(--s3); }
+.copy-btn.done { color: var(--green); }
+
+.code-block pre { margin: 0; padding: 4px 16px 16px; overflow-x: auto; max-height: 520px; }
+.code-block code {
+    font: 400 12.5px/1.65 var(--mono);
+    background: none;
+    padding: 0;
+    color: var(--text-2);
+    white-space: pre;
+}
+
+/* tokens — muted, close in value, so code reads as text not confetti */
+.tok-comment   { color: #6f7579; font-style: italic; }
+.tok-string    { color: #95d3a5; }
+.tok-regex     { color: #86cfc4; }
+.tok-number    { color: #f0b96b; }
+.tok-keyword   { color: #c9a6f5; }
+.tok-builtin   { color: #a8c7fa; }
+.tok-fn        { color: #8fc0f0; }
+.tok-type      { color: #7fd0c4; }
+.tok-var       { color: #f2b48a; }
+.tok-flag      { color: #c1adf0; }
+.tok-decorator { color: #f0b96b; }
+.tok-key       { color: #8fc0f0; }
+.tok-prop      { color: #8fc0f0; }
+.tok-selector  { color: #c9a6f5; }
+.tok-at        { color: #c9a6f5; }
+.tok-tag       { color: #c9a6f5; }
+.tok-attr      { color: #f0b96b; }
+.tok-doctype   { color: #6f7579; }
+.tok-punct     { color: #8b9094; }
+.tok-diff-meta { color: #a8c7fa; }
+.tok-diff-add  { color: #a7e6bd; }
+.tok-diff-del  { color: #f4b4ae; }
+
+/* ── terminal ────────────────────────────────────────────────────────── */
+
+/* Height is set by dragging the grip and remembered; the flex rules only stop
+   it eating the transcript entirely, which a drag to the top otherwise would. */
+.term-pane {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    height: var(--term-h, 300px);
+    min-height: 120px;
+    max-height: 78vh;
+    background: var(--s2);
+    border-top: 1px solid var(--outline-soft);
+}
+.term-pane[hidden] { display: none; }
+
+.term-grip {
+    flex: none;
+    height: 7px;
+    margin-top: -4px;
+    cursor: row-resize;
+    background: transparent;
+    transition: background var(--t-fast) var(--ease);
+}
+.term-grip:hover, .term-grip.dragging { background: var(--blue-cont); }
+
+.term-head {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 2px 12px 4px;
+}
+/* Shrinkable, not fixed: this holds the shell's directory, which homely() has
+   already shortened, but also a run's whole command line, which nothing has. */
+.term-dir {
+    flex: 0 1 auto;
+    min-width: 0;
+    font: 400 11.5px/1.5 var(--mono);
+    color: var(--text-4);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+/* Only shown when the session has moved on from where this shell opened —
+   a worktree it entered after the pane was already running. */
+.term-moved {
+    flex: 0 1 auto;
+    min-width: 0;
+    font: 400 11.5px/1.5 var(--sans);
+    color: var(--yellow);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.term-moved[hidden] { display: none; }
+.term-head .spacer { flex: 1; }
+
+.term-btn {
+    flex: none;
+    padding: 3px 10px;
+    border-radius: var(--pill);
+    font: 400 12px/1.4 var(--sans);
+    color: var(--text-3);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.term-btn:hover { background: var(--s3); color: var(--text); }
+.term-btn[hidden] { display: none; }
+/* A task's page is the thing most people start one for, and the button that
+   shows it would otherwise look exactly like Hide. */
+#term-preview:not(:disabled) { color: var(--blue); }
+#term-preview:not(:disabled):hover { background: var(--s3); }
+.term-btn:disabled { opacity: .5; cursor: default; }
+.term-btn:disabled:hover { background: none; color: var(--text-3); }
+
+/* The shell, then a run per declared command that has been started. Absent
+   entirely until there is a run, so a project that declares nothing sees the
+   pane exactly as it was. */
+.term-tabs {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+.term-tabs[hidden] { display: none; }
+
+.term-tab {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 9px;
+    border-radius: var(--pill);
+    font: 400 11.5px/1.5 var(--sans);
+    color: var(--text-4);
+    white-space: nowrap;
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.term-tab:hover { background: var(--s3); color: var(--text-2); }
+.term-tab.on { background: var(--s3); color: var(--text); }
+/* Green only for something actually answering on its port. */
+.term-tab.on-air::before,
+.term-tab.dead::before {
+    content: '';
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: var(--green);
+}
+.term-tab.dead::before { background: var(--text-4); }
+
+/* xterm measures itself against this box, so it has to be the one that scrolls
+   and it has to have a real height of its own. */
+.term-body {
+    flex: 1;
+    min-height: 0;
+    padding: 0 6px 6px 12px;
+    overflow: hidden;
+}
+.term-body .xterm { height: 100%; }
+.term-body .xterm-viewport { background: transparent !important; }
+.term-body .xterm-viewport::-webkit-scrollbar { width: 10px; }
+
+/* Dragging the grip over the transcript would otherwise select all of it. */
+body.term-resizing { user-select: none; cursor: row-resize; }
+
