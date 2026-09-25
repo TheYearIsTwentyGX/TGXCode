@@ -2,7 +2,10 @@
  *
  * Narrow desktop windows — not phone CSS; there is no mobile web UI. One
  * @media block reaching into the transcript, the composer, the boards and
- * Settings, kept whole and kept after all of them because it overrides them.
+ * Settings, kept whole and kept after them because it overrides them. It is
+ * linked *before* viewers.css, colours.css and preview.css, so a narrow-window
+ * rule for the context menu, the diff viewer, project colours or the preview
+ * loses to those files at equal specificity.
  *
  * Linked from web/index.html in the order the sections had in the old
  * web/styles.css, and concatenated in that order they reproduce it exactly, so

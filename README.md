@@ -389,7 +389,7 @@ Two rules worth knowing before you send a patch:
 | `web/css/dialogs.css` | Scrims, modals and the fields, pickers and buttons in them; notification history, the delete and restart confirmations, toasts |
 | `web/css/boards.css` | The task board, drafts, the schedule builder and the schedules panel |
 | `web/css/settings.css` | Settings — its groups, the shortcut table, Claude Code's settings and memory files, project commands, the snippet editor and dialogs |
-| `web/css/narrow.css` | The narrow-desktop-window `@media` block, which reaches into several areas and so comes after all of them. Not phone CSS |
+| `web/css/narrow.css` | The narrow-desktop-window `@media` block, which reaches into several areas and so comes after the transcript, composer, dialogs, boards and Settings it overrides — but before `viewers.css`, `colours.css` and `preview.css`, so a narrow override for those loses to them at equal specificity. Not phone CSS |
 | `web/css/viewers.css` | The right-click menu and the diff viewer's re-theming of `vendor/diff2html.css`, which is linked before every file here so no `!important` is needed |
 | `web/css/colours.css` | Project colours across the surfaces above, and Wispr Flow transforms. Late because it overrides them |
 | `web/css/preview.css` | The browser preview pane |
