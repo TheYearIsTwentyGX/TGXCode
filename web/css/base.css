@@ -67,6 +67,11 @@
     --ease: cubic-bezier(0.2, 0, 0, 1);
 }
 
+/* A 12-hour clock is two characters longer than a 24-hour one ("3:04:05 PM"
+   against "15:04:05"), which is more than the 68px gutter holds. See
+   transcript.clock in bridge/prefs.js and applyClock in web/app.js. */
+:root[data-clock="12h"] { --gutter: 80px; }
+
 * { box-sizing: border-box; }
 
 html, body { height: 100%; margin: 0; }

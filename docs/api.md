@@ -1109,7 +1109,11 @@ one, which is the same class of thing.
 `transcript` today: `groupToolCalls` (fold a run of tool calls into one row once
 a message closes it), `groupMinCalls` (how long a run has to be — at least 2),
 `groupIncludesThinking` (whether a thinking block is part of the run or the end
-of it).
+of it), `clock` (string, `"24h"` or `"12h"`, default `"24h"` — how a wall clock
+reads: `15:04:05` or `3:04:05 PM`). **`clock` is applied by the client, not the
+bridge** — every timestamp in every payload is the same ISO string or epoch
+milliseconds whatever it says. The desktop applies it to every clock it draws,
+not only the transcript's.
 
 `live` is about the desktop live board: `compact` (bool — a card stops at the
 tool-count line, with no history preview, no message box, no Open/Stop and no

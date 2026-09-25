@@ -102,8 +102,16 @@ export const SETTINGS_CATEGORIES = [
 export const SETTINGS = [
     {
         title: 'Reading', section: 'transcript', category: 'workspace',
-        note: 'How a transcript folds the work between one message and the next.',
+        note: 'How a transcript folds the work between one message and the next, '
+            + 'and how its clocks read.',
         rows: [
+            { key: 'clock', type: 'choice',
+                label: 'Clock',
+                options: [
+                    ['24h', '24-hour · 15:04'],
+                    ['12h', '12-hour · 3:04 PM'],
+                ],
+                note: 'Every time the app shows, not only the transcript’s.' },
             { key: 'groupToolCalls', type: 'bool',
                 label: 'Fold finished runs of tool calls',
                 note: 'Once a message closes a run, it becomes one row you can open.' },

@@ -22,7 +22,7 @@
 // nothing read it and is a thrown error the moment something does.
 export const PREFS_FALLBACK = {
     version: 1,
-    transcript: { groupToolCalls: true, groupMinCalls: 3, groupIncludesThinking: true },
+    transcript: { groupToolCalls: true, groupMinCalls: 3, groupIncludesThinking: true, clock: '24h' },
     live: {
         compact: false, hideElsewhere: false, order: 'needs-you',
         overTasks: 'hidden', overDashboard: 'hidden', overHistory: 'hidden',

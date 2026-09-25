@@ -30,7 +30,7 @@ import { del, get, patch, post, put } from './api.js';
 import { PREFS_FALLBACK, BOOT_PREFS, BOOT_HOST, pairToken } from './boot.js';
 import { DEFAULT_PERM, state } from './state.js';
 import { dom, el, toast, modalUp, closeOnClickOutside } from './dom.js';
-import { ago, clip, dur, noteHome, shortPath } from './format.js';
+import { ago, clip, dur, noteHome, setClock, shortPath } from './format.js';
 import { loadChannels } from './channels.js';
 import { PR_ICON, icon } from './icons.js';
 import { pullAndRestart, closeRestart, startFixSession } from './restart.js';
@@ -177,6 +177,18 @@ export function paintBackdropTint(preview) {
     root.toggleAttribute('data-plain-backdrop', p.backdropTint === false);
 }
 paintBackdropTint();
+
+/**
+ * `transcript.clock`, told to web/format.js (which draws every clock but may
+ * not read `state`) and to the root (whose `data-clock` widens the gutter a
+ * 12-hour clock needs — see web/css/base.css). What is already drawn keeps the
+ * old answer until it is drawn again; applyPrefsLive redraws for that.
+ */
+export function applyClock() {
+    setClock(BOOT_PREFS.transcript.clock);
+    document.documentElement.dataset.clock = BOOT_PREFS.transcript.clock === '12h' ? '12h' : '24h';
+}
+applyClock();
 
 // Here rather than beside its callers because paintPanels() asks it about
 // visibility, and paintPanels runs during boot, well before the section that

@@ -39,7 +39,7 @@ const ok = (name) => { pass++; console.log(`  ok  ${name}`); };
 process.removeAllListeners('warning');
 
 (async () => {
-    const { dateOf } = await import('../web/format.js');
+    const { dateOf, clockOf, hhmm, hourOpts, setClock } = await import('../web/format.js');
 
     // A fixed "now" so nothing here depends on when the suite runs: Tue 22 Sep
     // 2026, 08:00, local. Local rather than UTC because the rule is about the
@@ -154,6 +154,30 @@ process.removeAllListeners('warning');
     assert.strictEqual(dateOf(new Date().toISOString()), '',
         'a message sent this instant');
     ok('now defaults to the wall clock');
+
+    // ── the 12- or 24-hour clock ────────────────────────────────────────────────
+
+    // `transcript.clock`. Built from local-time parts, as the functions read them,
+    // so the file passes in any time zone.
+    const local = (h, m, s) => new Date(2026, 8, 21, h, m, s).toISOString();
+    assert.strictEqual(clockOf(local(15, 4, 5)), '15:04:05', '24h is the default');
+    assert.strictEqual(hhmm(local(9, 7, 0)), '09:07');
+    assert.strictEqual(hourOpts().hour12, false);
+    setClock('12h');
+    try {
+        assert.strictEqual(clockOf(local(15, 4, 5)), '3:04:05 PM');
+        assert.strictEqual(clockOf(local(0, 0, 0)), '12:00:00 AM', 'midnight is 12 AM, not 0');
+        assert.strictEqual(clockOf(local(12, 30, 9)), '12:30:09 PM', 'noon is 12 PM');
+        assert.strictEqual(hhmm(local(9, 7, 0)), '9:07 AM');
+        assert.strictEqual(hhmm(local(23, 59, 0)), '11:59 PM');
+        assert.strictEqual(clockOf(''), '', 'no ts is still an empty gutter');
+        assert.strictEqual(hhmm(null), '');
+        assert.strictEqual(hourOpts().hour12, true);
+    } finally {
+        setClock('24h');
+    }
+    assert.strictEqual(clockOf(local(15, 4, 5)), '15:04:05', 'and back');
+    ok('the clock reads 12- or 24-hour as transcript.clock says');
 
     console.log(`\nmessage-date: ${pass} passed`);
 })();

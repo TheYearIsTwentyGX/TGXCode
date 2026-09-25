@@ -465,7 +465,8 @@ defaults the first time the bridge runs, so it is there to edit:
   "transcript": {
     "groupToolCalls": true,
     "groupMinCalls": 3,
-    "groupIncludesThinking": true
+    "groupIncludesThinking": true,
+    "clock": "24h"
   }
 }
 ```
@@ -474,7 +475,9 @@ defaults the first time the bridge runs, so it is there to edit:
 or two rows collapsed into a summary loses more than it saves.
 `groupIncludesThinking` decides whether a thinking block is part of the work
 stretch or the end of it; folding it in keeps runs long, and breaking on it
-fragments a turn that thinks between every call.
+fragments a turn that thinks between every call. `clock` is `"24h"` (`15:04:05`)
+or `"12h"` (`3:04:05 PM`), and it is every clock the app draws, not only the
+transcript's — Settings → Reading → Clock.
 
 A project can override any of these in `<checkout>/.tgxcode/settings.json`, the
 same directory it declares its commands in and with the same precedence — see

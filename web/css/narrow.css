@@ -16,7 +16,7 @@
 /* ── narrow windows ──────────────────────────────────────────────────── */
 
 @media (max-width: 980px) {
-    :root { --rail: 250px; --gutter: 0px; }
+    :root, :root[data-clock="12h"] { --rail: 250px; --gutter: 0px; }
     .ev { grid-template-columns: 1fr; column-gap: 0; }
     .ev-time { display: none; }
     .log { padding: 6px 16px 40px; }

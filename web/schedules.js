@@ -41,7 +41,7 @@ import { html, useState } from './vendor/preact.js';
 import { del, get, patch, post } from './api.js';
 import { state } from './state.js';
 import { dom, toast } from './dom.js';
-import { ago, clip } from './format.js';
+import { ago, clip, hourOpts } from './format.js';
 import * as keys from './keys.js';
 import {
     closeOtherPanels, paintPanels, rememberView, syncBoardWatch, syncTaskboardWatch,
@@ -389,8 +389,8 @@ function schedNext(s) {
     const soon = s.nextRunAt - Date.now();
     // Under a day, the clock time is what you want; past that, the date is.
     const when = soon < 24 * 3600e3
-        ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-        : d.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+        ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', ...hourOpts() })
+        : d.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit', ...hourOpts() });
     return `next ${when}`;
 }
 
