@@ -74,6 +74,7 @@ export const liveStrip = () => dom.live.dataset.mode === 'dock' && state.live.do
  */
 const liveCompact = () => BOOT_PREFS.live.compact;
 const liveHideElsewhere = () => BOOT_PREFS.live.hideElsewhere;
+const liveByArrival = () => BOOT_PREFS.live.order === 'arrival';
 
 // How much history a card carries when it has the screen to itself.
 const HEADLINES_SHOWN = 3;
@@ -113,6 +114,9 @@ export function renderLive() {
         ? d.sessions.filter(s => !elsewhere(s))
         : d.sessions;
     const hiddenAway = d.sessions.length - sessions.length;
+    // Before the filter above is applied, so that turning `hideElsewhere` on and
+    // off does not send every terminal session to the back of the queue.
+    rememberArrival(d.sessions.filter(s => s.reason !== 'pinned'));
 
     const bits = [];
     if (d.waiting) bits.push(`${d.waiting} waiting for you`);
@@ -226,18 +230,58 @@ function jumpToGroup(key, label) {
 }
 
 /**
+ * When the work behind a card began, for seeding the queue on the first pass.
+ * `busySince` is the turn's own start; a session running in a terminal has no
+ * runner, so it falls back to the last thing somebody asked it.
+ */
+function startedAt(s) {
+    if (s.runner && s.runner.busySince) return s.runner.busySince;
+    const ts = Date.parse(s.lastUserTs || s.lastTs || '');
+    return Number.isNaN(ts) ? 0 : ts;
+}
+
+/**
+ * Keep `state.live.arrival` in step with the Live group: forget what has left
+ * it, and put what is new on the end.
+ *
+ * Forgetting is the half that makes the queue move — a card climbs because the
+ * ones above it stopped holding ranks, not because its own changed — and it is
+ * also why a session that finishes and is later asked something else rejoins at
+ * the bottom rather than where it used to be. That is the queue as asked for,
+ * even though a turn that ends and is followed at once by another is two visits.
+ *
+ * The first pass has nothing to go on but the cards themselves, all "new" at
+ * once, so it orders them by when their work started instead: the board opens
+ * with the longest-running job on top, as if it had been watching all along.
+ */
+function rememberArrival(list) {
+    const a = state.live.arrival;
+    const ids = new Set(list.map(s => s.sessionId));
+    for (const id of a.keys()) if (!ids.has(id)) a.delete(id);
+
+    const fresh = list.filter(s => !a.has(s.sessionId));
+    if (!a.size) fresh.sort((x, y) => startedAt(x) - startedAt(y));
+    for (const s of fresh) a.set(s.sessionId, state.live.nextArrival++);
+}
+
+/**
  * The board in three parts — along the strip, down the column, or down the page.
  *
  * Pinned and running are already known — they are the reasons the bridge sorts
  * the board by — so those two groups are that one list cut in two rather than a
  * second opinion about it, and the needs-you-first order inside each survives
- * the cut. Recent is the array the bridge sends beside it.
+ * the cut — unless `live.order` is `arrival`, when Live is put back into the
+ * order its cards joined in. Recent is the array the bridge sends beside it.
  *
  * Empty groups are dropped rather than shown empty: three headings over one card
  * is mostly headings, and the strip has no room to spare for them.
  */
 function liveGroups(d, strip) {
     const live = d.sessions.filter(s => s.reason !== 'pinned');
+    if (liveByArrival()) {
+        const rank = (s) => state.live.arrival.get(s.sessionId) ?? Infinity;
+        live.sort((x, y) => rank(x) - rank(y));
+    }
     const pinned = d.sessions.filter(s => s.reason === 'pinned');
     const recent = d.recent || [];
     // A settings question rather than a layout one: how much of a card there is

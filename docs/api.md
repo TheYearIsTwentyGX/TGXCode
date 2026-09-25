@@ -1043,7 +1043,13 @@ tool-count line, with no history preview, no message box, no Open/Stop and no
 approval row), `hideElsewhere` (bool — leave out cards whose session is running
 under something that is not this bridge, i.e. `reason: "elsewhere"`; the board
 says how many it left out rather than dropping them silently). Both default
-`false`.
+`false`. `order` (string, `"needs-you"` or `"arrival"`, default `"needs-you"`)
+is how the board orders its Live group: `needs-you` is the order
+`/api/overview` sends; `arrival` holds each card where it joined, new ones at the
+bottom, moving up only as the cards above leave the group. **It is applied by the
+client, not the bridge** — `sessions` in the overview payload is in the
+needs-you order whatever this says, so a client that honours `arrival` keeps its
+own record of when each session id first appeared.
 
 Six more `live` keys say whether the board stays on screen while a whole-screen
 panel is open, one per panel: `overTasks`, `overDashboard`, `overHistory`,

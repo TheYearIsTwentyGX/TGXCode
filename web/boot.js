@@ -24,7 +24,7 @@ export const PREFS_FALLBACK = {
     version: 1,
     transcript: { groupToolCalls: true, groupMinCalls: 3, groupIncludesThinking: true },
     live: {
-        compact: false, hideElsewhere: false,
+        compact: false, hideElsewhere: false, order: 'needs-you',
         overTasks: 'hidden', overDashboard: 'hidden', overHistory: 'hidden',
         overDrafts: 'hidden', overSchedules: 'hidden', overSettings: 'hidden',
     },

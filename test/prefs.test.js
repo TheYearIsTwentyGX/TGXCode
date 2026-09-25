@@ -504,6 +504,12 @@ assert.ok(!('live' in doc), 'an emptied section should go rather than sit there 
 assert.strictEqual(prefs.forCwd().live.compact, DEFAULTS.live.compact);
 ok('null removes a key, and an emptied section goes with it');
 
+prefs.save({ scope: 'user', patch: { live: { order: 'arrival' } } });
+assert.strictEqual(prefs.forCwd().live.order, 'arrival');
+prefs.save({ scope: 'user', patch: { live: { order: null } } });
+assert.strictEqual(prefs.forCwd().live.order, 'needs-you', 'the board defaults to needs-you first');
+ok('live.order saves, reads back, and clears to needs-you');
+
 // "All views" in Settings is one save of six keys, and clearing one afterwards
 // must leave the other five where they were.
 prefs.save({ scope: 'user', patch: { live: Object.fromEntries(OVER.map(k => [k, 'always'])) } });
@@ -598,6 +604,8 @@ refuses({ scope: 'user', patch: { nope: { a: 1 } } }, 'section', 'a section that
 refuses({ scope: 'user', patch: { live: { nope: true } } }, 'section', 'a key that does not exist');
 refuses({ scope: 'user', patch: { live: true } }, 'section', 'a section that is not an object');
 refuses({ scope: 'user', patch: { live: { overTasks: 'bottom' } } }, 'value', 'a dock word that is not a visibility');
+refuses({ scope: 'user', patch: { live: { order: 'newest' } } }, 'value', 'an order the board does not know');
+refuses({ scope: 'user', patch: { live: { order: true } } }, 'value', 'an order that is not a string');
 refuses({ scope: 'user', patch: null }, 'section', 'no patch at all');
 refuses({ scope: 'project', patch: { live: { compact: true } } }, 'dir', 'a project scope with no directory');
 refuses({ scope: 'project', dir: '/etc', patch: { live: { compact: true } } },

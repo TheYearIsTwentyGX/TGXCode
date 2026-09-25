@@ -101,6 +101,12 @@ export const SETTINGS = [
                 label: 'Leave out sessions running elsewhere',
                 note: 'Sessions under a terminal or another window — the cards this '
                     + 'board cannot drive. It says how many it left out.' },
+            { key: 'order', type: 'radio',
+                label: 'Order of the Live group',
+                options: [['needs-you', 'Needs you first'], ['arrival', 'Order of arrival']],
+                note: 'Order of arrival puts new work at the bottom and moves it up only '
+                    + 'as the sessions above it finish, so nothing reorders while you read. '
+                    + 'Pinned and Recent activity are unaffected.' },
             { type: 'heading', label: 'Live board visibility',
                 note: 'Whether the board stays up, docked beside or under the screen, '
                     + 'while one of these is open. Side-by-Side and Stacked keep it '

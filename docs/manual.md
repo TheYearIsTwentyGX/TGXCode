@@ -489,15 +489,16 @@ inherited it, and which file has taken it over when a stronger one has. See
 
 ### Cutting the live board down
 
-The same file has a `live` block, for the board behind **Live** (`Ctrl+3`) — two
-keys, both off by default:
+The same file has a `live` block, for the board behind **Live** (`Ctrl+3`) — three
+keys, all at their quietest by default:
 
 ```json
 {
   "version": 1,
   "live": {
     "compact": false,
-    "hideElsewhere": false
+    "hideElsewhere": false,
+    "order": "needs-you"
   }
 }
 ```
@@ -517,6 +518,15 @@ them, because two processes appending to one transcript is how a transcript gets
 corrupted — so if what you want from the board is only what you can drive from
 here, this is the switch. The subtitle still counts what it left out; the board
 never quietly shrinks.
+
+`order` decides how the **Live** group is sorted. `needs-you`, the default, puts
+anything waiting on you first and then whatever moved most recently — which
+means a card can move every time its session writes something. `arrival` turns
+the group into a queue: a session that starts working joins at the bottom, keeps
+its place however busy it is (an approval it is waiting on included), and moves
+up only as the sessions above it finish. One that finishes and is later given
+more work rejoins at the bottom. Pinned and Recent activity are ordered as
+before. In Settings it is *Live board → Order of the Live group*.
 
 Both are read from **your** file rather than a project's, even though a project
 may set them. The board is the one view that is not about a single session — it
