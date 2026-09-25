@@ -11,7 +11,8 @@ import { dom, el, toast } from '../dom.js';
 import { shortPath } from '../format.js';
 import { renderMarkdown } from '../markdown.js';
 import { state } from '../state.js';
-import { formatBytes, grow } from '../app.js';
+import { formatBytes } from '../composer/attachments.js';
+import { grow } from '../composer/send.js';
 import { copyPath } from './claude-config.js';
 import { renderSettings, settingsProject } from './index.js';
 

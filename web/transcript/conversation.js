@@ -24,13 +24,17 @@ import { icon, PR_ICON } from '../icons.js';
 import * as keys from '../keys.js';
 import { cvStaleFor } from '../quota.js';
 import { state } from '../state.js';
+import { loadCommands } from '../commands.js';
+import { showTerm, termOpen } from '../term-pane.js';
 import {
-    applyRunner, autoGrow, clearAttach, clearPendingSend, closeLater, closeMenus, grouping,
-    live, loadAttach, loadCommands, loadDraft, loadSessions, markSessionNotesRead, paintPanels,
-    prUnknownWhy, rememberView, renderAttach, renderLater, renderPins, renderRail, saveDraft,
-    scrollToEnd, showDash, showPreview, showTaskboard, showTerm, subscribe, takePendingJump,
-    termOpen,
+    applyRunner, grouping, loadAttach, loadDraft, loadSessions, markSessionNotesRead,
+    paintPanels, prUnknownWhy, rememberView, renderPins, renderRail, saveDraft, scrollToEnd,
+    showDash, showPreview, showTaskboard, subscribe, takePendingJump,
 } from '../app.js';
+import { clearAttach, renderAttach } from '../composer/attachments.js';
+import { closeLater, renderLater } from '../composer/later.js';
+import { autoGrow, clearPendingSend } from '../composer/send.js';
+import { closeMenus, live } from '../composer/slash.js';
 import { loadChangesIfStale, renderChanges, resetChanges } from './changes.js';
 import { renderChecklist, resetChecklist } from './checklist.js';
 import { findKey, markFindDirty, resetFind } from './find.js';

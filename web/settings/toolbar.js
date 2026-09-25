@@ -10,7 +10,8 @@ import { BOOT_PREFS } from '../boot.js';
 import { dom, el } from '../dom.js';
 import { icon } from '../icons.js';
 import { showCv, showQuota } from '../quota.js';
-import { devBrowserShown, showNewMenu } from '../app.js';
+import { devBrowserShown } from '../app.js';
+import { showNewMenu } from '../new-session/recent.js';
 import { saveSetting } from './index.js';
 
 // ── the top bar's layout ─────────────────────────────────────────────────

@@ -15,11 +15,13 @@ import { dom, el, toast } from '../dom.js';
 import { noteHome, shortPath } from '../format.js';
 import * as keys from '../keys.js';
 import { state } from '../state.js';
+import { termPane } from '../term-pane.js';
 import {
-    closeOtherPanels, liveVisible, loadPairing, paintBackdropTint,
-    paintComposerHint, paintDevBrowserPresence, paintPanels, paintRailSort, rememberView,
-    renderLive, renderRail, syncBoardWatch, syncTaskboardWatch, termPane,
+    closeOtherPanels, liveVisible, loadPairing, paintBackdropTint, paintDevBrowserPresence,
+    paintPanels, paintRailSort, rememberView, renderLive, renderRail, syncBoardWatch,
+    syncTaskboardWatch,
 } from '../app.js';
+import { paintComposerHint } from '../composer/send.js';
 import { openSession } from '../transcript/conversation.js';
 import { loadClaudeConfig } from './claude-config.js';
 import { settingAllRow, settingHeading, settingRow, SETTINGS } from './general.js';

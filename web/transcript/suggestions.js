@@ -11,7 +11,7 @@ import { get, post } from '../api.js';
 import { dom, el, toast } from '../dom.js';
 import { renderMarkdown } from '../markdown.js';
 import { state } from '../state.js';
-import { openNew } from '../app.js';
+import { openNew } from '../new-session/dialog.js';
 import { openSession, openSessionSoon } from './conversation.js';
 import { slidePane, syncPaneInsets } from './layout.js';
 

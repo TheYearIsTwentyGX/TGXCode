@@ -10,7 +10,9 @@ import { get, put } from '../api.js';
 import { dom, el, toast } from '../dom.js';
 import { shortPath } from '../format.js';
 import { state } from '../state.js';
-import { devBrowserShown, grow, loadCommands, snipDeleteButton } from '../app.js';
+import { loadCommands } from '../commands.js';
+import { devBrowserShown, snipDeleteButton } from '../app.js';
+import { grow } from '../composer/send.js';
 import { copyPath } from './claude-config.js';
 import { renderSettings, settingsProject } from './index.js';
 
