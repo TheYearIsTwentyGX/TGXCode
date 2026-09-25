@@ -306,7 +306,7 @@ Two rules worth knowing before you send a patch:
 | `scripts/quota-statusline.py` | Claude Code's status line, harvesting the quota percentages on the way past |
 | `scripts/install-quota-statusline.js` | Points `~/.claude/settings.json` at that script, and refuses to clobber one you already have |
 | `web/` | The UI. No build step: edit a file and refresh |
-| `web/app.js` | Everything not yet moved out of it: the transcript, the composer and every other surface but Settings. Imports the modules below |
+| `web/app.js` | Everything not yet moved out of it: the event stream, the composer and every surface but Settings and the transcript. Imports the modules below |
 | `web/api.js` | `get`, `post`, `patch`, `put`, `del`, `postFile` — the fetch wrappers every call to the bridge goes through, and the CSRF header they send |
 | `web/boot.js` | What the page was handed in `<meta>` tags — `BOOT_PREFS` and its fallback, the host paths, the pairing token — read synchronously at load |
 | `web/state.js` | `state`, the page's one mutable store, and `DEFAULT_PERM`. What a surface remembers goes on here, not in a module-level `let` |
@@ -327,6 +327,20 @@ Two rules worth knowing before you send a patch:
 | `web/settings/toolbar.js` | The top bar's layout and More menu, and the Toolbar group that edits them |
 | `web/settings/shortcuts.js` | The Shortcuts group, and the key hints in every title that names a binding |
 | `web/settings/notifications.js` | The Notifications group — this browser's switches for `web/notifications.js` |
+| `web/transcript/` | The open conversation, kept imperative on purpose: rows are append-only, streamed from SSE, with scroll, width and find marks managed by hand. Like `settings/`, every module here evaluates before app.js's body, so none may read an imported binding at top level |
+| `web/transcript/conversation.js` | Opening a session, its header, and appending events to the log through a view — `SESSION_VIEW` or `AGENT_VIEW` — so the main log and the subagent pane share one renderer; folding runs of tool calls |
+| `web/transcript/rows.js` | One row per event — the row shell and its copy button, user, assistant and thinking rows, peer messages, handoffs and system lines |
+| `web/transcript/tools.js` | Tool calls: the one-line summary, the block, and the body built on first expand (`fillTool`) |
+| `web/transcript/approvals.js` | A blocked turn — the permission card, the plan pane and the question dock — and answering it |
+| `web/transcript/review.js` | Reviewing a plan or a question after the fact |
+| `web/transcript/subagents.js` | The subagent list and the pane that opens one's transcript |
+| `web/transcript/suggestions.js` | Suggested follow-ups — the panel, the dialog that shows one at a readable width, and starting or dismissing one |
+| `web/transcript/changes.js` | What this session changed, and the diff viewer (diff2html, read as `window.Diff2Html`, never imported) |
+| `web/transcript/checklist.js` | The session's own task list, the column left of the transcript |
+| `web/transcript/layout.js` | The width the log lays itself out at, the composer's insets, and sliding a side column in and out |
+| `web/transcript/context-menu.js` | The right-click menu, and the file menu on a changed file |
+| `web/transcript/turn-rail.js` | The turn rail, and revealing and flashing a row in the log |
+| `web/transcript/find.js` | Ctrl+F over the transcript and its subagents |
 | `web/terminal.js` | The terminal pane — a shell, or a run's output |
 | `web/markdown.js` | The transcript's markdown renderer |
 | `web/highlight.js` | The syntax highlighter behind it |

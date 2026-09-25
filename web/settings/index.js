@@ -16,10 +16,11 @@ import { noteHome, shortPath } from '../format.js';
 import * as keys from '../keys.js';
 import { state } from '../state.js';
 import {
-    closeOtherPanels, liveVisible, loadPairing, openSession, paintBackdropTint,
+    closeOtherPanels, liveVisible, loadPairing, paintBackdropTint,
     paintComposerHint, paintDevBrowserPresence, paintPanels, paintRailSort, rememberView,
     renderLive, renderRail, syncBoardWatch, syncTaskboardWatch, termPane,
 } from '../app.js';
+import { openSession } from '../transcript/conversation.js';
 import { loadClaudeConfig } from './claude-config.js';
 import { settingAllRow, settingHeading, settingRow, SETTINGS } from './general.js';
 import { loadClaudeDocs } from './memory.js';

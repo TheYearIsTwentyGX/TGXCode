@@ -14,7 +14,7 @@ import { HEADERS, get, post } from './api.js';
 import { state } from './state.js';
 import { dom, el, toast } from './dom.js';
 import { renderQuotaRestart, showQuota } from './quota.js';
-import { openSessionSoon } from './app.js';
+import { openSessionSoon } from './transcript/conversation.js';
 
 // ── picking up new code ─────────────────────────────────────
 // One button: fast-forward the checkout the bridge is serving, then hand over to

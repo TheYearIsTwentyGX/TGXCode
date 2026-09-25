@@ -284,7 +284,7 @@ const TODOS = [
 // ── the same repair, on the client's side of the wire ──────────────────────
 
 {
-    // `web/app.js` renders a TodoWrite block in the transcript from `ev.input`
+    // `web/transcript/tools.js` renders a TodoWrite block in the transcript from `ev.input`
     // as the tool wrote it — the bridge's normaliser is not in that path — so
     // `todoItemsOf` there has to do what `todoInput` does here. It is asserted
     // by reading the source rather than by running a DOM: there is no browser in
@@ -294,10 +294,10 @@ const TODOS = [
     // trusted the result. On the session whose `todos` is a JSON string, the
     // collapsed summary counted the *characters* of that string and offered
     // "1041 items", and iterating it walked the list one character at a time.
-    const app = fs.readFileSync(path.join(__dirname, '..', 'web', 'app.js'), 'utf8');
+    const app = fs.readFileSync(path.join(__dirname, '..', 'web', 'transcript', 'tools.js'), 'utf8');
 
     assert.ok(app.includes('function todoItemsOf('),
-        'web/app.js must have the client-side half of the repair');
+        'web/transcript/tools.js must have the client-side half of the repair');
     // No call site may go back to reading the raw keys, which is what made the
     // string shape a bug in three places at once.
     const raw = app.match(/i\.tasks \|\| i\.todos/g) || [];

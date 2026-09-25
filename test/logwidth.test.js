@@ -1,6 +1,6 @@
 'use strict';
 
-// How wide the transcript lays itself out — `nextLogWidth` in web/app.js.
+// How wide the transcript lays itself out — `nextLogWidth` in web/transcript/layout.js.
 //
 // The function that decides the number is pure, and it is the half of this
 // feature whose mistakes are silent. A log a step *wider* than its pane stops
@@ -9,10 +9,10 @@
 // slides in is back to re-laying out two thousand rows a frame. That reads as
 // "the fix did nothing" rather than as a bug, so it is worth a test.
 //
-// **Lifted out of web/app.js as text, and deliberately.** `web/` has no build
-// step and app.js is a browser module that touches the DOM on the way in, so
-// there is nothing here to require; the alternative is a module of its own for
-// one expression, which README §Layout would then have to carry. The slice is
+// **Lifted out of web/transcript/layout.js as text, and deliberately.** `web/`
+// has no build step, and layout.js imports web/dom.js, which touches the DOM on
+// the way in, so there is nothing here to import; the alternative is a module of
+// its own for one expression, which README §Layout would then have to carry. The slice is
 // anchored on the two constants and the function's own name, so a rename breaks
 // this loudly rather than quietly testing nothing — which is what the first
 // assertion below is for.
@@ -21,9 +21,9 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
-const src = fs.readFileSync(path.join(__dirname, '..', 'web', 'app.js'), 'utf8');
+const src = fs.readFileSync(path.join(__dirname, '..', 'web', 'transcript', 'layout.js'), 'utf8');
 const slice = /\nconst LOG_MAX = [\s\S]*?\nfunction nextLogWidth\([\s\S]*?\n}\n/.exec(src);
-assert.ok(slice, 'web/app.js no longer has LOG_MAX and nextLogWidth where this test looks');
+assert.ok(slice, 'web/transcript/layout.js no longer has LOG_MAX and nextLogWidth where this test looks');
 
 const { nextLogWidth, LOG_MAX, LOG_STEP } =
     new Function(`${slice[0]}\nreturn { nextLogWidth, LOG_MAX, LOG_STEP };`)();

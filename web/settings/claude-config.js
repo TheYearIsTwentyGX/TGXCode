@@ -12,7 +12,8 @@ import { dom, el, toast } from '../dom.js';
 import { shortPath } from '../format.js';
 import { cvSettingsNote } from '../quota.js';
 import { state } from '../state.js';
-import { flashNode, grow } from '../app.js';
+import { grow } from '../app.js';
+import { flashNode } from '../transcript/turn-rail.js';
 import { claudeHooksRow, hkClearDraft } from './hooks.js';
 import { renderSettings, settingsProject } from './index.js';
 
