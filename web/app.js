@@ -2028,10 +2028,12 @@ export function showProjMenu(project, btn) {
     // `custom` order only: the keyboard way to do what dragging the heading does.
     const cards = BOOT_PREFS.projects.sort === 'custom' ? railCardOrder() : [];
     const at = cards.indexOf(project.cwd);
+    const origin = originRow(project.cwd, row);
     dom.projMenu.replaceChildren(
         el('div', { class: 'menu-note' }, clip(project.name, 30)),
         el('div', { class: 'sep' }),
         row('Set project colour', () => openPcolor(project)),
+        origin,
         ...(at < 0 ? [] : [
             el('div', { class: 'sep' }),
             row('Move to top', () => moveRailCard(project.cwd, 'top'), at === 0),
@@ -2041,6 +2043,37 @@ export function showProjMenu(project, btn) {
     );
     placeProjMenu(btn);
     dom.projMenu.querySelector('.picker-row').focus();
+}
+
+/** cwd -> the web URL of its `origin`, or null for none. A session's worth of answers. */
+const originUrls = new Map();
+
+/**
+ * The "Open origin in browser" row, disabled until the bridge says where that is.
+ *
+ * Asked when the menu *opens* rather than when the row is pressed, so the
+ * `window.open` stays inside the click that asked for it — a browser tab blocks
+ * a popup that follows an await. The answer patches this one button, which is
+ * `el()` DOM and not Preact's; if the menu has moved on to another project by
+ * then, the button is no longer in it and the patch lands on nothing.
+ */
+function originRow(cwd, row) {
+    let url = originUrls.get(cwd);
+    const btn = row('Open origin in browser',
+        () => { if (url) window.open(url, '_blank', 'noreferrer'); },
+        url === undefined || url === null);
+    const settle = (u) => {
+        url = u;
+        btn.disabled = !u;
+        if (!u) btn.firstChild.textContent = 'No origin remote';
+    };
+    if (url === null) settle(null);
+    else if (url === undefined) {
+        get(`/api/origin?cwd=${encodeURIComponent(cwd)}`)
+            .then(d => { originUrls.set(cwd, d.url || null); settle(d.url || null); })
+            .catch(() => settle(null));
+    }
+    return btn;
 }
 
 export function closeProjMenu() {

@@ -12,7 +12,7 @@
 
 const assert = require('assert');
 const {
-    resolveStatus, checkSummary, aggregate, ATTENTION_ORDER,
+    resolveStatus, checkSummary, aggregate, ATTENTION_ORDER, originWebUrl,
 } = require('../bridge/pulls.js');
 
 let pass = 0;
@@ -228,5 +228,27 @@ assert.ok(ATTENTION_ORDER.includes('unknown'), 'ATTENTION_ORDER must place gh be
 assert.strictEqual(ATTENTION_ORDER.length, RESOLVABLE.length + 1,
     'ATTENTION_ORDER has a status resolveStatus cannot produce');
 ok('the two orderings share one vocabulary');
+
+// The rail's "Open origin in browser". Every spelling a remote comes in lands on
+// the same page, and a token in an https remote never makes it into the answer —
+// that string goes to a browser and, over the API, possibly to a phone.
+const WEB = [
+    ['git@github.com:o/r.git', 'https://github.com/o/r'],
+    ['git@github.com:o/r', 'https://github.com/o/r'],
+    ['ssh://git@github.com/o/r.git', 'https://github.com/o/r'],
+    ['ssh://git@gitlab.example.com:2222/group/sub/r.git', 'https://gitlab.example.com/group/sub/r'],
+    ['https://github.com/o/r.git\n', 'https://github.com/o/r'],
+    ['https://github.com/o/r/', 'https://github.com/o/r'],
+    ['https://user:ghp_secret@github.com/o/r.git', 'https://github.com/o/r'],
+    ['http://git.internal/o/r', 'https://git.internal/o/r'],
+    ['/home/me/bare.git', null],
+    ['file:///home/me/bare.git', null],
+    ['C:\\repos\\r', null],
+    ['', null],
+];
+for (const [remote, want] of WEB) {
+    assert.strictEqual(originWebUrl(remote), want, `originWebUrl(${JSON.stringify(remote)})`);
+}
+ok('originWebUrl turns every remote spelling into its page, and drops credentials');
 
 console.log(`\n  ${pass} checks passed`);
