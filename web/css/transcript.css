@@ -1060,6 +1060,18 @@
 .ch-del { color: var(--red); }
 .ch-meta { flex: none; min-width: 2.5ch; text-align: right; color: var(--text-4); }
 
+/* The scratchpad is the third list and the least asked-for, so it gets the
+   smaller share; the tree above keeps the 45% it had with two. */
+.ch-sec + .ch-sec + .ch-sec { max-height: 30%; }
+/* Which worktree a run of scratchpad rows came from — only drawn when the
+   session had more than one. */
+.ch-group {
+    padding: 6px 5px 1px;
+    font: 400 10.5px/1.4 var(--sans);
+    letter-spacing: 0.03em;
+    color: var(--text-4);
+}
+
 /* ── the session's own task list ──────────────────────────────────────────
    `class="tasks checklist"`, so everything but the border side comes from the
    suggestions panel — including its two narrow-window rules, which is the whole

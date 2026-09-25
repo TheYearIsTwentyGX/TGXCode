@@ -3442,12 +3442,15 @@ dom.diffReload.addEventListener('click', () => {
 dom.diffCopy.addEventListener('click', async () => {
     try {
         await navigator.clipboard.writeText(state.diff.text || '');
-        toast('Diff copied.', 'ok');
+        toast(state.diff.kind === 'scratch' ? 'Copied.' : 'Diff copied.', 'ok');
     } catch (err) {
         toast(`Could not copy: ${err.message}`, 'error');
     }
 });
 dom.diffJump.addEventListener('click', jumpFromDiff);
+dom.diffOpen.addEventListener('click', () => {
+    if (state.diff.absPath) openPath(state.diff.absPath);
+});
 
 // ── the right-click menu ─────────────────────────────────────────────────
 
@@ -3990,7 +3993,7 @@ document.addEventListener('auxclick', (e) => {
  * No session id: the route is about the machine rather than a conversation,
  * which is what lets a path on the board work with nothing in focus.
  */
-async function openPath(p, { reveal = false } = {}) {
+export async function openPath(p, { reveal = false } = {}) {
     try {
         const out = await post('/api/fs/open', { path: p, reveal });
         // The bridge answers what it actually did. A silent reveal when the click

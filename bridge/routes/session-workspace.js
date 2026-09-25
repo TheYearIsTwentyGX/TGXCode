@@ -1,7 +1,7 @@
 'use strict';
 
 // One session's working directory rather than its conversation: its dev servers,
-// the changes panel (`changes`, `diff`), its pull requests, `reveal`,
+// the changes panel (`changes`, `diff`, `scratchpad`), its pull requests, `reveal`,
 // `open-file` and its terminal pane. The conversation is session.js — see the
 // header there for why the one `/api/sessions/:id` block became two files.
 //
@@ -29,6 +29,7 @@ const git = require('../git');
 const { NEXT, readJson, send } = require('../http');
 const prStore = require('../pr-store');
 const pulls = require('../pulls');
+const scratchpad = require('../scratchpad');
 
 // Handed over by server.js — see the note above ROUTES there.
 let index = null;
@@ -278,6 +279,29 @@ async function handle(req, res, url, pathname, seg, who) {
             if (!out.ok) return answer({ ok: false, ...meta, reason: out.reason, error: out.error });
             return answer({ ok: true, ...meta,
                 diff: out.diff, bytes: out.bytes, truncated: out.truncated });
+        }
+
+        // The session's scratchpad — see bridge/scratchpad.js for where it lives
+        // and why there can be more than one.
+        //
+        // Readable remotely for `diff`'s reason: a read, scoped by re-derivation
+        // to directories this session owns. Opening a file goes through
+        // `/api/fs/open`, which is local-only already, so there is no open here.
+        if (tail === 'scratchpad' && req.method === 'GET' && !seg[4]) {
+            if (!index.summary(sessionId)) return send(res, 404, { error: 'session not found' });
+            return send(res, 200, { checkedAt: new Date().toISOString(), ...scratchpad.list(sessionId) });
+        }
+        if (tail === 'scratchpad' && seg[4] === 'file' && !seg[5] && req.method === 'GET') {
+            const given = String(url.searchParams.get('path') || '').trim();
+            const key = String(url.searchParams.get('dir') || '').trim();
+            // Before the lookup, for the same reason as `diff`'s.
+            if (!given) return send(res, 400, { error: 'path is required' });
+            if (!key) return send(res, 400, { error: 'dir is required' });
+            if (!index.summary(sessionId)) return send(res, 404, { error: 'session not found' });
+            return send(res, 200, {
+                path: given, dir: key, checkedAt: new Date().toISOString(),
+                ...scratchpad.read(sessionId, key, given),
+            });
         }
 
         // The status of the pull requests this session raised.

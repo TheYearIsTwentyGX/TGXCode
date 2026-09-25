@@ -1736,6 +1736,9 @@
       <span class="spacer"></span>
       <span id="diff-note" class="diff-note"></span>
       <button id="diff-jump" class="btn small" type="button" hidden>Jump to the edit</button>
+      <!-- Scratchpad files only. They are outside the repository, so there is no
+           open-file route for them; this posts to /api/fs/open instead. -->
+      <button id="diff-open" class="btn small" type="button" hidden>Open</button>
       <button id="diff-reload" class="btn small" type="button">Reload</button>
       <button id="diff-copy" class="btn small" type="button">Copy diff</button>
     </div>

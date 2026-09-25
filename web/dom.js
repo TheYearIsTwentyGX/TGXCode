@@ -77,7 +77,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'del-scrim', 'del-what', 'del-meta', 'del-go',
     'diff-scrim', 'diff-title', 'diff-stat', 'diff-unified', 'diff-split',
     'diff-words', 'diff-wrap', 'diff-source', 'diff-note', 'diff-jump',
-    'diff-reload', 'diff-copy', 'diff-body', 'ctx-menu',
+    'diff-reload', 'diff-copy', 'diff-open', 'diff-body', 'ctx-menu',
     'bar-more-wrap', 'bar-more', 'bar-more-badge', 'bar-more-menu',
     'review-scrim', 'review-modal', 'review-kind', 'review-title', 'review-when',
     'review-outcome', 'review-body', 'review-jump',
