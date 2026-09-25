@@ -68,7 +68,7 @@ export function applySnippets(data) {
     state.snippets.error = null;
     if (!state.snippets.committing && !state.snippets.drag) state.snippets.order = null;
     renderPins();
-    for (const c of composers) if (!c.snips.node.hidden) drawSnips(c);
+    for (const c of composers) if (!c.snips.node.hidden) drawSnips(c, { follow: true });
     if (state.settings.open) renderSnipSettings();
 }
 

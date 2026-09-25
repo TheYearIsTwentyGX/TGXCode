@@ -132,11 +132,25 @@ export function positionSnips(c) {
  * the textarea because the list filters as you type, and this one is opened by a
  * button with nothing being typed, so it takes focus like any other menu. Moving
  * the highlight is a render with a new index, not an attribute written by hand.
+ *
+ * `follow` is for a redraw nobody asked for — a push while the popover is open.
+ * Rows may have come or gone above the highlight, so the index is re-derived from
+ * the row that has focus, by snippet id, and clamped in any case: left alone it
+ * could point at a different row or past the end, and the arrow keys index
+ * `cards` with it.
  */
-export function drawSnips(c) {
+export function drawSnips(c, { follow = false } = {}) {
     const m = c.snips;
     const cards = snipCards(snipCwd(c));
     const busy = isBusy() && !state.agent;
+
+    const order = cards.flatMap(card => card.rows.map(s => s.id));
+    if (follow) {
+        const f = document.activeElement;
+        const at = f && m.node.contains(f) && f.dataset.snip ? order.indexOf(f.dataset.snip) : -1;
+        if (at >= 0) m.index = at;
+    }
+    m.index = Math.max(0, Math.min(m.index || 0, order.length - 1));
 
     let empty = null;
     if (!state.snippets.rows.length) {
@@ -160,7 +174,7 @@ export function drawSnips(c) {
             ${card.rows.map((s) => {
                 const at = i++;
                 return html`<button key=${s.id} class="snip-row" type="button" role="option"
-                    data-i=${at} tabindex=${at === m.index ? 0 : -1}
+                    data-i=${at} data-snip=${s.id} tabindex=${at === m.index ? 0 : -1}
                     aria-selected=${String(at === m.index)}
                     title=${snipTitleFor(s, busy, c)}
                     onClick=${() => chooseSnippet(c, s)}

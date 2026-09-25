@@ -355,11 +355,14 @@ export const state = {
     // `order` is an arrangement the Settings editor is holding — `{groups: [id],
     // lists: {groupId or '': [snippetId]}}` — while a drag or an arrow is being
     // saved; the editor draws from it rather than from the rows until the push
-    // answers it. `committing` counts the saves still in flight. See
+    // answers it. `committing` is true while the one save loop is running.
+    // `revs` is a per-group counter the group head's inputs are keyed on, bumped
+    // to redraw them from the stored value when nothing else changed. See
     // web/snippets/settings.js.
     snippets: {
         rows: [], groups: [], at: 0, loading: false, error: null,
-        editing: null, fill: null, drag: null, order: null, committing: 0,
+        editing: null, fill: null, drag: null, order: null, committing: false,
+        revs: {},
     },
     // Schedules, on exactly the same terms as drafts above — an unconditional
     // push, held as sent. `editing` is the id the dialog has open, which is also

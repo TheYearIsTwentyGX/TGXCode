@@ -13,6 +13,13 @@
 // against the DOM, so a render in the middle of typing would put the stored name
 // back over what you had typed.
 //
+// An uncontrolled box stops following `defaultValue` once it has been typed in,
+// so the name and colour inputs are *keyed* on the stored value instead: a rename
+// from another window changes the key and remounts the box with the new value.
+// That never lands mid-typing, because nothing is stored until `change`. Where the
+// stored value did not move — a cleared name, a refused save — the group's entry
+// in `state.snippets.revs` is bumped, which changes the key just the same.
+//
 // **The arrangement is state, not DOM.** The hand-built editor let a drag move
 // rows with `insertBefore` and then read the order back out of the DOM, which is
 // exactly what cannot be done to nodes Preact owns: it diffs against its last
@@ -109,21 +116,23 @@ export function renderSnipSettings() {
 function snipSettingsGroup(g, rows) {
     const accent = snipAccent(g);
     const key = g ? g.id : LOOSE;
+    const rev = g ? state.snippets.revs[g.id] || 0 : 0;
     return html`<section key=${g ? `group:${g.id}` : 'loose'}
         class=${g ? 'snip-set-group' : 'snip-set-group is-loose'}
         style=${accent ? `--snip-accent: ${accent}` : null}>
         <div class="snip-set-head">${g ? [
             html`<span class="snip-grip" title="Drag to reorder">${icon('grip', 14)}</span>`,
-            html`<input class="snip-set-name" type="text" defaultValue=${g.name}
-                aria-label="Group name"
+            html`<input key=${`name:${rev}:${g.name}`} class="snip-set-name" type="text"
+                defaultValue=${g.name} aria-label="Group name"
                 onChange=${(e) => {
                     const name = e.target.value.trim();
-                    // A cleared name is not saved, so do not leave it looking cleared:
-                    // the input is uncontrolled, and nothing else would put it back.
-                    if (!name) { e.target.value = g.name; return; }
+                    // A cleared name is not saved, so do not leave it looking
+                    // cleared: remount the box from the stored name.
+                    if (!name) { redrawSnipGroup(g.id); return; }
                     saveSnipGroup(g.id, { name });
                 }} />`,
-            html`<input class="snip-set-accent" type="color" defaultValue=${accent || '#9aa0a6'}
+            html`<input key=${`accent:${rev}:${accent}`} class="snip-set-accent" type="color"
+                defaultValue=${accent || '#9aa0a6'}
                 aria-label="Group colour" title="Group colour"
                 onChange=${(e) => saveSnipGroup(g.id, { accent: e.target.value })} />`,
             ...snipMoveButtons('group', g.id),
@@ -260,61 +269,73 @@ function onSnipDragOver(e, key) {
  * patched first: its `groupId` is part of where it is, and reordering it into a
  * group it does not belong to would put it back on the next redraw.
  *
- * `committing` counts the saves in flight, and keeps the arrangement held across
- * the pushes their patches provoke on the way, which would otherwise redraw the
- * old order for a moment between the first write and the last. A count rather
- * than a flag because two quick arrow presses overlap, and the first to finish
- * must not let go of the second's arrangement.
+ * **One save at a time.** Two quick arrow presses, or a drop and then an arrow,
+ * used to send two reorders side by side, and if the second reached the bridge
+ * first the bridge ended on the first one's arrangement — the user's later move,
+ * silently undone. So a commit made while a save is running only raises `again`,
+ * and the running save goes round once more when it finishes, reading the held
+ * arrangement afresh. Several presses during one save coalesce into one more
+ * request carrying the last of them, which is also the only one that matters.
  *
- * When the last one finishes the arrangement is let go of, success or failure.
- * The push answering a reorder is broadcast before the HTTP response, so it
- * usually lands while this is still counting and cannot drop the order itself —
- * and a reorder that moved nothing sends no push at all. Left held, it would mask
+ * `committing` is true for the whole loop and keeps the arrangement held across
+ * the pushes its writes provoke on the way, which would otherwise redraw the old
+ * order for a moment between the first write and the last.
+ *
+ * When the loop finishes the arrangement is let go of, success or failure. The
+ * push answering a reorder is broadcast before the HTTP response, so it usually
+ * lands while this is still running and cannot drop the order itself — and a
+ * reorder that moved nothing sends no push at all. Left held, it would mask
  * whatever another window changed since and send that stale arrangement back on
  * the next arrow. The reorder route answers with the whole payload, which is laid
  * down only if it is newer than what the pushes already brought: a push from
  * another window can arrive between the broadcast and this response.
  */
-let freshest = null;
+let again = false;
 
 async function commitSnipOrder() {
     state.snippets.drag = null;
-    const held = state.snippets.order || holdArrangement();
-    state.snippets.order = held;
-    // In the order the blocks are drawn: groups first, the ungrouped block last.
-    const moves = [];
-    const ids = [];
-    for (const key of [...held.groups, LOOSE]) {
-        const groupId = key || null;
-        for (const id of held.lists[key] || []) {
-            const s = snipById(id);
-            ids.push(id);
-            if (s && (s.groupId || null) !== groupId) moves.push({ id, groupId });
-        }
-    }
+    state.snippets.order = state.snippets.order || holdArrangement();
+    if (state.snippets.committing) { again = true; return; }
 
-    state.snippets.committing++;
+    state.snippets.committing = true;
+    let answer = null;
     try {
-        for (const m of moves) await patch(`/api/snippets/${m.id}`, { groupId: m.groupId });
-        const payload = await post('/api/snippets/reorder', { snippets: ids, groups: held.groups });
-        if (payload && (!freshest || payload.at >= freshest.at)) freshest = payload;
+        do {
+            again = false;
+            const held = state.snippets.order || holdArrangement();
+            // In the order the blocks are drawn: groups first, the ungrouped block last.
+            const moves = [];
+            const ids = [];
+            for (const key of [...held.groups, LOOSE]) {
+                const groupId = key || null;
+                for (const id of held.lists[key] || []) {
+                    const s = snipById(id);
+                    ids.push(id);
+                    if (s && (s.groupId || null) !== groupId) moves.push({ id, groupId });
+                }
+            }
+            for (const m of moves) await patch(`/api/snippets/${m.id}`, { groupId: m.groupId });
+            answer = await post('/api/snippets/reorder', { snippets: ids, groups: held.groups });
+        } while (again);
     } catch (err) {
+        again = false;
+        answer = null;
         toast(`Could not save the order: ${err.message}`, 'error');
         // Back to what the bridge has, rather than leaving the screen claiming an
-        // arrangement that was refused.
-        state.snippets.order = null;
-        renderSnipSettings();
+        // arrangement that was refused — unless a drag is live, which needs it.
+        if (!state.snippets.drag) state.snippets.order = null;
     } finally {
-        state.snippets.committing = Math.max(0, state.snippets.committing - 1);
-        if (!state.snippets.committing) {
-            const answer = freshest;
-            freshest = null;
-            if (answer && answer.at > state.snippets.at) {
-                applySnippets(answer);
-            } else if (!state.snippets.drag) {
-                state.snippets.order = null;
-                renderSnipSettings();
-            }
+        state.snippets.committing = false;
+        // Sound only because the reorder route builds its payload, broadcasts it
+        // and responds with it with no await in between (bridge/server.js, the
+        // `reorder` branch), so this response and its own push carry the same
+        // `at`, and a push with a later one really did come from somewhere else.
+        // An await there would let another write slip between the two.
+        if (answer && answer.at > state.snippets.at) {
+            applySnippets(answer);
+        } else {
+            if (!state.snippets.drag) state.snippets.order = null;
+            renderSnipSettings();
         }
     }
 }
@@ -394,5 +415,15 @@ export async function newSnipGroup() {
 
 async function saveSnipGroup(id, fields) {
     try { await patch(`/api/snippet-groups/${id}`, fields); }
-    catch (err) { toast(`Could not save the group: ${err.message}`, 'error'); }
+    catch (err) {
+        toast(`Could not save the group: ${err.message}`, 'error');
+        // The box still shows what was refused; put the stored value back.
+        redrawSnipGroup(id);
+    }
+}
+
+/** Remount a group's name and colour boxes from what is stored. See the header. */
+function redrawSnipGroup(id) {
+    state.snippets.revs[id] = (state.snippets.revs[id] || 0) + 1;
+    renderSnipSettings();
 }
