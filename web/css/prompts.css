@@ -1,0 +1,628 @@
+/* web/css/prompts.css
+ *
+ * What a session stops to ask: the approval card, the plan view, the
+ * question dock and the plan/question review dialog.
+ *
+ * Linked from web/index.html in the order the sections had in the old
+ * web/styles.css, and concatenated in that order they reproduce it exactly, so
+ * the cascade is unchanged. A rule that moves between these files moves in the
+ * cascade too: check what it now comes before and after.
+ */
+
+/* ── approval card ───────────────────────────────────────────────────── */
+/* A blocked turn. It reads as a tool block on purpose — the thing you are
+   approving should look the way it will look once it has run — but it is
+   outlined and warm-tinted, because unlike a tool block it is asking you
+   something and the turn does not move until you answer. */
+
+.perm {
+    /* Left-aligned with event bodies: the gutter is for timestamps, and this
+       has no time of its own until the transcript records the outcome. */
+    margin: 10px 0 6px calc(var(--gutter) + 16px);
+    background: var(--s2);
+    border: 1px solid var(--yellow);
+    border-radius: var(--r);
+    padding: 12px 15px 13px;
+    outline: none;
+    animation: perm-in var(--t-med) var(--ease);
+}
+.perm:focus-visible { box-shadow: 0 0 0 2px var(--blue); }
+.perm[data-pending] { opacity: 0.55; }
+
+@keyframes perm-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) { .perm { animation: none; } }
+
+.perm-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font: 400 13px/1.5 var(--sans);
+}
+.perm-tool {
+    font: 500 12.5px/1.5 var(--mono);
+    color: var(--yellow);
+}
+.perm-title { color: var(--text-3); }
+
+.perm-arg {
+    margin-top: 7px;
+    font: 400 12px/1.6 var(--mono);
+    color: var(--text-2);
+    /* A command worth approving is worth reading in full, so it wraps rather
+       than being clipped the way a settled tool row is. */
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 220px;
+    overflow: auto;
+}
+
+.perm-why {
+    margin-top: 6px;
+    font: 400 11.5px/1.5 var(--sans);
+    color: var(--text-4);
+}
+
+.perm-btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+/* An author `display` beats the UA rule for [hidden], and this row is hidden
+   while the feedback box that replaces it is open. */
+.perm-btns[hidden] { display: none; }
+
+.perm-btn {
+    height: 30px;
+    padding: 0 14px;
+    border-radius: var(--pill);
+    background: var(--s3);
+    color: var(--text-2);
+    font: 500 12px/1 var(--sans);
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    transition: background var(--t-fast) var(--ease);
+}
+.perm-btn:hover:not(:disabled) { background: var(--s4); }
+.perm-btn:disabled { opacity: 0.5; }
+.perm-btn.allow { background: var(--blue-cont); color: var(--blue); }
+.perm-btn.allow:hover:not(:disabled) { background: #26426f; }
+.perm-btn.deny { color: var(--red); }
+.perm-btn.deny:hover:not(:disabled) { background: #33201f; }
+
+.perm-btn kbd {
+    font: 500 10px/1 var(--mono);
+    padding: 3px 5px;
+    border-radius: var(--r-xs);
+    background: rgba(0, 0, 0, 0.28);
+    color: inherit;
+    opacity: 0.75;
+}
+
+/* ── the plan view ───────────────────────────────────────────────────── */
+/* A plan is a document, and a card in the transcript is the wrong shape for
+   one: too narrow to read, too short to hold, and it scrolls away from the
+   buttons that answer it. So it takes the conversation over instead — laid
+   across .conv-main, which is everything from under the subagent pills down to
+   the bottom of the permission selector.
+ *
+ * Deliberately not a dialog. A dialog would follow you to another session and
+ * would have to be answered before you could leave; this is a view one
+ * conversation is in, so the rest of the app carries on around it. */
+
+.plan-pane {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    /* Opaque: it is over a live transcript, not beside one. */
+    background: var(--s1);
+    outline: none;
+    animation: perm-in var(--t-med) var(--ease);
+}
+.plan-pane[hidden] { display: none; }
+.plan-pane[data-pending] { opacity: 0.55; }
+@media (prefers-reduced-motion: reduce) { .plan-pane { animation: none; } }
+
+/* Head, plan and footer share one column. The plan is measured for reading and
+   so sits narrower than the pane; a title and a row of buttons flush to the
+   pane edges would read as belonging to something else. */
+.plan-head {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 28px 13px max(28px, calc((100% - 860px) / 2 + 28px));
+    border-bottom: 1px solid var(--outline-soft);
+    font: 400 13px/1.5 var(--sans);
+}
+.plan-head .spacer { flex: 1; }
+.plan-agent { font: 400 11.5px/1.5 var(--sans); color: var(--text-4); }
+
+.plan-aside {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    height: 28px;
+    padding: 0 12px;
+    border-radius: var(--pill);
+    background: var(--s3);
+    color: var(--text-3);
+    font: 500 12px/1 var(--sans);
+    cursor: pointer;
+    transition: background var(--t-fast) var(--ease);
+}
+/* Guarded, so a button that cannot be pressed cannot look pressable either —
+   the plan chrome going quietly dead was invisible for exactly this reason. */
+.plan-aside:hover:not(:disabled) { background: var(--s4); color: var(--text-2); }
+.plan-aside:disabled, .plan-bar:disabled { cursor: default; }
+
+/* The plan itself. Measured for reading rather than stretched to the pane, and
+   the only thing here that scrolls — the answer stays put below it. */
+.plan-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    scroll-behavior: smooth;
+}
+.plan-doc {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 22px 28px 36px;
+}
+
+/* Pinned. A plan you have to scroll past to accept is a plan people accept
+   without reading — and worse, one they cannot find the buttons for. */
+.plan-foot {
+    flex: none;
+    padding: 13px 28px 15px max(28px, calc((100% - 860px) / 2 + 28px));
+    border-top: 1px solid var(--outline-soft);
+    background: var(--s2);
+}
+.plan-foot > .perm-btns { margin-top: 0; }
+.plan-foot > .perm-why { margin-top: 8px; }
+.plan-foot > .perm-feedback { margin-top: 0; }
+.plan-foot .perm-fb { max-width: 860px; }
+
+/* A plan belonging to a session running in another window: readable here,
+   answerable only there. The footer keeps its place so the view does not change
+   shape — what changes is that it says why there is nothing to press. */
+.plan-elsewhere {
+    display: flex;
+    align-items: baseline;
+    gap: 9px;
+    max-width: 860px;
+    padding: 3px 0;
+    font: 400 12px/1.6 var(--sans);
+    color: var(--text-3);
+}
+.plan-elsewhere-mark { flex: none; color: var(--yellow); }
+.plan-pane[data-readonly] .plan-head .perm-tool { color: var(--text-3); }
+
+/* Set aside: the plan is still waiting, but the conversation underneath is
+   readable again. A line rather than nothing, because an ask you cannot see is
+   an ask you forget you owe an answer to. */
+.plan-pane[data-collapsed] {
+    position: static;
+    flex: none;
+    z-index: auto;
+    background: none;
+    animation: none;
+}
+.plan-pane[data-collapsed] .plan-head,
+.plan-pane[data-collapsed] .plan-body,
+.plan-pane[data-collapsed] .plan-foot { display: none; }
+.plan-pane:not([data-collapsed]) .plan-bar { display: none; }
+
+.plan-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 9px 28px;
+    background: #2a2617;
+    border-bottom: 1px solid var(--outline-soft);
+    color: var(--text-2);
+    font: 400 12.5px/1.5 var(--sans);
+    text-align: left;
+    cursor: pointer;
+    transition: background var(--t-fast) var(--ease);
+}
+.plan-bar:hover:not(:disabled) { background: #35301c; }
+.plan-bar-led {
+    flex: none;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--yellow);
+    animation: breathe 1.6s var(--ease) infinite;
+}
+@media (prefers-reduced-motion: reduce) { .plan-bar-led { animation: none; } }
+.plan-bar-text { flex: 1; min-width: 0; }
+.plan-bar-go { flex: none; color: var(--yellow); font-weight: 500; }
+
+/* Where a rejected plan gets its "why". */
+.perm-feedback { margin-top: 10px; }
+
+.perm-fb {
+    width: 100%;
+    padding: 9px 11px;
+    background: var(--bg);
+    border: 1px solid var(--outline);
+    border-radius: var(--r-sm);
+    color: var(--text);
+    font: 400 12.5px/1.6 var(--sans);
+    resize: vertical;
+}
+.perm-fb:focus { outline: none; border-color: var(--blue); }
+.perm-fb::placeholder { color: var(--text-4); }
+
+/* ── the question dock ───────────────────────────────────────────────── */
+/* Docked above the composer rather than left in the transcript: the turn is
+   stopped on this, so it belongs next to the box you would otherwise be typing
+   in — not somewhere you can scroll away from and lose.
+ *
+ * One question at a time, everything about it open. A set of questions stacked
+ * into one card is a wall; a set of options that only show what they mean when
+ * the pointer is over them is a wall you have to sweep. */
+
+/* Aligned with the composer below it — same margins, same 1000px inner — so
+   the two read as one column rather than two stacked boxes. Which now means the
+   same pane insets too: all three of the log, this and the composer are one
+   column down the middle of the pane. */
+.ask-dock {
+    flex: none;
+    margin: 0 calc(28px + var(--pane-right)) 6px calc(28px + var(--pane-left));
+    background: var(--s2);
+    border: 1px solid var(--yellow);
+    border-radius: var(--r);
+    animation: perm-in var(--t-med) var(--ease);
+    transition: margin var(--t-fast) var(--ease);
+}
+.ask-dock[hidden] { display: none; }
+.ask-dock[data-pending] { opacity: 0.55; }
+@media (prefers-reduced-motion: reduce) { .ask-dock { animation: none; transition: none; } }
+
+.ask-dock-inner {
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 11px 16px 13px;
+}
+
+.ask-dock-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font: 400 13px/1.5 var(--sans);
+}
+.ask-dock-head .spacer { flex: 1; }
+
+/* Where you are in the set, and what is left. The dots are the only place the
+   still-to-answer count was ever visible — it used to live in a tooltip on a
+   disabled button, which is nowhere. */
+.ask-nav { display: flex; align-items: center; gap: 8px; }
+.ask-nav-count {
+    font: 400 11.5px/1 var(--sans);
+    color: var(--text-4);
+    font-variant-numeric: tabular-nums;
+}
+.ask-dots { display: flex; align-items: center; gap: 5px; }
+.ask-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: none;
+    border: 1.5px solid var(--text-4);
+    padding: 0;
+    cursor: pointer;
+    transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+}
+.ask-dot:hover { border-color: var(--text-2); }
+.ask-dot[data-done] { background: var(--blue); border-color: var(--blue); }
+.ask-dot[aria-current="true"] { box-shadow: 0 0 0 2.5px var(--s4); border-color: var(--text-2); }
+.ask-dot[aria-current="true"][data-done] { border-color: var(--blue); }
+
+.ask-step {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--s3);
+    color: var(--text-2);
+    font: 400 14px/1 var(--sans);
+    transition: background var(--t-fast) var(--ease);
+}
+.ask-step:hover:not(:disabled) { background: var(--s4); }
+.ask-step:disabled { opacity: 0.35; cursor: default; }
+
+/* The one place anything scrolls, so the question can be as long as it likes
+   without pushing Send off the bottom. */
+.ask-dock-body {
+    max-height: min(46vh, 520px);
+    overflow-y: auto;
+    margin-top: 2px;
+}
+
+.ask-remain {
+    align-self: center;
+    font: 400 11.5px/1.5 var(--sans);
+    color: var(--text-4);
+}
+
+.perm-qs { margin-top: 4px; }
+
+/* Only ever meaningful in the transcript read-back; in the dock, one shows at
+   a time. */
+.perm-q + .perm-q:not([hidden]) {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--outline-soft);
+}
+
+.perm-q-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: 8px 0 9px;
+    font: 400 13px/1.5 var(--sans);
+    color: var(--text);
+}
+.perm-q-chip {
+    flex: none;
+    padding: 2px 8px;
+    border-radius: var(--pill);
+    background: var(--s4);
+    color: var(--text-3);
+    font: 500 10.5px/1.5 var(--sans);
+    text-transform: lowercase;
+}
+.perm-q-text { min-width: 0; }
+
+.perm-opt {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 8px 11px;
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-sm);
+    background: var(--bg);
+    cursor: pointer;
+    transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+}
+.perm-opt + .perm-opt { margin-top: 6px; }
+.perm-opt:hover { background: var(--s2); }
+.perm-opt:focus-within { border-color: var(--blue); }
+.perm-opt:has(input:checked) { border-color: var(--blue); background: var(--blue-tint); }
+
+.perm-opt input { flex: none; margin-top: 2px; accent-color: var(--blue-deep); }
+.perm-opt-body { display: block; min-width: 0; flex: 1; }
+.perm-opt-label {
+    display: block;
+    font: 500 12.5px/1.5 var(--sans);
+    color: var(--text);
+}
+.perm-opt-desc {
+    display: block;
+    margin-top: 2px;
+    font: 400 11.5px/1.55 var(--sans);
+    color: var(--text-3);
+}
+
+/* A preview is what you are comparing, so it is simply there. Opening it on
+   hover made the option below jump every time the pointer crossed one, and put
+   it out of reach entirely without a pointer. It keeps a scroll cap of its own
+   so one enormous preview cannot take the dock over. */
+.perm-opt-preview {
+    display: block;
+    margin: 8px 0 2px;
+    padding: 8px 10px;
+    max-height: 240px;
+    overflow: auto;
+    background: var(--s1);
+    border-radius: var(--r-xs);
+    font: 400 11.5px/1.6 var(--mono);
+    color: var(--text-2);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* The row that is a text box: the radio is checked by typing in it, so the
+   label must not look like the others until it is. */
+.perm-opt-other .perm-opt-label { color: var(--text-3); }
+.perm-opt-other:has(input:checked) .perm-opt-label { color: var(--text); }
+
+.perm-other {
+    width: 100%;
+    margin-top: 5px;
+    padding: 5px 9px;
+    background: var(--s1);
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-xs);
+    color: var(--text);
+    font: 400 12px/1.5 var(--sans);
+}
+.perm-other:focus { outline: none; border-color: var(--blue); }
+.perm-other::placeholder { color: var(--text-4); }
+
+/* Questions as they read back in the transcript, once the card is long gone. */
+.qview { font: 400 12px/1.7 var(--sans); }
+.qview-q {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    margin: 8px 0 4px;
+    color: var(--text);
+}
+.qview-q:first-child { margin-top: 0; }
+.qview-o { color: var(--text-3); padding-left: 4px; }
+.qview-mark { color: var(--text-4); margin-right: 8px; }
+/* The one that was picked. Colour and weight rather than a background: this
+   list sits inside an already-tinted tool block, and a second fill inside it
+   reads as a nested box rather than as emphasis. */
+.qview-o[data-chosen] { color: var(--text); }
+.qview-o[data-chosen] .qview-mark { color: var(--blue); }
+/* Typed rather than picked, through the tool's "Other" box — about one answer
+   in nine. Italic so it does not read as an option that was on offer. */
+.qview-said { font-style: italic; }
+
+/* ── the plan/question review dialog ───────────────────────────────────────
+   A plan or a set of questions, replayed read-only from the turn rail. The
+   columns below reuse .perm-q and .perm-opt so this looks like the dock it is
+   replaying; what is here is the grid, the sizing, and the marks that replace
+   the radios. */
+
+/* One dialog, four widths. A single question in a 1400px box is a sentence
+   marooned in a field, and four questions at 640px are four unreadable columns
+   — so rather than compromise for both, it is sized to the count, which is
+   known the moment it opens. The step is what a column needs to hold a label,
+   a description and a preview without every line breaking: below about 300px
+   it cannot, which is also where the stacking fallback comes in. */
+.modal.review-modal { width: min(760px, 100%); }
+.modal.review-modal[data-cols="2"] { width: min(1000px, 100%); }
+.modal.review-modal[data-cols="3"] { width: min(1260px, 100%); }
+.modal.review-modal[data-cols="4"] { width: min(1500px, 100%); }
+/* A plan is prose and takes its measure from .plan-rev, not from the count. */
+.modal.review-modal[data-kind="plan"] { width: min(880px, 100%); }
+
+/* The head is a chip, a verdict and a clock rather than the single 20px line
+   .modal-head is built for, so it sets its own type and spacing. `.spacer` is
+   scoped per container throughout this file — there is no global one — so the
+   push to the right has to be declared here too. */
+.review-modal .modal-head { gap: 10px; font: 400 14px/1.5 var(--sans); }
+.review-modal .modal-head .spacer { flex: 1; }
+.review-when { flex: none; font: 400 12px/1.5 var(--sans); color: var(--text-4); }
+
+/* The dialog takes focus on open so the keyboard is inside the scrim rather
+   than out in the rail behind it. It is a tabindex="-1" holder and never a
+   control, so it wears no ring: the scrim is what says where you are. */
+#review-modal:focus { outline: none; }
+
+/* Focusable so the arrow keys scroll a long plan, but the global
+   :focus-visible outline is offset outwards — and against a body that runs the
+   full width of the dialog that reads as two stray blue rules, top and bottom,
+   rather than as a focus ring. Drawn inside instead, the way .tasks-strip
+   solves the same thing. */
+#review-body:focus-visible { outline-offset: -3px; }
+
+/* What happened, above the thing it happened to: the outcome is the reason you
+   opened this, and putting it in the footer would mean scrolling a long plan to
+   find out it was sent back. */
+.review-outcome:empty { display: none; }
+.review-outcome {
+    margin: 4px 24px 0;
+    padding: 10px 14px;
+    background: var(--s1);
+    border-radius: var(--r-sm);
+}
+.review-said-head {
+    display: block;
+    margin-bottom: 4px;
+    font: 500 10.5px/1.5 var(--sans);
+    color: var(--text-4);
+    text-transform: lowercase;
+}
+.review-said { font: 400 12.5px/1.6 var(--sans); color: var(--text-2); }
+
+/* The same measure as .plan-doc, because prose is read at about this width —
+   but with its own padding rather than that rule's centring, which .plan-foot
+   does arithmetic against (see the calc there). Reusing it would move the live
+   pane's buttons. */
+.plan-rev { max-width: 820px; margin: 0 auto; padding: 4px 0 8px; }
+
+.qrev {
+    display: grid;
+    grid-template-columns: repeat(var(--qrev-cols, 1), minmax(0, 1fr));
+    gap: 0 20px;
+    /* A short question ends where it ends rather than being stretched to match
+       the longest column. */
+    align-items: start;
+}
+.review-modal[data-cols="2"] .qrev { --qrev-cols: 2; }
+.review-modal[data-cols="3"] .qrev { --qrev-cols: 3; }
+.review-modal[data-cols="4"] .qrev { --qrev-cols: 4; }
+
+/* The dock's separator is a rule *above* each question after the first, because
+   there they are stacked. Side by side that line is in the wrong place — it
+   belongs between the columns. */
+.qrev .perm-q + .perm-q {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: none;
+    padding-left: 20px;
+    border-left: 1px solid var(--outline-soft);
+}
+
+/* Narrower than the step above allows, so they stack instead — the columns
+   would be doing neither job at this width. */
+@media (max-width: 1100px) {
+    .qrev { grid-template-columns: 1fr; }
+    .qrev .perm-q + .perm-q {
+        margin-top: 14px;
+        padding-top: 14px;
+        padding-left: 0;
+        border-top: 1px solid var(--outline-soft);
+        border-left: none;
+    }
+}
+
+/* Nothing here is selectable, so the rows are divs and the hover and pointer
+   the dock gives its labels would both be lying. */
+.qrev .perm-opt { cursor: default; }
+.qrev .perm-opt:hover { background: var(--bg); }
+/* The dock marks its chosen option with `:has(input:checked)`; there are no
+   inputs here, so the same look hangs off the attribute instead. */
+.qrev .perm-opt[data-chosen] { border-color: var(--blue); background: var(--blue-tint); }
+.qrev-mark { flex: none; margin-top: 1px; color: var(--text-4); font-size: 12px; }
+.qrev .perm-opt[data-chosen] .qrev-mark { color: var(--blue); }
+
+/* A preview is a drawn thing as often as it is text — a mocked-up row, a table.
+   Wrapped at column width it stops being the thing it is a preview of, so here
+   it keeps its lines and scrolls sideways. The dock does not need this: an
+   option there is as wide as the composer. */
+.qrev .perm-opt-preview {
+    white-space: pre;
+    word-break: normal;
+    max-height: 200px;
+}
+
+/* Typed rather than picked, through the tool's "Other" box. Not drawn as an
+   option, because it was not one of them. */
+.qrev-said {
+    margin-top: 8px;
+    padding: 8px 11px;
+    background: var(--blue-tint);
+    border-radius: var(--r-sm);
+    font: 400 12.5px/1.6 var(--sans);
+    color: var(--text);
+}
+.qrev-said-head {
+    display: block;
+    margin-bottom: 3px;
+    font: 500 10.5px/1.5 var(--sans);
+    color: var(--text-4);
+    text-transform: lowercase;
+}
+.qrev-none {
+    margin-top: 8px;
+    font: 400 12px/1.6 var(--sans);
+    color: var(--text-4);
+    font-style: italic;
+}
+
+/* What happened to a card that is gone. The transcript carries the real
+   record; this is only so the card does not vanish without a word. */
+.perm-done {
+    margin: 4px 0 4px calc(var(--gutter) + 16px);
+    font: 400 11.5px/1.6 var(--sans);
+    color: var(--text-4);
+}
+
+.status-line[data-state="ask"] .led {
+    background: var(--yellow);
+    animation: breathe 1.6s var(--ease) infinite;
+}
+.btn-stop.force { color: var(--red); background: #33201f; }
+.btn-stop.force:hover { background: #452a28; }
+

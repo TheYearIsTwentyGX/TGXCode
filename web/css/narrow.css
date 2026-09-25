@@ -1,0 +1,113 @@
+/* web/css/narrow.css
+ *
+ * Narrow desktop windows — not phone CSS; there is no mobile web UI. One
+ * @media block reaching into the transcript, the composer, the boards and
+ * Settings, kept whole and kept after all of them because it overrides them.
+ *
+ * Linked from web/index.html in the order the sections had in the old
+ * web/styles.css, and concatenated in that order they reproduce it exactly, so
+ * the cascade is unchanged. A rule that moves between these files moves in the
+ * cascade too: check what it now comes before and after.
+ */
+
+/* ── narrow windows ──────────────────────────────────────────────────── */
+
+@media (max-width: 980px) {
+    :root { --rail: 250px; --gutter: 0px; }
+    .ev { grid-template-columns: 1fr; column-gap: 0; }
+    .ev-time { display: none; }
+    .log { padding: 6px 16px 40px; }
+    .conv-head { padding: 14px 16px 0; }
+    .composer { padding: 4px calc(16px + var(--turns)) 14px 16px; }
+
+    /* Two rows of two rather than four thin strips. Every column survives —
+       losing one would lose a state — and the board scrolls as a whole instead
+       of each column scrolling in a slot too short to be worth it. */
+    .tb-head { padding: 16px 16px 12px; }
+    .tb-body {
+        padding: 0 16px 20px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        overflow-y: auto;
+    }
+    .tb-col { max-height: 60vh; }
+    /* The board folds because it always has exactly four columns. The focused
+       one cannot: the count is however many projects have a task, and folding
+       would put one below the fold with nothing saying it was there. So it
+       keeps scrolling sideways and the floor comes down instead — the answer
+       `.dr-body.cols` takes below, for the same reason. */
+    .tb-body.cols {
+        grid-template-columns: none;
+        grid-auto-columns: minmax(260px, 1fr);
+        overflow-y: hidden;
+    }
+    .tb-body.cols .tb-col { max-height: none; }
+    .tb-search { width: 180px; }
+
+    .dr-head { padding: 16px 16px 12px; }
+    .dr-body { padding: 0 16px 20px; }
+    /* The board opposite folds to two rows of two because it always has exactly
+       four columns. This one cannot: the count is however many projects you are
+       working in, and folding would put a project below the fold with nothing
+       saying it was there. So the row keeps scrolling sideways and the floor
+       comes down instead — narrow enough for two columns at 980px, which is what
+       makes the sideways scroll a gesture rather than the only way to see
+       anything. */
+    .dr-body.cols { grid-auto-columns: minmax(260px, 1fr); }
+    .dr-col { max-height: none; }
+
+    /* The schedules panel, for the same reasons and with the same numbers. */
+    .sched-head { padding: 16px 16px 12px; }
+    .sched-body { padding: 0 16px 20px; }
+    .sched-body.cols { grid-auto-columns: minmax(260px, 1fr); }
+    .sched-col { max-height: none; }
+
+    /* The two selectors drop under the title rather than squeezing beside it;
+       the contents go above the groups instead of beside them, as a row that
+       scrolls sideways; and the shortcut table loses its fixed columns — at
+       this width the chord and its actions cannot both keep a lane. */
+    /* No room for an aside, so the contents come back into flow above the
+       groups as a row that scrolls sideways — and the width it was reserving
+       goes back to the column. */
+    .settings-shell { --set-aside: 0px; }
+    .settings-col { padding: 0 16px; }
+    .settings-head { flex-direction: column; gap: 12px; padding: 16px 0 12px; }
+    .settings-picks { margin-left: 0; }
+    .settings-toc {
+        position: static;
+        width: auto;
+        margin: 0 0 12px;
+    }
+    .settings-toc-list {
+        position: static;
+        flex-direction: row;
+        gap: 4px;
+        overflow-x: auto;
+        padding-bottom: 4px;
+    }
+    .settings-toc-link { flex: none; background: var(--s2); }
+    .settings-toc-link.on { background: var(--blue-cont); }
+    .settings-toc-link::before { display: none; }
+    .settings-key-row { flex-wrap: wrap; }
+    .settings-key-label { flex-basis: 100%; }
+    .settings-key-combo, .settings-key-recording { width: auto; min-width: 110px; }
+    .settings-key-acts { min-width: 0; margin-left: auto; }
+
+    /* The Claude Code group's own controls. The four file tabs plus the two
+       view tabs do not fit on one line here, so the row wraps and the spacer
+       that pushed the lens toggle to the far end has to stop reserving width —
+       otherwise it pushes the toggle onto a line of its own. `env` loses its
+       fixed left column, and a hook group its indent, for the same reason the
+       shortcut table above does: at this width a name and its value cannot
+       both keep a lane. */
+    .cfg-tabs-spacer { flex-basis: 100%; min-width: 0; }
+    .cfg-sub { padding: 14px 14px 4px; }
+    .cfg-kv-row { flex-wrap: wrap; }
+    .cfg-kv-name, .cfg-kv-newname { width: auto; flex: 1 1 100%; }
+    .hk-group { padding-left: 8px; }
+    .cfg-json { min-height: 200px; }
+    .cfg-md { min-height: 180px; }
+    /* The dialog is the whole window at this width, so the wrapper's padding
+       is the only thing left holding it off the edges. */
+    .modal.tall { height: 100%; max-height: 100%; }
+}
+

@@ -1,0 +1,511 @@
+/* web/css/rail.css
+ *
+ * The session rail (web/rail.js) and the pull-request vocabulary its rows
+ * share with the rest of the app.
+ *
+ * Linked from web/index.html in the order the sections had in the old
+ * web/styles.css, and concatenated in that order they reproduce it exactly, so
+ * the cascade is unchanged. A rule that moves between these files moves in the
+ * cascade too: check what it now comes before and after.
+ */
+
+/* ── rail ────────────────────────────────────────────────────────────── */
+
+.rail {
+    grid-area: rail;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    padding: 0 8px 8px;
+}
+
+.rail-head { display: flex; flex-direction: column; gap: 6px; padding: 0 4px 10px; }
+
+/* Secondary to the button above it and drawn that way: the rail's ground rather
+   than a raised surface, and a light that says on without competing with New
+   session for the eye. Full width because everything in this column is. */
+.rail-filter {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    height: 30px;
+    padding: 0 12px;
+    background: var(--s2);
+    color: var(--text-3);
+    font: 500 12px/1 var(--sans);
+    border-radius: var(--pill);
+    white-space: nowrap;
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.rail-filter:hover { background: var(--s3); color: var(--text); }
+.rail-filter svg { flex: none; color: var(--text-4); }
+.rail-filter-label { overflow: hidden; text-overflow: ellipsis; }
+.rail-filter[aria-pressed="true"] { background: var(--blue-cont); color: #dbe6fb; }
+.rail-filter[aria-pressed="true"] svg { color: var(--blue); }
+
+/* How many sessions the button is talking about — the same number whether it is
+   on or off, so it reads as "hide those 12" and then as "12 are hidden". */
+.rail-filter-count {
+    margin-left: auto;
+    color: var(--text-4);
+    font-variant-numeric: tabular-nums;
+}
+.rail-filter[aria-pressed="true"] .rail-filter-count { color: #b9cdf0; }
+.rail-filter-count[hidden] { display: none; }
+
+/* Hide finished and the order button share a row: the filter takes the width,
+   the order button is a round pill of the same height at its end. */
+.rail-filters { display: flex; gap: 6px; }
+.rail-filters .rail-filter { flex: 1; min-width: 0; }
+.rail-sort {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    background: var(--s2);
+    color: var(--text-4);
+    border-radius: var(--pill);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.rail-sort:hover,
+.rail-sort[aria-expanded="true"] { background: var(--s3); color: var(--text); }
+/* Anything but the default order is a choice somebody made, and says so. */
+.rail-sort.on { color: var(--blue); }
+.sort-row { gap: 8px; }
+.sort-tick { display: inline-grid; place-items: center; width: 13px; flex: none; color: var(--blue); }
+
+/* Two buttons that read as one control: one height, one outer radius, and a
+   hairline of the rail showing between them. Each half lights on its own, so the
+   thing about to be hit is the thing that highlights. The pair fills the rail —
+   at ~200px a content-width split button leaves dead space beside it and forces
+   its own menu wider than the thing it came out of. */
+.new-wrap { position: relative; display: flex; gap: 1px; }
+
+.btn-new {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    flex: 1;
+    min-width: 0;
+    height: 46px;
+    padding: 0 18px;
+    background: var(--s3);
+    color: var(--text);
+    font: 500 14px/1 var(--sans);
+    border-radius: var(--r-lg) 0 0 var(--r-lg);
+    transition: background var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
+}
+.btn-new:hover { background: var(--s4); box-shadow: 0 1px 3px #0006; }
+.btn-new:active { background: var(--s5); }
+.btn-new svg { color: var(--blue); flex: none; }
+
+.btn-new-caret {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 40px;
+    height: 46px;
+    background: var(--s3);
+    color: var(--text-3);
+    border-radius: 0 var(--r-lg) var(--r-lg) 0;
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.btn-new-caret:hover { background: var(--s4); color: var(--text); }
+.btn-new-caret:active { background: var(--s5); }
+.btn-new-caret[aria-expanded="true"] { background: var(--s4); color: var(--text); }
+.btn-new-caret svg { transition: transform var(--t-fast) var(--ease); }
+.btn-new-caret[aria-expanded="true"] svg { transform: rotate(180deg); }
+
+/* Anchored to the control, so it is exactly as wide as the thing it came out of.
+   --s3 rather than the dialog picker's --bg: a popover has to sit above its rail
+   rather than sink into it. .rail-head is a sibling of .rail-scroll, the only
+   thing here that clips, so absolute positioning is all this needs. */
+.new-menu {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 0;
+    right: 0;
+    z-index: 60;
+    /* Six rows, a rule and the escape hatch, so nothing that matters sits below
+       a fold. It still scrolls on a window too short to hold that. */
+    max-height: 420px;
+    overflow-y: auto;
+    padding: 6px;
+    background: var(--s3);
+    border-radius: var(--r);
+    box-shadow: 0 10px 30px #000a;
+    animation: menu-in var(--t-fast) var(--ease);
+    transform-origin: top left;
+}
+.new-menu[hidden] { display: none; }
+
+/* The dialog's row folded onto two lines: the rail cannot hold a name, a count
+   and a path side by side, and the path is the half that tells two projects of
+   the same name apart. */
+.new-menu .picker-row { flex-wrap: wrap; gap: 8px; padding: 7px 10px; }
+.new-menu .picker-row:hover { background: var(--s4); }
+.new-menu .picker-row .path {
+    flex-basis: 100%;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+.new-menu .sep { height: 1px; margin: 5px 8px; background: var(--outline-soft); }
+.new-menu .menu-note {
+    padding: 9px 10px;
+    font: 400 12px/1.5 var(--sans);
+    color: var(--text-4);
+}
+
+@media (prefers-reduced-motion: reduce) { .new-menu { animation: none; } }
+
+.rail-scroll { flex: 1; overflow-y: auto; min-height: 0; padding-bottom: 12px; }
+
+/* Each group is a card, so where one project ends and the next begins is a
+   change of surface rather than something the eye has to infer from spacing.
+   One tonal step above the rail, which leaves --s2 free for row hover. */
+.rail-group {
+    background: var(--s1);
+    border-radius: var(--r-lg);
+    padding: 4px;
+    margin-bottom: 8px;
+}
+
+/* The heading is the disclosure — clicking it shuts the group. */
+.group-head {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: var(--r);
+    font: 500 11.5px/1.4 var(--sans);
+    letter-spacing: 0.04em;
+    color: var(--text-3);
+    transition: background var(--t-fast) var(--ease);
+}
+.group-head:hover { background: var(--s2); color: var(--text-2); }
+.group-head .group-label { text-transform: capitalize; }
+.group-head .count { margin-left: auto; color: var(--text-4); font-variant-numeric: tabular-nums; }
+.group-head .live { color: var(--green); }
+.group-head .twist {
+    display: grid;
+    place-items: center;
+    color: var(--text-4);
+    transition: transform var(--t-fast) var(--ease);
+}
+.group-head[aria-expanded="true"] .twist { transform: rotate(90deg); }
+
+/* A group inside a group: the Scheduled runs of one project.
+   One more tonal step in, so the nesting is a change of surface like the outer
+   card is, rather than an indent the eye has to measure. Everything below is
+   consequences of that step: --s2 is now the card, so the row hover that used it
+   has to move up to --s3 or a hovered row would be invisible. */
+.rail-group.nested {
+    background: var(--s2);
+    margin: 2px 2px 4px;
+}
+.rail-group.nested > .group-head { padding: 7px 10px; font-size: 11px; }
+.rail-group.nested > .group-head:hover { background: var(--s3); }
+/* --row-bg is what .strip-actions fades its overlay into. Left at --s1 the
+   buttons would sit on a visible seam over a card that is no longer --s1. */
+.rail-group.nested .strip { --row-bg: var(--s2); }
+.rail-group.nested .strip:hover { background: var(--s3); --row-bg: var(--s3); }
+
+/* An archived row reads as set aside, without being hard to read. */
+.strip[data-archived="true"] .strip-title { color: var(--text-3); }
+
+.strip {
+    /* --row-bg lets the action overlay fade into whatever the row is sitting on,
+       which is now the group card rather than the rail itself. */
+    --row-bg: var(--s1);
+    position: relative;
+    display: flex;
+    align-items: center;
+    width: 100%;
+    /* A squircle rather than a pill: a two-line row rounded to its full height
+       reads as a lozenge floating in the card, and the ends eat into the title. */
+    border-radius: var(--r);
+    transition: background var(--t-fast) var(--ease);
+}
+.strip:hover { background: var(--s2); --row-bg: var(--s2); }
+.strip[aria-current="true"] { background: var(--blue-cont); --row-bg: var(--blue-cont); }
+.strip[aria-current="true"]:hover { background: #26406c; --row-bg: #26406c; }
+
+.strip-main {
+    flex: 1;
+    min-width: 0;
+    text-align: left;
+    padding: 9px 14px 10px;
+    border-radius: var(--r);
+}
+
+/* Pin and archive stay out of the way until the row is hovered — except a pin,
+   which is a state worth seeing at a glance. They float over the row rather
+   than sitting in the flow, so the title and meta keep the full width. */
+.strip-actions {
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    align-items: center;
+    gap: 1px;
+    padding-left: 26px;
+    background: linear-gradient(90deg, transparent, var(--row-bg) 24px);
+    border-radius: var(--r);
+    opacity: 0;
+    transition: opacity var(--t-fast) var(--ease);
+}
+/* Every row hides its controls until reached for, pinned ones included. They are
+   only transparent, never `display: none` — a hidden button is still a button and
+   has to stay in the tab order. A pinned row says so with the marker in its meta
+   line instead, which costs a glyph rather than a third of the row's width. */
+.strip:hover .strip-actions,
+.strip:focus-within .strip-actions { opacity: 1; }
+/* While a row is being renamed its buttons would sit over the end of the name. */
+.strip[data-renaming="true"] .strip-actions { display: none; }
+
+/* Sized to the title it stands in for, so the row does not change height. */
+.strip-rename {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    margin: -2px 0 0 -5px;
+    padding: 1px 4px;
+    font: inherit;
+    font-size: 13.5px;
+    line-height: 1.4;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--blue);
+    border-radius: var(--r-xs);
+    outline: none;
+}
+
+.strip-meta .tag-pin {
+    display: grid;
+    place-items: center;
+    flex: none;
+    color: var(--blue);
+}
+.strip[aria-current="true"] .strip-meta .tag-pin { color: #cfe0ff; }
+
+/* ── one PR vocabulary ──────────────────────────────────────────────────────
+   Three surfaces show what has become of a pull request — the rail glyph below,
+   the conversation header chip (`.conv-sub .pr`) and the dashboard chip
+   (`.sig.pr`) — and between them they get one colour table, here, rather than
+   three. It used to be two verbatim copies and, on the board, a fourth scheme
+   that was not about status at all: it coloured by `draft` alone, so a merged PR,
+   one conflicting with its base and one with a failing build were the same blue.
+
+   Colour and glyph say the same thing twice on purpose: two of these states are
+   red and two are yellow, so hue alone would not separate them. The word itself
+   is in the tooltip.
+
+   The layout of the three is genuinely different — an icon in a grid, an inline
+   chip, a pill with a tinted ground — so only the two tokens are shared.
+   `--pr-tint` is the hue; `--pr-fade` dims the settled states, which are kept
+   because "this landed" is worth a glance but must not compete with the rows that
+   still want something. */
+:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr) {
+    --pr-tint: var(--text-3);
+    --pr-fade: 1;
+}
+:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="open"] { --pr-tint: var(--blue); }
+:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="approved"] { --pr-tint: var(--green); }
+:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="changes"],
+:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="checks-failed"] { --pr-tint: var(--red); }
+:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="conflicting"],
+:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="checks-pending"] { --pr-tint: var(--yellow); }
+:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="draft"] { --pr-tint: var(--text-3); }
+:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="merged"] {
+    --pr-tint: var(--purple);
+    --pr-fade: 0.62;
+}
+:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="closed"] {
+    --pr-tint: var(--text-4);
+    --pr-fade: 0.62;
+}
+/* gh could not be reached. Says nothing rather than guessing. */
+:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="unknown"] { --pr-tint: var(--text-4); }
+/* Still moving, so it breathes — the same light every in-flight thing here uses. */
+:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="checks-pending"] svg {
+    animation: breathe 1.6s var(--ease) infinite;
+}
+
+/* What the session left on GitHub, at its worst.
+
+   `flex: none` is load-bearing. `.strip-meta` is nowrap with overflow hidden, and
+   the worktree name and the activity line are the two things meant to give way; a
+   status that vanished on a narrow rail would be worse than none, because its
+   absence means "no pull requests". */
+.strip-meta .tag-pr {
+    display: grid;
+    place-items: center;
+    flex: none;
+    color: var(--pr-tint);
+    opacity: var(--pr-fade);
+}
+/* The selected row recolours everything in its meta line, and this is the one
+   thing on it that carries meaning in the hue — so only the greys are lifted, to
+   where they can still be seen against --blue-cont. Red, yellow, green and purple
+   are left exactly as they are. */
+.strip[aria-current="true"] .strip-meta .tag-pr[data-status="draft"],
+.strip[aria-current="true"] .strip-meta .tag-pr[data-status="unknown"],
+.strip[aria-current="true"] .strip-meta .tag-pr[data-status="closed"] { color: #b3c7ea; }
+
+.mini {
+    display: grid;
+    place-items: center;
+    width: 27px; height: 27px;
+    border-radius: 50%;
+    color: var(--text-4);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.mini:hover { background: var(--s4); color: var(--text); }
+.mini.on { color: var(--blue); }
+.strip[aria-current="true"] .mini:hover { background: #30507f; }
+/* Destructive controls stay the same weight as their neighbours until reached
+   for — colouring one red at rest would make every row look like a warning. */
+.mini.danger:hover { background: #3a2422; color: var(--red); }
+.strip[aria-current="true"] .mini.danger:hover { background: #4a2b28; }
+
+/* Only a development bridge lists these at all; the tag says why a row is here
+   in a window where it might otherwise look like real work. */
+.tag-test {
+    flex: none;
+    padding: 0 6px;
+    border-radius: var(--r-xs);
+    background: var(--s4);
+    color: var(--text-3);
+    font: 500 10px/16px var(--mono);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+/* State reads as a small dot before the title, not a slab edge. */
+.strip-title {
+    display: block;
+    font-size: 13.5px;
+    line-height: 1.4;
+    color: var(--text-2);
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+.strip[aria-current="true"] .strip-title { color: #d7e3ff; font-weight: 500; }
+
+.strip-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 3px;
+    font: 400 11.5px/1.5 var(--sans);
+    color: var(--text-4);
+    white-space: nowrap;
+    overflow: hidden;
+}
+.strip[aria-current="true"] .strip-meta { color: #9db3d8; }
+.strip-meta .wt {
+    color: var(--text-3);
+    font-family: var(--mono);
+    font-size: 11px;
+    /* Gave up none of its width before, so on a pinned or labelled row it took
+       what the activity line needed. It is the longest thing on the line and the
+       least urgent, so it is the one that abbreviates. */
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.strip[aria-current="true"] .strip-meta .wt { color: #b3c7ea; }
+.strip-meta .dot { color: var(--text-4); opacity: 0.6; }
+
+.strip-meta .pulse {
+    display: inline-flex;
+    align-items: center;
+    /* Squeezed to nothing on a narrow rail, and that is allowed: the dot at the
+       head of the line is what says the session is working. */
+    min-width: 0;
+    color: var(--yellow);
+}
+.strip-meta .pulse-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* Messages you queued and then walked away from. Ahead of the activity, which is
+   what gives way when the row runs out of room. */
+.strip-meta .wait {
+    flex: none;
+    padding: 1px 7px;
+    border-radius: var(--pill);
+    background: var(--blue-tint);
+    color: var(--blue);
+    font-size: 10.5px;
+}
+
+/* Messages waiting on a clock rather than on a turn. The same badge in the amber
+   of a schedule, because the two facts are different in the one way that matters:
+   a queued message goes as soon as the turn ends, and this one goes at 2am. */
+.strip-meta .due {
+    flex: none;
+    padding: 1px 7px;
+    border-radius: var(--pill);
+    background: #3a2f16;
+    color: var(--yellow);
+    font-size: 10.5px;
+}
+
+/* Whether a session is doing anything, at the head of the line.
+   It used to be green-for-active only, standing down for running rows on the
+   grounds that the activity line said it better. But the activity line is last on
+   a row that does not wrap, so a row carrying a pin, a test label or a worktree
+   name pushed it off the end — a pinned session that was thinking looked exactly
+   like one that was idle. The words can still be cut; this cannot. */
+.strip[data-state="active"] .strip-meta::before,
+.strip[data-state="running"] .strip-meta::before {
+    content: "";
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--green);
+    flex: none;
+}
+.strip[data-state="running"] .strip-meta::before {
+    background: var(--yellow);
+    animation: breathe 1.6s var(--ease) infinite;
+}
+/* Running, but not by us — a terminal, VS Code, a background agent. Hollow to
+   the filled dot of a session this window is driving, because the difference
+   decides whether you can send into it. */
+.strip[data-state="elsewhere"] .strip-meta::before {
+    content: "";
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: transparent;
+    box-shadow: inset 0 0 0 1.5px var(--yellow);
+    flex: none;
+}
+
+/* A background agent: nobody is sitting in front of this one. Shaped like the
+   test label beside it, in the quieter colour — it is a fact about the session,
+   not a warning. */
+.tag-bg {
+    flex: none;
+    padding: 0 6px;
+    border-radius: var(--r-xs);
+    background: var(--s3);
+    color: var(--text-4);
+    font: 500 10px/16px var(--mono);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.rail-empty {
+    padding: 34px 20px;
+    color: var(--text-3);
+    font-size: 13.5px;
+    text-align: center;
+    line-height: 1.6;
+}
+

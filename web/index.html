@@ -13,11 +13,29 @@
       content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-src http://localhost:* http://127.0.0.1:*">
 <title>TGXCode</title>
 <link rel="stylesheet" href="./vendor/xterm.css">
-<!-- Before styles.css on purpose: the diff viewer re-themes diff2html by
+<!-- Before our own sheets on purpose: the diff viewer re-themes diff2html by
      redefining its --d2h-dark-* variables, and doing that without !important
      needs our rules to come second. -->
 <link rel="stylesheet" href="./vendor/diff2html.css">
-<link rel="stylesheet" href="./styles.css">
+<!-- Ours, by area. The order is the cascade: these were one styles.css, and in
+     this order they are it again, section for section. Tokens first, since
+     everything reads them; narrow.css and colours.css late, since they override
+     rules in the files before them. Separate <link>s rather than @import, so the
+     browser fetches them side by side instead of one after another. -->
+<link rel="stylesheet" href="./css/base.css">
+<link rel="stylesheet" href="./css/rail.css">
+<link rel="stylesheet" href="./css/transcript.css">
+<link rel="stylesheet" href="./css/prompts.css">
+<link rel="stylesheet" href="./css/tools.css">
+<link rel="stylesheet" href="./css/composer.css">
+<link rel="stylesheet" href="./css/dashboard.css">
+<link rel="stylesheet" href="./css/dialogs.css">
+<link rel="stylesheet" href="./css/boards.css">
+<link rel="stylesheet" href="./css/settings.css">
+<link rel="stylesheet" href="./css/narrow.css">
+<link rel="stylesheet" href="./css/viewers.css">
+<link rel="stylesheet" href="./css/colours.css">
+<link rel="stylesheet" href="./css/preview.css">
 </head>
 <body>
 
@@ -1593,7 +1611,7 @@
       <!-- The six palette hues, and then anything you like.
 
            Presets first because they are the answer nearly every time: they are
-           the colours web/styles.css already uses against these surfaces, so a
+           the colours web/css/base.css already uses against these surfaces, so a
            row of them is a row of choices that are all going to work. The free
            picker is underneath for the case the six do not cover — a group's
            accent made the same call, and bridge/snippets.js:157 says why: the

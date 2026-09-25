@@ -1831,7 +1831,7 @@ function cycleSelect(sel, allow, step = 1) {
 // both a popover and a panel row would be two pickers that drifted.
 
 // The six the stylesheet already uses against these surfaces — see the palette
-// at the top of web/styles.css. Read from the stylesheet rather than written out
+// at the top of web/css/base.css. Read from the stylesheet rather than written out
 // again here, so a restyle moves them and this list cannot go stale. A name
 // beside each, because a radio group that announces "#a8c7fa" is no use to
 // anybody listening to it.

@@ -1,0 +1,1434 @@
+/* web/css/transcript.css
+ *
+ * The main pane and the conversation in it (web/transcript/): the header,
+ * the log, the loading skeleton, suggested follow-ups, what this session
+ * changed, the session's task list, the turn rail and find in conversation.
+ *
+ * Linked from web/index.html in the order the sections had in the old
+ * web/styles.css, and concatenated in that order they reproduce it exactly, so
+ * the cascade is unchanged. A rule that moves between these files moves in the
+ * cascade too: check what it now comes before and after.
+ */
+
+/* ── main ────────────────────────────────────────────────────────────── */
+
+.main {
+    grid-area: main;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    background: var(--s1);
+    border-radius: var(--r-lg) 0 0 0;
+    overflow: hidden;
+}
+
+.conv {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+.conv[hidden] { display: none; }
+
+.conv-head {
+    flex: none;
+    padding: 18px 28px 0;
+}
+
+/* The transcript, the question dock and the composer, as one box. It exists to
+   be a containing block: a plan lays itself over exactly this, which is why the
+   head above it and the terminal below it stay reachable while one is up. The
+   subagent pills live in the head, so "below the pills" needs no measuring. */
+.conv-main {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+
+    /* How much of this box the side columns are using, so the composer and the
+       ask dock can sit over the transcript rather than over the whole pane.
+       Written by `syncPaneInsets` in app.js, which sums each column's own
+       `--pane-w`; these are the values for a conversation with none of them
+       open, so the layout is right before that has run and right if it never
+       does.
+
+       The transcript, the ask dock and the composer are all a 1000px box centred
+       in their container, and until this existed they had *different*
+       containers: the log is centred in `#scroll`, which the side panels squeeze,
+       while the two below it were centred in the whole of `.conv-main`. Opening
+       the task list therefore moved the transcript 300px and left the composer
+       where it was, which read as the composer being crooked. */
+    --pane-left: 0px;
+    --pane-right: var(--turns);
+
+    /* How wide the transcript lays itself out, in pixels, written by
+       `syncLogWidth` in app.js. `100%` is what `.log` did before it existed, and
+       is what it does until the first write and if there is never one. */
+    --log-w: 100%;
+}
+
+.conv-title-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+}
+
+.conv-title {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    font-size: 20px;
+    font-weight: 400;
+    line-height: 1.3;
+    color: var(--text);
+    letter-spacing: -0.003em;
+}
+
+.conv-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex: none;
+    margin-top: -4px;
+}
+
+.icon-btn {
+    display: grid;
+    place-items: center;
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    color: var(--text-3);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.icon-btn:hover { background: var(--s3); color: var(--text); }
+.icon-btn.on { color: var(--blue); }
+.icon-btn:disabled { opacity: 0.4; cursor: default; background: none; }
+.icon-btn.danger:hover { background: #3a2422; color: var(--red); }
+
+/* What the project declares in .tgxcode/ — a button each, words rather than an
+   icon, because "Dev server" is not a thing anybody draws. */
+.cmds {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-right: 6px;
+}
+.cmds:empty { display: none; }
+/* A config file with a typo in it should be findable, not shouty: the row picks
+   up a hairline and carries the parser's message in its tooltip. */
+.cmds.has-problems { border-bottom: 1px dotted var(--yellow); }
+
+.cmd-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 11px;
+    border-radius: var(--pill);
+    font: 400 12.5px/1.4 var(--sans);
+    color: var(--text-3);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.cmd-btn:hover { background: var(--s3); color: var(--text); }
+
+.cmd-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--text-4);
+    transition: background var(--t-fast) var(--ease);
+}
+/* Green is reserved in this UI for something actually running, so `starting`
+   does not get it — it pulses in the colour it is about to leave. */
+.cmd-btn.pending .cmd-dot { background: var(--yellow); animation: cmd-pulse 1.1s ease-in-out infinite; }
+.cmd-btn.on { color: var(--text); }
+.cmd-btn.on .cmd-dot { background: var(--green); }
+.cmd-btn.failed .cmd-dot { background: var(--red); }
+
+.cmd-port { font: 400 11.5px/1.4 var(--mono); color: var(--text-4); }
+.cmd-btn.on .cmd-port { color: var(--green); }
+
+@keyframes cmd-pulse { 50% { opacity: 0.35; } }
+
+.conv-sub {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 5px;
+    font: 400 12.5px/1.5 var(--sans);
+    color: var(--text-3);
+}
+.conv-sub .sep { color: var(--text-4); opacity: 0.7; }
+.conv-sub .branch { font-family: var(--mono); font-size: 12px; color: var(--text-2); }
+.conv-sub .cwd { font-family: var(--mono); font-size: 11.5px; color: var(--text-4); }
+
+/* Breadcrumb back to the session a subagent was spawned by. */
+.crumb {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 24px;
+    margin: 0 0 6px -6px;
+    padding: 0 10px 0 6px;
+    border-radius: var(--pill);
+    font: 400 12px/1 var(--sans);
+    color: var(--text-3);
+    max-width: 100%;
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.crumb:hover { background: var(--s3); color: var(--text); }
+.crumb[hidden] { display: none; }
+.crumb span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Subagents: a row of chips, each one a switch into that agent's transcript.
+   Same shape as the dev-server chips below — both answer "what else is going on
+   in this session, and can I go look at it". */
+.agents {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 12px;
+    padding-bottom: 16px;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+.agents::-webkit-scrollbar { display: none; }
+.agents:empty { display: none; }
+/* Whichever strip comes last carries the gap down to the transcript, so a
+   session with only one of them is spaced like a session with the other. */
+.agents:not(:empty) + .channels:not(:empty) { margin-top: 0; }
+
+.agent-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    flex: none;
+    height: 34px;
+    padding: 0 6px 0 13px;
+    background: var(--s2);
+    border-radius: var(--pill);
+    white-space: nowrap;
+    transition: background var(--t-fast) var(--ease);
+}
+.agent-chip:hover { background: var(--s3); }
+.agent-chip[aria-current="true"] { background: var(--blue-deep); }
+.agent-chip[data-status="done"] { opacity: 0.62; }
+.agent-chip[data-status="done"]:hover { opacity: 1; }
+
+.agent-chip .led {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--text-4);
+    flex: none;
+}
+.agent-chip[data-status="running"] .led {
+    background: var(--yellow);
+    animation: breathe 1.6s var(--ease) infinite;
+}
+/* Running, but nothing has written to it in 90 seconds: the session that owned
+   this agent went away. A steady grey light, not a hopeful pulse. */
+.agent-chip[data-status="running"][data-stalled="true"] .led {
+    background: var(--text-4);
+    animation: none;
+}
+.agent-chip[data-status="done"] .led { background: var(--green); }
+.agent-chip[data-status="failed"] .led { background: var(--red); }
+
+.agent-chip .depth { color: var(--text-4); font: 400 12px/1 var(--mono); }
+.agent-chip .name {
+    font: 400 12.5px/1 var(--sans);
+    color: var(--text);
+    max-width: 230px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.agent-chip .trail {
+    font: 400 11.5px/1 var(--mono);
+    color: var(--text-3);
+    max-width: 240px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.agent-chip[data-status="running"]:not([data-stalled="true"]) .trail { color: var(--yellow); }
+.agent-chip .go {
+    display: inline-flex;
+    align-items: center;
+    height: 24px;
+    padding: 0 11px;
+    border-radius: var(--pill);
+    font: 500 11.5px/1 var(--sans);
+    color: var(--text-3);
+    background: transparent;
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.agent-chip:hover .go { background: var(--blue-deep); color: #fff; }
+.agent-chip[aria-current="true"] .go { color: #fff; }
+
+/* The subagent's own status, where the session's project/branch line usually is. */
+.conv-sub .agent-state {
+    font: 500 12px/1 var(--sans);
+    text-transform: lowercase;
+}
+.conv-sub .agent-state.running { color: var(--yellow); }
+.conv-sub .agent-state.done { color: var(--green); }
+.conv-sub .agent-state.failed { color: var(--red); }
+.conv-sub .pulse { color: var(--yellow); }
+
+/* A pull request the session raised, and what has become of it. Colours come from
+   the shared table above.
+
+   `flex: none` because .conv-sub wraps: the icon and the number are one thing and
+   must not be broken across lines. The svg takes its colour from currentColor, so
+   this sets it on the anchor and never touches the svg. */
+.conv-sub .pr {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex: none;
+    font: 500 12px/1 var(--sans);
+    text-decoration: none;
+    color: var(--pr-tint);
+    opacity: var(--pr-fade);
+    transition: color var(--t-fast) var(--ease), opacity var(--t-fast) var(--ease);
+}
+/* Lifts the dimming off a settled PR without taking its colour away: the status is
+   the point, and losing it on the way to clicking the link would be a poor trade. */
+.conv-sub .pr:hover { opacity: 1; text-decoration: none; }
+
+/* Dev servers: a row of chips, each one a switch into DevBrowser. */
+.channels {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 14px;
+    padding-bottom: 16px;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+.channels::-webkit-scrollbar { display: none; }
+.channels:empty { display: none; }
+
+.channel {
+    display: inline-flex;
+    align-items: center;
+    flex: none;
+    height: 34px;
+    padding-right: 5px;
+    background: var(--s2);
+    border-radius: var(--pill);
+    white-space: nowrap;
+    transition: background var(--t-fast) var(--ease);
+}
+.channel:hover { background: var(--s3); }
+/* A dead port has nothing to stop, so its chip is all switch and keeps no room
+   on the end for a button that is not there. */
+.channel[data-live="false"] { opacity: 0.55; padding-right: 6px; }
+.channel[data-live="false"]:hover { opacity: 0.85; }
+
+.chan-open {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    height: 34px;
+    padding-left: 13px;
+    border-radius: var(--pill);
+}
+
+.channel .led {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--text-4);
+    flex: none;
+}
+.channel[data-live="true"] .led { background: var(--green); }
+
+.channel .port {
+    font: 500 12.5px/1 var(--mono);
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+}
+.channel .name {
+    font: 400 12.5px/1 var(--sans);
+    color: var(--text-3);
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.channel .go {
+    display: inline-flex;
+    align-items: center;
+    height: 24px;
+    padding: 0 11px;
+    border-radius: var(--pill);
+    font: 500 11.5px/1 var(--sans);
+    color: var(--text-3);
+    background: transparent;
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+/* Lit by hovering the switch itself, not the chip: reaching for the stop button
+   should not first promise to open a tab. */
+.chan-open:hover .go { background: var(--blue-deep); color: #fff; }
+.channel[data-live="false"] .chan-open:hover .go { background: var(--s5); color: var(--text-2); }
+/* Shown on this session's own word rather than the kernel's: nothing on the
+   Linux side holds the port, which here means a server on the Windows side of
+   the WSL mirror. Dashed, because the claim is weaker than the others. */
+.channel.unverified .led {
+    background: none;
+    border: 1px dashed var(--text-4);
+}
+.channel[data-live="true"].unverified .led { border-color: var(--green); }
+
+/* "3 elsewhere" — ports this session named that another workspace is holding.
+   Says why the strip is shorter than the transcript suggests. */
+.chan-note {
+    align-self: center;
+    padding: 0 4px;
+    font: 400 11.5px/1.5 var(--sans);
+    color: var(--text-4);
+    white-space: nowrap;
+    cursor: help;
+}
+
+.channel.busy { opacity: 0.7; }
+.channel.busy .chan-stop { pointer-events: none; }
+
+/* Shut the server down. Quiet until hovered, because the chip's own job is to
+   open a tab and this one is destructive — a red button sitting on every live
+   port would read as a warning about the port. */
+.chan-stop {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 25px; height: 25px;
+    flex: none;
+    border-radius: 50%;
+    color: var(--text-4);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.chan-stop:hover { background: #3a2422; color: var(--red); }
+
+/* Armed: one more click ends it. The chip says so where it said "Open", so the
+   confirmation is on the thing being confirmed and not in a dialog. */
+.channel[data-arm="true"] .chan-stop { background: #3a2422; color: var(--red); }
+.channel[data-arm="true"] .go,
+.channel[data-arm="true"] .chan-open:hover .go { background: #3a2422; color: var(--red); }
+
+/* ── transcript ──────────────────────────────────────────────────────── */
+
+.conv-body { display: flex; flex: 1; min-height: 0; }
+
+.scroll { flex: 1; overflow-y: auto; min-height: 0; scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { .scroll { scroll-behavior: auto; } }
+
+/* The width is a number this file does not know, written by `syncLogWidth` in
+   app.js, and the long comment there is why. Short version: an automatic width
+   depends on the pane around it, so every column that slides in and every window
+   that changes size re-laid-out every row in here, once per animation frame.
+   `margin: 0 auto` is untouched — the log is still centred in the real pane, it
+   just no longer resizes with it.
+
+   `100%` stays in the `min()` as a floor the variable cannot overhang: if it is
+   ever stale — not written yet, or a column still halfway out — the log narrows
+   to the pane rather than off the end of it, which is the behaviour this rule
+   had before. That is what lets every rule in app.js be a performance decision
+   and none of them a correctness one.
+
+   The 1000px is the same 1000px as `.composer-inner` and `.ask-dock-inner`, and
+   those two deliberately do *not* read the variable. Their containers are
+   already inset by 28px a side, so `100%` resolves 56px below what this does and
+   binds first — and 56 is more than LOG_STEP, so a quantized log mid-drag is
+   still the wider box and the order of the two cannot invert. Giving them
+   `--log-w` as well would read as the three being kept in step and would in fact
+   change nothing. */
+.log {
+    width: min(1000px, 100%, var(--log-w, 100%));
+    margin: 0 auto;
+    padding: 6px 28px 48px;
+}
+
+/* ── loading skeleton ────────────────────────────────────────────────── */
+/* Shown in place of a transcript while its events are still on the wire, laid
+   out on the same grid as .ev so the pane does not jump when they arrive.
+   The pulse is shadcn/ui's Skeleton: a 2s ease-in-out fade to half opacity over
+   a muted surface, with its 6px radius landing on our --r-xs. */
+
+.skel {
+    background: var(--s3);
+    border-radius: var(--r-xs);
+    animation: skel-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+@keyframes skel-pulse { 50% { opacity: 0.5; } }
+@media (prefers-reduced-motion: reduce) { .skel { animation: none; } }
+
+.skel-time { width: 34px; height: 10px; margin: 6px 0 0 auto; }
+.skel-name { width: 46px; height: 11px; margin-bottom: 9px; }
+/* 11px on a 24px pitch matches the 14px/1.72 prose it stands in for. */
+.skel-line { height: 11px; margin: 6.5px 0; }
+/* The collapsed tool row: 13px/1.5 text in 8px padding, inside .tool's radius. */
+.skel-tool { height: 36px; border-radius: var(--r); margin: 3px 0; }
+
+.load-failed {
+    max-width: 560px;
+    margin: 40px auto;
+    text-align: center;
+    color: var(--text-3);
+    font-size: 13.5px;
+}
+
+/* `content-visibility: auto` was tried here and removed. Once tool bodies are
+   built lazily an event is a single light row, and the cost of the browser
+   skipping and unskipping 1700 of them measured ~40% *slower* to scroll than
+   simply laying them out (p50 22.8ms vs 16.8ms over the same sweep), with no
+   gain on open. It is worth revisiting only if rows get heavy again. */
+.ev {
+    display: grid;
+    grid-template-columns: var(--gutter) 1fr;
+    column-gap: 16px;
+    padding: 3px 0;
+}
+
+.ev-time {
+    font: 400 11.5px/1.9 var(--mono);
+    color: var(--text-4);
+    text-align: right;
+    padding-top: 4px;
+    user-select: none;
+    white-space: nowrap;
+    opacity: 0.65;
+    font-variant-numeric: tabular-nums;
+}
+
+/* The date above the clock, on a message old enough that the clock alone does
+   not place it — see dateOf in app.js. Smaller than the clock and dimmer again on
+   top of the gutter's own fade: the clock is what you read, the date is what stops
+   you misreading it. Font, colour, right-alignment and tabular-nums all come from
+   .ev-time.
+
+   It pushes the clock down a line, so on a dated row the date sits beside the
+   'You'/'Claude' label and the clock beside the first line of the message. That
+   is the better of the two: the clock ends up next to the text it stamps. */
+.ev-date {
+    display: block;
+    font-size: 10.5px;
+    line-height: 1.5;
+    opacity: 0.8;
+}
+
+.ev-body { min-width: 0; }
+
+.ev-label {
+    font: 500 12px/1.4 var(--sans);
+    color: var(--text-3);
+    margin-bottom: 4px;
+    letter-spacing: 0.01em;
+}
+
+/* A message's header line: who said it, and the button that copies it.
+
+   Copy sits in the flow here rather than floating over the message. The label
+   line is the one part of a row that is reliably empty, so a control in it
+   cannot land on top of the first word of a long turn — and it is in the same
+   place whether the message is two lines or two hundred.
+
+   Not in the time gutter, which would have suited a grey control among grey
+   furniture: under 980px the gutter collapses to 0 and .ev-time goes to
+   display:none, so the button would have nowhere left to sit. */
+.ev-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 4px;
+}
+/* The gap under the label belongs to the line now. Every other kind of row still
+   takes it from .ev-label itself, which is why that rule is left alone. */
+.ev-head .ev-label { margin-bottom: 0; }
+
+.ev-copy {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 22px;
+    height: 22px;
+    /* Taller than the 12px label beside it, pulled back so the header line keeps
+       the height it had before there was a button on it. */
+    margin: -5px 0;
+    border-radius: var(--r-xs);
+    color: var(--text-4);
+    /* The glyph is an svg and never a '✓' character: rangesIn walks every text
+       node under a row, so a text tick would be indexed by find, and a
+       drag-selection of the message would pick it up and paste it. */
+    user-select: none;
+    /* Only transparent, never `display: none` — a hidden button is still a button
+       and has to stay in the tab order. See .strip-actions for the same call. */
+    opacity: 0;
+    transition: opacity var(--t-fast) var(--ease),
+        background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.ev:hover .ev-copy,
+.ev:focus-within .ev-copy { opacity: 1; }
+.ev-copy:hover { background: var(--s4); color: var(--text); }
+/* A third way to be visible, because the tick has to outlive the pointer leaving
+   the row. The always-on Copy on a code block never had to arrange that. */
+.ev-copy.done { opacity: 1; color: var(--green); }
+/* Your own turn sits in a container that is already --s3, and --s4 on top of it
+   is one tonal step at 22px, which reads as nothing. Same lift .rail-group.nested
+   gives a strip sitting on a card. */
+.ev-user .ev-copy:hover { background: var(--s5); }
+
+/* human turn — a tonal container, the way Google renders the person's side */
+.ev-user .ev-body {
+    background: var(--s3);
+    border-radius: var(--r-lg);
+    padding: 12px 18px 13px;
+    margin: 8px 0 12px;
+}
+.ev-user .ev-label { color: var(--peach); }
+.ev-user .prose { color: var(--text); }
+
+/* A turn drawn at Send, before the transcript has it. Full strength, because the
+   message is real and on its way — what is missing is only the time it was
+   recorded at, so the gutter that will hold it says so and then fills in. */
+.ev-user[data-pending] .ev-time::after { content: '·'; }
+
+/* assistant turn */
+.ev-assistant .ev-body { padding: 3px 0 10px; }
+.ev-assistant .ev-label { color: var(--blue); }
+
+/* reasoning — quieter than a tool call, and never coloured as a status */
+.ev-thinking .ev-body { padding: 2px 0 4px; }
+.tool.thinking { background: transparent; }
+.tool.thinking > summary::before { background: var(--purple); opacity: 0.7; }
+.tool.thinking > summary { color: var(--text-4); }
+.tool.thinking > summary:hover { background: var(--s2); }
+.tool.thinking .tname { color: var(--purple); font-family: var(--sans); font-size: 12.5px; }
+.tool.thinking .prose { color: var(--text-3); font-size: 13.5px; }
+
+/* a background task reporting back — adjacent to a tool call, not to your turn */
+.ev-agent-done .ev-body { padding: 4px 0 10px; }
+.ev-agent-done .ev-label { color: var(--purple); }
+.ev-agent-done .agent-done-sum {
+    font: 400 13.5px/1.6 var(--sans);
+    color: var(--text-2);
+}
+.ev-agent-done .agent-done-meta {
+    margin-top: 3px;
+    font: 400 11.5px/1.6 var(--mono);
+    color: var(--text-4);
+}
+.ev-agent-done .subagent-btns { margin-top: 2px; }
+
+/* ── suggested follow-ups ─────────────────────────────────────────────────
+   An aside beside the transcript, not part of it: the log is a record of what
+   happened, and these are the one thing in the pane that has not happened yet.
+   Collapses to a strip so a session with six offers is not permanently narrower
+   than one with none. */
+
+/* `--pane-w` is the width, and `width` only reads it, so a state that changes
+   how wide this column is has one number rather than two that can disagree.
+   `syncPaneInsets` in app.js sums it across the row to inset the composer.
+   Reading the variable rather than measuring the box is what makes that exact
+   during the transition below: a custom property is not animated, so it is the
+   width this column is heading for while `width` is still on its way there. */
+.tasks {
+    --pane-w: 300px;
+    flex: none;
+    width: var(--pane-w);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    border-left: 1px solid var(--outline-soft);
+    /* Only the width animates. Animating the whole box makes the transcript
+       reflow twice as the text inside re-wraps mid-transition. */
+    transition: width var(--t-fast) var(--ease);
+}
+.tasks.shut { --pane-w: 34px; }
+
+/* On its way in or out. `display` cannot be animated, so a column that simply
+   stopped being `display: none` would appear at its full width and shove the
+   transcript across in one frame — which is what switching between two
+   conversations used to look like, four times over. This is the same column at
+   zero width, still in the layout, so the width transition above has something
+   to move: `slidePane` in app.js adds the class to send it out and takes it off
+   to bring it back, and only sets `hidden` once it has finished leaving.
+
+   Selected through the row it sits in, which is where these columns always are:
+   `.tasks:not(.shut)` in the media query below is as specific as a bare
+   `.tasks.gone` and comes later, so it would hold a column open at 240px while
+   it tried to leave. One more element in the selector settles it without an
+   `!important`.
+
+   `overflow` and `min-width` are both load-bearing rather than tidiness. A flex
+   item's automatic minimum size floors it at its content's width, so `width: 0`
+   alone would leave a column as wide as its widest task; `overflow: hidden`
+   makes that minimum zero, and `min-width` says so outright. The border goes too,
+   or a column that has left keeps a 1px line down the edge of the transcript. */
+.conv-body > .tasks.gone {
+    --pane-w: 0px;
+    min-width: 0;
+    border-left-width: 0;
+    border-right-width: 0;
+    overflow: hidden;
+}
+/* Once it has left: out of the tab order and out of the a11y tree, rather than
+   a zero-width box that is still both. */
+.tasks[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) { .tasks { transition: none; } }
+
+/* Narrow windows have no room for a third column, and the transcript is the
+   one that matters. The panel is still reachable — it becomes the strip. */
+@media (max-width: 1100px) { .tasks:not(.shut) { --pane-w: 240px; } }
+@media (max-width: 900px) { .tasks { display: none; } }
+
+.tasks-open { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.tasks-open[hidden] { display: none; }
+
+.tasks-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: none;
+    padding: 10px 12px 8px;
+}
+.tasks-title {
+    font: 500 11px/1.4 var(--sans);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-4);
+}
+.tasks-count {
+    min-width: 17px;
+    padding: 0 5px;
+    border-radius: 9px;
+    background: var(--blue-cont);
+    color: var(--blue);
+    font: 500 11px/17px var(--sans);
+    text-align: center;
+}
+.tasks-collapse {
+    margin-left: auto;
+    padding: 2px 7px;
+    border: 0;
+    border-radius: var(--r-xs);
+    background: none;
+    color: var(--text-4);
+    font: 400 11.5px/1.5 var(--sans);
+    cursor: pointer;
+}
+.tasks-collapse:hover { background: var(--s3); color: var(--text-2); }
+
+.tasks-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0 8px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+/* The strip the panel becomes. Vertical text, so the label stays readable at
+   34px rather than being clipped to "Ta". */
+.tasks-strip {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 0;
+    border: 0;
+    background: none;
+    color: var(--text-4);
+    cursor: pointer;
+}
+.tasks-strip[hidden] { display: none; }
+.tasks-strip:hover { background: var(--s2); color: var(--text-2); }
+/* The strip is one tall button, so the default ring draws a box the height of
+   the window around it. Inset, it reads as the control being focused rather
+   than as a second panel border. */
+.tasks-strip:focus-visible { outline-offset: -3px; }
+.tasks-strip-label {
+    writing-mode: vertical-rl;
+    font: 500 11px/1 var(--sans);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+/* One task. A `details`, like a tool call in the log, so the caret and the
+   keyboard behaviour are the browser's rather than ours. */
+.task {
+    border: 1px solid var(--outline-soft);
+    border-left: 2px solid var(--blue);
+    border-radius: var(--r-xs);
+    background: var(--s2);
+}
+.task[data-status="started"],
+.task[data-status="completed"] { border-left-color: var(--green); }
+.task[data-status="completed"] { opacity: 0.85; }
+.task[data-status="dismissed"] { border-left-color: var(--outline-soft); opacity: 0.72; }
+.task[data-status="dismissed"]:hover { opacity: 1; }
+
+.task > summary {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    padding: 8px 10px;
+    cursor: pointer;
+    list-style: none;
+    font: 400 12.5px/1.45 var(--sans);
+    color: var(--text-2);
+}
+.task > summary::-webkit-details-marker { display: none; }
+.task > summary:hover { background: var(--s3); }
+.task[open] > summary { border-bottom: 1px solid var(--outline-soft); }
+.task > summary .caret {
+    flex: none;
+    margin-top: 1px;
+    font-size: 8px;
+    color: var(--text-4);
+    transition: transform var(--t-fast) var(--ease);
+}
+.task[open] > summary .caret { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .task > summary .caret { transition: none; } }
+.task-name { min-width: 0; overflow-wrap: anywhere; flex: 1; }
+
+/* Opens the task at a readable width. Faint until the row is under the cursor,
+   because the summary's own job — folding — is the common one. */
+.task-open {
+    flex: none;
+    padding: 0 2px;
+    border: 0;
+    border-radius: var(--r-xs);
+    background: none;
+    color: var(--text-4);
+    font-size: 12px;
+    line-height: 1.2;
+    opacity: 0;
+    cursor: pointer;
+}
+.task:hover .task-open,
+.task-open:focus-visible { opacity: 1; }
+.task-open:hover { color: var(--text-2); background: var(--s4); }
+
+.task-body { padding: 9px 10px 11px; }
+.task-why {
+    font: 400 11.5px/1.5 var(--sans);
+    color: var(--text-4);
+    margin-bottom: 7px;
+}
+/* The prompt in full — it is the thing being offered, and the only way to judge
+   the offer. Scrolls rather than stretching the panel to the height of an essay. */
+.task-prompt {
+    max-height: 320px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    font-size: 12.5px;
+    color: var(--text-3);
+}
+.task-cwd {
+    margin-top: 7px;
+    font: 400 11px/1.45 var(--mono);
+    color: var(--text-4);
+    overflow-wrap: anywhere;
+}
+.task-btns {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+}
+.task-done {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 9px;
+    font: 400 12px/1.5 var(--sans);
+    color: var(--text-4);
+}
+.linky {
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    color: var(--blue);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    cursor: pointer;
+}
+.linky:hover { color: #dbe6fb; }
+
+/* The same task, at a width you can actually read a briefing at. */
+.task-dlg-why {
+    margin-bottom: 12px;
+    font: 400 13px/1.55 var(--sans);
+    color: var(--text-4);
+}
+.task-dlg-why[hidden] { display: none; }
+.task-dlg-prompt { font-size: 14px; line-height: 1.65; color: var(--text-2); }
+.task-dlg-cwd {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--outline-soft);
+    font: 400 11.5px/1.5 var(--mono);
+    color: var(--text-4);
+    overflow-wrap: anywhere;
+}
+.task-dlg-cwd[hidden] { display: none; }
+/* The buttons keep the shape they have on the card, so the decision looks the
+   same wherever it is taken. */
+.task-dlg-acts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* a message from another session — somebody else's agent talking to yours.
+   Coloured apart from both your turns and Claude's, because it is neither. */
+.ev-peer-message .ev-body {
+    border-left: 2px solid var(--peach);
+    padding: 4px 0 10px 12px;
+    margin: 6px 0;
+}
+.ev-peer-message .ev-label { color: var(--peach); }
+.ev-peer-message .peer-sub {
+    margin: 1px 0 4px;
+    font: 400 12px/1.5 var(--sans);
+    color: var(--text-4);
+}
+.ev-peer-message .subagent-btns { margin-top: 8px; }
+
+/* work handed to this session by another one, which is what started the turn
+   under it. Purple rather than the peach above: a peer message is a session
+   being talked to, this is a session being given something, and it borrows the
+   colour of a plan because a plan is what it produces. */
+.ev-handoff .ev-body {
+    border-left: 2px solid var(--purple);
+    padding: 4px 0 10px 12px;
+    margin: 6px 0;
+}
+.ev-handoff .ev-label { color: var(--purple); }
+.ev-handoff .peer-sub {
+    margin: 1px 0 4px;
+    font: 400 12px/1.5 var(--sans);
+    color: var(--text-4);
+}
+.ev-handoff .subagent-btns { margin-top: 8px; }
+
+/* system notices */
+.ev-system .ev-body {
+    background: var(--blue-tint);
+    border-radius: var(--r);
+    padding: 12px 16px;
+    margin: 8px 0;
+    font-size: 13.5px;
+}
+.ev-system[data-error="true"] .ev-body { background: #331f1e; }
+.ev-system .ev-label { color: var(--yellow); }
+.ev-system[data-error="true"] .ev-label { color: var(--red); }
+
+/* compaction divider */
+.ev-compact { grid-template-columns: 1fr; }
+.ev-compact .ev-body {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin: 22px 0;
+    font: 400 12px/1 var(--sans);
+    color: var(--text-4);
+}
+.ev-compact .ev-body::before,
+.ev-compact .ev-body::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--outline-soft);
+}
+
+/* ── what this session changed ───────────────────────────────────────────
+   The drawer carries `class="tasks changes"`, so the box, the strip and the
+   narrow-window behaviour are the suggestions panel's — one aside styled once.
+   Only what is different is here: two sections instead of a list of cards, and
+   rows that are paths rather than prose, so monospace and clipped from the left
+   where the interesting end of a path is. */
+
+/* Each list scrolls on its own, rather than the drawer scrolling as one column.
+   A session that changed seventy files would otherwise push the working tree —
+   the whole point of there being two lists — several screens below the fold. */
+.changes-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 0 8px 8px;
+}
+
+.ch-sec { display: flex; flex-direction: column; min-height: 0; }
+/* The transcript's list gets whatever room there is; the tree takes what it
+   needs up to a share of the drawer, so its heading is always in view. */
+.ch-sec:first-child { flex: 1 1 auto; }
+.ch-sec + .ch-sec {
+    /* Takes what it needs up to a share of the drawer, and does not give it
+       back: the list above is the one with room to yield, and a tree section
+       squeezed to its heading would be a heading over nothing. */
+    flex: 0 0 auto;
+    max-height: 45%;
+    margin-top: 8px;
+    padding-top: 2px;
+    border-top: 1px solid var(--outline-soft);
+}
+
+.ch-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex: none;
+    padding: 10px 4px 4px;
+}
+.ch-title {
+    font: 500 11px/1.4 var(--sans);
+    letter-spacing: 0.04em;
+    color: var(--text-3);
+}
+.ch-tally { margin-left: auto; font: 400 11px/1.4 var(--mono); color: var(--text-4); }
+/* The whole-session total, in the heading rather than in a row. */
+.ch-head .ch-nums { margin-left: auto; font: 400 11px/1.4 var(--mono); }
+.ch-branch { flex: none; margin: 0 4px 4px; font: 400 11px/1.5 var(--mono); color: var(--text-4); }
+.ch-note { flex: none; margin: 2px 4px 6px; font: 400 11.5px/1.5 var(--sans); color: var(--text-4); }
+.ch-note.bad { color: var(--red); }
+
+.ch-list {
+    list-style: none;
+    margin: 0;
+    padding: 0 0 6px;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+/* One file. A button where there is a diff behind it and a plain row where there
+   is not — which since the diff viewer landed is the narrow case rather than a
+   whole list: an untracked directory, which git will not diff, and a binary,
+   which has nothing to render. Both lists are a way in now. */
+.ch-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    width: 100%;
+    padding: 3px 5px;
+    border: 0;
+    border-radius: var(--r-xs);
+    background: none;
+    color: var(--text-2);
+    font: 400 11.5px/1.7 var(--mono);
+    text-align: left;
+    cursor: pointer;
+}
+.ch-row.flat { cursor: default; }
+.ch-row:not(.flat):hover { background: var(--s3); color: var(--text); }
+
+/* A path is read from its right-hand end, and the drawer is narrow, so the
+   directory is what gives way rather than the filename — two spans rather than
+   one clipped string, which also lets the leading directories go quiet and the
+   file stand out. Clipping with `direction: rtl` would do it in one, and does it
+   wrong: an untracked directory ends in a slash, and bidi reordering moves that
+   slash to the front. */
+.ch-row .fpath { flex: 1; min-width: 0; display: flex; }
+/* Both halves can give way, and the directories give way first — the shrink
+   factors are that priority. Without one on the filename too, a long name
+   pushed the line counts out of the row instead of clipping itself. */
+.ch-row .fdir {
+    flex: 0 999 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-4);
+}
+.ch-row .fbase {
+    flex: 0 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* Wide enough for the longest word statusWord produces — `modified`, `conflict`
+   — and clipped rather than allowed to bleed into the path beside it. */
+.ch-row .fstat { flex: none; width: 8ch; overflow: hidden; color: var(--text-4); }
+.ch-row .fstat[data-s="??"] { color: var(--green); }
+.ch-row .fstat[data-s="UU"] { color: var(--red); }
+
+.ch-nums { flex: none; display: inline-flex; gap: 5px; }
+.ch-add { color: var(--green); }
+.ch-del { color: var(--red); }
+.ch-meta { flex: none; min-width: 2.5ch; text-align: right; color: var(--text-4); }
+
+/* ── the session's own task list ──────────────────────────────────────────
+   `class="tasks checklist"`, so everything but the border side comes from the
+   suggestions panel — including its two narrow-window rules, which is the whole
+   point of sharing the class: a third column has to give way on a narrow window
+   exactly as the other two do, and inheriting that is one rule less to keep in
+   step. Only the differences are here. */
+
+/* Leftmost, so the divider goes the other way. After `.tasks` in the file
+   rather than by !important. */
+.checklist { border-left: 0; border-right: 1px solid var(--outline-soft); }
+
+.checklist-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0 8px 12px;
+}
+
+/* The bar and the step it is on, above the list. `.tbar` is the board card's,
+   so a session reads the same here as it does on a tile. */
+.checklist-body .tbar { margin: 2px 4px 8px; }
+.cl-current {
+    margin: 0 4px 8px;
+    font: 400 11.5px/1.5 var(--sans);
+    color: var(--text-3);
+}
+.cl-note { margin: 6px 4px 0; font: 400 11.5px/1.5 var(--sans); color: var(--text-4); }
+
+.cl-list { list-style: none; margin: 0; padding: 0; }
+
+/* One task. A button because clicking jumps to the call that last touched it —
+   the same affordance `.ch-row` carries, and a plain row would be a lie about
+   it. `.flat` for an item no call in this conversation matches. */
+.cl-row {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    width: 100%;
+    padding: 4px 5px;
+    border: 0;
+    border-radius: var(--r-xs);
+    background: none;
+    color: var(--text-2);
+    font: 400 12px/1.55 var(--sans);
+    text-align: left;
+    cursor: pointer;
+}
+.cl-row.flat { cursor: default; }
+.cl-row:not(.flat):hover { background: var(--s3); color: var(--text); }
+
+/* The status is an attribute, so the mark is CSS rather than four inline style
+   strings built per render — which is what todoView did before this existed. */
+.cl-mark { flex: none; width: 1.1em; font: 400 12px/1.55 var(--mono); }
+.cl-name { flex: 1; min-width: 0; }
+.cl-row[data-status="completed"] .cl-mark { color: var(--green); }
+.cl-row[data-status="completed"] .cl-name { color: var(--text-4); }
+.cl-row[data-status="in_progress"] .cl-mark { color: var(--yellow); }
+.cl-row[data-status="in_progress"] .cl-name { color: var(--text); }
+.cl-row[data-status="pending"] .cl-mark { color: var(--text-4); }
+
+/* ── turn rail ───────────────────────────────────────────────────────── */
+/* One tick per thing you said, down the right edge. Hover reads it back,
+   clicking jumps to it. Deliberately mute: it is a map, not a second rail. */
+
+.turns {
+    position: relative;   /* ticks measure their offset against the rail */
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    /* A column in the row like the panels are, so it declares its width the same
+       way and the composer is inset by it for the same reason. It used to be the
+       one column the composer knew about, by hardcoding `--turns` into its
+       padding — which then stayed subtracted on a session with no turns at all,
+       where this rail is not there. */
+    --pane-w: var(--turns);
+    width: var(--pane-w);
+    padding: 8px 0 26px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: none;
+}
+.turns::-webkit-scrollbar { display: none; }
+.turns:empty { display: none; }
+/* Holding its place while a conversation is being drawn.
+ *
+ * `beginOpen` empties the rail and the new transcript refills it, so for the
+ * few frames in between `:empty` above took the column out — and the composer,
+ * which counts this rail like any other column, stepped 30px sideways and back
+ * in the middle of whatever else the switch was animating. A rail is genuinely
+ * absent only for a conversation with no turns at all, which is a fact about
+ * the session rather than about how far its render has got; `renderTurns` drops
+ * the class once it knows which it is. */
+.turns.holding:empty { display: flex; }
+/* display:flex above would otherwise beat the hidden attribute. */
+.turns[hidden] { display: none; }
+
+.turn-tick {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 15px;
+    border-radius: var(--pill);
+    transition: background var(--t-fast) var(--ease);
+}
+.turn-tick::before {
+    content: "";
+    width: 11px;
+    height: 2px;
+    border-radius: var(--pill);
+    background: var(--text-4);
+    transition: width var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+}
+.turn-tick:hover { background: var(--s3); }
+.turn-tick:hover::before { width: 16px; background: var(--text-2); }
+.turn-tick[aria-current="true"]::before { width: 16px; background: var(--peach); }
+
+/* A plan and a question are not turns, so they are not lines.
+ *
+ * The rail is 30px wide and everything in it is a few pixels across, which is
+ * why the distinction is *shape* rather than colour alone: shape survives being
+ * small, and it is there for people who cannot tell the colours apart. Colour
+ * then carries the second fact, which is how the thing ended.
+ *
+ * These come after the hover and aria-current rules above because they match at
+ * the same specificity, so order is what decides. The hover pair is restated
+ * below for the same reason — inheriting it would stretch a diamond into a
+ * lozenge on the way past. */
+.turn-tick[data-kind="plan"]::before,
+.turn-tick[data-kind="question"]::before {
+    width: 9px;
+    height: 9px;
+    background: currentColor;
+    transition: transform var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+}
+/* A square stood on its corner: a document, and the only angular thing here. */
+.turn-tick[data-kind="plan"]::before { border-radius: 2px; transform: rotate(45deg); }
+/* A dot: one of a set. */
+.turn-tick[data-kind="question"]::before { border-radius: 50%; }
+.turn-tick[data-kind]:hover::before { transform: scale(1.25) rotate(0deg); }
+.turn-tick[data-kind="plan"]:hover::before { transform: scale(1.25) rotate(45deg); }
+
+/* Settled the way it was put forward. */
+.turn-tick[data-kind][data-status="ok"] { color: var(--green); }
+/* Came back — sent back for more planning, or dismissed unanswered. Hollow as
+   well as grey, so it reads as "did not land" at a glance rather than only to
+   someone comparing two ticks. */
+.turn-tick[data-kind][data-status="error"] { color: var(--text-4); }
+.turn-tick[data-kind][data-status="error"]::before {
+    background: transparent;
+    box-shadow: inset 0 0 0 1.5px currentColor;
+}
+/* Still open: the live plan pane or question dock is up, and this is its place
+   in the rail. Peach is what the rail already uses for "this is where you are". */
+.turn-tick[data-kind][data-status="pending"] { color: var(--peach); }
+
+.turn-pop {
+    position: fixed;
+    z-index: 60;
+    width: 330px;
+    padding: 11px 15px 13px;
+    background: var(--s3);
+    border-radius: var(--r);
+    box-shadow: 0 10px 30px #000a;
+    pointer-events: none;
+    animation: pop-in var(--t-fast) var(--ease);
+}
+.turn-pop[hidden] { display: none; }
+
+.turn-pop .pop-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font: 500 11px/1.4 var(--sans);
+    letter-spacing: 0.03em;
+    color: var(--peach);
+}
+.turn-pop .pop-head .when {
+    margin-left: auto;
+    font-family: var(--mono);
+    color: var(--text-4);
+    font-variant-numeric: tabular-nums;
+}
+.turn-pop .pop-text {
+    margin-top: 6px;
+    max-height: 190px;
+    overflow: hidden;
+    font: 400 13px/1.6 var(--sans);
+    color: var(--text-2);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+.turn-pop .pop-text.cmd { font-family: var(--mono); font-size: 12.5px; color: var(--peach); }
+
+@keyframes pop-in {
+    from { opacity: 0; transform: translateX(4px); }
+    to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) { .turn-pop { animation: none; } }
+
+/* Where a jump landed, so the eye finds it without hunting.
+ *
+ * Two rules, because the keyframes have to end on the row's own resting
+ * background and a user turn is the only kind that has one (`--s3`, above).
+ * Dropping the `.ev-user` qualifier instead would leave an assistant or tool row
+ * as an opaque grey box once the animation stopped. The second rule is not
+ * theoretical: `editRow` and `takePendingJump` both jump to tool calls, and
+ * until it existed they flashed nothing at all. */
+.ev-user.flash .ev-body { animation: flash 1.3s var(--ease); }
+@keyframes flash {
+    0%, 55% { background: var(--blue-cont); }
+    100% { background: var(--s3); }
+}
+.ev:not(.ev-user).flash .ev-body { animation: flash-row 1.3s var(--ease); }
+@keyframes flash-row {
+    0%, 55% { background: var(--blue-tint); }
+    100% { background: transparent; }
+}
+/* A settings row whose value moved while the panel was open — Claude Code
+ * writing its own settings file. Deliberately the transcript's flash rather
+ * than a second idea about what "this just changed" looks like; both fade to
+ * transparent, which is what a row with no resting background of its own
+ * needs. See claudeFlash() in web/app.js. */
+.settings-row.flash {
+    border-radius: var(--r-sm);
+    animation: flash-settings-row 1.3s var(--ease);
+}
+/* The transcript's `flash-row` timing exactly — hold, then fade — but the
+ * highlight is carried out past the row by a spread `box-shadow` as well as
+ * filling it. A settings row has `padding: 14px 0`, so background alone stops
+ * dead at the text on both sides and reads as a clipped rectangle rather than
+ * as this row. A shadow does it without taking part in layout, which a margin
+ * would. */
+@keyframes flash-settings-row {
+    0%, 55% { background: var(--blue-tint); box-shadow: 0 0 0 8px var(--blue-tint); }
+    100% { background: transparent; box-shadow: 0 0 0 8px transparent; }
+}
+/* A select the keyboard just moved. Ctrl+P and Ctrl+M cycle the composer's
+ * Permissions and Model (Shift walks them backwards), and a value changing on its own is easy to miss in a
+ * row of small pills — so the same "this just changed" vocabulary as the two
+ * above, aimed at a control rather than a row.
+ *
+ * A ring and no background, which is the one thing it does differently. The
+ * other three end on `transparent` because they highlight something with no
+ * resting background of its own; a select has one, so ending there would leave
+ * the pill flat until the next repaint. The spread `box-shadow` follows the
+ * pill's own border-radius and takes no part in layout. */
+select.flash { animation: flash-select 1.3s var(--ease); }
+@keyframes flash-select {
+    0%, 55% { box-shadow: 0 0 0 3px var(--blue-tint); }
+    100% { box-shadow: 0 0 0 3px transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .ev-user.flash .ev-body,
+    .ev:not(.ev-user).flash .ev-body,
+    .settings-row.flash,
+    select.flash { animation: none; }
+}
+
+/* ── find in conversation ────────────────────────────────────────────── */
+/* Ctrl+F, over the transcript. Absolute inside `.conv-main`, which is a
+   containing block already, and `z-index: 4` so the plan pane (5) covers it.
+   `right: 38px` clears the turn rail (--turns, plus a little air). */
+
+.find {
+    position: absolute;
+    top: 8px;
+    right: 38px;
+    z-index: 4;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 5px 5px 5px 12px;
+    border-radius: var(--pill);
+    background: var(--s2);
+    box-shadow: 0 6px 22px #0009, 0 0 0 1px var(--outline-soft);
+    animation: find-in var(--t-fast) var(--ease);
+}
+/* display:flex above would otherwise beat the hidden attribute. */
+.find[hidden] { display: none; }
+
+@keyframes find-in {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) { .find { animation: none; } }
+
+#find-input {
+    width: 230px;
+    padding: 4px 0;
+    font: 400 13px/1.5 var(--sans);
+    outline: none;
+}
+#find-input::placeholder { color: var(--text-4); }
+
+/* Tabular so the count does not shuffle sideways as you cycle through it. */
+.find-count {
+    flex: none;
+    min-width: 74px;
+    text-align: right;
+    font: 400 11.5px/1.5 var(--mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--text-4);
+    white-space: nowrap;
+}
+
+.find-btn {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 26px; height: 26px;
+    border-radius: 50%;
+    color: var(--text-3);
+    font-size: 12px;
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.find-btn:hover { background: var(--s4); color: var(--text); }
+.find-btn:disabled { opacity: 0.35; cursor: default; background: none; }
+
+.find-subs {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-left: 2px;
+    padding: 3px 9px 3px 6px;
+    border-radius: var(--pill);
+    background: var(--s3);
+    font: 400 11.5px/1.5 var(--sans);
+    color: var(--text-3);
+    white-space: nowrap;
+    cursor: pointer;
+}
+.find-subs[hidden] { display: none; }
+.find-subs:hover { color: var(--text); }
+.find-subs input { accent-color: var(--blue-deep); cursor: pointer; }
+.find-subs:has(input:checked) { background: var(--blue-cont); color: #e6edff; }
+
+/* How many matches are hiding inside something you have not opened. Without it
+   the count in the field and the marks on screen would not add up, and the gap
+   would look like a bug rather than a closed tool call. */
+.find-hits {
+    margin-left: 6px;
+    padding: 0 6px;
+    border-radius: var(--pill);
+    background: var(--yellow);
+    color: #131314;
+    font: 500 10.5px/16px var(--mono);
+    font-variant-numeric: tabular-nums;
+}
+
+/* The marks themselves, painted through the Custom Highlight API rather than by
+   wrapping matches in elements — see the find section of web/app.js for why.
+   Only `color`, `background-color`, `text-decoration`, `text-shadow` and
+   `-webkit-text-stroke` are honoured here, so the mark is a plain rectangle.
+   Both set `color`: a match landing on a dim syntax token (`.tok-comment`) would
+   otherwise be unreadable, and matches land on three different backgrounds — a
+   user turn's `--s3`, the bare page, and the `--bg` of a code block. Amber, not
+   the blue of `::selection`: a find mark that reads as a selection is a bug
+   report waiting to happen. */
+::highlight(cs-find) {
+    background-color: #4d3f10;
+    color: #f6e3ab;
+}
+::highlight(cs-find-at) {
+    background-color: var(--yellow);
+    color: #131314;
+}
+
