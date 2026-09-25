@@ -336,6 +336,43 @@ const RESET_7D = now() + 5 * 86400;
 }
 
 {
+    // The stream half of the same rule. The five-hour window rejected and went
+    // onto overage; it has since reset, and the only thing that has seen the
+    // new window is the status line. The last turn's verdict is about the old
+    // window and must not be drawn beside the new one's percentage.
+    const u = fresh();
+    u.noteRateLimitEvent({
+        status: 'rejected', resetsAt: now() - 60, rateLimitType: 'five_hour',
+        isUsingOverage: true, overageStatus: 'allowed', overageResetsAt: RESET_7D,
+    });
+    writeStatusLine({ five_hour: { used_percentage: 5, resets_at: RESET_5H } });
+
+    const w = win(u.snapshot(), 'five_hour');
+    assert.strictEqual(w.usedPercent, 5, 'the new window still reads');
+    assert.strictEqual(w.resetsAt, RESET_5H, 'with its own reset, not the one that passed');
+    assert.strictEqual(w.status, null, 'the rejection was about the window that ended');
+    assert.strictEqual(w.isUsingOverage, false, 'and so was being on overage');
+    assert.strictEqual(w.overageStatus, null);
+    assert.strictEqual(w.overageResetsAt, null);
+    assert.strictEqual(u.snapshot().events.length, 1, 'the history still says it happened');
+
+    // The control: the same verdict about a window still running stands.
+    const v = fresh();
+    v.noteRateLimitEvent({
+        status: 'rejected', resetsAt: RESET_5H, rateLimitType: 'five_hour', isUsingOverage: true,
+    });
+    const live = win(v.snapshot(), 'five_hour');
+    assert.strictEqual(live.status, 'rejected');
+    assert.strictEqual(live.isUsingOverage, true);
+
+    // And with no status-line reading, the expired record leaves nothing to show.
+    clearStatusLine();
+    assert.strictEqual(win(u.snapshot(), 'five_hour'), undefined);
+
+    ok('a turn\'s verdict on a window that has since reset is not reported');
+}
+
+{
     const u = fresh();
     clearStatusLine();
     const snap = u.snapshot();

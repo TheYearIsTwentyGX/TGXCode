@@ -309,8 +309,20 @@ class Usage {
 
         const windows = [];
         for (const type of types) {
-            const s = this.stream[type] || null;
+            // The stream half of the rule readStatusLine applies to its own:
+            // a record whose reset has passed is about a window that is over.
+            // Nothing replaces it until the next turn, and if the work since
+            // has been in a terminal that turn never comes — so without this a
+            // five-hour window that rejected and went onto overage kept saying
+            // "rejected · on overage" beside the fresh reading of the window
+            // that followed it. The record stays in `this.stream` for the next
+            // event to overwrite; it is only not reported.
+            const rec = this.stream[type] || null;
+            const s = rec && !(rec.resetsAt !== null && rec.resetsAt <= now) ? rec : null;
             const l = (sl && sl.windows[type]) || null;
+            // Only an expired record knew this window: say nothing, as the
+            // status line's pruning does, rather than draw an empty row.
+            if (!s && !l) continue;
             // Per window, not per file. The harvest file holds readings learned
             // at different moments by different terminals — a five-hour window
             // refreshed a minute ago next to a weekly one nobody has updated

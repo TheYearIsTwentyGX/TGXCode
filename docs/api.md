@@ -2509,9 +2509,9 @@ render it as given.
 | `usedPercentAt` | number, unix seconds, or null — **when that percentage was learned**, per window. Not one timestamp shared by the response: two windows here can be stamped hours apart, because they are written by whichever terminals happen to be open and each holds a reading of its own age. It also advances only when the percentage itself *changes* — a terminal re-reporting the same 3% has learned nothing, so a steady number ages and eventually greys by design |
 | `usedPercentSource` | `"statusline"`, `"stream"`, or null |
 | `resetsAt` | number, unix seconds, or null |
-| `status` | `"allowed"`, `"allowed_warning"`, `"rejected"`, or **null when never observed.** Null is not "allowed" — a window the status line reported and no turn ever did has a percentage and no status |
-| `isUsingOverage` | boolean |
-| `overageStatus` | same three strings, or null |
+| `status` | `"allowed"`, `"allowed_warning"`, `"rejected"`, or **null when never observed — or when the last turn to observe it was about a window that has since reset.** Null is not "allowed" — a window the status line reported and no turn ever did has a percentage and no status. A turn's reading is dropped once its `resetsAt` passes, taking `status`, `statusAt` and every overage field with it, so a window that rejected and went onto overage stops saying so the moment it resets rather than at the next turn. A window that only an expired turn had seen is left out of `windows` altogether |
+| `isUsingOverage` | boolean — false once the observed window has reset (see `status`) |
+| `overageStatus` | same three strings, or null — null once the observed window has reset |
 | `surpassedThreshold` | number 0–1, or null — the threshold the account crossed |
 | `events[].from` | string, or **null** for a window first observed already in trouble |
 
