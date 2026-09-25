@@ -10,6 +10,10 @@
 // module is evaluating — every use is inside a function called later. Keep it
 // that way: a top-level `const X = someImport(...)` runs before app.js's body
 // and throws in the temporal dead zone, and only loading the page shows it.
+//
+// One exception: SESSION_VIEW and AGENT_VIEW capture `state.*` at load. That is
+// safe because state.js imports nothing, so it has always finished evaluating
+// before this file runs. Do not extend the exception to any other import.
 
 import { get } from '../api.js';
 import { BOOT_PREFS } from '../boot.js';

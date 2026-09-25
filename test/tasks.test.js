@@ -294,15 +294,28 @@ const TODOS = [
     // trusted the result. On the session whose `todos` is a JSON string, the
     // collapsed summary counted the *characters* of that string and offered
     // "1041 items", and iterating it walked the list one character at a time.
-    const app = fs.readFileSync(path.join(__dirname, '..', 'web', 'transcript', 'tools.js'), 'utf8');
+    //
+    // The call sites are spread across web/transcript/ (tools.js and find.js
+    // today), so every file there is scanned, plus web/app.js for anything that
+    // stayed behind — a guard that reads one file stops guarding the moment a
+    // call site moves to another.
+    const webDir = path.join(__dirname, '..', 'web');
+    const transcriptDir = path.join(webDir, 'transcript');
+    const scanned = [
+        path.join(webDir, 'app.js'),
+        ...fs.readdirSync(transcriptDir).filter(f => f.endsWith('.js')).sort()
+            .map(f => path.join(transcriptDir, f)),
+    ];
+    const src = scanned.map(f => fs.readFileSync(f, 'utf8')).join('\n');
 
-    assert.ok(app.includes('function todoItemsOf('),
-        'web/transcript/tools.js must have the client-side half of the repair');
+    assert.ok(src.includes('function todoItemsOf('),
+        'web/transcript/ must have the client-side half of the repair');
     // No call site may go back to reading the raw keys, which is what made the
     // string shape a bug in three places at once.
-    const raw = app.match(/i\.tasks \|\| i\.todos/g) || [];
+    const raw = src.match(/i\.tasks \|\| i\.todos/g) || [];
     assert.strictEqual(raw.length, 1,
-        'only the comment explaining the trap may still name the raw keys');
+        'across web/app.js and every web/transcript/*.js, only the comment in ' +
+        'tools.js explaining the trap may still name the raw keys');
 
     ok('the transcript renderer repairs a stringified list too, not just the bridge');
 }
