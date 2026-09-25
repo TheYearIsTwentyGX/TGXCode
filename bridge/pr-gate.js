@@ -9,11 +9,12 @@
 //
 //   **A schedule marked `test` never posts.** `gh` is authenticated as the
 //   user on every bridge, dev ones included, and TGXCODE_SCHEDULE_ON_DEV exists
-//   so a development bridge can fire test schedules — so the first line of
-//   `postReviewToPr` is the only thing between testing this feature and
-//   commenting on, and relabelling, the user's real pull requests. `gate.post:
-//   false` is the same switch for an ordinary schedule that wants the reviews
-//   without the noise. Keep them on one line, and keep that line first.
+//   so a development bridge can fire test schedules — so the `if (row.test ||
+//   … row.gate.post === false)` in `postReviewToPr` is the only thing between
+//   testing this feature and commenting on, and relabelling, the user's real
+//   pull requests. `gate.post: false` is the same switch for an ordinary
+//   schedule that wants the reviews without the noise. Keep them in that one
+//   `if`, and keep it ahead of every `pulls.*` call in the function.
 //
 // Everything else that touches GitHub for a schedule is a *read* (`pulls.repoOf`,
 // the pr-store's lists, `git fetch`), and a read changes nothing there.
