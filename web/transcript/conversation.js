@@ -27,9 +27,9 @@ import { state } from '../state.js';
 import { loadCommands } from '../commands.js';
 import { showTerm, termOpen } from '../term-pane.js';
 import {
-    applyRunner, grouping, loadAttach, loadDraft, loadSessions, markSessionNotesRead,
+    applyRunner, closePanels, grouping, loadAttach, loadDraft, loadSessions, markSessionNotesRead,
     paintPanels, prUnknownWhy, rememberView, renderRail, saveDraft, scrollToEnd,
-    showDash, showPreview, showTaskboard, subscribe, takePendingJump,
+    showPreview, subscribe, takePendingJump,
 } from '../app.js';
 import { renderPins } from '../snippets/pins.js';
 import { clearAttach, renderAttach } from '../composer/attachments.js';
@@ -49,14 +49,20 @@ import { hideTurnPop, renderTurns, REVIEWABLE } from './turn-rail.js';
 
 // ── conversation ─────────────────────────────────────────────────────────
 
-export async function openSession(id, { quiet = false, keepDash = false } = {}) {
+export async function openSession(id, { quiet = false, keepPanels = false } = {}) {
     // Going to a conversation is what "I have dealt with this" looks like, so it
     // is what clears its notifications. Above the early return below rather than
     // after it: a history row for the chat you are already sitting in still has
     // to clear, and that is the one path that does not reach the rest of this.
     markSessionNotesRead(id);
-    // Already here — but a history row may still have somewhere to put you.
-    if (state.current && state.current.sessionId === id) { takePendingJump(); return true; }
+    // Already here — but a history row may still have somewhere to put you, and
+    // a panel may be covering it. Clicking the session you are in with Settings up
+    // did nothing at all, which reads as the click not having landed.
+    if (state.current && state.current.sessionId === id) {
+        if (!keepPanels) closePanels();
+        takePendingJump();
+        return true;
+    }
     // Keep whatever is half-typed for the session being left behind.
     if (state.current) saveDraft(state.current.sessionId, dom.input.value);
     // The menu belongs to the directory being left, and the draft arriving in
@@ -72,7 +78,7 @@ export async function openSession(id, { quiet = false, keepDash = false } = {}) 
     // the old behaviour of arriving all at once.
     const known = state.sessions.find(s => s.sessionId === id) || null;
     const seq = ++state.openSeq;
-    if (known) beginOpen(known, { keepDash });
+    if (known) beginOpen(known, { keepPanels });
 
     try {
         const data = await get(`/api/sessions/${id}`);
@@ -81,7 +87,7 @@ export async function openSession(id, { quiet = false, keepDash = false } = {}) 
         if (seq !== state.openSeq) return true;
 
         if (known) state.current = data.summary;   // the index may have moved on
-        else beginOpen(data.summary, { keepDash }); // nothing was drawn yet
+        else beginOpen(data.summary, { keepPanels }); // nothing was drawn yet
         state.offset = data.offset;
         // Before appendEvents, because a suggestion card reads this as it is
         // built — a card drawn first and corrected afterwards would offer to
@@ -143,11 +149,12 @@ export async function openSession(id, { quiet = false, keepDash = false } = {}) 
  * the events, the byte offset, the runner state — is deliberately left cleared
  * so nothing downstream reads the session it just left.
  *
- * `keepDash` is for a restore, where the session is not being picked but put
+ * `keepPanels` is for a restore, where the session is not being picked but put
  * back: a window that was on the work-in-flight board over an open conversation
  * should return to the board, not be walked off it by the conversation arriving.
+ * Settings uses it too, to re-read the conversation under itself.
  */
-function beginOpen(summary, { keepDash = false } = {}) {
+function beginOpen(summary, { keepPanels = false } = {}) {
     state.current = summary;
     state.offset = 0;
     state.runner = null;
@@ -196,13 +203,14 @@ function beginOpen(summary, { keepDash = false } = {}) {
     state.stopArmed = 0;
     leaveAgent();       // a subagent belongs to the session it was spawned by
 
-    // Picking a session is done with the whole-screen boards, whichever way you
+    // Picking a session is done with every whole-screen panel, whichever way you
     // got there — including the roundabout way, where Start on a task board card
-    // makes a session and then opens it. The live board is not a place you leave
-    // — it docks under the conversation you just opened, which is the whole
-    // point of it.
-    if (state.dash.open && !keepDash) showDash(false);
-    if (state.taskboard.open && !keepDash) showTaskboard(false);
+    // makes a session and then opens it. This used to close only the two boards,
+    // so a rail click under Drafts, Schedules or Settings opened the conversation
+    // out of sight and looked like nothing had happened. The live board is not a
+    // place you leave — it docks under the conversation you just opened, which is
+    // the whole point of it.
+    if (!keepPanels) closePanels();
     // Through paintPanels rather than by hand: opening a session is what turns a
     // full-height board into a docked one, and setting `conv.hidden` here
     // directly left the two disagreeing — the conversation drawn underneath a
@@ -253,7 +261,7 @@ function beginOpen(summary, { keepDash = false } = {}) {
     // paths through openSession converge on a session, so every way of getting
     // to a conversation — a rail row, a card, the dashboard, a notification, a
     // fork still being written — writes the address once, with everything the
-    // showDash above may have changed on the way already settled.
+    // closePanels above may have changed on the way already settled.
     rememberView();
 }
 
