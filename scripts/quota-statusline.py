@@ -246,7 +246,7 @@ def save(found, seen_at, now):
       - **An unchanged value does not move its timestamp.** Re-confirming 3% is
         not learning anything, and stamping it fresh is how a number nobody has
         updated goes on looking current. It also keeps `capturedAt` meaning what
-        web/app.js's staleness greying has always assumed.
+        web/quota.js's staleness greying has always assumed.
     """
     prev = {}
     try:

@@ -306,12 +306,16 @@ Two rules worth knowing before you send a patch:
 | `scripts/quota-statusline.py` | Claude Code's status line, harvesting the quota percentages on the way past |
 | `scripts/install-quota-statusline.js` | Points `~/.claude/settings.json` at that script, and refuses to clobber one you already have |
 | `web/` | The UI. No build step: edit a file and refresh |
-| `web/app.js` | Everything not yet moved out of it: the transcript, the composer, Settings and every other surface. Imports the five modules below |
+| `web/app.js` | Everything not yet moved out of it: the transcript, the composer, Settings and every other surface. Imports the modules below |
 | `web/api.js` | `get`, `post`, `patch`, `put`, `del`, `postFile` — the fetch wrappers every call to the bridge goes through, and the CSRF header they send |
 | `web/boot.js` | What the page was handed in `<meta>` tags — `BOOT_PREFS` and its fallback, the host paths, the pairing token — read synchronously at load |
 | `web/state.js` | `state`, the page's one mutable store, and `DEFAULT_PERM`. What a surface remembers goes on here, not in a module-level `let` |
 | `web/dom.js` | `dom` (every id in index.html, looked up once), `el`, `toast`, and the rules modal dialogs share |
 | `web/format.js` | Timestamps, durations, paths and model ids as short text. Pure, so the Node tests import it directly |
+| `web/notifications.js` | Desktop notifications and the chime for a turn that finished or is waiting on you, and the page side of `sw.js` — registering it, and opening the session a notification's button was about |
+| `web/quota.js` | The quota pill and the Claude Code version pill, and their popovers. `loadQuota`/`loadCv` are what a reconnect calls |
+| `web/restart.js` | Pull and restart — the quota popover's button that fast-forwards the checkout and hands over to `scripts/restart-bridge.sh`, and the dialog for a refusal |
+| `web/channels.js` | The dev-server channel strip: a chip per port the open session started, to open in DevBrowser or stop |
 | `web/terminal.js` | The terminal pane — a shell, or a run's output |
 | `web/markdown.js` | The transcript's markdown renderer |
 | `web/highlight.js` | The syntax highlighter behind it |

@@ -84,7 +84,7 @@ that must talk to such a bridge can do the same.
 It is a CSRF guard, not a secret: the value is a constant published in this
 repository, and the point is only that a form post or an image tag from another
 origin cannot set a custom header without a preflight. Nothing in `web/` mentions
-it in prose because `web/app.js`, `web/terminal.js` and `web/sw.js` each carry it
+it in prose because `web/api.js`, `web/terminal.js` and `web/sw.js` each carry it
 in their own `HEADERS` constant.
 
 It is the first thing a new client trips over, because the read surface works
