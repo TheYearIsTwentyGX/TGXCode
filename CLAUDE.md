@@ -210,6 +210,12 @@ does not start a bridge that was not already running on 45888. `--no-restart`
 leaves the running bridge alone; `--restart` restarts even when `bridge/` did not
 change.
 
+The restart runs in its own session (`setsid`), because the **Land** button is a
+run of the bridge being restarted and the bridge kills its runs as it exits —
+before that, the restart died halfway and left 45888 down. So from the button the
+pane ends with the old bridge; whether the new one came up is the last line of
+`~/.cache/tgxcode/restart-45888.log`.
+
 It is also the sanctioned way to reach the main checkout at all: a worktree-isolated
 session is refused `git -C ~/Other/claude-sessions` by its own harness, which is
 why the gap existed. The script is narrow so that being sanctioned is safe — it
