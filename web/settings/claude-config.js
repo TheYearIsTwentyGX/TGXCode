@@ -15,6 +15,7 @@ import { state } from '../state.js';
 import { grow } from '../composer/send.js';
 import { flashNode } from '../transcript/turn-rail.js';
 import { claudeHooksRow, hkClearDraft } from './hooks.js';
+import { foldLabel, isOpen, LONG } from './fold.js';
 import { renderSettings, settingsProject } from './index.js';
 
 // ── Claude Code's own settings ───────────────────────────────────────────
@@ -470,11 +471,17 @@ function claudeRow(row) {
 
     const save = (v, opts) => saveClaudePath(row.path, v, opts);
 
+    // The wide collections fold; see fold.js. Shut, the row keeps its label,
+    // its warnings and one line of counts, and drops the note and the list.
+    const fold = row.wide && (isList || isMap) ? claudeFoldSummary(row, own, eff, inheritedCount) : null;
+    const open = !fold || isOpen(`claude:${row.path}`, fold.long);
+
     const text = el('div', { class: 'settings-row-text' },
         el('div', { class: 'settings-row-label' },
-            row.label,
+            fold ? foldLabel(`claude:${row.path}`, open, row.label) : row.label,
             el('code', { class: 'cfg-path', text: row.path })),
-        row.note ? el('div', { class: 'settings-row-note', text: row.note }) : null,
+        !open ? el('div', { class: 'set-fold-sum', text: fold.text }) : null,
+        row.note && open ? el('div', { class: 'settings-row-note', text: row.note }) : null,
         // What the channel is currently delivering. See paintCvSettingsNote().
         row.path === 'autoUpdatesChannel' ? cvSettingsNote() : null,
         row.hint === 'user' && s.scope !== 'user'
@@ -487,7 +494,7 @@ function claudeRow(row) {
                 el('code', { text: shortPath(eff.file) }),
                 ' wins, so this has no effect here.')
             : null,
-        merged && inheritedCount
+        merged && inheritedCount && open
             ? el('div', { class: 'settings-row-note cfg-merged' },
                 `These add up across files rather than overriding: ${inheritedCount} more `
                 + `${inheritedCount === 1 ? 'rule is' : 'rules are'} in force from `
@@ -515,15 +522,17 @@ function claudeRow(row) {
     // enabled in the user file should read as enabled here, and unticking it
     // should write one key rather than twenty.
     const merged_ = eff ? eff.value : undefined;
-    const control = claudeControl(row, value, disabled, save, explicit, inherited, merged_);
     // `data-path` is the only handle a row has: renderSettings() replaces the
     // whole body, so a value that moved underneath cannot be pointed at unless
-    // the row it landed in can be found again. See claudeFlash().
+    // the row it landed in can be found again. See claudeFlash(). A folded row
+    // keeps it, so the flash still lands on its head.
     if (row.wide) {
-        return el('div', { class: 'settings-row is-wide', 'data-path': row.path },
+        return el('div', { class: `settings-row is-wide${open ? '' : ' is-folded'}`, 'data-path': row.path },
             el('div', { class: 'settings-row-head' }, text, side),
-            el('div', { class: 'settings-row-wide' }, control));
+            open ? el('div', { class: 'settings-row-wide' },
+                claudeControl(row, value, disabled, save, explicit, inherited, merged_)) : null);
     }
+    const control = claudeControl(row, value, disabled, save, explicit, inherited, merged_);
     return el('div', { class: 'settings-row', 'data-path': row.path },
         text,
         el('div', { class: 'settings-row-ctl' }, control, side));
@@ -531,6 +540,32 @@ function claudeRow(row) {
 
 const isScalarValue = (v) => v === null
     || ['boolean', 'number', 'string'].includes(typeof v);
+
+/**
+ * What a folded collection row says in place of its list, and whether it is
+ * long enough to start shut. Counted the way each control draws: a list by
+ * this file's entries (the inherited block folds on its own), a map by what
+ * is in force, since that is what its control shows.
+ */
+function claudeFoldSummary(row, own, eff, inheritedCount) {
+    const s = claudeState();
+    if (row.kind === 'rules' || row.kind === 'strings') {
+        const n = own.length;
+        const from = inheritedCount
+            ? ` · ${inheritedCount} more from ${eff.from.filter(f => f.scope !== s.scope && f.count)
+                .map(f => CLAUDE_SCOPES[f.scope]).join(' and ')}`
+            : '';
+        return { long: n > LONG, text: `${n === 0 ? 'Nothing' : n} in this file${from}` };
+    }
+    const inForce = asMap(eff ? eff.value : undefined);
+    if (row.kind === 'map-bool') {
+        const names = new Set([...Object.keys(inForce), ...(s.data.installedPlugins || [])]);
+        const on = Object.values(inForce).filter(v => v === true).length;
+        return { long: names.size > LONG, text: `${on} of ${names.size} enabled` };
+    }
+    const n = Object.keys({ ...inForce, ...asMap(own) }).length;
+    return { long: n > LONG, text: `${n} ${n === 1 ? 'variable' : 'variables'}` };
+}
 
 /** The control for a catalogued kind. Every one of them saves on change. */
 function claudeControl(row, value, disabled, save, explicit, inherited, merged) {
@@ -657,16 +692,24 @@ function claudeList(row, list, disabled, save, inherited = []) {
         // is not answerable from one file — and reading it used to mean opening
         // two. Not editable from this scope: the row that owns an entry is the
         // row that may remove it.
-        inherited.map(from => el('div', { class: 'cfg-inherit' },
-            el('div', { class: 'cfg-inherit-head' },
-                `${from.count} more from ${CLAUDE_SCOPES[from.scope]}`,
-                el('code', { text: shortPath(from.file) })),
-            // Guarded rather than assumed: a page served by one bridge and
-            // still open when another restarts is routine here, and a missing
-            // field should cost the entry list rather than the whole panel.
-            (from.values || []).map(entry => el('div', {
-                class: 'cfg-inherit-row', text: entry,
-            })))),
+        //
+        // Shut by default, each file on its own: it is read-only, and the
+        // longest part of the row — the user's allow list, seen from a project.
+        inherited.map((from) => {
+            const key = `claude:${row.path}:from:${from.scope}`;
+            const open = isOpen(key, true);
+            return el('div', { class: 'cfg-inherit' },
+                el('div', { class: 'cfg-inherit-head' },
+                    foldLabel(key, open, `${from.count} more from ${CLAUDE_SCOPES[from.scope]}`,
+                        'set-fold is-quiet'),
+                    el('code', { text: shortPath(from.file) })),
+                // Guarded rather than assumed: a page served by one bridge and
+                // still open when another restarts is routine here, and a missing
+                // field should cost the entry list rather than the whole panel.
+                open ? (from.values || []).map(entry => el('div', {
+                    class: 'cfg-inherit-row', text: entry,
+                })) : null);
+        }),
 
         el('div', { class: 'cfg-list-add' },
             el('input', {
@@ -765,9 +808,12 @@ function claudeMapString(row, own, disabled, save, merged) {
         elsewhere.length
             ? el('div', { class: 'cfg-inherit' },
                 el('div', { class: 'cfg-inherit-head' },
-                    `${elsewhere.length} more in force from another file`),
-                elsewhere.map(name => el('div', { class: 'cfg-inherit-row' },
-                    `${name} = ${inForce[name]}`)))
+                    foldLabel(`claude:${row.path}:from`, isOpen(`claude:${row.path}:from`, true),
+                        `${elsewhere.length} more in force from another file`, 'set-fold is-quiet')),
+                isOpen(`claude:${row.path}:from`, true)
+                    ? elsewhere.map(name => el('div', { class: 'cfg-inherit-row' },
+                        `${name} = ${inForce[name]}`))
+                    : null)
             : null,
         el('div', { class: 'cfg-kv-add' },
             el('input', { class: 'settings-text cfg-kv-newname', type: 'text',
@@ -853,14 +899,22 @@ export function claudeJsonLink(path, label) {
 function claudeUnknownCard() {
     const s = claudeState();
     const unknown = s.data.unknown || [];
+    // Folds as a whole card: it is a heap of unrelated keys, often long, and
+    // the one group on the page nobody came here to edit.
+    const open = !unknown.length || isOpen('claude:unknown', unknown.length > LONG);
     const card = el('section', { class: 'settings-group cfg-sub', id: 'set-g-claude-unknown' },
-        el('h3', { class: 'settings-group-title', text: 'Also in these files' }),
-        el('p', { class: 'settings-group-note' },
-            'Keys this page has no control for. Claude Code adds settings faster than '
-            + 'this app learns their names, so nothing here is hidden — a scalar gets a '
-            + 'plain control by type, and anything larger opens in the JSON tab. Read '
-            + 'against Claude Code ', el('code', { text: s.data.catalogueAgainst }), '.'));
+        el('h3', { class: 'settings-group-title' },
+            unknown.length ? foldLabel('claude:unknown', open, 'Also in these files') : 'Also in these files'),
+        open
+            ? el('p', { class: 'settings-group-note' },
+                'Keys this page has no control for. Claude Code adds settings faster than '
+                + 'this app learns their names, so nothing here is hidden — a scalar gets a '
+                + 'plain control by type, and anything larger opens in the JSON tab. Read '
+                + 'against Claude Code ', el('code', { text: s.data.catalogueAgainst }), '.')
+            : el('div', { class: 'set-fold-sum' },
+                `${unknown.length} ${unknown.length === 1 ? 'key' : 'keys'} this page has no control for`));
 
+    if (!open) return card;
     if (!unknown.length) {
         card.append(el('div', { class: 'cfg-list-none',
             text: 'Nothing — this page has a control for every key in these files.' }));

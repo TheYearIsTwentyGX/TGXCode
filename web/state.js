@@ -402,6 +402,13 @@ export const state = {
         rev: 0,
         // Which group the contents list lights. See markSettingsToc().
         toc: null,
+        // The long rows somebody folded or opened, by key. See settings/fold.js.
+        folds: (() => {
+            try {
+                const f = JSON.parse(localStorage.getItem('settingsFolds') || '{}');
+                return f && typeof f === 'object' && !Array.isArray(f) ? f : {};
+            } catch { return {}; }
+        })(),
     },
     // Claude Code's own settings, which are a different four files with a
     // different owner — see the Claude Code section below. Its own `scope`

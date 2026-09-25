@@ -240,6 +240,42 @@
 .settings-row-head .settings-row-side { flex: none; padding-top: 1px; }
 .settings-row-wide { width: 100%; margin-top: 12px; }
 
+/* A long row folded away — settings/fold.js. The label is the button, so it
+   keeps the look of whatever it labels and only gains a caret in front; the
+   caret hangs in the gutter so a folded label lines up with a plain one. */
+.set-fold {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: -16px;
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    letter-spacing: inherit;
+    text-transform: inherit;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.set-fold:hover { color: var(--text); }
+.set-fold:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 3px; }
+.set-fold-caret {
+    display: inline-flex;
+    flex: none;
+    width: 12px;
+    color: var(--text-4);
+    transition: transform var(--t-fast) var(--ease);
+}
+.set-fold[aria-expanded="true"] .set-fold-caret { transform: rotate(90deg); }
+/* Inside a bordered block (the inherited lists) there is no gutter to hang in. */
+.set-fold.is-quiet, .set-fold.is-card { margin-left: 0; }
+.set-fold.is-quiet:hover { color: var(--text-2); }
+.set-fold-sum { margin-top: 3px; font-size: 12px; color: var(--text-4); }
+.set-fold-sum.is-inline { margin: 0 0 0 8px; text-transform: none; letter-spacing: 0; }
+.settings-row.is-folded .settings-row-head { align-items: center; }
+.cmd-card.is-folded .cmd-card-head { margin-bottom: 0; }
+
 /* No stripe on a row this scope has set, though there was one. At User scope
    almost every row is set, so the bar ran the whole length of every group and
    read as a border somebody had drawn badly rather than as a fact about a row.
@@ -833,7 +869,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .cfg-tab, .cfg-list-x { transition: none; }
+    .cfg-tab, .cfg-list-x, .set-fold-caret { transition: none; }
 }
 
 /* ── the commands a project declares ──────────────────────────────────────
