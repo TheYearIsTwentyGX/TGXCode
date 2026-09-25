@@ -242,7 +242,9 @@ Two rules worth knowing before you send a patch:
 
 | Path | |
 |---|---|
-| `bridge/server.js` | HTTP + SSE, routing, static files |
+| `bridge/server.js` | HTTP, routing, static files, and the wiring that hands the modules below their instances |
+| `bridge/events.js` | The `/api/events` stream: connections, the fan-out, the live board's and task board's ticks, transcript follows, the peer list |
+| `bridge/pairing.js` | `/pair` and `/pair/forget` — a pasted link becoming a cookie |
 | `bridge/config.js` | Paths, ports, allowed roots — every constant with a reason attached, and the two containment checks that decide whether a path is one a caller may name |
 | `bridge/dashboard.js` | Uncommitted changes and open PRs, per project |
 | `bridge/git.js` | Every question the bridge asks git about a directory, cached once for all of them |
@@ -250,6 +252,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/changes.js` | What a session changed, out of its transcript and its subagents' |
 | `bridge/pulls.js` | Everything this app asks GitHub about a pull request, what its status *is*, and the review it leaves behind |
 | `bridge/pr-store.js` | When to ask, and last time's answer kept on disk — so no route ever waits on GitHub |
+| `bridge/pr-refresh.js` | The clock that fills it: one pass over the repositories in play, and `prs-changed` when the answer moved |
 | `bridge/overview.js` | The live board: what every session is doing right now |
 | `bridge/taskboard.js` | The task board: everything outstanding, in a column per state |
 | `bridge/sessions.js` | The session index — incremental, cached, watched |
@@ -284,10 +287,13 @@ Two rules worth knowing before you send a patch:
 | `bridge/suggestions.js` | What you did about a suggested follow-up |
 | `bridge/drafts.js` | Sessions set up but not started — a create call, held back |
 | `bridge/later.js` | Messages delivered to a session at a time you picked — a send, held back |
+| `bridge/later-delivery.js` | Delivering one: the tick, the path it shares with `POST /api/later/:id/send`, and owning up to an interrupted delivery |
 | `bridge/snippets.js` | Canned messages and the groups they sit in |
 | `bridge/usage.js` | How much of the 5-hour window and the week are gone, merged from turn events and the status line |
 | `bridge/beacon.js` | A `claude` started for four seconds and killed, so the quota percentages refresh with no terminal open |
 | `bridge/schedule.js` | Sessions that start on a clock — the store, the cron, and what counts as new since last time |
+| `bridge/scheduler.js` | The firing half: the tick, Run now's shared path, a schedule on the wire, and a finished turn attributed back |
+| `bridge/pr-gate.js` | A pull-request schedule's GitHub side — what is due, its range, the sweep's budget, and posting the review. A `test` schedule never posts |
 | `bridge/mcp.js` | The tools this app gives a session: offer the next piece of work, find the other sessions, hand one of them a fact, search and take up suggested tasks, schedule a session |
 | `bridge/handoff.js` | The rules a handoff has to pass: the loop guard, and what waking a session would run into |
 | `bridge/slash-commands.js` | What slash commands a directory has, for composer completion |

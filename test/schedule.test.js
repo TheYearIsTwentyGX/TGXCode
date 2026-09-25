@@ -779,7 +779,7 @@ const FIELDS = ['id', 'enabled', 'title', 'cwd', 'prompt', 'model', 'permissionM
     assert.strictEqual(mid.once, true);
     assert.strictEqual(s.enabled().length, 0,
         'so pass one cannot see it — which is right, it must not claim another slot');
-    // The condition pass two uses. Spelled out here because it lives in server.js
+    // The condition pass two uses. Spelled out here because it lives in scheduler.js
     // and this is the file that would catch it regressing.
     assert.ok(!mid.enabled && mid.once && mid.sweepUntil,
         'and pass two finds it by being a spent one-time with a window still open');
@@ -1367,7 +1367,7 @@ const pr = (number, over = {}) => ({
 
     // A second store over the same file is a second bridge, or this one after a
     // restart — which is the whole reason the run store is on disk rather than
-    // in the Map server.js keeps.
+    // in the Map scheduler.js keeps.
     assert.strictEqual(new Schedules().forSession({ sessionId: 'sess-1' }).id, row.id,
         'the link survives a restart');
 

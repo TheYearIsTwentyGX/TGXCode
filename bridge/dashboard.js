@@ -89,7 +89,7 @@ const chipTime = (c) => (c.lastTs ? Date.parse(c.lastTs) : 0);
  * `refresh` is the board's own Refresh button and nothing else. It drops the
  * working-tree cache; asking GitHub again is the caller's to arrange, because a
  * forced list is a pass of the refresher rather than a thing this can do on its
- * own — see `refreshPrs` in server.js.
+ * own — see `tickPrs` in bridge/pr-refresh.js.
  *
  * @param {import('./sessions').SessionIndex} index
  * @param {{includeTest?: boolean, refresh?: boolean}} opts

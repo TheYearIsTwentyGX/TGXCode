@@ -41,7 +41,7 @@
 // A failed call backs off — 1, 2, 5 minutes, then the idle floor — and, crucially,
 // **keeps the pulls it last read successfully**. gh failing has to be
 // distinguishable from a repository with nothing open; `pullsForSchedule` in
-// server.js refuses to prune a schedule's reviewed set on a failed list precisely
+// bridge/pr-gate.js refuses to prune a schedule's reviewed set on a failed list precisely
 // because those two used to look identical for a whole minute.
 //
 // The file is a cache and lives in CACHE_DIR, on the line bridge/config.js draws:
