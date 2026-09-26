@@ -73,6 +73,17 @@ export const state = {
     // plans and questions joined the rail.
     turnTicks: [],
     activeTurn: -1,
+    // Every mark the rail shows, from the bridge's turn index — including the
+    // turns whose rows have not been loaded. See web/transcript/earlier.js.
+    turnIndex: [],
+    // Byte offset the loaded part of the transcript begins at. 0 once all of it
+    // is on screen; above that, there is an earlier stretch to fetch.
+    windowStart: 0,
+    // Results that arrived for a call in a stretch not loaded yet, by tool id,
+    // applied when that stretch is.
+    orphanResults: new Map(),
+    // The fetch of an earlier stretch in flight, so two do not race.
+    loadingEarlier: null,
     // The plan or question the review dialog is showing, by event id. An id and
     // not the event: patchTool rebuilds the object when a result lands.
     review: { evId: null },

@@ -14,6 +14,7 @@ const { EventEmitter } = require('events');
 const { PROJECTS_DIR, CACHE_DIR } = require('./config');
 const { scanMeta, parseLines, buildEvents, readSubagentIndex,
     readSubagentTranscript, lastActivity } = require('./transcript');
+const { TurnIndex } = require('./turn-index');
 
 const CACHE_FILE = path.join(CACHE_DIR, 'index.json');
 // Bump whenever scanMeta's output shape or derivation changes, so a stale cache
@@ -32,6 +33,8 @@ class SessionIndex extends EventEmitter {
     constructor(flags = null) {
         super();
         this.flags = flags;
+        /** Where each turn starts, so a long transcript can be opened from its end. */
+        this.turnIndex = new TurnIndex();
         /**
          * Which sessions are actually running, when we have it. Set from
          * server.js rather than constructed here: the index is about files on
@@ -529,6 +532,43 @@ class SessionIndex extends EventEmitter {
         return { summary: this._summary(rec), events, offset: consumed };
     }
 
+    /**
+     * The turn index for a session, brought up to date with its file. See
+     * bridge/turn-index.js. Null for a session we do not know.
+     */
+    turns(sessionId) {
+        const rec = this.sessions.get(sessionId);
+        if (!rec) return null;
+        return this.turnIndex.update(sessionId, rec.file);
+    }
+
+    /**
+     * The events in bytes [from, to) of the transcript — `to` defaulting to the
+     * end. Both must be line starts, which is what the turn index's offsets are.
+     * Returns {summary, events, offset} like read(), `offset` being where this
+     * window stopped reading, so a window that runs to the end can be tailed.
+     */
+    readWindow(sessionId, from, to = null) {
+        const rec = this.sessions.get(sessionId);
+        if (!rec) return null;
+        let buf;
+        try {
+            const size = fs.statSync(rec.file).size;
+            const end = to === null ? size : Math.min(to, size);
+            const len = Math.max(0, end - from);
+            buf = Buffer.alloc(len);
+            if (len) {
+                const fd = fs.openSync(rec.file, 'r');
+                try { fs.readSync(fd, buf, 0, len, from); } finally { fs.closeSync(fd); }
+            }
+        } catch { return null; }
+        const { entries, consumed } = parseLines(buf);
+        const sessionDir = path.join(rec.dir, sessionId);
+        const subagentsByToolUse = readSubagentIndex(sessionDir);
+        const { events } = buildEvents(entries, { subagentsByToolUse });
+        return { summary: this._summary(rec), events, offset: from + consumed };
+    }
+
     /** Events appended since `offset`. Used by the live tail. */
     readSince(sessionId, offset) {
         const rec = this.sessions.get(sessionId);
@@ -711,6 +751,7 @@ class SessionIndex extends EventEmitter {
         }
 
         this.sessions.delete(sessionId);
+        this.turnIndex.forget(sessionId);
         // Deleting is deliberate, so it takes the reprieve with it: a session
         // removed on purpose must not be held alive by having been recent.
         this.pending.delete(sessionId);

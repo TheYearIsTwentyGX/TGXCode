@@ -24,6 +24,7 @@ import { renderHeaderActions } from './conversation.js';
 import { slidePane, syncPaneInsets } from './layout.js';
 import { openAgent } from './subagents.js';
 import { jumpToTurn } from './turn-rail.js';
+import { loadAll } from './earlier.js';
 
 // ── what this session changed ────────────────────────────────────────────
 //
@@ -476,6 +477,8 @@ export async function fetchDiff() {
     } catch (err) {
         // Dropped rather than drawn if it is no longer the question on screen.
         if (d.req !== seq || !d.open) return;
+        await loadAll();
+        if (d.req !== seq || !d.open) return;
         d.loading = false;
         // The bridge could not answer, but the conversation may still be able to.
         // This is not a fringe case: a session that ran outside a repository has
@@ -512,7 +515,12 @@ export async function fetchDiff() {
     }
 
     // Nothing in the tree — committed since, gone, or never in a repository at
-    // all. The conversation may still remember what it did.
+    // all. The conversation may still remember what it did — all of it, not
+    // only the stretch that is loaded.
+    if (state.windowStart) {
+        await loadAll();
+        if (d.req !== seq || !d.open) return;
+    }
     const fromTalk = transcriptDiff(d.absPath || answer.absPath || d.path);
     if (fromTalk) {
         d.source = 'transcript';

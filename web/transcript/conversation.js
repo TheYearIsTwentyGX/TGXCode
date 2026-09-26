@@ -46,6 +46,7 @@ import { leaveAgent, loadAgents, renderAgents } from './subagents.js';
 import { closeTaskDialog, loadTasks, loadTasksSoon, renderTasks } from './suggestions.js';
 import { fillTool } from './tools.js';
 import { hideTurnPop, renderTurns, REVIEWABLE } from './turn-rail.js';
+import { mountEarlier, OPEN_TURNS } from './earlier.js';
 
 // ── conversation ─────────────────────────────────────────────────────────
 
@@ -81,7 +82,8 @@ export async function openSession(id, { quiet = false, keepPanels = false } = {}
     if (known) beginOpen(known, { keepPanels });
 
     try {
-        const data = await get(`/api/sessions/${id}`);
+        // The last few turns and the index of all of them — see earlier.js.
+        const data = await get(`/api/sessions/${id}?turns=${OPEN_TURNS}`);
         // Another session was opened while this was in flight; that one owns the
         // pane now and must not be overwritten by this late arrival.
         if (seq !== state.openSeq) return true;
@@ -89,6 +91,11 @@ export async function openSession(id, { quiet = false, keepPanels = false } = {}
         if (known) state.current = data.summary;   // the index may have moved on
         else beginOpen(data.summary, { keepPanels }); // nothing was drawn yet
         state.offset = data.offset;
+        // Before appendEvents, because a result in this window for a call above
+        // it is kept for later rather than dropped — see patchTool.
+        state.turnIndex = data.turns || [];
+        state.windowStart = (data.window && data.window.start) || 0;
+        state.orphanResults.clear();
         // Before appendEvents, because a suggestion card reads this as it is
         // built — a card drawn first and corrected afterwards would offer to
         // start something that was started days ago.
@@ -115,6 +122,7 @@ export async function openSession(id, { quiet = false, keepPanels = false } = {}
         dom.log.replaceChildren();
         clearPendingSend();
         appendEvents(data.events);
+        mountEarlier();
         warmPeers();        // not awaited: it only adds a name and a link
         renderTurns();      // a session with no turns of your own still clears the rail
         renderRail();
@@ -166,6 +174,9 @@ function beginOpen(summary, { keepPanels = false } = {}) {
     state.turns = [];
     state.turnTicks = [];
     state.activeTurn = -1;
+    state.turnIndex = [];
+    state.windowStart = 0;
+    state.orphanResults.clear();
     state.pinned = true;
     state.agents = [];  // the previous session's agents are not this one's
     resetFind();
@@ -571,7 +582,7 @@ export function appendEvents(events, view = SESSION_VIEW, { live = false } = {})
             // the swap invisible: both happen before the next frame is painted.
             // A subagent's own prompt is not ours — different transcript, different
             // pane — so the session view is the only one that reconciles.
-            if (!view.isAgent && state.pendingSend && state.current
+            if (!view.isAgent && !view.prepend && state.pendingSend && state.current
                 && state.pendingSend.sessionId === state.current.sessionId) {
                 clearPendingSend();
             }
@@ -585,7 +596,9 @@ export function appendEvents(events, view = SESSION_VIEW, { live = false } = {})
     // running: mid-turn, the calls on screen are the work you are watching.
     if (!isBusy()) closeRun(view);
     if (newTasks) { renderTasks(); if (live) loadTasksSoon(); }
-    if (!view.isAgent) {
+    // A stretch loaded above the log is history: earlier.js redraws the rail
+    // once it is in place, and the agents strip has nothing new to learn.
+    if (!view.isAgent && !view.prepend) {
         // Waiting for the next message to redraw would leave a plan's marker
         // missing for the whole of the work it authorised, which is the longest
         // gap in the session.
@@ -598,9 +611,14 @@ export function appendEvents(events, view = SESSION_VIEW, { live = false } = {})
 }
 
 /** A tool call whose result arrived in a later chunk than the call itself. */
-function patchTool(patch, view = SESSION_VIEW) {
+export function patchTool(patch, view = SESSION_VIEW) {
     const entry = view.tools.get(patch.toolId);
-    if (!entry) return;
+    if (!entry) {
+        // Its call is in a stretch above the loaded part. Keep the result for
+        // when that stretch arrives, or the call would sit pending forever.
+        if (!view.isAgent && state.windowStart > 0) state.orphanResults.set(patch.toolId, patch);
+        return;
+    }
     // Only the result fields. The patch is a well-formed event in its own right,
     // so it carries `id` (`toolu_x:result`), `kind` ('tool-result') and the
     // result's own `ts` — and merging those into the call is silently fatal:

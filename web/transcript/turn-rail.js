@@ -13,6 +13,7 @@ import { clip, clockOf, dateOf } from '../format.js';
 import { state } from '../state.js';
 import { openContextMenu } from './context-menu.js';
 import { SESSION_VIEW } from './conversation.js';
+import { loadEarlier } from './earlier.js';
 import { markOutcome, openReview } from './review.js';
 import { toolSummary } from './tools.js';
 
@@ -21,7 +22,9 @@ import { toolSummary } from './tools.js';
 // each plan and each question — the other two moments the conversation stopped
 // and waited for you. Hovering reads it back; clicking a message jumps to it and
 // clicking a plan or a question opens it (see openReview). Built from the
-// rendered log, so a session streaming in a terminal grows its rail as it goes.
+// bridge's turn index, so it is whole even when only the end of a long session is
+// loaded, and from the rendered log after that, so a session streaming in a
+// terminal grows its rail as it goes.
 
 /** The two tool calls that are a moment in the conversation rather than work. */
 export const REVIEWABLE = { ExitPlanMode: 'plan', AskUserQuestion: 'question' };
@@ -55,14 +58,29 @@ export function renderTurns() {
     state.turns = [];
     state.turnTicks = [];
     const marks = [];
+    const add = (entry, kind) => {
+        if (kind === 'turn') {
+            state.turns.push(entry);
+            marks.push({ entry, kind, no: state.turns.length });
+        } else {
+            marks.push({ entry, kind });
+        }
+    };
+    // The index first: it is the whole conversation up to when it was opened.
+    // A mark whose row is loaded uses the row's event, which is the live one —
+    // a plan answered since has its outcome there. One that is not stands in
+    // with the index's own copy and no node; see jumpTo.
+    const seen = new Set();
+    for (const mark of state.turnIndex) {
+        seen.add(mark.id);
+        add(state.nodes.get(mark.id) || { ev: mark, node: null, mark }, mark.kind);
+    }
+    // Then whatever arrived after it, in document order.
     for (const entry of state.nodes.values()) {
         const ev = entry.ev;
-        if (ev.kind === 'user') {
-            state.turns.push(entry);
-            marks.push({ entry, kind: 'turn', no: state.turns.length });
-        } else if (ev.kind === 'tool' && REVIEWABLE[ev.name]) {
-            marks.push({ entry, kind: REVIEWABLE[ev.name] });
-        }
+        if (seen.has(ev.id)) continue;
+        if (ev.kind === 'user') add(entry, 'turn');
+        else if (ev.kind === 'tool' && REVIEWABLE[ev.name]) add(entry, REVIEWABLE[ev.name]);
     }
     state.activeTurn = -1;
 
@@ -83,7 +101,7 @@ export function renderTurns() {
                 ? `Turn ${m.no} of ${total}: ${clip(turnText(ev), 60)}`
                 : `${m.kind === 'plan' ? 'Plan' : 'Question'}, ${markOutcome(ev)}: `
                     + clip(toolSummary(ev) || '', 60),
-            onclick: () => (turn ? jumpToTurn(m.entry) : openReview(ev.id)),
+            onclick: () => (turn ? jumpToTurn(m.entry) : reviewMark(m.entry)),
             onmouseenter: (e) => showTurnPop(e.currentTarget, m),
             onmouseleave: hideTurnPop,
             onfocus: (e) => showTurnPop(e.currentTarget, m),
@@ -107,7 +125,7 @@ function openMarkMenu(e, m) {
     e.preventDefault();
     const what = m.kind === 'plan' ? 'plan' : 'question';
     openContextMenu(e, [
-        { label: `Open the ${what}`, onClick: () => openReview(m.entry.ev.id) },
+        { label: `Open the ${what}`, onClick: () => reviewMark(m.entry) },
         { label: 'Show it in the transcript', onClick: () => jumpToTurn(m.entry) },
     ]);
 }
@@ -148,9 +166,26 @@ export function hideTurnPop() {
     dom.turnPop.hidden = true;
 }
 
-export function jumpToTurn(t) {
+export async function jumpToTurn(t) {
     hideTurnPop();
-    revealNode(t.node);
+    const entry = await materialize(t);
+    if (entry) revealNode(entry.node);
+}
+
+async function reviewMark(t) {
+    const entry = await materialize(t);
+    if (entry) openReview(entry.ev.id);
+}
+
+/**
+ * The loaded entry for a rail mark, fetching the stretch it is in first if it is
+ * above the loaded part of the log.
+ */
+async function materialize(t) {
+    if (t.node) return t;
+    const id = t.ev.id;
+    if (!state.nodes.has(id) && t.mark) await loadEarlier({ through: t.mark });
+    return state.nodes.get(id) || null;
 }
 
 /**
@@ -250,9 +285,13 @@ export function flashNode(node) {
 export function markActiveTurn() {
     if (!state.turns.length) return;
     const edge = dom.scroll.getBoundingClientRect().top + 60;
-    let lo = 0;
+    // Turns not loaded yet have no row to measure. They are all above the
+    // loaded ones, so the search starts at the first that has one — and the
+    // answer stays monotonic.
+    let lo = state.turns.findIndex(t => t.node);
+    if (lo === -1) return;
     let hi = state.turns.length - 1;
-    let active = 0;
+    let active = lo;
     while (lo <= hi) {
         const mid = (lo + hi) >> 1;
         if (state.turns[mid].node.getBoundingClientRect().top > edge) {

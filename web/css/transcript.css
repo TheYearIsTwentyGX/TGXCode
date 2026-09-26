@@ -468,6 +468,15 @@
 /* The collapsed tool row: 13px/1.5 text in 8px padding, inside .tool's radius. */
 .skel-tool { height: 36px; border-radius: var(--r); margin: 3px 0; }
 
+/* The top of a long conversation opened from its end — see earlier.js. It
+   loads on its own as it scrolls into view; the button is for a pane short
+   enough that it never leaves it. */
+.load-earlier {
+    display: flex;
+    justify-content: center;
+    padding: 10px 0 18px;
+}
+
 .load-failed {
     max-width: 560px;
     margin: 40px auto;

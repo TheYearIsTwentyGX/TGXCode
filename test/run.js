@@ -29,7 +29,7 @@ const UNIT = ['auth.test.js', 'temp.test.js', 'recent.test.js', 'pulls.test.js',
     'commands.test.js', 'message-date.test.js', 'folded.test.js',
     'claude-version.test.js', 'wispr.test.js', 'legacy.test.js',
     'suggestions.test.js', 'mcp.test.js', 'flags.test.js', 'worktree.test.js',
-    'scratchpad.test.js'];
+    'scratchpad.test.js', 'turn-index.test.js'];
 const LIVE = ['gate.test.js', 'browser.test.js', 'refusals.test.js', 'unpaired.test.js'];
 
 const given = Number(process.argv[2]);
