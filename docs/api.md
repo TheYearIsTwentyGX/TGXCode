@@ -451,7 +451,7 @@ for a status per session across the whole list, both below. It is an array becau
 a session that lands one PR and opens another is ordinary; it was a single `pr`
 object until August 2026, which silently kept only the newest.
 
-### `GET /api/sessions/:id[?tail=N]`
+### `GET /api/sessions/:id[?tail=N | ?turns=K]`
 
 `{ summary, events: [...], offset, runner, suggestions, prefs }`.
 
@@ -479,6 +479,55 @@ it is what resumes the live tail.
 `truncated: { dropped, total }`. Mobile clients should use it — a 60-turn session is
 ~1,800 events and half a megabyte of JSON, and none of the first 1,500 is why
 someone opened their phone.
+
+`?tail=N` still parses the whole file on the bridge and only sends less. **`?turns=K`**
+reads less as well: it returns the events from the start of the Kth-last turn to the
+end of the file, and adds two fields. `K` is at least 1. It takes precedence over
+`tail` if both are sent.
+
+- **`turns[]`** — the whole conversation's rail, in file order, whatever was loaded.
+  Each entry is a turn, a plan or a question:
+  `{kind: "turn"|"plan"|"question", id string, offset number, ts ISO string or null, …}`.
+  - `kind: "turn"` adds `text` string (clipped to 460 chars) · **`command` object or
+    null** — `{name, args}` as on a `user` event · `images` number (a count, not the
+    images).
+  - `kind: "plan"` / `"question"` adds `name` (`"ExitPlanMode"` / `"AskUserQuestion"`) ·
+    `status` `"pending"|"ok"|"error"` · `input` object — `{plan}` (clipped to 200) for
+    a plan, `{questions: [{header, question}]}` for a question · `result`
+    `{text, planWasEdited}` or null. Enough to draw the tick and its tooltip, not the
+    card.
+  - `id` is the id the same moment has as an event (`user` event id, `tool` event id),
+    so a client can tell which entries it has loaded.
+  - `offset` is a byte position that a window may start at. **A plan's or question's
+    `offset` is that of the turn it belongs to,** not its own line, so no window starts
+    halfway through a turn.
+- **`window {start, startTurn}`** — `start` is the byte offset `events` begins at (0
+  when the whole transcript was returned) and `startTurn` is the index into the turns
+  (`kind: "turn"` entries only) of the first one included.
+
+`turns[]` is the index as of this request. Marks for anything that arrives later come
+on the live tail as ordinary events, so add them from there. `offset` works exactly as
+without `turns`.
+
+Use `?turns=K` over `?tail=N` when you can: the index is cached per transcript in
+`~/.cache/tgxcode/turns/` and grows incrementally, so a warm open of a 50 MB transcript
+is milliseconds rather than a full parse. The desktop opens with `?turns=8`.
+
+### `GET /api/sessions/:id/range?from=A&to=B`
+
+`{ events, from, to }` — the events in bytes `[A, B)` of the transcript, for the
+stretch above a window opened with `?turns=K`. Pass the window's `start` as `B`, and
+`A` either from an earlier `turns[]` entry's `offset` or as `0`.
+
+**Both ends must be 0 or an `offset` from `turns[]`,** so a stretch never begins
+halfway through a line. Anything else is `400 {"error":"from and to must be turn
+offsets"}`, and so is `from > to`. `404` if the session is unknown.
+
+A stretch is parsed on its own, so a result whose call is in an *earlier* stretch
+comes as a `tool-result` patch, exactly as on the tail. Going the other way, the
+stretch loaded first can hold a result for a call in this one. That result arrived
+as a patch with nothing to patch, so **keep unmatched `tool-result` patches** and apply
+them once the call arrives, or the call shows as pending forever.
 
 Event kinds, all with `id` (string), `kind` (string) and `ts` (ISO 8601 string).
 Types are given because several of these were once listed by name alone and read as
@@ -4473,7 +4522,7 @@ These are cheap now and expensive later, so they are settled:
   change, when a transport buffers it. It is what the bridge speaks, and it is
   what survives an HTTP proxy. (One caveat: see the `cloudflared` buffering bug in
   `docs/remote.md` — it is a reason to pick a transport, not to change protocol.)
-- **`?tail=N` on open, `/since?offset=` to resume.** Never refetch a whole
+- **`?turns=K` (or `?tail=N`) on open, `/range` for earlier, `/since?offset=` to resume.** Never refetch a whole
   transcript on reconnect.
 - **No dependency on the Electron shell.** There is exactly one native method
   (`app/preload.js` → `revealWindow`) and both of its call sites are already

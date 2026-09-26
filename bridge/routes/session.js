@@ -32,6 +32,7 @@ const tasks = require('../tasks');
 // Written here, read back by transcript.js. One format, and the two halves of it
 // live in one file so they cannot drift apart.
 const { handoffEnvelope } = require('../transcript');
+const { boundaries } = require('../turn-index');
 const {
     attachmentPath, attachmentRefused, receiveAttachment, resolveAttachments,
 } = require('./files');
@@ -60,11 +61,43 @@ function init(deps) {
 // windows it keeps and why a loop guard is needed at all.
 const handoffLimit = new HandoffLimit();
 
+/**
+ * `GET /api/sessions/:id?turns=K`: the last K turns of the transcript, and the
+ * index of every turn so the rail can be drawn whole.
+ *
+ * The point is what this does *not* do: read the rest of the file. A long
+ * transcript is megabytes, and parsing and drawing all of it is the lag on
+ * opening one. The earlier turns come from `/range` when they are asked for.
+ */
+function sendWindowed(res, url, sessionId) {
+    const idx = index.turns(sessionId);
+    if (!idx) return send(res, 404, { error: 'session not found' });
+    const k = Math.max(1, Math.floor(Number(url.searchParams.get('turns'))) || 1);
+    const turns = idx.marks.filter(m => m.kind === 'turn');
+    const startTurn = Math.max(0, turns.length - k);
+    const start = startTurn > 0 ? turns[startTurn].offset : 0;
+    const data = index.readWindow(sessionId, start);
+    if (!data) return send(res, 404, { error: 'session not found' });
+    const st = pool.statuses()[sessionId];
+    return send(res, 200, {
+        ...data,
+        turns: idx.marks,
+        window: { start, startTurn },
+        runner: st || null,
+        suggestions: suggestions.forSession(sessionId),
+        prefs: prefs.forCwd(data.summary && data.summary.cwd),
+    });
+}
+
 async function handle(req, res, url, pathname, seg, who) {
     // /api/sessions/:id[/...]
     if (seg[1] === 'sessions' && seg[2]) {
         const sessionId = seg[2];
         const tail = seg[3];
+
+        if (!tail && req.method === 'GET' && url.searchParams.get('turns') !== null) {
+            return sendWindowed(res, url, sessionId);
+        }
 
         if (!tail && req.method === 'GET') {
             const data = index.read(sessionId);
@@ -162,6 +195,24 @@ async function handle(req, res, url, pathname, seg, who) {
             broadcast('session-deleted', { sessionId, title: summary.title });
             broadcast('sessions-changed', { at: Date.now() });
             return send(res, 200, { ok: true, sessionId, ...removed });
+        }
+
+        // An earlier stretch of a transcript opened with `?turns=K`. Both ends
+        // must be offsets the turn index handed out, so a window never begins
+        // halfway through a line — or halfway through a turn.
+        if (tail === 'range' && req.method === 'GET') {
+            const idx = index.turns(sessionId);
+            if (!idx) return send(res, 404, { error: 'session not found' });
+            const from = Number(url.searchParams.get('from'));
+            const to = Number(url.searchParams.get('to'));
+            const ok = boundaries(idx);
+            if (!Number.isInteger(from) || !Number.isInteger(to) || from > to
+                || !ok.has(from) || !ok.has(to)) {
+                return send(res, 400, { error: 'from and to must be turn offsets' });
+            }
+            const data = index.readWindow(sessionId, from, to);
+            if (!data) return send(res, 404, { error: 'session not found' });
+            return send(res, 200, { events: data.events, from, to });
         }
 
         if (tail === 'since' && req.method === 'GET') {

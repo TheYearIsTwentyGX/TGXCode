@@ -787,6 +787,9 @@ function clearCurrent() {
     state.turns = [];
     state.turnTicks = [];
     state.activeTurn = -1;
+    state.turnIndex = [];
+    state.windowStart = 0;
+    state.orphanResults.clear();
     state.agents = [];
     state.ask = null;
     clearPendingSend();   // the conversation it was drawn in is gone
