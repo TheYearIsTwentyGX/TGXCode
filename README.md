@@ -255,6 +255,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/routes/snippets.js` | `/api/snippets` and `/api/snippet-groups` |
 | `bridge/routes/schedules.js` | `/api/schedules` |
 | `bridge/routes/dashboard.js` | `/api/dashboard` and `/api/prs` |
+| `bridge/routes/github.js` | `/api/github/*`: account, templates, teams, repo state, name check, publish |
 | `bridge/routes/quota.js` | `/api/quota` and refreshing it |
 | `bridge/routes/session.js` | One session's conversation: read, delete, send, later, handoff, stop, queue, permission, flags, attachments, suggestions, tasks, subagents |
 | `bridge/routes/session-workspace.js` | One session's directory: dev servers, changes, diff, pull requests, reveal, open-file, its terminal |
@@ -271,6 +272,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/changes.js` | What a session changed, out of its transcript and its subagents' |
 | `bridge/scratchpad.js` | A session's scratchpad directories under `/tmp/claude-<uid>/` (one per worktree it entered), listed and read with containment |
 | `bridge/pulls.js` | Everything this app asks GitHub about a pull request, what its status *is*, and the review it leaves behind |
+| `bridge/github.js` | Publishing a directory to GitHub: who gh is logged in as, `git init`, starter files, a first commit, `gh repo create --source --push` and `gh repo edit` |
 | `bridge/pr-store.js` | When to ask, and last time's answer kept on disk — so no route ever waits on GitHub |
 | `bridge/pr-refresh.js` | The clock that fills it: one pass over the repositories in play, and `prs-changed` when the answer moved |
 | `bridge/overview.js` | The live board: what every session is doing right now |
@@ -396,6 +398,7 @@ Two rules worth knowing before you send a patch:
 | `web/new-session/` | The Start-a-session dialog. Same top-level rule as `composer/` |
 | `web/new-session/dialog.js` | Opening and closing it, the working-directory box, the values Start and Save send, and its first-message box (`newC`) |
 | `web/new-session/picker.js` | The Recent and Browse tabs over one directory, and the New-folder row |
+| `web/github/publish.js` | The Publish to GitHub dialog, opened from the project ⋮ menu and from Start-a-session |
 | `web/new-session/recent.js` | The recent-directories menu on the New button's split half |
 | `web/new-session/trigger.js` | The schedule picker that composes cron, the gate fields, and the Start, Save-draft and Schedule buttons |
 | `web/commands.js` | The header's project-command buttons — `.tgxcode/commands.json` for the session's directory — and the runs they start |

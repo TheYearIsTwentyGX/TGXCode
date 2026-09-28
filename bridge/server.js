@@ -372,6 +372,12 @@ function remoteRefusal(pathname, method) {
     if (/^\/api\/sessions\/[^/]+\/open-file$/.test(pathname) && method === 'POST') {
         return 'opening a file only makes sense on the machine itself';
     }
+    // Creating a repository under your GitHub account and pushing this
+    // machine's files to it. The GETs beside it stay open: they read which
+    // account gh is logged in as and what a directory is, and change nothing.
+    if (pathname === '/api/github/publish') {
+        return 'a repository can only be published from the machine it lives on';
+    }
     // Exact equality, not a prefix: GET /api/fs stays readable remotely.
     if (pathname === '/api/fs/mkdir') {
         return 'folders can only be created on the machine they live on';
@@ -591,6 +597,7 @@ const ROUTES = [
     require('./routes/snippets'),
     require('./routes/schedules'),
     require('./routes/dashboard'),
+    require('./routes/github'),
     require('./routes/quota'),
     require('./routes/session'),
     require('./routes/session-workspace'),

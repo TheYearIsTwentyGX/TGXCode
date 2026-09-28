@@ -191,7 +191,7 @@ of `/api/terminals/*`; all of `/api/runs/*`; `POST /api/commands/run`; all of
 `/api/commands-config*`;
 `/api/shutdown`; `/api/restart` (both methods); `POST /api/claude-version/update`; `/api/devservers/stop`; `/api/devbrowser/*`;
 `POST /api/sessions/:id/reveal`; `POST /api/sessions/:id/open-file`;
-`POST /api/sessions/:id/handoff`; `POST /api/fs/mkdir`;
+`POST /api/sessions/:id/handoff`; `POST /api/fs/mkdir`; `POST /api/github/publish`;
 `POST /api/fs/open`;
 `POST /api/wispr/press`;
 `PUT /api/prefs`;
@@ -800,7 +800,9 @@ caller.
   missing or outside the bridge's allowed roots.
 - Allowed to remote callers.
 - Memoised per directory for ten minutes, so a remote changed with `git remote
-  set-url` can take that long to show here.
+  set-url` can take that long to show here. A publish through
+  `POST /api/github/publish` forgets the memo for its directory, so the new origin
+  shows at once.
 
 ### `GET /api/sessions/:id/tasks`
 
@@ -4282,6 +4284,137 @@ one exists and no client sees the difference. `served` is
 the origin `tailscale serve` is already proxying to this port, or null. Every `url`
 is a real value a client can use directly — never a placeholder to be edited. When
 nothing can be determined, `hosts` is empty and the caller should ask.
+
+## Publishing to GitHub
+
+Turning a directory into a GitHub repository: `git init` if needed, starter files,
+a first commit, `gh repo create --source --push`, then `gh repo edit` for what
+create cannot set. The desktop opens it from the project ⋮ menu (when there is no
+origin) and from Start-a-session. Everything goes through the `gh` CLI on the
+bridge's machine, logged in as whoever ran `gh auth login` there. There is no
+token of its own.
+
+All of these need the token, and the POST needs `X-TGXCode-Client: 1` like every
+write. **`POST /api/github/publish` is refused to remote callers** (`403 {error,
+remote: true}`). The GETs are allowed remotely.
+
+### `GET /api/github/account[?refresh=1]`
+
+`{installed: bool, authed: bool, login: string|null, name: string|null,
+orgs: string[], error: string|null}`. Memoised for five minutes, and `?refresh=1`
+drops the memo first.
+
+- `installed: false`: there is no `gh` on the bridge's PATH.
+- `authed: false` with `installed: true`: gh is there but `gh api user` failed,
+  meaning not logged in, an expired token, or no network. `error` is gh's first line.
+- `orgs` are the logins from `gh api user/orgs`. If the token lacks `read:org`,
+  `orgs` is `[]` and `error` says so while `authed` stays true. Your own account
+  still works then.
+
+### `GET /api/github/templates`
+
+`{gitignore: string[], licenses: [{key, name}], error: string|null}`. These are
+GitHub's `.gitignore` template names and license keys, memoised for a day. When
+GitHub cannot be asked, the lists are empty and `error` is set, still with a 200.
+
+### `GET /api/github/teams?org=<login>`
+
+`{teams: string[]}`, the team slugs you can see in that organisation, memoised for
+ten minutes. An empty list is an answer: no teams, or you cannot list them. `400`
+when `org` is missing or malformed.
+
+### `GET /api/github/repo-state?cwd=<dir>`
+
+What the directory is right now. Not cached.
+
+```
+{ cwd: string, suggestedName: string,
+  isGit: bool,                 // cwd is itself a repository root
+  insideOther: string|null,    // the root of the repository cwd is *inside*, if any
+  hasCommits: bool, branch: string|null, uncommitted: number,
+  remotes: [{name, url}],      // fetch URLs
+  github: string|null,         // "owner/repo" when origin is on GitHub
+  existing: {gitignore: bool, license: bool, readme: bool} }
+```
+
+- `insideOther` set means a publish will be refused (409). A repository nested
+  in another is almost never what was meant, so the answer is to publish the
+  outer one.
+- `existing.license` is true for any `LICENSE*` / `LICENCE*` file, not only
+  `LICENSE`.
+- `403` when `cwd` is missing or outside the allowed roots.
+
+### `GET /api/github/name?owner=<login>&name=<repo>`
+
+`{problem: string|null, taken: bool|null}`. `problem` is why GitHub would refuse
+the name (letters, digits, `.`, `-` and `_`, at most 100, not `.`/`..`, not ending
+in `.git`). `taken` is null when there is a problem or GitHub could not be asked.
+It is a hint for a form. The publish is what decides.
+
+### `POST /api/github/publish`
+
+Body, where everything but `cwd`, `owner` and `name` is optional:
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `cwd` | string | | the directory; roots-scoped (`403` outside) |
+| `owner` | string | | `login` or one of `orgs` from `/api/github/account` |
+| `name` | string | | the repository name |
+| `visibility` | `"private" \| "public" \| "internal"` | `"private"` | `internal` for organisations only |
+| `description`, `homepage` | string | | passed to `gh repo create` |
+| `team` | string | | a team slug granted access; organisations only |
+| `disableIssues`, `disableWiki` | bool | `false` | |
+| `remote` | string | `"origin"` | the remote name to add |
+| `branch` | string | `"main"` | used only when `git init` runs |
+| `gitignore` | string | | a template name from `/api/github/templates` |
+| `license` | string | | a license key; `[year]` and `[fullname]` are filled from the account |
+| `readme` | bool | `false` | writes `# <name>` and the description |
+| `commit` | bool | `true` | `git add -A` and commit, when there is anything to commit |
+| `commitMessage` | string | `"Initial commit"` | |
+| `push` | bool | `true` | `--push`; ignored when there is no commit to push |
+| `topics` | string (comma-separated) or string[] | | lowercased, hyphenated, at most 20 |
+| `settings` | object | | see below |
+
+`settings` holds booleans that `gh repo edit` applies after the create:
+`mergeCommit`, `squashMerge`, `rebaseMerge` (GitHub's default for each is true),
+`autoMerge`, `deleteBranchOnMerge`, `allowUpdateBranch`, `discussions`, `template`
+(default false), `projects` (default true). Also `squashMessage`, one of
+`default | pr-title | pr-title-commits | pr-title-description`. A value equal to
+GitHub's default is not sent, so an untouched form makes no edit call. `topics`
+is also accepted inside `settings`.
+
+**Starter files are written into the directory, not created on GitHub,** and one
+that already exists is never overwritten. It is reported as a skipped step.
+
+Refusals, decided before anything runs, so nothing has changed:
+
+- `400 {error}`: a bad name, an unknown owner, `internal` or `team` on a personal
+  account, a bad branch name, a `cwd` that is not a directory, or gh not logged in.
+- `409 {error}`: `cwd` is inside another repository, already has a remote called
+  `remote`, or is already being published.
+
+Otherwise **200**, whatever happened:
+
+```
+{ ok: bool, fullName: "owner/name", url: string|null,
+  steps: [{step: string, ok: bool, skipped?: true, detail: string|null}] }
+```
+
+- `steps` in order, drawn from `write .gitignore`, `write LICENSE`,
+  `write README.md`, `git init`, `commit`, `create repository`, `push`,
+  `settings`. Only the steps that apply appear. They stop at the first failure,
+  except `settings`.
+- **`url` can be set while `ok` is false.** gh creates the repository before it
+  pushes, so a failed push leaves a repository that exists, and `url` points at
+  it. A client should show it rather than offer a blind retry, which would stop
+  at "already exists". `url` is null when nothing was created.
+- **A failed `settings` step leaves `ok: true`.** The repository exists and was
+  pushed. Only an option was not applied.
+- `git` and `gh` run with `GIT_TERMINAL_PROMPT=0` and `GH_PROMPT_DISABLED=1`, so a
+  push that wants credentials fails with a message instead of hanging. The push
+  gets 120 seconds.
+- Afterwards `/api/origin` and the pull-request refresher see the new origin
+  straight away.
 
 ## Project commands
 

@@ -111,6 +111,11 @@ const HOME = os.homedir();
     check('mkdir', (await call('POST', '/api/fs/mkdir', {
         headers: PHONE, body: { parent: HOME, name: 'x' },
     })).status, 403);
+    // Creating a repository under the user's account and pushing this machine's
+    // files to it. The reads beside it stay open.
+    check('publishing to GitHub', (await call('POST', '/api/github/publish', {
+        headers: PHONE, body: { cwd: HOME, owner: 'x', name: 'x' },
+    })).status, 403);
     // Opening a path is the mkdir clause with a window on the end of it, and the
     // path comes out of a transcript rather than out of the app.
     check('opening a path', (await call('POST', '/api/fs/open', {
