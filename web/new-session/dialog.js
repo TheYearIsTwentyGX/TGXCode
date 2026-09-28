@@ -117,6 +117,7 @@ export async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     dom.newName.value = src ? (src.title || '') : '';
     dom.newTest.checked = src ? !!src.test : false;
     dom.newModel.value = src ? (src.model || '') : '';
+    dom.newEffort.value = src ? (src.effort || '') : '';
     // The dialog's own default, and deliberately not the composer's: the first
     // message of a session is the one written with the least idea of what it will
     // touch. Spelled out here rather than left to the `selected` attribute, which
@@ -304,6 +305,7 @@ export function newDialogValues() {
     const body = {
         cwd, prompt,
         model: dom.newModel.value || null,
+        effort: dom.newEffort.value || null,
         permissionMode: dom.newPerm.value,
     };
     // `test` is only sent where the checkbox exists, which is the development

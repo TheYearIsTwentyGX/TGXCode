@@ -103,6 +103,10 @@ export const state = {
     // you opened. A chord makes that far easier to do by accident, which is what
     // turned an oddity into a bug — see paintModel.
     modelChoice: new Map(),
+    // And for the effort level, which is the model's in every respect but one:
+    // the transcript never records it, so there is nothing to fall back to after
+    // a reload but what the live process reports.
+    effortChoice: new Map(),
     channels: [],
     // Ports this session mentioned that belong to another workspace, counted
     // so the strip can say they were left out rather than just look empty.
@@ -227,6 +231,7 @@ export const state = {
     // `--model` reports one — so this holds what the bridge said, null included,
     // and `has()` is what tells "not seen yet" from "seen, and inheriting".
     runnerModel: new Map(),
+    runnerEffort: new Map(),
     stopArmed: 0,           // when a soft Stop happened, for the force escalation
     // Sessions where "Send anyway" was clicked past the live-elsewhere lock.
     // Per session and not persisted: the next window, and this one after a

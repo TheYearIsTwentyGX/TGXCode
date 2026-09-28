@@ -278,6 +278,7 @@ function scheduleFields(body, who, { partial }) {
 
     // The ones that mean "no choice made" when empty, rather than being invalid.
     if (!partial || body.model !== undefined) fields.model = body.model || null;
+    if (!partial || body.effort !== undefined) fields.effort = body.effort || null;
     if (!partial || body.title !== undefined) fields.title = body.title || null;
     if (!partial || body.test !== undefined) fields.test = !!body.test;
     if (!partial || body.enabled !== undefined) fields.enabled = body.enabled !== false;
@@ -427,7 +428,8 @@ async function runSchedule(row, { force = false, who = LOCAL_CALLER, target = nu
     const prompt = unattended(fillPrompt(row.prompt, facts));
     let out;
     try {
-        out = pool.create({ cwd: row.cwd, prompt, model: row.model, permissionMode: mode });
+        out = pool.create({ cwd: row.cwd, prompt, model: row.model,
+            effort: row.effort, permissionMode: mode });
     } catch (err) {
         // The marker is untouched, which is the point of doing this in this
         // order: a directory that has moved since you saved the schedule should

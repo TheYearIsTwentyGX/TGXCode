@@ -786,6 +786,18 @@
                 <option value="haiku">haiku</option>
                 <option value="fable">fable</option>
               </select>
+              <!-- `inherit` sends no `--effort`, so Claude's own effortLevel
+                   decides. The levels are `claude --effort`'s, and EFFORTS in
+                   bridge/runner.js is the list that is enforced. -->
+              <label for="effort">Effort</label>
+              <select id="effort" aria-label="Effort">
+                <option value="">inherit</option>
+                <option value="low">low</option>
+                <option value="medium">medium</option>
+                <option value="high">high</option>
+                <option value="xhigh">xhigh</option>
+                <option value="max">max</option>
+              </select>
               <label for="perm">Permissions</label>
               <select id="perm" aria-label="Permission mode">
                 <option value="acceptEdits">acceptEdits</option>
@@ -1557,6 +1569,17 @@
             <option value="sonnet">sonnet</option>
             <option value="haiku">haiku</option>
             <option value="fable">fable</option>
+          </select>
+        </span>
+        <span class="opt">
+          <label for="new-effort">Effort</label>
+          <select id="new-effort">
+            <option value="">inherit</option>
+            <option value="low">low</option>
+            <option value="medium">medium</option>
+            <option value="high">high</option>
+            <option value="xhigh">xhigh</option>
+            <option value="max">max</option>
           </select>
         </span>
         <span class="opt">

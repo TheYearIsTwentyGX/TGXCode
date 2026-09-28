@@ -269,7 +269,7 @@ const GROUPS = [
                 note: 'Tried when the model above is unavailable. `default` means the '
                     + 'built-in default at that position.' },
             { path: 'effortLevel', kind: 'choice', open: true,
-                options: ['low', 'medium', 'high', 'xhigh'],
+                options: ['low', 'medium', 'high', 'xhigh', 'max'],
                 label: 'Effort' },
             { path: 'alwaysThinkingEnabled', kind: 'bool', label: 'Always think first' },
             { path: 'autoCompactEnabled', kind: 'bool', label: 'Compact automatically' },

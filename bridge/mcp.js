@@ -306,6 +306,10 @@ const TASK_REF_HELP = 'The task, as the `task:` line find_tasks prints '
 // header.
 const AGENT_MODES = ['plan', 'auto', 'acceptEdits', 'dontAsk'];
 
+// `EFFORTS` in runner.js, copied rather than required: this process is spawned
+// by every `claude` the bridge starts and loads nothing it does not need.
+const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+
 const FIND_TASKS = {
     name: 'find_tasks',
     title: 'Search suggested tasks',
@@ -470,6 +474,11 @@ const SCHEDULE = {
                 description: "Where to run. Defaults to this session's project.",
             },
             model: { type: 'string', description: 'Model for the run. Defaults to the usual one.' },
+            effort: {
+                type: 'string',
+                enum: EFFORTS,
+                description: 'How hard the model thinks. Defaults to the usual one.',
+            },
         },
         required: ['prompt'],
     },
@@ -775,6 +784,7 @@ async function callSchedule(id, args) {
         title: typeof args.title === 'string' && args.title.trim() ? args.title.trim() : null,
         cwd: typeof args.cwd === 'string' && args.cwd.trim() ? args.cwd.trim() : null,
         model: typeof args.model === 'string' && args.model.trim() ? args.model.trim() : null,
+        effort: EFFORTS.includes(args.effort) ? args.effort : null,
         permissionMode: mode,
         from: SESSION_ID,
     });

@@ -67,7 +67,7 @@ const life = (uuid, state) => lc && uuid && out({ type: 'command_lifecycle',
 const textOf = (m) => (m.message.content || [])
     .filter(b => b.type === 'text').map(b => b.text).join('\\n');
 const log = (m, extra = {}) => LOG && fs.appendFileSync(LOG,
-    JSON.stringify({ text: textOf(m), pid: process.pid, ...extra }) + '\\n');
+    JSON.stringify({ text: textOf(m), pid: process.pid, argv, ...extra }) + '\\n');
 
 function toolTurn(m, ms) {
     running = true;
@@ -592,6 +592,63 @@ function runner() {
         assert.deepStrictEqual(turns().map(t => t.text), ['TOOLS700 across', 'mid'],
             'the handed message is delivered once, by the process that held it');
         ok('a message handed over before a restart is not sent again after it');
+    }
+
+    // --- effort reaches argv, and absent is not the same as inherit -------
+    // `--effort` is read once, at spawn, so every change is a new process — the
+    // pid says whether one happened. The case that matters is the last two: a
+    // send with no effort (a board card's) must leave the level alone, and one
+    // with null (`inherit`, picked in the selector) must not, or the dropdown
+    // shows a choice the process is not running at.
+    {
+        reset();
+        const pool = bridge();
+        const id = randomUUID();
+        const flag = (t, f) => { const i = t.argv.indexOf(f); return i < 0 ? null : t.argv[i + 1]; };
+        const turn = async (r, text) => {
+            r.send(text);
+            await until(() => r.lastResultText === text, 8000, `the turn "${text}"`);
+            return turns().find(t => t.text === text);
+        };
+
+        const r1 = pool.ensure(id, { cwd: root, isNew: true, model: 'opus', effort: 'high' });
+        const t1 = await turn(r1, 'first');
+        assert.strictEqual(flag(t1, '--effort'), 'high');
+        assert.strictEqual(flag(t1, '--model'), 'opus');
+        assert.strictEqual(r1.status().effort, 'high');
+        ok('the effort and model a session starts with reach its argv');
+
+        const r2 = pool.ensure(id, { cwd: root, permissionMode: 'acceptEdits' });
+        assert.notStrictEqual(r2, r1, 'a mode change replaces the process');
+        const t2 = await turn(r2, 'second');
+        assert.strictEqual(flag(t2, '--effort'), 'high',
+            'a process replaced for its mode keeps the effort it had');
+        ok('a mode change on its own keeps the effort');
+
+        assert.strictEqual(pool.ensure(id, { cwd: root }), r2,
+            'no effort asked for is not a change');
+        assert.strictEqual(pool.ensure(id, { cwd: root, effort: 'high' }), r2,
+            'the same effort is not a change');
+
+        const r3 = pool.ensure(id, { cwd: root, effort: 'low' });
+        assert.notStrictEqual(r3, r2);
+        const t3 = await turn(r3, 'third');
+        assert.strictEqual(flag(t3, '--effort'), 'low');
+        assert.notStrictEqual(t3.pid, t2.pid);
+        ok('an effort change replaces the process');
+
+        const r4 = pool.ensure(id, { cwd: root, effort: null });
+        assert.notStrictEqual(r4, r3, 'null is inherit, which is a change from low');
+        const t4 = await turn(r4, 'fourth');
+        assert.ok(!t4.argv.includes('--effort'), 'inherit starts with no --effort at all');
+        assert.strictEqual(r4.status().effort, null);
+        ok('inherit clears the effort rather than keeping it');
+
+        assert.strictEqual(pool.ensure(id, { cwd: root, effort: 'ultra' }), r4,
+            'an unknown level reads as inherit, which this already is');
+        const r5 = new Runner({ sessionId: randomUUID(), cwd: root, isNew: true, effort: '--fork-session' });
+        assert.strictEqual(r5.effort, null, 'nothing outside the list reaches argv');
+        ok('an unknown effort never reaches argv');
     }
 })().then(() => finish(0)).catch((err) => {
     console.error(err && err.stack || err);
