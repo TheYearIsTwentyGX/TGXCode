@@ -97,6 +97,7 @@ function draftFields(body, who, { partial }) {
 
     // The two that mean "no choice made" when empty, rather than being invalid.
     if (!partial || body.model !== undefined) fields.model = body.model || null;
+    if (!partial || body.effort !== undefined) fields.effort = body.effort || null;
     if (!partial || body.title !== undefined) fields.title = body.title || null;
     if (!partial || body.test !== undefined) fields.test = !!body.test;
 
@@ -201,6 +202,7 @@ async function handle(req, res, url, pathname, seg, who) {
                     cwd: draft.cwd,
                     prompt: draft.prompt,
                     model: draft.model,
+                    effort: draft.effort,
                     permissionMode: mode,
                 });
             } catch (err) {

@@ -300,6 +300,7 @@ function DraftCard({ d }) {
                 <span title=${d.cwd}>${d.projectName || 'unknown'}</span>
                 <span class="dot">·</span>
                 <span>${d.model || 'inherit'}</span>
+                ${d.effort ? html`<span class="dot">·</span><span>${d.effort} effort</span>` : null}
                 <span class="dot">·</span>
                 <span>${d.permissionMode}</span>
                 <span class="dot">·</span>

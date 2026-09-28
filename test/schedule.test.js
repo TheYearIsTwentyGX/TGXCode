@@ -513,7 +513,7 @@ const show = (ms) => (ms == null ? 'null' : new Date(ms).toString().slice(0, 21)
 
 // --- the store ----------------------------------------------------------
 
-const FIELDS = ['id', 'enabled', 'title', 'cwd', 'prompt', 'model', 'permissionMode',
+const FIELDS = ['id', 'enabled', 'title', 'cwd', 'prompt', 'model', 'effort', 'permissionMode',
     'test', 'cron', 'once', 'gate', 'createdBy', 'lastSlotAt', 'lastFiredAt', 'lastSessionId',
     'lastOutcome', 'lastSkipReason', 'lastError', 'lastMarker', 'reviewed',
     'sweepSlotAt', 'sweepUntil', 'runs', 'createdAt', 'updatedAt'];
@@ -525,7 +525,7 @@ const FIELDS = ['id', 'enabled', 'title', 'cwd', 'prompt', 'model', 'permissionM
 
     const made = s.create({
         cwd: '/home/someone/proj', prompt: 'review {{range}}', cron: '0 2 * * 2-6',
-        model: 'opus', permissionMode: 'dontAsk', test: true,
+        model: 'opus', effort: 'low', permissionMode: 'dontAsk', test: true,
         gate: { kind: 'git-commits', ref: 'origin/main' },
         lastMarker: 'c'.repeat(40),
     });
@@ -547,6 +547,10 @@ const FIELDS = ['id', 'enabled', 'title', 'cwd', 'prompt', 'model', 'permissionM
     s.flush();
     assert.deepStrictEqual(new Schedules().list().map(r => r.id).sort(),
         [made.id, sneaky.id].sort(), 'and it survives a reload');
+    // The field `clean()` has to know about, or the everyday bridge strips it
+    // from the shared file within a tick — see CLAUDE.md on testing schedules.
+    assert.strictEqual(new Schedules().get(made.id).effort, 'low', 'effort included');
+    assert.strictEqual(sneaky.effort, null, 'absent is inherit');
     ok('create stores exactly the whitelisted fields and they survive a reload');
 }
 

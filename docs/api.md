@@ -1752,7 +1752,7 @@ permission mode, held until somebody presses Start.
       "cwd": "/home/dylan_hays/Other/claude-sessions",
       "projectName": "claude-sessions",
       "prompt": "Add a CSV export to the reports page",
-      "title": null, "model": "opus", "permissionMode": "plan", "test": true,
+      "title": null, "model": "opus", "effort": "high", "permissionMode": "plan", "test": true,
       "createdAt": 1787328400891, "updatedAt": 1787328401276 }
   ],
   "counts": { "total": 1 }
@@ -1784,6 +1784,7 @@ label.
 | `prompt` | string, non-empty, already trimmed |
 | **`title`** | **string or null.** `null` means *derive it* — take the first line of `prompt`. It is not an empty heading and it is not the string `"null"`; a client that renders it raw shows nothing where the name should be |
 | **`model`** | **string or null.** `null` is `inherit` — the session picks for itself. Not `""` |
+| **`effort`** | **string or null** — `low`, `medium`, `high`, `xhigh` or `max`, what `claude --effort` takes. `null` is `inherit`: no flag, so Claude's own `effortLevel` decides. Stored as written; an unknown level is dropped to `null` when it is started, not when it is saved. Absent on a row written before the field existed, which reads as `null` |
 | `permissionMode` | string, one of the six in `POST /api/sessions/:id/send` |
 | `test` | boolean — the flag the started session will get, not a property of the draft |
 | `createdAt`, `updatedAt` | numbers, epoch ms. `createdAt` never moves; every write bumps `updatedAt` |
@@ -1818,7 +1819,7 @@ picked. Where a draft is a `POST /api/sessions` held back, one of these is a
       "projectName": "claude-sessions",
       "text": "You may now modify app data to get the screenshots.",
       "attachments": [],
-      "model": null, "permissionMode": "bypassPermissions",
+      "model": null, "effort": null, "permissionMode": "bypassPermissions",
       "at": 1790112000000, "state": "pending", "late": false, "test": false,
       "createdAt": 1790086931954, "updatedAt": 1790086931954,
       "sentAt": null, "error": null }
@@ -1840,6 +1841,7 @@ one value that cannot.
 | `text` | string. May be `""` when `attachments` is non-empty — a screenshot with nothing typed under it is a message |
 | **`attachments`** | **array of objects**, `[{path, relPath, mediaType}]`, each of the last two a string or null; `[]` for most messages, at most 5. Files already written by the attachments route. Re-derived against the session's own directory at delivery, so one tidied away in the meantime is dropped rather than failing the message |
 | **`model`** | **string or null.** `null` is `inherit`. Not `""` |
+| **`effort`** | **string or null** — `low`, `medium`, `high`, `xhigh` or `max`, what `claude --effort` takes. `null` is `inherit`: no flag, so Claude's own `effortLevel` decides. Stored as written; an unknown level is dropped to `null` when it is delivered, not when it is saved. Absent on a row written before the field existed, which reads as `null` |
 | **`permissionMode`** | string, one of the six in `POST /api/sessions/:id/send`, and **never absent** — see below |
 | `at` | number, epoch ms — when it is due |
 | **`state`** | string, one of `pending` · `delivering` · `sent` · `missed` · `failed`. `delivering` is a claim a tick holds and is normally seen only for a moment; a client should draw it as in-progress rather than as a state of its own |
@@ -1869,7 +1871,7 @@ delivery.** `web/app.js` offers `bypassPermissions` first and remembers the last
 A client that omits the field gets a `400` rather than a silent `auto`, which is the one
 place this deliberately departs from `POST /api/sessions/:id/send`.
 
-The mode is also applied on the way in: delivering with a model or mode that differs
+The mode is also applied on the way in: delivering with a model, effort or mode that differs
 from the session's current one replaces the process, exactly as a `/send` with a changed
 mode does. That is why the tick **waits for the session to be idle** in that case rather
 than delivering behind the turn — replacing the process ends the turn in flight, and
@@ -2045,7 +2047,7 @@ expression and an optional gate, held and fired by the bridge itself.
       "cwd": "/home/dylan_hays/LTCDataPlus",
       "projectName": "LTCDataPlus",
       "prompt": "/adversarial-reviewer --diff {{range}}",
-      "model": null, "permissionMode": "dontAsk", "test": false,
+      "model": null, "effort": null, "permissionMode": "dontAsk", "test": false,
       "cron": "0 2 * * 2-6",
       "once": false,
       "cronText": "Tue–Sat at 2:00 AM",
@@ -2105,6 +2107,7 @@ right thing to show and edit; it is just not byte-for-byte what the session is s
 | **`projectName`** | string — derived, not stored. The same label the rail uses |
 | `prompt` | string, non-empty, already trimmed. See placeholders above |
 | **`model`** | **string or null.** `null` is `inherit`. Not `""` |
+| **`effort`** | **string or null** — `low`, `medium`, `high`, `xhigh` or `max`, what `claude --effort` takes. `null` is `inherit`: no flag, so Claude's own `effortLevel` decides. Stored as written; an unknown level is dropped to `null` when it is delivered, not when it is saved. Absent on a row written before the field existed, which reads as `null` |
 | `permissionMode` | string, one of the six in `POST /api/sessions/:id/send` |
 | `test` | boolean — the flag the started session will get |
 | `cron` | string, **five space-separated fields in the bridge's local timezone**: minute hour day-of-month month day-of-week. `*`, `N`, `a-b`, `*/n` and comma lists. Day-of-week 0 and 7 are both Sunday. **No** names (`MON`), `@daily`, `L`, `#` or `?` — those are refused, not ignored. When day-of-month and day-of-week are both restricted, a day matching **either** fires, which is crontab(5)'s rule |
@@ -2489,7 +2492,7 @@ and `sessions-changed` is the signal that the index moved.
 
 ### `POST /api/suggestions/:sessionId/:toolUseId/start`
 
-`{permissionMode?, cwd?, extra?, model?, test?, prompt?, from?}` →
+`{permissionMode?, cwd?, extra?, model?, effort?, test?, prompt?, from?}` →
 `{sessionId, …, test: bool, task}`. It takes up a task as a session of its own:
 `:sessionId` is the session that filed the task and `:toolUseId` is the task's `id`.
 The response carries what `POST /api/sessions` returns, and `task` is the row as
@@ -2843,6 +2846,7 @@ down from:
 | Field | Type |
 |---|---|
 | `sessionId`, `model`, `permissionMode`, `cwd` | strings or null |
+| `effort` | string or null — the `--effort` the process was started with, `null` for none. **Only here**: the transcript does not record it, so no session summary carries it, and a session with no process has nothing to report |
 | `state` | `"stopped"`, `"starting"`, `"idle"`, `"busy"` or `"error"` |
 | `activity`, `verb`, `detail` | strings or null — see below |
 | `error`, `errorKind` | strings or null |
@@ -2900,7 +2904,7 @@ causes auto-denials.
 
 ### `POST /api/sessions`
 
-`{cwd, prompt, model?, permissionMode?, test?, attachments?, fromDraft?}` →
+`{cwd, prompt, model?, effort?, permissionMode?, test?, attachments?, fromDraft?}` →
 `{sessionId, status, test}`.
 
 `cwd` must be inside the allowed roots. `test: true` keeps it out of the everyday
@@ -2960,7 +2964,7 @@ creates a minute.
 
 ### `POST /api/sessions/:id/send`
 
-`{text, attachments?, model?, permissionMode?, fork?}` →
+`{text, attachments?, model?, effort?, permissionMode?, fork?}` →
 `{ok, id, cwd, fork, status, queued}`, where `id` is the id of the message and
 `status` is a whole runner status object, not a word.
 
@@ -2968,8 +2972,17 @@ creates a minute.
 omitting it does not mean "leave it alone" — it means "set it to auto", and would
 quietly drop a session out of `acceptEdits` on every message.
 
-A model or mode change replaces the process; queued messages carry across. `queued`
+A model, effort or mode change replaces the process; queued messages carry across. `queued`
 tells you whether the text is still recoverable on this side.
+
+`effort` is one of `low`, `medium`, `high`, `xhigh`, `max`, or `null` for `inherit` (no
+`--effort`, so Claude's own `effortLevel` decides); any other string is read as `null`.
+**Absent and `null` are different requests**, and this is the one field where they are:
+absent keeps whatever the live process has — including across a replacement for some
+other reason, such as a mode change — while `null` asks for `inherit` and replaces a
+process that has a level. A client with an effort selector should always send its value;
+one without should leave the field out. (`model` does not work this way: an absent or
+`null` model both mean "as you were".)
 
 `attachments` is a list of files already uploaded through the route below —
 `[{path, relPath?, mediaType?}]`, at most five. Each is re-derived against *this*
@@ -2984,7 +2997,7 @@ event above), so the paths are not shown twice.
 
 ### `POST /api/drafts`
 
-`{cwd, prompt, model?, permissionMode?, test?, title?}` → `{draft}`, the row as
+`{cwd, prompt, model?, effort?, permissionMode?, test?, title?}` → `{draft}`, the row as
 `GET /api/drafts` describes it.
 
 **Validated exactly as `POST /api/sessions` is, at save time.** This is the part worth
@@ -3010,7 +3023,7 @@ mean "decide later", it means the draft is saved as `auto`.
 
 ### `PATCH /api/drafts/:id`
 
-Any subset of `{cwd, prompt, model, permissionMode, test, title}` → `{draft}`.
+Any subset of `{cwd, prompt, model, effort, permissionMode, test, title}` → `{draft}`.
 
 **A genuine partial.** A field left out of the body is left alone; only what you send is
 written. So saving an edited message does not restate the model and the mode, and cannot
@@ -3018,8 +3031,8 @@ silently reset them — which is the trap `POST /api/sessions/:id/send` has with
 `permissionMode`, and the reason this is a PATCH rather than a second POST.
 
 `null` is a value and absence is not: `{"title": null}` clears a title, `{}` changes
-nothing but the timestamp. For `title` and `model` a whitespace-only string is stored as
-`null`, since neither has a meaningful empty value.
+nothing but the timestamp. For `title`, `model` and `effort` a whitespace-only string is
+stored as `null`, since none has a meaningful empty value.
 
 Every field is validated as it is on create, so the refusals are the same — `400`, and
 `403` on a remote caller's `permissionMode` — plus `404` for an unknown id. `createdAt`
@@ -3076,7 +3089,7 @@ send back.
 
 ### `POST /api/sessions/:id/later`
 
-`{text, attachments?, model?, permissionMode, at}` → `{message}`, the row as
+`{text, attachments?, model?, effort?, permissionMode, at}` → `{message}`, the row as
 `GET /api/later` returns it.
 
 The create lives on the session because a scheduled message is written *against* one.
@@ -3106,7 +3119,7 @@ one session**, which is a ceiling and not a lifetime budget — cancelling one m
 
 ### `PATCH /api/later/:id`
 
-Any subset of `{text, attachments, model, permissionMode, at}` → `{message}`.
+Any subset of `{text, attachments, model, effort, permissionMode, at}` → `{message}`.
 
 **A genuine partial**, `PATCH /api/drafts/:id`'s rule: a field left out is left alone, so
 rescheduling does not restate the mode and cannot silently reset it. Every field is
@@ -3275,7 +3288,7 @@ notice.
 
 ### `POST /api/schedules`
 
-`{cwd, prompt, cron | at, once?, gate?, title?, model?, permissionMode?, test?,
+`{cwd, prompt, cron | at, once?, gate?, title?, model?, effort?, permissionMode?, test?,
 enabled?, seed?, fromDraft?, from?}` → `{schedule}`, the row as `GET /api/schedules`
 returns it.
 

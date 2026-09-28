@@ -2909,6 +2909,13 @@ export function applyRunner(s) {
         state.runnerModel.set(s.sessionId, model);
         if (seen && moved) state.modelChoice.delete(s.sessionId);
     }
+    if (s) {
+        const effort = s.effort || '';
+        const seen = state.runnerEffort.has(s.sessionId);
+        const moved = state.runnerEffort.get(s.sessionId) !== effort;
+        state.runnerEffort.set(s.sessionId, effort);
+        if (seen && moved) state.effortChoice.delete(s.sessionId);
+    }
 
     dom.statusLine.dataset.state = s
         ? (s.state === 'error' ? 'error' : ask ? 'ask' : retrying ? 'stalled' : busy ? 'busy' : 'idle')
@@ -2941,6 +2948,7 @@ export function applyRunner(s) {
     }
     paintPerm();
     paintModel();
+    paintEffort();
     paintLock();
     paintStatus(s);
 }
@@ -3063,6 +3071,26 @@ function paintModel() {
 
     const known = [...dom.model.options].some(o => o.value === model);
     dom.model.value = known ? model : '';
+}
+
+/**
+ * The effort selector: paintModel less its first rung. The transcript records
+ * which model answered but not how hard it was asked to think, so with no live
+ * process and no pick of your own this shows `inherit`. That is also what a send
+ * from it then does: the next process starts without `--effort`. Unlike the
+ * model, `inherit` sent to a live process is honoured rather than read as "as you
+ * were" — see `ensure` in bridge/runner.js — so what this shows is always what
+ * the next message runs at.
+ */
+function paintEffort() {
+    const id = state.current && state.current.sessionId;
+    let effort = '';
+    if (id && state.runnerEffort.has(id)) effort = state.runnerEffort.get(id);
+    if (state.runner) effort = state.runner.effort || '';
+    if (id && state.effortChoice.has(id)) effort = state.effortChoice.get(id);
+
+    const known = [...dom.effort.options].some(o => o.value === effort);
+    dom.effort.value = known ? effort : '';
 }
 
 function paintStatus(s) {
@@ -3333,6 +3361,9 @@ dom.perm.addEventListener('change', () => {
 // all — see paintModel.
 dom.model.addEventListener('change', () => {
     if (state.current) state.modelChoice.set(state.current.sessionId, dom.model.value);
+});
+dom.effort.addEventListener('change', () => {
+    if (state.current) state.effortChoice.set(state.current.sessionId, dom.effort.value);
 });
 
 dom.input.addEventListener('input', autoGrow);

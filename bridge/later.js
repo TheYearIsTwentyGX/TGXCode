@@ -145,6 +145,7 @@ function clean(row) {
         attachments: row.attachments,
         // Null is `inherit`, the composer's own default.
         model: row.model,
+        effort: row.effort,
         // Never defaulted at delivery. /send's documented trap is that an absent
         // mode normalises to `auto`; doing that silently, six hours after the
         // message was written, would pick the one mode that cannot work when
@@ -198,6 +199,7 @@ function read() {
                 text,
                 attachments,
                 model: orNull(row.model),
+                effort: orNull(row.effort),
                 // Not checked against PERMISSION_MODES here, for the reason
                 // drafts.js gives: every route runs it through normalizeMode on
                 // the way in and the delivery runs it again on the way out, so a
@@ -359,7 +361,7 @@ class Later {
      *   ceiling — which the route turns into a 409. Null rather than a throw so
      *   the caller does not have to read a message to tell the two apart.
      */
-    create({ sessionId, cwd, text, attachments, model, permissionMode, at, test } = {}) {
+    create({ sessionId, cwd, text, attachments, model, effort, permissionMode, at, test } = {}) {
         if (this.pendingCount(sessionId) >= MAX_PER_SESSION) return null;
         const now = this._stamp();
         const row = clean({
@@ -369,6 +371,7 @@ class Later {
             text: String(text || ''),
             attachments: cleanAttachments(attachments),
             model: orNull(model),
+            effort: orNull(effort),
             permissionMode: String(permissionMode || 'auto'),
             at: Number(at),
             state: 'pending',
@@ -408,6 +411,7 @@ class Later {
             row.attachments = cleanAttachments(fields.attachments);
         }
         if (fields.model !== undefined) row.model = orNull(fields.model);
+        if (fields.effort !== undefined) row.effort = orNull(fields.effort);
         if (fields.permissionMode !== undefined) {
             row.permissionMode = String(fields.permissionMode);
         }

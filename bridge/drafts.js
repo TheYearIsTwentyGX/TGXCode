@@ -83,6 +83,7 @@ function clean(row) {
         // Null is `inherit`, the dialog's own default — the absence of a choice
         // rather than a choice of nothing.
         model: row.model,
+        effort: row.effort,
         permissionMode: row.permissionMode,
         test: row.test,
         createdAt: row.createdAt,
@@ -131,6 +132,7 @@ function read() {
                 prompt: row.prompt,
                 title: orNull(row.title),
                 model: orNull(row.model),
+                effort: orNull(row.effort),
                 // Not checked against PERMISSION_MODES here, and it does not need
                 // to be: every route runs it through normalizeMode both when a
                 // draft is written and again when it is started, so a mode this
@@ -258,7 +260,7 @@ class Drafts {
      *   the route turns into a 409. Null rather than a throw so the one caller
      *   that has to tell the two apart does not have to read a message.
      */
-    create({ cwd, prompt, title, model, permissionMode, test } = {}) {
+    create({ cwd, prompt, title, model, effort, permissionMode, test } = {}) {
         if (this.rows.length >= MAX_DRAFTS) return null;
         const now = this._stamp();
         const row = clean({
@@ -267,6 +269,7 @@ class Drafts {
             prompt: String(prompt),
             title: orNull(title),
             model: orNull(model),
+            effort: orNull(effort),
             permissionMode: String(permissionMode || 'auto'),
             test: !!test,
             // The same stamp for both, so a draft nobody has edited reads as
@@ -295,6 +298,7 @@ class Drafts {
         if (fields.prompt !== undefined) row.prompt = String(fields.prompt);
         if (fields.title !== undefined) row.title = orNull(fields.title);
         if (fields.model !== undefined) row.model = orNull(fields.model);
+        if (fields.effort !== undefined) row.effort = orNull(fields.effort);
         if (fields.permissionMode !== undefined) {
             row.permissionMode = String(fields.permissionMode);
         }

@@ -40,7 +40,7 @@ function fresh() {
     return new Drafts();
 }
 
-const FIELDS = ['id', 'cwd', 'prompt', 'title', 'model', 'permissionMode',
+const FIELDS = ['id', 'cwd', 'prompt', 'title', 'model', 'effort', 'permissionMode',
     'test', 'createdAt', 'updatedAt'];
 
 // --- the round trip ------------------------------------------------------
@@ -52,9 +52,10 @@ const FIELDS = ['id', 'cwd', 'prompt', 'title', 'model', 'permissionMode',
 
     const made = d.create({
         cwd: '/home/someone/proj', prompt: 'Wire up the export button',
-        model: 'opus', permissionMode: 'plan', test: true,
+        model: 'opus', effort: 'high', permissionMode: 'plan', test: true,
     });
     assert.ok(made.id, 'a draft gets an id');
+    assert.strictEqual(made.effort, 'high');
     assert.deepStrictEqual(Object.keys(made).sort(), [...FIELDS].sort());
     assert.strictEqual(made.cwd, '/home/someone/proj');
     assert.strictEqual(made.prompt, 'Wire up the export button');
@@ -92,7 +93,7 @@ const FIELDS = ['id', 'cwd', 'prompt', 'title', 'model', 'permissionMode',
 {
     const d = fresh();
     const made = d.create({
-        cwd: '/a', prompt: 'first', model: 'sonnet',
+        cwd: '/a', prompt: 'first', model: 'sonnet', effort: 'xhigh',
         permissionMode: 'acceptEdits', test: true, title: 'Kept',
     });
 
@@ -100,6 +101,7 @@ const FIELDS = ['id', 'cwd', 'prompt', 'title', 'model', 'permissionMode',
     assert.strictEqual(next.prompt, 'second');
     // Everything not named is untouched — this is the whole point of PATCH.
     assert.strictEqual(next.model, 'sonnet');
+    assert.strictEqual(next.effort, 'xhigh');
     assert.strictEqual(next.permissionMode, 'acceptEdits');
     assert.strictEqual(next.test, true);
     assert.strictEqual(next.title, 'Kept');
@@ -116,6 +118,8 @@ const FIELDS = ['id', 'cwd', 'prompt', 'title', 'model', 'permissionMode',
     assert.strictEqual(d.update(made.id, { title: null }).title, null);
     assert.strictEqual(d.update(made.id, { model: '   ' }).model, null,
         'whitespace is not a model');
+    assert.strictEqual(d.update(made.id, { effort: '  ' }).effort, null,
+        'nor an effort');
     assert.strictEqual(d.update(made.id, {}).title, null, 'an empty patch is legal');
     ok('null clears an optional string; whitespace does too; {} is a no-op');
 }

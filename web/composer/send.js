@@ -186,6 +186,7 @@ export async function sendMessage({ fork = false, text: override = null, canned 
             attachments: files,
             fork,
             model: dom.model.value || null,
+            effort: dom.effort.value || null,
             permissionMode: dom.perm.value,
         });
         // Only a message that actually went to the process needs holding here:

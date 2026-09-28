@@ -958,6 +958,7 @@ function clean(row) {
         cwd: row.cwd,
         prompt: row.prompt,
         model: row.model,
+        effort: row.effort,
         permissionMode: row.permissionMode,
         test: row.test,
         cron: row.cron,
@@ -1029,6 +1030,7 @@ function read() {
                 cwd: row.cwd,
                 prompt: row.prompt,
                 model: orNull(row.model),
+                effort: orNull(row.effort),
                 // Not checked against PERMISSION_MODES here, and it does not
                 // need to be: `scheduleFields` normalizes on the way in and the
                 // fire path normalizes again on the way out, so a mode this file
@@ -1440,6 +1442,7 @@ class Schedules {
             cwd: String(fields.cwd),
             prompt: String(fields.prompt),
             model: orNull(fields.model),
+            effort: orNull(fields.effort),
             permissionMode: String(fields.permissionMode || 'auto'),
             test: !!fields.test,
             cron: String(fields.cron),
@@ -1494,6 +1497,7 @@ class Schedules {
         if (fields.cwd !== undefined) row.cwd = String(fields.cwd);
         if (fields.prompt !== undefined) row.prompt = String(fields.prompt);
         if (fields.model !== undefined) row.model = orNull(fields.model);
+        if (fields.effort !== undefined) row.effort = orNull(fields.effort);
         if (fields.permissionMode !== undefined) {
             row.permissionMode = String(fields.permissionMode);
         }
