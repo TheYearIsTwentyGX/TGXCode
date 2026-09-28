@@ -124,6 +124,7 @@ async function deliverLater(row) {
     // when the message was written, and a tick has no caller to refuse.
     const mode = normalizeMode(row.permissionMode);
     const model = row.model || null;
+    const effort = row.effort || null;
 
     const st = pool.statuses()[row.sessionId] || null;
 
@@ -147,7 +148,8 @@ async function deliverLater(row) {
     // would not is simply queued behind the turn, which is correct and needs no
     // special case.
     const busy = st && (st.state === 'busy' || st.state === 'starting');
-    if (busy && (st.permissionMode !== mode || (st.model || null) !== model)) {
+    if (busy && (st.permissionMode !== mode || (st.model || null) !== model
+        || (st.effort || null) !== effort)) {
         return {
             ok: false, retry: true,
             error: `that session is mid-turn and this message would change its mode to `
@@ -172,7 +174,7 @@ async function deliverLater(row) {
     let r;
     let entry;
     try {
-        r = pool.ensure(row.sessionId, { cwd, model, permissionMode: mode });
+        r = pool.ensure(row.sessionId, { cwd, model, effort, permissionMode: mode });
         entry = r.send(String(row.text || ''), files);
     } catch (err) {
         return { ok: false, error: err.message };

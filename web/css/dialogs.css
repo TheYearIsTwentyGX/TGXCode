@@ -122,6 +122,12 @@
    read, so it gets the prose face rather than the monospace the directory box
    wants for lining up slashes. */
 #new-name { font-family: var(--sans); font-size: 13px; }
+/* A search over names as much as paths, so the prose face, and slimmer than the
+   directory box above it: it is a tool on the list, not a field of the form. */
+.field input.picker-filter {
+    font-family: var(--sans); font-size: 13px;
+    padding: 8px 12px; margin-bottom: 6px;
+}
 .field textarea:focus, .field input:focus {
     outline: none;
     box-shadow: inset 0 0 0 2px var(--blue);

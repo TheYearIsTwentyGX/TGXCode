@@ -479,6 +479,7 @@ export function drToSchedule() {
             prompt: body.prompt,
             title: newDialogName(),
             model: body.model,
+            effort: body.effort,
             test: body.test,
             permissionMode: 'dontAsk',
             // Null from a plain Start-a-session dialog, where there is nothing to

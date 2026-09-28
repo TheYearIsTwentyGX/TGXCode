@@ -178,6 +178,7 @@ async function handle(req, res, url, pathname, seg, who) {
                 cwd,
                 prompt,
                 model: body.model || null,
+                effort: body.effort || null,
                 permissionMode: mode,
                 attachments: files,
             });

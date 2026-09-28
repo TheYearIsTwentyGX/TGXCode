@@ -61,7 +61,7 @@ function make(store, over = {}) {
     });
 }
 
-const FIELDS = ['at', 'attachments', 'createdAt', 'cwd', 'error', 'id', 'model',
+const FIELDS = ['at', 'attachments', 'createdAt', 'cwd', 'effort', 'error', 'id', 'model',
     'permissionMode', 'sentAt', 'sessionId', 'state', 'test', 'text', 'updatedAt'];
 
 // --- the wire shape -----------------------------------------------------
@@ -96,6 +96,8 @@ const FIELDS = ['at', 'attachments', 'createdAt', 'cwd', 'error', 'id', 'model',
     assert.strictEqual(row.error, null);
     assert.strictEqual(row.test, false);
     assert.strictEqual(row.model, null, 'a blank model is `inherit`, not a model named " "');
+    assert.strictEqual(row.effort, null, 'and so is an effort nobody gave');
+    assert.strictEqual(make(s, { effort: 'max' }).effort, 'max');
     assert.deepStrictEqual(row.attachments, []);
     assert.strictEqual(row.createdAt, row.updatedAt,
         'a message nobody has edited reads as untouched');

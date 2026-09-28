@@ -124,7 +124,8 @@ async function handle(req, res, url, pathname, seg, who) {
         const prompt = extra ? `${task.prompt}\n\n---\n\n${extra}` : task.prompt;
         let out;
         try {
-            out = pool.create({ cwd, prompt, model: body.model || null, permissionMode: mode });
+            out = pool.create({ cwd, prompt, model: body.model || null,
+                effort: body.effort || null, permissionMode: mode });
         } catch (err) {
             return send(res, 400, { error: err.message });
         }

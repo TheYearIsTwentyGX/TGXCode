@@ -23,6 +23,7 @@ import { get } from '../api.js';
 import { closeOnClickOutside, dom, el, toast } from '../dom.js';
 import { clip } from '../format.js';
 import { state } from '../state.js';
+import { homely } from '../term-pane.js';
 import { projectColor } from '../app.js';
 import { closeSnips } from '../snippets/popover.js';
 import { clearAttach } from '../composer/attachments.js';
@@ -48,6 +49,75 @@ export async function loadProjects() {
     // here" without a second request. It quietly joins the two tabs together.
     state.browse.known = new Map(projects.map(p => [p.cwd, p]));
     return projects;
+}
+
+// ── the Recent tab ───────────────────────────────────────────────────────
+
+// The whole list from the last open, so the filter can reach past the rows on
+// screen without asking the bridge again on every keystroke.
+let recentProjects = [];
+const RECENT_MAX = 40;
+
+/**
+ * Every term has to appear somewhere in the name or the path, in any order —
+ * so `claude work` finds `~/Other/claude-sessions/.claude/worktrees/…`. The
+ * `~` spelling is matched as well as the real one, because it is the spelling
+ * every path in this app is shown in.
+ */
+export function matchesRecent(p, query) {
+    const terms = String(query || '').toLowerCase().split(/\s+/).filter(Boolean);
+    if (!terms.length) return true;
+    const hay = `${p.name}\n${p.cwd}\n${homely(p.cwd)}`.toLowerCase();
+    return terms.every(t => hay.includes(t));
+}
+
+function renderRecent() {
+    const query = dom.newRecentFilter.value;
+    const shown = recentProjects.filter(p => matchesRecent(p, query)).slice(0, RECENT_MAX);
+    if (!shown.length) {
+        dom.newPicker.replaceChildren(el('div', { class: 'picker-msg' },
+            recentProjects.length
+                ? 'No recent directory matches — Browse finds the rest.'
+                : 'No directories yet — Browse to pick one.'));
+        return;
+    }
+    dom.newPicker.replaceChildren(...shown.map((p, i) => {
+        // A dot in the project's own colour, so what the dialog is about to
+        // turn into is readable before the press rather than after it.
+        const accent = projectColor(p.cwd);
+        return el('button', {
+            class: 'picker-row', type: 'button',
+            'data-tinted': accent ? '1' : null,
+            style: accent ? `--proj-accent: ${accent}` : null,
+            onclick: () => pickRecent(p.cwd),
+            onkeydown: (e) => onRecentKey(e, i),
+        },
+            el('span', { class: 'pdot' }, ''),
+            el('span', {}, p.name),
+            el('span', { class: 'path' }, clip(p.cwd, 44)),
+            p.active ? el('span', { class: 'tag' }, `${p.active} live`) : null,
+        );
+    }));
+}
+
+function pickRecent(cwd) {
+    setNewCwd(cwd);
+    dom.newPrompt.focus();
+}
+
+const recentRows = () => [...dom.newPicker.querySelectorAll('.picker-row')];
+
+/** Up from the first row is back into the filter, so the list and its search are one column. */
+function onRecentKey(e, i) {
+    const rows = recentRows();
+    if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        rows[Math.min(i + 1, rows.length - 1)]?.focus();
+    } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (i === 0) dom.newRecentFilter.focus();
+        else rows[i - 1]?.focus();
+    }
 }
 
 /**
@@ -118,6 +188,7 @@ export async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     dom.newName.value = src ? (src.title || '') : '';
     dom.newTest.checked = src ? !!src.test : false;
     dom.newModel.value = src ? (src.model || '') : '';
+    dom.newEffort.value = src ? (src.effort || '') : '';
     // The dialog's own default, and deliberately not the composer's: the first
     // message of a session is the one written with the least idea of what it will
     // touch. Spelled out here rather than left to the `selected` attribute, which
@@ -189,24 +260,12 @@ export async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
         : (draft ? 'Edit draft' : 'Start a session');
     dom.newSave.textContent = draft ? 'Save changes' : 'Save as draft';
     cancelMkdir();
+    // A filter left over from the last open would hide rows for no reason you
+    // can see from here, so every open starts from the whole list.
+    dom.newRecentFilter.value = '';
     try {
-        const projects = await loadProjects();
-        dom.newPicker.replaceChildren(...projects.slice(0, 40).map((p) => {
-            // A dot in the project's own colour, so what the dialog is about to
-            // turn into is readable before the press rather than after it.
-            const accent = projectColor(p.cwd);
-            return el('button', {
-                class: 'picker-row', type: 'button',
-                'data-tinted': accent ? '1' : null,
-                style: accent ? `--proj-accent: ${accent}` : null,
-                onclick: () => { setNewCwd(p.cwd); dom.newPrompt.focus(); },
-            },
-                el('span', { class: 'pdot' }, ''),
-                el('span', {}, p.name),
-                el('span', { class: 'path' }, clip(p.cwd, 44)),
-                p.active ? el('span', { class: 'tag' }, `${p.active} live`) : null,
-            );
-        }));
+        recentProjects = await loadProjects();
+        renderRecent();
     } catch (err) {
         toast(`Could not list projects: ${err.message}`, 'error');
     }
@@ -335,6 +394,7 @@ export function newDialogValues() {
     const body = {
         cwd, prompt,
         model: dom.newModel.value || null,
+        effort: dom.newEffort.value || null,
         permissionMode: dom.newPerm.value,
     };
     // `test` is only sent where the checkbox exists, which is the development
@@ -451,6 +511,27 @@ export function wireNewDialog() {
             (other === 'browse' ? dom.newTabBrowse : dom.newTabRecent).focus();
         });
     }
+
+    dom.newRecentFilter.addEventListener('input', renderRecent);
+    dom.newRecentFilter.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            recentRows()[0]?.focus();
+        } else if (e.key === 'Enter') {
+            // The top match is the answer to a search you pressed Enter on. Never
+            // let the key fall through to anything that would start the session.
+            e.preventDefault();
+            const first = recentProjects.find(p => matchesRecent(p, dom.newRecentFilter.value));
+            if (first) pickRecent(first.cwd);
+        } else if (e.key === 'Escape' && dom.newRecentFilter.value) {
+            // Escape clears the search. The modal swallows the key otherwise, so
+            // this is the only answer it has here — the New folder box's pattern.
+            e.preventDefault();
+            e.stopPropagation();
+            dom.newRecentFilter.value = '';
+            renderRecent();
+        }
+    });
 
     dom.newGh.addEventListener('click', () => publishFromNew(dom.newCwd.value.trim()));
     dom.newMkdir.addEventListener('click', startMkdir);

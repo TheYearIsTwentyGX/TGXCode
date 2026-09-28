@@ -161,6 +161,13 @@ const IDLE_EVICT_MS = 15 * 60 * 1000;
 
 const PERMISSION_MODES = ['auto', 'acceptEdits', 'plan', 'manual', 'dontAsk', 'bypassPermissions'];
 
+// What `claude --effort` accepts. Anything else becomes null (inherit, which
+// leaves the flag off) here, at the one place it would reach argv: the stores
+// keep whatever string they were given, as they do for a model, so that a level
+// added upstream is not silently erased from a draft by a build that predates it.
+const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+const effortOrNull = (v) => (EFFORTS.includes(v) ? v : null);
+
 /**
  * Which tools are a conversation rather than a permission question.
  * @type {Record<string, 'plan'|'question'>}
@@ -279,6 +286,7 @@ class Runner extends EventEmitter {
         this.cwd = opts.cwd;
         this.isNew = !!opts.isNew;
         this.model = opts.model || null;
+        this.effort = effortOrNull(opts.effort);
         this.permissionMode = opts.permissionMode || 'auto';
         // Branch off a copy instead of continuing in place. Needed when the
         // original is already live somewhere else.
@@ -443,6 +451,7 @@ class Runner extends EventEmitter {
         else args.push('--resume', this.sessionId);
         if (this.fork) args.push('--fork-session');
         if (this.model) args.push('--model', this.model);
+        if (this.effort) args.push('--effort', this.effort);
 
         this._setState('starting', 'Starting Claude…');
 
@@ -904,6 +913,7 @@ class Runner extends EventEmitter {
             sessionId: this.sessionId,
             cwd: this.cwd,
             model: this.model,
+            effort: this.effort,
             permissionMode: this.permissionMode,
             claudeVersion: this.claudeVersion,
             inFlight: this.inFlight.map(entry),
@@ -1899,6 +1909,7 @@ class Runner extends EventEmitter {
             verb: this._verb,
             detail: this._detail,
             model: this.model,
+            effort: this.effort,
             permissionMode: this.permissionMode,
             // Null whenever there is no process, so a session sitting idle with
             // nothing running is never reported as on an old binary: its next
@@ -2106,19 +2117,33 @@ class RunnerPool extends EventEmitter {
     }
 
     /** Existing runner for a session, or a new one bound to `cwd`. */
-    ensure(sessionId, { cwd, model, permissionMode, isNew = false, fork = false } = {}) {
+    ensure(sessionId, { cwd, model, effort, permissionMode, isNew = false, fork = false } = {}) {
         let r = this.runners.get(sessionId);
         let carried = [];
+        // Absent and null are different answers for effort, unlike model: absent
+        // is "as you were" — a board card's send, which has no selector to read —
+        // and null is `inherit`, picked in a selector that offers it. Folding the
+        // two together, as `model ?? r.model` does, would make choosing `inherit`
+        // do nothing while the dropdown said it had.
         if (r) {
-            // A mode, model or fork change only takes effect on a fresh process.
-            const wants = { model: model ?? r.model, permissionMode: permissionMode ?? r.permissionMode };
+            // A mode, model, effort or fork change only takes effect on a fresh
+            // process: `claude` reads all of them from its argv and nowhere else.
+            const wants = {
+                model: model ?? r.model,
+                effort: effort === undefined ? r.effort : effortOrNull(effort),
+                permissionMode: permissionMode ?? r.permissionMode,
+            };
             if (r.state !== 'busy'
-                && (wants.model !== r.model || wants.permissionMode !== r.permissionMode
+                && (wants.model !== r.model || wants.effort !== r.effort
+                    || wants.permissionMode !== r.permissionMode
                     || fork !== r.fork || r.state === 'error')) {
-                // A model or mode change replaces the process. Messages still
+                // A model, effort or mode change replaces the process. Messages still
                 // waiting belong to the user, not to the process, so they move
                 // across rather than disappearing.
                 carried = r.takeQueue();
+                // So that a mode change on its own does not drop the effort the
+                // process had.
+                effort = wants.effort;
                 r.retire();
                 this.runners.delete(sessionId);
                 r = null;
@@ -2132,7 +2157,7 @@ class RunnerPool extends EventEmitter {
         // Delegated rather than handed over, so a runner asks the pool afresh
         // every time: settings change under a live session, and the answer
         // should not be the one that was true when it started.
-        r = this._make({ sessionId, cwd, model, permissionMode, isNew, fork });
+        r = this._make({ sessionId, cwd, model, effort, permissionMode, isNew, fork });
         if (carried.length) {
             r.queue.push(...carried);
             r._queueChanged();
@@ -2211,7 +2236,7 @@ class RunnerPool extends EventEmitter {
             try { got = await hostClient.adopt(h.key); } catch { continue; }
             const r = this._make({
                 sessionId: note.sessionId, cwd: note.cwd, model: note.model,
-                permissionMode: note.permissionMode,
+                effort: note.effort, permissionMode: note.permissionMode,
             });
             r.adopt({ child: got.child, records: got.records, note: got.note || note,
                 noteSeq: got.noteSeq });
@@ -2229,10 +2254,10 @@ class RunnerPool extends EventEmitter {
     }
 
     /** Create a brand-new session and deliver its first prompt. */
-    create({ cwd, model, permissionMode, prompt, attachments = [] }) {
+    create({ cwd, model, effort, permissionMode, prompt, attachments = [] }) {
         const dir = resolveWorkdir(cwd);
         const sessionId = randomUUID();
-        const r = this.ensure(sessionId, { cwd: dir, model, permissionMode, isNew: true });
+        const r = this.ensure(sessionId, { cwd: dir, model, effort, permissionMode, isNew: true });
         // The first message takes files like any other. `send` has always accepted
         // them and `userContent` has always known what to do with them; this was the
         // one caller that dropped them on the floor, so a session could not be
@@ -2356,4 +2381,4 @@ class RunnerPool extends EventEmitter {
     }
 }
 
-module.exports = { RunnerPool, Runner, PERMISSION_MODES, resolveWorkdir };
+module.exports = { RunnerPool, Runner, PERMISSION_MODES, EFFORTS, resolveWorkdir };

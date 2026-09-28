@@ -786,6 +786,18 @@
                 <option value="haiku">haiku</option>
                 <option value="fable">fable</option>
               </select>
+              <!-- `inherit` sends no `--effort`, so Claude's own effortLevel
+                   decides. The levels are `claude --effort`'s, and EFFORTS in
+                   bridge/runner.js is the list that is enforced. -->
+              <label for="effort">Effort</label>
+              <select id="effort" aria-label="Effort">
+                <option value="">inherit</option>
+                <option value="low">low</option>
+                <option value="medium">medium</option>
+                <option value="high">high</option>
+                <option value="xhigh">xhigh</option>
+                <option value="max">max</option>
+              </select>
               <label for="perm">Permissions</label>
               <select id="perm" aria-label="Permission mode">
                 <option value="acceptEdits">acceptEdits</option>
@@ -1284,12 +1296,19 @@
       <div class="field">
         <div class="picker-tabs" role="tablist" aria-label="Pick a working directory">
           <button id="new-tab-recent" class="picker-tab" type="button" role="tab"
-                  aria-selected="true" aria-controls="new-picker">Recent</button>
+                  aria-selected="true" aria-controls="new-recent">Recent</button>
           <button id="new-tab-browse" class="picker-tab" type="button" role="tab"
                   aria-selected="false" aria-controls="new-browse">Browse</button>
         </div>
-        <div id="new-picker" class="picker" role="tabpanel"
-             aria-labelledby="new-tab-recent"></div>
+        <!-- The filter searches every directory the bridge knows, not only the
+             rows on screen — the list is capped, and the one you are looking
+             for is the one that fell off the end of it. -->
+        <div id="new-recent" role="tabpanel" aria-labelledby="new-tab-recent">
+          <input id="new-recent-filter" class="picker-filter" type="text"
+                 spellcheck="false" autocomplete="off"
+                 placeholder="Filter by name or path" aria-label="Filter recent directories">
+          <div id="new-picker" class="picker" aria-label="Recent directories"></div>
+        </div>
         <!-- Browsing and selecting are one gesture: walking into a folder is how
              you choose it, and #new-cwd above always says which one that is. -->
         <div id="new-browse" role="tabpanel" aria-labelledby="new-tab-browse" hidden>
@@ -1562,6 +1581,17 @@
             <option value="sonnet">sonnet</option>
             <option value="haiku">haiku</option>
             <option value="fable">fable</option>
+          </select>
+        </span>
+        <span class="opt">
+          <label for="new-effort">Effort</label>
+          <select id="new-effort">
+            <option value="">inherit</option>
+            <option value="low">low</option>
+            <option value="medium">medium</option>
+            <option value="high">high</option>
+            <option value="xhigh">xhigh</option>
+            <option value="max">max</option>
           </select>
         </span>
         <span class="opt">

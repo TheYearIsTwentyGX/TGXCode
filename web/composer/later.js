@@ -338,6 +338,7 @@ async function scheduleMessage(at) {
             text,
             attachments: files,
             model: dom.model.value || null,
+            effort: dom.effort.value || null,
             permissionMode: laterMode,
             at,
         });

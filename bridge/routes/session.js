@@ -305,6 +305,9 @@ async function handle(req, res, url, pathname, seg, who) {
             const r = pool.ensure(sessionId, {
                 cwd,
                 model: body.model || null,
+                // Passed as sent: absent keeps the process's effort and null
+                // clears it, which `pool.ensure` tells apart.
+                effort: body.effort,
                 permissionMode: sendMode,
                 fork: !!body.fork,
             });

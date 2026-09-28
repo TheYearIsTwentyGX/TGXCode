@@ -119,6 +119,7 @@ function laterFields(body, who, { partial }) {
     }
 
     if (!partial || body.model !== undefined) fields.model = body.model || null;
+    if (!partial || body.effort !== undefined) fields.effort = body.effort || null;
 
     return { fields };
 }

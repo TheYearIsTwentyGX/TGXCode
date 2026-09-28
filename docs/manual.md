@@ -319,8 +319,16 @@ Everything that stays visible is genuinely still cancellable:
   so they come back to the composer instead of vanishing.
 - **A process that dies** hands back everything it was holding, the turn it died
   on and the queue behind it, in the order you wrote them.
-- **A model or permission change** replaces the process; the queue moves across,
-  because those messages belong to you, not to the process.
+- **A model, effort or permission change** replaces the process; the queue moves
+  across, because those messages belong to you, not to the process.
+
+**Effort** sits next to *Model* in the composer and in *Start a session*, and is
+kept on drafts, scheduled messages and schedules the same way. It is `claude
+--effort`: `low` to `max`, or `inherit` to leave it to `effortLevel` in
+`~/.claude/settings.json`, which *Settings* can edit too. Choosing `inherit` on a
+session running at `high` does take it back — the next message starts a process
+without the flag. The transcript does not record effort, so a session you open
+with nothing running shows `inherit` until its process reports otherwise.
 
 Rows in the rail carry a `+N queued` badge, so a session you queued work for and
 walked away from says so from the outside.
