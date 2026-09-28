@@ -72,7 +72,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'live-side', 'live-side-label', 'live-side-a', 'live-side-b',
     'new-scrim', 'new-cwd', 'new-picker', 'new-prompt', 'new-model', 'new-perm',
     'new-test', 'new-test-row', 'new-go', 'new-save', 'new-title', 'new-name',
-    'new-tab-recent', 'new-tab-browse', 'new-browse', 'new-roots', 'new-crumbs',
+    'new-tab-recent', 'new-tab-browse', 'new-recent', 'new-recent-filter', 'new-browse', 'new-roots', 'new-crumbs',
     'new-tree', 'new-mkdir', 'new-mkdir-name', 'new-mkdir-go', 'new-browse-note',
     'del-scrim', 'del-what', 'del-meta', 'del-go',
     'diff-scrim', 'diff-title', 'diff-stat', 'diff-unified', 'diff-split',

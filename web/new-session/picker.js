@@ -36,7 +36,7 @@ export function setPickerTab(tab, { load = false } = {}) {
 
     dom.newTabRecent.setAttribute('aria-selected', String(!browsing));
     dom.newTabBrowse.setAttribute('aria-selected', String(browsing));
-    dom.newPicker.hidden = browsing;
+    dom.newRecent.hidden = browsing;
     dom.newBrowse.hidden = !browsing;
     if (!browsing) cancelMkdir();
     if (browsing && (load || !state.browse.dir)) browseTo(startDir());
