@@ -74,6 +74,8 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'new-test', 'new-test-row', 'new-go', 'new-save', 'new-title', 'new-name',
     'new-tab-recent', 'new-tab-browse', 'new-recent', 'new-recent-filter', 'new-browse', 'new-roots', 'new-crumbs',
     'new-tree', 'new-mkdir', 'new-mkdir-name', 'new-mkdir-go', 'new-browse-note',
+    'new-mkdir-gh', 'new-mkdir-gh-row', 'new-gh',
+    'gh-scrim', 'gh-body', 'gh-go', 'gh-foot-note',
     'del-scrim', 'del-what', 'del-meta', 'del-go',
     'diff-scrim', 'diff-title', 'diff-stat', 'diff-unified', 'diff-split',
     'diff-words', 'diff-wrap', 'diff-source', 'diff-note', 'diff-jump',
@@ -177,7 +179,10 @@ export function modalUp() {
         // The plan/question review, which is the diff viewer's case exactly: a
         // read-only replay holding no work, so the paragraph above is not what
         // puts it here either. The sentence after it is.
-        || !dom.reviewScrim.hidden;
+        || !dom.reviewScrim.hidden
+        // Publish to GitHub holds a filled-in form, and can be up over
+        // Start-a-session, which is the snippet dialog's case.
+        || !dom.ghScrim.hidden;
 }
 
 /**

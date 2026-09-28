@@ -35,6 +35,7 @@ import {
     browseNote, browseTo, cancelMkdir, setPickerTab, startMkdir, submitMkdir,
 } from './picker.js';
 import { describeCronSoon, paintGateFields, paintNewAttach, setWhen } from './trigger.js';
+import { openPublish } from '../github/publish.js';
 
 // ── new session ──────────────────────────────────────────────────────────
 
@@ -317,6 +318,36 @@ export function paintNewProject() {
         el('span', { class: 'new-project-name' }, name || 'No project selected'),
     );
     dom.newProject.classList.toggle('none', !cwd);
+    paintNewGh();
+}
+
+let ghTimer = null;
+let ghAsked = 0;
+
+/**
+ * Show "Publish to GitHub…" under the directory box when the directory has no
+ * origin to publish to. Asked a moment after the box stops changing, because
+ * typing a path fires this on every character and each one is a `git` call on
+ * the bridge. Hidden while the question is out, so a link never points at the
+ * directory before the one now in the box.
+ */
+function paintNewGh() {
+    clearTimeout(ghTimer);
+    dom.newGh.hidden = true;
+    const cwd = dom.newCwd.value.trim();
+    if (!cwd) return;
+    ghTimer = setTimeout(async () => {
+        const asked = ++ghAsked;
+        let st;
+        try { st = await get(`/api/github/repo-state?cwd=${encodeURIComponent(cwd)}`); } catch { return; }
+        if (asked !== ghAsked || dom.newCwd.value.trim() !== cwd) return;
+        dom.newGh.hidden = !!st.insideOther || st.remotes.some(r => r.name === 'origin');
+    }, 300);
+}
+
+/** Open Publish to GitHub over this dialog, for `cwd`, and look again afterwards. */
+export function publishFromNew(cwd) {
+    openPublish(cwd, { onDone: () => paintNewGh() });
 }
 
 export function closeNew() {
@@ -502,6 +533,7 @@ export function wireNewDialog() {
         }
     });
 
+    dom.newGh.addEventListener('click', () => publishFromNew(dom.newCwd.value.trim()));
     dom.newMkdir.addEventListener('click', startMkdir);
     dom.newMkdirGo.addEventListener('click', submitMkdir);
     dom.newMkdirName.addEventListener('keydown', (e) => {

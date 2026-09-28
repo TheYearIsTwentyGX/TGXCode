@@ -106,6 +106,7 @@ import {
     newC, openNew, paintNewProject, wireNewDialog,
 } from './new-session/dialog.js';
 import { showNewMenu, wireNewMenu } from './new-session/recent.js';
+import { openPublish, wirePublish } from './github/publish.js';
 import {
     drSave, drToSchedule, paintGateFields, schedSave, startNew, whenBuild,
 } from './new-session/trigger.js';
@@ -2046,12 +2047,17 @@ export function showProjMenu(project, btn) {
     // `custom` order only: the keyboard way to do what dragging the heading does.
     const cards = BOOT_PREFS.projects.sort === 'custom' ? railCardOrder() : [];
     const at = cards.indexOf(project.cwd);
-    const origin = originRow(project.cwd, row);
+    const publish = row('Publish to GitHub…', () => openPublish(project.cwd, {
+        onDone: (url) => originUrls.set(project.cwd, url),
+    }));
+    publish.style.display = 'none';
+    const origin = originRow(project.cwd, row, publish);
     dom.projMenu.replaceChildren(
         el('div', { class: 'menu-note' }, clip(project.name, 30)),
         el('div', { class: 'sep' }),
         row('Set project colour', () => openPcolor(project)),
         origin,
+        publish,
         ...(at < 0 ? [] : [
             el('div', { class: 'sep' }),
             row('Move to top', () => moveRailCard(project.cwd, 'top'), at === 0),
@@ -2074,8 +2080,10 @@ const originUrls = new Map();
  * a popup that follows an await. The answer patches this one button, which is
  * `el()` DOM and not Preact's; if the menu has moved on to another project by
  * then, the button is no longer in it and the patch lands on nothing.
+ *
+ * The same answer shows or hides `publish`, the Publish to GitHub row.
  */
-function originRow(cwd, row) {
+function originRow(cwd, row, publish) {
     let url = originUrls.get(cwd);
     const btn = row('Open origin in browser',
         () => { if (url) window.open(url, '_blank', 'noreferrer'); },
@@ -2084,6 +2092,9 @@ function originRow(cwd, row) {
         url = u;
         btn.disabled = !u;
         if (!u) btn.firstChild.textContent = 'No origin remote';
+        // No origin is exactly the case Publish to GitHub is for. The dialog
+        // itself says so when the checkout turns out to have a non-web remote.
+        publish.style.display = u ? 'none' : '';
     };
     if (url === null) settle(null);
     else if (url === undefined) {
@@ -3488,6 +3499,7 @@ wireAttachments(newC);
 
 wireWispr();
 wireNewDialog();
+wirePublish();
 
 // ✕, Cancel and a whole click outside — no Escape; see modalUp().
 for (const n of dom.delScrim.querySelectorAll('[data-close-del]')) {

@@ -87,9 +87,9 @@ const cache = {
  * installed, the repo may not be readable, the network may be down, and the
  * caller's job in all three cases is to say so and carry on.
  */
-function run(cmd, args, { timeout = GH_TIMEOUT_MS, input = null } = {}) {
+function run(cmd, args, { timeout = GH_TIMEOUT_MS, input = null, cwd, env } = {}) {
     return new Promise((resolve) => {
-        const child = execFile(cmd, args, { timeout, maxBuffer: 8 * 1024 * 1024 },
+        const child = execFile(cmd, args, { timeout, cwd, env, maxBuffer: 8 * 1024 * 1024 },
             (err, stdout, stderr) => resolve({
                 ok: !err,
                 stdout: String(stdout || ''),
@@ -101,6 +101,10 @@ function run(cmd, args, { timeout = GH_TIMEOUT_MS, input = null } = {}) {
         // Linux but roughly 32KB through CreateProcess, and this app ships to
         // Windows. `execFile` avoids a shell so quoting was never the problem;
         // length is. Writing the body to stdin has no such limit.
+        //
+        // `cwd` and `env` are bridge/github.js's, which runs `gh repo create
+        // --source` inside the directory it publishes and has to shut off the
+        // prompts a push can raise — see the note there.
         //
         // Guarded because a child that has already failed to spawn has no
         // stdin, and an EPIPE on a process that exited is not news.
@@ -154,6 +158,16 @@ function originWebUrl(url) {
     if (host.length === 1) return null;
     rest = rest.replace(/\/+$/, '').replace(/\.git$/, '');
     return rest ? `https://${host}/${rest}` : null;
+}
+
+/**
+ * Forget what `repoOf` and `originUrlOf` remembered about one checkout. A
+ * publish gives a directory its first origin, and ten minutes of "no remote"
+ * afterwards would read as the publish not having worked.
+ */
+function forgetRepo(dir) {
+    cache.repo.delete(dir);
+    cache.origin.delete(dir);
 }
 
 const originUrlOf = (dir) => cached(cache.origin, dir, REPO_TTL_MS, async () => {
@@ -580,6 +594,7 @@ async function setVerdictLabel(repo, number, want, present = []) {
 }
 
 module.exports = {
+    run, ghError, forgetRepo,
     githubRepo, repoOf, originWebUrl, originUrlOf, openPulls, pullState, resolveStatus, checkSummary,
     resolveBatch, aggregate, ATTENTION_ORDER,
     comment, ensureLabel, setVerdictLabel, VERDICT_LABELS,

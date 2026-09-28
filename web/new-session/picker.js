@@ -15,7 +15,7 @@ import { dom, el, toast } from '../dom.js';
 import { clip } from '../format.js';
 import { state } from '../state.js';
 import { homely } from '../term-pane.js';
-import { setNewCwd } from './dialog.js';
+import { publishFromNew, setNewCwd } from './dialog.js';
 
 // ── the directory picker ─────────────────────────────────────────────────
 //
@@ -251,6 +251,7 @@ export function startMkdir() {
     dom.newMkdir.hidden = true;
     dom.newMkdirName.hidden = false;
     dom.newMkdirGo.hidden = false;
+    dom.newMkdirGhRow.hidden = false;
     dom.newMkdirName.value = '';
     dom.newMkdirName.focus();
 }
@@ -260,6 +261,7 @@ export function cancelMkdir() {
     dom.newMkdir.hidden = false;
     dom.newMkdirName.hidden = true;
     dom.newMkdirGo.hidden = true;
+    dom.newMkdirGhRow.hidden = true;
     dom.newMkdirName.value = '';
 }
 
@@ -279,11 +281,18 @@ export async function submitMkdir() {
     dom.newMkdirGo.disabled = true;
     try {
         const r = await post('/api/fs/mkdir', { parent, name });
+        // Read before cancelMkdir hides it. The box stays ticked for the next
+        // folder, because somebody making several projects in a row means it
+        // for each of them.
+        const publish = dom.newMkdirGh.checked;
         cancelMkdir();
         // Walking in is what selects it, so this is also the pick.
         await browseTo(r.path);
         toast(r.created ? `Created ${name}.` : `${name} was already there.`, 'ok');
         dom.newPrompt.focus();
+        // Over this dialog rather than instead of it: cancelling it leaves the
+        // folder made and picked, and the session can still be started.
+        if (publish) publishFromNew(r.path);
     } catch (err) {
         // The name box stays open with the text in it — retyping a rejected name
         // is the one thing that should not be part of fixing it.

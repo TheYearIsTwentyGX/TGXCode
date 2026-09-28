@@ -1290,7 +1290,8 @@
         <label for="new-cwd">Working directory</label>
         <input id="new-cwd" type="text" spellcheck="false">
         <div class="note">The agent runs here. Pick one below, or type a path —
-          <code>~</code> works, and Enter browses to it.</div>
+          <code>~</code> works, and Enter browses to it.
+          <button id="new-gh" class="link-btn" type="button" hidden>Publish to GitHub…</button></div>
       </div>
       <div class="field">
         <div class="picker-tabs" role="tablist" aria-label="Pick a working directory">
@@ -1318,6 +1319,10 @@
             <button id="new-mkdir" class="btn small" type="button">New folder</button>
             <input id="new-mkdir-name" class="mkdir-name" type="text" spellcheck="false"
                    hidden placeholder="Folder name" aria-label="New folder name">
+            <label id="new-mkdir-gh-row" class="mkdir-gh" hidden>
+              <input id="new-mkdir-gh" type="checkbox">
+              <span>and publish to GitHub</span>
+            </label>
             <button id="new-mkdir-go" class="btn small primary" type="button" hidden>Create</button>
             <span id="new-browse-note" class="note"></span>
           </div>
@@ -1914,6 +1919,27 @@
 <div id="ctx-menu" class="ctx-menu" role="menu" hidden></div>
 
 <div id="turn-pop" class="turn-pop" role="tooltip" hidden></div>
+
+<!-- Publish to GitHub. After every other modal in the document, so it stacks
+     over Start-a-session when it is opened from there: the scrims share a
+     z-index, and document order decides which is on top. The body is built by
+     web/github/publish.js, because what it holds depends on which account gh
+     is logged in as and on what the directory already is. -->
+<div id="gh-scrim" class="scrim" hidden>
+  <div class="modal gh" role="dialog" aria-modal="true" aria-labelledby="gh-title">
+    <div class="modal-head">
+      <span id="gh-title">Publish to GitHub</span>
+      <button class="modal-close" data-close-gh type="button" aria-label="Close">✕</button>
+    </div>
+    <div id="gh-body" class="modal-body"></div>
+    <div class="modal-foot">
+      <span id="gh-foot-note" class="gh-foot-note"></span>
+      <span class="spacer"></span>
+      <button class="btn quiet" data-close-gh type="button">Cancel</button>
+      <button id="gh-go" class="btn primary" type="button">Create repository</button>
+    </div>
+  </div>
+</div>
 
 <div id="toasts" class="toasts" aria-live="polite"></div>
 
