@@ -94,6 +94,7 @@ import { adoptAttachments, dragHasFiles, wireAttachments } from './composer/atta
 import { applyLater, closeLater, loadLater, wireLater } from './composer/later.js';
 import { updateMentionMenu } from './composer/mentions.js';
 import { applyQueue, wireQueue } from './composer/queue.js';
+import { cancelBranch } from './composer/branch.js';
 import {
     autoGrow, clearPendingSend, enableSend, enterSends, grow, handleSendFailure,
     paintComposerHint, sendMessage,
@@ -777,6 +778,7 @@ function forgetSession(sessionId) {
 /** Back to the empty state — the conversation on screen is not there any more. */
 function clearCurrent() {
     state.current = null;
+    cancelBranch();         // it named a turn of the conversation that went away
     state.openSeq++;        // a transcript fetch still in flight must not draw
     state.offset = 0;
     state.runner = null;
@@ -2842,8 +2844,16 @@ function connect() {
         // it. openSessionSoon below can retry for a while, and the row must not sit
         // there through that.
         if (state.pendingSend && state.pendingSend.sessionId === from) clearPendingSend();
+        // An Edit and branch has landed: the copy exists, so there is nothing left
+        // to retry and the banner is done. Only now, never when the POST returned —
+        // see state.branchFrom.
+        const branched = state.branchFrom && state.branchFrom.sessionId === from
+            ? state.branchFrom : null;
+        if (branched) cancelBranch();
         if (!state.current || state.current.sessionId !== from) return;
-        toast('Branched off a copy — following the new session.', 'ok');
+        toast(branched && branched.turn
+            ? `Branched from turn ${branched.turn} — following the new session.`
+            : 'Branched off a copy — following the new session.', 'ok');
         // The original keeps running elsewhere; the copy is where this turn goes.
         openSessionSoon(to);
     });
@@ -3872,6 +3882,7 @@ dom.notesClear.addEventListener('click', async () => {
 // own. sendMessage already does the whole thing — the original keeps running
 // wherever it is, and the window follows the fork.
 dom.lockFork.addEventListener('click', () => sendMessage({ fork: true }));
+dom.branchCancel.addEventListener('click', () => { cancelBranch(); dom.input.focus(); });
 dom.lockAnyway.addEventListener('click', () => {
     if (!state.current) return;
     state.lockOverride.add(state.current.sessionId);

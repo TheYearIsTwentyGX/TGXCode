@@ -29,7 +29,7 @@ import { jumpToTurn } from './turn-rail.js';
  * opens and shuts on the same click. Kept in one place because the listener and the
  * handlers are 18,000 lines apart and the failure looks like the handler not firing.
  */
-export const CTX_OWNERS = '.ch-row, .turn-tick, .snip-row, .btn-pin-snip, #cv-pill';
+export const CTX_OWNERS = '.ch-row, .turn-tick, .snip-row, .btn-pin-snip, #cv-pill, .ev-user';
 
 /**
  * Open a menu at the pointer.

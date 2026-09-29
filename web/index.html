@@ -658,6 +658,16 @@
             <div id="attach" class="attach" hidden
                  aria-label="Files attached to this message"></div>
 
+            <!-- Edit and branch: the next send goes to a copy of this session cut
+                 back to before one of your earlier turns. Said above the box
+                 rather than only in a toast, because what it changes is what
+                 Send does, and that has to be on screen while you are typing. -->
+            <div id="branch" class="lock branch" hidden>
+              <span id="branch-text" class="lock-text"></span>
+              <button id="branch-cancel" class="lock-btn" type="button"
+                      aria-label="Cancel branching" title="Cancel — send to this session as usual">✕</button>
+            </div>
+
             <!-- This session already has a process somewhere else, so sending from
                  here would put two writers on one transcript. Offered before
                  anything is sent, rather than caught afterwards by the error. -->

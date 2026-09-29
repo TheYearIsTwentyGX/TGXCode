@@ -976,6 +976,10 @@ function filed(row) {
     });
 }
 pool.on('forked', ({ from, to }) => {
+    // A copy of a test session is one too. Otherwise branching a probe — which is
+    // most of what branching is while the feature is being worked on — drops a
+    // row into the everyday window that nobody labelled.
+    if (flags.get(from).test) flags.set(to, { test: true });
     index.note(to);
     broadcast('session-forked', { from, to });
 });

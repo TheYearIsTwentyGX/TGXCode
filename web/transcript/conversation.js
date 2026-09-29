@@ -34,6 +34,7 @@ import {
 import { renderPins } from '../snippets/pins.js';
 import { clearAttach, renderAttach } from '../composer/attachments.js';
 import { closeLater, renderLater } from '../composer/later.js';
+import { paintBranch } from '../composer/branch.js';
 import { autoGrow, clearPendingSend } from '../composer/send.js';
 import { closeMenus, live } from '../composer/slash.js';
 import { loadChangesIfStale, renderChanges, resetChanges } from './changes.js';
@@ -198,6 +199,9 @@ function beginOpen(summary, { keepPanels = false } = {}) {
     // conversations, so the strip is rebuilt against the new directory rather than
     // only when the list itself changes.
     renderPins();
+    // A branch pending on the session being left is dropped, not carried: it names
+    // a turn of that session, and would be waiting as a surprise on the way back.
+    paintBranch();
     resetChanges();             // and the files listed were the old session's
     renderChanges();            // which leaves the drawer saying it is looking
     resetChecklist();           // as was the task list — the push will refill it
@@ -546,7 +550,7 @@ export function appendEvents(events, view = SESSION_VIEW, { live = false } = {})
             continue;
         }
         if (view.nodes.has(ev.id)) continue;
-        const node = renderEvent(ev);
+        const node = renderEvent(ev, { actions: !view.isAgent });
         if (!node) continue;
         view.nodes.set(ev.id, { ev, node });
         // Where the run of tool calls begins and ends. Decided here rather than

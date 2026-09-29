@@ -15,7 +15,9 @@ import { icon } from '../icons.js';
 import { inline, renderMarkdown } from '../markdown.js';
 import { state } from '../state.js';
 import { attachExt, openAttachment } from '../composer/attachments.js';
+import { editAndBranch, editAndResend } from '../composer/branch.js';
 import { insertMention, loadPeers, peerByName } from '../composer/mentions.js';
+import { closeContextMenu, openContextMenu } from './context-menu.js';
 import { openSession } from './conversation.js';
 import { markFindDirty } from './find.js';
 import { openAgent } from './subagents.js';
@@ -58,10 +60,70 @@ function messageMarkdown(ev) {
  * click, and they are also the only two kinds `closeRun` lifts into a `.trun` —
  * so leaving them out is what guarantees no copy button is ever inside a fold.
  */
-function evHead(ev, label) {
+function evHead(ev, label, ...more) {
     return el('div', { class: 'ev-head' },
         el('div', { class: 'ev-label' }, label),
-        copyButton(ev));
+        copyButton(ev), ...more);
+}
+
+// ── doing a turn over ────────────────────────────────────────────────────
+// Your own turns carry two more buttons beside Copy, and the same two in a
+// right-click menu: Edit and resend, and Edit and branch. What each does is in
+// web/composer/branch.js; this is only where they are drawn.
+//
+// Only in the session's own log. A subagent's prompt is a user entry in *its*
+// transcript, and branching this session from an id that is not in it is a 400
+// at best — so the subagent pane and the inline peek render without them.
+
+/** The actions a turn offers, as menu items. Shared by the buttons and the menu. */
+function turnActions(ev) {
+    return [
+        { label: 'Edit and resend', icon: 'pencil', onClick: () => editAndResend(ev) },
+        { label: 'Edit and branch', icon: 'branch', onClick: () => editAndBranch(ev) },
+    ];
+}
+
+function turnButtons(ev) {
+    return turnActions(ev).map(a => el('button', {
+        class: 'ev-copy ev-act', type: 'button',
+        title: a.label === 'Edit and branch'
+            ? 'Edit and branch — send the edit to a copy without this turn or any after it'
+            : 'Edit and resend — put this in the box to send again',
+        'aria-label': a.label,
+        onclick: a.onClick,
+    }, icon(a.icon, 14)));
+}
+
+/**
+ * Right-click on your own turn. Selected text keeps the browser's menu — Copy is
+ * what you want when you have just highlighted something — and so does a click
+ * on a link or an image inside the message.
+ */
+function onTurnMenu(e, ev) {
+    const node = e.currentTarget;
+    const sel = window.getSelection && window.getSelection();
+    // `.ev-user` is in CTX_OWNERS, so the document listener leaves a menu from an
+    // earlier right-click alone — which is right when this opens one and wrong
+    // when it steps aside for the browser's, so it closes it itself.
+    if ((sel && !sel.isCollapsed && node.contains(sel.anchorNode))
+        || (e.target.closest && e.target.closest('a, img'))) {
+        closeContextMenu({ focus: false });
+        return;
+    }
+    e.preventDefault();
+    const md = messageMarkdown(ev);
+    const items = turnActions(ev).map(({ label, onClick }) => ({ label, onClick }));
+    if (md) {
+        items.push({ sep: true });
+        items.push({
+            label: 'Copy message',
+            onClick: () => {
+                const btn = node.querySelector('.ev-copy:not(.ev-act)');
+                if (btn) copyMessage(btn, md);
+            },
+        });
+    }
+    openContextMenu(e, items);
 }
 
 /**
@@ -165,9 +227,14 @@ export function row(ev, kind, ...body) {
     );
 }
 
-export function renderEvent(ev) {
+/**
+ * @param {object} [opts]
+ * @param {boolean} [opts.actions] draw the per-turn actions on a user row — true
+ *   only for the session's own log; see turnActions
+ */
+export function renderEvent(ev, opts = {}) {
     switch (ev.kind) {
-        case 'user': return renderUser(ev);
+        case 'user': return renderUser(ev, opts);
         case 'assistant': return renderAssistant(ev);
         case 'thinking': return renderThinking(ev);
         case 'tool': return renderTool(ev);
@@ -180,9 +247,11 @@ export function renderEvent(ev) {
     }
 }
 
-export function renderUser(ev) {
+export function renderUser(ev, { actions = false } = {}) {
     const body = [];
-    body.push(evHead(ev, 'You'));
+    // No id is the row drawn at Send, which has nothing on disk to branch from yet.
+    const acts = actions && ev.id;
+    body.push(evHead(ev, 'You', ...(acts ? turnButtons(ev) : [])));
     if (ev.command) {
         body.push(el('div', { class: 'prose', html:
             `<p><code>/${escapeHtml(ev.command.name)}</code>`
@@ -203,7 +272,10 @@ export function renderUser(ev) {
     // of the two you can click to open, and "open the screenshot I just pasted" is a
     // thing you want as much for a PNG as for a PDF.
     if (ev.files && ev.files.length) body.push(attachCards(ev));
-    return row(ev, 'user', ...body);
+    const node = row(ev, 'user', ...body);
+    // A property rather than el()'s attribute, so the closure has `currentTarget`.
+    if (acts) node.addEventListener('contextmenu', (e) => onTurnMenu(e, ev));
+    return node;
 }
 
 /**
@@ -316,7 +388,7 @@ function redrawEvent(ev) {
     for (const nodes of [state.nodes, state.agentNodes]) {
         const entry = nodes.get(ev.id);
         if (!entry || !entry.node.isConnected) continue;
-        const next = renderEvent(ev);
+        const next = renderEvent(ev, { actions: nodes === state.nodes });
         if (!next) return;
         entry.node.replaceWith(next);
         nodes.set(ev.id, { ev, node: next });

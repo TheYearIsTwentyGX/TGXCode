@@ -19,6 +19,8 @@ import { renderUser } from '../transcript/rows.js';
 import { clearAttach, readyAttachments, revokePreviews } from './attachments.js';
 import { live } from './slash.js';
 import { renderPins } from '../snippets/pins.js';
+import { openSessionSoon } from '../transcript/conversation.js';
+import { branchFor, cancelBranch } from './branch.js';
 
 // ── composer ─────────────────────────────────────────────────────────────
 
@@ -121,7 +123,9 @@ export function clearPendingSend() {
     revokePreviews(p.previews);
 }
 
-export async function sendMessage({ fork = false, text: override = null, canned = false } = {}) {
+export async function sendMessage(opts = {}) {
+    const { text: override = null, canned = false } = opts;
+    let { fork = false } = opts;
     const text = override != null ? override : dom.input.value.trim();
     // Attachments only ride on a message that came out of the box. A canned send — a
     // snippet that sends itself, a follow-up card — must not walk off with a screenshot
@@ -132,6 +136,12 @@ export async function sendMessage({ fork = false, text: override = null, canned 
     // whole content of it.
     if ((!text && !files.length) || !state.current) return;
     const sessionId = state.current.sessionId;
+
+    // Edit and branch. A canned send is not the message you were editing, so it
+    // goes to this session as usual and leaves the branch waiting for the one that is.
+    const branch = canned ? null : branchFor(sessionId);
+    if (branch && branch.first) return branchAsNewSession(text, files, opts);
+    if (branch) fork = true;
 
     // The lock is a rule, not a disabled button. Greying out the buttons left
     // Enter — and every internal caller, a snippet included — going straight past it
@@ -185,6 +195,9 @@ export async function sendMessage({ fork = false, text: override = null, canned 
             // attachments route before its chip appeared.
             attachments: files,
             fork,
+            // The turn to branch from. The bridge works out where to cut from it,
+            // and refuses it without `fork`.
+            ...(branch ? { fromUuid: branch.uuid } : {}),
             model: dom.model.value || null,
             effort: dom.effort.value || null,
             permissionMode: dom.perm.value,
@@ -210,7 +223,47 @@ export async function sendMessage({ fork = false, text: override = null, canned 
         // The files are still on disk, so handing their metadata back is enough to put
         // the chips where they were.
         if (!canned) restoreToComposer(text, files);
-        toast(`Could not send: ${err.message}`, 'error');
+        // The same send again. The text is back in the box (or, canned, in `opts`),
+        // and a branch is still in state, so this repeats exactly what was asked.
+        toast(`Could not send: ${err.message}`, 'error', {
+            action: { label: 'Retry', onClick: () => sendMessage(opts) },
+        });
+    } finally {
+        enableSend(Boolean(state.current));
+    }
+}
+
+/**
+ * Branch from turn 1: there is nothing before it to keep, so the copy is simply a
+ * new session in the same folder with the edited text as its first message.
+ */
+async function branchAsNewSession(text, files, opts) {
+    const cur = state.current;
+    dom.input.value = '';
+    autoGrow();
+    saveDraft(cur.sessionId, '');
+    clearAttach(live, { revoke: true });
+    enableSend(false);
+    try {
+        const r = await post('/api/sessions', {
+            cwd: cur.cwd,
+            prompt: text,
+            // Same folder, so the same attachments directory: the paths resolve.
+            attachments: files,
+            model: dom.model.value || null,
+            effort: dom.effort.value || null,
+            permissionMode: dom.perm.value,
+            // A probe's branch is a probe.
+            ...(cur.test ? { test: true } : {}),
+        });
+        cancelBranch();
+        toast('Started a new session from your edited first turn.', 'ok');
+        openSessionSoon(r.sessionId);
+    } catch (err) {
+        restoreToComposer(text, files);
+        toast(`Could not start the session: ${err.message}`, 'error', {
+            action: { label: 'Retry', onClick: () => sendMessage(opts) },
+        });
     } finally {
         enableSend(Boolean(state.current));
     }
@@ -241,6 +294,14 @@ export function handleSendFailure(f) {
     if (f.kind === 'busy-elsewhere' && onCurrent && text) {
         toast(`${f.message} Your message is back in the box.`, 'warn', {
             action: { label: 'Branch off a copy', onClick: () => sendMessage({ fork: true }) },
+        });
+    } else if (onCurrent && text && f.kind !== 'branch-refused') {
+        // The text is in the box, so sending the box is sending it again — and a
+        // branch still in state branches again. Not offered for a refused branch:
+        // the CLI refuses the same cut the same way every time, and ✕ on the
+        // banner is the way on from there.
+        toast(`${f.message} Your message was put back.`, 'error', {
+            action: { label: 'Retry', onClick: () => sendMessage() },
         });
     } else {
         toast(text ? `${f.message} Your message was put back.` : f.message, 'error',
