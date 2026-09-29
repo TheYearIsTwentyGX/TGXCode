@@ -254,6 +254,18 @@ export async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     dom.newAttachRow.hidden = schedMode || Boolean(draft);
     clearAttach(newC);
 
+    // The worktree row, on the same terms and for a stronger reason: a draft and a
+    // schedule are validated when saved, before any worktree could exist. Reset on
+    // every open, so a name typed for the last session is not offered for this one.
+    // Painted again now because setNewCwd above painted it under the last open's
+    // mode; the repo-state answer it is waiting on paints it once more.
+    wt.offered = !schedMode && !draft;
+    wt.named = false;
+    dom.newWt.checked = false;
+    dom.newWtName.value = '';
+    dom.newWtBase.value = '';
+    paintNewWorktree();
+
     dom.newTitle.textContent = schedMode
         ? (sched ? 'Edit schedule'
             : (state.sched.fromDraft ? 'Schedule this draft' : 'Schedule a session'))
@@ -334,6 +346,11 @@ let ghAsked = 0;
 function paintNewGh() {
     clearTimeout(ghTimer);
     dom.newGh.hidden = true;
+    // The same answer decides the worktree row, so it is withdrawn with the link
+    // and comes back with it: a row offered for the directory before this one
+    // would preview a path in the wrong repository.
+    wt.root = null;
+    paintNewWorktree();
     const cwd = dom.newCwd.value.trim();
     if (!cwd) return;
     ghTimer = setTimeout(async () => {
@@ -342,7 +359,104 @@ function paintNewGh() {
         try { st = await get(`/api/github/repo-state?cwd=${encodeURIComponent(cwd)}`); } catch { return; }
         if (asked !== ghAsked || dom.newCwd.value.trim() !== cwd) return;
         dom.newGh.hidden = !!st.insideOther || st.remotes.some(r => r.name === 'origin');
+        wt.root = worktreeRoot(st);
+        paintNewWorktree();
     }, 300);
+}
+
+// ── start in a new worktree ───────────────────────────────────────────────
+
+/**
+ * What the worktree row knows. `root` is the repository a new worktree would go
+ * under, or null when the directory is not one it can be made from; `offered` is
+ * whether this open of the dialog is plain Start (see openNew); `named` is
+ * whether somebody has typed in the name box, after which the prompt stops
+ * writing it.
+ */
+const wt = { root: null, offered: false, named: false };
+
+// The rule bridge/worktree.js applies. Checked here too so the preview can say a
+// name will be refused before the press rather than after it.
+const WT_NAME_RE = /^[A-Za-z0-9._-]{1,60}$/;
+const wtNameOk = (n) => WT_NAME_RE.test(n) && !/^[.-]/.test(n) && !n.endsWith('.lock') && !n.includes('..');
+
+/**
+ * The repository root a worktree for this directory would be made under, from
+ * `/api/github/repo-state` — the question the Publish link already asks, so the
+ * row costs no request of its own.
+ *
+ * A repository root needs a commit (there is nothing to branch from otherwise); a
+ * directory inside one is offered on the parent's behalf. Either way, a root that
+ * is itself `.claude/worktrees/<name>` is replaced by the checkout it belongs to,
+ * because that is where the bridge will put the new one — it never nests them.
+ * That last step is a preview of the bridge's `--git-common-dir` answer, not the
+ * answer itself, and it only recognises the layout this app and `EnterWorktree`
+ * make.
+ */
+function worktreeRoot(st) {
+    const root = st.isGit ? (st.hasCommits ? st.cwd : null) : st.insideOther;
+    if (!root) return null;
+    const m = /^(.*)\/\.claude\/worktrees\/[^/]+\/?$/.exec(root);
+    return m ? m[1] : root;
+}
+
+/** A name from the first few words of the prompt: `fix-the-login-redirect`. */
+export function worktreeSlug(text) {
+    return String(text || '').toLowerCase()
+        .split(/[^a-z0-9]+/).filter(Boolean).slice(0, 4).join('-')
+        .slice(0, 40).replace(/-+$/, '');
+}
+
+/** Show, hide and describe the worktree row. Cheap; called on every change. */
+export function paintNewWorktree() {
+    const show = wt.offered && !!wt.root;
+    dom.newWtRow.hidden = !show;
+    const on = show && dom.newWt.checked;
+    dom.newWtFields.hidden = !on;
+    dom.newWtNote.hidden = !on;
+    if (!on) return;
+
+    if (!wt.named) dom.newWtName.value = worktreeSlug(dom.newPrompt.value);
+    const name = dom.newWtName.value.trim();
+    const base = dom.newWtBase.value.trim() || 'HEAD';
+    if (!name) {
+        dom.newWtNote.replaceChildren('Name the worktree — it becomes the folder and the branch.');
+        dom.newWtNote.classList.add('warn');
+        return;
+    }
+    if (!wtNameOk(name)) {
+        dom.newWtNote.replaceChildren('Letters, digits, ".", "_" and "-" only, up to 60, '
+            + 'not starting with "." or "-".');
+        dom.newWtNote.classList.add('warn');
+        return;
+    }
+    dom.newWtNote.classList.remove('warn');
+    dom.newWtNote.replaceChildren(
+        'Starts in ', el('code', {}, homely(`${wt.root}/.claude/worktrees/${name}`)),
+        ' on a new branch ', el('code', {}, `worktree-${name}`),
+        ' from ', el('code', {}, base), '.');
+}
+
+/**
+ * The `worktree` field of `POST /api/sessions`, or null for none, or false when
+ * the row is ticked with a name that will be refused (and it has said so).
+ *
+ * **Deliberately not part of `newDialogValues`,** for the reason `newDialogName`
+ * gives: that body is also the drafts' and the schedules' body, and neither store
+ * has this field — so Start asks for it and the other two do not. The row is
+ * hidden in draft and schedule mode anyway; this is what keeps Save-as-draft
+ * from the plain Start dialog honest too.
+ */
+export function newDialogWorktree() {
+    if (dom.newWtRow.hidden || !dom.newWt.checked) return null;
+    const name = dom.newWtName.value.trim();
+    if (!wtNameOk(name)) {
+        toast('Give the worktree a name: letters, digits, ".", "_" and "-".', 'warn');
+        dom.newWtName.focus();
+        return false;
+    }
+    const base = dom.newWtBase.value.trim();
+    return base ? { name, base } : { name };
 }
 
 /** Open Publish to GitHub over this dialog, for `cwd`, and look again afterwards. */
@@ -534,6 +648,19 @@ export function wireNewDialog() {
     });
 
     dom.newGh.addEventListener('click', () => publishFromNew(dom.newCwd.value.trim()));
+
+    // The worktree row. The prompt writes the name until somebody types in the
+    // name box; clearing that box hands it back to the prompt.
+    dom.newWt.addEventListener('change', () => {
+        paintNewWorktree();
+        if (dom.newWt.checked) dom.newWtName.focus();
+    });
+    dom.newWtName.addEventListener('input', () => {
+        wt.named = dom.newWtName.value.trim() !== '';
+        paintNewWorktree();
+    });
+    dom.newWtBase.addEventListener('input', paintNewWorktree);
+    dom.newPrompt.addEventListener('input', () => { if (!wt.named) paintNewWorktree(); });
     dom.newMkdir.addEventListener('click', startMkdir);
     dom.newMkdirGo.addEventListener('click', submitMkdir);
     dom.newMkdirName.addEventListener('keydown', (e) => {

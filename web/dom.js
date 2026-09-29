@@ -75,6 +75,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'new-tab-recent', 'new-tab-browse', 'new-recent', 'new-recent-filter', 'new-browse', 'new-roots', 'new-crumbs',
     'new-tree', 'new-mkdir', 'new-mkdir-name', 'new-mkdir-go', 'new-browse-note',
     'new-mkdir-gh', 'new-mkdir-gh-row', 'new-gh',
+    'new-wt-row', 'new-wt', 'new-wt-fields', 'new-wt-name', 'new-wt-base', 'new-wt-note',
     'gh-scrim', 'gh-body', 'gh-go', 'gh-foot-note',
     'del-scrim', 'del-what', 'del-meta', 'del-go',
     'diff-scrim', 'diff-title', 'diff-stat', 'diff-unified', 'diff-split',

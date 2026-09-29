@@ -672,3 +672,13 @@
 .mkdir-gh[hidden] { display: none; }
 .mkdir-gh input { accent-color: var(--blue); }
 
+
+/* Start-a-session's worktree row: a name and a base on one line under the box. */
+.wt-fields { display: flex; align-items: center; gap: 8px; margin: 8px 0 0 26px; }
+.wt-fields[hidden] { display: none; }
+.field .wt-fields input[type="text"] { padding: 7px 12px; }
+.field .wt-fields #new-wt-name { flex: 2; }
+.field .wt-fields #new-wt-base { flex: 1; min-width: 0; }
+.wt-from { font-size: 12px; color: var(--text-4); }
+#new-wt-note { margin-left: 26px; overflow-wrap: anywhere; }
+#new-wt-note.warn { color: var(--yellow); }
