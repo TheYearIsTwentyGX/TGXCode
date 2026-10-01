@@ -2938,8 +2938,9 @@ causes auto-denials.
 
 ### `POST /api/sessions`
 
-`{cwd, prompt, model?, effort?, permissionMode?, test?, attachments?, fromDraft?}` →
-`{sessionId, status, test}`.
+`{cwd, prompt, model?, effort?, permissionMode?, test?, attachments?, fromDraft?,
+worktree?: {name: string, base?: string}}` →
+`{sessionId, status, test, worktree?: {path: string, branch: string}}`.
 
 `cwd` must be inside the allowed roots. `test: true` keeps it out of the everyday
 window — use it for anything exploratory. `plan` is the sensible default mode for a
@@ -2978,6 +2979,37 @@ first. Editing the prompt and passing `fromDraft` runs the edited prompt and dro
 draft unedited: sending it is a decision not to keep the draft. A client that wants the
 edit kept should `PATCH /api/drafts/:id` and then `POST /api/drafts/:id/start`.
 
+**`worktree` starts the session in a new git worktree** of the repository `cwd` is
+in, made by the bridge before the process spawns. The directory is
+`<top>/.claude/worktrees/<name>` on a new branch `worktree-<name>`, checked out from
+`base` (a branch, tag or commit; `HEAD` when absent or empty), and the session's cwd
+is that directory from its first message. `<top>` is the **main** checkout's top
+level: from inside a worktree, or a directory inside one, the new worktree goes
+beside it under the main repository, never nested in it. The response echoes
+`worktree {path, branch}` (both absolute path / branch name strings); without the
+field in the request there is no `worktree` key in the response.
+
+- `name` must match `^[A-Za-z0-9._-]{1,60}$`, must not start with `.` or `-`, must
+  not end in `.lock` and must not contain `..`. Anything else is a `400`.
+- `409 {error: "worktree-exists", message: string, path: string, branch: string}`
+  when the directory **or** the branch `worktree-<name>` already exists — a branch
+  left behind by a removed worktree counts. Nothing is created, and nothing is
+  re-used: pick another name, or open the session already in `path`.
+- `400 {error: string, code: string}` when git refuses — `code` is `git-failed` and
+  `error` is git's own `fatal:`/`error:` line (an unknown `base`, a repository with
+  no commits) — or when `cwd` is not in a repository (`not-a-repo`), the name or base
+  is malformed (`bad-name`, `bad-base`), or the new path is outside the allowed roots
+  (`outside-roots`). **No session is started on any of these.**
+- `403 {error, remote: true}` for any `worktree` from a remote caller, whatever the
+  mode — it creates a directory and a branch, which is why `POST /api/fs/mkdir` is
+  refused remotely. Checked before the create limit is charged.
+- The worktree is never removed by the bridge, including when the spawn after it
+  fails (a `400` that then carries `worktree` too). A retry with the same name gets
+  the `409`.
+- Once indexed, the session's summary in `GET /api/sessions` carries the usual
+  `worktree {name, branch, path, originalCwd}` object for it, with `cwd` equal to
+  `worktree.path` — the same shape an `EnterWorktree` session has.
+
 **`status` is a whole runner status object** — the `runner-status` payload, for the
 process that was just started — not a word describing the outcome. Same on
 `POST /api/sessions/:id/send` and on every queue write.
@@ -2993,8 +3025,9 @@ against pruning for five minutes for the same reason (`note()` in
 `bridge/sessions.js`), so a 404 in that window is "not yet", never "never".
 
 `400` for a missing `cwd` or `prompt`, a directory that does not exist, or one outside
-the roots; `403` for a refused `permissionMode` from a remote caller; `429` past 8
-creates a minute.
+the roots, or a `worktree` git would not make; `403` for a refused `permissionMode`,
+or any `worktree`, from a remote caller; `409` for a `worktree` that already exists;
+`429` past 8 creates a minute.
 
 ### `POST /api/sessions/:id/send`
 

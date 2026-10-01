@@ -19,7 +19,7 @@ import { draftsVisible, showDrafts } from '../drafts.js';
 import { showSched } from '../schedules.js';
 import { commitAttachments } from '../composer/attachments.js';
 import { openSessionSoon } from '../transcript/conversation.js';
-import { closeNew, newC, newDialogName, newDialogValues, openNew } from './dialog.js';
+import { closeNew, newC, newDialogName, newDialogValues, newDialogWorktree, openNew } from './dialog.js';
 
 // ── the trigger picker ──────────────────────────────────────────────────────
 //
@@ -553,6 +553,11 @@ export async function startNew() {
     // on a route that ignores it.
     const fromDraft = state.drafts.editing;
     if (fromDraft) body.fromDraft = fromDraft;
+    // Start alone, for the reason newDialogWorktree gives. `false` is a name the
+    // bridge would refuse, and the row has already said why.
+    const worktree = newDialogWorktree();
+    if (worktree === false) return;
+    if (worktree) body.worktree = worktree;
 
     dom.newGo.disabled = true;
     dom.newGo.textContent = 'Starting';
@@ -572,11 +577,20 @@ export async function startNew() {
         // so leaving it up would put a list over the thing it just started. A
         // plain Ctrl+N from an open board is not that, and leaves it alone.
         if (fromDraft && draftsVisible()) showDrafts(false);
-        toast('Session started.', 'ok');
+        toast(r.worktree ? `Session started in ${r.worktree.branch}.` : 'Session started.', 'ok');
         // The transcript only exists once `claude` writes its first line.
         openSessionSoon(r.sessionId);
     } catch (err) {
-        toast(`Could not start the session: ${err.message}`, 'error');
+        // Said in words rather than as the bare code the route answers with, and
+        // the dialog stays open on it: the fix is a different name, one box away.
+        if (err.status === 409 && err.data && err.data.error === 'worktree-exists') {
+            toast(`A worktree called "${worktree.name}" already exists`
+                + `${err.data.path ? ` at ${err.data.path}` : ''} — pick another name.`, 'warn');
+            dom.newWtName.focus();
+            dom.newWtName.select();
+        } else {
+            toast(`Could not start the session: ${err.message}`, 'error');
+        }
     } finally {
         dom.newGo.disabled = false;
         dom.newGo.textContent = 'Start';

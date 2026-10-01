@@ -11,6 +11,8 @@
 //
 // Starting a session is open to a remote caller, but not in every mode:
 // modeRefusal() is asked beside the route, before the create limit is charged.
+// Nor with a `worktree`, which creates a directory and a branch — the reason
+// `/api/fs/mkdir` is refused remotely.
 //
 // One of the route modules server.js's `api()` asks in turn — see the note above
 // ROUTES there for the contract: `handle` returns `NEXT` for a request that is
@@ -25,6 +27,7 @@ const { NEXT, readJson, send } = require('../http');
 const { resolveWorkdir } = require('../runner');
 const { draftsPayload } = require('./drafts');
 const { resolveAttachments } = require('./files');
+const { createWorktree } = require('../worktree');
 
 // Handed over by server.js — see the note above ROUTES there.
 let CREATE_LIMIT = null;
@@ -166,6 +169,17 @@ async function handle(req, res, url, pathname, seg, who) {
         const refusal = modeRefusal(mode, who);
         if (refusal) return send(res, 403, { error: refusal, remote: true });
 
+        // Checked beside the mode, before the create limit is charged, and for the
+        // same kind of reason: stricter than starting a session is. A worktree is
+        // a directory and a branch, which is `POST /api/fs/mkdir`'s reason for
+        // being refused remotely — see docs/remote.md.
+        if (body.worktree != null && who.remote) {
+            return send(res, 403, {
+                error: 'a worktree cannot be created remotely — start it at the machine itself',
+                remote: true,
+            });
+        }
+
         if (tooManyCreates()) {
             return send(res, 429, {
                 error: `more than ${CREATE_LIMIT.max} sessions started in a minute — `
@@ -173,9 +187,43 @@ async function handle(req, res, url, pathname, seg, who) {
             });
         }
 
+        // **A worktree to start in, made here and not by `claude`.** See
+        // bridge/worktree.js for why the bridge runs git itself. Made after every
+        // other refusal and before the spawn, so a request refused for its mode or
+        // its rate leaves no directory and no branch behind; and a git failure is
+        // a 400 with no session, rather than a session started in the main
+        // checkout that was asked to be somewhere else. (A remote caller never
+        // gets this far; see above.)
+        let worktree = null;
+        let startIn = cwd;
+        if (body.worktree != null) {
+            const wt = body.worktree;
+            if (typeof wt !== 'object' || Array.isArray(wt)) {
+                return send(res, 400, { error: 'worktree must be an object {name, base?}' });
+            }
+            let repo;
+            try {
+                repo = resolveWorkdir(cwd);
+            } catch (err) {
+                return send(res, 400, { error: err.message });
+            }
+            try {
+                worktree = await createWorktree(repo, wt.name, wt.base,
+                    { allow: (p) => cfg.withinRoots(p) });
+            } catch (err) {
+                if (err.code === 'worktree-exists') {
+                    return send(res, 409, {
+                        error: 'worktree-exists', message: err.message, path: err.path, branch: err.branch,
+                    });
+                }
+                return send(res, 400, { error: err.message, code: err.code || 'git-failed' });
+            }
+            startIn = worktree.path;
+        }
+
         try {
             const out = pool.create({
-                cwd,
+                cwd: startIn,
                 prompt,
                 model: body.model || null,
                 effort: body.effort || null,
@@ -222,9 +270,12 @@ async function handle(req, res, url, pathname, seg, who) {
             const from = typeof body.fromDraft === 'string' ? body.fromDraft : null;
             if (from && drafts.remove(from)) broadcast('drafts-changed', draftsPayload());
 
-            return send(res, 200, { ...out, test: !!body.test });
+            return send(res, 200, { ...out, test: !!body.test, ...(worktree ? { worktree } : {}) });
         } catch (err) {
-            return send(res, 400, { error: err.message });
+            // A worktree made above is left where it is. It is on disk under a
+            // name the caller chose, so a retry gets a 409 that names it rather
+            // than a second copy — and removing one is never this route's call.
+            return send(res, 400, { error: err.message, ...(worktree ? { worktree } : {}) });
         }
     }
 
