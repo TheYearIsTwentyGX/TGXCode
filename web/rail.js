@@ -364,7 +364,7 @@ function strip(s) {
             ${renaming
                 ? html`<div class="strip-main">${renameInput(s)}${meta}</div>`
                 : html`<button class="strip-main" type="button" onClick=${() => openSession(s.sessionId)}>
-                    <span class="strip-title">${s.title}</span>${meta}</button>`}
+                    <span class="strip-title">${s.title}</span>${standingLine(s, running)}${meta}</button>`}
             <div class="strip-actions">
                 <button class="mini" type="button" title="Rename"
                     onClick=${(e) => { e.stopPropagation(); startRename(s); }}
@@ -383,6 +383,24 @@ function strip(s) {
                 >${icon('trash')}</button>
             </div>
         </div>`;
+}
+
+/**
+ * Where the session's last turn left things, in one line — bridge/standing.js.
+ *
+ * Not while a turn runs: the line is about the reply before this one, and the
+ * activity in the meta line is the better answer then. A line that came from the
+ * reply itself rather than the model is set in italics, so the two can be told
+ * apart at a glance.
+ */
+function standingLine(s, running) {
+    const st = s.standing;
+    if (!st || !st.text || running) return null;
+    if (BOOT_PREFS.standing && BOOT_PREFS.standing.mode === 'off') return null;
+    const when = st.at ? `${ago(st.at)} ago` : '';
+    const how = st.source === 'model' ? 'Summarised after the last turn' : 'The last line of the last reply';
+    return html`<span class="strip-standing" data-source=${st.source}
+        title=${`${st.text}\n${how}${when ? `, ${when}` : ''}`}>${st.text}</span>`;
 }
 
 /**

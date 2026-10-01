@@ -277,6 +277,21 @@ export const SETTINGS = [
         ],
     },
     {
+        title: 'Session status line', section: 'standing', category: 'workspace', userOnly: true,
+        note: 'One line under each session in the rail saying where its last turn left '
+            + 'things — “PR #150 opened, waiting on review”. Written when a turn this app '
+            + 'ran ends; sessions in a terminal do not get one.',
+        rows: [
+            { key: 'mode', type: 'choice',
+                label: 'Write it by',
+                options: [['model', 'Asking a model'], ['extract', 'Taking the last reply'],
+                    ['off', 'Off']],
+                note: 'Asking a model is one short haiku call per reply, never repeated for '
+                    + 'the same reply. Taking the last reply costs nothing and reads worse; '
+                    + 'it is shown in italics.' },
+        ],
+    },
+    {
         title: 'DevBrowser', section: 'devbrowser', category: 'browsers', userOnly: true,
         note: 'The separate browser app on this machine that shows one tab per port.',
         rows: [
