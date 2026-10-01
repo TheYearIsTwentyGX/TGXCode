@@ -101,6 +101,9 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     if (m.type === 'control_request') {
         const req = m.request || {};
         let response = {};
+        if (LOG && req.subtype === 'set_permission_mode') {
+            fs.appendFileSync(LOG + '.ctl', JSON.stringify({ pid: process.pid, mode: req.mode }) + '\\n');
+        }
         if (req.subtype === 'cancel_async_message') {
             const i = held.findIndex(h => h.uuid === req.message_uuid);
             if (i >= 0) { held.splice(i, 1); life(req.message_uuid, 'cancelled'); }
@@ -135,6 +138,19 @@ function onUser(m) {
             message: { role: 'assistant', content: [{ type: 'text', text: 'working' }] } });
     }
     if (/\\bDIE0\\b/.test(text)) { setTimeout(() => process.exit(0), 120); return; }
+    // A turn that leaves work running, the way \`run_in_background\` does: the task
+    // starts, the turn ends, and the task reports in on its own clock afterwards.
+    const bg = /\\bBG(\\d+)\\b/.exec(text);
+    if (bg) {
+        const task = 'bg-' + Math.random().toString(36).slice(2);
+        out({ type: 'system', subtype: 'task_started', task_id: task, task_type: 'local_bash',
+            is_backgrounded: true, session_id: sessionId });
+        out({ type: 'result', subtype: 'success', is_error: false, result: text,
+            duration_ms: 1, num_turns: 1, total_cost_usd: 0, session_id: sessionId });
+        setTimeout(() => out({ type: 'system', subtype: 'task_notification', task_id: task,
+            status: 'completed', summary: 'done', session_id: sessionId }), Number(bg[1]));
+        return;
+    }
     // A turn that takes a while: long enough to restart a bridge in the middle of.
     const slow = /\\bSLOW(\\d+)\\b/.exec(text);
     if (slow) {
@@ -649,6 +665,99 @@ function runner() {
         const r5 = new Runner({ sessionId: randomUUID(), cwd: root, isNew: true, effort: '--fork-session' });
         assert.strictEqual(r5.effort, null, 'nothing outside the list reaches argv');
         ok('an unknown effort never reaches argv');
+    }
+
+    // --- background work survives the next message -----------------------
+    // A turn that backgrounds a command ends, and the session reports `idle`
+    // while the command runs on inside `claude`. Every way of replacing an idle
+    // process used to take that command with it — a mode, model or effort picked
+    // in the composer, the idle sweep, a fifth session — and the resumed process
+    // then said "background tasks didn't finish before the previous session
+    // ended". The pid is what says whether the process survived.
+    {
+        reset();
+        fs.rmSync(logFile + '.ctl', { force: true });
+        const ctl = () => (fs.existsSync(logFile + '.ctl')
+            ? fs.readFileSync(logFile + '.ctl', 'utf8').split('\n').filter(Boolean).map(JSON.parse)
+            : []);
+        const flag = (t, f) => { const i = t.argv.indexOf(f); return i < 0 ? null : t.argv[i + 1]; };
+        const pool = bridge();
+        const notices = [];
+        pool.on('notice', (n) => notices.push(n));
+        const id = randomUUID();
+
+        const r1 = pool.ensure(id, { cwd: root, isNew: true, model: 'opus' });
+        r1.send('BG1500 start');
+        await until(() => r1.lastResultText === 'BG1500 start' && r1.state === 'idle', 8000,
+            'the turn that starts a background task to end');
+        assert.ok(r1.hasBackground);
+        assert.strictEqual(r1.status().background, 1);
+        ok('a task the turn left running is counted while the session is idle');
+
+        assert.strictEqual(pool.ensure(id, { cwd: root, permissionMode: 'acceptEdits' }), r1,
+            'a mode change must not replace a process with background work');
+        assert.strictEqual(r1.permissionMode, 'acceptEdits');
+        await until(() => ctl().some(c => c.mode === 'acceptEdits'), 3000,
+            'the mode to be switched in place');
+        ok('a mode change is made in place instead');
+
+        assert.strictEqual(pool.ensure(id, { cwd: root, model: 'sonnet' }), r1,
+            'nor may a model change');
+        assert.deepStrictEqual(r1.pendingSettings, { model: 'sonnet', effort: null });
+        r1.send('during');
+        await until(() => r1.lastResultText === 'during', 8000, 'the message sent meanwhile');
+        const pid = turns().find(t => t.text === 'BG1500 start').pid;
+        assert.strictEqual(turns().find(t => t.text === 'during').pid, pid,
+            'the message goes to the process that is running the task');
+        assert.strictEqual(pool.ensure(id, { cwd: root, model: 'sonnet' }), r1);
+        assert.strictEqual(notices.filter(n => n.kind === 'settings_deferred').length, 1,
+            'the change is explained once, not on every message after it');
+        ok('a model change waits, and the message goes to the running process');
+
+        r1.lastUsedAt = 0;
+        pool._evictIdle();
+        pool._evictTo(0);
+        assert.strictEqual(pool.get(id), r1);
+        ok('neither eviction takes a process with background work');
+
+        await until(() => pool.get(id) !== r1, 5000, 'the held model change once the task ends');
+        const r2 = pool.get(id);
+        assert.strictEqual(r2.model, 'sonnet');
+        assert.strictEqual(r2.permissionMode, 'acceptEdits');
+        r2.send('after');
+        await until(() => r2.lastResultText === 'after', 8000, 'the turn after the change');
+        const t = turns().find(x => x.text === 'after');
+        assert.strictEqual(flag(t, '--model'), 'sonnet');
+        assert.strictEqual(flag(t, '--permission-mode'), 'acceptEdits');
+        assert.notStrictEqual(t.pid, pid);
+        ok('and the change is applied once the task finishes');
+
+        assert.strictEqual(pool.ensure(id, { cwd: root, model: 'opus' }) === r2, false,
+            'with nothing in the background a change replaces the process as before');
+        ok('with no background work a change still restarts');
+    }
+
+    // The count crosses a bridge restart: an adopted process that was running a
+    // task is as protected as it was before, and learns of the task finishing.
+    {
+        reset();
+        const id = randomUUID();
+        const b1 = bridge();
+        const r1 = b1.ensure(id, { cwd: root, isNew: true });
+        r1.send('BG1200 across');
+        await until(() => r1.lastResultText === 'BG1200 across' && r1.hasBackground, 5000,
+            'the background task to start');
+        assert.strictEqual(b1.shutdown().held, 1);
+
+        const b2 = bridge();
+        assert.strictEqual(await b2.adoptHeld(), 1);
+        const r2 = b2.get(id);
+        assert.ok(r2.hasBackground, 'the adopted process still has its task');
+        assert.strictEqual(b2.ensure(id, { cwd: root, effort: 'low' }), r2,
+            'so a settings change after the restart does not replace it either');
+        await until(() => b2.get(id) !== r2, 5000, 'the task to finish and the change to apply');
+        assert.strictEqual(b2.get(id).effort, 'low');
+        ok('background work is still counted after a restart adopts the process');
     }
 })().then(() => finish(0)).catch((err) => {
     console.error(err && err.stack || err);
