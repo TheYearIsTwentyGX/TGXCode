@@ -310,6 +310,11 @@ class Runner extends EventEmitter {
         // Branch off a copy instead of continuing in place. Needed when the
         // original is already live somewhere else.
         this.fork = !!opts.fork;
+        // And where to cut that copy: `{fromUuid, parent, guard}`, from the send
+        // route, when the fork is a branch from one of your earlier turns rather
+        // than a copy of the whole conversation. Meaningless without `fork`, and
+        // spent with it — see the reset below the spawn.
+        this.branch = this.fork && opts.branch ? opts.branch : null;
         this.errorKind = null;
         this.retry = null;             // set while the CLI is retrying the API
 
@@ -481,6 +486,22 @@ class Runner extends EventEmitter {
         if (this.isNew) args.push('--session-id', this.sessionId);
         else args.push('--resume', this.sessionId);
         if (this.fork) args.push('--fork-session');
+        // Keep history up to and including `parent` — the entry the edited turn
+        // follows — and drop the rest from the copy. The original is not touched:
+        // the cut only applies to what this process loads, and `--fork-session`
+        // writes it under a new id. Both flags are print-mode only, which the
+        // `-p` above is, and both need `--resume`, which a fork always has.
+        //
+        // `--resume-drops-turn` is the CLI's own check that the cut discards the
+        // turn you meant and nothing else — a queued message it absorbed, a task
+        // notification. It refuses any cut that drops *another turn of yours*,
+        // though, so it can only be asked for when the edited turn is the last
+        // one (`guard`). Branching from turn 4 of 12 drops turns 5–12 on purpose,
+        // and the banner that offered it said so.
+        if (this.branch) {
+            args.push(`--resume-session-at=${this.branch.parent}`);
+            if (this.branch.guard) args.push(`--resume-drops-turn=${this.branch.fromUuid}`);
+        }
         if (this.model) args.push('--model', this.model);
         if (this.effort) args.push('--effort', this.effort);
 
@@ -526,6 +547,10 @@ class Runner extends EventEmitter {
         //   copy this runner had already adopted — and quietly leave the user's
         //   message in a third transcript they were not looking at.
         //
+        //   `branch` goes with `fork`, for the same reason and one more: re-passing
+        //   `--resume-session-at` on the copy would cut *it* back as well, losing
+        //   the turn this start was made to send.
+        //
         // Clearing them here rather than on `system/init`: the id exists from the
         // moment the CLI opens the file, so a restart has to resume whether or not
         // the handshake got as far as telling us so. The one exit that restarts
@@ -533,10 +558,12 @@ class Runner extends EventEmitter {
         // `close`, which is reached before the CLI has done anything at all.
         const wasNew = this.isNew;
         const wasFork = this.fork;
+        const wasBranch = this.branch;
         this.isNew = false;
         this.fork = false;
+        this.branch = null;
 
-        this._bind(this.proc, { wasNew, wasFork });
+        this._bind(this.proc, { wasNew, wasFork, wasBranch });
         // Before anything is written, so a bridge that dies before the first line
         // still leaves the host a record of whose process this is.
         this._saveNote();
@@ -560,7 +587,7 @@ class Runner extends EventEmitter {
      * dies exactly the way a started one does. `wasNew`/`wasFork` are what the
      * permission-prompt retry puts back; an adopted process was never new here.
      */
-    _bind(proc, { wasNew = false, wasFork = false } = {}) {
+    _bind(proc, { wasNew = false, wasFork = false, wasBranch = null } = {}) {
         proc.stdout.setEncoding('utf8');
         proc.stdout.on('data', (chunk) => this._onStdout(chunk));
         proc.stderr.setEncoding('utf8');
@@ -661,6 +688,7 @@ class Runner extends EventEmitter {
                     this.queue = flight.concat(this.queue);
                     this.isNew = wasNew;
                     this.fork = wasFork;
+                    this.branch = wasBranch;
                     this._stderr = '';
                     this.emit('notice', {
                         level: 'warn', kind: 'no_permission_prompt',
@@ -2132,6 +2160,18 @@ function classifyError(stderr, code) {
                 + 'continued here. Branch off a copy to keep going.',
         };
     }
+    // A branch from an earlier turn that the CLI would not cut: the entry it was
+    // told to keep is not in the transcript, or the drop guard found something
+    // other than the edited turn in the part that would be discarded. Before the
+    // `missing` test below, which "No message found" would otherwise not reach but
+    // a later rewording easily could.
+    if (/Resume rejected by --resume-drops-turn|No message found with message\.uuid/i.test(text)) {
+        return {
+            kind: 'branch-refused',
+            message: 'Claude Code would not branch from that turn: '
+                + text.split('\n').filter(Boolean)[0],
+        };
+    }
     if (/ENOENT|command not found|not found/i.test(text) && /claude/i.test(text)) {
         return {
             kind: 'no-claude',
@@ -2217,7 +2257,9 @@ class RunnerPool extends EventEmitter {
     }
 
     /** Existing runner for a session, or a new one bound to `cwd`. */
-    ensure(sessionId, { cwd, model, effort, permissionMode, isNew = false, fork = false } = {}) {
+    ensure(sessionId, {
+        cwd, model, effort, permissionMode, isNew = false, fork = false, branch = null,
+    } = {}) {
         let r = this.runners.get(sessionId);
         let carried = [];
         // Absent and null are different answers for effort, unlike model: absent
@@ -2267,7 +2309,13 @@ class RunnerPool extends EventEmitter {
                 return r;
             }
             if (r.state !== 'busy'
-                && (settings || mode || fork !== r.fork || r.state === 'error')) {
+                && (settings || mode || fork !== r.fork || r.state === 'error'
+                    // A branch is a fork with a cut in it; a different cut, or
+                    // one where the live process has none, is as much a new
+                    // process as a fork is. `r.branch` is null once started, so
+                    // asking for a branch always replaces it.
+                    || (branch ? branch.fromUuid : null)
+                        !== (r.branch ? r.branch.fromUuid : null))) {
                 // A model, effort or mode change replaces the process. Messages still
                 // waiting belong to the user, not to the process, so they move
                 // across rather than disappearing.
@@ -2288,7 +2336,7 @@ class RunnerPool extends EventEmitter {
         // Delegated rather than handed over, so a runner asks the pool afresh
         // every time: settings change under a live session, and the answer
         // should not be the one that was true when it started.
-        r = this._make({ sessionId, cwd, model, effort, permissionMode, isNew, fork });
+        r = this._make({ sessionId, cwd, model, effort, permissionMode, isNew, fork, branch });
         if (carried.length) {
             r.queue.push(...carried);
             r._queueChanged();

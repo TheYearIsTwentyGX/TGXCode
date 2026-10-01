@@ -947,10 +947,39 @@ function buildEvents(entries, ctx = {}) {
             files: attached ? attached.files : [],
             command: parseCommand(body),
             origin: e.origin && e.origin.kind,
+            // The chain entry this turn follows, which is what branching from it
+            // keeps history up to: `--resume-session-at` truncates *after* the
+            // uuid it is given, so the edited turn's own id would keep the turn
+            // it is meant to replace. Null on the first turn of a conversation,
+            // which has nothing before it to keep.
+            parent: e.parentUuid || null,
         });
     }
 
     return { events, model: lastAssistantModel };
+}
+
+/**
+ * Where a branch from one of your turns would cut the conversation.
+ *
+ * The send route calls this rather than trusting a parent the client read off an
+ * event: the pair (the turn, and what comes before it) is one fact, and letting a
+ * client supply both halves is letting it get them out of step. Read through
+ * `buildEvents` so "a turn" here is exactly a row the transcript draws as yours.
+ *
+ * @returns {null | {parent: string|null, last: boolean}} null when no turn of
+ *   yours has that id. `last` is whether any turn of yours comes after it —
+ *   the runner uses it to decide whether the CLI's drop guard can be asked for,
+ *   because that guard refuses a cut that discards any other turn at all.
+ */
+function branchPoint(file, uuid) {
+    let buf;
+    try { buf = fs.readFileSync(file); } catch { return null; }
+    const { events } = buildEvents(parseLines(buf).entries);
+    const turns = events.filter(ev => ev.kind === 'user');
+    const i = turns.findIndex(ev => ev.id === uuid);
+    if (i < 0) return null;
+    return { parent: turns[i].parent, last: i === turns.length - 1 };
 }
 
 function imageRef(b) {
@@ -1786,7 +1815,7 @@ function todoProgress(file) {
 }
 
 module.exports = {
-    parseLines, scanMeta, buildEvents, readSubagentIndex, readSubagentTranscript,
+    parseLines, scanMeta, buildEvents, branchPoint, readSubagentIndex, readSubagentTranscript,
     lastActivity, recentActivity, todoProgress, describeTool, stripEnvelope, firstLine,
     commandText,
     // The three parts of the TodoWrite format: what shape it arrived in

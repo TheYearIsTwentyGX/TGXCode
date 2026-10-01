@@ -31,13 +31,17 @@ const { STATUSES: SUGGESTION_STATUSES } = require('../suggestions');
 const tasks = require('../tasks');
 // Written here, read back by transcript.js. One format, and the two halves of it
 // live in one file so they cannot drift apart.
-const { handoffEnvelope } = require('../transcript');
+const { branchPoint, handoffEnvelope } = require('../transcript');
 const { boundaries } = require('../turn-index');
 const {
     attachmentPath, attachmentRefused, receiveAttachment, resolveAttachments,
 } = require('./files');
 const { laterFields, laterOut, laterPayload } = require('./later');
 const { archiveStoppedRuns } = require('./session-workspace');
+
+// What a transcript entry's id looks like. `fromUuid` is spliced into an argv as
+// `--resume-session-at=…`'s neighbour, so nothing else gets that far.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Handed over by server.js — see the note above ROUTES there.
 let flags = null;
@@ -289,9 +293,50 @@ async function handle(req, res, url, pathname, seg, who) {
             const sendRefusal = modeRefusal(sendMode, who);
             if (sendRefusal) return send(res, 403, { error: sendRefusal, remote: true });
 
+            // Branching from one of your earlier turns. Only ever with `fork`: a
+            // cut applied in place would rewrite the history of the transcript the
+            // user is looking at, which is exactly what forking exists to avoid.
+            // Shape-checked here, before the lookup, for the same reason as the
+            // mode above — and because it ends up on an argv.
+            const fromUuid = body.fromUuid == null ? null : body.fromUuid;
+            if (fromUuid !== null) {
+                if (!body.fork) {
+                    return send(res, 400, { error: 'fromUuid is only accepted with fork: true' });
+                }
+                if (typeof fromUuid !== 'string' || !UUID_RE.test(fromUuid)) {
+                    return send(res, 400, { error: 'fromUuid must be a uuid' });
+                }
+            }
+
             const summary = index.summary(sessionId);
             if (!summary) return send(res, 404, { error: 'session not found' });
             const cwd = sessionCwd(summary);
+
+            // Where the copy is cut, worked out here rather than taken from the
+            // client — see branchPoint. Turn 1 has nothing before it to keep, so a
+            // branch from it is a new session, and the web starts one; the bridge
+            // says so rather than guessing that that is what was meant.
+            let branch = null;
+            if (fromUuid) {
+                const rec = index.get(sessionId);
+                const at = rec && rec.file ? branchPoint(rec.file, fromUuid) : null;
+                if (!at) {
+                    return send(res, 400, { error: 'no turn of yours with that id in this session' });
+                }
+                if (!at.parent) {
+                    return send(res, 400, {
+                        error: 'that is the first turn, so there is nothing to keep — start a new session instead',
+                    });
+                }
+                // A turn in progress in this bridge would be retired by the fork
+                // below — or, worse, the edited text would queue behind it and be
+                // sent to the original as an ordinary message.
+                const live = pool.get(sessionId);
+                if (live && (live.state === 'busy' || live.state === 'starting')) {
+                    return send(res, 409, { error: 'this session is working; stop it or wait before branching' });
+                }
+                branch = { fromUuid, parent: at.parent, guard: at.last };
+            }
 
             // The client is telling us paths it was told a moment ago; this is what
             // makes that safe. Anything that is not in this session's own attachments
@@ -313,6 +358,7 @@ async function handle(req, res, url, pathname, seg, who) {
                 effort: body.effort,
                 permissionMode: sendMode,
                 fork: !!body.fork,
+                branch,
             });
             const entry = r.send(text, files);
             // Which of the two happened matters to the caller: a message that is

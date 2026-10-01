@@ -602,6 +602,13 @@
     color: var(--text-2);
 }
 .lock-text { flex: 1; min-width: 0; }
+/* Edit and branch: the lock's shape, because it is the same kind of thing — a
+   fact about where Send is going, directly above the box — in the accent rather
+   than the warning colour, since nothing here is about to go wrong. */
+.lock.branch {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 32%, transparent);
+}
+.lock.branch .lock-btn { padding: 6px 9px; }
 
 .lock-btn {
     flex: none;

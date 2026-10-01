@@ -170,6 +170,13 @@ export const state = {
     // builds the turn rail from there, and a tick whose node is about to be
     // thrown away is worse than a tick that arrives one poll late.
     pendingSend: null,
+    // An earlier turn of yours the next send branches from, set by Edit and branch
+    // (web/composer/branch.js): {sessionId, uuid, turn, total, first}. Cleared by
+    // the fork landing, by ✕ on the banner, and by opening another session — and
+    // deliberately *not* by the POST succeeding, because the CLI can still refuse
+    // the cut after that, and a Retry must branch again rather than quietly send
+    // the edited text to the original.
+    branchFrom: null,
     pendingDelete: null,    // the session the confirm dialog is asking about
     busyTimer: null,        // ticks the elapsed-time readout while a turn runs
     queue: [],              // the current session's waiting messages, from the bridge

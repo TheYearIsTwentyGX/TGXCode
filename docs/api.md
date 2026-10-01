@@ -556,7 +556,7 @@ strings by a client that then rendered `[object Object]`:
 
 | kind | Carries |
 |---|---|
-| `user` | `text` string · `images[]` `{mediaType, dataUri}` · `files[]` `{relPath, name, size}` · **`command` object or null** — `{name, args}` · `origin` string or absent — Claude Code's own `origin.kind`, passed through: `"human"`, `"peer"`, or an agent type. Not a closed set the bridge controls, so treat anything other than `"human"` as "not the person" rather than switching on it. A message **folded into a running turn** is a `user` event too, even though on disk it is a `queued_command` attachment with no `user` entry. It sits between the tool calls where the turn read it, its `ts` is when it was *sent* (so it can be earlier than the tool block before it), and its `origin` is `"human"` or absent |
+| `user` | `text` string · `images[]` `{mediaType, dataUri}` · `files[]` `{relPath, name, size}` · **`command` object or null** — `{name, args}` · **`parent` string or null** — the `parentUuid` of the turn's entry, i.e. the chain entry it follows; `null` on the first turn of a conversation, which is the one turn `fromUuid` cannot branch from (see `POST /api/sessions/:id/send`). Absent from a bridge older than branching, so treat absent as unknown rather than as `null` · `origin` string or absent — Claude Code's own `origin.kind`, passed through: `"human"`, `"peer"`, or an agent type. Not a closed set the bridge controls, so treat anything other than `"human"` as "not the person" rather than switching on it. A message **folded into a running turn** is a `user` event too, even though on disk it is a `queued_command` attachment with no `user` entry. It sits between the tool calls where the turn read it, its `ts` is when it was *sent* (so it can be earlier than the tool block before it), and its `origin` is `"human"` or absent |
 | `assistant` | `text` string (markdown) · `model` string or null |
 | `thinking` | `text` string |
 | `tool` | `name` string · `input` object · `status` — see below · `result` object or null · **`agent` object or null** · `persistedPath` string or null · `durationMs` number or null · `resultTs` ISO string once resolved |
@@ -2866,7 +2866,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `quota` | **the whole `GET /api/quota` payload**, so there is nothing to refetch. Ungated, like `drafts-changed`. Fires only when a reading actually moved — the CLI sends an identical `rate_limit_event` on every turn and those are dropped rather than pushed. Note it carries **no `sessionId`**: quota is account-wide, and which session happened to observe it says nothing. A window that has been near a limit for an hour will therefore push nothing at all, which is why `usedPercentAt` matters more than the arrival time of this event |
 | `standing-changed` | `{sessionId, standing}` — `standing` is `{text, source, at}` exactly as on the session summary (`text` a string, `source` `"model"` or `"extract"`, `at` epoch ms), or null. Patch that row's `standing`; there is nothing to refetch. Fires about fifteen seconds after a `turn-complete`, and only when the line was actually rewritten — a turn whose reply was already summarised sends nothing |
 | `turn-complete` | `{sessionId, isError, detail, retries, costUsd, durationMs, numTurns, stopReason}` — the runner's `lastResult` with the session id on it. `detail` is null unless `isError` |
-| `send-failed` | `{sessionId, kind, message, unsent: [text]}` — a send that never became a turn; hand the text back to the user. `unsent` is an array of **strings**, in send order, and may be empty — the event still means the send failed, and `message` is then the whole of it. `kind` is one of `busy-elsewhere` (the session is running somewhere else; offer to branch), `no-claude`, `missing`, `unknown`, `exited` (the process ended without answering) or `retired` (the bridge shut the process down with messages still queued). Treat an unrecognised kind as `unknown`. Attachments are **not** carried: a message that had files comes back as its text alone |
+| `send-failed` | `{sessionId, kind, message, unsent: [text]}` — a send that never became a turn; hand the text back to the user. `unsent` is an array of **strings**, in send order, and may be empty — the event still means the send failed, and `message` is then the whole of it. `kind` is one of `busy-elsewhere` (the session is running somewhere else; offer to branch), `branch-refused` (Claude Code would not make the cut a `fromUuid` send asked for — see `POST /api/sessions/:id/send`), `no-claude`, `missing`, `unknown`, `exited` (the process ended without answering) or `retired` (the bridge shut the process down with messages still queued). Treat an unrecognised kind as `unknown`. Attachments are **not** carried: a message that had files comes back as its text alone |
 | `session-forked` | `{from, to}` — follow the new id |
 | `slash-commands` | `{cwd, at}` — that directory's slash commands changed; drop what you cached |
 | `run-changed` | `{runId, workspace, commandId, label, state, port, http, exit, stopped, at}` — a project command moved; state only, never output. `http` (bool) as in the run record; it can turn `true` in an event of its own, any time after the one that said `listening`, seconds or minutes later. `web` (bool) as in the run record |
@@ -3031,7 +3031,7 @@ or any `worktree`, from a remote caller; `409` for a `worktree` that already exi
 
 ### `POST /api/sessions/:id/send`
 
-`{text, attachments?, model?, effort?, permissionMode?, fork?}` →
+`{text, attachments?, model?, effort?, permissionMode?, fork?, fromUuid?}` →
 `{ok, id, cwd, fork, status, queued}`, where `id` is the id of the message and
 `status` is a whole runner status object, not a word.
 
@@ -3069,6 +3069,43 @@ What the process receives is the text plus a trailing list of the paths, and an 
 image block for each attachment that really is a PNG, JPEG, GIF or WebP. The list is
 parsed back off the message before the transcript renders it (`files[]` on the `user`
 event above), so the paths are not shown twice.
+
+#### Branching from an earlier turn: `fromUuid`
+
+`fork: true` alone sends the message to a copy of the **whole** conversation, under a
+new id. `fromUuid?: string` — the `id` of one of your own `user` events in this
+session — cuts that copy back first: the copy keeps everything *before* that turn and
+none of it or anything after, and `text` takes the turn's place. This is what the web's
+**Edit and branch** sends. **The original transcript is never modified**; the cut is
+applied only to what the copy loads (`claude --resume … --fork-session
+--resume-session-at=<the turn's parent>`).
+
+- **Only with `fork: true`.** `fromUuid` without it is `400 {error: "fromUuid is only
+  accepted with fork: true"}` — a cut applied in place would rewrite the history of the
+  transcript being looked at. A value that is not uuid-shaped is `400 {error: "fromUuid
+  must be a uuid"}`. Both are checked before the session is looked up.
+- **Send the turn, not its parent.** The bridge reads the transcript and works out
+  where to cut from the turn's own entry (the `parent` on the `user` event is the same
+  fact, exposed so a client can tell the first turn apart); it does not accept a parent
+  from the client.
+- `400 {error: "no turn of yours with that id in this session"}` when no `user` event of
+  the session has that id — a subagent's prompt, an assistant message, a typo.
+- **The first turn cannot be branched from.** Its `parent` is `null`, there is nothing
+  before it to keep, and the send is `400` saying so. A client that wants "edit my first
+  message" should start a new session in the same `cwd` with the edited text instead —
+  which is what the web does.
+- `409 {error: "this session is working; …"}` while this bridge has a turn running on the
+  session. Branching would retire it, or, worse, queue the edited text behind it as an
+  ordinary message to the original.
+- **Still eventually a `send-failed`.** A `200` means the copy is being started, not that
+  the CLI accepted the cut. It can still refuse — the entry to keep is not in the
+  transcript, or, when the edited turn is the **last** one, its guard found something
+  other than that turn in what would be discarded (a queued message it had absorbed, a
+  task notification). That arrives as `send-failed` with `kind: "branch-refused"` and the
+  text in `unsent`. Retrying the same branch fails the same way; send without
+  `fromUuid` instead.
+- Success is the ordinary fork: `session-forked {from, to}` follows, and `to` is the
+  copy. A copy of a session labelled `test` is labelled `test` as well.
 
 ### `POST /api/drafts`
 

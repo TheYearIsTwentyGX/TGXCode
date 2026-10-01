@@ -46,9 +46,22 @@ const readline = require('readline');
 const fs = require('fs');
 const argv = process.argv.slice(2);
 const at = (f) => { const i = argv.indexOf(f); return i < 0 ? null : argv[i + 1]; };
-const sessionId = at('--session-id') || at('--resume') || 'stub';
+// A fork is written under a new id, and \`system/init\` is where the runner learns
+// it — so the stub mints one, the way the CLI does, or \`forked\` never fires.
+const sessionId = argv.includes('--fork-session')
+    ? require('crypto').randomUUID()
+    : (at('--session-id') || at('--resume') || 'stub');
 const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
 const LOG = process.env.FAKE_CLAUDE_LOG;
+
+// A cut at an entry that is not there, refused the way 2.1.284 refuses it: a line on
+// stderr and exit 1, before any init.
+const cutAt = argv.find(a => a.startsWith('--resume-session-at='));
+if (cutAt && cutAt.endsWith('=00000000-0000-4000-8000-000000000000')) {
+    process.stderr.write('No message found with message.uuid of: '
+        + cutAt.split('=')[1] + '\\n');
+    process.exit(1);
+}
 
 out({ type: 'system', subtype: 'init', session_id: sessionId, cwd: process.cwd(),
       model: 'stub', tools: [], slash_commands: [] });
@@ -665,6 +678,96 @@ function runner() {
         const r5 = new Runner({ sessionId: randomUUID(), cwd: root, isNew: true, effort: '--fork-session' });
         assert.strictEqual(r5.effort, null, 'nothing outside the list reaches argv');
         ok('an unknown effort never reaches argv');
+    }
+
+    // --- a branch from an earlier turn is cut once, on the copy -----------
+    // Branching is a fork with `--resume-session-at` on it. Two ways to get it
+    // wrong, and neither announces itself: forgetting the cut makes a copy of the
+    // whole conversation, which looks exactly like a branch until you scroll up;
+    // and re-passing it on the copy's next start would truncate the copy back to
+    // before the turn you just sent it, which looks like the reply being lost.
+    {
+        reset();
+        const pool = bridge();
+        const original = randomUUID();
+        const fromUuid = randomUUID();
+        const parent = randomUUID();
+        const r = pool.ensure(original, {
+            cwd: root, fork: true, branch: { fromUuid, parent, guard: true },
+        });
+        const forked = once(pool, 'forked');
+        r.send('Z');
+        const { from, to } = await forked;
+        assert.strictEqual(from, original);
+        assert.notStrictEqual(to, original, 'a fork is written under a new id');
+        await until(() => r.lastResultText === 'Z', 8000, 'the branched turn');
+        const t = turns().find(x => x.text === 'Z');
+        assert.ok(t.argv.includes('--fork-session'));
+        assert.ok(t.argv.includes(`--resume-session-at=${parent}`),
+            'history is kept up to the edited turn\'s parent');
+        assert.ok(t.argv.includes(`--resume-drops-turn=${fromUuid}`),
+            'the guard names the turn being replaced');
+        assert.strictEqual(t.argv[t.argv.indexOf('--resume') + 1], original);
+        ok('a branch passes the cut and the guard alongside --fork-session');
+
+        assert.strictEqual(r.inFlight.length, 0, 'the branched turn finished');
+        assert.strictEqual(pool.get(to), r, 'a later send reaches the copy');
+        assert.strictEqual(pool.get(original), null, 'and not the original');
+        ok('the copy is re-keyed and nothing is left in flight');
+
+        // A guard is only asked for when the edited turn is the last one — the
+        // CLI refuses any cut that drops another turn of yours.
+        const r2 = pool.ensure(randomUUID(), {
+            cwd: root, fork: true, branch: { fromUuid: randomUUID(), parent, guard: false },
+        });
+        r2.send('Y');
+        await until(() => r2.lastResultText === 'Y', 8000, 'the unguarded branch');
+        const t2 = turns().find(x => x.text === 'Y');
+        assert.ok(t2.argv.includes(`--resume-session-at=${parent}`));
+        assert.ok(!t2.argv.some(a => a.startsWith('--resume-drops-turn')),
+            'no guard on a cut that drops later turns on purpose');
+        ok('a branch from a middle turn is cut without the guard');
+
+        // The next start of the copy — here a model change, which replaces the
+        // process — resumes the copy as it is.
+        const again = pool.ensure(to, { cwd: root, model: 'haiku' });
+        assert.notStrictEqual(again, r, 'a model change replaces the process');
+        again.send('after');
+        await until(() => again.lastResultText === 'after', 8000, 'the next turn on the copy');
+        const t3 = turns().find(x => x.text === 'after');
+        assert.strictEqual(t3.argv[t3.argv.indexOf('--resume') + 1], to);
+        assert.ok(!t3.argv.includes('--fork-session'), 'the copy is not forked again');
+        assert.ok(!t3.argv.some(a => a.startsWith('--resume-session-at')),
+            'nor cut again — that would drop the turn just sent to it');
+        assert.strictEqual(again.inFlight.length, 0);
+        ok('the copy\'s next start neither forks nor cuts again');
+
+        // A branch on a runner that already exists replaces it, even when fork
+        // alone would not have: the cut is part of what the process was started with.
+        const plain = pool.ensure(to, { cwd: root, model: 'haiku' });
+        assert.strictEqual(plain, again);
+        const cut = pool.ensure(to, {
+            cwd: root, model: 'haiku', fork: true, branch: { fromUuid, parent, guard: false },
+        });
+        assert.notStrictEqual(cut, again, 'a branch is a fresh process');
+        assert.ok(cut.branch && cut.branch.fromUuid === fromUuid);
+        ok('asking for a branch replaces a live runner');
+        made.push(cut);
+
+        // And a cut the CLI refuses has to reach the user as a failed send, with
+        // their text handed back — not as a process that quietly went away.
+        const bad = pool.ensure(randomUUID(), {
+            cwd: root, fork: true,
+            branch: { fromUuid, parent: '00000000-0000-4000-8000-000000000000', guard: false },
+        });
+        const failed = once(pool, 'failed');
+        bad.send('edited');
+        const f = await failed;
+        assert.strictEqual(f.kind, 'branch-refused');
+        assert.match(f.message, /No message found/);
+        assert.deepStrictEqual(f.unsent, ['edited'], 'the edited text comes back');
+        assert.strictEqual(bad.inFlight.length, 0);
+        ok('a refused cut is a send-failed with the text handed back');
     }
 
     // --- background work survives the next message -----------------------

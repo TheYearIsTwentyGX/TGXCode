@@ -14,6 +14,15 @@ export const ICON = {
     pencil: '<path d="M4.5 19.5 5.3 15.6 15.6 5.3a1.9 1.9 0 0 1 2.7 0l.4.4a1.9 1.9 0 0 1 0 2.7'
         + 'L8.4 18.7l-3.9.8Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>'
         + '<path d="m13.8 7.1 3.1 3.1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+    // Edit and branch: one line splitting in two. The `pr` glyph's two dots and an
+    // elbow already mean a pull request everywhere in this app, so this one is a
+    // fork drawn from the stem up rather than another variation on that.
+    branch: '<circle cx="7" cy="18.5" r="2.3" stroke="currentColor" stroke-width="1.8"/>'
+        + '<circle cx="7" cy="5.5" r="2.3" stroke="currentColor" stroke-width="1.8"/>'
+        + '<circle cx="17" cy="5.5" r="2.3" stroke="currentColor" stroke-width="1.8"/>'
+        + '<path d="M7 7.8v8.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>'
+        + '<path d="M17 7.8v1.4a4 4 0 0 1-4 4H11a4 4 0 0 0-4 4" stroke="currentColor" '
+        + 'stroke-width="1.8" stroke-linecap="round"/>',
     archive: '<path d="M3.5 6.2h17V9h-17V6.2Z" stroke="currentColor" stroke-width="1.8" '
         + 'stroke-linejoin="round"/><path d="M5 9v9.3h14V9" stroke="currentColor" '
         + 'stroke-width="1.8" stroke-linejoin="round"/><path d="M10 12.5h4" stroke="currentColor" '
