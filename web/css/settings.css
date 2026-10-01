@@ -1399,6 +1399,36 @@
 .snip-chip-x { color: var(--text-4); background: none; font-size: 11px; padding: 0 3px; }
 .snip-chip-x:hover { color: var(--red); }
 .snip-project-add { display: flex; gap: 6px; }
+
+/* Save as snippet's offers: the specifics in the message that could be asked for. */
+.snip-suggest { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+.snip-suggest[hidden] { display: none; }
+.snip-suggest .note { margin: 0; }
+.snip-suggest-chip { cursor: pointer; padding: 3px 10px; }
+.snip-suggest-chip:hover { background: var(--s4); color: var(--text); }
+.snip-suggest-chip code { font: inherit; }
+
+/* Send to another session — web/transcript/send-to.js. */
+.send-to-preview {
+    background: var(--s1);
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-sm);
+    padding: 8px 10px;
+    margin-bottom: 12px;
+    font: 400 12.5px/1.45 var(--sans);
+    color: var(--text-3);
+    white-space: pre-wrap;
+    max-height: 7.5em;
+    overflow: hidden;
+}
+#send-to-filter { width: 100%; }
+.send-to-group { margin-top: 10px; display: flex; flex-direction: column; gap: 1px; }
+.send-to-head { font: 600 11px/1.4 var(--sans); text-transform: uppercase; letter-spacing: .04em;
+    color: var(--text-4); padding: 0 12px 4px; }
+.send-to-session .send-to-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.send-to-session .tag { color: var(--amber, var(--text-4)); white-space: nowrap; }
+.send-to-session[disabled] { opacity: .55; cursor: default; }
+.send-to-group > .note { padding: 4px 12px; margin: 0; }
 .snip-project-add input {
     flex: 1;
     background: var(--s1);

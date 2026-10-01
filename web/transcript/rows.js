@@ -18,9 +18,11 @@ import { attachExt, openAttachment } from '../composer/attachments.js';
 import { editAndBranch, editAndResend } from '../composer/branch.js';
 import { insertMention, loadPeers, peerByName } from '../composer/mentions.js';
 import { closeContextMenu, openContextMenu } from './context-menu.js';
+import { saveAsSnippet } from '../snippets/index.js';
 import { openSession } from './conversation.js';
 import { markFindDirty } from './find.js';
 import { openAgent } from './subagents.js';
+import { openSendTo } from './send-to.js';
 import { renderTool } from './tools.js';
 import { turnText } from './turn-rail.js';
 
@@ -67,28 +69,46 @@ function evHead(ev, label, ...more) {
 }
 
 // ── doing a turn over ────────────────────────────────────────────────────
-// Your own turns carry two more buttons beside Copy, and the same two in a
-// right-click menu: Edit and resend, and Edit and branch. What each does is in
-// web/composer/branch.js; this is only where they are drawn.
+// Your own turns carry more buttons beside Copy, and the same ones in a
+// right-click menu: Edit and resend, and Edit and branch (web/composer/branch.js);
+// then Save as snippet (web/snippets/) and Send to another session
+// (./send-to.js), which reuse the text somewhere else rather than here. This is
+// only where they are drawn.
 //
 // Only in the session's own log. A subagent's prompt is a user entry in *its*
 // transcript, and branching this session from an id that is not in it is a 400
 // at best — so the subagent pane and the inline peek render without them.
 
-/** The actions a turn offers, as menu items. Shared by the buttons and the menu. */
+/**
+ * The actions a turn offers, as menu items. Shared by the buttons and the menu.
+ * `sep` marks where the menu draws a line: the first pair does this turn over,
+ * the second takes its text elsewhere. The reuse pair needs text, so an
+ * image-only turn goes without it.
+ */
 function turnActions(ev) {
-    return [
-        { label: 'Edit and resend', icon: 'pencil', onClick: () => editAndResend(ev) },
-        { label: 'Edit and branch', icon: 'branch', onClick: () => editAndBranch(ev) },
+    const acts = [
+        { label: 'Edit and resend', icon: 'pencil', onClick: () => editAndResend(ev),
+            title: 'Edit and resend — put this in the box to send again' },
+        { label: 'Edit and branch', icon: 'branch', onClick: () => editAndBranch(ev),
+            title: 'Edit and branch — send the edit to a copy without this turn or any after it' },
     ];
+    const md = messageMarkdown(ev);
+    if (md) {
+        acts.push(
+            { sep: true },
+            { label: 'Save as snippet', icon: 'snippets', onClick: () => saveAsSnippet(md),
+                title: 'Save as snippet — open the snippet editor with this message in it' },
+            { label: 'Send to another session', icon: 'forward', onClick: () => openSendTo(md),
+                title: 'Send to another session — queue it in one, or start a new one with it' },
+        );
+    }
+    return acts;
 }
 
 function turnButtons(ev) {
-    return turnActions(ev).map(a => el('button', {
+    return turnActions(ev).filter(a => !a.sep).map(a => el('button', {
         class: 'ev-copy ev-act', type: 'button',
-        title: a.label === 'Edit and branch'
-            ? 'Edit and branch — send the edit to a copy without this turn or any after it'
-            : 'Edit and resend — put this in the box to send again',
+        title: a.title,
         'aria-label': a.label,
         onclick: a.onClick,
     }, icon(a.icon, 14)));
@@ -112,7 +132,7 @@ function onTurnMenu(e, ev) {
     }
     e.preventDefault();
     const md = messageMarkdown(ev);
-    const items = turnActions(ev).map(({ label, onClick }) => ({ label, onClick }));
+    const items = turnActions(ev).map(({ sep, label, onClick }) => (sep ? { sep } : { label, onClick }));
     if (md) {
         items.push({ sep: true });
         items.push({
