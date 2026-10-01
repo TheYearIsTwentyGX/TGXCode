@@ -383,6 +383,7 @@ Two rules worth knowing before you send a patch:
 | `web/transcript/checklist.js` | The session's own task list, the column left of the transcript |
 | `web/transcript/layout.js` | The width the log lays itself out at, the composer's insets, and sliding a side column in and out |
 | `web/transcript/context-menu.js` | The right-click menu, and the file menu on a changed file |
+| `web/transcript/send-to.js` | Send to another session — a message you sent, queued into another session by the composer's route or handed to Start-a-session as a new one's prompt |
 | `web/transcript/earlier.js` | Opening a long conversation from its end, and loading earlier stretches on the way up |
 | `web/transcript/turn-rail.js` | The turn rail, and revealing and flashing a row in the log |
 | `web/transcript/find.js` | Ctrl+F over the transcript and its subagents |

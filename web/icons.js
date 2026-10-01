@@ -23,6 +23,10 @@ export const ICON = {
         + '<path d="M7 7.8v8.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>'
         + '<path d="M17 7.8v1.4a4 4 0 0 1-4 4H11a4 4 0 0 0-4 4" stroke="currentColor" '
         + 'stroke-width="1.8" stroke-linecap="round"/>',
+    // Send to another session: a message's arrow leaving to the right, curved so it
+    // reads as passing on rather than as the composer's Send.
+    forward: '<path d="M20 10.5 14.5 5v3.2C9 8.6 5 11.5 4 18.5c2.2-3.3 5.4-4.9 10.5-5v3.4'
+        + 'L20 10.5Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>',
     archive: '<path d="M3.5 6.2h17V9h-17V6.2Z" stroke="currentColor" stroke-width="1.8" '
         + 'stroke-linejoin="round"/><path d="M5 9v9.3h14V9" stroke="currentColor" '
         + 'stroke-width="1.8" stroke-linejoin="round"/><path d="M10 12.5h4" stroke="currentColor" '

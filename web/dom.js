@@ -14,7 +14,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'btn-send', 'btn-attach', 'attach', 'attach-input', 'composer',
     'pins', 'btn-snippets', 'snip-menu', 'new-btn-snippets', 'new-snip-menu',
     'snip-fill-scrim', 'snip-fill-title', 'snip-fill-form', 'snip-fill-go',
-    'snip-edit-scrim',
+    'snip-edit-scrim', 'send-to-scrim',
     'set-g-snippets', 'snip-new', 'snip-group-new', 'snip-settings-body',
     'slash-menu', 'mention-menu', 'new-slash-menu', 'new-mention-menu',
     'new-attach', 'new-attach-input', 'new-attach-btn', 'new-attach-row',
@@ -183,7 +183,11 @@ export function modalUp() {
         || !dom.reviewScrim.hidden
         // Publish to GitHub holds a filled-in form, and can be up over
         // Start-a-session, which is the snippet dialog's case.
-        || !dom.ghScrim.hidden;
+        || !dom.ghScrim.hidden
+        // Send to another session holds nothing but a filter, so it is here for
+        // the sentence the diff viewer's comment makes: one dialog that answered
+        // Escape would be the special case this function exists to stop.
+        || !dom.sendToScrim.hidden;
 }
 
 /**
