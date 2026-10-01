@@ -187,6 +187,12 @@ const DEFAULTS = {
         overDrafts: 'hidden',
         overSchedules: 'hidden',
         overSettings: 'hidden',
+        // Minutes a busy turn may go without a line on the stream — no output,
+        // no tool starting or finishing, nothing waiting on you — before it is
+        // called stalled: a badge on its rail row and a notification with a
+        // Stop on it. A tool call still open holds the clock, so a long build
+        // never trips it; bridge/runner.js's header says why. 0 is off.
+        stalledAfterMinutes: 5,
     },
     projects: {
         // Directory -> `#rgb` or `#rrggbb`. Absent means no colour, which is
@@ -418,6 +424,7 @@ const SHAPE = {
         overDrafts: isLiveOver,
         overSchedules: isLiveOver,
         overSettings: isLiveOver,
+        stalledAfterMinutes: (v) => Number.isInteger(v) && v >= 0 && v <= 120,
     },
     projects: {
         // The last gate rather than the only one, as `keyboard.bindings` and

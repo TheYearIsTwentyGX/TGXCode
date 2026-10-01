@@ -348,7 +348,7 @@ project filter on `GET /api/sessions?project=`.
 | **`standing`** | **object or null** — `{text, source, at}`: `text` a string of at most 80 characters, `source` `"model"` or `"extract"`, `at` epoch ms; see below |
 | `prs` | array of `{number, url, repo}`, empty if none |
 | **`live`** | **object or null** — see below |
-| **`runner`** | **object or absent** — five fields only, see below |
+| **`runner`** | **object or absent** — six fields only, see below |
 
 **`schedule` is an object, not an id**, and its presence changes `title`. It is
 `{id, title}` when a schedule started this session and `null` for everything else,
@@ -448,8 +448,8 @@ read it off. Nothing errors when you read a field that is not there; you get
 | Where | `runner` is |
 |---|---|
 | `GET /api/sessions/:id` · `runner-status` event · the `status` a write returns | **the whole thing** — every field in §*`runner-status`* below |
-| `GET /api/sessions` · `GET /api/dashboard` | **five fields**: `{state, activity, detail, queued, claudeVersion}` |
-| a `GET /api/overview` / `taskboard` card | **seven fields**: `{state, activity, queued, busySince, retry, error, errorKind}` |
+| `GET /api/sessions` · `GET /api/dashboard` | **six fields**: `{state, activity, detail, queued, claudeVersion, stalled}` — `stalled` a bool. (Five until `stalled` was added; a client written against five reads it as `undefined`, which is falsy and therefore the right answer for an old bridge) |
+| a `GET /api/overview` / `taskboard` card | **eight fields**: `{state, activity, queued, busySince, retry, error, errorKind, stalled}` — `stalled` a bool |
 | absent entirely | there is no process of ours for that session |
 
 The narrowing is deliberate — the rail draws several hundred rows and wants a label and
@@ -1222,6 +1222,12 @@ client, not the bridge** — `sessions` in the overview payload is in the
 needs-you order whatever this says, so a client that honours `arrival` keeps its
 own record of when each session id first appeared.
 
+`stalledAfterMinutes` (integer 0–120, default `5`) is not about the board: it is how
+long a busy turn may say nothing before `runner-status` calls it `stalled` and
+`runner-stalled` fires. `0` turns that off. **Unlike the rest of `live`, it is read
+for the session's own directory**, so a project's file may lengthen it for a project
+whose turns are legitimately quiet.
+
 Six more `live` keys say whether the board stays on screen while a whole-screen
 panel is open, one per panel: `overTasks`, `overDashboard`, `overHistory`,
 `overDrafts`, `overSchedules`, `overSettings`. Each is a string, one of
@@ -1670,7 +1676,7 @@ waiting, running }`, already ordered needs-you-first. A card is:
 | `toolCalls`, `userMessages` | numbers |
 | **`worktree`** | **object or null** — as on a session summary |
 | **`live`** | **object or null** — the registry entry, as on a session summary |
-| **`runner`** | **object or null — seven fields**, not the `runner-status` payload: `{state, activity, queued, busySince, retry, error, errorKind}` |
+| **`runner`** | **object or null — eight fields**, not the `runner-status` payload: `{state, activity, queued, busySince, retry, error, errorKind, stalled}`. `stalled` is a bool — see §*`runner-status`*. `lastActivityAt` is deliberately not here: the card's signature would change on every line the turn streams |
 | **`ask`** | **object or null** — the *whole* ask (`runner.pendingPermission`), so a tool ask is answerable from the card. Same shape as `permission-request` |
 | **`headlines[]`** | **array of objects**, not strings — `{text, ts}`, oldest first, up to three |
 | `tasks` | object or null — **five fields, and no items**: `{done: number, total: number, current: string\|null, idle: boolean, ts: string\|null}`. `current` is the in-progress task's `activeForm`. `idle` is true when work is left and *nothing* is in progress — a list that has stopped, not one between steps. `ts` is ISO 8601 and non-null only when the answer came from a `TodoWrite` in the transcript rather than from `~/.claude/tasks`. **The items are not here** — `GET /api/sessions/:id/tasks` has them. (Previously documented as `{done, total, current, ts}`, which was true of only one of the two sources: the directory returned `idle` and no `ts`, the transcript the reverse.) |
@@ -2326,7 +2332,7 @@ the field to check before concluding anything from an empty `prs`.
 
 `sessions[]` are chips — `{sessionId, title, lastTs, userMessages,
 active}` — capped at six per workspace with `moreSessions` counting the rest, and
-carrying the same narrow five-field `runner` as `GET /api/sessions` where one is live.
+carrying the same narrow six-field `runner` as `GET /api/sessions` where one is live.
 A chip carries **no `schedule`**, so a client cannot tell a scheduled run from any
 other here; its `title` is still the composed one, so the schedule's name and the date
 it ran are in the text even though the field is not there to group on.
@@ -2364,7 +2370,7 @@ A row is:
   "read": false }
 ```
 
-`type` is one of `permission`, `plan`, `question`, `finished`, `failed`, `agent-done`,
+`type` is one of `permission`, `plan`, `question`, `finished`, `failed`, `stalled`, `agent-done`,
 `peer-message`, `handoff`, `schedule-findings`, `schedule-failed`, `schedule-missed`,
 `later-failed`, `later-missed`.
 `summary` is clipped to 200 characters and `detail` to 400.
@@ -2859,6 +2865,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `notification-read` | `{sessionId: string\|null, at: number, unread: number}` — a watermark moved, here or in another window. `sessionId` is `null` when the whole log was marked. Fold `at` into your copy of `read` and repaint |
 | `notifications-cleared` | `{at}` — the log was emptied, by this window or another |
 | `runner-status` | see below |
+| `runner-stalled` | `{sessionId: string, stalled: boolean, lastActivityAt: number\|null, busySince: number\|null, stalledAfterMs: number}` — a busy turn crossed into or out of *stalled* (rule under §*`runner-status`*). Times are epoch ms; `stalledAfterMs` is the threshold in force for that session's directory. Sent once per crossing, never repeated while it stays stalled. `stalled: false` comes from the next line on the stream **or** from the turn ending any way at all — stopped, finished, died — so a client may treat it as "take the badge and the toast down". A `runner-status` carrying the same `stalled` follows (or, on a turn ending, is the same broadcast's next message), so a client that only reads `runner-status` still draws it right; this event exists for the notification. A `stalled: true` also files a loud `stalled` notification row |
 | `permission-request` | `{sessionId, ...ask}` |
 | `permission-resolved` | `{sessionId, requestId, outcome}` |
 | `notice` | `{sessionId: string, level: 'warn', kind: string, text: string}` — something worth telling the user that is not a permission ask. Every notice the bridge sends is `level: 'warn'` except `settings_deferred`, which is `level: 'info'`; treat any level other than `warn` as informational. `kind` is one of `settings_deferred` (a model/effort change held while background work runs — see the send route), `no_permission_prompt`, `permission_uninteractive`, `mode_change_failed`, `permission_auto_denied`, `permission_denied`, `api_retry`, `turn_failed`, `rate_limit` — and an unrecognised kind is a plain warning, not an error. **`rate_limit` is not one per limit: it repeats on every turn for as long as the limit holds**, because the CLI sends an identical `rate_limit_event` each time and this one is not deduplicated the way the `quota` event below is. A client that toasts it unconditionally therefore stacks the same warning over and over for an afternoon. `web/app.js` drops this kind entirely and flashes the header quota pill off the `quota` event instead; a client with nowhere to put a persistent indicator should throttle the toast itself. Everything the notice says is also in `GET /api/quota` — `windows[].status` for the current state and `events` for the history |
@@ -2885,6 +2892,17 @@ down from:
 | `queued` | number — how many messages are waiting, handed-over ones included |
 | **`queue[]`** | **array of objects** — `{id, text, at, attachments[], handed}`, the messages themselves, because the composer draws a chip per entry and needs the `id` to cancel or reorder it. `attachments` is metadata only; the base64 is read at flush time and never travels here. **`handed`** bool — see below |
 
+| **`pendingPermission`** | **object or null** — the whole ask, same shape as `permission-request` |
+| `canPrompt` | bool — whether this process supports permission prompts at all |
+| `busySince` | number or null — epoch ms, and null unless `state` is `busy` |
+| `background` | number — tasks the process started and has not finished: a command run with `run_in_background`, a subagent sent off on its own. **A session can be `idle` with this above zero**, and while it is the bridge will not restart or evict the process (see the send route). `0` whenever there is no process. Carried over when a bridge adopts a process |
+| **`pendingSettings`** | **object or null** — `{model, effort}` (each a string or null), a model/effort change the bridge is holding until `background` reaches zero, because applying it restarts the process and would stop that work. When it is applied, a status with the new `model`/`effort` follows |
+| `claudeVersion` | string or null — the Claude Code version **of the running process**, from its `system/init` line (e.g. `"2.1.280"`). Null until the process has started and whenever there is none, so an idle session with no process is never "on an old binary": its next message starts whatever is installed then. This is not the summary's `version`, which is the first binary that ever wrote the transcript. Carried over when a bridge adopts a process from the session host. See `GET /api/claude-version` |
+| **`retry`** | **object or null** — `{attempt, max, status, at}` while the CLI is retrying a failing API call, which can run for minutes. Cleared when the turn lands |
+| **`lastResult`** | **object or null** — `{isError, detail, retries, costUsd, durationMs, numTurns, stopReason}` for the turn that most recently finished |
+| **`stalled`** | **bool** — the turn is `busy` and has said nothing for longer than the threshold, with nothing waiting on you and no tool call open. See below. Always `false` when `state` is not `busy` |
+| `lastActivityAt` | number or null — epoch ms of the last line the process wrote (any stream-json line, a tool starting or finishing), or of an ask being answered. Null until the process has written one. Not reset between turns: the stall clock uses the later of this and `busySince` |
+
 **A queued message can land inside the running turn.** While a tool call is running,
 the bridge hands everything waiting to the CLI (`handed: true`), and the CLI folds it
 into that turn once the tool round ends. The model reads it next to the tool result,
@@ -2902,14 +2920,21 @@ things follow for a client:
 Handing over happens only when the process has shown it supports it. Builds without the
 CLI's command queue keep the old one-turn-at-a-time behaviour, and `handed` is then
 always false.
-| **`pendingPermission`** | **object or null** — the whole ask, same shape as `permission-request` |
-| `canPrompt` | bool — whether this process supports permission prompts at all |
-| `busySince` | number or null — epoch ms, and null unless `state` is `busy` |
-| `background` | number — tasks the process started and has not finished: a command run with `run_in_background`, a subagent sent off on its own. **A session can be `idle` with this above zero**, and while it is the bridge will not restart or evict the process (see the send route). `0` whenever there is no process. Carried over when a bridge adopts a process |
-| **`pendingSettings`** | **object or null** — `{model, effort}` (each a string or null), a model/effort change the bridge is holding until `background` reaches zero, because applying it restarts the process and would stop that work. When it is applied, a status with the new `model`/`effort` follows |
-| `claudeVersion` | string or null — the Claude Code version **of the running process**, from its `system/init` line (e.g. `"2.1.280"`). Null until the process has started and whenever there is none, so an idle session with no process is never "on an old binary": its next message starts whatever is installed then. This is not the summary's `version`, which is the first binary that ever wrote the transcript. Carried over when a bridge adopts a process from the session host. See `GET /api/claude-version` |
-| **`retry`** | **object or null** — `{attempt, max, status, at}` while the CLI is retrying a failing API call, which can run for minutes. Cleared when the turn lands |
-| **`lastResult`** | **object or null** — `{isError, detail, retries, costUsd, durationMs, numTurns, stopReason}` for the turn that most recently finished |
+
+**`stalled` is the bridge's judgement, not the CLI's.** A busy turn is stalled when
+all of these hold: `state` is `busy`; `pendingPermission` is null (waiting on a person
+is not silence); **no tool call is open** — a `tool_use` with no `tool_result` yet;
+and nothing has arrived for `stalledAfterMs`, measured from the later of
+`lastActivityAt` and `busySince`. The threshold is `live.stalledAfterMinutes` in
+settings (integer 0–120, default 5, `0` off), read for the session's directory.
+An open tool call stops the clock outright, so a twenty-minute build is never
+stalled; the cost is that a wedged *tool* is not detected by this — only a turn
+that is silent between tools. It clears on the next line from the process or when
+the turn ends. It is a note on `busy`, not a state: `state` stays `busy`, and the
+turn may yet finish on its own. Stopping it is `POST /api/sessions/:id/stop`; the
+desktop sends `{hard: true}` for a stalled turn, since a process that has gone
+silent is the one least likely to answer an interrupt.
+
 
 **`activity` is the label to draw.** While a turn works it is composed of two
 halves — `verb`, the themed spinner word, and `detail`, whatever is specifically

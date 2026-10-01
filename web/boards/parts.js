@@ -130,10 +130,17 @@ class Clock extends Component {
 }
 
 /**
- * Stop a turn from a card. Always the soft stop — the escalation to a kill is
- * armed by pressing Stop twice in the conversation, and a single button on a
- * card several sessions away from the one you are reading is not the place to
- * offer it.
+ * Stop a turn from a card. The soft stop — the escalation to a kill is armed
+ * by pressing Stop twice in the conversation, and a single button on a card
+ * several sessions away from the one you are reading is not the place to offer
+ * it.
+ *
+ * Except with `hard`, which the rail's row passes only for a stalled turn. That
+ * is the one case the interrupt is least likely to fix: a process that has said
+ * nothing for minutes either does not answer it (eight seconds, then the kill
+ * anyway) or answers it and still sends no `result` — the `inFlight` wedge,
+ * where nothing is running to interrupt. The transcript is already on disk, so
+ * the kill costs a turn that was producing nothing.
  *
  * A component rather than a function of the button, because "Stopping…" is a
  * state and the button is Preact's. `reset` is the value that, when it changes,
@@ -143,33 +150,44 @@ class Clock extends Component {
  * rather than sitting at Stopping… for the rest of the turn.
  */
 export class StopButton extends Component {
-    render({ cls, reset }, { at }) {
+    render({ cls, reset, hard }, { at }) {
         const stopping = at !== undefined && at === reset;
         return html`<button class=${cls} type="button"
-            title="Interrupt the turn this session is running"
+            title=${hard ? 'Stop this stalled turn — ends the process, keeps the conversation'
+                : 'Interrupt the turn this session is running'}
             disabled=${stopping}
             onClick=${() => this.stop()}>${stopping ? 'Stopping…' : 'Stop'}</button>`;
     }
 
     async stop() {
-        const { sessionId, reset } = this.props;
+        const { sessionId, reset, hard } = this.props;
         this.setState({ at: reset });
         try {
-            const r = await post(`/api/sessions/${sessionId}/stop`, {});
-            // Whatever never reached the process comes back, exactly as it does in
-            // the conversation view — otherwise a queue would vanish silently. One
-            // draft holds all of them, joined the way the composer restores them;
-            // saving each in turn would leave only the last.
-            const dropped = r.dropped || [];
-            if (dropped.length) {
-                const held = loadDraft(sessionId);
-                saveDraft(sessionId, [held, dropped.join('\n\n')].filter(Boolean).join('\n\n'));
-                toast(`Stopped. ${dropped.length} unsent message${dropped.length === 1
-                    ? ' is' : 's are'} waiting in that session's composer.`, 'info');
-            }
+            await stopFromCard(sessionId, { hard: !!hard });
         } catch (err) {
             toast(`Could not stop: ${err.message}`, 'error');
             this.setState({ at: undefined });
         }
     }
+}
+
+/**
+ * The stop itself, for StopButton and for a stalled turn's notification — sw.js
+ * hands its Stop turn button to an open window rather than fetching itself, so
+ * that what the stop gives back lands here, in a draft, and not nowhere.
+ */
+export async function stopFromCard(sessionId, { hard = false } = {}) {
+    const r = await post(`/api/sessions/${sessionId}/stop`, hard ? { hard: true } : {});
+    // Whatever never reached the process comes back, exactly as it does in
+    // the conversation view — otherwise a queue would vanish silently. One
+    // draft holds all of them, joined the way the composer restores them;
+    // saving each in turn would leave only the last.
+    const dropped = r.dropped || [];
+    if (dropped.length) {
+        const held = loadDraft(sessionId);
+        saveDraft(sessionId, [held, dropped.join('\n\n')].filter(Boolean).join('\n\n'));
+        toast(`Stopped. ${dropped.length} unsent message${dropped.length === 1
+            ? ' is' : 's are'} waiting in that session's composer.`, 'info');
+    }
+    return r;
 }

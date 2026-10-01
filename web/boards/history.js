@@ -29,6 +29,7 @@ const NOTE_LABEL = {
     finished: 'Finished',
     failed: 'Failed',
     'agent-done': 'Subagent done',
+    stalled: 'Stalled',
     'peer-message': 'From another session',
     handoff: 'Handed work',
     'schedule-findings': 'Scheduled review',

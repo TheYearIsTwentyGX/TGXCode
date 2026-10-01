@@ -323,6 +323,24 @@ assert.strictEqual(kept.prefs.devbrowser.openIn, 'inline');
 assert.strictEqual(kept.prefs.devbrowser.whenClosed, 'nothing');
 ok('the preview keys default to the old behaviour and take only their closed sets');
 
+// The stall threshold: whole minutes, 0 for off, and read per workspace — a
+// project with slow silent builds is exactly the one that wants a longer one.
+assert.strictEqual(DEFAULTS.live.stalledAfterMinutes, 5);
+clear();
+write(userFile, { version: VERSION });
+prefs.cache.clear();
+assert.strictEqual(prefs.forCwd().live.stalledAfterMinutes, 5, 'five minutes unless told otherwise');
+for (const bad of [-1, 121, 2.5, '5', null]) {
+    assert.ok(!SHAPE.live.stalledAfterMinutes(bad), `${bad} passed the shape`);
+}
+for (const bad of [-1, 121, 2.5]) {
+    assert.throws(() => prefs.save({ scope: 'user', patch: { live: { stalledAfterMinutes: bad } } }),
+        (e) => e.code === 'value', `${bad} minutes was saved`);
+}
+assert.strictEqual(prefs.save({ scope: 'user', patch: { live: { stalledAfterMinutes: 0 } } })
+    .prefs.live.stalledAfterMinutes, 0, '0 is "off", not missing');
+ok('the stall threshold defaults to five minutes and takes whole minutes up to 120');
+
 // preview.list: one bad line in a hand-edited file costs that line, a repeat is
 // dropped quietly because it means nothing new, and a PUT with a bad line is
 // refused whole like any other bad value.

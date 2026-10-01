@@ -538,3 +538,40 @@
     line-height: 1.6;
 }
 
+
+/* A busy turn that has said nothing past the threshold — bridge/runner.js. The
+   badge stands in for the pulse, and the dot stops breathing: both of those say
+   "working", and the point of this row is that nothing is. Red rather than the
+   amber of `.due`, because this one is asking you to do something. */
+.strip-meta .tag-stalled {
+    flex: none;
+    padding: 1px 7px;
+    border-radius: var(--pill);
+    background: #3a2422;
+    color: var(--red);
+    font-size: 10.5px;
+}
+.strip[data-stalled="true"] .strip-meta::before {
+    background: var(--red);
+    animation: none;
+}
+/* Its Stop is the one control a row shows without being reached for, since the
+   row is already telling you to reach for it. The rest are out of the layout
+   until the row is hovered or focused — merely invisible, they still took their
+   width and the Stop sat over the badge it belongs to. Tabbing still reaches
+   them: Stop comes first, and focusing it is focus-within. */
+.strip[data-stalled="true"] .strip-actions { opacity: 1; }
+.strip[data-stalled="true"]:not(:hover):not(:focus-within) .strip-actions .mini:not(.stop) {
+    display: none;
+}
+.strip-stop { display: contents; }
+.mini.stop {
+    width: auto;
+    padding: 0 10px;
+    border-radius: var(--pill);
+    font-size: 11px;
+    color: var(--red);
+    background: #3a2422;
+}
+.mini.stop:hover { background: #4a2b28; color: var(--red); }
+.mini.stop:disabled { opacity: .6; cursor: default; }

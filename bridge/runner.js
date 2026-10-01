@@ -61,6 +61,29 @@
 // next to the other liveness state and never goes near the transcript. The real
 // record of what was allowed or denied still arrives from the file.
 //
+// A turn that is busy and silent is *stalled*: `stalled` in status(), and a
+// `stalled` event each way across the line. It exists because a hung `claude`,
+// a lost `result` and an `inFlight` left full all look exactly like a slow turn
+// from every surface otherwise. The rule, and why each part of it is there:
+//
+//   - Activity is any stream-json line, `lastActivityAt`. Tool starts and
+//     results count by name too, and so does an ask being answered — the
+//     wait for a person is not the process's silence.
+//   - The clock runs from the later of that and `busySince`, and only while
+//     busy, with no ask pending and no tool call open. The threshold is
+//     `stallAfter(cwd)` from the pool (settings: `live.stalledAfterMinutes`);
+//     zero turns it off.
+//   - An open tool call stops the clock outright rather than lengthening it.
+//     A build or a test run is silent on the stream for as long as it takes,
+//     and any threshold short enough to be useful is one a real build crosses.
+//     The cost, accepted: a wedged *tool* is not caught here. Bash bounds
+//     itself (ten minutes at most), and an Agent call that runs for an hour is
+//     ordinary — its subagent's lines carry `parent_tool_use_id` and count as
+//     activity anyway. The clock restarts from the `tool_result`.
+//   - One lazy timer per runner, armed on entering busy and re-armed on the
+//     way past when activity moved the deadline, so a line costs a timestamp
+//     and not a clearTimeout. Recovery is noticed inline, on the next line.
+//
 // None of this is a documented, stable surface, so every part of it is written
 // to degrade rather than break: an unrecognised subtype is answered and ignored,
 // a CLI that rejects the flag falls back to permission modes alone, and an
@@ -327,6 +350,12 @@ class Runner extends EventEmitter {
         this._verb = null;             // the themed word, drifting on its own clock
         this._detail = null;           // and what is specifically happening, if anything
         this._reroll = null;           // the timer moving the verb along
+        // How long a busy turn may be silent before it is reported stalled, in
+        // ms; 0 is never. Delegated like the two above. See the header.
+        this.stallAfter = opts.stallAfter || (() => 0);
+        this.lastActivityAt = null;    // the last stream line, tool or answered ask
+        this.stalled = false;
+        this._stallTimer = null;
 
         this.proc = null;
         // What `claude --version` the running process is, from its init line.
@@ -1423,6 +1452,9 @@ class Runner extends EventEmitter {
         this.emit('permission-resolved', {
             sessionId: this.sessionId, requestId: ask.id, outcome,
         });
+        // Waiting on a person is not the process going quiet: the clock starts
+        // again from the answer.
+        this._touch();
         // The tool is about to run (or not); either way we are back to working.
         if (this.state === 'busy') this._work();
     }
@@ -1655,6 +1687,7 @@ class Runner extends EventEmitter {
                 this._stderr = (this._stderr + line + '\n').slice(-4000);
                 continue;
             }
+            this._touch();
             this._onMessage(msg);
         }
     }
@@ -1766,6 +1799,7 @@ class Runner extends EventEmitter {
                 for (const b of content) {
                     if (b.type === 'tool_use') {
                         this._pendingTools.set(b.id, b.name);
+                        this._touch();
                         this._work(describeTool(b));
                         // The round this tool belongs to is where anything waiting
                         // gets read, so hand it over now, while there is time.
@@ -1784,6 +1818,7 @@ class Runner extends EventEmitter {
                 for (const b of content) {
                     if (b.type !== 'tool_result') continue;
                     this._pendingTools.delete(b.tool_use_id);
+                    this._touch();
                 }
                 // The call is over, so its name would now be a lie — back to
                 // the verb alone until the next thing starts.
@@ -1974,7 +2009,67 @@ class Runner extends EventEmitter {
         if (state !== 'busy') this.busySince = null;
         this.state = state;
         this.activity = activity;
+        if (state === 'busy') {
+            this._armStall();
+        } else {
+            if (this._stallTimer) { clearTimeout(this._stallTimer); this._stallTimer = null; }
+            // Said here rather than through _setStalled, so the one status
+            // below carries both changes.
+            if (this.stalled) { this.stalled = false; this._emitStalled(); }
+        }
         if (changed) this.emit('status', this.status());
+    }
+
+    // -- stall ------------------------------------------------------------
+
+    /** Something happened. Clears a stall on the spot; see the header. */
+    _touch() {
+        this.lastActivityAt = Date.now();
+        if (this.stalled) this._setStalled(false);
+        if (this.state === 'busy') this._armStall();
+    }
+
+    /** Arm the stall timer if it is not already; a no-op while it is. */
+    _armStall() {
+        if (this._stallTimer) return;
+        const ms = this.stallAfter(this.cwd);
+        if (!(ms > 0)) return;
+        const since = Math.max(this.lastActivityAt || 0, this.busySince || 0) || Date.now();
+        const wait = Math.max(0, since + ms - Date.now());
+        this._stallTimer = setTimeout(() => { this._stallTimer = null; this._checkStall(); }, wait);
+        // Never a reason to keep the bridge alive, the same as _reroll.
+        this._stallTimer.unref();
+    }
+
+    /**
+     * The timer's half. Quiet while an ask or a tool call holds the clock —
+     * whatever ends either of them is a touch, and the touch re-arms.
+     */
+    _checkStall() {
+        if (this.state !== 'busy' || this.stalled) return;
+        if (this.pendingPermission || this._pendingTools.size) return;
+        const ms = this.stallAfter(this.cwd);
+        if (!(ms > 0)) return;
+        const since = Math.max(this.lastActivityAt || 0, this.busySince || 0);
+        if (Date.now() - since < ms) { this._armStall(); return; }
+        this._setStalled(true);
+    }
+
+    _setStalled(stalled) {
+        if (this.stalled === stalled) return;
+        this.stalled = stalled;
+        this._emitStalled();
+        this.emit('status', this.status());
+    }
+
+    _emitStalled() {
+        this.emit('stalled', {
+            sessionId: this.sessionId,
+            stalled: this.stalled,
+            lastActivityAt: this.lastActivityAt,
+            busySince: this.busySince,
+            stalledAfterMs: this.stallAfter(this.cwd) || 0,
+        });
     }
 
     /**
@@ -2044,6 +2139,9 @@ class Runner extends EventEmitter {
             retry: this.retry,
             lastResult: this.lastResult,
             queued: this.queue.length,
+            // A busy turn gone quiet past the threshold; see the header.
+            stalled: this.stalled,
+            lastActivityAt: this.lastActivityAt,
             // Background tasks this process is still running. A session can be
             // `idle` with this above zero, and then it is not free to restart.
             background: this.proc ? this.background.size : 0,
@@ -2250,6 +2348,9 @@ class RunnerPool extends EventEmitter {
         // this app said before there were any.
         this.thinking = () => null;
         this.rerollAfter = () => 0;
+        // And how long a silent busy turn waits before it is called stalled, in
+        // ms. Zero is off, which is what a pool without a server gets.
+        this.stallAfter = () => 0;
     }
 
     get(sessionId) {
@@ -2349,7 +2450,8 @@ class RunnerPool extends EventEmitter {
     _make(opts) {
         const r = new Runner({ ...opts, caps: this.caps,
             thinking: (dir, last) => this.thinking(dir, last),
-            rerollAfter: (dir) => this.rerollAfter(dir) });
+            rerollAfter: (dir) => this.rerollAfter(dir),
+            stallAfter: (dir) => this.stallAfter(dir) });
         // Read through `r.sessionId` rather than closing over the id it was
         // created with: a fork changes it, and the viewer check has to follow.
         r.hasViewer = () => this.hasViewer(r.sessionId);
@@ -2363,6 +2465,7 @@ class RunnerPool extends EventEmitter {
         r.on('turn-complete', (res) => this.emit('turn-complete', { sessionId: r.sessionId, ...res }));
         r.on('failed', (f) => this.emit('failed', { sessionId: r.sessionId, ...f }));
         r.on('agent-done', (a) => this.emit('agent-done', a));
+        r.on('stalled', (p) => this.emit('stalled', p));
         // The only route by which the app learns what slash commands a directory
         // has. It arrives once per process start and is worth keeping: a session
         // sitting idle in the rail has no process of its own, and its composer

@@ -545,6 +545,22 @@ draws cards from every project on the machine at once, so letting whichever
 conversation happens to be open decide how the rest are drawn is a setting that
 appears to change on its own.
 
+### A turn that has gone quiet
+
+`live.stalledAfterMinutes` (default `5`) is how long a working session may go
+without a word — no output, no tool starting or finishing, nothing waiting on you
+— before the app calls it stalled. Its rail row then says **stalled** in red where
+the activity was, with a **Stop** button that shows without hovering, and a
+notification with a *Stop turn* button goes up if the window is not on it. Stop
+here is the hard one: a process that has said nothing for minutes is the one least
+likely to answer a polite interrupt, and the conversation is on disk either way.
+
+An open tool call holds the clock, so a long build or test run never trips it. The
+other side of that rule is that a tool that itself hangs is not caught — this is for
+the turn that is silent *between* tools. `0` turns it off. Unlike the board keys
+above, a project's own file may set it, for a project whose turns are quiet for
+longer on purpose. In Settings it is *Live board → Call a silent turn stalled after*.
+
 An existing `~/.tgxcode/settings.json` will not have grown the block: the
 defaults are only written out when there is no file at all. Add it by hand, or
 tick the two boxes under *Settings → Live board*, which writes them for you and

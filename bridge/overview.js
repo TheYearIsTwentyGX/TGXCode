@@ -248,6 +248,9 @@ function card(index, s, runner, reason) {
             retry: runner.retry,
             error: runner.error,
             errorKind: runner.errorKind,
+            // A boolean, not lastActivityAt: the card's fingerprint hashes this,
+            // and a timestamp would change it on every line.
+            stalled: runner.stalled,
         } : null,
 
         // Whether there is a process, and whose. `live` covers the sessions the

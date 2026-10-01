@@ -773,6 +773,13 @@ pool.hasViewer = () => clients.size > 0;
 // all of them — a phone included — agree. See bridge/spinner.js.
 pool.thinking = (cwd, last) => spinner.pick(cwd, last);
 pool.rerollAfter = (cwd) => spinner.rerollMs(cwd);
+// How long a busy turn may say nothing before it is called stalled. Read fresh
+// each time, like the beacon's interval, so a settings edit lands without a
+// restart.
+pool.stallAfter = (cwd) => {
+    const m = prefs.forCwd(cwd).live.stalledAfterMinutes;
+    return Number.isInteger(m) && m > 0 ? m * 60_000 : 0;
+};
 
 index.on('changed', () => broadcast('sessions-changed', { at: Date.now() }));
 
@@ -970,6 +977,11 @@ pool.on('failed', (f) => { broadcast('send-failed', f); filed(notifications.send
 // Nothing notifies for a subagent finishing; it is logged so that "what has been
 // happening" has an answer at all.
 pool.on('agent-done', (a) => filed(notifications.agentDone(a)));
+// Both ways across the line, for the badge; only the way in is a notification.
+pool.on('stalled', (p) => {
+    broadcast('runner-stalled', p);
+    if (p.stalled) filed(notifications.stalled(p));
+});
 
 /**
  * Tell any open history view about a new row, so it does not have to re-fetch.

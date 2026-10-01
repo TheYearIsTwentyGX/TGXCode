@@ -397,6 +397,7 @@
 .note-row[data-type="question"] { --accent: var(--peach); }
 .note-row[data-type="finished"] { --accent: var(--green); }
 .note-row[data-type="failed"] { --accent: var(--red); }
+.note-row[data-type="stalled"] { --accent: var(--yellow); }
 .note-row[data-type="agent-done"] { --accent: var(--text-4); }
 .note-row[data-type="peer-message"] { --accent: var(--peach); }
 .note-row[data-type="handoff"] { --accent: var(--purple); }
