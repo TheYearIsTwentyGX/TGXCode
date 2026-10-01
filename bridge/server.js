@@ -29,6 +29,7 @@ const { Spinner } = require('./spinner');
 const { Suggestions } = require('./suggestions');
 const { Drafts } = require('./drafts');
 const { Later } = require('./later');
+const { Standing } = require('./standing');
 const { Snippets } = require('./snippets');
 const { Schedules } = require('./schedule');
 const { SlashCommandCache } = require('./slash-commands');
@@ -156,12 +157,23 @@ index.schedules = schedules;
 // So a rail row can say that a message is due here overnight. Absent, every
 // summary carries `later: null` and nothing else changes.
 index.later = later;
+// One line per session saying where its last turn left things, for the rail. Only
+// sessions this pool runs get one — see bridge/standing.js for why, and for the
+// three things that keep it from spending quota twice on the same reply.
+const standing = new Standing({
+    mode: () => { try { return (prefs.forCwd().standing || {}).mode; } catch { return 'model'; } },
+    record: (id) => index.get(id),
+    busy: (id) => { const r = pool.get(id); return !!r && r.state === 'busy'; },
+    resultText: (id) => { const r = pool.get(id); return r ? r.lastResultText : null; },
+});
+index.standing = standing;
 
 // The /api/events stream — its connections, the two boards, the transcript
 // follows and the peer list — is bridge/events.js. `clients` is its Map, shared
 // by reference, so the health count and `hasViewer` below see the same one.
 events.init({ index, pool, registry });
 const { clients, broadcast, tickBoard } = events;
+standing.on('changed', (p) => broadcast('standing-changed', p));
 
 // ---------------------------------------------------------------------------
 // Routing
@@ -609,7 +621,7 @@ const ROUTES = [
 
 const ROUTE_DEPS = {
     index, pool, registry, flags, prefs, claudeConfig, claudeDocs, spinner, suggestions,
-    beacon, drafts, later, snippetStore, schedules, claudeVersion, terminals,
+    beacon, drafts, later, standing, snippetStore, schedules, claudeVersion, terminals,
     slashCommands, runs, notifications, reads,
     normalizeMode, modeRefusal, tooManyCreates, CREATE_LIMIT, sessionCwd, shutdown,
     quotaPayload, quotaPrefs, runBeaconNow, markClaudeVersionSent,
@@ -950,6 +962,7 @@ pool.on('init', ({ cwd, init }) => {
 });
 pool.on('turn-complete', (r) => {
     broadcast('turn-complete', r);
+    standing.noteTurn(r);
     filed(notifications.turn(r));
     noteScheduledOutcome(r);
 });
@@ -1018,6 +1031,7 @@ function shutdown(code = 0) {
     try { terminals.shutdown(); } catch { /* nothing to clean */ }
     try { runs.shutdown(); } catch { /* nothing to clean */ }
     try { beacon.shutdown(); } catch { /* nothing to clean */ }
+    try { standing.shutdown(); } catch { /* nothing to clean */ }
     // Drafts are written on a 400ms debounce and this process exits 200ms from
     // here, so a draft saved in the last moment before a restart would simply be
     // gone — having been acknowledged with a 200. Worse in one direction than the
@@ -1225,6 +1239,9 @@ takeBackHeld().catch((err) => {
     // more, and the index has just finished scanning.
     try { later.prune(index.knownIds()); } catch (err) {
         console.error(`[tgxcode] message prune failed: ${err.message}`);
+    }
+    try { standing.prune(index.knownIds()); } catch (err) {
+        console.error(`[tgxcode] standing prune failed: ${err.message}`);
     }
     tickLater().catch(err => console.error(
         `[tgxcode] scheduled message catch-up failed: ${err.message}`));

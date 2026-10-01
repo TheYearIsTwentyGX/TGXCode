@@ -313,6 +313,13 @@ const HOME = os.homedir();
     });
     check('bypassPermissions remotely', bypass.status, 403);
     console.log(`       said: ${bypass.body && bypass.body.error}`);
+    // Stricter than starting a session: a worktree is a directory and a branch,
+    // the mkdir clause. Refused before anything is resolved, so HOME not being a
+    // repository cannot be what answers.
+    const wtRemote = await call('POST', '/api/sessions', {
+        headers: PHONE, body: { cwd: HOME, prompt: 'x', worktree: { name: 'never' } },
+    });
+    check('starting in a new worktree remotely', wtRemote.status, 403);
     check('dontAsk remotely', (await call('POST', '/api/sessions', {
         headers: PHONE, body: { cwd: HOME, prompt: 'x', permissionMode: 'dontAsk' },
     })).status, 403);

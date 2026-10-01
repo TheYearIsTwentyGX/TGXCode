@@ -1338,6 +1338,25 @@
           </div>
         </div>
       </div>
+      <!-- Start in a new git worktree of the chosen repository. Shown only in plain
+           Start mode and only when the directory is a repository with a commit to
+           branch from (paintNewWorktree). Not offered on a draft or a schedule:
+           both are validated when saved, before any worktree could exist, and
+           neither store has the field. -->
+      <div class="field" id="new-wt-row" hidden>
+        <label class="check">
+          <input id="new-wt" type="checkbox">
+          <span>Create a worktree</span>
+        </label>
+        <div id="new-wt-fields" class="wt-fields" hidden>
+          <input id="new-wt-name" type="text" spellcheck="false" autocomplete="off"
+                 placeholder="name" aria-label="Worktree name" maxlength="60">
+          <span class="wt-from">from</span>
+          <input id="new-wt-base" type="text" spellcheck="false" autocomplete="off"
+                 placeholder="HEAD" aria-label="Branch, tag or commit to start from">
+        </div>
+        <div id="new-wt-note" class="note" hidden></div>
+      </div>
       <!-- What a draft or a schedule is called on its card. Shown in every mode,
            including plain Start-a-session, because Save-as-draft is in this same
            footer — hiding it there would mean a draft could only be named after

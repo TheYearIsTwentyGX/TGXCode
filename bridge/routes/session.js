@@ -54,10 +54,12 @@ let prefs = null;
 let sessionCwd = null;
 let suggestions = null;
 let terminals = null;
+let standing = null;
 
 function init(deps) {
     ({
         flags, index, later, modeRefusal, normalizeMode, pool, prefs, sessionCwd, suggestions, terminals,
+        standing,
     } = deps);
 }
 
@@ -193,6 +195,7 @@ async function handle(req, res, url, pathname, seg, who) {
             // Nothing left to deliver them to. The same rule the changes above
             // follow: what was about this session goes when the session does.
             if (later.forget(sessionId)) broadcast('later-changed', laterPayload());
+            if (standing) standing.forget(sessionId);
 
             // Two events: one for windows showing this conversation, which have
             // to leave it, and the ordinary list refresh for everybody else.

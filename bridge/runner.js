@@ -158,6 +158,11 @@ function mcpConfig(sessionId) {
 // Processes are cheap to restart (resume is a warm cache hit), so don't hoard them.
 const MAX_LIVE = 4;
 const IDLE_EVICT_MS = 15 * 60 * 1000;
+// How long a background task is believed to be running with no word of it
+// finishing. Generous: a dev server is the common case and runs for hours.
+const BACKGROUND_STALE_MS = 12 * 60 * 60 * 1000;
+// The task statuses that mean it is over, as `task_updated` spells them.
+const TASK_DONE = ['completed', 'failed', 'killed', 'stopped'];
 
 const PERMISSION_MODES = ['auto', 'acceptEdits', 'plan', 'manual', 'dontAsk', 'bypassPermissions'];
 
@@ -167,6 +172,20 @@ const PERMISSION_MODES = ['auto', 'acceptEdits', 'plan', 'manual', 'dontAsk', 'b
 // added upstream is not silently erased from a draft by a build that predates it.
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const effortOrNull = (v) => (EFFORTS.includes(v) ? v : null);
+
+/** Two held model/effort changes (either may be null) asking for the same thing. */
+function sameSettings(a, b) {
+    if (!a || !b) return !a === !b;
+    return a.model === b.model && a.effort === b.effort;
+}
+
+/** "model", "effort" or "model and effort" — whichever `wants` changes. */
+function settingsWord(r, wants) {
+    const parts = [];
+    if (wants.model !== r.model) parts.push('model');
+    if (wants.effort !== r.effort) parts.push('effort');
+    return parts.join(' and ');
+}
 
 /**
  * Which tools are a conversation rather than a permission question.
@@ -342,6 +361,17 @@ class Runner extends EventEmitter {
         this._buf = '';
         this._stderr = '';
         this._pendingTools = new Map();
+        // Work this process started and has not reported finished: a command run
+        // with `run_in_background`, a subagent sent off on its own. taskId ->
+        // {type, startedAt}. It runs *inside* `claude`, so a turn that started it
+        // and ended reports `idle` while it carries on — and replacing or evicting
+        // an idle process killed it, which the resumed one then announces as
+        // "background tasks didn't finish before the previous session ended".
+        // Per process: cleared wherever the process goes. See `hasBackground`.
+        this.background = new Map();
+        // A model or effort change that arrived while `background` was not empty,
+        // held until it is. {model, effort}, or null. Applied by the pool.
+        this.pendingSettings = null;
 
         // -- control channel ------------------------------------------------
         this.caps = opts.caps || { permissionPrompt: true, interrupt: true };
@@ -389,6 +419,7 @@ class Runner extends EventEmitter {
         // happen, or explicitly cancelled. The one exit where re-queueing is
         // provably safe does it itself, in `close`.
         this.inFlight.length = 0;
+        this.background.clear();
         this.lastError = null;
         this.errorKind = null;
         // A fresh process is not the one that was too busy to answer.
@@ -590,6 +621,9 @@ class Runner extends EventEmitter {
             this.proc = null;
             this.claudeVersion = null;
             this._pendingTools.clear();
+            // Whatever it was running in the background went with it.
+            this.background.clear();
+            this.pendingSettings = null;
             this._abandonControl('the Claude process exited');
             // The turn this process was answering, taken before any branch below
             // gets an opinion about it.
@@ -947,6 +981,8 @@ class Runner extends EventEmitter {
             inFlight: this.inFlight.map(entry),
             queue: this.queue.map(entry),
             lifecycle: this._lifecycle,
+            background: [...this.background].map(([id, t]) => ({ id, ...t })),
+            pendingSettings: this.pendingSettings,
             answered: this._answered,
             sessionAllow: [...this._sessionAllow],
         });
@@ -1342,7 +1378,7 @@ class Runner extends EventEmitter {
      * builds its argv from `permissionMode`, and a session that had left plan
      * mode must not silently return to it.
      */
-    _setPermissionMode(mode) {
+    _setPermissionMode(mode, { approved = true } = {}) {
         const previous = this.permissionMode;
         this.permissionMode = mode;
         this._queueChanged();   // the UI's mode selector follows this
@@ -1355,9 +1391,14 @@ class Runner extends EventEmitter {
             this._queueChanged();
             this.emit('notice', {
                 level: 'warn', kind: 'mode_change_failed',
-                text: `Approved, but this Claude Code version would not switch out of `
-                    + `${previous} mode from here. Change the mode under the composer and `
-                    + 'send a message to carry on.',
+                text: approved
+                    ? `Approved, but this Claude Code version would not switch out of `
+                        + `${previous} mode from here. Change the mode under the composer and `
+                        + 'send a message to carry on.'
+                    // From ensure(), which switches in place to spare background work.
+                    : `This Claude Code version would not switch to ${mode} mode without `
+                        + `a restart, so that message ran in ${previous} mode. It will `
+                        + 'switch on the first message after the background tasks finish.',
             });
         });
     }
@@ -1505,6 +1546,9 @@ class Runner extends EventEmitter {
         this.queue = (note.queue || []).map(entry);
         this.inFlight = (note.inFlight || []).map(entry);
         this._lifecycle = !!note.lifecycle;
+        this.background = new Map((note.background || [])
+            .filter(t => t && t.id).map(({ id, ...t }) => [id, t]));
+        this.pendingSettings = note.pendingSettings || null;
         this._answered = (note.answered || []).slice(-20);
         this._sessionAllow = new Set(note.sessionAllow || []);
         this.claudeVersion = note.claudeVersion || null;
@@ -1544,6 +1588,11 @@ class Runner extends EventEmitter {
                 ask = null;
                 tools.clear();
                 if (r.seq > noteSeq) finished = msg;
+            } else if (msg.type === 'system' && /^task_/.test(msg.subtype || '')) {
+                // Background work that started or finished while no bridge was
+                // listening. Without this an adopted process would look free to
+                // replace while something it started was still running.
+                this._noteTask(msg, { quiet: true });
             } else if (msg.type === 'system' && msg.subtype === 'init') {
                 if (msg.claude_code_version) this.claudeVersion = msg.claude_code_version;
                 // A fork the previous bridge had already followed is in the note;
@@ -1666,8 +1715,11 @@ class Runner extends EventEmitter {
                         level: 'warn', kind: 'permission_denied',
                         text: msg.content || 'A tool call was denied by the permission mode.',
                     });
+                } else if (msg.subtype === 'task_started' || msg.subtype === 'task_updated') {
+                    this._noteTask(msg);
                 } else if (msg.subtype === 'task_notification') {
-                    // A background subagent finished.
+                    this._noteTask(msg);
+                    // A background task finished — a subagent, or a command.
                     //
                     // The conversation gets this as an injected *user* message,
                     // which is the form transcript.js parses to draw the row —
@@ -1925,6 +1977,49 @@ class Runner extends EventEmitter {
         if (changed) this.emit('status', this.status());
     }
 
+    /**
+     * Is this process running work it started and has not finished?
+     *
+     * Entries older than BACKGROUND_STALE_MS are dropped on the way past: the
+     * finish is only ever learned from the stream, and one that went missing must
+     * not pin a process open for good.
+     */
+    get hasBackground() {
+        if (!this.proc) return false;
+        const cutoff = Date.now() - BACKGROUND_STALE_MS;
+        for (const [id, t] of this.background) if (t.startedAt < cutoff) this.background.delete(id);
+        return this.background.size > 0;
+    }
+
+    /**
+     * Keep `background` in step with the CLI's task events.
+     *
+     * `task_started` is sent for foreground subagents too; they finish with a
+     * `task_notification` like any other, before their turn does, so tracking
+     * every task rather than guessing which are backgrounded costs nothing.
+     * `task_updated` is read for a terminal status in case a build sends that
+     * without the notification. `quiet` is the adopt replay, which decides state
+     * once at the end and must not act on each line.
+     */
+    _noteTask(msg, { quiet = false } = {}) {
+        const id = msg.task_id;
+        if (!id) return;
+        const before = this.background.size;
+        if (msg.subtype === 'task_started') {
+            this.background.set(id, { type: msg.task_type || null, startedAt: Date.now() });
+        } else if (msg.subtype === 'task_notification'
+            || (msg.subtype === 'task_updated' && msg.patch
+                && TASK_DONE.includes(msg.patch.status))) {
+            this.background.delete(id);
+        } else {
+            return;
+        }
+        if (quiet || this.background.size === before) return;
+        this._saveNote();
+        this.emit('status', this.status());
+        if (!this.background.size) this.emit('background-drained');
+    }
+
     status() {
         return {
             sessionId: this.sessionId,
@@ -1949,6 +2044,11 @@ class Runner extends EventEmitter {
             retry: this.retry,
             lastResult: this.lastResult,
             queued: this.queue.length,
+            // Background tasks this process is still running. A session can be
+            // `idle` with this above zero, and then it is not free to restart.
+            background: this.proc ? this.background.size : 0,
+            // A model/effort change waiting for those to finish, or null.
+            pendingSettings: this.pendingSettings,
             // The messages themselves, not just a count: the composer renders one
             // chip per entry and needs the id to cancel or reorder it. Every
             // status event carries this, so it stays a list of what is still
@@ -2168,17 +2268,48 @@ class RunnerPool extends EventEmitter {
         // two together, as `model ?? r.model` does, would make choosing `inherit`
         // do nothing while the dropdown said it had.
         if (r) {
-            // A mode, model, effort or fork change only takes effect on a fresh
-            // process: `claude` reads all of them from its argv and nowhere else.
+            // A model, effort or fork change only takes effect on a fresh process:
+            // `claude` reads them from its argv and nowhere else. A mode can also
+            // be changed in place, which is used below only where a restart would
+            // cost something.
             const wants = {
                 model: model ?? r.model,
                 effort: effort === undefined ? r.effort : effortOrNull(effort),
                 permissionMode: permissionMode ?? r.permissionMode,
             };
+            const settings = wants.model !== r.model || wants.effort !== r.effort;
+            const mode = wants.permissionMode !== r.permissionMode;
+            // A process still running background work is not replaced for a
+            // settings change, because replacing it kills that work — the dev
+            // server the last turn started, a subagent it sent off. A mode is
+            // switched in place instead, which the CLI can do; a model or effort
+            // cannot be, so it waits until the work finishes (_applyPending) and
+            // the message goes to the process as it is. A fork or an error still
+            // replaces it: the first is asked for outright, and in the second
+            // there is nothing to keep.
+            if (r.state !== 'busy' && r.hasBackground && !fork && r.state !== 'error') {
+                if (mode) r._setPermissionMode(wants.permissionMode, { approved: false });
+                // Null when the pick matches the process again, which withdraws one.
+                const pending = settings ? { model: wants.model, effort: wants.effort } : null;
+                if (!sameSettings(pending, r.pendingSettings)) {
+                    r.pendingSettings = pending;
+                    r._queueChanged();
+                    // Said once per change asked for, not on every message after it.
+                    if (pending) {
+                        const n = r.background.size;
+                        this.emit('notice', {
+                            sessionId, level: 'info', kind: 'settings_deferred',
+                            text: `Kept the current ${settingsWord(r, wants)} for this message: `
+                                + `${n} background task${n === 1 ? ' is' : 's are'} still `
+                                + 'running, and switching restarts Claude, which would stop '
+                                + `${n === 1 ? 'it' : 'them'}. It switches once they finish.`,
+                        });
+                    }
+                }
+                return r;
+            }
             if (r.state !== 'busy'
-                && (wants.model !== r.model || wants.effort !== r.effort
-                    || wants.permissionMode !== r.permissionMode
-                    || fork !== r.fork || r.state === 'error'
+                && (settings || mode || fork !== r.fork || r.state === 'error'
                     // A branch is a fork with a cut in it; a different cut, or
                     // one where the live process has none, is as much a new
                     // process as a fork is. `r.branch` is null once started, so
@@ -2242,6 +2373,10 @@ class RunnerPool extends EventEmitter {
             sessionId: r.sessionId, cwd: msg.cwd || r.cwd, init: msg,
         }));
         r.on('exit', () => this.emit('status', r.status()));
+        // A model/effort change held for background work is applied at the first
+        // moment it can be: the work finishing, or the turn running when it did.
+        r.on('background-drained', () => this._applyPending(r));
+        r.on('turn-complete', () => this._applyPending(r));
         r.on('forked', ({ from, to }) => {
             // Re-key so a later send reaches the copy, not the original.
             if (this.runners.get(from) === r) this.runners.delete(from);
@@ -2352,10 +2487,40 @@ class RunnerPool extends EventEmitter {
         this.runners.delete(id);
     }
 
+    /**
+     * Carry out a model/effort change `ensure` held back for background work.
+     *
+     * The process is retired and a runner with the new settings put in its place,
+     * not started: nothing is waiting to be sent (anything queued moves across and
+     * starts it), so the next message starts it with the right argv. Waits rather
+     * than acting while a turn runs or work remains; `turn-complete` asks again.
+     */
+    _applyPending(r) {
+        if (!r.pendingSettings || r.state === 'busy' || r.hasBackground) return;
+        if (this.runners.get(r.sessionId) !== r) return;
+        const { model, effort } = r.pendingSettings;
+        r.pendingSettings = null;
+        const carried = r.takeQueue();
+        const fresh = this._make({ sessionId: r.sessionId, cwd: r.cwd, model, effort,
+            permissionMode: r.permissionMode });
+        this.runners.set(r.sessionId, fresh);
+        // The old runner's exit reports *its* settings, and a window takes the
+        // last status it hears for a session as the truth — so say the new one's
+        // again after it.
+        r.once('exit', () => this.emit('status', fresh.status()));
+        r.retire();
+        if (carried.length) {
+            fresh.queue.push(...carried);
+            fresh._queueChanged();
+            fresh.start();
+        }
+        this.emit('status', fresh.status());
+    }
+
     _evictIdle() {
         const now = Date.now();
         for (const [id, r] of this.runners) {
-            if (r.state === 'busy') continue;
+            if (r.state === 'busy' || r.hasBackground) continue;
             if (now - r.lastUsedAt < IDLE_EVICT_MS) continue;
             this._evict(id, r,
                 'That session had been idle for a while, so its process was shut down.');
@@ -2364,7 +2529,9 @@ class RunnerPool extends EventEmitter {
 
     _evictTo(limit) {
         const idle = [...this.runners.entries()]
-            .filter(([, r]) => r.state !== 'busy')
+            // Not one running background work either: it is idle in name only, and
+            // evicting it stops the work. MAX_LIVE gives way rather than that.
+            .filter(([, r]) => r.state !== 'busy' && !r.hasBackground)
             .sort((a, b) => a[1].lastUsedAt - b[1].lastUsedAt);
         while (this.runners.size > limit && idle.length) {
             const [id, r] = idle.shift();
