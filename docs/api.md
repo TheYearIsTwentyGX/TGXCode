@@ -2832,7 +2832,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `runner-status` | see below |
 | `permission-request` | `{sessionId, ...ask}` |
 | `permission-resolved` | `{sessionId, requestId, outcome}` |
-| `notice` | `{sessionId: string, level: 'warn', kind: string, text: string}` — something worth telling the user that is not a permission ask. Every notice the bridge sends today is `level: 'warn'`; treat any other level as informational. `kind` is one of `no_permission_prompt`, `permission_uninteractive`, `mode_change_failed`, `permission_auto_denied`, `permission_denied`, `api_retry`, `turn_failed`, `rate_limit` — and an unrecognised kind is a plain warning, not an error. **`rate_limit` is not one per limit: it repeats on every turn for as long as the limit holds**, because the CLI sends an identical `rate_limit_event` each time and this one is not deduplicated the way the `quota` event below is. A client that toasts it unconditionally therefore stacks the same warning over and over for an afternoon. `web/app.js` drops this kind entirely and flashes the header quota pill off the `quota` event instead; a client with nowhere to put a persistent indicator should throttle the toast itself. Everything the notice says is also in `GET /api/quota` — `windows[].status` for the current state and `events` for the history |
+| `notice` | `{sessionId: string, level: 'warn', kind: string, text: string}` — something worth telling the user that is not a permission ask. Every notice the bridge sends is `level: 'warn'` except `settings_deferred`, which is `level: 'info'`; treat any level other than `warn` as informational. `kind` is one of `settings_deferred` (a model/effort change held while background work runs — see the send route), `no_permission_prompt`, `permission_uninteractive`, `mode_change_failed`, `permission_auto_denied`, `permission_denied`, `api_retry`, `turn_failed`, `rate_limit` — and an unrecognised kind is a plain warning, not an error. **`rate_limit` is not one per limit: it repeats on every turn for as long as the limit holds**, because the CLI sends an identical `rate_limit_event` each time and this one is not deduplicated the way the `quota` event below is. A client that toasts it unconditionally therefore stacks the same warning over and over for an afternoon. `web/app.js` drops this kind entirely and flashes the header quota pill off the `quota` event instead; a client with nowhere to put a persistent indicator should throttle the toast itself. Everything the notice says is also in `GET /api/quota` — `windows[].status` for the current state and `events` for the history |
 | `claude-version` | **the whole `GET /api/claude-version` payload**, so there is nothing to refetch. Ungated, no `sessionId`. Sent when the summary moved: the hourly registry check found a newer version, an update finished, or a process started or ended on a version that changes `staleSessions`. Debounced by about a second |
 | `quota` | **the whole `GET /api/quota` payload**, so there is nothing to refetch. Ungated, like `drafts-changed`. Fires only when a reading actually moved — the CLI sends an identical `rate_limit_event` on every turn and those are dropped rather than pushed. Note it carries **no `sessionId`**: quota is account-wide, and which session happened to observe it says nothing. A window that has been near a limit for an hour will therefore push nothing at all, which is why `usedPercentAt` matters more than the arrival time of this event |
 | `turn-complete` | `{sessionId, isError, detail, retries, costUsd, durationMs, numTurns, stopReason}` — the runner's `lastResult` with the session id on it. `detail` is null unless `isError` |
@@ -2875,6 +2875,8 @@ always false.
 | **`pendingPermission`** | **object or null** — the whole ask, same shape as `permission-request` |
 | `canPrompt` | bool — whether this process supports permission prompts at all |
 | `busySince` | number or null — epoch ms, and null unless `state` is `busy` |
+| `background` | number — tasks the process started and has not finished: a command run with `run_in_background`, a subagent sent off on its own. **A session can be `idle` with this above zero**, and while it is the bridge will not restart or evict the process (see the send route). `0` whenever there is no process. Carried over when a bridge adopts a process |
+| **`pendingSettings`** | **object or null** — `{model, effort}` (each a string or null), a model/effort change the bridge is holding until `background` reaches zero, because applying it restarts the process and would stop that work. When it is applied, a status with the new `model`/`effort` follows |
 | `claudeVersion` | string or null — the Claude Code version **of the running process**, from its `system/init` line (e.g. `"2.1.280"`). Null until the process has started and whenever there is none, so an idle session with no process is never "on an old binary": its next message starts whatever is installed then. This is not the summary's `version`, which is the first binary that ever wrote the transcript. Carried over when a bridge adopts a process from the session host. See `GET /api/claude-version` |
 | **`retry`** | **object or null** — `{attempt, max, status, at}` while the CLI is retrying a failing API call, which can run for minutes. Cleared when the turn lands |
 | **`lastResult`** | **object or null** — `{isError, detail, retries, costUsd, durationMs, numTurns, stopReason}` for the turn that most recently finished |
@@ -2976,6 +2978,14 @@ quietly drop a session out of `acceptEdits` on every message.
 
 A model, effort or mode change replaces the process; queued messages carry across. `queued`
 tells you whether the text is still recoverable on this side.
+
+**Except while the process is running background work** (`status.background > 0`),
+because replacing it stops that work. Then a mode change is made in place on the running
+process, and a model or effort change is **held**: the message is answered with the
+settings the process already has, `status.pendingSettings` carries the change, a
+`notice` with `kind: "settings_deferred"` says so (once per change, not per message),
+and the change is applied as soon as the work finishes and no turn is running. A fork or
+a process in `error` is replaced as before.
 
 `effort` is one of `low`, `medium`, `high`, `xhigh`, `max`, or `null` for `inherit` (no
 `--effort`, so Claude's own `effortLevel` decides); any other string is read as `null`.
