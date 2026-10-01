@@ -2549,6 +2549,9 @@ function connect() {
         // to be redrawn — including the rail, which nothing else here touches.
         repaintProjectColors();
         paintRailSort();
+        // `standing.mode` decides whether the summaries carry a line at all, so
+        // turning it back on needs the list again rather than a repaint.
+        loadSessions();
         // The panel that did the saving already has the answer; one that is open
         // in *this* window while another saved does not.
         if (state.settings.open && !state.settings.saving) loadSettings();
@@ -2659,6 +2662,17 @@ function connect() {
         if (row) {
             row.runner = { state: s.state, activity: s.activity,
                 detail: s.detail, queued: s.queued };
+            renderRail();
+        }
+    });
+
+    // A session's one-line standing moved — bridge/standing.js. Patched onto the
+    // rail's copy like `runner-status` above, since the list itself did not change.
+    es.addEventListener('standing-changed', (e) => {
+        const p = JSON.parse(e.data);
+        const row = state.sessions.find(x => x.sessionId === p.sessionId);
+        if (row) {
+            row.standing = p.standing || null;
             renderRail();
         }
     });

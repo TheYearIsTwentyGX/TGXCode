@@ -345,6 +345,7 @@ project filter on `GET /api/sessions?project=`.
 | **`worktree`** | **object or null** — `{name, branch, path, originalCwd}` |
 | **`schedule`** | **object or null** — `{id, title}`, both strings; see below |
 | **`later`** | **object or null** — `{pending, nextAt}`, both numbers; see below |
+| **`standing`** | **object or null** — `{text, source, at}`: `text` a string of at most 80 characters, `source` `"model"` or `"extract"`, `at` epoch ms; see below |
 | `prs` | array of `{number, url, repo}`, empty if none |
 | **`live`** | **object or null** — see below |
 | **`runner`** | **object or absent** — five fields only, see below |
@@ -378,6 +379,26 @@ not pushed when a message is delivered — `later-changed` is. So a client that 
 badge from this field and never refetches will show a message that has already gone.
 `web/app.js` draws its badge from the `later-changed` payload instead and leaves this
 field for clients that fetch sessions and nothing else.
+
+**`standing` is one line on where the session's last turn left things** — "PR #150
+opened, waiting on review", "blocked: needs DB password" — for a rail to show under the
+title. `source: "model"` means a short haiku call wrote it; `"extract"` means it is the
+last prose line of the final reply, used when `standing.mode` is `"extract"`, when the
+turn ended in an error, or when the model call failed. `at` is when it was written.
+
+It is **`null` far more often than not**, and a client must treat that as normal:
+
+- **Only sessions this bridge ran a turn for get one.** It is written about fifteen
+  seconds after a `turn-complete`, so a session in a terminal never has one, and a
+  bridge-run session has one only once a turn has ended since the feature existed.
+- **A line outlives the turn it described** until the next turn the bridge runs ends.
+  A session continued in a terminal keeps its old line; compare `at` with `lastTs` if
+  that matters to you.
+- It is `null` for every session while `standing.mode` is `"off"`.
+- It is not pushed on `sessions-changed`. A change arrives as `standing-changed`, below.
+
+A client should not show it while `runner.state` is `busy`: it describes the previous
+reply, and `web/app.js` hides it then.
 
 `titleSource` says where `title` came from: `user` (a name set through
 `POST /api/sessions/:id/flags`, which beats everything below), `custom-title`,
@@ -1162,8 +1183,8 @@ rather than taken at face value; the default stands. Without `?cwd=` you get the
 user-level answer, which is also what every page is served in a `tgx-prefs`
 `<meta>` tag (minus `sources` and `problems`).
 
-**Seven sections may only be set in the user's own file**: `quota`, `keyboard`,
-`projects`, `toolbar`, `wispr`, `preview` and `devbrowser`. A project file that carries one is ignored and says so in
+**Eight sections may only be set in the user's own file**: `quota`, `keyboard`,
+`projects`, `toolbar`, `wispr`, `preview`, `devbrowser` and `standing`. A project file that carries one is ignored and says so in
 `problems`. What directory this app starts `claude` in, and which keys your
 hands use, are not a repository's business — and a repository that could rebind
 your keys could make the window unusable with hand-editing the file as the only
@@ -1395,6 +1416,14 @@ Both sections are **user file only**, and both are read only by the desktop page
 a client with no browser of its own has nothing to consult them for. The defaults
 are the behaviour from before either existed: a click goes to DevBrowser, and
 launches it if need be.
+
+`standing` decides how the one-line `standing` on a session summary is written. One
+key, **user file only** — whether this machine spends a model call after every turn is
+not a checked-in repository's decision:
+
+| Key | Type | |
+|---|---|---|
+| `mode` | **`"model"`, `"extract"` or `"off"`**, default `"model"` | `"model"` asks haiku for the line once per reply, through `claude -p --no-session-persistence` (so it leaves no transcript), never twice for the same reply. `"extract"` takes the last line of the reply and costs no quota. `"off"` does no work, and every summary carries `standing: null` until it is turned back on. Rows already written are kept, so turning it back on shows them again. |
 
 ### `GET /api/wispr`
 
@@ -2822,7 +2851,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `handoff` | `{at, sessionId, from, count}` — another session handed this one work, and it was resumed to deal with it. Same shape and same reasoning as above; watched in the transcript rather than reported by the route, so it fires when the message *arrived* rather than when it was queued |
 | `suggestion-changed` | `{at, sessionId, toolUseId}` — a suggested follow-up was started, completed, dismissed, or undone, possibly in another window |
 | `session-deleted` | `{sessionId, title}` |
-| `prefs` | the **user-level** settings, in the same shape as the `tgx-prefs` `<meta>` tag: `{version, transcript, live, projects, quota, spinner, keyboard, toolbar, wispr}`, with no `sources` or `problems`. Fired on every `PUT /api/prefs` including your own, so a second window does not sit on a stale copy — two are routinely open here. A project's answer is deliberately not sent: it is the open session's business and arrives with `GET /api/sessions/:id` |
+| `prefs` | the **user-level** settings, in the same shape as the `tgx-prefs` `<meta>` tag: `{version, transcript, live, projects, quota, spinner, keyboard, toolbar, wispr, preview, devbrowser, standing}`, with no `sources` or `problems`. Fired on every `PUT /api/prefs` including your own, so a second window does not sit on a stale copy — two are routinely open here. A project's answer is deliberately not sent: it is the open session's business and arrives with `GET /api/sessions/:id` |
 | `claude-config` | `{at: number, scope: 'user'\|'project'\|'project-local'\|'managed', file: string}` — the *fact* that one of Claude Code's settings files changed, and deliberately **not** its content. Unlike `prefs` there is no `<meta>` copy for a page to keep in sync and nothing in this app behaves differently because of those files, so the event is a nudge to re-read; pushing the contents of a file whose route is local-only down every open channel would be a poor trade for saving a fetch. Fired on every successful `PUT /api/claude-config`, including your own — **and on a change this bridge did not make**: `claude` writes these files itself, so `theme` or `editorMode` from `/config`, `enabledPlugins` from a plugin toggle, and a rule appended to `settings.local.json` when somebody approves a permission mid-turn all arrive here too. `scope` may then be `managed`, which no `PUT` can produce. **Two caveats a client has to hold.** It is best-effort: the bridge watches directories with `fs.watch`, which throws on some filesystems and silently does nothing on others, so a change can go unannounced — keep treating `409 {code:'stale'}` from `PUT /api/claude-config` as the guarantee, and this only as the convenience that usually saves you from meeting it. And a project's two files are watched only once `GET /api/claude-config?cwd=<dir>` has been called for that directory, only for a small number of directories at a time (least-recently-read dropped first), and not after ten minutes without another read of it; the user file and the managed file are watched throughout. So poll or re-`GET` if you need certainty about a directory you have not asked about |
 | `claude-docs` | `{at, scope, file}` — the same trade for a `CLAUDE.md`: the fact one was written, never its contents. `scope` is `"user"` or `"project"`. Fired on every successful `PUT /api/claude-docs`, including your own. **A client holding an unsaved draft must not reload on this** — show a conflict and keep what the person typed; the whole draft here is somebody's prose rather than one key |
 | `notification` | a whole notification row, just filed — the same shape `GET /api/notifications` returns, `read` included — plus `unread`, the badge count after this row. So an open history view need not refetch, and need not guess whether the new row counts |
@@ -2835,6 +2864,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `notice` | `{sessionId: string, level: 'warn', kind: string, text: string}` — something worth telling the user that is not a permission ask. Every notice the bridge sends is `level: 'warn'` except `settings_deferred`, which is `level: 'info'`; treat any level other than `warn` as informational. `kind` is one of `settings_deferred` (a model/effort change held while background work runs — see the send route), `no_permission_prompt`, `permission_uninteractive`, `mode_change_failed`, `permission_auto_denied`, `permission_denied`, `api_retry`, `turn_failed`, `rate_limit` — and an unrecognised kind is a plain warning, not an error. **`rate_limit` is not one per limit: it repeats on every turn for as long as the limit holds**, because the CLI sends an identical `rate_limit_event` each time and this one is not deduplicated the way the `quota` event below is. A client that toasts it unconditionally therefore stacks the same warning over and over for an afternoon. `web/app.js` drops this kind entirely and flashes the header quota pill off the `quota` event instead; a client with nowhere to put a persistent indicator should throttle the toast itself. Everything the notice says is also in `GET /api/quota` — `windows[].status` for the current state and `events` for the history |
 | `claude-version` | **the whole `GET /api/claude-version` payload**, so there is nothing to refetch. Ungated, no `sessionId`. Sent when the summary moved: the hourly registry check found a newer version, an update finished, or a process started or ended on a version that changes `staleSessions`. Debounced by about a second |
 | `quota` | **the whole `GET /api/quota` payload**, so there is nothing to refetch. Ungated, like `drafts-changed`. Fires only when a reading actually moved — the CLI sends an identical `rate_limit_event` on every turn and those are dropped rather than pushed. Note it carries **no `sessionId`**: quota is account-wide, and which session happened to observe it says nothing. A window that has been near a limit for an hour will therefore push nothing at all, which is why `usedPercentAt` matters more than the arrival time of this event |
+| `standing-changed` | `{sessionId, standing}` — `standing` is `{text, source, at}` exactly as on the session summary (`text` a string, `source` `"model"` or `"extract"`, `at` epoch ms), or null. Patch that row's `standing`; there is nothing to refetch. Fires about fifteen seconds after a `turn-complete`, and only when the line was actually rewritten — a turn whose reply was already summarised sends nothing |
 | `turn-complete` | `{sessionId, isError, detail, retries, costUsd, durationMs, numTurns, stopReason}` — the runner's `lastResult` with the session id on it. `detail` is null unless `isError` |
 | `send-failed` | `{sessionId, kind, message, unsent: [text]}` — a send that never became a turn; hand the text back to the user. `unsent` is an array of **strings**, in send order, and may be empty — the event still means the send failed, and `message` is then the whole of it. `kind` is one of `busy-elsewhere` (the session is running somewhere else; offer to branch), `no-claude`, `missing`, `unknown`, `exited` (the process ended without answering) or `retired` (the bridge shut the process down with messages still queued). Treat an unrecognised kind as `unknown`. Attachments are **not** carried: a message that had files comes back as its text alone |
 | `session-forked` | `{from, to}` — follow the new id |

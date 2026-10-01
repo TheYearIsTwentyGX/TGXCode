@@ -358,6 +358,13 @@ const DEFAULTS = {
         // nothing.
         whenClosed: 'launch',
     },
+    standing: {
+        // The one-line "where this session stands" under each rail card, written
+        // after a turn the bridge ran ends. 'model' asks haiku for it (one short
+        // call per reply), 'extract' takes the last line of the reply and costs
+        // no quota, 'off' shows nothing and does no work. See bridge/standing.js.
+        mode: 'model',
+    },
 };
 
 // Sections a project may not set, however the precedence would otherwise fall.
@@ -380,8 +387,11 @@ const DEFAULTS = {
 //
 // `preview` and `devbrowser` are about which browser on this machine you look at
 // pages in, and whether one of them launches on a click — the same class of thing.
+//
+// `standing` is the quota argument again: whether this machine spends a model
+// call after every turn is not a checked-in repository's call.
 const USER_ONLY = new Set(['quota', 'keyboard', 'projects', 'toolbar', 'wispr',
-    'preview', 'devbrowser']);
+    'preview', 'devbrowser', 'standing']);
 
 // What each key is allowed to be. A file is a thing people edit, so a bad value
 // is dropped and the default kept rather than taken at face value — a
@@ -501,6 +511,9 @@ const SHAPE = {
         show: (v) => typeof v === 'boolean',
         openIn: (v) => v === 'inline' || v === 'devbrowser',
         whenClosed: (v) => v === 'launch' || v === 'inline' || v === 'nothing',
+    },
+    standing: {
+        mode: (v) => v === 'model' || v === 'extract' || v === 'off',
     },
 };
 
@@ -900,7 +913,7 @@ class Prefs {
      *   user-level answer, which is what the page is served before it knows
      *   which conversation it is about to show.
      * @returns {{version, transcript, live, projects, quota, spinner, keyboard,
-     *   wispr, preview, devbrowser, sources: string[], problems: object[]}}
+     *   wispr, preview, devbrowser, standing, sources: string[], problems: object[]}}
      */
     forCwd(dir) {
         const key = dir || '';
@@ -933,6 +946,7 @@ class Prefs {
             wispr: { transforms: [...DEFAULTS.wispr.transforms] },
             preview: { ...DEFAULTS.preview, list: [...DEFAULTS.preview.list] },
             devbrowser: { ...DEFAULTS.devbrowser },
+            standing: { ...DEFAULTS.standing },
             sources: [],
             problems: [],
         };

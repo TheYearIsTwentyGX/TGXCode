@@ -415,6 +415,20 @@
 }
 .strip[aria-current="true"] .strip-title { color: #d7e3ff; font-weight: 500; }
 
+/* Where the last turn left things — bridge/standing.js. One line, cut rather
+   than wrapped: the rail is narrow and the full line is in the tooltip. */
+.strip-standing {
+    display: block;
+    margin-top: 2px;
+    font: 400 12px/1.45 var(--sans);
+    color: var(--text-3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.strip-standing[data-source="extract"] { font-style: italic; }
+.strip[aria-current="true"] .strip-standing { color: #b3c7ea; }
+
 .strip-meta {
     display: flex;
     align-items: center;

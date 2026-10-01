@@ -40,6 +40,7 @@ export const PREFS_FALLBACK = {
     wispr: { transforms: [] },
     preview: { keepAliveMinutes: 10, overLive: true, links: false, listMode: 'block', list: [] },
     devbrowser: { show: true, openIn: 'devbrowser', whenClosed: 'launch' },
+    standing: { mode: 'model' },
 };
 
 
