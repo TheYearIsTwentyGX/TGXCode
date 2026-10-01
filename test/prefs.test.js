@@ -397,7 +397,7 @@ ok('an order saves resolved, refuses a bad entry, and is user-only');
 // because the call sites passed no cwd. A page that prints which file wins for
 // each key cannot rely on that.
 assert.deepStrictEqual([...USER_ONLY].sort(),
-    ['devbrowser', 'keyboard', 'preview', 'projects', 'quota', 'toolbar', 'wispr']);
+    ['devbrowser', 'keyboard', 'preview', 'projects', 'quota', 'standing', 'toolbar', 'wispr']);
 
 clear();
 write(userFile, { version: VERSION });

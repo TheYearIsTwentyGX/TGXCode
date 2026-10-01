@@ -65,6 +65,13 @@ class SessionIndex extends EventEmitter {
          * @type {import('./later').Later|null}
          */
         this.later = null;
+        /**
+         * The one-line "where this session stands", written after a turn the
+         * bridge ran. Set from server.js; absent, every session reports
+         * `standing: null`.
+         * @type {import('./standing').Standing|null}
+         */
+        this.standing = null;
         /** @type {Map<string, {file, dir, size, mtimeMs, meta}>} keyed by sessionId */
         this.sessions = new Map();
         /**
@@ -442,6 +449,9 @@ class SessionIndex extends EventEmitter {
             // that "something arrives here at 2am" is answerable without opening
             // the session, which is the one thing nobody is going to do at 2am.
             later: this.later ? this.later.pendingFor(m.sessionId) : null,
+            // `{text, source, at}` — a line about where the last turn left things,
+            // or null. See bridge/standing.js for where it comes from.
+            standing: this.standing ? this.standing.forSession(m.sessionId) : null,
             cwd: m.cwd,
             projectCwd: m.projectCwd,
             projectName: projectName(m.projectCwd || m.cwd),
