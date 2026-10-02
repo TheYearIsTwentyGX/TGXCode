@@ -542,8 +542,9 @@
 /* A busy turn that has said nothing past the threshold — bridge/runner.js. The
    badge stands in for the pulse, and the dot stops breathing: both of those say
    "working", and the point of this row is that nothing is. Red rather than the
-   amber of `.due`, because this one is asking you to do something. */
-.strip-meta .tag-stalled {
+   amber of `.due`, because this one is asking you to do something. The badge
+   is web/boards/parts.js's, so the boards' cards wear it too. */
+.tag-stalled {
     flex: none;
     padding: 1px 7px;
     border-radius: var(--pill);

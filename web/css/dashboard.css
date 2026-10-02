@@ -401,6 +401,9 @@
     animation: breathe 1.6s var(--ease) infinite;
 }
 .lcard[data-reason="ask"] .lcard-dot { background: var(--yellow); }
+/* Running and saying nothing — web/css/rail.css's `.strip` rule, for the same
+   reason: a breathing dot claims the work the badge beside it denies. */
+.lcard[data-stalled="true"] .lcard-dot { background: var(--red); animation: none; }
 .lcard[data-reason="error"] .lcard-dot { background: var(--red); }
 /* Hollow, exactly as in the rail: running, but not by us. */
 .lcard[data-reason="elsewhere"] .lcard-dot {

@@ -231,6 +231,8 @@
     background: var(--green);
     animation: breathe 1.6s var(--ease) infinite;
 }
+/* Stalled: the live card's rule, web/css/dashboard.css. */
+.tb-card[data-stalled="true"] .tb-dot { background: var(--red); animation: none; }
 .tb-task .tb-dot { background: var(--blue); }
 
 /* Two lines, then an ellipsis. A task title is a sentence and a session title

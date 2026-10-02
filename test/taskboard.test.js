@@ -14,7 +14,7 @@
 // and the last three cases here are the ones that would catch it.
 
 const assert = require('assert');
-const { column } = require('../bridge/taskboard.js');
+const { build, column } = require('../bridge/taskboard.js');
 
 let pass = 0;
 const ok = (name) => { pass++; console.log(`  ok  ${name}`); };
@@ -79,5 +79,23 @@ is('idle', {}, { state: 'stopped' }, 'a stopped runner is idle');
 // state of its own would otherwise get none. Here every session gets a card, so
 // a pin says nothing about which column — it is still just idle.
 is('idle', { pinned: true }, null, 'a pinned idle session is idle');
+
+// --- the card's runner -----------------------------------------------------
+// docs/api.md promises the overview card's eight fields on this board's cards
+// too. Two of them went missing here once, and the board then drew a hung turn
+// as an ordinary working one — nothing errors when a field is simply absent.
+{
+    const runner = { state: 'busy', activity: 'Writing', queued: 0, busySince: 1,
+        retry: null, error: null, errorKind: null, stalled: true,
+        lastActivityAt: 2, pendingPermission: null, queue: [] };
+    const index = { ready: true, listSuggestions: () => [],
+        list: () => [{ sessionId: 'a', title: 't', lastTs: '2026-01-01T00:00:00Z' }] };
+    const pool = { statuses: () => ({ a: runner }) };
+    const board = build(index, pool);
+    assert.deepStrictEqual(Object.keys(board.working[0].runner).sort(),
+        ['activity', 'busySince', 'error', 'errorKind', 'queued', 'retry', 'stalled', 'state']);
+    assert.strictEqual(board.working[0].runner.stalled, true);
+    ok('a working card carries the eight-field runner, stalled included');
+}
 
 console.log(`\n${pass} passed`);
