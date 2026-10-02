@@ -36,7 +36,7 @@ import { PR_ICON, icon } from './icons.js';
 import { pullAndRestart, closeRestart, startFixSession } from './restart.js';
 import {
     noteRunner, announceTurn, announceSendFailure, announceAsk,
-    askBody, clearAsk, registerWorker, openFromHash,
+    askBody, clearAsk, announceStall, clearStall, registerWorker, openFromHash,
 } from './notifications.js';
 import {
     renderQuota, showQuota, loadQuota, applyQuotaSnapshot,
@@ -2663,9 +2663,17 @@ function connect() {
         const row = state.sessions.find(x => x.sessionId === s.sessionId);
         if (row) {
             row.runner = { state: s.state, activity: s.activity,
-                detail: s.detail, queued: s.queued };
+                detail: s.detail, queued: s.queued, stalled: s.stalled };
             renderRail();
         }
+    });
+
+    // A busy turn gone quiet, or back. The badge is the runner-status above,
+    // which follows this; what is left here is the notification.
+    es.addEventListener('runner-stalled', (e) => {
+        const p = JSON.parse(e.data);
+        if (p.stalled) announceStall(p);
+        else clearStall(p.sessionId);
     });
 
     // A session's one-line standing moved — bridge/standing.js. Patched onto the

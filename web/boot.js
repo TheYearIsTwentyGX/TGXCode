@@ -27,6 +27,7 @@ export const PREFS_FALLBACK = {
         compact: false, hideElsewhere: false, order: 'needs-you',
         overTasks: 'hidden', overDashboard: 'hidden', overHistory: 'hidden',
         overDrafts: 'hidden', overSchedules: 'hidden', overSettings: 'hidden',
+        stalledAfterMinutes: 5,
     },
     projects: {
         colors: {}, backdropTint: true, backdropStrength: 13,

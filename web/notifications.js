@@ -15,6 +15,7 @@ import { state } from './state.js';
 import { clip, dur } from './format.js';
 import { openSession } from './transcript/conversation.js';
 import { toolSummary } from './transcript/tools.js';
+import { stopFromCard } from './boards/parts.js';
 
 // ── notifications ────────────────────────────────────────────────────────
 //
@@ -234,6 +235,49 @@ export function clearAsk(sessionId) {
 }
 
 /**
+ * A busy turn that has gone silent — `runner-stalled` from the bridge, whose
+ * header in bridge/runner.js has the rule.
+ *
+ * Its own tag, so it neither replaces a pending ask's toast nor is replaced by
+ * the turn's finish, and taken down by clearStall() the moment the turn speaks
+ * again. One button, Stop turn, answered by sw.js without a window — the whole
+ * point is that nothing on screen is going to tell you to. The same caveat as
+ * an ask's buttons: no worker, no button, and the click opens the session.
+ */
+export function announceStall(p) {
+    const watching = document.hasFocus()
+        && state.current && state.current.sessionId === p.sessionId;
+    if (watching || !allowedNow(p.sessionId)) return;
+    const mins = Math.max(1, Math.round((p.stalledAfterMs || 0) / 60_000));
+    const title = `${clip(sessionTitle(p.sessionId), 60)} — may be stuck`;
+    const body = `Still working, but nothing for ${mins} min: no output, no tool running.`;
+    chime('ask');
+    if (!notify.desktop || notifyPermission() !== 'granted') return;
+    if (notify.sw) {
+        notify.sw.showNotification(title, {
+            body,
+            tag: stallTag(p.sessionId),
+            silent: true,
+            requireInteraction: true,
+            data: { sessionId: p.sessionId },
+            actions: [{ action: 'stop', title: 'Stop turn' }],
+        }).catch(() => {});
+        return;
+    }
+    announce(title, body, null, p.sessionId);
+}
+
+const stallTag = (sessionId) => `claude-stall:${sessionId}`;
+
+/** The turn spoke again, or ended: the toast offering to stop it is stale. */
+export function clearStall(sessionId) {
+    if (!notify.sw) return;
+    notify.sw.getNotifications({ tag: stallTag(sessionId) })
+        .then(list => list.forEach(n => n.close()))
+        .catch(() => {});
+}
+
+/**
  * Said out loud, and clickable back to where it came from.
  *
  * Through the service-worker registration where there is one, which showAsk()
@@ -367,6 +411,11 @@ export async function registerWorker() {
 // that lives here rather than there.
 navigator.serviceWorker?.addEventListener('message', (e) => {
     const msg = e.data || {};
+    // A stalled turn's Stop turn button — see stopTurn() in sw.js.
+    if (msg.type === 'stop-stalled' && msg.sessionId) {
+        stopFromCard(msg.sessionId, { hard: true }).catch(() => {});
+        return;
+    }
     if (msg.type !== 'reveal-session') return;
     if (window.claudeShell) window.claudeShell.revealWindow();
     if (msg.sessionId) openSession(msg.sessionId);

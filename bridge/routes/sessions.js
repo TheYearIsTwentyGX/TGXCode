@@ -76,9 +76,12 @@ async function handle(req, res, url, pathname, seg, who) {
             // `queued` rides along so the rail can say a session has work waiting
             // even while you are looking at a different one, and `detail` so a
             // row too narrow for the whole label can show the half that matters.
+            // `stalled` so a window opened onto a wedged turn badges it at once,
+            // rather than only after the next transition event.
             if (st) {
                 s.runner = { state: st.state, activity: st.activity,
-                    detail: st.detail, queued: st.queued, claudeVersion: st.claudeVersion };
+                    detail: st.detail, queued: st.queued, claudeVersion: st.claudeVersion,
+                    stalled: st.stalled };
             }
         }
         return send(res, 200, { sessions, ready: index.ready });

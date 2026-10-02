@@ -29,6 +29,8 @@ self.addEventListener('notificationclick', (event) => {
     // else — including a click on the body — is a request to go and look.
     if (event.action === 'allow' || event.action === 'deny') {
         event.waitUntil(answer(data, event.action));
+    } else if (event.action === 'stop') {
+        event.waitUntil(stopTurn(data));
     } else {
         event.waitUntil(reveal(data));
     }
@@ -54,6 +56,36 @@ async function answer(data, decision) {
             body: JSON.stringify({ requestId: data.requestId, decision }),
         });
     } catch { /* nothing here can usefully recover; the card still can */ }
+}
+
+/**
+ * Stop a stalled turn, from its notification's button. Hard, like the rail
+ * row's Stop for a stalled turn — web/boards/parts.js's StopButton says why.
+ *
+ * Handed to a window when there is one, because the stop gives back whatever
+ * was queued and only a page has a composer to put it in. With no window the
+ * worker stops it itself and that queue is lost: the toast was raised by a page,
+ * so a window having closed since is the rare case, and leaving a wedged turn
+ * running is not the better trade. Quiet on failure for the same reason as
+ * answer().
+ */
+async function stopTurn(data) {
+    if (!data.sessionId) return;
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    if (windows.length) {
+        windows[0].postMessage({ type: 'stop-stalled', sessionId: data.sessionId });
+        return;
+    }
+    try {
+        await fetch(`/api/sessions/${encodeURIComponent(data.sessionId)}/stop`, {
+            method: 'POST',
+            headers: {
+                'X-TGXCode-Client': '1', 'X-Claude-Sessions-Client': '1',
+                'Content-Type': 'application/json',
+            },
+            body: '{"hard":true}',
+        });
+    } catch { /* the rail's Stop is still there */ }
 }
 
 /**

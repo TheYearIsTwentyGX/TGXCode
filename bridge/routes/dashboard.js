@@ -53,7 +53,8 @@ async function handle(req, res, url, pathname, seg, who) {
                     const st = statuses[s.sessionId];
                     if (st) {
                         s.runner = { state: st.state, activity: st.activity,
-                            detail: st.detail, queued: st.queued, claudeVersion: st.claudeVersion };
+                            detail: st.detail, queued: st.queued, claudeVersion: st.claudeVersion,
+                            stalled: st.stalled };
                     }
                 }
             }

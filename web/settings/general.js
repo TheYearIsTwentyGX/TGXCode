@@ -143,6 +143,12 @@ export const SETTINGS = [
                 note: 'Order of arrival puts new work at the bottom and moves it up only '
                     + 'as the sessions above it finish, so nothing reorders while you read. '
                     + 'Pinned and Recent activity are unaffected.' },
+            { key: 'stalledAfterMinutes', type: 'int', min: 0, max: 120,
+                label: 'Call a silent turn stalled after, in minutes',
+                note: 'A working session with no output, no tool running and nothing '
+                    + 'waiting on you for this long gets a Stalled badge and a '
+                    + 'notification. An open tool call — a long build — never counts. '
+                    + '0 turns it off.' },
             { type: 'heading', label: 'Live board visibility',
                 note: 'Whether the board stays up, docked beside or under the screen, '
                     + 'while one of these is open. Side-by-Side and Stacked keep it '

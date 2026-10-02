@@ -150,6 +150,22 @@ function onUser(m) {
         return out({ type: 'assistant',
             message: { role: 'assistant', content: [{ type: 'text', text: 'working' }] } });
     }
+    // A tool call that never finishes: the build that is still building.
+    if (/\\bOPENTOOL\\b/.test(text)) {
+        return out({ type: 'assistant', message: { role: 'assistant',
+            content: [{ type: 'tool_use', id: 'tu-open', name: 'Bash', input: { command: 'make' } }] } });
+    }
+    // Quiet for the given milliseconds mid-turn, then a line and the end: the slow
+    // turn that looked stuck and was not.
+    const late = /\\bLATE(\\d+)\\b/.exec(text);
+    if (late) {
+        out({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'thinking' }] } });
+        return setTimeout(() => {
+            out({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'back' }] } });
+            setTimeout(() => out({ type: 'result', subtype: 'success', is_error: false, result: text,
+                duration_ms: 1, num_turns: 1, total_cost_usd: 0, session_id: sessionId }), 50);
+        }, Number(late[1]));
+    }
     if (/\\bDIE0\\b/.test(text)) { setTimeout(() => process.exit(0), 120); return; }
     // A turn that leaves work running, the way \`run_in_background\` does: the task
     // starts, the turn ends, and the task reports in on its own clock afterwards.
@@ -454,6 +470,103 @@ function runner() {
         assert.deepStrictEqual(turns().map(t => t.text), ['TOOLS1500 z', 'after'],
             'the handed message is not delivered, and the stopped turn is not re-sent');
         ok('a hard stop hands back a handed message and does not wedge the next send');
+    }
+
+    // --- a busy turn that has gone quiet is reported stalled ---------------
+    // Three ways to be busy and silent, and only one of them is stuck. Each case
+    // counts the `stalled` events rather than sampling the flag, because a flag
+    // that flickered and settled would pass a sample and fail the user.
+    const STALL_MS = 300;
+    const watchStall = (r) => {
+        const seen = [];
+        r.stallAfter = () => STALL_MS;
+        r.on('stalled', (p) => seen.push(p));
+        return seen;
+    };
+
+    {
+        reset();
+        const r = runner();
+        const seen = watchStall(r);
+        r.send('HANG stall');
+        await until(() => r.state === 'busy', 5000, 'the turn');
+        assert.strictEqual(r.status().stalled, false, 'not stalled the moment it starts');
+        await until(() => seen.length, 2000, 'a stalled event');
+        assert.strictEqual(seen[0].stalled, true);
+        assert.strictEqual(seen[0].sessionId, r.sessionId);
+        assert.strictEqual(seen[0].stalledAfterMs, STALL_MS);
+        assert.strictEqual(typeof seen[0].lastActivityAt, 'number');
+        assert.ok(Date.now() - seen[0].lastActivityAt >= STALL_MS, 'and quiet for the whole threshold');
+        const st = r.status();
+        assert.strictEqual(st.stalled, true);
+        assert.strictEqual(st.state, 'busy', 'still busy: stalled is a note on busy, not a state');
+        await sleep(STALL_MS * 2);
+        assert.strictEqual(seen.length, 1, 'said once, not on every tick');
+        await r.stop({ hard: true });
+        await once(r, 'exit');
+        assert.strictEqual(r.status().stalled, false, 'and gone with the turn');
+        assert.deepStrictEqual(seen.map(p => p.stalled), [true, false], 'the stop is a recovery');
+        ok('a hung turn becomes stalled');
+    }
+
+    {
+        reset();
+        const r = runner();
+        const seen = watchStall(r);
+        r.send('OPENTOOL build');
+        await until(() => r._pendingTools.size, 5000, 'the tool call');
+        await sleep(STALL_MS * 4);
+        assert.strictEqual(r.status().stalled, false);
+        assert.strictEqual(seen.length, 0, 'an open tool call holds the clock');
+        await r.stop({ hard: true });
+        await once(r, 'exit');
+        ok('an open long tool call is not stalled');
+    }
+
+    {
+        reset();
+        const r = runner();
+        const seen = watchStall(r);
+        r.send('LATE1200 slow');
+        await until(() => seen.length === 1, 2000, 'the stall');
+        assert.strictEqual(r.status().stalled, true);
+        await until(() => seen.length === 2, 3000, 'the recovery');
+        assert.strictEqual(seen[1].stalled, false);
+        assert.strictEqual(r.status().stalled, false, 'output clears it');
+        assert.strictEqual(r.state, 'busy', 'while the turn carries on');
+        await until(() => r.state === 'idle', 3000, 'the end of the turn');
+        assert.strictEqual(seen.length, 2, 'and the end says nothing more');
+        await r.stop({ hard: true });
+        ok('output after stalling clears the flag');
+    }
+
+    {
+        reset();
+        const r = runner();
+        r.hasViewer = () => true;
+        const seen = watchStall(r);
+        r.send('ASK stall');
+        await until(() => r.pendingPermission, 5000, 'the ask');
+        await sleep(STALL_MS * 4);
+        assert.strictEqual(seen.length, 0, 'waiting on a person is not a stall');
+        await r.stop({ hard: true });
+        await once(r, 'exit');
+        ok('a pending ask is not stalled');
+    }
+
+    {
+        const pool = bridge();
+        let asked = null;
+        pool.stallAfter = (dir) => { asked = dir; return 1234; };
+        const r = pool.ensure(randomUUID(), { cwd: root, isNew: true });
+        made.push(r);
+        assert.strictEqual(r.stallAfter(root), 1234, 'the pool supplies the threshold');
+        assert.strictEqual(asked, root, 'per directory');
+        const seen = [];
+        pool.on('stalled', (p) => seen.push(p));
+        r.emit('stalled', { sessionId: r.sessionId, stalled: true });
+        assert.strictEqual(seen.length, 1, 'and forwards the event');
+        ok('the pool delegates the stall threshold and forwards the event');
     }
 
     // --- the session host: a bridge restart in the middle of a turn -------

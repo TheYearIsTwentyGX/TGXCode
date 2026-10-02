@@ -318,6 +318,24 @@ class NotificationLog {
     }
 
     /**
+     * A busy turn gone silent past the threshold — see bridge/runner.js.
+     *
+     * Loud: it is the one row here about something that has *not* happened, and
+     * a turn wedged in a session nobody is looking at stays wedged for as long
+     * as nobody looks. Only the way in is filed; the recovery is not news.
+     */
+    stalled(p) {
+        const mins = Math.max(1, Math.round((p.stalledAfterMs || 0) / 60_000));
+        return this.record({
+            sessionId: p.sessionId,
+            type: 'stalled',
+            summary: `Still working, but nothing for ${mins} min — it may be stuck.`,
+            detail: null,
+            loud: true,
+        });
+    }
+
+    /**
      * A subagent finishing.
      *
      * Never loud, because nothing notifies for one of these today — it renders

@@ -51,6 +51,7 @@ import {
     showProjMenu, closeProjMenu, renderRail,
 } from './app.js';
 import { openSession } from './transcript/conversation.js';
+import { StopButton } from './boards/parts.js';
 
 /**
  * Draw the rail into #rail. Called only by renderRail() in app.js, which paints
@@ -314,6 +315,8 @@ function groupCard(key, label, list, opts = {}) {
 
 function strip(s) {
     const running = s.runner && (s.runner.state === 'busy' || s.runner.state === 'starting');
+    // Busy and silent past the threshold — bridge/runner.js's header has the rule.
+    const stalled = running && !!s.runner.stalled;
     const current = state.current && state.current.sessionId === s.sessionId;
     const queued = (s.runner && s.runner.queued) || 0;
     const away = elsewhere(s);
@@ -339,6 +342,7 @@ function strip(s) {
                     ${s.test ? html`<span class="tag-test">test</span>` : null}
                     ${(s.live && s.live.kind === 'bg')
                         ? html`<span class="tag-bg" title="A background agent">bg</span>` : null}
+                    ${stalled ? stalledBadge() : null}
                     ${prBadge(s)}
                     ${s.worktree ? html`<span class="wt">${s.worktree.name}</span>` : null}
                     ${s.worktree ? html`<span class="dot">·</span>` : null}
@@ -347,7 +351,7 @@ function strip(s) {
                     <span>${`${s.userMessages} ${s.userMessages === 1 ? 'turn' : 'turns'}`}</span>
                     ${queued ? queuedBadge(queued) : null}
                     ${dueBadge(s.sessionId)}
-                    ${activityBits(running ? s.runner : null)}
+                    ${stalled ? null : activityBits(running ? s.runner : null)}
                 </span>`;
 
     // Renaming swaps the button for a plain box around the input: an input inside
@@ -360,12 +364,16 @@ function strip(s) {
             data-pinned=${String(!!s.pinned)}
             data-archived=${String(!!s.archived)}
             data-renaming=${renaming ? 'true' : null}
+            data-stalled=${stalled ? 'true' : null}
             aria-current=${current ? 'true' : null}>
             ${renaming
                 ? html`<div class="strip-main">${renameInput(s)}${meta}</div>`
                 : html`<button class="strip-main" type="button" onClick=${() => openSession(s.sessionId)}>
                     <span class="strip-title">${s.title}</span>${standingLine(s, running)}${meta}</button>`}
             <div class="strip-actions">
+                ${stalled ? html`<span class="strip-stop" onClick=${(e) => e.stopPropagation()}>
+                    <${StopButton} cls="mini stop" sessionId=${s.sessionId} hard=${true}
+                        reset=${s.runner.activity} /></span>` : null}
                 <button class="mini" type="button" title="Rename"
                     onClick=${(e) => { e.stopPropagation(); startRename(s); }}
                 >${icon('pencil')}</button>
@@ -468,6 +476,19 @@ function activityBits(runner) {
         html`<span class="pulse"><span class="pulse-t">${
             clip(runner.detail || runner.activity || 'Working', 22)}</span></span>`,
     ];
+}
+
+/**
+ * In place of the pulse rather than beside it: a breathing "Working" next to
+ * a badge saying nothing is happening is two claims, and only one is true. And
+ * up with the tags rather than where the pulse was, because the end of the line
+ * is what a narrow row cuts, and this is the one thing on it that must not be.
+ */
+function stalledBadge() {
+    const mins = BOOT_PREFS.live.stalledAfterMinutes;
+    return html`<span class="tag-stalled"
+        title=${`Working, but nothing for ${mins} min or more: no output, no tool running`}
+        >stalled</span>`;
 }
 
 /** The rail's copy of web/boards/parts.js's queuedBadge(); keep the two saying the same thing. */
