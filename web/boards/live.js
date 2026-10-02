@@ -108,8 +108,9 @@ export function renderLive() {
     // `live.hideElsewhere`: drop the cards this window has no process for. The
     // test is the one the rail already uses, so the two views cannot disagree
     // about what "not ours" means. `recent` needs no filtering — a session the
-    // bridge put in that group is one it found idle, and a session running in a
-    // terminal is never idle.
+    // bridge put in that group is one it found idle, which a session running in a
+    // terminal never is, and one whose idle process is ours arrives with the
+    // runner the bridge holds, so `elsewhere()` does not mistake it for away.
     const sessions = liveHideElsewhere()
         ? d.sessions.filter(s => !elsewhere(s))
         : d.sessions;
