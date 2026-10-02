@@ -460,6 +460,19 @@
 .lstate.ask   { color: var(--yellow); font-weight: 500; }
 .lcard-clock { flex: none; font: 400 11.5px/1 var(--mono); color: var(--text-4); }
 
+/* Where the last turn left things — bridge/standing.js. One line, cut rather
+   than wrapped, and kept on a compact card. */
+.lcard-standing {
+    min-width: 0;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.lcard-standing[data-source="extract"] { font-style: italic; }
+
 /* How far through its own task list the session is. */
 .tbar {
     height: 3px;
