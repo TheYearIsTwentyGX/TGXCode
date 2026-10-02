@@ -356,6 +356,9 @@ class LiveCard extends Component {
         const r = s.runner;
         const busy = r && (r.state === 'busy' || r.state === 'starting');
         const away = s.live && s.live.running && !r;
+        // Busy and silent past the threshold. Its Stop is the kill rather than the
+        // interrupt — StopButton in web/boards/parts.js says why.
+        const stalled = busy && !!r.stalled;
         // In the bottom strip every row a card gives up is a row of transcript, so
         // it drops what is duplicated elsewhere: one line of history, and the Open
         // button — the title above it already opens the session, and the rail is
@@ -379,6 +382,7 @@ class LiveCard extends Component {
         return html`
             <article class="lcard" data-reason=${s.reason} data-id=${s.sessionId}
                 data-compact=${compact ? '1' : null}
+                data-stalled=${stalled ? 'true' : null}
                 onClick=${(e) => { if (cardClickOpens(e)) open(); }}>
                 <header class="lcard-head">
                     <span class="lcard-dot"></span>
@@ -403,7 +407,7 @@ class LiveCard extends Component {
                 ${(!compact && (!strip || busy)) ? html`
                     <div class="lcard-acts">
                         ${strip ? null : html`<button class="lbtn" type="button" onClick=${open}>Open</button>`}
-                        ${busy ? html`<${StopButton} cls="lbtn" sessionId=${s.sessionId} reset=${s.sig} />` : null}
+                        ${busy ? html`<${StopButton} cls="lbtn" sessionId=${s.sessionId} reset=${s.sig} hard=${stalled} />` : null}
                     </div>` : null}
             </article>`;
     }

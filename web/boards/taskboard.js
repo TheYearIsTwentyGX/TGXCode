@@ -540,9 +540,12 @@ function tbSessionCard(s) {
     const r = s.runner;
     const busy = r && (r.state === 'busy' || r.state === 'starting');
     const away = s.live && s.live.running && !r;
+    // The live board's rule, and its Stop the same kill: see LiveCard.
+    const stalled = busy && !!r.stalled;
 
     return html`
         <article key=${`session:${s.sessionId}`} class="tb-card tb-session" data-col=${s.column} data-id=${s.sessionId}
+            data-stalled=${stalled ? 'true' : null}
             onClick=${(e) => { if (tbCardClickOpens(e)) tbOpen(s.sessionId); }}>
             <header class="tb-card-head">
                 <span class="tb-dot"></span>
@@ -571,7 +574,7 @@ function tbSessionCard(s) {
                 <button class=${s.ask ? 'tb-btn primary' : 'tb-btn'} type="button"
                     onClick=${() => tbOpen(s.sessionId)}>${s.ask ? 'Answer it' : 'Open'}</button>
                 ${busy ? html`<${StopButton} cls="tb-btn" sessionId=${s.sessionId}
-                    reset=${state.taskboard.at} />` : null}
+                    reset=${state.taskboard.at} hard=${stalled} />` : null}
             </div>
         </article>`;
 }

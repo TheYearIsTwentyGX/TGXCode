@@ -18,6 +18,7 @@
 
 import { html, render, Component } from '../vendor/preact.js';
 import { post } from '../api.js';
+import { BOOT_PREFS } from '../boot.js';
 import { toast } from '../dom.js';
 import { clip, dur } from '../format.js';
 import { ICON } from '../icons.js';
@@ -55,6 +56,20 @@ export function queuedBadge(queued) {
         >${`+${queued} queued`}</span>`;
 }
 
+/**
+ * A busy turn that has said nothing past `live.stalledAfterMinutes` —
+ * bridge/runner.js's header has the rule. The rail's row, both boards' cards.
+ *
+ * In place of the pulse rather than beside it: a breathing "Working" next to
+ * a badge saying nothing is happening is two claims, and only one is true.
+ */
+export function stalledBadge() {
+    const mins = BOOT_PREFS.live.stalledAfterMinutes;
+    return html`<span class="tag-stalled"
+        title=${`Working, but nothing for ${mins} min or more: no output, no tool running`}
+        >stalled</span>`;
+}
+
 /** A session's task list, as a bar. app.js keeps the DOM twin for the checklist. */
 export function taskBar(t) {
     const pct = t.total ? Math.round((t.done / t.total) * 100) : 0;
@@ -87,8 +102,11 @@ export function liveStatusWords(s, busy, away, { tick = false } = {}) {
         return [html`<span class="lstate err">${clip(r.error || 'The turn failed.', 68)}</span>`];
     }
     if (busy) {
+        // The activity line is the last thing the turn said, and minutes old; the
+        // clock stays, because how long it has been is what you decide on.
         return [
-            html`<span class=${r.retry ? 'lstate warn' : 'lstate'}>${clip(r.activity || 'Working…', 52)}</span>`,
+            r.stalled ? stalledBadge()
+                : html`<span class=${r.retry ? 'lstate warn' : 'lstate'}>${clip(r.activity || 'Working…', 52)}</span>`,
             r.busySince ? html`<${Clock} since=${r.busySince} tick=${tick} />` : null,
         ];
     }
@@ -135,7 +153,8 @@ class Clock extends Component {
  * several sessions away from the one you are reading is not the place to offer
  * it.
  *
- * Except with `hard`, which the rail's row passes only for a stalled turn. That
+ * Except with `hard`, which the rail's row and both boards' cards pass only for
+ * a stalled turn. That
  * is the one case the interrupt is least likely to fix: a process that has said
  * nothing for minutes either does not answer it (eight seconds, then the kill
  * anyway) or answers it and still sends no `result` — the `inFlight` wedge,

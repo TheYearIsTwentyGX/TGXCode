@@ -51,7 +51,7 @@ import {
     showProjMenu, closeProjMenu, renderRail,
 } from './app.js';
 import { openSession } from './transcript/conversation.js';
-import { StopButton } from './boards/parts.js';
+import { stalledBadge, StopButton } from './boards/parts.js';
 
 /**
  * Draw the rail into #rail. Called only by renderRail() in app.js, which paints
@@ -335,7 +335,9 @@ function strip(s) {
     // are the two things this line is allowed to squeeze out; the time is the one
     // the list is ordered by, so the order reads as sorted. A queue count goes
     // ahead of the activity because the activity is the one part of the row that
-    // may be cut short — it is the least specific thing on it.
+    // may be cut short — it is the least specific thing on it. A stalled badge goes up
+    // with the tags rather than where the pulse was, for the opposite reason:
+    // it is the one thing on the line that must not be cut.
     const meta = html`
                 <span class="strip-meta">
                     ${s.pinned ? html`<span class="tag-pin" title="Pinned">${icon('pin', 11)}</span>` : null}
@@ -476,19 +478,6 @@ function activityBits(runner) {
         html`<span class="pulse"><span class="pulse-t">${
             clip(runner.detail || runner.activity || 'Working', 22)}</span></span>`,
     ];
-}
-
-/**
- * In place of the pulse rather than beside it: a breathing "Working" next to
- * a badge saying nothing is happening is two claims, and only one is true. And
- * up with the tags rather than where the pulse was, because the end of the line
- * is what a narrow row cuts, and this is the one thing on it that must not be.
- */
-function stalledBadge() {
-    const mins = BOOT_PREFS.live.stalledAfterMinutes;
-    return html`<span class="tag-stalled"
-        title=${`Working, but nothing for ${mins} min or more: no output, no tool running`}
-        >stalled</span>`;
 }
 
 /** The rail's copy of web/boards/parts.js's queuedBadge(); keep the two saying the same thing. */
