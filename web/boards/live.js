@@ -387,6 +387,7 @@ class LiveCard extends Component {
                     <span class="lcard-where">${s.worktree ? s.worktree.name : s.projectName}</span>
                 </header>
                 <div class="lcard-line">${liveStatusWords(s, busy, away, { tick: true })}</div>
+                ${busy ? null : standingLine(s)}
                 ${s.tasks ? taskBar(s.tasks) : null}
                 <div class="lcard-facts">
                     ${s.tasks ? html`<span>${`${s.tasks.done} of ${s.tasks.total} tasks`}</span>` : null}
@@ -592,6 +593,26 @@ class LiveCard extends Component {
             mark(false);
         }
     }
+}
+
+/**
+ * Where the last turn left things, in one line — the rail's line, on the card.
+ * See bridge/standing.js.
+ *
+ * Kept by `live.compact`, unlike the history below it: it is the one line that
+ * says what a session is waiting for without reading it, which is what a compact
+ * board is still for. Dropped while a turn runs, where it would describe the
+ * reply before this one and the status words above are the better answer. A
+ * line taken from the reply rather than written by the model is in italics, as
+ * in the rail.
+ */
+function standingLine(s) {
+    const st = s.standing;
+    if (!st || !st.text) return null;
+    if (BOOT_PREFS.standing && BOOT_PREFS.standing.mode === 'off') return null;
+    const how = st.source === 'model' ? 'Summarised after the last turn' : 'The last line of the last reply';
+    return html`<div class="lcard-standing" data-source=${st.source}
+        title=${`${st.text}\n${how}${st.at ? `, ${ago(st.at)} ago` : ''}`}>${st.text}</div>`;
 }
 
 /**

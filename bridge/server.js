@@ -173,7 +173,8 @@ index.standing = standing;
 // by reference, so the health count and `hasViewer` below see the same one.
 events.init({ index, pool, registry });
 const { clients, broadcast, tickBoard } = events;
-standing.on('changed', (p) => broadcast('standing-changed', p));
+// The board carries the line too, and is only rebuilt when something asks it to.
+standing.on('changed', (p) => { broadcast('standing-changed', p); tickBoard(); });
 
 // ---------------------------------------------------------------------------
 // Routing
