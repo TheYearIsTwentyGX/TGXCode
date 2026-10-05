@@ -1749,6 +1749,7 @@ waiting, running }`, already ordered needs-you-first. A card is:
 | `lastTs`, `lastUserTs` | ISO 8601 strings or null |
 | `toolCalls`, `userMessages` | numbers |
 | **`worktree`** | **object or null** — as on a session summary |
+| **`prs[]`** | **array of objects** — `{number, url, repo}`, as on a session summary; empty `[]` if none, never null. Part of `sig`. **Status is not here** — colour it from `prs-changed` / `GET /api/prs`, keyed by `sessionId`, which do not move `sig`. The web board draws the glyph on `recent` and `pinned` cards only |
 | **`live`** | **object or null** — the registry entry, as on a session summary |
 | **`runner`** | **object or null — eight fields**, not the `runner-status` payload: `{state, activity, queued, busySince, retry, error, errorKind, stalled}`. `stalled` is a bool — see §*`runner-status`*. `lastActivityAt` is deliberately not here: the card's signature would change on every line the turn streams |
 | **`ask`** | **object or null** — the *whole* ask (`runner.pendingPermission`), so a tool ask is answerable from the card. Same shape as `permission-request` |
