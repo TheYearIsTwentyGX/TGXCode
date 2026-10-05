@@ -55,6 +55,11 @@
 // `keyboard`'s reason made sharper — a repository choosing which keys get
 // pressed on your machine is not a preference.
 //
+// `startup` is what a new window opens to — a panel, the live board, or both.
+// Only a launch reads it: a refresh keeps landing where you were, because the
+// address bar is that memory (see rememberView in web/app.js). It is **user-only**
+// for `toolbar`'s reason — a repository does not get to arrange your window.
+//
 // **Where the file lives is the deliberate part.** `~/.tgxcode/settings.json`,
 // not STATE_DIR. Everything under STATE_DIR is state the app owns and nobody is
 // expected to open — a token, a set of archived ids. This is a file a person
@@ -371,6 +376,15 @@ const DEFAULTS = {
         // no quota, 'off' shows nothing and does no work. See bridge/standing.js.
         mode: 'model',
     },
+    startup: {
+        // What a new window opens to: 'conversation' (no panel — what a launch
+        // always did), or a panel by the name the address bar gives it. A
+        // refresh never reads this; it lands where you were. See web/startup.js.
+        view: 'conversation',
+        // Whether the live board comes up too — under the panel, which shows it
+        // only if `live.over*` keeps it up there, or on its own.
+        live: false,
+    },
 };
 
 // Sections a project may not set, however the precedence would otherwise fall.
@@ -396,8 +410,11 @@ const DEFAULTS = {
 //
 // `standing` is the quota argument again: whether this machine spends a model
 // call after every turn is not a checked-in repository's call.
+//
+// `startup` is the toolbar argument once more: what your window opens to is not
+// a repository's to decide.
 const USER_ONLY = new Set(['quota', 'keyboard', 'projects', 'toolbar', 'wispr',
-    'preview', 'devbrowser', 'standing']);
+    'preview', 'devbrowser', 'standing', 'startup']);
 
 // What each key is allowed to be. A file is a thing people edit, so a bad value
 // is dropped and the default kept rather than taken at face value — a
@@ -406,6 +423,8 @@ const USER_ONLY = new Set(['quota', 'keyboard', 'projects', 'toolbar', 'wispr',
 // What `live.over*` may say: see DEFAULTS.live.
 const LIVE_OVER = ['hidden', 'always', 'side', 'stacked'];
 const isLiveOver = (v) => LIVE_OVER.includes(v);
+// What `startup.view` may say: the panels with an address form, and none.
+const STARTUP_VIEWS = ['conversation', 'taskboard', 'dashboard', 'drafts', 'schedules'];
 
 const SHAPE = {
     transcript: {
@@ -521,6 +540,10 @@ const SHAPE = {
     },
     standing: {
         mode: (v) => v === 'model' || v === 'extract' || v === 'off',
+    },
+    startup: {
+        view: (v) => STARTUP_VIEWS.includes(v),
+        live: (v) => typeof v === 'boolean',
     },
 };
 
@@ -954,6 +977,7 @@ class Prefs {
             preview: { ...DEFAULTS.preview, list: [...DEFAULTS.preview.list] },
             devbrowser: { ...DEFAULTS.devbrowser },
             standing: { ...DEFAULTS.standing },
+            startup: { ...DEFAULTS.startup },
             sources: [],
             problems: [],
         };

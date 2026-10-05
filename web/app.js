@@ -8,6 +8,7 @@ import { configurePaths } from './markdown.js';
 import { PreviewPane } from './preview.js';
 import { opensInPreview } from './link-policy.js';
 import { loadPrOwners, wirePrRefs } from './pr-refs.js';
+import { startupQuery } from './startup.js';
 import * as keys from './keys.js';
 import { drawRail } from './rail.js';
 import { liveStrip, renderLive } from './boards/live.js';
@@ -1176,8 +1177,9 @@ let restoring = false;
  * The address is the whole of the memory here. Ctrl+R reloads the document URL,
  * and replaceState has been keeping that URL current all along, so a refresh
  * restores everything for free. A fresh shell launch loads the bare origin
- * (app/main.js) and therefore starts clean, which is the intended difference:
- * opening the app is not the same gesture as refreshing it.
+ * (app/main.js), so it opens to whatever Settings › On startup says instead —
+ * nothing, by default. That is the intended difference: opening the app is not
+ * the same gesture as refreshing it. See web/startup.js.
  *
  * `view` is the panel with the screen. `live=1` is the one thing it cannot say:
  * the work-in-flight board covers the live board without closing it, so a board
@@ -4232,8 +4234,7 @@ function debounce(fn, ms) {
  * statements and the first paint must not wait on a transcript fetch, so the
  * session is started and left to arrive.
  */
-function restoreView() {
-    const q = new URLSearchParams(location.search);
+function restoreView(q) {
     restoring = true;
 
     // The arrangement first, so the board is painted once into the shape it is
@@ -4316,7 +4317,17 @@ watchPaneInsets();      // keep the composer over the transcript as columns come
 // combo at all and this is what puts one there.
 paintShortcutHints();
 paintComposerHint();
-restoreView();          // and where we were, from the address that survived the refresh
+// And where we were, from the address that survived the refresh — or, on a
+// launch, from Settings › On startup. That one is written into the address once
+// it is up, so a refresh afterwards keeps it rather than starting from nothing.
+{
+    const nav = performance.getEntriesByType('navigation')[0];
+    const launch = startupQuery(BOOT_PREFS.startup, {
+        navType: nav && nav.type, search: location.search, hash: location.hash,
+    });
+    restoreView(launch || new URLSearchParams(location.search));
+    if (launch) rememberView();
+}
 primeWaiting();
 // The pill's first answer and its 20-second poll — or neither, when Settings
 // says DevBrowser is not part of this app.

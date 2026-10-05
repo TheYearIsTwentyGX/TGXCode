@@ -42,6 +42,7 @@ export const PREFS_FALLBACK = {
     preview: { keepAliveMinutes: 10, overLive: true, links: false, listMode: 'block', list: [] },
     devbrowser: { show: true, openIn: 'devbrowser', whenClosed: 'launch' },
     standing: { mode: 'model' },
+    startup: { view: 'conversation', live: false },
 };
 
 
