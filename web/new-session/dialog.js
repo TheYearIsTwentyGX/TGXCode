@@ -370,8 +370,8 @@ function paintNewGh() {
  * What the worktree row knows. `root` is the repository a new worktree would go
  * under, or null when the directory is not one it can be made from; `offered` is
  * whether this open of the dialog is plain Start (see openNew); `named` is
- * whether somebody has typed in the name box, after which the prompt stops
- * writing it.
+ * whether the name box holds something somebody typed, after which the prompt
+ * stops writing it.
  */
 const wt = { root: null, offered: false, named: false };
 
@@ -407,6 +407,15 @@ export function worktreeSlug(text) {
         .slice(0, 40).replace(/-+$/, '');
 }
 
+/**
+ * Write the name from the prompt, unless somebody has typed one of their own.
+ * Only ticking the box and editing the prompt call this — never a paint, or
+ * clearing the name box to type a new one would refill it on the same keystroke.
+ */
+function fillWtName() {
+    if (!wt.named) dom.newWtName.value = worktreeSlug(dom.newPrompt.value);
+}
+
 /** Show, hide and describe the worktree row. Cheap; called on every change. */
 export function paintNewWorktree() {
     const show = wt.offered && !!wt.root;
@@ -416,7 +425,6 @@ export function paintNewWorktree() {
     dom.newWtNote.hidden = !on;
     if (!on) return;
 
-    if (!wt.named) dom.newWtName.value = worktreeSlug(dom.newPrompt.value);
     const name = dom.newWtName.value.trim();
     const base = dom.newWtBase.value.trim() || 'HEAD';
     if (!name) {
@@ -650,8 +658,10 @@ export function wireNewDialog() {
     dom.newGh.addEventListener('click', () => publishFromNew(dom.newCwd.value.trim()));
 
     // The worktree row. The prompt writes the name until somebody types in the
-    // name box; clearing that box hands it back to the prompt.
+    // name box; clearing that box hands it back to the prompt's next edit, and
+    // leaves it empty until then.
     dom.newWt.addEventListener('change', () => {
+        if (dom.newWt.checked) fillWtName();
         paintNewWorktree();
         if (dom.newWt.checked) dom.newWtName.focus();
     });
@@ -660,7 +670,11 @@ export function wireNewDialog() {
         paintNewWorktree();
     });
     dom.newWtBase.addEventListener('input', paintNewWorktree);
-    dom.newPrompt.addEventListener('input', () => { if (!wt.named) paintNewWorktree(); });
+    dom.newPrompt.addEventListener('input', () => {
+        if (wt.named) return;
+        fillWtName();
+        paintNewWorktree();
+    });
     dom.newMkdir.addEventListener('click', startMkdir);
     dom.newMkdirGo.addEventListener('click', submitMkdir);
     dom.newMkdirName.addEventListener('keydown', (e) => {
