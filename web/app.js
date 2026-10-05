@@ -2135,6 +2135,38 @@ function originRow(cwd, row, publish) {
     return btn;
 }
 
+/**
+ * The same menu against a session row's ⋮, which a row draws instead of its
+ * buttons when `projects.compactActions` is on — see stripMenuButton() in
+ * web/rail.js. One element and one `state.projMenu` for both, so opening either
+ * closes the other, and the close, Escape and follow-the-button wiring below
+ * serves both; `sessionId` is what tells them which kind of ⋮ to look for.
+ *
+ * The rows act on the session as of now rather than as of the press, so `s` is
+ * looked up again: a pin that landed while the menu was open is not undone.
+ */
+export function showStripMenu(s, btn) {
+    state.projMenu = { sessionId: s.sessionId };
+    dom.projMenu.hidden = false;
+    renderRail();   // the ⋮ draws itself expanded
+    const now = () => state.sessions.find(x => x.sessionId === s.sessionId) || s;
+    const row = (label, act, cls) => el('button', {
+        class: 'picker-row' + (cls ? ` ${cls}` : ''), type: 'button', role: 'menuitem',
+        onclick: () => { closeProjMenu(); act(now()); },
+    }, el('span', {}, label));
+    dom.projMenu.replaceChildren(
+        el('div', { class: 'menu-note' }, clip(s.title, 30)),
+        el('div', { class: 'sep' }),
+        row('Rename', startRename),
+        row(s.pinned ? 'Unpin' : 'Pin to the top', (x) => setFlags(x, { pinned: !x.pinned })),
+        row(s.archived ? 'Restore from archive' : 'Archive', (x) => setFlags(x, { archived: !x.archived })),
+        el('div', { class: 'sep' }),
+        row('Delete permanently', askDelete, 'danger'),
+    );
+    placeProjMenu(btn);
+    dom.projMenu.querySelector('.picker-row').focus();
+}
+
 export function closeProjMenu() {
     if (!state.projMenu) return;
     state.projMenu = null;
@@ -2186,8 +2218,9 @@ const PROJ_MENU_W = 220;
  */
 function syncProjMenu() {
     if (!state.projMenu) return;
-    const btn = dom.rail.querySelector(
-        `.rail-group[data-key="${cssEscape(state.projMenu.key)}"] .group-menu-btn`);
+    const btn = dom.rail.querySelector(state.projMenu.sessionId
+        ? `.strip[data-id="${cssEscape(state.projMenu.sessionId)}"] > .strip-menu-btn`
+        : `.rail-group[data-key="${cssEscape(state.projMenu.key)}"] .group-menu-btn`);
     if (!btn) { closeProjMenu(); return; }
     const b = btn.getBoundingClientRect();
     const rail = dom.rail.getBoundingClientRect();
@@ -2310,7 +2343,8 @@ closeOnClickOutside(dom.pcolorScrim, closePcolor);
 // some other control closes this before that control acts on it.
 document.addEventListener('click', (e) => {
     if (!state.projMenu) return;
-    if (dom.projMenu.contains(e.target) || e.target.closest('.group-menu-btn')) return;
+    if (dom.projMenu.contains(e.target)
+        || e.target.closest('.group-menu-btn, .strip-menu-btn')) return;
     closeProjMenu();
 }, true);
 document.addEventListener('keydown', (e) => {

@@ -386,11 +386,12 @@ for (const v of ['recent', 'dynamic', 'alpha', 'custom']) assert.ok(SHAPE.projec
 for (const v of ['Recent', 'az', '', null, 1]) assert.ok(!SHAPE.projects.sort(v), JSON.stringify(v));
 assert.ok(SHAPE.projects.newAt('top') && SHAPE.projects.newAt('bottom'));
 assert.ok(!SHAPE.projects.newAt('middle') && !SHAPE.projects.newAt(true));
-for (const k of ['bumpOnCreate', 'bumpOnUser', 'bumpOnAny', 'bumpOnTurn', 'bumpOnPr']) {
+for (const k of ['bumpOnCreate', 'bumpOnUser', 'bumpOnAny', 'bumpOnTurn', 'bumpOnPr', 'compactActions']) {
     assert.ok(SHAPE.projects[k](true) && SHAPE.projects[k](false), k);
     assert.ok(!SHAPE.projects[k]('true'), `${k} took a string`);
 }
 assert.strictEqual(DEFAULTS.projects.bumpOnAny, false, 'the noisy one is off by default');
+assert.strictEqual(DEFAULTS.projects.compactActions, false, 'the rail keeps its buttons unless asked');
 assert.ok(SHAPE.projects.order([]));
 assert.ok(SHAPE.projects.order([project, `${home}/other`]));
 assert.ok(!SHAPE.projects.order(['proj']), 'a relative entry');

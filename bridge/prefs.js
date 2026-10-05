@@ -243,6 +243,11 @@ const DEFAULTS = {
         bumpOnAny: false,
         bumpOnTurn: false,
         bumpOnPr: false,
+        // Whether a rail row's Rename, Pin, Archive and Delete live in a ⋮ menu
+        // at its top-right rather than a row of buttons over its foot. Off is
+        // how the rail has always looked. A stalled row's Stop stays on the row
+        // either way: it is the one thing that row is asking you to do.
+        compactActions: false,
         // `custom`: project directories, top first. Keyed by path for the
         // reason `colors` is. A card not listed goes to the top or the bottom
         // by `newAt`, and joins the list the next time anything is dragged.
@@ -480,6 +485,7 @@ const SHAPE = {
         bumpOnAny: (v) => typeof v === 'boolean',
         bumpOnTurn: (v) => typeof v === 'boolean',
         bumpOnPr: (v) => typeof v === 'boolean',
+        compactActions: (v) => typeof v === 'boolean',
         // The last gate; cleanOrder() has already dropped the entries that fail.
         order: (v) => Array.isArray(v) && v.length <= MAX_ORDER
             && v.every(d => typeof d === 'string' && d.startsWith('/') && d === path.resolve(d))

@@ -284,6 +284,37 @@
 /* While a row is being renamed its buttons would sit over the end of the name. */
 .strip[data-renaming="true"] .strip-actions { display: none; }
 
+/* `projects.compactActions`: one ⋮ at the row's top-right in place of the four
+   buttons, .group-menu-btn's look one size down. Shown the way the buttons were —
+   on hover or focus — and held up while its menu is open. The title stops short
+   of it; the meta line runs underneath, which is the line that may be cut. */
+.strip-menu-btn {
+    position: absolute;
+    top: 5px;
+    right: 6px;
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    color: var(--text-4);
+    opacity: 0;
+    transition: opacity var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+}
+.strip:hover > .strip-menu-btn,
+.strip:focus-within > .strip-menu-btn,
+.strip-menu-btn[aria-expanded="true"] { opacity: 1; }
+.strip-menu-btn:hover { background: var(--s4); color: var(--text); }
+.strip-menu-btn[aria-expanded="true"] { background: var(--s4); color: var(--text); }
+.strip[aria-current="true"] > .strip-menu-btn:hover,
+.strip[aria-current="true"] > .strip-menu-btn[aria-expanded="true"] { background: #30507f; }
+.strip:has(> .strip-menu-btn) .strip-title { padding-right: 22px; }
+.strip[data-renaming="true"] > .strip-menu-btn { display: none; }
+/* Nothing left in the overlay but a stalled row's Stop, so without one it would
+   be an empty gradient patch fading in over the meta line. */
+.strip:has(> .strip-menu-btn) .strip-actions:not(:has(.strip-stop)) { display: none; }
+.proj-menu .picker-row.danger:hover { color: var(--red); }
+
 /* Sized to the title it stands in for, so the row does not change height. */
 .strip-rename {
     display: block;
