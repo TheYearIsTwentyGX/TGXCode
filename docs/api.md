@@ -792,6 +792,7 @@ A repository is listed when any of these holds:
 | Never listed | immediately — bridge start, or a newly-linked PR |
 | Any open, non-draft PR reads mergeability `UNKNOWN` (or carries a stale answer) | 20s — so in practice the next pass; after 7 lists in a row it drops to 2 min |
 | A PR left its open list in the last 3 min — merged, most likely, so the base moved | 20s |
+| The head of a branch its open PRs target moved — checked with `git ls-remote`, at most once a minute per repository, which does not count against GitHub's API rate limit, and not while the last listing failed | listed on that pass, then 20s for 3 min, as above |
 | A session whose PRs live in it has a transcript newer than the last listing, or a turn running | 60s floor |
 | Any of its open PRs has a check in flight | 2 min |
 | Otherwise | 20 min |
@@ -801,8 +802,11 @@ A repository is listed when any of these holds:
 That is the deliberate trade for not calling `gh` sixty times an hour per repository
 forever. Anything a conversation *can* see — a PR raised, pushed to or merged from a
 session on this machine — is picked up within a minute of it happening, and a build
-finishing within two. A merge seen on any listing keeps the repository on the
-short interval for three minutes, which is how long GitHub usually takes to
+finishing within two. A merge made anywhere else — in the GitHub UI, or by another
+developer — moves the base branch, and that is noticed within about a minute
+without spending any API calls; what still waits for the idle floor is a review or
+a comment on a repository nobody is working in. A merge seen either way keeps the
+repository on the short interval for three minutes, which is how long GitHub usually takes to
 recompute its siblings' mergeability — so a conflict that merge caused shows in
 about a minute rather than on the idle floor. `npm run land` forces a listing as
 soon as it has merged.

@@ -16,8 +16,8 @@
 // whole repository. Settled PRs were kept forever but only in memory, so every
 // restart paid a `gh pr view` for each one. And nothing bounded the maps at all.
 //
-// No bridge and no network: `pulls.openPulls` and `pulls.pullState` are stubbed on
-// the module object, which is the seam that exists precisely because the store
+// No bridge and no network: `pulls.openPulls`, `pulls.pullState` and
+// `pulls.remoteHeads` are stubbed on the module object, which is the seam that exists precisely because the store
 // asks gh through them rather than shelling out itself.
 
 const assert = require('assert');
@@ -63,9 +63,14 @@ let listCalls = [];
 let viewCalls = [];
 let listAnswer = () => ({ ok: true, error: null, pulls: [] });
 let viewAnswer = () => ({ ok: false, error: 'not stubbed', terminal: false, pull: null });
+let headCalls = [];
+// Failing by default, which is the answer that changes nothing: every case that
+// is not about the base watcher behaves exactly as it did before it existed.
+let headAnswer = () => ({ ok: false, error: 'not stubbed', shas: {} });
 
 pulls.openPulls = async (repo) => { listCalls.push(repo); return listAnswer(repo); };
 pulls.pullState = async (repo, number) => { viewCalls.push(`${repo}#${number}`); return viewAnswer(repo, number); };
+pulls.remoteHeads = async (repo, bases) => { headCalls.push(`${repo}:${bases.join(',')}`); return headAnswer(repo, bases); };
 // Every session in these tests names its own repository, so this must never run.
 pulls.repoOf = async () => { throw new Error('repoOf should not be needed'); };
 
@@ -73,6 +78,8 @@ const reset = () => {
     store.reset();
     listCalls = [];
     viewCalls = [];
+    headCalls = [];
+    headAnswer = () => ({ ok: false, error: 'not stubbed', shas: {} });
     try { fs.unlinkSync(store.STORE_FILE); } catch { /* not there yet */ }
 };
 
@@ -242,6 +249,81 @@ const session = (over = {}) => ({
     assert.strictEqual(store.interval(moved, false, moved.baseMovedAt + store.MERGED_WINDOW_MS), store.IDLE_MS,
         'until the window closes, when it goes back to the idle floor');
     ok('a merge keeps its siblings on a short interval for a few minutes');
+
+    // -- a merge made somewhere else -----------------------------------------
+    //
+    // Merged in the GitHub UI, or by another developer: no list this store ran
+    // ever saw the PR leave, so only the base branch's head says anything moved.
+
+    reset();
+    listAnswer = () => ({ ok: true, error: null, pulls: [pull()] });
+    headAnswer = () => ({ ok: true, error: null, shas: { main: 'aaa' } });
+    store.seed('o/r', { checkedAt: Date.now(), pulls: [pull()] });
+    await store.tick({ sessions: [session({ mtimeMs: 0 })] });
+    let watched = store.snapshot().repos['o/r'];
+    assert.deepStrictEqual(headCalls, ['o/r:main'], 'the base its open PRs target is asked about');
+    assert.strictEqual(watched.baseShas.main, 'aaa', 'and its head written down');
+    assert.strictEqual(watched.baseMovedAt, 0, 'a head seen for the first time is not a merge');
+    assert.strictEqual(listCalls.length, 0, 'so nothing is listed');
+
+    headAnswer = () => ({ ok: true, error: null, shas: { main: 'bbb' } });
+    await store.tick({ sessions: [session({ mtimeMs: 0 })] });
+    assert.strictEqual(headCalls.length, 1, 'ls-remote is asked at most once a minute per repository');
+    assert.strictEqual(listCalls.length, 0, 'and a move it has not looked for yet lists nothing');
+
+    const lastMinute = Date.now() - store.BASE_WATCH_MS - 1;
+    store.seed('o/r', {
+        checkedAt: Date.now(), pulls: [pull()], baseShas: { main: 'aaa' }, baseCheckedAt: lastMinute,
+    });
+    await store.tick({ sessions: [session({ mtimeMs: 0 })] });
+    watched = store.snapshot().repos['o/r'];
+    assert.strictEqual(listCalls.length, 1,
+        'a moved base lists the repository on the same pass, not on the idle floor');
+    assert.ok(watched.baseMovedAt > 0, 'and opens the merged window');
+    assert.strictEqual(watched.baseShas.main, 'bbb',
+        'with the new head kept through the list that followed');
+    assert.strictEqual(store.interval(watched, false), store.UNKNOWN_MS,
+        'so its siblings are asked about at the short interval');
+    ok('a base branch that moved elsewhere opens the merged window');
+
+    // ls-remote failing is not a move, and must not lose the head it compares to.
+    reset();
+    headAnswer = () => ({ ok: false, error: 'could not read Username', shas: {} });
+    store.seed('o/r', {
+        checkedAt: Date.now(), pulls: [pull()], baseShas: { main: 'aaa' }, baseCheckedAt: lastMinute,
+    });
+    await store.tick({ sessions: [session({ mtimeMs: 0 })] });
+    watched = store.snapshot().repos['o/r'];
+    assert.strictEqual(headCalls.length, 1, 'the base was asked about');
+    assert.strictEqual(listCalls.length, 0, 'a failed ls-remote lists nothing');
+    assert.strictEqual(watched.baseShas.main, 'aaa', 'and keeps the head it last read');
+    assert.ok(watched.baseCheckedAt > lastMinute,
+        'but still counts as asked, so a private repo is not retried every tick');
+
+    // A repository gh cannot list is on its backoff, and a moved base must not
+    // cut that short — asking harder is how a rate limit becomes a ban.
+    reset();
+    headAnswer = () => ({ ok: true, error: null, shas: { main: 'bbb' } });
+    store.seed('o/r', {
+        ok: false, attempts: 2, checkedAt: Date.now(), pulls: [pull()],
+        baseShas: { main: 'aaa' }, baseCheckedAt: lastMinute,
+    });
+    await store.tick({ sessions: [session({ mtimeMs: 0 })] });
+    assert.strictEqual(headCalls.length, 0, 'a failing repository is not watched');
+    assert.strictEqual(listCalls.length, 0, 'and stays on its backoff');
+    ok('the base watcher neither invents a move nor overrides a backoff');
+
+    // The heads survive a restart, or the first watch after one is blind.
+    reset();
+    headAnswer = () => ({ ok: true, error: null, shas: { main: 'aaa' } });
+    store.seed('o/r', { checkedAt: Date.now(), pulls: [pull()] });
+    await store.tick({ sessions: [session({ mtimeMs: 0 })] });
+    store.flush();
+    store.reset();
+    watched = store.snapshot().repos['o/r'];
+    assert.deepStrictEqual(watched.baseShas, { main: 'aaa' }, 'the heads are read back from the file');
+    assert.ok(watched.baseCheckedAt > 0, 'and so is when they were asked');
+    ok('base heads survive a restart');
 
     // -- activity is what the conversation moving means ----------------------
     //
