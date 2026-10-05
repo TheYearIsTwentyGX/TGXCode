@@ -2983,6 +2983,7 @@ export function applyRunner(s) {
     state.runner = s;
     const busy = s && (s.state === 'busy' || s.state === 'starting');
     const retrying = Boolean(s && s.retry);
+    const stalled = Boolean(busy && s.stalled);
 
     // A turn that ends without saying anything — stopped, or an error — leaves
     // its last run of tool calls with no message coming to close it. The turn
@@ -3032,7 +3033,8 @@ export function applyRunner(s) {
     }
 
     dom.statusLine.dataset.state = s
-        ? (s.state === 'error' ? 'error' : ask ? 'ask' : retrying ? 'stalled' : busy ? 'busy' : 'idle')
+        ? (s.state === 'error' ? 'error' : ask ? 'ask' : stalled ? 'stalled'
+            : retrying ? 'retrying' : busy ? 'busy' : 'idle')
         : 'idle';
     // While a subagent is on screen the composer belongs to nothing you can
     // send to, so its controls stay out of the way.
@@ -3047,11 +3049,8 @@ export function applyRunner(s) {
 
     // The escalation is armed against one turn. Once that turn is over the
     // button must not still be offering to kill the next one.
-    if (!busy && state.stopArmed) {
-        state.stopArmed = 0;
-        dom.btnStop.textContent = 'Stop';
-        dom.btnStop.classList.remove('force');
-    }
+    if (!busy) state.stopArmed = 0;
+    paintStop();
 
     // A turn can run for minutes; without a clock it is impossible to tell a
     // long tool call from a stuck one.
@@ -3217,7 +3216,15 @@ function paintStatus(s) {
     if (busy) {
         const elapsed = s.busySince ? ` · ${dur(Date.now() - s.busySince)}` : '';
         const label = s.activity || 'Working…';
-        if (s.retry) {
+        if (s.stalled) {
+            // The activity is the last thing the turn said, and minutes stale. The
+            // threshold is the bridge's setting; the badges' titles use it too.
+            const mins = BOOT_PREFS.live.stalledAfterMinutes;
+            dom.statusText.replaceChildren(
+                el('span', { class: 'err' }, `Nothing for ${mins} min or more`),
+                el('span', {}, elapsed),
+                el('span', { class: 'muted' }, ' · Stop ends the process'));
+        } else if (s.retry) {
             dom.statusText.replaceChildren(
                 el('span', { class: 'warn' }, label),
                 el('span', {}, elapsed),
@@ -3501,23 +3508,40 @@ wireSlash();
 // A second click within a few seconds kills the process instead, which is what
 // you want when the polite one did not take — and which can leave a tool call
 // half-finished, so it is never what happens on the first click.
+//
+// Except for a stalled turn, where the first click is the kill. That is the case
+// the interrupt is least likely to fix — StopButton in web/boards/parts.js has
+// the reasoning — and the rail and both boards already stop one that way, so
+// the conversation offering a polite stop first would be the odd one out. The
+// transcript is on disk; what the kill costs is a turn that was producing
+// nothing. Back to the two-press flow the moment the turn speaks again.
 const FORCE_WINDOW_MS = 4000;
+
+const stopIsHard = () => Boolean(state.runner && state.runner.stalled)
+    || (state.stopArmed > 0 && Date.now() - state.stopArmed < FORCE_WINDOW_MS);
+
+/** Say which stop the next click is. Every change to either reason ends here. */
+function paintStop() {
+    const hard = stopIsHard();
+    dom.btnStop.textContent = hard ? 'Force stop' : 'Stop';
+    dom.btnStop.classList.toggle('force', hard);
+    dom.btnStop.title = (state.runner && state.runner.stalled)
+        ? 'Stop this stalled turn — ends the process, keeps the conversation' : '';
+}
 
 function armForce() {
     state.stopArmed = Date.now();
-    dom.btnStop.textContent = 'Force stop';
-    dom.btnStop.classList.add('force');
+    paintStop();
     setTimeout(() => {
         if (Date.now() - state.stopArmed < FORCE_WINDOW_MS) return;
         state.stopArmed = 0;
-        dom.btnStop.textContent = 'Stop';
-        dom.btnStop.classList.remove('force');
+        paintStop();
     }, FORCE_WINDOW_MS + 50);
 }
 
 dom.btnStop.addEventListener('click', async () => {
     if (!state.current) return;
-    const hard = state.stopArmed > 0 && Date.now() - state.stopArmed < FORCE_WINDOW_MS;
+    const hard = stopIsHard();
     dom.btnStop.disabled = true;
     try {
         const out = await post(`/api/sessions/${state.current.sessionId}/stop`, { hard });
@@ -3541,15 +3565,13 @@ dom.btnStop.addEventListener('click', async () => {
             // exists to stop: the old wording claimed a kill and a transcript
             // entry for a turn that had ended minutes ago.
             state.stopArmed = 0;
-            dom.btnStop.textContent = 'Stop';
-            dom.btnStop.classList.remove('force');
+            paintStop();
             toast(back
                 ? 'That session\u2019s process had already stopped.' + back
                 : 'That session\u2019s process had already stopped — nothing to stop.', 'ok');
         } else {
             state.stopArmed = 0;
-            dom.btnStop.textContent = 'Stop';
-            dom.btnStop.classList.remove('force');
+            paintStop();
             toast('Killed the process. Whatever was written is in the transcript.' + back, 'warn');
         }
     } catch (err) {

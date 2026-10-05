@@ -165,13 +165,18 @@ function card(s, runner, col) {
         // Whether there is a process, and whose. `live` covers the sessions the
         // pool knows nothing about — anything running in a terminal.
         live: s.live,
+        // The overview card's eight fields, which docs/api.md promises for both.
+        // `retry` and `stalled` were missing here for a while, so the board said
+        // "Working…" in the plain colour about a turn that was retrying or hung.
         runner: runner ? {
             state: runner.state,
             activity: runner.activity,
             queued: runner.queued,
             busySince: runner.busySince,
+            retry: runner.retry,
             error: runner.error,
             errorKind: runner.errorKind,
+            stalled: runner.stalled,
         } : null,
         ask: (runner && runner.pendingPermission) || null,
 
