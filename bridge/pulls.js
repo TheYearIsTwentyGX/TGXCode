@@ -224,6 +224,35 @@ async function openPulls(repo) {
 }
 
 /**
+ * The head SHA of each named branch on a GitHub repository, from `git ls-remote`.
+ *
+ * This is how `pr-store.js` notices a base branch moving when the merge happened
+ * somewhere it cannot see — the GitHub UI, another developer's machine. It talks
+ * git's smart-HTTP protocol rather than the REST API, so it does not count against
+ * gh's rate limit, and every branch asked about costs the one process.
+ *
+ * `GIT_TERMINAL_PROMPT=0` for the reason bridge/github.js gives: a private
+ * repository with no credential helper must fail, not sit at a prompt nobody can
+ * see until the timeout. A branch missing from the answer was deleted, and is
+ * simply absent from `shas`.
+ */
+async function remoteHeads(repo, branches) {
+    const refs = [...new Set(branches || [])].filter(Boolean).map(b => `refs/heads/${b}`);
+    if (!refs.length) return { ok: true, error: null, shas: {} };
+    const r = await run('git', ['ls-remote', `https://github.com/${repo}.git`, ...refs], {
+        timeout: GIT_TIMEOUT_MS,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    });
+    if (!r.ok) return { ok: false, error: firstLine(r.stderr) || 'git ls-remote failed', shas: {} };
+    const shas = {};
+    for (const line of r.stdout.split('\n')) {
+        const m = /^([0-9a-f]{40,64})\trefs\/heads\/(.+)$/.exec(line.trim());
+        if (m) shas[m[2]] = m[1];
+    }
+    return { ok: true, error: null, shas };
+}
+
+/**
  * One pull request by number, for the PRs the open list does not mention.
  *
  * `terminal` is the answer the caller is really after: `MERGED` and `CLOSED` are
@@ -595,7 +624,7 @@ async function setVerdictLabel(repo, number, want, present = []) {
 
 module.exports = {
     run, ghError, forgetRepo,
-    githubRepo, repoOf, originWebUrl, originUrlOf, openPulls, pullState, resolveStatus, checkSummary,
+    githubRepo, repoOf, originWebUrl, originUrlOf, openPulls, remoteHeads, pullState, resolveStatus, checkSummary,
     resolveBatch, aggregate, ATTENTION_ORDER,
     comment, ensureLabel, setVerdictLabel, VERDICT_LABELS,
 };

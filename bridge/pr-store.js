@@ -29,6 +29,10 @@
 //     list reads UNKNOWN and the conflict it hides is the thing somebody is about
 //     to look for. 20s, bounded: three minutes after a merge, and seven UNKNOWN
 //     lists in a row. Meanwhile the last real answer is held — `carryMergeable`.
+//     A merge made somewhere else — the GitHub UI, another developer — leaves no
+//     trace in a list nobody has run, so `watchBases` asks `git ls-remote` for the
+//     head of every base the open PRs target, at most once a minute per
+//     repository, and a moved head opens the same window.
 //   * **The conversation moved.** A session's transcript mtime is past the moment
 //     its repository was last listed. Someone is working here, so a PR may have
 //     just been raised, pushed to, or merged. Floored at a minute so a busy
@@ -84,7 +88,8 @@ const ACTIVE_MS = 60_000;
 const CHECKS_MS = 2 * 60_000;
 
 // The staleness floor, and the cap on every backoff. Everything a conversation
-// cannot see — a review landing, somebody else merging — is found within this.
+// cannot see — a review landing, a comment — is found within this. Somebody else
+// merging used to be on that list; `watchBases` takes it off.
 const IDLE_MS = 20 * 60_000;
 
 // After a failed list. Short at first because gh failing is usually a token or a
@@ -109,6 +114,13 @@ const UNKNOWN_TRIES = 6;
 // the idle floor.
 const MERGED_WINDOW_MS = 3 * 60_000;
 
+// How often a repository's base branches are checked for having moved. This is
+// `git ls-remote`, which is git's protocol rather than GitHub's API and so costs
+// no rate limit, and it is the only thing here that sees a merge made off this
+// machine before the idle floor does. A minute, rather than every tick, because
+// it is still a process and a round trip per repository.
+const BASE_WATCH_MS = 60_000;
+
 // Separate processes, not requests on one connection. The same figure pulls.js and
 // dashboard.js use, for the same reason.
 const GH_CONCURRENCY = 4;
@@ -122,7 +134,7 @@ const GIT_CONCURRENCY = 8;
 // ---------------------------------------------------------------------------
 
 const state = {
-    /** @type {Map<string, {checkedAt: number, ok: boolean, error: string|null, attempts: number, unknownStreak: number, baseMovedAt: number, pulls: Array}>} */
+    /** @type {Map<string, {checkedAt: number, ok: boolean, error: string|null, attempts: number, unknownStreak: number, baseMovedAt: number, baseShas: Object<string, string>, baseCheckedAt: number, pulls: Array}>} */
     repos: new Map(),
     /** @type {Map<string, {at: number, pull: object}>} `owner/name#12` -> a settled PR */
     terminal: new Map(),
@@ -156,6 +168,8 @@ function load() {
                 attempts: Number(e.attempts) || 0,
                 unknownStreak: Number(e.unknownStreak) || 0,
                 baseMovedAt: Number(e.baseMovedAt) || 0,
+                baseShas: cleanShas(e.baseShas),
+                baseCheckedAt: Number(e.baseCheckedAt) || 0,
                 pulls: e.pulls,
             });
         }
@@ -171,6 +185,14 @@ function load() {
             console.error(`[tgxcode] ignoring unreadable ${STORE_FILE}: ${err.message}`);
         }
     }
+}
+
+/** `{branch: sha}` from the file, keeping only string values. */
+function cleanShas(raw) {
+    const out = {};
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+    for (const [b, sha] of Object.entries(raw)) if (typeof sha === 'string' && sha) out[b] = sha;
+    return out;
 }
 
 const serialise = () => JSON.stringify({
@@ -439,6 +461,10 @@ async function refreshRepo(repo) {
         attempts: r.ok ? 0 : (prev ? prev.attempts : 0) + 1,
         unknownStreak: prev ? prev.unknownStreak || 0 : 0,
         baseMovedAt: prev ? prev.baseMovedAt || 0 : 0,
+        // The watcher's, not the list's: carried so a list does not forget the
+        // heads it last saw and miss the next move.
+        baseShas: prev ? prev.baseShas || {} : {},
+        baseCheckedAt: prev ? prev.baseCheckedAt || 0 : 0,
         pulls: r.ok ? carryMergeable(r.pulls, prev) : (prev ? prev.pulls : []),
     };
     if (r.ok) {
@@ -453,6 +479,61 @@ async function refreshRepo(repo) {
     }
     state.repos.set(repo, entry);
     return before !== signature(entry);
+}
+
+/**
+ * Notice a base branch moving without listing anything.
+ *
+ * One `git ls-remote` per repository, naming every base its open PRs target, and
+ * no more than once per BASE_WATCH_MS. A head that differs from the one recorded
+ * last time is treated exactly like a PR leaving the open list: `baseMovedAt` opens
+ * the short window and `checkedAt = 0` makes the repository due on this very pass.
+ *
+ * A head seen for the first time is only written down — there is nothing to
+ * compare it against, and a boot is not a merge. A failing repository is left
+ * alone: forcing a list would cut its gh backoff short, and gh being down is not
+ * something a moved branch fixes. A failed ls-remote keeps the old heads and still
+ * moves `baseCheckedAt`, so a remote git cannot read is asked once a minute rather
+ * than every tick.
+ *
+ * @returns {Promise<boolean>} whether anything was asked, so the caller saves.
+ */
+async function watchBases(repos, now = Date.now()) {
+    const todo = [];
+    for (const repo of repos) {
+        const entry = state.repos.get(repo);
+        if (!entry || !entry.ok || !entry.checkedAt) continue;
+        if (now - (entry.baseCheckedAt || 0) < BASE_WATCH_MS) continue;
+        const bases = [...new Set((entry.pulls || []).map(p => p && p.base).filter(Boolean))];
+        if (bases.length) todo.push({ repo, bases });
+    }
+    if (!todo.length) return false;
+
+    await mapLimit(todo, GIT_CONCURRENCY, async ({ repo, bases }) => {
+        const r = await pulls.remoteHeads(repo, bases);
+        // Looked up again rather than captured: a list may have replaced the
+        // entry while git ran, and writing to the old record would be lost.
+        const entry = state.repos.get(repo);
+        if (!entry) return;
+        entry.baseCheckedAt = now;
+        if (!r.ok) return;
+        const before = entry.baseShas || {};
+        const after = {};
+        let moved = false;
+        for (const base of bases) {
+            const sha = r.shas[base];
+            if (!sha) continue;
+            after[base] = sha;
+            if (before[base] && before[base] !== sha) moved = true;
+        }
+        entry.baseShas = after;
+        if (moved) {
+            entry.baseMovedAt = now;
+            entry.unknownStreak = 0;
+            entry.checkedAt = 0;
+        }
+    });
+    return true;
 }
 
 /**
@@ -592,6 +673,9 @@ async function tick({ sessions = [], running = new Set(), extraRepos = [], force
         }
     }
 
+    // Before deciding what is due, because a moved base makes its repository due.
+    const watched = await watchBases(repos, now);
+
     const due = [...repos].filter(repo => force || isDue(repo, active.has(repo), now));
 
     let changed = false;
@@ -620,7 +704,7 @@ async function tick({ sessions = [], running = new Set(), extraRepos = [], force
     // pass is still there to be found next time, without a marker recording it.
 
     prune(sessions, repos);
-    if (changed || due.length) save();
+    if (changed || due.length || watched) save();
     return { changed, refreshed: due, repos };
 }
 
@@ -665,6 +749,8 @@ function seed(repo, entry) {
         attempts: 0,
         unknownStreak: 0,
         baseMovedAt: 0,
+        baseShas: {},
+        baseCheckedAt: 0,
         pulls: [],
         ...entry,
     });
@@ -681,9 +767,9 @@ function reset() {
 module.exports = {
     openPulls, terminalPull, lookup, checkedAt, ghError,
     forSession, forSessions,
-    tick, invalidate, refreshRepo, resolveTerminal, reposFor,
+    tick, invalidate, refreshRepo, resolveTerminal, reposFor, watchBases,
     dueAt, isDue, interval, checksRunning, mergeUnknown, carryMergeable,
     load, save, flush, snapshot, seed, reset,
     STORE_FILE, TICK_MS, ACTIVE_MS, CHECKS_MS, IDLE_MS, BACKOFF_MS,
-    UNKNOWN_MS, UNKNOWN_TRIES, MERGED_WINDOW_MS,
+    UNKNOWN_MS, UNKNOWN_TRIES, MERGED_WINDOW_MS, BASE_WATCH_MS,
 };
