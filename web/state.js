@@ -114,6 +114,9 @@ export const state = {
     // url -> {status, label, detail, title, updatedAt} from /api/sessions/:id/prs.
     // Null until that answers; the header draws its PRs from the summary either way.
     prStatus: null,
+    // {sessionId, repo} — the repository that session's checkout points at, from the
+    // same response. What a bare `#N` in it means; see web/pr-refs.js.
+    prRepo: null,
     // sessionId -> {status, label, total, counts} — one word for a whole session's
     // pull requests, which is all a rail row has space for. Seeded from /api/prs at
     // boot and kept current by the `prs-changed` event; empty until the first of

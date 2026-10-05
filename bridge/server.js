@@ -44,6 +44,7 @@ const { RunPool } = require('./runs');
 const events = require('./events');
 const scheduler = require('./scheduler');
 const prRefresh = require('./pr-refresh');
+const prOwners = require('./pr-owners');
 const laterDelivery = require('./later-delivery');
 const { pair } = require('./pairing');
 // Plumbing every route shares, and the API itself — see bridge/routes/.
@@ -539,6 +540,7 @@ const {
 } = scheduler;
 
 prRefresh.init({ index, pool });
+prOwners.init({ index });
 const { tickPrs } = prRefresh;
 
 laterDelivery.init({

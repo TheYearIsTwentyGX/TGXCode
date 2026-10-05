@@ -317,12 +317,15 @@ async function handle(req, res, url, pathname, seg, who) {
 
             // A `pr-link` entry usually names its repository. Where one did not,
             // the session's own directory is the best guess available.
+            //
+            // Asked whether or not any PR needs it now: `repo` is also returned on
+            // its own, because it is the repository a `#N` in this conversation
+            // means by default (web/pr-refs.js) — and a session that has raised no
+            // PR yet still has one.
             const list = summary.prs || [];
-            const repo = list.some(pr => !pr.repo) && summary.cwd
-                ? await pulls.repoOf(summary.cwd)
-                : null;
+            const repo = summary.cwd ? await pulls.repoOf(summary.cwd) : null;
 
-            return send(res, 200, prStore.forSession(list, repo));
+            return send(res, 200, { ...prStore.forSession(list, repo), repo: repo || null });
         }
 
         // Show the session's working directory in Windows File Explorer.

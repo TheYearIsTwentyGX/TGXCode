@@ -7,6 +7,7 @@
 import { configurePaths } from './markdown.js';
 import { PreviewPane } from './preview.js';
 import { opensInPreview } from './link-policy.js';
+import { loadPrOwners, wirePrRefs } from './pr-refs.js';
 import { startupQuery } from './startup.js';
 import * as keys from './keys.js';
 import { drawRail } from './rail.js';
@@ -2526,6 +2527,9 @@ function connect() {
     es.addEventListener('prs-changed', (e) => {
         applyRailPrs(JSON.parse(e.data));
         if (state.current) loadPrStatus();
+        // A PR raised elsewhere is the likeliest thing to have moved, and it is
+        // what turns a plain `#N` in this conversation into a link.
+        loadPrOwners();
         if (state.dash.open) loadDash();
     });
 
@@ -3526,6 +3530,9 @@ dom.agentScroll.addEventListener('scroll', () => {
 
 // The tooltip is positioned against a tick, so it cannot follow one that moves.
 dom.turns.addEventListener('scroll', hideTurnPop);
+
+// `#151` in a message: a hover card for whose PR it is and a click to that chat.
+wirePrRefs();
 
 // The Start-a-session dialog's first-message box, built in new-session/dialog.js.
 wireComposer(newC);

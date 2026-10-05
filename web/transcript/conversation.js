@@ -24,6 +24,7 @@ import { icon, PR_ICON } from '../icons.js';
 import * as keys from '../keys.js';
 import { cvStaleFor } from '../quota.js';
 import { state } from '../state.js';
+import { notePrRepo } from '../pr-refs.js';
 import { loadCommands } from '../commands.js';
 import { showTerm, termOpen } from '../term-pane.js';
 import {
@@ -460,11 +461,12 @@ export async function loadPrStatus() {
     // bridge answers a session with none from its index without asking GitHub.
     const id = state.current.sessionId;
     try {
-        const { prs, gh } = await get(`/api/sessions/${id}/prs`);
+        const { prs, gh, repo } = await get(`/api/sessions/${id}/prs`);
         if (!state.current || state.current.sessionId !== id) return;
         state.prStatus = new Map((prs || []).map(pr => [pr.url, pr]));
         if (gh && gh.error) state.prsError = gh.error;
         renderHeader();
+        notePrRepo(id, repo);
     } catch {
         // Leaves whatever was known before, which is better than blanking it.
     }

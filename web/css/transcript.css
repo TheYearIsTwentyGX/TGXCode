@@ -1278,11 +1278,63 @@
 }
 .turn-pop .pop-text.cmd { font-family: var(--mono); font-size: 12.5px; color: var(--peach); }
 
+/* `#151` in a message - web/pr-refs.js. Plain text until it resolves to another
+   chat's PR, because most `#N` do not: a mark that went nowhere drawn as a link
+   is the one thing worse than no link.
+
+   Colour alone, no underline: an agent that names the same PR ten times in a
+   reply drew ten underlines, and the paragraph read as a row of links. The one
+   under the pointer gets one, so it still shows it can be clicked. */
+.prose a.pr-ref { color: inherit; text-decoration: none; cursor: text; }
+.prose a.pr-ref.linked { color: var(--blue); cursor: pointer; }
+.prose a.pr-ref.linked:hover { text-decoration: underline; text-underline-offset: 3px; }
+.prose a.pr-ref.linked:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; border-radius: 2px; }
+
+/* The card a linked mention shows. #turn-pop's surface and type, anchored under
+   the mention, one section per project when the chat spans more than one. */
+.pr-pop { width: auto; min-width: 220px; max-width: 360px; animation-name: pop-down; }
+.pr-pop .pop-head { margin-bottom: 4px; }
+.pr-pop-sec + .pr-pop-sec { margin-top: 9px; padding-top: 8px; border-top: 1px solid var(--outline); }
+.pr-pop-proj {
+    font: 500 11px/1.4 var(--sans);
+    letter-spacing: 0.03em;
+    color: var(--peach);
+}
+.pr-pop-pr {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 3px 0;
+    font: 400 13px/1.45 var(--sans);
+    color: var(--text-2);
+    min-width: 0;
+}
+.pr-pop-pr .pr { display: grid; place-items: center; color: var(--pr-tint); opacity: var(--pr-fade); flex: none; }
+.pr-pop-pr .num { font-family: var(--mono); font-size: 12px; color: var(--text-3); flex: none; }
+.pr-pop-pr .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-pop-chat {
+    padding-left: 12px;
+    font: 400 13px/1.5 var(--sans);
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.pr-pop-chat::before { content: '└ '; color: var(--text-4); }
+.pr-pop-chat.self { color: var(--text-4); }
+.pr-pop-chat .note { color: var(--text-4); }
+.pr-pop-foot { margin-top: 8px; font: 400 11px/1.4 var(--sans); color: var(--text-4); }
+
+@keyframes pop-down {
+    from { opacity: 0; transform: translateY(-3px); }
+    to { opacity: 1; transform: none; }
+}
+
 @keyframes pop-in {
     from { opacity: 0; transform: translateX(4px); }
     to { opacity: 1; transform: none; }
 }
-@media (prefers-reduced-motion: reduce) { .turn-pop { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .turn-pop, .pr-pop { animation: none; } }
 
 /* Where a jump landed, so the eye finds it without hunting.
  *
