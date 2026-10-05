@@ -679,8 +679,15 @@ than refetching.
 
 ### `GET /api/sessions/:id/prs`
 
-`{ prs: [...], gh: {ok, error}, checkedAt }` — what has become of the pull requests
-this session raised, one entry per PR in `summary.prs`, same order.
+`{ prs: [...], gh: {ok, error}, checkedAt, repo }` — what has become of the pull
+requests this session raised, one entry per PR in `summary.prs`, same order.
+
+`repo` is a string `"owner/name"` or null: the GitHub repository the session's
+checkout's `origin` points at. It is present even when `prs` is empty — it is the
+repository a bare `#N` in this conversation refers to by default, which is what
+`GET /api/pr-owners` is looked up against. Null when the checkout has no GitHub
+remote or no longer exists. A remote you just changed can take up to ten minutes
+to show here (the lookup is memoised).
 
 `checkedAt` is an ISO string or null: the most recent moment any repository was
 successfully listed. Null means nothing has been listed yet — a bridge that has
@@ -803,6 +810,50 @@ round of `gh` calls and loses nothing.
 
 `?refresh=1` on `GET /api/dashboard` is the only way to make the refresher run out
 of turn. There is no per-route refresh here.
+
+### `GET /api/pr-owners`
+
+`{ owners: {...}, prs: {...}, checkedAt }` — which conversation raised each pull
+request: the reverse of `summary.prs`. A client uses it to turn a `#151` written
+in a message into "raised in *that* chat", with a way to open it.
+
+**Both objects are keyed `"owner/name#N"`, not by number** — a number means
+nothing without its repository. Look a mention up under the repositories the
+conversation is about (`repo` from `GET /api/sessions/:id/prs`, plus the `repo`
+of each of its own `prs`), never across every repository: an unrelated project's
+#151 is not the one the message meant.
+
+`owners` maps each key to **an array of objects**, most recently active first,
+with each session at most once:
+
+| Field | Type |
+|---|---|
+| `sessionId` | string |
+| `title` | string or null — the session's title, resolved as on the summary |
+| `projectName` | string or null — the same label the summary carries |
+| `projectCwd` | string or null |
+| `archived` | boolean |
+| `mtimeMs` | number — the transcript's mtime, the sort key |
+
+More than one entry is ordinary — a PR re-linked by a follow-up conversation, or
+a conversation that crossed into a worktree. The asking client's own session can
+be one of them; it is not filtered out here.
+
+`prs` maps a key to `{title (string or null), status (string), label (string or
+null)}` — the same `status` values `GET /api/sessions/:id/prs` uses — **only when
+the PR status store already has an answer**. A key absent from `prs` is not an
+error; draw the mention without a status. This route never asks GitHub.
+
+- The whole index is walked, not the 500 sessions `/api/sessions` returns, because
+  the session that raised a PR is often an old one. Test sessions are included
+  only on a dev bridge, as everywhere else.
+- A `pr-link` that named no repository is filed under its checkout's `origin`. One
+  that still cannot be placed is **left out**, never keyed under `null`.
+- The answer is kept for up to **30 seconds**, and dropped early when the session
+  index changes. There is no event for it: refetch on `prs-changed`, or when the
+  copy you hold is older than you are happy with.
+
+`checkedAt` is an ISO string: when this answer was built.
 
 ### `GET /api/origin?cwd=<dir>`
 

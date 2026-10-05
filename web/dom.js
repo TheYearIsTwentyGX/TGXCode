@@ -30,7 +30,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'quota-restart', 'quota-restart-label', 'quota-restart-sub',
     'cv-wrap', 'cv-pill', 'cv-menu', 'cv-changelog', 'cv-check', 'cv-body', 'cv-update', 'cv-update-label',
     'btn-pin', 'btn-changes', 'btn-folder', 'btn-term', 'btn-archive', 'btn-delete',
-    'turns', 'turn-pop',
+    'turns', 'turn-pop', 'pr-pop',
     'find', 'find-input', 'find-count', 'find-prev', 'find-next',
     'find-subs', 'find-subs-row', 'find-close',
     'changes', 'changes-strip', 'changes-strip-count', 'changes-open', 'changes-count',

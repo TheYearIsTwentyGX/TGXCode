@@ -276,6 +276,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/github.js` | Publishing a directory to GitHub: who gh is logged in as, `git init`, starter files, a first commit, `gh repo create --source --push` and `gh repo edit` |
 | `bridge/pr-store.js` | When to ask, and last time's answer kept on disk — so no route ever waits on GitHub |
 | `bridge/pr-refresh.js` | The clock that fills it: one pass over the repositories in play, and `prs-changed` when the answer moved |
+| `bridge/pr-owners.js` | The way back: which conversation raised each PR, keyed `owner/name#N` — `GET /api/pr-owners` |
 | `bridge/overview.js` | The live board: what every session is doing right now |
 | `bridge/taskboard.js` | The task board: everything outstanding, in a column per state |
 | `bridge/sessions.js` | The session index — incremental, cached, watched |
@@ -407,6 +408,7 @@ Two rules worth knowing before you send a patch:
 | `web/commands.js` | The header's project-command buttons — `.tgxcode/commands.json` for the session's directory — and the runs they start |
 | `web/term-pane.js` | The app's side of the terminal pane: the one `TerminalPane`, open per session, its height and head, and the shell/run tabs |
 | `web/markdown.js` | The transcript's markdown renderer |
+| `web/pr-refs.js` | A `#151` in a message: whose PR it is (hover card) and the chat that raised it (click) |
 | `web/highlight.js` | The syntax highlighter behind it |
 | `web/sw.js` | A service worker for one thing only: buttons on a notification. No `fetch` handler |
 | `web/preview.js` | The browser preview — a dev server's page in the window, with DevBrowser's toolbar |

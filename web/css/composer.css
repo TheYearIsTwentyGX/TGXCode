@@ -60,7 +60,7 @@
 @media (prefers-reduced-motion: reduce) {
     .status-line[data-state="busy"] .led,
     .status-line[data-state="ask"] .led,
-    :is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="checks-pending"] svg,
+    :is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="checks-pending"] svg,
     .tool[data-status="pending"] > summary::before,
     .strip[data-state="running"] .strip-meta::before { animation: none; }
 }
