@@ -380,6 +380,8 @@ export const state = {
     // The project card whose ⋮ menu is open, or null. The menu is fixed and
     // outside the rail, so this is how the card's ⋮ knows to draw itself
     // expanded, and how syncProjMenu() finds the button to follow.
+    // `{key, cwd, name}` for a project card; `{sessionId}` when it was opened
+    // from a session row's ⋮ instead (`projects.compactActions`).
     projMenu: null,
     // Canned messages, and the groups they are drawn in. Drafts' terms for the
     // push — the whole list, unconditional, held as sent — with one difference

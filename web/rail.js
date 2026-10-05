@@ -48,7 +48,7 @@ import {
     projectColor,
     elsewhere, awayWords, prWords, prUnknownWhy, inProjectCard, groupKeyOf, rankOf,
     setFlags, askDelete, startRename, cancelRename, commitRename, toggleGroup, onRailDragStart, onRailDragEnd,
-    showProjMenu, closeProjMenu, renderRail,
+    showProjMenu, closeProjMenu, showStripMenu, renderRail,
 } from './app.js';
 import { openSession } from './transcript/conversation.js';
 import { StopButton } from './boards/parts.js';
@@ -322,6 +322,7 @@ function strip(s) {
     const away = elsewhere(s);
     const when = ago(s.lastUserTs || s.lastTs);
     const renaming = !!state.railRename && state.railRename.id === s.sessionId;
+    const compact = !!BOOT_PREFS.projects.compactActions;
 
     // A row, not a button: it holds its own pin and archive controls, and
     // nesting buttons is not allowed.
@@ -370,11 +371,12 @@ function strip(s) {
                 ? html`<div class="strip-main">${renameInput(s)}${meta}</div>`
                 : html`<button class="strip-main" type="button" onClick=${() => openSession(s.sessionId)}>
                     <span class="strip-title">${s.title}</span>${standingLine(s, running)}${meta}</button>`}
+            ${compact ? stripMenuButton(s) : null}
             <div class="strip-actions">
                 ${stalled ? html`<span class="strip-stop" onClick=${(e) => e.stopPropagation()}>
                     <${StopButton} cls="mini stop" sessionId=${s.sessionId} hard=${true}
                         reset=${s.runner.activity} /></span>` : null}
-                <button class="mini" type="button" title="Rename"
+                ${compact ? null : html`<button class="mini" type="button" title="Rename"
                     onClick=${(e) => { e.stopPropagation(); startRename(s); }}
                 >${icon('pencil')}</button>
                 <button class=${'mini' + (s.pinned ? ' on' : '')} type="button"
@@ -388,9 +390,27 @@ function strip(s) {
                 >${icon(s.archived ? 'unarchive' : 'archive')}</button>
                 <button class="mini danger" type="button" title="Delete permanently"
                     onClick=${(e) => { e.stopPropagation(); askDelete(s); }}
-                >${icon('trash')}</button>
+                >${icon('trash')}</button>`}
             </div>
         </div>`;
+}
+
+/**
+ * The row's ⋮, with `projects.compactActions` on: the four buttons above as a
+ * menu, which showStripMenu() in app.js draws into the project cards' menu
+ * element. A sibling of `.strip-main` for `group-menu-btn`'s reason — that is a
+ * <button>, and a button inside a button is not a thing the browser will build.
+ */
+function stripMenuButton(s) {
+    const open = !!state.projMenu && state.projMenu.sessionId === s.sessionId;
+    return html`<button class="strip-menu-btn" type="button"
+        aria-haspopup="menu" aria-expanded=${String(open)}
+        aria-label=${`More for ${s.title}`} title="More"
+        onClick=${(e) => {
+            e.stopPropagation();
+            if (open) closeProjMenu();
+            else showStripMenu(s, e.currentTarget);
+        }}>${icon('dots', 15)}</button>`;
 }
 
 /**

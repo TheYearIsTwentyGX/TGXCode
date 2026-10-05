@@ -404,6 +404,10 @@ export const SETTINGS = [
                 options: [['top', 'Top'], ['bottom', 'Bottom']],
                 note: 'A project you have not placed yet. It keeps that place once '
                     + 'you drag anything.' },
+            { key: 'compactActions', type: 'bool',
+                label: 'Compact session actions',
+                note: 'Put Rename, Pin, Archive and Delete in a ⋮ menu at the top right '
+                    + 'of each session, instead of a row of buttons over it on hover.' },
         ],
         // Ordinary rows, drawn into the markup group because the group is not
         // built from `rows` — see renderProjectBackdrop().

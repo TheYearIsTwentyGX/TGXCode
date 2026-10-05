@@ -1304,7 +1304,7 @@ answer — the board draws sessions from every project at once, so a project's
 on `?cwd=`, but it does not change what the board draws. A client that builds its
 own cards has no reason to read `live` at all — the Android app does not.
 
-`projects` is eleven keys: `colors`, a map described below; seven about the
+`projects` is twelve keys: `colors`, a map described below; seven about the
 order of the rail's project cards, described after it; and two plain ones
 about how the desktop wears a colour — `backdropTint {boolean}`, default `true`,
 and `backdropStrength {integer 0–40}`, default `13`, a percentage of the
@@ -1314,6 +1314,12 @@ the desktop window alone, so a client with no such backdrop has no reason to
 read them; a value out of range, a string, or a fraction is dropped with one
 `problems` line and the default holds. They are user-only like the rest of the
 section.
+
+The twelfth, `compactActions {boolean}`, default `false`, is how the desktop
+rail draws a session row's Rename, Pin, Archive and Delete: `false` is a row of
+buttons over the row on hover, `true` is one ⋮ at the row's top-right that opens
+a menu of them. Presentation only, like the backdrop pair; a non-boolean is
+dropped with one `problems` line.
 
 `colors` is an **object**:
 `{"<absolute project directory>": "<#rgb or #rrggbb>"}`. It is a colour a person

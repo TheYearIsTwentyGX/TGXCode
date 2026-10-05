@@ -33,6 +33,7 @@ export const PREFS_FALLBACK = {
         colors: {}, backdropTint: true, backdropStrength: 13,
         sort: 'recent', bumpOnCreate: true, bumpOnUser: true, bumpOnAny: false,
         bumpOnTurn: false, bumpOnPr: false, order: [], newAt: 'top',
+        compactActions: false,
     },
     quota: { beacon: false, beaconDir: null, beaconEveryMinutes: 20 },
     spinner: { randomize: true, groups: [], weights: {}, rerollMs: 8000 },
