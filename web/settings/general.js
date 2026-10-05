@@ -101,6 +101,23 @@ export const SETTINGS_CATEGORIES = [
 // index.js). `card` and `rows` groups are Preact all the way down.
 export const SETTINGS = [
     {
+        title: 'On startup', section: 'startup', category: 'workspace', userOnly: true,
+        note: 'What a new window opens to. A refresh keeps whatever was open.',
+        rows: [
+            { key: 'view', type: 'radio',
+                label: 'Open to',
+                options: [
+                    ['conversation', 'Conversation'], ['dashboard', 'Dashboard'],
+                    ['taskboard', 'Tasks'], ['drafts', 'Drafts'], ['schedules', 'Schedules'],
+                ] },
+            { key: 'live', type: 'bool',
+                label: 'Live board on',
+                note: 'Over another screen it shows only where Live board › visibility '
+                    + 'keeps it up; otherwise it is on underneath, there when you '
+                    + 'close that screen.' },
+        ],
+    },
+    {
         title: 'Reading', section: 'transcript', category: 'workspace',
         note: 'How a transcript folds the work between one message and the next, '
             + 'and how its clocks read.',

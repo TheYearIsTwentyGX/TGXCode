@@ -125,6 +125,19 @@ for (const key of OVER) {
 }
 ok('the live.over* keys take the four visibilities and nothing else');
 
+// --- startup: what a new window opens to ---------------------------------
+assert.deepStrictEqual(DEFAULTS.startup, { view: 'conversation', live: false },
+    'a launch must default to what it always did: nothing open');
+for (const v of ['conversation', 'taskboard', 'dashboard', 'drafts', 'schedules']) {
+    assert.ok(SHAPE.startup.view(v), `startup.view: ${v}`);
+}
+// History has no address form, and `live` is the other key's job.
+for (const v of ['history', 'live', 'settings', 'Dashboard', '', null, true]) {
+    assert.ok(!SHAPE.startup.view(v), `startup.view: ${JSON.stringify(v)}`);
+}
+assert.ok(SHAPE.startup.live(true) && SHAPE.startup.live(false) && !SHAPE.startup.live('yes'));
+ok('startup.view takes the panels with an address and nothing else');
+
 // --- bindings are cleaned entry by entry --------------------------------
 // Every other setting is one value, so a bad one costs that value. A map is
 // different: one typo'd id must not throw away the bindings beside it.
@@ -415,7 +428,7 @@ ok('an order saves resolved, refuses a bad entry, and is user-only');
 // because the call sites passed no cwd. A page that prints which file wins for
 // each key cannot rely on that.
 assert.deepStrictEqual([...USER_ONLY].sort(),
-    ['devbrowser', 'keyboard', 'preview', 'projects', 'quota', 'standing', 'toolbar', 'wispr']);
+    ['devbrowser', 'keyboard', 'preview', 'projects', 'quota', 'standing', 'startup', 'toolbar', 'wispr']);
 
 clear();
 write(userFile, { version: VERSION });
@@ -427,9 +440,12 @@ write(projFile, {
     wispr: { transforms: [{ id: 'lock', title: 'Lock', combo: 'Win+L' }] },
     preview: { keepAliveMinutes: 200 },
     devbrowser: { whenClosed: 'nothing' },
+    startup: { view: 'dashboard', live: true },
 });
 prefs.cache.clear();
 got = prefs.forCwd(project);
+// What your window opens to is not a repository's to arrange.
+assert.deepStrictEqual(got.startup, DEFAULTS.startup, 'a project set startup');
 // Whether a click launches an app on this machine is not a repository's call.
 assert.strictEqual(got.devbrowser.whenClosed, DEFAULTS.devbrowser.whenClosed, 'a project set devbrowser.whenClosed');
 assert.strictEqual(got.preview.keepAliveMinutes, DEFAULTS.preview.keepAliveMinutes, 'a project set preview.keepAliveMinutes');
@@ -443,7 +459,7 @@ assert.deepStrictEqual(got.projects.colors, {}, 'a project coloured itself');
 // The bridge presses these chords on the desktop, so a repository listing one
 // would be a repository pressing keys on your machine.
 assert.deepStrictEqual(got.wispr.transforms, [], 'a project added a Wispr transform');
-for (const section of ['quota', 'keyboard', 'projects', 'wispr', 'preview', 'devbrowser']) {
+for (const section of ['quota', 'keyboard', 'projects', 'wispr', 'preview', 'devbrowser', 'startup']) {
     assert.ok(got.problems.some(p => p.file === projFile
         && p.message.includes(`"${section}" may only be set in`)),
     `no problem reported for a project's "${section}"`);
@@ -533,6 +549,16 @@ assert.strictEqual(prefs.forCwd().live.order, 'arrival');
 prefs.save({ scope: 'user', patch: { live: { order: null } } });
 assert.strictEqual(prefs.forCwd().live.order, 'needs-you', 'the board defaults to needs-you first');
 ok('live.order saves, reads back, and clears to needs-you');
+
+prefs.save({ scope: 'user', patch: { startup: { view: 'dashboard', live: true } } });
+assert.deepStrictEqual(prefs.forCwd().startup, { view: 'dashboard', live: true });
+assert.throws(() => prefs.save({ scope: 'user', patch: { startup: { view: 'history' } } }),
+    (e) => e.code === 'value');
+assert.throws(() => prefs.save({ scope: 'project', dir: project, patch: { startup: { live: true } } }),
+    (e) => e.code === 'readonly');
+prefs.save({ scope: 'user', patch: { startup: { view: null, live: null } } });
+assert.deepStrictEqual(prefs.forCwd().startup, DEFAULTS.startup);
+ok('startup saves, refuses a view with no address, is user-only, and clears');
 
 // "All views" in Settings is one save of six keys, and clearing one afterwards
 // must leave the other five where they were.
