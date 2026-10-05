@@ -2428,6 +2428,12 @@ function connect() {
         // The version check has the same missed-push problem, and this is also
         // how the first answer arrives at all.
         loadCv();
+        // And the pull requests. `prs-changed` is only sent when the answer moves,
+        // so a push missed here is not followed by another one — a conflict that
+        // appeared while the stream was down would otherwise stay invisible until
+        // something else about that repository changed. Reads the store; no gh.
+        loadRailPrs();
+        if (state.current) loadPrStatus();
         // Same reasoning for the status line, which onerror left reading
         // "Reconnecting to the bridge…". applyRunner derives it from what we
         // already know, so an idle session says Ready again and a busy one is

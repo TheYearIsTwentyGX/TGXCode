@@ -166,6 +166,83 @@ const session = (over = {}) => ({
         'and it stops the moment the check does');
     ok('the four intervals, including the one resolveStatus would have hidden');
 
+    // -- a conflict shows in seconds, not on the idle floor ------------------
+    //
+    // GitHub computes `mergeable` lazily: the first list after the base moves
+    // reads UNKNOWN. Waiting twenty minutes for the real answer is what made a
+    // conflict caused by another PR's merge take that long to appear.
+
+    reset();
+    const pending = { ...quiet, pulls: [pull({ mergeable: 'UNKNOWN' })] };
+    assert.strictEqual(store.interval(pending, false), store.UNKNOWN_MS,
+        'an UNKNOWN is asked about again within the next pass or so');
+    assert.strictEqual(store.interval({ ...pending, unknownStreak: store.UNKNOWN_TRIES + 1 }, false),
+        store.CHECKS_MS,
+        'but one GitHub never settles must not pin the repository to a gh every tick');
+    const draftUnknown = { ...quiet, pulls: [pull({ draft: true, mergeable: 'UNKNOWN' })] };
+    assert.strictEqual(store.interval(draftUnknown, false), store.IDLE_MS,
+        'a draft\'s mergeability is not what the rail shows for it');
+
+    listAnswer = () => ({ ok: true, error: null, pulls: [pull({ mergeable: 'UNKNOWN' })] });
+    for (let i = 0; i < store.UNKNOWN_TRIES + 1; i++) {
+        store.invalidate('o/r');
+        await store.tick({ sessions: [session()] });
+    }
+    assert.strictEqual(store.snapshot().repos['o/r'].unknownStreak, store.UNKNOWN_TRIES + 1,
+        'every list that still reads UNKNOWN counts towards the cap');
+    listAnswer = () => ({ ok: true, error: null, pulls: [pull()] });
+    store.invalidate('o/r');
+    await store.tick({ sessions: [session()] });
+    assert.strictEqual(store.snapshot().repos['o/r'].unknownStreak, 0,
+        'and a settled answer resets it');
+    ok('UNKNOWN is retried soon, and not forever');
+
+    // The last real answer is held while GitHub recomputes — otherwise the
+    // conflict colour vanishes for a pass exactly when somebody is looking for it.
+    reset();
+    listAnswer = () => ({ ok: true, error: null, pulls: [pull({ mergeable: 'CONFLICTING' })] });
+    await store.tick({ sessions: [session()] });
+    listAnswer = () => ({ ok: true, error: null, pulls: [pull({ mergeable: 'UNKNOWN' })] });
+    store.invalidate('o/r');
+    let res = await store.tick({ sessions: [session()] });
+    let held = store.openPulls('o/r').pulls[0];
+    assert.strictEqual(held.mergeable, 'CONFLICTING', 'the conflict survives an UNKNOWN read');
+    assert.strictEqual(held.mergeableStale, true, 'and says it is carried over');
+    assert.strictEqual(res.changed, true, 'going stale is a change, so the windows hear of it');
+
+    listAnswer = () => ({ ok: true, error: null, pulls: [pull({ mergeable: 'CONFLICTING' })] });
+    store.invalidate('o/r');
+    res = await store.tick({ sessions: [session()] });
+    held = store.openPulls('o/r').pulls[0];
+    assert.strictEqual(held.mergeableStale, undefined, 'a fresh answer replaces the carried one');
+    assert.strictEqual(res.changed, true, 'and that is pushed too, even with the same value');
+
+    listAnswer = () => ({ ok: true, error: null, pulls: [pull({ mergeable: 'UNKNOWN', headSha: 'def456' })] });
+    store.invalidate('o/r');
+    await store.tick({ sessions: [session()] });
+    assert.strictEqual(store.openPulls('o/r').pulls[0].mergeable, 'UNKNOWN',
+        'a new push is exactly when a conflict may have been fixed, so nothing is carried');
+    ok('a known conflict is held through UNKNOWN, but not across a push');
+
+    // A PR leaving the open list — merged, most likely — moves the base its
+    // siblings are measured against. They are asked about soon, for a while.
+    reset();
+    const sibling = pull({ number: 2, url: 'https://github.com/o/r/pull/2' });
+    listAnswer = () => ({ ok: true, error: null, pulls: [pull(), sibling] });
+    await store.tick({ sessions: [session()] });
+    assert.strictEqual(store.snapshot().repos['o/r'].baseMovedAt, 0, 'nothing has left yet');
+
+    listAnswer = () => ({ ok: true, error: null, pulls: [sibling] });
+    store.invalidate('o/r');
+    await store.tick({ sessions: [session()] });
+    const moved = store.snapshot().repos['o/r'];
+    assert.ok(moved.baseMovedAt > 0, 'a PR leaving the list marks the base as moved');
+    assert.strictEqual(store.interval(moved, false), store.UNKNOWN_MS,
+        'and the rest of the repository is asked about at the short interval');
+    assert.strictEqual(store.interval(moved, false, moved.baseMovedAt + store.MERGED_WINDOW_MS), store.IDLE_MS,
+        'until the window closes, when it goes back to the idle floor');
+    ok('a merge keeps its siblings on a short interval for a few minutes');
+
     // -- activity is what the conversation moving means ----------------------
     //
     // The transcript mtime is compared against the repository's own `checkedAt`,
