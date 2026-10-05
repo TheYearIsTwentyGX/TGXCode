@@ -5,7 +5,7 @@
 // running in somebody's terminal renders identically to one started here.
 
 import { configurePaths } from './markdown.js';
-import { PreviewPane } from './preview.js';
+import { PreviewPane, canPreviewUrls } from './preview.js';
 import { opensInPreview } from './link-policy.js';
 import { loadPrOwners, wirePrRefs } from './pr-refs.js';
 import { startupQuery } from './startup.js';
@@ -916,7 +916,30 @@ function showPortInline(o) {
 async function openLinkInPreview(href) {
     const shown = previewAvailable() && await previewPane.openUrl(href);
     if (shown) showPreview(true);
-    else window.open(href, '_blank', 'noreferrer');
+    else {
+        window.open(href, '_blank', 'noreferrer');
+        explainStaleShell(href);
+    }
+}
+
+/**
+ * A site that is not a local port needs `allowPreviewOrigin` from the shell,
+ * and a shell packaged before link previews existed does not have it — app/
+ * main.js and app/preload.js are packaged, web/ is not. The fallback to the
+ * browser is right, but silent it reads as the setting being broken, so the
+ * first such link in a page load says why. In a plain browser tab there is no
+ * shell at all, which the Settings note already covers.
+ */
+let staleShellExplained = false;
+function explainStaleShell(href) {
+    if (staleShellExplained || canPreviewUrls || !window.claudeShell || !previewAvailable()) return;
+    let u;
+    try { u = new URL(href); } catch { return; }
+    if (['localhost', '127.0.0.1', '[::1]'].includes(u.hostname)) return;
+    staleShellExplained = true;
+    toast('This app was packaged before links could open in the preview, so other sites '
+        + 'still go to your browser. Rebuild it (install.ps1) to fix that — local ports '
+        + 'already preview.', 'info');
 }
 
 /**
