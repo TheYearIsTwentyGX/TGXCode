@@ -428,7 +428,8 @@ ok('an order saves resolved, refuses a bad entry, and is user-only');
 // because the call sites passed no cwd. A page that prints which file wins for
 // each key cannot rely on that.
 assert.deepStrictEqual([...USER_ONLY].sort(),
-    ['devbrowser', 'keyboard', 'preview', 'projects', 'quota', 'standing', 'startup', 'toolbar', 'wispr']);
+    ['agentBrowser', 'devbrowser', 'keyboard', 'preview', 'projects', 'quota', 'standing', 'startup',
+        'toolbar', 'wispr']);
 
 clear();
 write(userFile, { version: VERSION });
@@ -441,11 +442,14 @@ write(projFile, {
     preview: { keepAliveMinutes: 200 },
     devbrowser: { whenClosed: 'nothing' },
     startup: { view: 'dashboard', live: true },
+    agentBrowser: { mode: 'headless' },
 });
 prefs.cache.clear();
 got = prefs.forCwd(project);
 // What your window opens to is not a repository's to arrange.
 assert.deepStrictEqual(got.startup, DEFAULTS.startup, 'a project set startup');
+// Nor is whether a browser window pops up on your desktop.
+assert.deepStrictEqual(got.agentBrowser, DEFAULTS.agentBrowser, 'a project set agentBrowser');
 // Whether a click launches an app on this machine is not a repository's call.
 assert.strictEqual(got.devbrowser.whenClosed, DEFAULTS.devbrowser.whenClosed, 'a project set devbrowser.whenClosed');
 assert.strictEqual(got.preview.keepAliveMinutes, DEFAULTS.preview.keepAliveMinutes, 'a project set preview.keepAliveMinutes');
@@ -459,7 +463,8 @@ assert.deepStrictEqual(got.projects.colors, {}, 'a project coloured itself');
 // The bridge presses these chords on the desktop, so a repository listing one
 // would be a repository pressing keys on your machine.
 assert.deepStrictEqual(got.wispr.transforms, [], 'a project added a Wispr transform');
-for (const section of ['quota', 'keyboard', 'projects', 'wispr', 'preview', 'devbrowser', 'startup']) {
+for (const section of ['quota', 'keyboard', 'projects', 'wispr', 'preview', 'devbrowser', 'startup',
+    'agentBrowser']) {
     assert.ok(got.problems.some(p => p.file === projFile
         && p.message.includes(`"${section}" may only be set in`)),
     `no problem reported for a project's "${section}"`);
@@ -559,6 +564,16 @@ assert.throws(() => prefs.save({ scope: 'project', dir: project, patch: { startu
 prefs.save({ scope: 'user', patch: { startup: { view: null, live: null } } });
 assert.deepStrictEqual(prefs.forCwd().startup, DEFAULTS.startup);
 ok('startup saves, refuses a view with no address, is user-only, and clears');
+
+assert.deepStrictEqual(DEFAULTS.agentBrowser, { mode: 'visible' },
+    'an agent\'s browser must default to what it always did: a window');
+prefs.save({ scope: 'user', patch: { agentBrowser: { mode: 'headless' } } });
+assert.strictEqual(prefs.forCwd().agentBrowser.mode, 'headless');
+assert.throws(() => prefs.save({ scope: 'user', patch: { agentBrowser: { mode: 'virtual' } } }),
+    (e) => e.code === 'value');
+prefs.save({ scope: 'user', patch: { agentBrowser: { mode: null } } });
+assert.deepStrictEqual(prefs.forCwd().agentBrowser, DEFAULTS.agentBrowser);
+ok('agentBrowser saves, refuses a mode it does not know, and clears');
 
 // "All views" in Settings is one save of six keys, and clearing one afterwards
 // must leave the other five where they were.

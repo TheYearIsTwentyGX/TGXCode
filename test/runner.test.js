@@ -206,7 +206,7 @@ process.env.FAKE_CLAUDE_LOG = logFile;
 // the stub ignores, and sessionEnv() strips it from the child anyway.
 process.env.TGXCODE_PORT = '45939';
 
-const { Runner, RunnerPool } = require('../bridge/runner.js');
+const { Runner, RunnerPool, sessionEnv } = require('../bridge/runner.js');
 const hostClient = require('../bridge/host-client.js');
 
 let pass = 0;
@@ -266,6 +266,22 @@ function runner() {
     const r = new Runner({ sessionId: randomUUID(), cwd: root, isNew: true });
     made.push(r);
     return r;
+}
+
+// --- the agent's browser: headless only when asked -----------------------
+// Playwright MCP is started by `claude` and reads its flags from the environment,
+// so this variable is the whole of the setting. `visible` must add nothing, or
+// the bridge's own environment could no longer choose for itself.
+{
+    delete process.env.PLAYWRIGHT_MCP_HEADLESS;
+    assert.strictEqual(sessionEnv({ browser: 'headless' }).PLAYWRIGHT_MCP_HEADLESS, 'true');
+    assert.ok(!('PLAYWRIGHT_MCP_HEADLESS' in sessionEnv({ browser: 'visible' })));
+    assert.ok(!('PLAYWRIGHT_MCP_HEADLESS' in sessionEnv()));
+    assert.ok(!('TGXCODE_PORT' in sessionEnv({ browser: 'headless' })), 'the port must still be stripped');
+    const pool = new RunnerPool();
+    assert.strictEqual(pool.agentBrowser(root), 'visible', 'a pool without a server shows the window');
+    pool.shutdown({ force: true });
+    ok('sessionEnv sets PLAYWRIGHT_MCP_HEADLESS for headless and nothing for visible');
 }
 
 (async () => {

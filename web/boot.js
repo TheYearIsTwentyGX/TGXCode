@@ -43,6 +43,7 @@ export const PREFS_FALLBACK = {
     devbrowser: { show: true, openIn: 'devbrowser', whenClosed: 'launch' },
     standing: { mode: 'model' },
     startup: { view: 'conversation', live: false },
+    agentBrowser: { mode: 'visible' },
 };
 
 
