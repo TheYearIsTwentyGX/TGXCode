@@ -338,6 +338,18 @@ export const SETTINGS = [
                 note: 'Starting it opens a window; “do nothing” only says it is closed.' },
         ],
     },
+    {
+        title: 'Agent test browser', section: 'agentBrowser', category: 'browsers', userOnly: true,
+        note: 'The browser an agent opens through Playwright to look at a page it is testing.',
+        rows: [
+            { key: 'mode', type: 'choice',
+                label: 'Show its window',
+                options: [['visible', 'Yes'], ['headless', 'No — run it headless']],
+                note: 'Headless draws no window, so it cannot come to the front or take the '
+                    + 'keyboard while you type. Screenshots and clicks still work. Applies to '
+                    + 'sessions started from now on; one already running keeps its browser.' },
+        ],
+    },
     // Claude Code's own settings — a different owner's files, and the one group
     // built by a `render` rather than from `rows` or from markup. It has to be:
     // what it draws comes from the bridge at load time rather than from a table

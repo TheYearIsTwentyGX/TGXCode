@@ -117,8 +117,15 @@ let queueSeq = 0;
  *
  * CLAUDE_CODE_ENTRYPOINT goes the other way: it is set here so the CLI knows what
  * started it.
+ *
+ * `browser` is the `agentBrowser.mode` setting. `headless` sets the variable the
+ * Playwright MCP server reads in place of its `--headless` flag, so the browser an
+ * agent tests with draws no window and cannot take focus from the person typing
+ * elsewhere. `visible` adds nothing, which leaves the bridge's own environment in
+ * charge — set the variable there and it still holds. The MCP server is started
+ * once per `claude`, so a change reaches the next session spawned, not one running.
  */
-function sessionEnv() {
+function sessionEnv({ browser = 'visible' } = {}) {
     const env = { ...process.env, CLAUDE_CODE_ENTRYPOINT: 'tgxcode' };
     deleteBoth(env, 'PORT');
     // terminal.js sets this on a session's own terminal pane, and devservers.js
@@ -131,6 +138,7 @@ function sessionEnv() {
     // session's own task list, and current models are not offered the tools that
     // keep one unless this is set. See cfg.TODO_TOOLS for the opt-out.
     if (cfg.TODO_TOOLS) env.CLAUDE_CODE_ENABLE_TODO_TOOLS = '1';
+    if (browser === 'headless') env.PLAYWRIGHT_MCP_HEADLESS = 'true';
     return env;
 }
 
@@ -353,6 +361,9 @@ class Runner extends EventEmitter {
         // How long a busy turn may be silent before it is reported stalled, in
         // ms; 0 is never. Delegated like the two above. See the header.
         this.stallAfter = opts.stallAfter || (() => 0);
+        // Whether the browser an agent tests with gets a window. Supplied by the
+        // pool from `agentBrowser.mode`; see sessionEnv().
+        this.agentBrowser = opts.agentBrowser || (() => 'visible');
         this.lastActivityAt = null;    // the last stream line, tool or answered ask
         this.stalled = false;
         this._stallTimer = null;
@@ -544,7 +555,7 @@ class Runner extends EventEmitter {
             this.proc = hostClient.spawnClaude(CLAUDE_BIN, args, {
                 cwd: this.cwd,
                 stdio: ['pipe', 'pipe', 'pipe'],
-                env: sessionEnv(),
+                env: sessionEnv({ browser: this.agentBrowser(this.cwd) }),
                 // Its own process group, so a Ctrl-C aimed at the bridge is not
                 // also delivered to a turn in flight; it gets to shut down on
                 // stdin EOF instead of being interrupted mid-write.
@@ -2351,6 +2362,9 @@ class RunnerPool extends EventEmitter {
         // And how long a silent busy turn waits before it is called stalled, in
         // ms. Zero is off, which is what a pool without a server gets.
         this.stallAfter = () => 0;
+        // And whether an agent's test browser draws a window. `visible` is what
+        // every session did before there was a setting.
+        this.agentBrowser = () => 'visible';
     }
 
     get(sessionId) {
@@ -2451,7 +2465,8 @@ class RunnerPool extends EventEmitter {
         const r = new Runner({ ...opts, caps: this.caps,
             thinking: (dir, last) => this.thinking(dir, last),
             rerollAfter: (dir) => this.rerollAfter(dir),
-            stallAfter: (dir) => this.stallAfter(dir) });
+            stallAfter: (dir) => this.stallAfter(dir),
+            agentBrowser: (dir) => this.agentBrowser(dir) });
         // Read through `r.sessionId` rather than closing over the id it was
         // created with: a fork changes it, and the viewer check has to follow.
         r.hasViewer = () => this.hasViewer(r.sessionId);
@@ -2699,4 +2714,4 @@ class RunnerPool extends EventEmitter {
     }
 }
 
-module.exports = { RunnerPool, Runner, PERMISSION_MODES, EFFORTS, resolveWorkdir };
+module.exports = { RunnerPool, Runner, PERMISSION_MODES, EFFORTS, resolveWorkdir, sessionEnv };

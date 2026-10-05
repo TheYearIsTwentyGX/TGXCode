@@ -1183,8 +1183,8 @@ rather than taken at face value; the default stands. Without `?cwd=` you get the
 user-level answer, which is also what every page is served in a `tgx-prefs`
 `<meta>` tag (minus `sources` and `problems`).
 
-**Nine sections may only be set in the user's own file**: `quota`, `keyboard`,
-`projects`, `toolbar`, `wispr`, `preview`, `devbrowser`, `standing` and `startup`. A project file that carries one is ignored and says so in
+**Ten sections may only be set in the user's own file**: `quota`, `keyboard`,
+`projects`, `toolbar`, `wispr`, `preview`, `devbrowser`, `standing`, `startup` and `agentBrowser`. A project file that carries one is ignored and says so in
 `problems`. What directory this app starts `claude` in, and which keys your
 hands use, are not a repository's business — and a repository that could rebind
 your keys could make the window unusable with hand-editing the file as the only
@@ -1199,7 +1199,8 @@ presses its chords on the desktop, and a repository choosing which keys get
 pressed on your machine is not a preference. `preview` and `devbrowser` decide
 which browser on this machine you look at pages in and whether a click launches
 one, which is the same class of thing. `startup` is the `toolbar` argument again:
-what your window opens to is not a repository's to arrange.
+what your window opens to is not a repository's to arrange. `agentBrowser` is the same: whether a window
+opens on your desktop is yours.
 
 `transcript` today: `groupToolCalls` (fold a run of tool calls into one row once
 a message closes it), `groupMinCalls` (how long a run has to be — at least 2),
@@ -1445,6 +1446,13 @@ The web client applies it only on a *launch*: a navigation whose timing type is 
 an address that names a view or session, and a notification deep link all win over
 it. Once applied, the address is rewritten to `?view=…&live=1` as though the window
 had been left that way, so a later refresh keeps it.
+
+`agentBrowser` is whether the browser an agent tests with gets a window. **User
+file only**, and **applied by the bridge when it spawns `claude`**, not by a client:
+
+| Key | Type | |
+|---|---|---|
+| `mode` | **`"visible"` or `"headless"`**, default `"visible"` | `"headless"` sets `PLAYWRIGHT_MCP_HEADLESS=true` in the environment of each session the bridge starts, so the Playwright MCP server launches its browser without a window. `"visible"` sets nothing and leaves the bridge's own environment in charge. Read at spawn: a session already running keeps the browser it has until its `claude` is restarted. Sessions started outside this bridge (a terminal, VS Code) are unaffected. |
 
 ### `GET /api/wispr`
 
@@ -2873,7 +2881,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `handoff` | `{at, sessionId, from, count}` — another session handed this one work, and it was resumed to deal with it. Same shape and same reasoning as above; watched in the transcript rather than reported by the route, so it fires when the message *arrived* rather than when it was queued |
 | `suggestion-changed` | `{at, sessionId, toolUseId}` — a suggested follow-up was started, completed, dismissed, or undone, possibly in another window |
 | `session-deleted` | `{sessionId, title}` |
-| `prefs` | the **user-level** settings, in the same shape as the `tgx-prefs` `<meta>` tag: `{version, transcript, live, projects, quota, spinner, keyboard, toolbar, wispr, preview, devbrowser, standing, startup}`, with no `sources` or `problems`. Fired on every `PUT /api/prefs` including your own, so a second window does not sit on a stale copy — two are routinely open here. A project's answer is deliberately not sent: it is the open session's business and arrives with `GET /api/sessions/:id` |
+| `prefs` | the **user-level** settings, in the same shape as the `tgx-prefs` `<meta>` tag: `{version, transcript, live, projects, quota, spinner, keyboard, toolbar, wispr, preview, devbrowser, standing, startup, agentBrowser}`, with no `sources` or `problems`. Fired on every `PUT /api/prefs` including your own, so a second window does not sit on a stale copy — two are routinely open here. A project's answer is deliberately not sent: it is the open session's business and arrives with `GET /api/sessions/:id` |
 | `claude-config` | `{at: number, scope: 'user'\|'project'\|'project-local'\|'managed', file: string}` — the *fact* that one of Claude Code's settings files changed, and deliberately **not** its content. Unlike `prefs` there is no `<meta>` copy for a page to keep in sync and nothing in this app behaves differently because of those files, so the event is a nudge to re-read; pushing the contents of a file whose route is local-only down every open channel would be a poor trade for saving a fetch. Fired on every successful `PUT /api/claude-config`, including your own — **and on a change this bridge did not make**: `claude` writes these files itself, so `theme` or `editorMode` from `/config`, `enabledPlugins` from a plugin toggle, and a rule appended to `settings.local.json` when somebody approves a permission mid-turn all arrive here too. `scope` may then be `managed`, which no `PUT` can produce. **Two caveats a client has to hold.** It is best-effort: the bridge watches directories with `fs.watch`, which throws on some filesystems and silently does nothing on others, so a change can go unannounced — keep treating `409 {code:'stale'}` from `PUT /api/claude-config` as the guarantee, and this only as the convenience that usually saves you from meeting it. And a project's two files are watched only once `GET /api/claude-config?cwd=<dir>` has been called for that directory, only for a small number of directories at a time (least-recently-read dropped first), and not after ten minutes without another read of it; the user file and the managed file are watched throughout. So poll or re-`GET` if you need certainty about a directory you have not asked about |
 | `claude-docs` | `{at, scope, file}` — the same trade for a `CLAUDE.md`: the fact one was written, never its contents. `scope` is `"user"` or `"project"`. Fired on every successful `PUT /api/claude-docs`, including your own. **A client holding an unsaved draft must not reload on this** — show a conflict and keep what the person typed; the whole draft here is somebody's prose rather than one key |
 | `notification` | a whole notification row, just filed — the same shape `GET /api/notifications` returns, `read` included — plus `unread`, the badge count after this row. So an open history view need not refetch, and need not guess whether the new row counts |

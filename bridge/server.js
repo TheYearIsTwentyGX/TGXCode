@@ -781,6 +781,11 @@ pool.stallAfter = (cwd) => {
     const m = prefs.forCwd(cwd).live.stalledAfterMinutes;
     return Number.isInteger(m) && m > 0 ? m * 60_000 : 0;
 };
+// Whether an agent's test browser draws a window. Read at each spawn, so a change
+// reaches the next session started; one already running keeps its browser.
+pool.agentBrowser = () => {
+    try { return prefs.forCwd().agentBrowser.mode; } catch { return 'visible'; }
+};
 
 index.on('changed', () => broadcast('sessions-changed', { at: Date.now() }));
 
