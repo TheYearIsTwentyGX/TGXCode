@@ -327,29 +327,29 @@
    `--pr-tint` is the hue; `--pr-fade` dims the settled states, which are kept
    because "this landed" is worth a glance but must not compete with the rows that
    still want something. */
-:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr) {
+:is(.strip-meta .tag-pr, .lcard-head .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr) {
     --pr-tint: var(--text-3);
     --pr-fade: 1;
 }
-:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="open"] { --pr-tint: var(--blue); }
-:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="approved"] { --pr-tint: var(--green); }
-:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="changes"],
-:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="checks-failed"] { --pr-tint: var(--red); }
-:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="conflicting"],
-:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="checks-pending"] { --pr-tint: var(--yellow); }
-:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="draft"] { --pr-tint: var(--text-3); }
-:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="merged"] {
+:is(.strip-meta .tag-pr, .lcard-head .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="open"] { --pr-tint: var(--blue); }
+:is(.strip-meta .tag-pr, .lcard-head .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="approved"] { --pr-tint: var(--green); }
+:is(.strip-meta .tag-pr, .lcard-head .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="changes"],
+:is(.strip-meta .tag-pr, .lcard-head .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="checks-failed"] { --pr-tint: var(--red); }
+:is(.strip-meta .tag-pr, .lcard-head .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="conflicting"],
+:is(.strip-meta .tag-pr, .lcard-head .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="checks-pending"] { --pr-tint: var(--yellow); }
+:is(.strip-meta .tag-pr, .lcard-head .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="draft"] { --pr-tint: var(--text-3); }
+:is(.strip-meta .tag-pr, .lcard-head .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="merged"] {
     --pr-tint: var(--purple);
     --pr-fade: 0.62;
 }
-:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="closed"] {
+:is(.strip-meta .tag-pr, .lcard-head .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="closed"] {
     --pr-tint: var(--text-4);
     --pr-fade: 0.62;
 }
 /* gh could not be reached. Says nothing rather than guessing. */
-:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="unknown"] { --pr-tint: var(--text-4); }
+:is(.strip-meta .tag-pr, .lcard-head .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="unknown"] { --pr-tint: var(--text-4); }
 /* Still moving, so it breathes — the same light every in-flight thing here uses. */
-:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="checks-pending"] svg {
+:is(.strip-meta .tag-pr, .lcard-head .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="checks-pending"] svg {
     animation: breathe 1.6s var(--ease) infinite;
 }
 

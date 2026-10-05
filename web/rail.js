@@ -553,7 +553,7 @@ function prDone(s) {
  * `prLink` does in the header. A session with no PRs draws nothing at all, which
  * is not the same as one whose PRs could not be reached: that one is grey.
  */
-function prBadge(s) {
+export function prBadge(s) {
     if (!s.prs || !s.prs.length) return null;
     const agg = state.railPrs.get(s.sessionId) || null;
     const status = (agg && agg.status) || 'unknown';

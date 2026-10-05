@@ -327,6 +327,8 @@ function applyRailPrs(payload) {
     }
     state.prsLoaded = true;
     renderRail();
+    // The idle groups on the live board draw the same glyph.
+    if (liveVisible()) renderLive();
 }
 
 /** The one fetch of `/api/prs` a window makes: its first paint. */
