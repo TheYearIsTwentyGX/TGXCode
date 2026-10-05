@@ -709,6 +709,10 @@ Two answers are deliberately withheld rather than guessed. A repository with no 
 reports no check state at all — an empty rollup is not a pending one. And GitHub
 reports mergeability as `UNKNOWN` until it has computed it, which is common on a
 freshly-pushed branch, so nothing is said about conflicts until it does.
+The exception is a PR that was already known to conflict and reads `UNKNOWN` only
+because its base moved (another PR merged): with the same head and base, the last
+answer is held, so a `conflicting` PR does not flicker to `open` while GitHub
+recomputes it.
 
 `unknown` means the bridge has no answer for that PR *yet*, and it covers three
 cases, only one of which is a problem: gh could not be reached, the PR's repository
@@ -786,6 +790,8 @@ A repository is listed when any of these holds:
 | Trigger | Interval |
 |---|---|
 | Never listed | immediately — bridge start, or a newly-linked PR |
+| Any open, non-draft PR reads mergeability `UNKNOWN` (or carries a stale answer) | 20s — so in practice the next pass; after 7 lists in a row it drops to 2 min |
+| A PR left its open list in the last 3 min — merged, most likely, so the base moved | 20s |
 | A session whose PRs live in it has a transcript newer than the last listing, or a turn running | 60s floor |
 | Any of its open PRs has a check in flight | 2 min |
 | Otherwise | 20 min |
@@ -795,7 +801,11 @@ A repository is listed when any of these holds:
 That is the deliberate trade for not calling `gh` sixty times an hour per repository
 forever. Anything a conversation *can* see — a PR raised, pushed to or merged from a
 session on this machine — is picked up within a minute of it happening, and a build
-finishing within two.
+finishing within two. A merge seen on any listing keeps the repository on the
+short interval for three minutes, which is how long GitHub usually takes to
+recompute its siblings' mergeability — so a conflict that merge caused shows in
+about a minute rather than on the idle floor. `npm run land` forces a listing as
+soon as it has merged.
 
 A failed listing **keeps the pull requests it last read successfully** and reports
 `ok: false` alongside them. This matters to any client that acts on absence: an
@@ -2396,6 +2406,7 @@ The record, field by field — it was documented by reference before, which is t
 | `createdAt`, `updatedAt` | ISO strings or null |
 | `state` | string — `"OPEN"`, `"MERGED"`, `"CLOSED"` |
 | `mergeable` | string — `"MERGEABLE"`, `"CONFLICTING"`, `"UNKNOWN"`. `UNKNOWN` says nothing, deliberately |
+| **`mergeableStale`** | **boolean, or absent** — `true` when GitHub answered `UNKNOWN` and `mergeable` is the previous answer carried over, because head and base have not moved since. Absent (not `false`) on a fresh answer. A carried `CONFLICTING` still resolves `status` to `conflicting`; the bridge re-lists the repository within about 30 seconds until a fresh answer replaces it |
 | **`checks`** | **object or null** — `{total, failed, pending, passed}`. **`null` means the repository has no CI**, which is not the same as zero of everything, and a client that renders it as "0 checks passed" is saying something untrue |
 | `repo` | string — `owner/name` |
 | **`status`**, **`label`** | **strings** — the resolved one-word status and its wording, exactly as `GET /api/sessions/:id/prs` defines them |

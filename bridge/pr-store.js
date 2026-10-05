@@ -20,10 +20,15 @@
 // the PRs that changed" is not a question that can be asked — the question is
 // which *repositories* are worth a call. Everything below decides that.
 //
-// Four triggers, in the order they matter:
+// Five triggers, in the order they matter:
 //
 //   * **Never asked.** A repository the store has not seen, which is boot and any
 //     newly-linked PR.
+//   * **The base just moved.** A PR left the open list, or one reads mergeable
+//     UNKNOWN. GitHub computes mergeability lazily after a merge, so the first
+//     list reads UNKNOWN and the conflict it hides is the thing somebody is about
+//     to look for. 20s, bounded: three minutes after a merge, and seven UNKNOWN
+//     lists in a row. Meanwhile the last real answer is held — `carryMergeable`.
 //   * **The conversation moved.** A session's transcript mtime is past the moment
 //     its repository was last listed. Someone is working here, so a PR may have
 //     just been raised, pushed to, or merged. Floored at a minute so a busy
@@ -86,6 +91,24 @@ const IDLE_MS = 20 * 60_000;
 // network blip, then giving up on being clever.
 const BACKOFF_MS = [60_000, 2 * 60_000, 5 * 60_000, IDLE_MS];
 
+// While GitHub is still working out whether a PR merges. `mergeable` is computed
+// lazily and in the background: the first list after the base branch moves reads
+// UNKNOWN, and the real answer is usually there seconds later. Waiting the idle
+// floor for it is how a conflict took twenty minutes to show. The 30s tick is the
+// real floor under this, so in practice it means "the next pass".
+const UNKNOWN_MS = 20_000;
+
+// How many lists in a row may come back UNKNOWN before a repository stops being
+// asked about at that rate. A PR GitHub never settles must not pin a repository
+// to a gh every tick; past this it falls back to the checks interval.
+const UNKNOWN_TRIES = 6;
+
+// After a PR leaves a repository's open list, the rest of it is asked about at
+// UNKNOWN_MS for this long. A merge moves the base branch, and that is the moment
+// a sibling PR acquires a conflict — which nothing else here would notice until
+// the idle floor.
+const MERGED_WINDOW_MS = 3 * 60_000;
+
 // Separate processes, not requests on one connection. The same figure pulls.js and
 // dashboard.js use, for the same reason.
 const GH_CONCURRENCY = 4;
@@ -99,7 +122,7 @@ const GIT_CONCURRENCY = 8;
 // ---------------------------------------------------------------------------
 
 const state = {
-    /** @type {Map<string, {checkedAt: number, ok: boolean, error: string|null, attempts: number, pulls: Array}>} */
+    /** @type {Map<string, {checkedAt: number, ok: boolean, error: string|null, attempts: number, unknownStreak: number, baseMovedAt: number, pulls: Array}>} */
     repos: new Map(),
     /** @type {Map<string, {at: number, pull: object}>} `owner/name#12` -> a settled PR */
     terminal: new Map(),
@@ -131,6 +154,8 @@ function load() {
                 ok: !!e.ok,
                 error: e.error ? String(e.error) : null,
                 attempts: Number(e.attempts) || 0,
+                unknownStreak: Number(e.unknownStreak) || 0,
+                baseMovedAt: Number(e.baseMovedAt) || 0,
                 pulls: e.pulls,
             });
         }
@@ -190,18 +215,31 @@ const checksRunning = (entry) => (entry.pulls || [])
     .some(p => p && p.checks && p.checks.pending > 0);
 
 /**
+ * Is GitHub still computing whether some PR here merges?
+ *
+ * Counts a PR showing a carried-over answer (`mergeableStale`) as well as a bare
+ * UNKNOWN: the carried value is what it looked like before, not what it is. Drafts
+ * are left out because a draft's conflict is not what the rail shows for it.
+ */
+const mergeUnknown = (entry) => (entry.pulls || [])
+    .some(p => p && !p.draft && (p.mergeable === 'UNKNOWN' || p.mergeableStale));
+
+/**
  * How long to leave a repository alone, given its last answer.
  *
  * A failed call backs off regardless of activity: gh being down is not something
  * that typing fixes, and asking harder is how a rate limit becomes a ban.
  */
-function interval(entry, active) {
+function interval(entry, active, now = Date.now()) {
     if (!entry.ok) {
         const n = Math.min(Math.max(entry.attempts, 1), BACKOFF_MS.length) - 1;
         return BACKOFF_MS[n];
     }
+    const unknown = mergeUnknown(entry);
+    if (unknown && (entry.unknownStreak || 0) <= UNKNOWN_TRIES) return UNKNOWN_MS;
+    if (entry.baseMovedAt && now - entry.baseMovedAt < MERGED_WINDOW_MS) return UNKNOWN_MS;
     if (active) return ACTIVE_MS;
-    if (checksRunning(entry)) return CHECKS_MS;
+    if (unknown || checksRunning(entry)) return CHECKS_MS;
     return IDLE_MS;
 }
 
@@ -375,8 +413,8 @@ function forSessions(rows) {
 const signature = (entry) => JSON.stringify([
     entry.ok, entry.error,
     (entry.pulls || []).map(p => [
-        p.number, p.state, p.draft, p.reviewDecision, p.mergeable, p.updatedAt,
-        p.headSha, p.labels, p.checks,
+        p.number, p.state, p.draft, p.reviewDecision, p.mergeable, !!p.mergeableStale,
+        p.updatedAt, p.headSha, p.labels, p.checks,
     ]),
 ]);
 
@@ -393,15 +431,52 @@ async function refreshRepo(repo) {
     const before = prev ? signature(prev) : null;
 
     const r = await pulls.openPulls(repo);
+    const now = Date.now();
     const entry = {
-        checkedAt: Date.now(),
+        checkedAt: now,
         ok: r.ok,
         error: r.error,
         attempts: r.ok ? 0 : (prev ? prev.attempts : 0) + 1,
-        pulls: r.ok ? r.pulls : (prev ? prev.pulls : []),
+        unknownStreak: prev ? prev.unknownStreak || 0 : 0,
+        baseMovedAt: prev ? prev.baseMovedAt || 0 : 0,
+        pulls: r.ok ? carryMergeable(r.pulls, prev) : (prev ? prev.pulls : []),
     };
+    if (r.ok) {
+        // Something left the open list since the last good one: merged, most
+        // likely, which moved its base. Its siblings are about to be recomputed.
+        const open = new Set(entry.pulls.map(p => p.number));
+        if (prev && prev.ok && prev.pulls.some(p => p && !open.has(p.number))) {
+            entry.baseMovedAt = now;
+            entry.unknownStreak = 0;
+        }
+        entry.unknownStreak = mergeUnknown(entry) ? entry.unknownStreak + 1 : 0;
+    }
     state.repos.set(repo, entry);
     return before !== signature(entry);
+}
+
+/**
+ * Keep the last real `mergeable` for a PR GitHub is recomputing.
+ *
+ * Without this a PR that was CONFLICTING reads UNKNOWN for a pass after any base
+ * move, and `resolveStatus` says nothing for UNKNOWN — so the conflict colour
+ * disappears exactly when the user is looking for it. The carried value is marked
+ * `mergeableStale` so `interval` keeps asking and the signature changes once the
+ * fresh answer lands.
+ *
+ * Only for the same head and base. A new push or a retargeted PR is precisely when
+ * a conflict may have gone away, and claiming the old one then would be a lie.
+ */
+function carryMergeable(list, prev) {
+    if (!prev || !prev.pulls || !prev.pulls.length) return list;
+    const before = new Map(prev.pulls.filter(Boolean).map(p => [p.number, p]));
+    return list.map((p) => {
+        if (!p || p.mergeable !== 'UNKNOWN') return p;
+        const q = before.get(p.number);
+        if (!q || !q.mergeable || q.mergeable === 'UNKNOWN') return p;
+        if (q.headSha !== p.headSha || q.base !== p.base) return p;
+        return { ...p, mergeable: q.mergeable, mergeableStale: true };
+    });
 }
 
 /**
@@ -588,6 +663,8 @@ function seed(repo, entry) {
         ok: true,
         error: null,
         attempts: 0,
+        unknownStreak: 0,
+        baseMovedAt: 0,
         pulls: [],
         ...entry,
     });
@@ -605,7 +682,8 @@ module.exports = {
     openPulls, terminalPull, lookup, checkedAt, ghError,
     forSession, forSessions,
     tick, invalidate, refreshRepo, resolveTerminal, reposFor,
-    dueAt, isDue, interval, checksRunning,
+    dueAt, isDue, interval, checksRunning, mergeUnknown, carryMergeable,
     load, save, flush, snapshot, seed, reset,
     STORE_FILE, TICK_MS, ACTIVE_MS, CHECKS_MS, IDLE_MS, BACKOFF_MS,
+    UNKNOWN_MS, UNKNOWN_TRIES, MERGED_WINDOW_MS,
 };

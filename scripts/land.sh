@@ -165,6 +165,19 @@ else
         die "gh pr merge failed. Nothing was pulled." "$PR_URL"
     fi
     say "Merged."
+    # Tell the everyday bridge, so the PRs this merge just put into conflict show
+    # it now rather than on its idle floor. The board's Refresh is the one way to
+    # ask GitHub out of turn; a re-list that sees this PR gone also keeps the
+    # repository on a short interval while GitHub recomputes its siblings.
+    # Backgrounded and best-effort: a bridge that is down, slow or refusing the
+    # token is no reason for a landing to wait or fail.
+    TOKEN_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/tgxcode/token"
+    [ -r "$TOKEN_FILE" ] || TOKEN_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/claude-sessions/token"
+    if [ -r "$TOKEN_FILE" ]; then
+        ( curl -fsS -m 30 -o /dev/null \
+            -H "Authorization: Bearer $(cat "$TOKEN_FILE")" \
+            'http://127.0.0.1:45888/api/dashboard?refresh=1' >/dev/null 2>&1 & ) || true
+    fi
 fi
 
 # --- bring the main checkout up to date ------------------------------------
