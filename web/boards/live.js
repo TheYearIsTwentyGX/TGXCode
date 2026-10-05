@@ -48,6 +48,7 @@ import { answerAskFor, ASK_HEAD } from '../transcript/approvals.js';
 import { openSession } from '../transcript/conversation.js';
 import { toolSummary } from '../transcript/tools.js';
 import { enterSends, grow } from '../composer/send.js';
+import { prBadge } from '../rail.js';
 import {
     liveStatusWords, paint, queuedBadge, StopButton, taskBar,
 } from './parts.js';
@@ -320,7 +321,8 @@ function liveGroup(key, label, list, hidden, strip, compact) {
                 <span class="lgroup-more" hidden=${!hidden}>${hidden ? `+${hidden} more` : ''}</span>
             </h2>
             <div class="lgroup-body">
-                ${list.map(s => html`<${LiveCard} key=${s.sessionId} s=${s} strip=${strip} compact=${compact} />`)}
+                ${list.map(s => html`<${LiveCard} key=${s.sessionId} s=${s} strip=${strip} compact=${compact}
+                    prs=${key !== 'live'} />`)}
             </div>
         </section>`;
 }
@@ -349,10 +351,18 @@ class LiveCard extends Component {
         return next.s.sig !== this.props.s.sig
             || next.strip !== this.props.strip
             || next.compact !== this.props.compact
+            || next.prs !== this.props.prs
+            // A PR's status is not in `sig` — it arrives on `prs-changed`, which
+            // rebuilds `state.railPrs` from parsed JSON, so a moved answer is a
+            // new object and a reference check is enough.
+            || (next.prs && state.railPrs.get(next.s.sessionId) !== this.prAgg)
             || nextState !== this.state;
     }
 
-    render({ s, strip, compact }) {
+    render({ s, strip, compact, prs }) {
+        // Recent activity and Pinned only. A running card has enough to say, and
+        // its PR is rarely the news while the turn that will change it is live.
+        this.prAgg = prs ? state.railPrs.get(s.sessionId) : undefined;
         const r = s.runner;
         const busy = r && (r.state === 'busy' || r.state === 'starting');
         const away = s.live && s.live.running && !r;
@@ -388,9 +398,11 @@ class LiveCard extends Component {
                     <span class="lcard-dot"></span>
                     <button class="lcard-title" type="button" title="Open this conversation"
                         onClick=${open}>${clip(s.title, 60)}</button>
+                    ${prs ? prBadge(s) : null}
                     <span class="lcard-where">${s.worktree ? s.worktree.name : s.projectName}</span>
                 </header>
                 <div class="lcard-line">${liveStatusWords(s, busy, away, { tick: true })}</div>
+                ${busy ? null : standingLine(s)}
                 ${s.tasks ? taskBar(s.tasks) : null}
                 <div class="lcard-facts">
                     ${s.tasks ? html`<span>${`${s.tasks.done} of ${s.tasks.total} tasks`}</span>` : null}
@@ -596,6 +608,26 @@ class LiveCard extends Component {
             mark(false);
         }
     }
+}
+
+/**
+ * Where the last turn left things, in one line — the rail's line, on the card.
+ * See bridge/standing.js.
+ *
+ * Kept by `live.compact`, unlike the history below it: it is the one line that
+ * says what a session is waiting for without reading it, which is what a compact
+ * board is still for. Dropped while a turn runs, where it would describe the
+ * reply before this one and the status words above are the better answer. A
+ * line taken from the reply rather than written by the model is in italics, as
+ * in the rail.
+ */
+function standingLine(s) {
+    const st = s.standing;
+    if (!st || !st.text) return null;
+    if (BOOT_PREFS.standing && BOOT_PREFS.standing.mode === 'off') return null;
+    const how = st.source === 'model' ? 'Summarised after the last turn' : 'The last line of the last reply';
+    return html`<div class="lcard-standing" data-source=${st.source}
+        title=${`${st.text}\n${how}${st.at ? `, ${ago(st.at)} ago` : ''}`}>${st.text}</div>`;
 }
 
 /**

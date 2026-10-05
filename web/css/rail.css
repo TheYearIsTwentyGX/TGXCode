@@ -284,6 +284,37 @@
 /* While a row is being renamed its buttons would sit over the end of the name. */
 .strip[data-renaming="true"] .strip-actions { display: none; }
 
+/* `projects.compactActions`: one ⋮ at the row's top-right in place of the four
+   buttons, .group-menu-btn's look one size down. Shown the way the buttons were —
+   on hover or focus — and held up while its menu is open. The title stops short
+   of it; the meta line runs underneath, which is the line that may be cut. */
+.strip-menu-btn {
+    position: absolute;
+    top: 5px;
+    right: 6px;
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    color: var(--text-4);
+    opacity: 0;
+    transition: opacity var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+}
+.strip:hover > .strip-menu-btn,
+.strip:focus-within > .strip-menu-btn,
+.strip-menu-btn[aria-expanded="true"] { opacity: 1; }
+.strip-menu-btn:hover { background: var(--s4); color: var(--text); }
+.strip-menu-btn[aria-expanded="true"] { background: var(--s4); color: var(--text); }
+.strip[aria-current="true"] > .strip-menu-btn:hover,
+.strip[aria-current="true"] > .strip-menu-btn[aria-expanded="true"] { background: #30507f; }
+.strip:has(> .strip-menu-btn) .strip-title { padding-right: 22px; }
+.strip[data-renaming="true"] > .strip-menu-btn { display: none; }
+/* Nothing left in the overlay but a stalled row's Stop, so without one it would
+   be an empty gradient patch fading in over the meta line. */
+.strip:has(> .strip-menu-btn) .strip-actions:not(:has(.strip-stop)) { display: none; }
+.proj-menu .picker-row.danger:hover { color: var(--red); }
+
 /* Sized to the title it stands in for, so the row does not change height. */
 .strip-rename {
     display: block;
@@ -312,7 +343,8 @@
 /* ── one PR vocabulary ──────────────────────────────────────────────────────
    Three surfaces show what has become of a pull request — the rail glyph below,
    the conversation header chip (`.conv-sub .pr`) and the dashboard chip
-   (`.sig.pr`) — and between them they get one colour table, here, rather than
+   (`.sig.pr`), plus the hover card on a `#N` mention (`.pr-pop .pr`) — and
+   between them they get one colour table, here, rather than
    three. It used to be two verbatim copies and, on the board, a fourth scheme
    that was not about status at all: it coloured by `draft` alone, so a merged PR,
    one conflicting with its base and one with a failing build were the same blue.
@@ -326,29 +358,29 @@
    `--pr-tint` is the hue; `--pr-fade` dims the settled states, which are kept
    because "this landed" is worth a glance but must not compete with the rows that
    still want something. */
-:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr) {
+:is(.strip-meta .tag-pr, .lcard-head .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr) {
     --pr-tint: var(--text-3);
     --pr-fade: 1;
 }
-:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="open"] { --pr-tint: var(--blue); }
-:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="approved"] { --pr-tint: var(--green); }
-:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="changes"],
-:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="checks-failed"] { --pr-tint: var(--red); }
-:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="conflicting"],
-:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="checks-pending"] { --pr-tint: var(--yellow); }
-:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="draft"] { --pr-tint: var(--text-3); }
-:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="merged"] {
+:is(.strip-meta .tag-pr, .lcard-head .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="open"] { --pr-tint: var(--blue); }
+:is(.strip-meta .tag-pr, .lcard-head .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="approved"] { --pr-tint: var(--green); }
+:is(.strip-meta .tag-pr, .lcard-head .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="changes"],
+:is(.strip-meta .tag-pr, .lcard-head .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="checks-failed"] { --pr-tint: var(--red); }
+:is(.strip-meta .tag-pr, .lcard-head .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="conflicting"],
+:is(.strip-meta .tag-pr, .lcard-head .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="checks-pending"] { --pr-tint: var(--yellow); }
+:is(.strip-meta .tag-pr, .lcard-head .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="draft"] { --pr-tint: var(--text-3); }
+:is(.strip-meta .tag-pr, .lcard-head .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="merged"] {
     --pr-tint: var(--purple);
     --pr-fade: 0.62;
 }
-:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="closed"] {
+:is(.strip-meta .tag-pr, .lcard-head .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="closed"] {
     --pr-tint: var(--text-4);
     --pr-fade: 0.62;
 }
 /* gh could not be reached. Says nothing rather than guessing. */
-:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="unknown"] { --pr-tint: var(--text-4); }
+:is(.strip-meta .tag-pr, .lcard-head .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="unknown"] { --pr-tint: var(--text-4); }
 /* Still moving, so it breathes — the same light every in-flight thing here uses. */
-:is(.strip-meta .tag-pr, .conv-sub .pr, .sig.pr)[data-status="checks-pending"] svg {
+:is(.strip-meta .tag-pr, .lcard-head .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="checks-pending"] svg {
     animation: breathe 1.6s var(--ease) infinite;
 }
 

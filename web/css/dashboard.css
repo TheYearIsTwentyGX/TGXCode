@@ -434,6 +434,16 @@
 .lsend, .lask, .lcard-log { cursor: auto; }
 .lsend-box { cursor: text; }
 
+/* The rail's PR glyph, on Recent activity and Pinned cards. `flex: none` for the
+   rail's reason: absent means "no pull requests", so it must not be squeezed out. */
+.lcard-head .tag-pr {
+    display: grid;
+    place-items: center;
+    flex: none;
+    color: var(--pr-tint);
+    opacity: var(--pr-fade);
+}
+
 .lcard-where {
     /* Shrinkable, not fixed: `flex: none` meant the whole worktree name counted
        towards the card's minimum width even though it ellipsises. */
@@ -462,6 +472,19 @@
 .lstate.err   { color: var(--red); }
 .lstate.ask   { color: var(--yellow); font-weight: 500; }
 .lcard-clock { flex: none; font: 400 11.5px/1 var(--mono); color: var(--text-4); }
+
+/* Where the last turn left things — bridge/standing.js. One line, cut rather
+   than wrapped, and kept on a compact card. */
+.lcard-standing {
+    min-width: 0;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.lcard-standing[data-source="extract"] { font-style: italic; }
 
 /* How far through its own task list the session is. */
 .tbar {

@@ -44,6 +44,7 @@ const { RunPool } = require('./runs');
 const events = require('./events');
 const scheduler = require('./scheduler');
 const prRefresh = require('./pr-refresh');
+const prOwners = require('./pr-owners');
 const laterDelivery = require('./later-delivery');
 const { pair } = require('./pairing');
 // Plumbing every route shares, and the API itself — see bridge/routes/.
@@ -173,7 +174,8 @@ index.standing = standing;
 // by reference, so the health count and `hasViewer` below see the same one.
 events.init({ index, pool, registry });
 const { clients, broadcast, tickBoard } = events;
-standing.on('changed', (p) => broadcast('standing-changed', p));
+// The board carries the line too, and is only rebuilt when something asks it to.
+standing.on('changed', (p) => { broadcast('standing-changed', p); tickBoard(); });
 
 // ---------------------------------------------------------------------------
 // Routing
@@ -538,6 +540,7 @@ const {
 } = scheduler;
 
 prRefresh.init({ index, pool });
+prOwners.init({ index });
 const { tickPrs } = prRefresh;
 
 laterDelivery.init({
@@ -779,6 +782,11 @@ pool.rerollAfter = (cwd) => spinner.rerollMs(cwd);
 pool.stallAfter = (cwd) => {
     const m = prefs.forCwd(cwd).live.stalledAfterMinutes;
     return Number.isInteger(m) && m > 0 ? m * 60_000 : 0;
+};
+// Whether an agent's test browser draws a window. Read at each spawn, so a change
+// reaches the next session started; one already running keeps its browser.
+pool.agentBrowser = () => {
+    try { return prefs.forCwd().agentBrowser.mode; } catch { return 'visible'; }
 };
 
 index.on('changed', () => broadcast('sessions-changed', { at: Date.now() }));

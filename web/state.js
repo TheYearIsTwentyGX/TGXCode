@@ -114,6 +114,9 @@ export const state = {
     // url -> {status, label, detail, title, updatedAt} from /api/sessions/:id/prs.
     // Null until that answers; the header draws its PRs from the summary either way.
     prStatus: null,
+    // {sessionId, repo} — the repository that session's checkout points at, from the
+    // same response. What a bare `#N` in it means; see web/pr-refs.js.
+    prRepo: null,
     // sessionId -> {status, label, total, counts} — one word for a whole session's
     // pull requests, which is all a rail row has space for. Seeded from /api/prs at
     // boot and kept current by the `prs-changed` event; empty until the first of
@@ -377,6 +380,8 @@ export const state = {
     // The project card whose ⋮ menu is open, or null. The menu is fixed and
     // outside the rail, so this is how the card's ⋮ knows to draw itself
     // expanded, and how syncProjMenu() finds the button to follow.
+    // `{key, cwd, name}` for a project card; `{sessionId}` when it was opened
+    // from a session row's ⋮ instead (`projects.compactActions`).
     projMenu: null,
     // Canned messages, and the groups they are drawn in. Drafts' terms for the
     // push — the whole list, unconditional, held as sent — with one difference

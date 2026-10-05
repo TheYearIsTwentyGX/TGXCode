@@ -22,6 +22,7 @@
 
 import { html, useState } from '../vendor/preact.js';
 import { shortPath } from '../format.js';
+import { canPreviewUrls } from '../preview.js';
 import { state } from '../state.js';
 import {
     paintBackdropTint, refreshPairUrl, renderProjectBackdrop, renderProjectColors,
@@ -100,6 +101,23 @@ export const SETTINGS_CATEGORIES = [
 // `render` and `node` are handed to Preact as foreign DOM (see Foreign in
 // index.js). `card` and `rows` groups are Preact all the way down.
 export const SETTINGS = [
+    {
+        title: 'On startup', section: 'startup', category: 'workspace', userOnly: true,
+        note: 'What a new window opens to. A refresh keeps whatever was open.',
+        rows: [
+            { key: 'view', type: 'radio',
+                label: 'Open to',
+                options: [
+                    ['conversation', 'Conversation'], ['dashboard', 'Dashboard'],
+                    ['taskboard', 'Tasks'], ['drafts', 'Drafts'], ['schedules', 'Schedules'],
+                ] },
+            { key: 'live', type: 'bool',
+                label: 'Live board on',
+                note: 'Over another screen it shows only where Live board › visibility '
+                    + 'keeps it up; otherwise it is on underneath, there when you '
+                    + 'close that screen.' },
+        ],
+    },
     {
         title: 'Reading', section: 'transcript', category: 'workspace',
         note: 'How a transcript folds the work between one message and the next, '
@@ -265,7 +283,11 @@ export const SETTINGS = [
                 note: 'A link in a message opens here instead of in your browser. '
                     + 'Ctrl-, Shift- or middle-click still sends it to the browser. '
                     + 'A site other than a local port needs the desktop app, and a '
-                    + 'link it leads to on another site still leaves for the browser.' },
+                    + 'link it leads to on another site still leaves for the browser.'
+                    + (window.claudeShell && !canPreviewUrls
+                        ? ' This app was packaged before that was possible: rebuild it '
+                            + '(install.ps1) and other sites open here too.'
+                        : '') },
             { key: 'listMode', type: 'radio',
                 when: (p) => p.preview && p.preview.links === true,
                 label: 'Which links',
@@ -319,6 +341,18 @@ export const SETTINGS = [
                 options: [['launch', 'Start it'], ['inline', 'Preview here instead'],
                     ['nothing', 'Do nothing']],
                 note: 'Starting it opens a window; “do nothing” only says it is closed.' },
+        ],
+    },
+    {
+        title: 'Agent test browser', section: 'agentBrowser', category: 'browsers', userOnly: true,
+        note: 'The browser an agent opens through Playwright to look at a page it is testing.',
+        rows: [
+            { key: 'mode', type: 'choice',
+                label: 'Show its window',
+                options: [['visible', 'Yes'], ['headless', 'No — run it headless']],
+                note: 'Headless draws no window, so it cannot come to the front or take the '
+                    + 'keyboard while you type. Screenshots and clicks still work. Applies to '
+                    + 'sessions started from now on; one already running keeps its browser.' },
         ],
     },
     // Claude Code's own settings — a different owner's files, and the one group
@@ -375,6 +409,10 @@ export const SETTINGS = [
                 options: [['top', 'Top'], ['bottom', 'Bottom']],
                 note: 'A project you have not placed yet. It keeps that place once '
                     + 'you drag anything.' },
+            { key: 'compactActions', type: 'bool',
+                label: 'Compact session actions',
+                note: 'Put Rename, Pin, Archive and Delete in a ⋮ menu at the top right '
+                    + 'of each session, instead of a row of buttons over it on hover.' },
         ],
         // Ordinary rows, drawn into the markup group because the group is not
         // built from `rows` — see renderProjectBackdrop().

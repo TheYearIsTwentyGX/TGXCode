@@ -679,8 +679,15 @@ than refetching.
 
 ### `GET /api/sessions/:id/prs`
 
-`{ prs: [...], gh: {ok, error}, checkedAt }` — what has become of the pull requests
-this session raised, one entry per PR in `summary.prs`, same order.
+`{ prs: [...], gh: {ok, error}, checkedAt, repo }` — what has become of the pull
+requests this session raised, one entry per PR in `summary.prs`, same order.
+
+`repo` is a string `"owner/name"` or null: the GitHub repository the session's
+checkout's `origin` points at. It is present even when `prs` is empty — it is the
+repository a bare `#N` in this conversation refers to by default, which is what
+`GET /api/pr-owners` is looked up against. Null when the checkout has no GitHub
+remote or no longer exists. A remote you just changed can take up to ten minutes
+to show here (the lookup is memoised).
 
 `checkedAt` is an ISO string or null: the most recent moment any repository was
 successfully listed. Null means nothing has been listed yet — a bridge that has
@@ -702,6 +709,10 @@ Two answers are deliberately withheld rather than guessed. A repository with no 
 reports no check state at all — an empty rollup is not a pending one. And GitHub
 reports mergeability as `UNKNOWN` until it has computed it, which is common on a
 freshly-pushed branch, so nothing is said about conflicts until it does.
+The exception is a PR that was already known to conflict and reads `UNKNOWN` only
+because its base moved (another PR merged): with the same head and base, the last
+answer is held, so a `conflicting` PR does not flicker to `open` while GitHub
+recomputes it.
 
 `unknown` means the bridge has no answer for that PR *yet*, and it covers three
 cases, only one of which is a problem: gh could not be reached, the PR's repository
@@ -779,6 +790,9 @@ A repository is listed when any of these holds:
 | Trigger | Interval |
 |---|---|
 | Never listed | immediately — bridge start, or a newly-linked PR |
+| Any open, non-draft PR reads mergeability `UNKNOWN` (or carries a stale answer) | 20s — so in practice the next pass; after 7 lists in a row it drops to 2 min |
+| A PR left its open list in the last 3 min — merged, most likely, so the base moved | 20s |
+| The head of a branch its open PRs target moved — checked with `git ls-remote`, at most once a minute per repository, which does not count against GitHub's API rate limit, and not while the last listing failed | listed on that pass, then 20s for 3 min, as above |
 | A session whose PRs live in it has a transcript newer than the last listing, or a turn running | 60s floor |
 | Any of its open PRs has a check in flight | 2 min |
 | Otherwise | 20 min |
@@ -788,7 +802,14 @@ A repository is listed when any of these holds:
 That is the deliberate trade for not calling `gh` sixty times an hour per repository
 forever. Anything a conversation *can* see — a PR raised, pushed to or merged from a
 session on this machine — is picked up within a minute of it happening, and a build
-finishing within two.
+finishing within two. A merge made anywhere else — in the GitHub UI, or by another
+developer — moves the base branch, and that is noticed within about a minute
+without spending any API calls; what still waits for the idle floor is a review or
+a comment on a repository nobody is working in. A merge seen either way keeps the
+repository on the short interval for three minutes, which is how long GitHub usually takes to
+recompute its siblings' mergeability — so a conflict that merge caused shows in
+about a minute rather than on the idle floor. `npm run land` forces a listing as
+soon as it has merged.
 
 A failed listing **keeps the pull requests it last read successfully** and reports
 `ok: false` alongside them. This matters to any client that acts on absence: an
@@ -803,6 +824,50 @@ round of `gh` calls and loses nothing.
 
 `?refresh=1` on `GET /api/dashboard` is the only way to make the refresher run out
 of turn. There is no per-route refresh here.
+
+### `GET /api/pr-owners`
+
+`{ owners: {...}, prs: {...}, checkedAt }` — which conversation raised each pull
+request: the reverse of `summary.prs`. A client uses it to turn a `#151` written
+in a message into "raised in *that* chat", with a way to open it.
+
+**Both objects are keyed `"owner/name#N"`, not by number** — a number means
+nothing without its repository. Look a mention up under the repositories the
+conversation is about (`repo` from `GET /api/sessions/:id/prs`, plus the `repo`
+of each of its own `prs`), never across every repository: an unrelated project's
+#151 is not the one the message meant.
+
+`owners` maps each key to **an array of objects**, most recently active first,
+with each session at most once:
+
+| Field | Type |
+|---|---|
+| `sessionId` | string |
+| `title` | string or null — the session's title, resolved as on the summary |
+| `projectName` | string or null — the same label the summary carries |
+| `projectCwd` | string or null |
+| `archived` | boolean |
+| `mtimeMs` | number — the transcript's mtime, the sort key |
+
+More than one entry is ordinary — a PR re-linked by a follow-up conversation, or
+a conversation that crossed into a worktree. The asking client's own session can
+be one of them; it is not filtered out here.
+
+`prs` maps a key to `{title (string or null), status (string), label (string or
+null)}` — the same `status` values `GET /api/sessions/:id/prs` uses — **only when
+the PR status store already has an answer**. A key absent from `prs` is not an
+error; draw the mention without a status. This route never asks GitHub.
+
+- The whole index is walked, not the 500 sessions `/api/sessions` returns, because
+  the session that raised a PR is often an old one. Test sessions are included
+  only on a dev bridge, as everywhere else.
+- A `pr-link` that named no repository is filed under its checkout's `origin`. One
+  that still cannot be placed is **left out**, never keyed under `null`.
+- The answer is kept for up to **30 seconds**, and dropped early when the session
+  index changes. There is no event for it: refetch on `prs-changed`, or when the
+  copy you hold is older than you are happy with.
+
+`checkedAt` is an ISO string: when this answer was built.
 
 ### `GET /api/origin?cwd=<dir>`
 
@@ -1183,8 +1248,8 @@ rather than taken at face value; the default stands. Without `?cwd=` you get the
 user-level answer, which is also what every page is served in a `tgx-prefs`
 `<meta>` tag (minus `sources` and `problems`).
 
-**Eight sections may only be set in the user's own file**: `quota`, `keyboard`,
-`projects`, `toolbar`, `wispr`, `preview`, `devbrowser` and `standing`. A project file that carries one is ignored and says so in
+**Ten sections may only be set in the user's own file**: `quota`, `keyboard`,
+`projects`, `toolbar`, `wispr`, `preview`, `devbrowser`, `standing`, `startup` and `agentBrowser`. A project file that carries one is ignored and says so in
 `problems`. What directory this app starts `claude` in, and which keys your
 hands use, are not a repository's business — and a repository that could rebind
 your keys could make the window unusable with hand-editing the file as the only
@@ -1198,7 +1263,9 @@ project's value back as though it counted. `wispr` is there because the bridge
 presses its chords on the desktop, and a repository choosing which keys get
 pressed on your machine is not a preference. `preview` and `devbrowser` decide
 which browser on this machine you look at pages in and whether a click launches
-one, which is the same class of thing.
+one, which is the same class of thing. `startup` is the `toolbar` argument again:
+what your window opens to is not a repository's to arrange. `agentBrowser` is the same: whether a window
+opens on your desktop is yours.
 
 `transcript` today: `groupToolCalls` (fold a run of tool calls into one row once
 a message closes it), `groupMinCalls` (how long a run has to be — at least 2),
@@ -1251,7 +1318,7 @@ answer — the board draws sessions from every project at once, so a project's
 on `?cwd=`, but it does not change what the board draws. A client that builds its
 own cards has no reason to read `live` at all — the Android app does not.
 
-`projects` is eleven keys: `colors`, a map described below; seven about the
+`projects` is twelve keys: `colors`, a map described below; seven about the
 order of the rail's project cards, described after it; and two plain ones
 about how the desktop wears a colour — `backdropTint {boolean}`, default `true`,
 and `backdropStrength {integer 0–40}`, default `13`, a percentage of the
@@ -1261,6 +1328,12 @@ the desktop window alone, so a client with no such backdrop has no reason to
 read them; a value out of range, a string, or a fraction is dropped with one
 `problems` line and the default holds. They are user-only like the rest of the
 section.
+
+The twelfth, `compactActions {boolean}`, default `false`, is how the desktop
+rail draws a session row's Rename, Pin, Archive and Delete: `false` is a row of
+buttons over the row on hover, `true` is one ⋮ at the row's top-right that opens
+a menu of them. Presentation only, like the backdrop pair; a non-boolean is
+dropped with one `problems` line.
 
 `colors` is an **object**:
 `{"<absolute project directory>": "<#rgb or #rrggbb>"}`. It is a colour a person
@@ -1430,6 +1503,27 @@ not a checked-in repository's decision:
 | Key | Type | |
 |---|---|---|
 | `mode` | **`"model"`, `"extract"` or `"off"`**, default `"model"` | `"model"` asks haiku for the line once per reply, through `claude -p --no-session-persistence` (so it leaves no transcript), never twice for the same reply. `"extract"` takes the last line of the reply and costs no quota. `"off"` does no work, and every summary carries `standing: null` until it is turned back on. Rows already written are kept, so turning it back on shows them again. |
+
+`startup` is what a new desktop window opens to. **User file only**, and **applied
+by the client, not the bridge** — nothing the bridge sends changes because of it:
+
+| Key | Type | |
+|---|---|---|
+| `view` | **`"conversation"`, `"taskboard"`, `"dashboard"`, `"drafts"` or `"schedules"`**, default `"conversation"` | The panel to open. `"conversation"` opens none, which is what a launch always did. History is not offered: it has no address form to restore. |
+| `live` | **bool**, default `false` | Switch the live board on too. Under a panel it is visible only where that panel's `live.over*` keeps it up; otherwise it is on underneath. With `view: "conversation"` it is the board on its own. |
+
+The web client applies it only on a *launch*: a navigation whose timing type is not
+`reload`, at an address with no query string and no `#/session/<id>` hash. A refresh,
+an address that names a view or session, and a notification deep link all win over
+it. Once applied, the address is rewritten to `?view=…&live=1` as though the window
+had been left that way, so a later refresh keeps it.
+
+`agentBrowser` is whether the browser an agent tests with gets a window. **User
+file only**, and **applied by the bridge when it spawns `claude`**, not by a client:
+
+| Key | Type | |
+|---|---|---|
+| `mode` | **`"visible"` or `"headless"`**, default `"visible"` | `"headless"` sets `PLAYWRIGHT_MCP_HEADLESS=true` in the environment of each session the bridge starts, so the Playwright MCP server launches its browser without a window. `"visible"` sets nothing and leaves the bridge's own environment in charge. Read at spawn: a session already running keeps the browser it has until its `claude` is restarted. Sessions started outside this bridge (a terminal, VS Code) are unaffected. |
 
 ### `GET /api/wispr`
 
@@ -1675,12 +1769,14 @@ waiting, running }`, already ordered needs-you-first. A card is:
 | `lastTs`, `lastUserTs` | ISO 8601 strings or null |
 | `toolCalls`, `userMessages` | numbers |
 | **`worktree`** | **object or null** — as on a session summary |
+| **`prs[]`** | **array of objects** — `{number, url, repo}`, as on a session summary; empty `[]` if none, never null. Part of `sig`. **Status is not here** — colour it from `prs-changed` / `GET /api/prs`, keyed by `sessionId`, which do not move `sig`. The web board draws the glyph on `recent` and `pinned` cards only |
 | **`live`** | **object or null** — the registry entry, as on a session summary |
 | **`runner`** | **object or null — eight fields**, not the `runner-status` payload: `{state, activity, queued, busySince, retry, error, errorKind, stalled}`. `stalled` is a bool — see §*`runner-status`*. `lastActivityAt` is deliberately not here: the card's signature would change on every line the turn streams |
 | **`ask`** | **object or null** — the *whole* ask (`runner.pendingPermission`), so a tool ask is answerable from the card. Same shape as `permission-request` |
 | **`headlines[]`** | **array of objects**, not strings — `{text, ts}`, oldest first, up to three |
 | `tasks` | object or null — **five fields, and no items**: `{done: number, total: number, current: string\|null, idle: boolean, ts: string\|null}`. `current` is the in-progress task's `activeForm`. `idle` is true when work is left and *nothing* is in progress — a list that has stopped, not one between steps. `ts` is ISO 8601 and non-null only when the answer came from a `TodoWrite` in the transcript rather than from `~/.claude/tasks`. **The items are not here** — `GET /api/sessions/:id/tasks` has them. (Previously documented as `{done, total, current, ts}`, which was true of only one of the two sources: the directory returned `idle` and no `ts`, the transcript the reverse.) |
 | **`devservers`** | **array of objects or null** — `{port, title, owned, http}`, listening ports only, attributed and probed exactly as on `/api/sessions/:id/devservers`. `owned` means DevBrowser's title for the port is this session's worktree or project name. It is a hint for whether opening a tab should also name it, and says nothing about whose server it is; `null` until the first probe has run |
+| **`standing`** | **object or null** — `{text, source, at}`, exactly as on a session summary (`text` a string of at most 80 characters, `source` `"model"` or `"extract"`, `at` epoch ms), and null as often. Part of `sig`, so a new line moves the card's fingerprint and an `overview` push follows it. The web board draws it on full and compact cards alike, and hides it while `runner.state` is `busy` |
 | `sig` | string — see below |
 
 Every card also carries `sig`, a short hash of the rest of the card. The board is pushed
@@ -2320,6 +2416,7 @@ The record, field by field — it was documented by reference before, which is t
 | `createdAt`, `updatedAt` | ISO strings or null |
 | `state` | string — `"OPEN"`, `"MERGED"`, `"CLOSED"` |
 | `mergeable` | string — `"MERGEABLE"`, `"CONFLICTING"`, `"UNKNOWN"`. `UNKNOWN` says nothing, deliberately |
+| **`mergeableStale`** | **boolean, or absent** — `true` when GitHub answered `UNKNOWN` and `mergeable` is the previous answer carried over, because head and base have not moved since. Absent (not `false`) on a fresh answer. A carried `CONFLICTING` still resolves `status` to `conflicting`; the bridge re-lists the repository within about 30 seconds until a fresh answer replaces it |
 | **`checks`** | **object or null** — `{total, failed, pending, passed}`. **`null` means the repository has no CI**, which is not the same as zero of everything, and a client that renders it as "0 checks passed" is saying something untrue |
 | `repo` | string — `owner/name` |
 | **`status`**, **`label`** | **strings** — the resolved one-word status and its wording, exactly as `GET /api/sessions/:id/prs` defines them |
@@ -2857,7 +2954,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `handoff` | `{at, sessionId, from, count}` — another session handed this one work, and it was resumed to deal with it. Same shape and same reasoning as above; watched in the transcript rather than reported by the route, so it fires when the message *arrived* rather than when it was queued |
 | `suggestion-changed` | `{at, sessionId, toolUseId}` — a suggested follow-up was started, completed, dismissed, or undone, possibly in another window |
 | `session-deleted` | `{sessionId, title}` |
-| `prefs` | the **user-level** settings, in the same shape as the `tgx-prefs` `<meta>` tag: `{version, transcript, live, projects, quota, spinner, keyboard, toolbar, wispr, preview, devbrowser, standing}`, with no `sources` or `problems`. Fired on every `PUT /api/prefs` including your own, so a second window does not sit on a stale copy — two are routinely open here. A project's answer is deliberately not sent: it is the open session's business and arrives with `GET /api/sessions/:id` |
+| `prefs` | the **user-level** settings, in the same shape as the `tgx-prefs` `<meta>` tag: `{version, transcript, live, projects, quota, spinner, keyboard, toolbar, wispr, preview, devbrowser, standing, startup, agentBrowser}`, with no `sources` or `problems`. Fired on every `PUT /api/prefs` including your own, so a second window does not sit on a stale copy — two are routinely open here. A project's answer is deliberately not sent: it is the open session's business and arrives with `GET /api/sessions/:id` |
 | `claude-config` | `{at: number, scope: 'user'\|'project'\|'project-local'\|'managed', file: string}` — the *fact* that one of Claude Code's settings files changed, and deliberately **not** its content. Unlike `prefs` there is no `<meta>` copy for a page to keep in sync and nothing in this app behaves differently because of those files, so the event is a nudge to re-read; pushing the contents of a file whose route is local-only down every open channel would be a poor trade for saving a fetch. Fired on every successful `PUT /api/claude-config`, including your own — **and on a change this bridge did not make**: `claude` writes these files itself, so `theme` or `editorMode` from `/config`, `enabledPlugins` from a plugin toggle, and a rule appended to `settings.local.json` when somebody approves a permission mid-turn all arrive here too. `scope` may then be `managed`, which no `PUT` can produce. **Two caveats a client has to hold.** It is best-effort: the bridge watches directories with `fs.watch`, which throws on some filesystems and silently does nothing on others, so a change can go unannounced — keep treating `409 {code:'stale'}` from `PUT /api/claude-config` as the guarantee, and this only as the convenience that usually saves you from meeting it. And a project's two files are watched only once `GET /api/claude-config?cwd=<dir>` has been called for that directory, only for a small number of directories at a time (least-recently-read dropped first), and not after ten minutes without another read of it; the user file and the managed file are watched throughout. So poll or re-`GET` if you need certainty about a directory you have not asked about |
 | `claude-docs` | `{at, scope, file}` — the same trade for a `CLAUDE.md`: the fact one was written, never its contents. `scope` is `"user"` or `"project"`. Fired on every successful `PUT /api/claude-docs`, including your own. **A client holding an unsaved draft must not reload on this** — show a conflict and keep what the person typed; the whole draft here is somebody's prose rather than one key |
 | `notification` | a whole notification row, just filed — the same shape `GET /api/notifications` returns, `read` included — plus `unread`, the badge count after this row. So an open history view need not refetch, and need not guess whether the new row counts |

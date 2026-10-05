@@ -20,10 +20,19 @@
 // the PRs that changed" is not a question that can be asked — the question is
 // which *repositories* are worth a call. Everything below decides that.
 //
-// Four triggers, in the order they matter:
+// Five triggers, in the order they matter:
 //
 //   * **Never asked.** A repository the store has not seen, which is boot and any
 //     newly-linked PR.
+//   * **The base just moved.** A PR left the open list, or one reads mergeable
+//     UNKNOWN. GitHub computes mergeability lazily after a merge, so the first
+//     list reads UNKNOWN and the conflict it hides is the thing somebody is about
+//     to look for. 20s, bounded: three minutes after a merge, and seven UNKNOWN
+//     lists in a row. Meanwhile the last real answer is held — `carryMergeable`.
+//     A merge made somewhere else — the GitHub UI, another developer — leaves no
+//     trace in a list nobody has run, so `watchBases` asks `git ls-remote` for the
+//     head of every base the open PRs target, at most once a minute per
+//     repository, and a moved head opens the same window.
 //   * **The conversation moved.** A session's transcript mtime is past the moment
 //     its repository was last listed. Someone is working here, so a PR may have
 //     just been raised, pushed to, or merged. Floored at a minute so a busy
@@ -79,12 +88,38 @@ const ACTIVE_MS = 60_000;
 const CHECKS_MS = 2 * 60_000;
 
 // The staleness floor, and the cap on every backoff. Everything a conversation
-// cannot see — a review landing, somebody else merging — is found within this.
+// cannot see — a review landing, a comment — is found within this. Somebody else
+// merging used to be on that list; `watchBases` takes it off.
 const IDLE_MS = 20 * 60_000;
 
 // After a failed list. Short at first because gh failing is usually a token or a
 // network blip, then giving up on being clever.
 const BACKOFF_MS = [60_000, 2 * 60_000, 5 * 60_000, IDLE_MS];
+
+// While GitHub is still working out whether a PR merges. `mergeable` is computed
+// lazily and in the background: the first list after the base branch moves reads
+// UNKNOWN, and the real answer is usually there seconds later. Waiting the idle
+// floor for it is how a conflict took twenty minutes to show. The 30s tick is the
+// real floor under this, so in practice it means "the next pass".
+const UNKNOWN_MS = 20_000;
+
+// How many lists in a row may come back UNKNOWN before a repository stops being
+// asked about at that rate. A PR GitHub never settles must not pin a repository
+// to a gh every tick; past this it falls back to the checks interval.
+const UNKNOWN_TRIES = 6;
+
+// After a PR leaves a repository's open list, the rest of it is asked about at
+// UNKNOWN_MS for this long. A merge moves the base branch, and that is the moment
+// a sibling PR acquires a conflict — which nothing else here would notice until
+// the idle floor.
+const MERGED_WINDOW_MS = 3 * 60_000;
+
+// How often a repository's base branches are checked for having moved. This is
+// `git ls-remote`, which is git's protocol rather than GitHub's API and so costs
+// no rate limit, and it is the only thing here that sees a merge made off this
+// machine before the idle floor does. A minute, rather than every tick, because
+// it is still a process and a round trip per repository.
+const BASE_WATCH_MS = 60_000;
 
 // Separate processes, not requests on one connection. The same figure pulls.js and
 // dashboard.js use, for the same reason.
@@ -99,7 +134,7 @@ const GIT_CONCURRENCY = 8;
 // ---------------------------------------------------------------------------
 
 const state = {
-    /** @type {Map<string, {checkedAt: number, ok: boolean, error: string|null, attempts: number, pulls: Array}>} */
+    /** @type {Map<string, {checkedAt: number, ok: boolean, error: string|null, attempts: number, unknownStreak: number, baseMovedAt: number, baseShas: Object<string, string>, baseCheckedAt: number, pulls: Array}>} */
     repos: new Map(),
     /** @type {Map<string, {at: number, pull: object}>} `owner/name#12` -> a settled PR */
     terminal: new Map(),
@@ -131,6 +166,10 @@ function load() {
                 ok: !!e.ok,
                 error: e.error ? String(e.error) : null,
                 attempts: Number(e.attempts) || 0,
+                unknownStreak: Number(e.unknownStreak) || 0,
+                baseMovedAt: Number(e.baseMovedAt) || 0,
+                baseShas: cleanShas(e.baseShas),
+                baseCheckedAt: Number(e.baseCheckedAt) || 0,
                 pulls: e.pulls,
             });
         }
@@ -146,6 +185,14 @@ function load() {
             console.error(`[tgxcode] ignoring unreadable ${STORE_FILE}: ${err.message}`);
         }
     }
+}
+
+/** `{branch: sha}` from the file, keeping only string values. */
+function cleanShas(raw) {
+    const out = {};
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+    for (const [b, sha] of Object.entries(raw)) if (typeof sha === 'string' && sha) out[b] = sha;
+    return out;
 }
 
 const serialise = () => JSON.stringify({
@@ -190,18 +237,31 @@ const checksRunning = (entry) => (entry.pulls || [])
     .some(p => p && p.checks && p.checks.pending > 0);
 
 /**
+ * Is GitHub still computing whether some PR here merges?
+ *
+ * Counts a PR showing a carried-over answer (`mergeableStale`) as well as a bare
+ * UNKNOWN: the carried value is what it looked like before, not what it is. Drafts
+ * are left out because a draft's conflict is not what the rail shows for it.
+ */
+const mergeUnknown = (entry) => (entry.pulls || [])
+    .some(p => p && !p.draft && (p.mergeable === 'UNKNOWN' || p.mergeableStale));
+
+/**
  * How long to leave a repository alone, given its last answer.
  *
  * A failed call backs off regardless of activity: gh being down is not something
  * that typing fixes, and asking harder is how a rate limit becomes a ban.
  */
-function interval(entry, active) {
+function interval(entry, active, now = Date.now()) {
     if (!entry.ok) {
         const n = Math.min(Math.max(entry.attempts, 1), BACKOFF_MS.length) - 1;
         return BACKOFF_MS[n];
     }
+    const unknown = mergeUnknown(entry);
+    if (unknown && (entry.unknownStreak || 0) <= UNKNOWN_TRIES) return UNKNOWN_MS;
+    if (entry.baseMovedAt && now - entry.baseMovedAt < MERGED_WINDOW_MS) return UNKNOWN_MS;
     if (active) return ACTIVE_MS;
-    if (checksRunning(entry)) return CHECKS_MS;
+    if (unknown || checksRunning(entry)) return CHECKS_MS;
     return IDLE_MS;
 }
 
@@ -375,8 +435,8 @@ function forSessions(rows) {
 const signature = (entry) => JSON.stringify([
     entry.ok, entry.error,
     (entry.pulls || []).map(p => [
-        p.number, p.state, p.draft, p.reviewDecision, p.mergeable, p.updatedAt,
-        p.headSha, p.labels, p.checks,
+        p.number, p.state, p.draft, p.reviewDecision, p.mergeable, !!p.mergeableStale,
+        p.updatedAt, p.headSha, p.labels, p.checks,
     ]),
 ]);
 
@@ -393,15 +453,111 @@ async function refreshRepo(repo) {
     const before = prev ? signature(prev) : null;
 
     const r = await pulls.openPulls(repo);
+    const now = Date.now();
     const entry = {
-        checkedAt: Date.now(),
+        checkedAt: now,
         ok: r.ok,
         error: r.error,
         attempts: r.ok ? 0 : (prev ? prev.attempts : 0) + 1,
-        pulls: r.ok ? r.pulls : (prev ? prev.pulls : []),
+        unknownStreak: prev ? prev.unknownStreak || 0 : 0,
+        baseMovedAt: prev ? prev.baseMovedAt || 0 : 0,
+        // The watcher's, not the list's: carried so a list does not forget the
+        // heads it last saw and miss the next move.
+        baseShas: prev ? prev.baseShas || {} : {},
+        baseCheckedAt: prev ? prev.baseCheckedAt || 0 : 0,
+        pulls: r.ok ? carryMergeable(r.pulls, prev) : (prev ? prev.pulls : []),
     };
+    if (r.ok) {
+        // Something left the open list since the last good one: merged, most
+        // likely, which moved its base. Its siblings are about to be recomputed.
+        const open = new Set(entry.pulls.map(p => p.number));
+        if (prev && prev.ok && prev.pulls.some(p => p && !open.has(p.number))) {
+            entry.baseMovedAt = now;
+            entry.unknownStreak = 0;
+        }
+        entry.unknownStreak = mergeUnknown(entry) ? entry.unknownStreak + 1 : 0;
+    }
     state.repos.set(repo, entry);
     return before !== signature(entry);
+}
+
+/**
+ * Notice a base branch moving without listing anything.
+ *
+ * One `git ls-remote` per repository, naming every base its open PRs target, and
+ * no more than once per BASE_WATCH_MS. A head that differs from the one recorded
+ * last time is treated exactly like a PR leaving the open list: `baseMovedAt` opens
+ * the short window and `checkedAt = 0` makes the repository due on this very pass.
+ *
+ * A head seen for the first time is only written down — there is nothing to
+ * compare it against, and a boot is not a merge. A failing repository is left
+ * alone: forcing a list would cut its gh backoff short, and gh being down is not
+ * something a moved branch fixes. A failed ls-remote keeps the old heads and still
+ * moves `baseCheckedAt`, so a remote git cannot read is asked once a minute rather
+ * than every tick.
+ *
+ * @returns {Promise<boolean>} whether anything was asked, so the caller saves.
+ */
+async function watchBases(repos, now = Date.now()) {
+    const todo = [];
+    for (const repo of repos) {
+        const entry = state.repos.get(repo);
+        if (!entry || !entry.ok || !entry.checkedAt) continue;
+        if (now - (entry.baseCheckedAt || 0) < BASE_WATCH_MS) continue;
+        const bases = [...new Set((entry.pulls || []).map(p => p && p.base).filter(Boolean))];
+        if (bases.length) todo.push({ repo, bases });
+    }
+    if (!todo.length) return false;
+
+    await mapLimit(todo, GIT_CONCURRENCY, async ({ repo, bases }) => {
+        const r = await pulls.remoteHeads(repo, bases);
+        // Looked up again rather than captured: a list may have replaced the
+        // entry while git ran, and writing to the old record would be lost.
+        const entry = state.repos.get(repo);
+        if (!entry) return;
+        entry.baseCheckedAt = now;
+        if (!r.ok) return;
+        const before = entry.baseShas || {};
+        const after = {};
+        let moved = false;
+        for (const base of bases) {
+            const sha = r.shas[base];
+            if (!sha) continue;
+            after[base] = sha;
+            if (before[base] && before[base] !== sha) moved = true;
+        }
+        entry.baseShas = after;
+        if (moved) {
+            entry.baseMovedAt = now;
+            entry.unknownStreak = 0;
+            entry.checkedAt = 0;
+        }
+    });
+    return true;
+}
+
+/**
+ * Keep the last real `mergeable` for a PR GitHub is recomputing.
+ *
+ * Without this a PR that was CONFLICTING reads UNKNOWN for a pass after any base
+ * move, and `resolveStatus` says nothing for UNKNOWN — so the conflict colour
+ * disappears exactly when the user is looking for it. The carried value is marked
+ * `mergeableStale` so `interval` keeps asking and the signature changes once the
+ * fresh answer lands.
+ *
+ * Only for the same head and base. A new push or a retargeted PR is precisely when
+ * a conflict may have gone away, and claiming the old one then would be a lie.
+ */
+function carryMergeable(list, prev) {
+    if (!prev || !prev.pulls || !prev.pulls.length) return list;
+    const before = new Map(prev.pulls.filter(Boolean).map(p => [p.number, p]));
+    return list.map((p) => {
+        if (!p || p.mergeable !== 'UNKNOWN') return p;
+        const q = before.get(p.number);
+        if (!q || !q.mergeable || q.mergeable === 'UNKNOWN') return p;
+        if (q.headSha !== p.headSha || q.base !== p.base) return p;
+        return { ...p, mergeable: q.mergeable, mergeableStale: true };
+    });
 }
 
 /**
@@ -517,6 +673,9 @@ async function tick({ sessions = [], running = new Set(), extraRepos = [], force
         }
     }
 
+    // Before deciding what is due, because a moved base makes its repository due.
+    const watched = await watchBases(repos, now);
+
     const due = [...repos].filter(repo => force || isDue(repo, active.has(repo), now));
 
     let changed = false;
@@ -545,7 +704,7 @@ async function tick({ sessions = [], running = new Set(), extraRepos = [], force
     // pass is still there to be found next time, without a marker recording it.
 
     prune(sessions, repos);
-    if (changed || due.length) save();
+    if (changed || due.length || watched) save();
     return { changed, refreshed: due, repos };
 }
 
@@ -588,6 +747,10 @@ function seed(repo, entry) {
         ok: true,
         error: null,
         attempts: 0,
+        unknownStreak: 0,
+        baseMovedAt: 0,
+        baseShas: {},
+        baseCheckedAt: 0,
         pulls: [],
         ...entry,
     });
@@ -604,8 +767,9 @@ function reset() {
 module.exports = {
     openPulls, terminalPull, lookup, checkedAt, ghError,
     forSession, forSessions,
-    tick, invalidate, refreshRepo, resolveTerminal, reposFor,
-    dueAt, isDue, interval, checksRunning,
+    tick, invalidate, refreshRepo, resolveTerminal, reposFor, watchBases,
+    dueAt, isDue, interval, checksRunning, mergeUnknown, carryMergeable,
     load, save, flush, snapshot, seed, reset,
     STORE_FILE, TICK_MS, ACTIVE_MS, CHECKS_MS, IDLE_MS, BACKOFF_MS,
+    UNKNOWN_MS, UNKNOWN_TRIES, MERGED_WINDOW_MS, BASE_WATCH_MS,
 };

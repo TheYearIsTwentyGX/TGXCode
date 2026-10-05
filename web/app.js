@@ -5,8 +5,10 @@
 // running in somebody's terminal renders identically to one started here.
 
 import { configurePaths } from './markdown.js';
-import { PreviewPane } from './preview.js';
+import { PreviewPane, canPreviewUrls } from './preview.js';
 import { opensInPreview } from './link-policy.js';
+import { loadPrOwners, wirePrRefs } from './pr-refs.js';
+import { startupQuery } from './startup.js';
 import * as keys from './keys.js';
 import { drawRail } from './rail.js';
 import { liveStrip, renderLive } from './boards/live.js';
@@ -325,6 +327,8 @@ function applyRailPrs(payload) {
     }
     state.prsLoaded = true;
     renderRail();
+    // The idle groups on the live board draw the same glyph.
+    if (liveVisible()) renderLive();
 }
 
 /** The one fetch of `/api/prs` a window makes: its first paint. */
@@ -914,7 +918,30 @@ function showPortInline(o) {
 async function openLinkInPreview(href) {
     const shown = previewAvailable() && await previewPane.openUrl(href);
     if (shown) showPreview(true);
-    else window.open(href, '_blank', 'noreferrer');
+    else {
+        window.open(href, '_blank', 'noreferrer');
+        explainStaleShell(href);
+    }
+}
+
+/**
+ * A site that is not a local port needs `allowPreviewOrigin` from the shell,
+ * and a shell packaged before link previews existed does not have it — app/
+ * main.js and app/preload.js are packaged, web/ is not. The fallback to the
+ * browser is right, but silent it reads as the setting being broken, so the
+ * first such link in a page load says why. In a plain browser tab there is no
+ * shell at all, which the Settings note already covers.
+ */
+let staleShellExplained = false;
+function explainStaleShell(href) {
+    if (staleShellExplained || canPreviewUrls || !window.claudeShell || !previewAvailable()) return;
+    let u;
+    try { u = new URL(href); } catch { return; }
+    if (['localhost', '127.0.0.1', '[::1]'].includes(u.hostname)) return;
+    staleShellExplained = true;
+    toast('This app was packaged before links could open in the preview, so other sites '
+        + 'still go to your browser. Rebuild it (install.ps1) to fix that — local ports '
+        + 'already preview.', 'info');
 }
 
 /**
@@ -1175,8 +1202,9 @@ let restoring = false;
  * The address is the whole of the memory here. Ctrl+R reloads the document URL,
  * and replaceState has been keeping that URL current all along, so a refresh
  * restores everything for free. A fresh shell launch loads the bare origin
- * (app/main.js) and therefore starts clean, which is the intended difference:
- * opening the app is not the same gesture as refreshing it.
+ * (app/main.js), so it opens to whatever Settings › On startup says instead —
+ * nothing, by default. That is the intended difference: opening the app is not
+ * the same gesture as refreshing it. See web/startup.js.
  *
  * `view` is the panel with the screen. `live=1` is the one thing it cannot say:
  * the work-in-flight board covers the live board without closing it, so a board
@@ -2107,6 +2135,38 @@ function originRow(cwd, row, publish) {
     return btn;
 }
 
+/**
+ * The same menu against a session row's ⋮, which a row draws instead of its
+ * buttons when `projects.compactActions` is on — see stripMenuButton() in
+ * web/rail.js. One element and one `state.projMenu` for both, so opening either
+ * closes the other, and the close, Escape and follow-the-button wiring below
+ * serves both; `sessionId` is what tells them which kind of ⋮ to look for.
+ *
+ * The rows act on the session as of now rather than as of the press, so `s` is
+ * looked up again: a pin that landed while the menu was open is not undone.
+ */
+export function showStripMenu(s, btn) {
+    state.projMenu = { sessionId: s.sessionId };
+    dom.projMenu.hidden = false;
+    renderRail();   // the ⋮ draws itself expanded
+    const now = () => state.sessions.find(x => x.sessionId === s.sessionId) || s;
+    const row = (label, act, cls) => el('button', {
+        class: 'picker-row' + (cls ? ` ${cls}` : ''), type: 'button', role: 'menuitem',
+        onclick: () => { closeProjMenu(); act(now()); },
+    }, el('span', {}, label));
+    dom.projMenu.replaceChildren(
+        el('div', { class: 'menu-note' }, clip(s.title, 30)),
+        el('div', { class: 'sep' }),
+        row('Rename', startRename),
+        row(s.pinned ? 'Unpin' : 'Pin to the top', (x) => setFlags(x, { pinned: !x.pinned })),
+        row(s.archived ? 'Restore from archive' : 'Archive', (x) => setFlags(x, { archived: !x.archived })),
+        el('div', { class: 'sep' }),
+        row('Delete permanently', askDelete, 'danger'),
+    );
+    placeProjMenu(btn);
+    dom.projMenu.querySelector('.picker-row').focus();
+}
+
 export function closeProjMenu() {
     if (!state.projMenu) return;
     state.projMenu = null;
@@ -2158,8 +2218,9 @@ const PROJ_MENU_W = 220;
  */
 function syncProjMenu() {
     if (!state.projMenu) return;
-    const btn = dom.rail.querySelector(
-        `.rail-group[data-key="${cssEscape(state.projMenu.key)}"] .group-menu-btn`);
+    const btn = dom.rail.querySelector(state.projMenu.sessionId
+        ? `.strip[data-id="${cssEscape(state.projMenu.sessionId)}"] > .strip-menu-btn`
+        : `.rail-group[data-key="${cssEscape(state.projMenu.key)}"] .group-menu-btn`);
     if (!btn) { closeProjMenu(); return; }
     const b = btn.getBoundingClientRect();
     const rail = dom.rail.getBoundingClientRect();
@@ -2282,7 +2343,8 @@ closeOnClickOutside(dom.pcolorScrim, closePcolor);
 // some other control closes this before that control acts on it.
 document.addEventListener('click', (e) => {
     if (!state.projMenu) return;
-    if (dom.projMenu.contains(e.target) || e.target.closest('.group-menu-btn')) return;
+    if (dom.projMenu.contains(e.target)
+        || e.target.closest('.group-menu-btn, .strip-menu-btn')) return;
     closeProjMenu();
 }, true);
 document.addEventListener('keydown', (e) => {
@@ -2425,6 +2487,12 @@ function connect() {
         // The version check has the same missed-push problem, and this is also
         // how the first answer arrives at all.
         loadCv();
+        // And the pull requests. `prs-changed` is only sent when the answer moves,
+        // so a push missed here is not followed by another one — a conflict that
+        // appeared while the stream was down would otherwise stay invisible until
+        // something else about that repository changed. Reads the store; no gh.
+        loadRailPrs();
+        if (state.current) loadPrStatus();
         // Same reasoning for the status line, which onerror left reading
         // "Reconnecting to the bridge…". applyRunner derives it from what we
         // already know, so an idle session says Ready again and a busy one is
@@ -2524,6 +2592,9 @@ function connect() {
     es.addEventListener('prs-changed', (e) => {
         applyRailPrs(JSON.parse(e.data));
         if (state.current) loadPrStatus();
+        // A PR raised elsewhere is the likeliest thing to have moved, and it is
+        // what turns a plain `#N` in this conversation into a link.
+        loadPrOwners();
         if (state.dash.open) loadDash();
     });
 
@@ -3547,6 +3618,9 @@ dom.agentScroll.addEventListener('scroll', () => {
 // The tooltip is positioned against a tick, so it cannot follow one that moves.
 dom.turns.addEventListener('scroll', hideTurnPop);
 
+// `#151` in a message: a hover card for whose PR it is and a click to that chat.
+wirePrRefs();
+
 // The Start-a-session dialog's first-message box, built in new-session/dialog.js.
 wireComposer(newC);
 wireAttachments(newC);
@@ -4247,8 +4321,7 @@ function debounce(fn, ms) {
  * statements and the first paint must not wait on a transcript fetch, so the
  * session is started and left to arrive.
  */
-function restoreView() {
-    const q = new URLSearchParams(location.search);
+function restoreView(q) {
     restoring = true;
 
     // The arrangement first, so the board is painted once into the shape it is
@@ -4331,7 +4404,17 @@ watchPaneInsets();      // keep the composer over the transcript as columns come
 // combo at all and this is what puts one there.
 paintShortcutHints();
 paintComposerHint();
-restoreView();          // and where we were, from the address that survived the refresh
+// And where we were, from the address that survived the refresh — or, on a
+// launch, from Settings › On startup. That one is written into the address once
+// it is up, so a refresh afterwards keeps it rather than starting from nothing.
+{
+    const nav = performance.getEntriesByType('navigation')[0];
+    const launch = startupQuery(BOOT_PREFS.startup, {
+        navType: nav && nav.type, search: location.search, hash: location.hash,
+    });
+    restoreView(launch || new URLSearchParams(location.search));
+    if (launch) rememberView();
+}
 primeWaiting();
 // The pill's first answer and its 20-second poll — or neither, when Settings
 // says DevBrowser is not part of this app.

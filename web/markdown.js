@@ -508,6 +508,19 @@ export function inline(src) {
         (m, pre, url) => `${pre}<a href="${safeUrl(url.startsWith('www.') ? 'http://' + url : url)}" `
             + `target="_blank" rel="noreferrer">${url}</a>`);
 
+    // `#151` - a pull request, maybe. Only marked here: this renderer has no idea
+    // which conversation it is drawing, so whose PR it is (if anybody's) is
+    // web/pr-refs.js's question, and an unresolved mark looks like plain text.
+    //
+    // A link or image produced above is matched first and handed back untouched,
+    // so a `#12` in link text or an alt attribute never grows an anchor inside
+    // another. The preceding character keeps URL fragments (`/pull/7#123`), the
+    // `&#39;` escapeHtml just wrote and `abc#12` out; code spans are parked.
+    s = s.replace(/(<a\b[^>]*>[\s\S]*?<\/a>|<img\b[^>]*>)|(^|[\s(\[*_])#(\d{1,6})(?![\w-])/g,
+        (m, tag, pre, n) => tag
+            ? tag
+            : `${pre}\u0000${parked.push(`<a class="pr-ref" data-pr="${n}">#${n}</a>`) - 1}\u0000`);
+
     s = s.replace(/\*\*\*([^*]+)\*\*\*/g, '<strong><em>$1</em></strong>');
     s = s.replace(/\*\*([\s\S]+?)\*\*/g, '<strong>$1</strong>');
     s = s.replace(/(^|[^\w*])\*([^*\n]+)\*(?!\w)/g, '$1<em>$2</em>');

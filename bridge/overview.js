@@ -220,6 +220,10 @@ function card(index, s, runner, reason) {
         projectName: s.projectName,
         cwd: s.cwd,
         worktree: s.worktree,
+        // `{number, url, repo}[]`, as on the summary. Status is not here: it
+        // moves on GitHub's clock rather than the session's, and arrives on
+        // `prs-changed` instead — the card only needs to know there is a PR.
+        prs: s.prs || [],
         pinned: s.pinned,
         test: s.test,
         model: s.model,
@@ -268,6 +272,11 @@ function card(index, s, runner, reason) {
 
         // Whatever the last dev-server pass left; null until the first one runs.
         devservers: devLast.get(s.sessionId) || null,
+
+        // Where the last turn left things — `{text, source, at}` or null, exactly
+        // as on the session summary; see bridge/standing.js. Hashed by the
+        // fingerprint like the rest, so a new line redraws the card.
+        standing: s.standing || null,
     };
 
     c.sig = fingerprint(c);

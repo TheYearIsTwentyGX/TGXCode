@@ -1001,12 +1001,17 @@
 
 /* The full-height editor. `.tall` is the modal shape this needs and nothing
    else does: as wide as the window sensibly allows and as tall, because the
-   whole reason to open it is that 60vh in a column was not enough. */
+   whole reason to open it is that 60vh in a column was not enough.
+   Split is two of the single-pane shape side by side, so it gets nearly the
+   whole window: at 1000px each half was under 500px, narrower than the
+   settings column it was meant to escape. One pane stops at 1200px, which is
+   already a long line of prose. */
 .modal.tall {
-    width: min(1000px, 100%);
+    width: min(1200px, 100%);
     max-height: 94vh;
     height: 94vh;
 }
+.modal.tall:has(> .modal-body[data-view="split"]) { width: min(1800px, 100%); }
 /* `flex: 1` and `min-height: 0` together are what make the box fill the
    dialog: .modal is already a column, but .modal-body does not grow on its
    own, and without min-height a flex child refuses to shrink below its
