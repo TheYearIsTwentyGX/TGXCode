@@ -22,6 +22,7 @@
 
 import { html, useState } from '../vendor/preact.js';
 import { shortPath } from '../format.js';
+import { canPreviewUrls } from '../preview.js';
 import { state } from '../state.js';
 import {
     paintBackdropTint, refreshPairUrl, renderProjectBackdrop, renderProjectColors,
@@ -282,7 +283,11 @@ export const SETTINGS = [
                 note: 'A link in a message opens here instead of in your browser. '
                     + 'Ctrl-, Shift- or middle-click still sends it to the browser. '
                     + 'A site other than a local port needs the desktop app, and a '
-                    + 'link it leads to on another site still leaves for the browser.' },
+                    + 'link it leads to on another site still leaves for the browser.'
+                    + (window.claudeShell && !canPreviewUrls
+                        ? ' This app was packaged before that was possible: rebuild it '
+                            + '(install.ps1) and other sites open here too.'
+                        : '') },
             { key: 'listMode', type: 'radio',
                 when: (p) => p.preview && p.preview.links === true,
                 label: 'Which links',
