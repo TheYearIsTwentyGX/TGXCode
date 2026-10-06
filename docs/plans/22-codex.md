@@ -20,10 +20,12 @@ transcript view, answer its approvals from the same cards, and schedule it
 from the same schedule rows. Where Codex cannot do something, the UI should not
 pretend it can.
 
-This document is what research turned up, not what was measured. It is based on
-`openai/codex` at `rust-v0.160.1` (2026-10-05) and on how
-`pingdotgg/t3code` drives Codex today. Phase 0 exists to turn the claims below
-into fixtures before any of them is built on.
+The roadmap is based on `openai/codex` at `rust-v0.160.1` (2026-10-05) and on
+how `pingdotgg/t3code` drives Codex today. Most of the claims it builds on were
+then checked against a live 0.160.1 on a ChatGPT Free account, by driving
+`codex app-server` directly; *Measured on 0.160.1* near the end records what
+that showed. Where a measurement contradicted the research, the measurement
+wins and the section has been changed to match.
 
 ## What Codex offers a client like this one
 
@@ -110,6 +112,25 @@ own event store. That was rejected for three reasons:
   that way.
 - The rollout format has churned more slowly than the RPC surface.
 
+Measured, this holds up better than expected:
+
+- **The file is live.** Each line lands within about 50 ms of the matching
+  notification, and a tool call is on disk *before* `item/started` reaches the
+  client. A content-from-file view lags the stream by less than a frame.
+- **One mapper serves both sources.** Next to the raw Responses API lines
+  (`response_item`), the rollout records `event_msg` `item_completed` with the
+  same v2 `ThreadItem` the app-server streams. The type names are PascalCase
+  there (`CommandExecution`) and camelCase on the wire (`commandExecution`). So
+  the transcript reader and the runner's liveness parser can share one table of
+  item kinds.
+- **The noise needs filtering.** Each turn opens with `developer` messages
+  (skills, multi-agent role) and a user-role `<environment_context>` message.
+  These are the Codex equivalents of `<system-reminder>`, and the reader must
+  strip them the same way.
+- **`thread/start` returns the file's path** as `thread.path`, but the file
+  does not exist until the first turn. `index.note(id)` already handles a
+  session that has an id and no file yet.
+
 Two details:
 
 - **Cold rollouts may be compressed** to `.jsonl.zst`. Node has
@@ -151,7 +172,7 @@ three settings, `approvalPolicy`, `sandbox` and `approvalsReviewer`:
 | `acceptEdits` | `on-request` | `workspace-write` | `user` | Edits in the workspace run; escalations ask |
 | `auto` | `on-request` | `workspace-write` | `auto_review` | A reviewer subagent answers approvals instead of us |
 | `plan` | `on-request` | `read-only` | `user` | Plus `collaborationMode: {mode:"plan"}` |
-| `dontAsk` | `never` | `workspace-write` | `user` | Never asks; anything outside the sandbox fails back to the model. Closest to Claude's meaning — verify in Phase 0 |
+| `dontAsk` | `never` | `workspace-write` | `user` | Never asks; anything outside the sandbox fails back to the model. Measured: a write outside the workspace got "Read-only file system" and no prompt. `/tmp` stays writable unless `excludeSlashTmp`. |
 | `bypassPermissions` | `never` | `danger-full-access` | `user` | |
 
 All three settings are sent on **every `turn/start`**, not only at thread start.
@@ -174,9 +195,9 @@ takes effect on the next one, so the UI should say so.
   turn. Keep the rollout files they produce beside them.
 - Add a `TGXCODE_CODEX_BIN` stub that replays fixtures, the way the `runner`
   test drives a stub `claude` through `TGXCODE_CLAUDE_BIN`.
-- Answer the open questions at the end of this document.
+- Settle what *Still open* lists at the end of this document; *Measured on 0.160.1* records what has already been answered.
 
-**Exit check:** fixtures exist for each event kind Phase 2 maps, and each open
+**Exit check:** fixtures exist for each event kind Phase 2 maps, and each still-open
 question has an answer written down here.
 
 ### Phase 1 — The seam, with no Codex in it
@@ -227,15 +248,15 @@ These are the `runner.js` behaviours, one by one, mapped onto the app-server:
 | New session (`--session-id`) | `thread/start {cwd, model, config, historyMode:"paginated"}`. **The thread id comes back in the response**, so `index.note(id)` moves to after the reply. Today we mint the id ourselves, so this changes the order. |
 | Resume (`--resume`) | `thread/resume {threadId}`, with the same `config` overrides |
 | Send a turn | `turn/start {threadId, input[], approvalPolicy, sandboxPolicy, model, effort, collaborationMode}` |
-| Hand a message to the running turn (`_handOver`) | `turn/steer {threadId, expectedTurnId, input}` |
+| Hand a message to the running turn (`_handOver`) | `turn/steer {threadId, expectedTurnId, input}`. Measured: steering during a running command folded the message into the **same** turn at the next tool boundary, which is Claude's semantics exactly. The steered message is only written to the rollout when it is folded in, so the existing "queued" chip covers the gap between the steer and its line on disk. |
 | Drop a queued message | Our own queue holds it until `turn/completed`. There is no `cancel_async_message` to send. |
-| Stop | `turn/interrupt {threadId, turnId}`, then SIGTERM/SIGKILL after `CONTROL_TIMEOUT_MS`, as now |
+| Stop | `turn/interrupt {threadId, turnId}`, then SIGTERM/SIGKILL after `CONTROL_TIMEOUT_MS`, as now. Measured: the running command was killed at once, and the turn ended `interrupted`, recorded as `turn_aborted {reason:"interrupted"}`. |
 | Busy / idle and the activity label | `turn/started`, `turn/completed`, `item/started`, `item/completed`, `thread/status/changed` (`active{waitingOnApproval}`) |
-| `can_use_tool` approval card | `item/commandExecution/requestApproval` (shows the command and cwd) and `item/fileChange/requestApproval` (the diff comes from the `fileChange` item). Reply with `{decision: accept \| acceptForSession \| decline \| cancel}`. **"Allow always" becomes `acceptForSession`**, and `cancel` also interrupts the turn. |
+| `can_use_tool` approval card | `item/commandExecution/requestApproval` (shows the command and cwd) and `item/fileChange/requestApproval` (the diff comes from the `fileChange` item). Each answer is a `{decision}`. **A command request carries `availableDecisions`, and the card draws its buttons from that list rather than from a fixed set.** Measured under `untrusted`, the list was `accept`, `{acceptWithExecpolicyAmendment: [prefix]}`, `cancel`: no `decline` and no `acceptForSession`. The amendment is a *persistent* "always allow this command prefix" rule, which is stronger than Claude's session-scoped "allow always", so its button must say so. `cancel` also interrupts the turn. A file-change request carries no list. It was declined with `decline`, which became `status: "declined"` on the item. |
 | A card withdrawn (`control_cancel_request`) | `serverRequest/resolved {threadId, requestId}` |
-| AskUserQuestion card | `item/tool/requestUserInput {questions[{id, header, question, options, isOther, isSecret}]}`, answered with `{answers:{<id>:{answers:[…]}}}`. Needs `tools.experimental_request_user_input.enabled` in the thread `config`. |
+| AskUserQuestion card | **Two mechanisms, and the model picks which one.** The *blocking* tool, `request_user_input`, sends `item/tool/requestUserInput {questions[{id, header, question, options, isOther, isSecret}]}`, which is answered with `{answers:{<id>:{answers:[…]}}}`. It is on by default but offered only in plan mode, unless the `DefaultModeRequestUserInput` feature also enables it in default mode. The *async* tool, `request_user_input_async`, is offered when the model's metadata lists it, and in both of our probes it was the one used, in default and in plan mode. It produces no server request at all: an `agentMessage` arrives with `delivery: "async"` and `questions[{title, options[]}]`, and the turn carries on and ends. The card is drawn from that item, and choosing an option sends it as the next turn. So the card must handle both, and only the blocking one maps onto today's AskUserQuestion flow. |
 | Extra permissions | `item/permissions/requestApproval` gets a third card type, with a turn or session scope |
-| Model and effort pickers | `model/list`, which returns per model `supportedReasoningEfforts` and `defaultReasoningEffort`. `web/index.html` stops hard-coding the list for Codex sessions. |
+| Model and effort pickers | `model/list`, which returns per model `supportedReasoningEfforts` and `defaultReasoningEffort`. `web/index.html` stops hard-coding the list for Codex sessions. **Never hard-code a Codex model.** The default depends on the account: signed out it was `gpt-6.1-sol`, and on a ChatGPT Free account it was `gpt-6-luna`. A turn naming a model the account cannot use fails late, with an `error` notification and `turn/completed {status:"failed"}` ("model is not supported when using Codex with a ChatGPT account"), not at `turn/start`. |
 | Images | `{type:"localImage", path}`, using the files `attachments.js` already stages. No base64 inlining. |
 | `classifyError` | JSON-RPC error codes and `error` notifications instead of matching stderr text. An archived thread on resume gets `thread/unarchive` and one retry, as t3code does. |
 
@@ -263,23 +284,30 @@ the Codex stub, and an approval survives `npm run dev` being restarted.
 
 ### Phase 4 — The features around the conversation
 
-- **Fork.** `thread/fork {threadId}`. The new id is in the response, and it
-  drives the existing `session-forked` broadcast.
+- **Fork.** `thread/fork {threadId}`. The new id is in the response, alongside
+  `forkedFromId`, and it drives the existing `session-forked` broadcast. Pass
+  `excludeTurns: true`: without it, 0.160.1 sends a `deprecationNotice` saying
+  full-history hydration is deprecated for paginated threads.
 - **Branch from a turn.**
   - Fork with `lastTurnId`, which is inclusive, to keep everything up to that
     turn.
   - Use `beforeTurnId` (experimental) to drop that turn.
-  - Both need paginated history. A thread started in legacy mode by a terminal
-    `codex` reports `branchFromTurn: false`.
+  - Both need paginated history. Measured on 0.160.1, every new thread is
+    paginated, both from `app-server` and from a terminal `codex exec`. Only
+    threads left by older Codex versions report `branchFromTurn: false`.
   - Neither undoes file changes, which matches what branch does today.
 - **The tgxcode MCP server.**
   - Inject it through the `config` map on `thread/start` and `thread/resume`:
     `{"mcp_servers.tgxcode": {"command": node, "args": [mcp.js, "--port", P, "--session", id]}}`.
     `mcp.js` itself does not change.
   - Replace `--allowedTools mcp__tgxcode__*` with
-    `default_tools_approval_mode = "approve"` on that server (an `AppToolApproval`
-    in `codex-rs/config/src/types.rs`). Phase 0 confirms that value means
-    "never ask".
+    `default_tools_approval_mode = "approve"` on that server. The type is
+    `AppToolApproval` (`auto | prompt | writes | approve`) in
+    `codex-rs/config/src/mcp_types.rs`, and `approve` is the identity in its
+    `restrict_to`, so it is the least restrictive of the four. Measured: both the
+    dotted key and the nested form are accepted in `config`. A bad value is
+    refused at `thread/start` with -32600 naming the key, and the server's
+    startup is reported per thread through `mcpServer/startupStatus/updated`.
   - `parseSuggestion` matches an MCP tool-call item with `{server: "tgxcode",
     tool: "suggest_session"}` instead of the `mcp__…__suggest_session` name.
 - **Checklist and boards.**
@@ -299,7 +327,10 @@ the Codex stub, and an approval survives `npm run dev` being restarted.
     and no writing to anyone's settings.
   - `thread/tokenUsage/updated` gives context-window use, which Claude sessions
     do not show today.
-  - `web/quota.js` gets a second meter keyed by runtime.
+  - `web/quota.js` gets a second meter keyed by runtime. **Draw it from
+    `windowDurationMins`; do not assume Claude's five-hour and weekly shape.**
+    Measured on a Free plan, there was a single `primary` window of 43200
+    minutes (30 days) and `secondary: null`. Other plans have other windows.
 - **Version.** `codex --version`, compared against npm `@openai/codex`
   dist-tags. This is the same shape as `claude-version.js`, minus `claude
   update`: Codex installs vary (npm, brew, a release tarball), so tell the user
@@ -349,7 +380,7 @@ the Codex stub, and an approval survives `npm run dev` being restarted.
 | Transcript view | ✅ | Rollout reader, D2 |
 | Tool approvals, allow for session | ✅ | `requestApproval` + `acceptForSession` |
 | Approvals surviving a bridge restart | ✅ | Note records the JSON-RPC id (Phase 3) |
-| AskUserQuestion | ✅ | `item/tool/requestUserInput` (experimental) |
+| AskUserQuestion | 🟡 | The blocking `requestUserInput` and the async `agentMessage.questions` both have to be handled, and the model picks between them |
 | Stop / interrupt | ✅ | `turn/interrupt` |
 | Mid-turn message | ✅ | `turn/steer` |
 | Model and effort | ✅ | `model/list`, which is better than our hard-coded list |
@@ -360,8 +391,8 @@ the Codex stub, and an approval survives `npm run dev` being restarted.
 | Scheduling, PR gate | ✅ | `runtime` on rows; `review/start` as an option |
 | Worktrees | ✅ | Ours are plain git. A Codex session started in one just has that `cwd`. |
 | Plan mode | 🟡 | A `plan` item, not an approval. The buttons send the next turn. |
-| Permission modes | 🟡 | Mapped per turn (D5). `dontAsk` needs verifying. |
-| Branch from a turn | 🟡 | Paginated-history threads only |
+| Permission modes | 🟡 | Mapped per turn (D5), and measured |
+| Branch from a turn | 🟡 | Paginated-history threads only, which is every thread from 0.160.1 |
 | Checklist / boards | 🟡 | `update_plan`, opt-in. It has no `blocks` and no task ids, so the taskboard shows a flat list. |
 | Slash commands | 🟡 | Skills only. Custom prompts were removed from Codex in March 2026. |
 | Settings, memory, hooks, version | 🟡 | Through app-server RPCs, with no install-and-update button |
@@ -394,18 +425,37 @@ the Codex stub, and an approval survives `npm run dev` being restarted.
 - **Auth and CSRF are unaffected.** Codex holds its own credentials in
   `$CODEX_HOME`, and nothing about the bridge token changes.
 
-## Open questions for Phase 0
+## Measured on 0.160.1
 
-1. Does `approvalPolicy: never` with `workspace-write` behave like `dontAsk` —
-   fail quietly — or does it widen anything?
-2. Does `default_tools_approval_mode = "approve"` mean "never prompt"? And is
-   the dotted `config` key `mcp_servers.tgxcode` accepted, or does the map need
-   nesting?
-3. How promptly does Codex flush rollout lines? If it buffers until the end of
-   a turn, the live transcript has to come from `item/*` notifications after
-   all, and D2 becomes "file for history, stream for the turn in progress".
-4. Does a thread started by a terminal `codex` default to `legacy` or
-   `paginated` history in 0.160? That decides how often branch-from-turn is
-   unavailable.
-5. Does `turn/steer` fold a message in at the next tool boundary, as Claude
-   does, or does it restart the model call?
+These were measured on 2026-10-06, by driving `codex app-server` over stdio
+with a throwaway client, on a ChatGPT Free account and in scratch directories.
+Each answer has already been folded into the section it affects. This is the
+index.
+
+| Question | Answer |
+|---|---|
+| Does `never` + `workspace-write` behave like `dontAsk`? | Yes. A write outside the workspace failed with "Read-only file system", with no prompt and no file. |
+| Is `default_tools_approval_mode = "approve"` "never prompt"? Is the dotted key accepted? | Yes, and yes. The nested form is accepted too. A bad value is a -32600 at `thread/start`. |
+| How promptly does the rollout flush? | Live, within about 50 ms of the stream. D2 holds without a stream fallback. |
+| Legacy or paginated history from a terminal `codex`? | Paginated (`codex exec`, `history_mode: "paginated"`). |
+| Does `turn/steer` fold at a tool boundary? | Yes, into the same turn. It is written to the rollout when folded, not when sent. |
+| Do approvals look like the docs say? | Yes, plus `availableDecisions` per command request. See Phase 3. |
+| Does plan mode end in something to approve? | No. It ends in a `plan` item carrying markdown, as Phase 3 assumes. |
+| Does `requestUserInput` arrive? | Not in either probe. The model chose `request_user_input_async`, which arrives as an `agentMessage` carrying `questions`. See Phase 3. |
+| Does the bridge's `originator` mark sessions it started? | Yes. `clientInfo.name` is stored as `originator` in `session_meta`. Terminal runs say `codex_exec`. |
+| Does a signed-out Codex work at all? | `thread/start` works signed out. `account/read` returns `{account: null, requiresOpenaiAuth: true}`, which is what the "sign in to Codex" banner should key on. Turns fail with 401. |
+
+## Still open
+
+1. **Do approvals survive host adoption?** The design in Phase 3 says yes,
+   because the process and its pending JSON-RPC id outlive the bridge. It cannot
+   be measured until the adapter exists.
+2. **When does a rollout become `.jsonl.zst`,** and can that happen to a thread
+   that is still loaded? None did during the probes.
+3. **Is the rollout still the history of record?** `$CODEX_HOME` now also holds
+   `thread_history_1.sqlite`. If paginated history moves out of the rollout in a
+   later version, D2 has to move with it, to `thread/turns/list` and
+   `thread/items/list`. Watch for this on every upgrade.
+4. **What decides between the two question tools?** Is the async one model
+   metadata alone, or can a client ask for the blocking one? If a client can,
+   AskUserQuestion becomes ✅.
