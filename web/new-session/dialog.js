@@ -262,9 +262,10 @@ export async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     wt.offered = !schedMode && !draft;
     wt.named = false;
     dom.newWt.checked = false;
-    // Starting as an orchestrator, on the worktree row's terms: Start only, reset
+    // Starting as an orchestrator, on the worktree box's terms: Start only, reset
     // on every open so the last session's choice is not carried into this one.
-    dom.newOrchRow.hidden = !wt.offered;
+    // The two share a line (see index.html), so the line goes with them.
+    dom.newStartRow.hidden = !wt.offered;
     dom.newOrch.checked = false;
     paintNewOrch();
     dom.newWtName.value = '';
@@ -453,8 +454,12 @@ export function paintNewWorktree() {
 const ORCH_NOTE = 'It starts worker sessions and reads what they report from an inbox, '
     + 'rather than doing the work itself.';
 
-/** The orchestrator row's note, which says so when the mode will fight it. */
+/**
+ * The orchestrator box's note: only while it is ticked, so an unticked box adds
+ * no height, and saying so when the mode will fight it.
+ */
 function paintNewOrch() {
+    dom.newOrchNote.hidden = !dom.newOrch.checked;
     const clash = dom.newOrch.checked && dom.newPerm.value === 'plan';
     dom.newOrchNote.classList.toggle('warn', clash);
     dom.newOrchNote.textContent = clash
@@ -468,7 +473,7 @@ function paintNewOrch() {
  * below — neither the drafts nor the schedules store has the field.
  */
 export function newDialogOrchestrator() {
-    return !dom.newOrchRow.hidden && dom.newOrch.checked;
+    return !dom.newStartRow.hidden && dom.newOrch.checked;
 }
 
 /**

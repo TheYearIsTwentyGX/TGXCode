@@ -1356,16 +1356,32 @@
           </div>
         </div>
       </div>
-      <!-- Start in a new git worktree of the chosen repository. Shown only in plain
-           Start mode and only when the directory is a repository with a commit to
-           branch from (paintNewWorktree). Not offered on a draft or a schedule:
-           both are validated when saved, before any worktree could exist, and
-           neither store has the field. -->
-      <div class="field" id="new-wt-row" hidden>
-        <label class="check">
-          <input id="new-wt" type="checkbox">
-          <span>Create a worktree</span>
-        </label>
+      <!-- How to start it: two checkboxes on one line, both plain-Start only (a
+           draft or a schedule is validated when saved, before any worktree could
+           exist, and neither store has either field).
+
+           One line rather than a field each, and the orchestrator's note only
+           once it is ticked: the dialog focuses the first-message box on open and
+           scrolls to it, so every line added here pushes the directory and the
+           worktree box off the top. A field of its own did exactly that — the
+           worktree box looked as though it had been replaced.
+
+           Create a worktree: shown only when the directory is a repository with
+           a commit to branch from (paintNewWorktree). Start as an orchestrator:
+           `orchestrator: true` on the create call, so it has its tools from the
+           first turn rather than after the restart the header toggle costs
+           (web/orchestrator.js). -->
+      <div class="field" id="new-start-row" hidden>
+        <div class="check-line">
+          <label class="check" id="new-wt-row" hidden>
+            <input id="new-wt" type="checkbox">
+            <span>Create a worktree</span>
+          </label>
+          <label class="check" id="new-orch-row">
+            <input id="new-orch" type="checkbox">
+            <span>Start as an orchestrator</span>
+          </label>
+        </div>
         <div id="new-wt-fields" class="wt-fields" hidden>
           <input id="new-wt-name" type="text" spellcheck="false" autocomplete="off"
                  placeholder="name" aria-label="Worktree name" maxlength="60">
@@ -1374,19 +1390,7 @@
                  placeholder="HEAD" aria-label="Branch, tag or commit to start from">
         </div>
         <div id="new-wt-note" class="note" hidden></div>
-      </div>
-      <!-- Start the session as an orchestrator: `orchestrator: true` on the create
-           call, so it has its tools from the first turn rather than after the
-           restart the header toggle costs (web/orchestrator.js). Plain Start mode
-           only, like the worktree row above and for the same reason — neither the
-           drafts nor the schedules store has the field. -->
-      <div class="field" id="new-orch-row" hidden>
-        <label class="check">
-          <input id="new-orch" type="checkbox">
-          <span>Start as an orchestrator</span>
-        </label>
-        <div class="note" id="new-orch-note">It starts worker sessions and reads what they
-          report from an inbox, rather than doing the work itself.</div>
+        <div class="note" id="new-orch-note" hidden></div>
       </div>
       <!-- What a draft or a schedule is called on its card. Shown in every mode,
            including plain Start-a-session, because Save-as-draft is in this same
