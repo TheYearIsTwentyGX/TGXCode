@@ -217,6 +217,39 @@ export const SETTINGS = [
         ],
     },
     {
+        title: 'Orchestrators', section: 'orchestrator', category: 'workspace', userOnly: true,
+        note: 'Sessions marked as orchestrators start worker sessions and read what they report '
+            + 'from an inbox. These are what a new orchestrator starts with; each keeps its own '
+            + 'copy afterwards, changed from its own conversation.',
+        rows: [
+            { key: 'maxRunning', type: 'int', min: 1, max: 10,
+                label: 'Workers running at once',
+                note: 'More are queued, and start as running ones finish their turn.' },
+            { key: 'worktree', type: 'bool',
+                label: 'Start each worker in its own worktree' },
+            { key: 'usageStopEnabled', type: 'bool',
+                label: 'Stop everything past a usage threshold',
+                note: 'Stops the orchestrator and every running worker, and waits for Resume.' },
+            { key: 'usageStopPercent', type: 'int', min: 1, max: 100,
+                label: 'Threshold, in percent' },
+            { key: 'usageStopWindow', type: 'choice',
+                label: 'Of which window',
+                options: [
+                    ['five_hour', 'Five-hour'], ['seven_day', 'Weekly'],
+                    ['seven_day_opus', 'Weekly, Opus'], ['seven_day_sonnet', 'Weekly, Sonnet'],
+                ] },
+            { key: 'addendum', type: 'text',
+                label: 'Instructions for every orchestrator',
+                note: 'Added to each orchestrator’s system prompt, after the brief that explains '
+                    + 'its tools — a CLAUDE.md for orchestrators. Takes effect when its process '
+                    + 'next starts.',
+                placeholder: 'e.g. Have every worker open a pull request when it is done.' },
+            { key: 'workerAddendum', type: 'text',
+                label: 'Instructions for every worker',
+                note: 'The same, for the workers they start.' },
+        ],
+    },
+    {
         title: 'Toolbar', section: 'toolbar', category: 'workspace', userOnly: true, toolbar: true,
         note: 'The buttons along the top: their order, which of them fold into the '
             + 'More menu, and which show their name beside the icon. A hidden view '
@@ -704,6 +737,15 @@ function settingControl(row, value, disabled, save, saveKey) {
                 const lines = e.target.value.split('\n').map(l => l.trim()).filter(Boolean);
                 save(lines.length ? lines : null);
             }}></textarea>`;
+    }
+    if (row.type === 'text') {
+        // Free text over several lines, committed on blur like a list. Kept as
+        // written, blank lines and all; an empty box is the default.
+        const text = typeof value === 'string' ? value : '';
+        return html`<textarea key=${`text:${rev}:${text}`} class="settings-text settings-list"
+            rows=${Math.min(14, Math.max(4, text.split('\n').length + 1))}
+            defaultValue=${text} disabled=${disabled} placeholder=${row.placeholder || ''}
+            onChange=${(e) => save(e.target.value.trim() ? e.target.value : null)}></textarea>`;
     }
     if (row.type === 'groups') return settingGroups(value, disabled, save, saveKey);
     return html`<span>${String(value)}</span>`;

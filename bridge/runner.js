@@ -171,7 +171,28 @@ const AGENT_TOOLS = [
     'mcp__tgxcode__schedule_session',
 ];
 
-function mcpConfig(sessionId) {
+// The extra tools a session gets for its part in an orchestration — see
+// bridge/orchestrators.js. Auto-approved for the reason the list above is: an
+// orchestrator's whole job is calling them, mostly while nobody is watching, and
+// a card for each one would be auto-denied at exactly that moment. What they can
+// *do* is bounded where it survives that: the workers they start stop at the
+// orchestrator's own permission prompts, the cap on running workers, and the
+// usage cutoff.
+const ROLE_TOOLS = {
+    orchestrator: [
+        'spawn_worker', 'list_workers', 'next_message', 'send_to_worker', 'answer_worker',
+        'read_worker', 'stop_worker', 'close_worker', 'get_usage', 'set_summary',
+    ].map(t => `mcp__tgxcode__${t}`),
+    worker: ['mcp__tgxcode__report_to_orchestrator'],
+};
+
+// Answered without asking anybody, in any mode, plan included. Filing a report
+// in an orchestrator's inbox changes nothing outside the app, and a worker in
+// plan mode that had to have it approved would send its permission prompt to
+// the very inbox it was trying to write to.
+const ALWAYS_ALLOW = new Set(['mcp__tgxcode__report_to_orchestrator']);
+
+function mcpConfig(sessionId, role = null) {
     return JSON.stringify({
         mcpServers: {
             tgxcode: {
@@ -180,6 +201,11 @@ function mcpConfig(sessionId) {
                     path.join(__dirname, 'mcp.js'),
                     '--port', String(cfg.PORT),
                     '--session', sessionId,
+                    // Which tools to list. Fixed at spawn, like everything on this
+                    // line: the CLI reads the tool list once, so a session whose
+                    // role changes has to be restarted to see it — see
+                    // RunnerPool#recycle.
+                    ...(role ? ['--role', role] : []),
                 ],
             },
         },
@@ -417,6 +443,19 @@ class Runner extends EventEmitter {
         this.caps = opts.caps || { permissionPrompt: true, interrupt: true };
         /** Is anyone actually in a position to answer an approval card? */
         this.hasViewer = opts.hasViewer || (() => false);
+        /**
+         * Is somebody other than a window going to answer this session's asks?
+         * True for a worker whose orchestrator takes its prompts — see
+         * bridge/orchestration.js. It is what keeps the no-window auto-deny from
+         * firing on a worker nobody is looking at, which is most of them.
+         */
+        this.delegated = opts.delegated || (() => false);
+        /**
+         * `{role, brief}` for this session's part in an orchestration, or null.
+         * Asked at each spawn, so a session marked an orchestrator gets its tools
+         * on the next process it starts.
+         */
+        this.roleOf = opts.roleOf || (() => null);
         /** @type {null | {id:string, tool:string, input:object, askedAt:number}} */
         this.pendingPermission = null;
         this._ctlSeq = 0;
@@ -518,8 +557,15 @@ class Runner extends EventEmitter {
         // an approval card would be auto-denied at the one moment it matters —
         // and the same plan-mode rule means a session that is only planning still
         // has to ask before it schedules or starts anything.
-        args.push('--mcp-config', mcpConfig(this.sessionId));
+        const role = this.roleOf(this.sessionId);
+        this.role = role ? role.role : null;
+        args.push('--mcp-config', mcpConfig(this.sessionId, this.role));
         for (const tool of AGENT_TOOLS) args.push('--allowedTools', tool);
+        for (const tool of (this.role && ROLE_TOOLS[this.role]) || []) args.push('--allowedTools', tool);
+        // What an orchestrator or a worker is for, and the user's own addendum.
+        // Appended rather than replacing anything, so CLAUDE.md and the rest of
+        // the default prompt still apply.
+        if (role && role.brief) args.push('--append-system-prompt', role.brief);
         // `--session-id` mints the id; `--resume` continues it. Which one is right
         // is a fact about *this start*, not about the runner — see the reset below
         // the spawn, and the bug that reset fixes.
@@ -1257,6 +1303,11 @@ class Runner extends EventEmitter {
 
         const ask = askFrom(msg);
 
+        if (ALWAYS_ALLOW.has(ask.tool)) {
+            this._respondPermission(ask, { behavior: 'allow' });
+            return;
+        }
+
         // Said yes to this tool earlier in the session, before the process was
         // last restarted. The CLI has forgotten; we have not.
         //
@@ -1274,7 +1325,7 @@ class Runner extends EventEmitter {
 
         // Nothing is attached to answer, so the honest outcome is the one the
         // app produced before any of this existed: denied.
-        if (!this.hasViewer()) {
+        if (!this.hasViewer() && !this.delegated()) {
             this._autoDeny(ask, kind === 'tool'
                 ? 'No TGXCode window was open to approve this, so it was denied.'
                 : `No TGXCode window was open to answer this, so ${
@@ -1468,6 +1519,18 @@ class Runner extends EventEmitter {
         this._touch();
         // The tool is about to run (or not); either way we are back to working.
         if (this.state === 'busy') this._work();
+    }
+
+    /**
+     * Deny the ask this session is blocked on, if any, saying why. For a worker
+     * whose orchestrator went away while it waited: delegation was the only thing
+     * that kept the no-window auto-deny off it, and an ask already held never
+     * passes that check again.
+     */
+    denyPending(reason) {
+        if (!this.pendingPermission) return false;
+        this._autoDeny(this.pendingPermission, reason);
+        return true;
     }
 
     _autoDeny(ask, reason) {
@@ -2365,6 +2428,10 @@ class RunnerPool extends EventEmitter {
         // And whether an agent's test browser draws a window. `visible` is what
         // every session did before there was a setting.
         this.agentBrowser = () => 'visible';
+        // Orchestration, replaced by the server with bridge/orchestration.js.
+        // Without one no session has a role and nobody answers for a window.
+        this.roleOf = () => null;
+        this.delegateFor = () => false;
     }
 
     get(sessionId) {
@@ -2470,6 +2537,8 @@ class RunnerPool extends EventEmitter {
         // Read through `r.sessionId` rather than closing over the id it was
         // created with: a fork changes it, and the viewer check has to follow.
         r.hasViewer = () => this.hasViewer(r.sessionId);
+        r.delegated = () => this.delegateFor(r.sessionId);
+        r.roleOf = (id) => this.roleOf(id);
         r.on('status', (s) => this.emit('status', s));
         r.on('notice', (n) => this.emit('notice', { sessionId: r.sessionId, ...n }));
         // Quota is account-wide, so this one deliberately does not carry a
@@ -2493,8 +2562,16 @@ class RunnerPool extends EventEmitter {
         r.on('exit', () => this.emit('status', r.status()));
         // A model/effort change held for background work is applied at the first
         // moment it can be: the work finishing, or the turn running when it did.
-        r.on('background-drained', () => this._applyPending(r));
-        r.on('turn-complete', () => this._applyPending(r));
+        //
+        // The same two moments carry out a `recycle` that was waiting for a turn
+        // to end. A replacement made for a model change reads its role afresh as
+        // well, so once `_applyPending` has acted there is nothing left to recycle.
+        const settle = () => {
+            this._applyPending(r);
+            if (r._recycle && this.runners.get(r.sessionId) === r) this.recycle(r.sessionId);
+        };
+        r.on('background-drained', settle);
+        r.on('turn-complete', settle);
         r.on('forked', ({ from, to }) => {
             // Re-key so a later send reaches the copy, not the original.
             if (this.runners.get(from) === r) this.runners.delete(from);
@@ -2555,9 +2632,10 @@ class RunnerPool extends EventEmitter {
     }
 
     /** Create a brand-new session and deliver its first prompt. */
-    create({ cwd, model, effort, permissionMode, prompt, attachments = [] }) {
+    create({ cwd, model, effort, permissionMode, prompt, attachments = [], sessionId = randomUUID() }) {
+        // `sessionId` is for a caller that has to file the id somewhere before the
+        // process starts — an orchestrator's worker, whose role decides the argv.
         const dir = resolveWorkdir(cwd);
-        const sessionId = randomUUID();
         const r = this.ensure(sessionId, { cwd: dir, model, effort, permissionMode, isNew: true });
         // The first message takes files like any other. `send` has always accepted
         // them and `userContent` has always known what to do with them; this was the
@@ -2565,6 +2643,52 @@ class RunnerPool extends EventEmitter {
         // started with the screenshot that was the reason for starting it.
         r.send(prompt, attachments);
         return { sessionId, status: r.status() };
+    }
+
+    /**
+     * Replace a session's process at the next moment it is free, so the next
+     * start reads its argv afresh — how a session marked an orchestrator gets its
+     * tools. Nothing is started here: the next message starts it, and anything
+     * still waiting moves across, as it does for a model change.
+     *
+     * Returns true when it was done now, false when it is waiting for a turn or
+     * background work to finish (`turn-complete` and `background-drained` try
+     * again).
+     */
+    recycle(sessionId) {
+        const r = this.runners.get(sessionId);
+        if (!r) return true;
+        if (r.state === 'busy' || r.state === 'starting' || r.hasBackground) {
+            r._recycle = true;
+            return false;
+        }
+        this._replace(r, { model: r.model, effort: r.effort });
+        return true;
+    }
+
+    /**
+     * Put a fresh, unstarted runner in place of `r` with the given model and
+     * effort, carrying across anything still waiting. Shared by a held settings
+     * change and by `recycle`, so the two cannot drift: the queue-carrying rule
+     * `_evict` documents is exactly the kind of fix that lands in one copy only.
+     */
+    _replace(r, { model, effort }) {
+        const carried = r.takeQueue();
+        const fresh = this._make({ sessionId: r.sessionId, cwd: r.cwd, model, effort,
+            permissionMode: r.permissionMode });
+        this.runners.set(r.sessionId, fresh);
+        // The old runner's exit reports *its* settings, and a window takes the
+        // last status it hears for a session as the truth — so say the new one's
+        // again after it.
+        r.once('exit', () => this.emit('status', fresh.status()));
+        r.retire();
+        if (carried.length) {
+            fresh.queue.push(...carried);
+            fresh._queueChanged();
+            fresh.start();
+        }
+        this.emit('status', fresh.status());
+        return fresh;
     }
 
     statuses() {
@@ -2618,21 +2742,7 @@ class RunnerPool extends EventEmitter {
         if (this.runners.get(r.sessionId) !== r) return;
         const { model, effort } = r.pendingSettings;
         r.pendingSettings = null;
-        const carried = r.takeQueue();
-        const fresh = this._make({ sessionId: r.sessionId, cwd: r.cwd, model, effort,
-            permissionMode: r.permissionMode });
-        this.runners.set(r.sessionId, fresh);
-        // The old runner's exit reports *its* settings, and a window takes the
-        // last status it hears for a session as the truth — so say the new one's
-        // again after it.
-        r.once('exit', () => this.emit('status', fresh.status()));
-        r.retire();
-        if (carried.length) {
-            fresh.queue.push(...carried);
-            fresh._queueChanged();
-            fresh.start();
-        }
-        this.emit('status', fresh.status());
+        this._replace(r, { model, effort });
     }
 
     _evictIdle() {

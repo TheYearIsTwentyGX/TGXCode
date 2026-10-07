@@ -434,6 +434,22 @@
     text-transform: uppercase;
 }
 
+/* An orchestrator, with its unread inbox count. Blue rather than the test tag's
+   grey because it is real work; amber when the usage cutoff has paused it. */
+.tag-orch {
+    flex: none;
+    padding: 0 6px;
+    border-radius: var(--r-xs);
+    background: color-mix(in srgb, var(--blue) 22%, transparent);
+    color: var(--blue);
+    font: 500 10px/16px var(--mono);
+    letter-spacing: 0.04em;
+}
+.tag-orch.paused {
+    background: color-mix(in srgb, var(--yellow) 22%, transparent);
+    color: var(--yellow);
+}
+
 /* State reads as a small dot before the title, not a slab edge. */
 .strip-title {
     display: block;

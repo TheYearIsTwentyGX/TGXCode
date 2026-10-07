@@ -192,6 +192,9 @@ of `/api/terminals/*`; all of `/api/runs/*`; `POST /api/commands/run`; all of
 `/api/shutdown`; `/api/restart` (both methods); `POST /api/claude-version/update`; `/api/devservers/stop`; `/api/devbrowser/*`;
 `POST /api/sessions/:id/reveal`; `POST /api/sessions/:id/open-file`;
 `POST /api/sessions/:id/handoff`; `POST /api/fs/mkdir`; `POST /api/github/publish`;
+the orchestrator tools — `POST /api/sessions/:id/orchestrator/{spawn,next,send,answer,read,stop,close,summary}`
+and a worker's `POST /api/sessions/:id/report` (reading an orchestrator, changing its
+settings, dismissing an item and Resume stay open);
 `POST /api/fs/open`;
 `POST /api/wispr/press`;
 `PUT /api/prefs`;
@@ -346,6 +349,8 @@ project filter on `GET /api/sessions?project=`.
 | **`schedule`** | **object or null** — `{id, title}`, both strings; see below |
 | **`later`** | **object or null** — `{pending, nextAt}`, both numbers; see below |
 | **`standing`** | **object or null** — `{text, source, at}`: `text` a string of at most 80 characters, `source` `"model"` or `"extract"`, `at` epoch ms; see below |
+| **`orchestrator`** | **object or null** — `{inbox: number, workers: number, paused: boolean}` on a session marked as an orchestrator: unread inbox items, open workers, and whether the usage cutoff stopped it. Null otherwise. See §*Orchestrators* |
+| **`worker`** | **object or null** — `{orchestratorId: string, title: string\|null, closed: boolean}` on a session an orchestrator started. Null otherwise. A worker whose orchestrator is gone keeps the field; draw it as an ordinary session |
 | `prs` | array of `{number, url, repo}`, empty if none |
 | **`live`** | **object or null** — see below |
 | **`runner`** | **object or absent** — six fields only, see below |
@@ -2968,6 +2973,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `notice` | `{sessionId: string, level: 'warn', kind: string, text: string}` — something worth telling the user that is not a permission ask. Every notice the bridge sends is `level: 'warn'` except `settings_deferred`, which is `level: 'info'`; treat any level other than `warn` as informational. `kind` is one of `settings_deferred` (a model/effort change held while background work runs — see the send route), `no_permission_prompt`, `permission_uninteractive`, `mode_change_failed`, `permission_auto_denied`, `permission_denied`, `api_retry`, `turn_failed`, `rate_limit` — and an unrecognised kind is a plain warning, not an error. **`rate_limit` is not one per limit: it repeats on every turn for as long as the limit holds**, because the CLI sends an identical `rate_limit_event` each time and this one is not deduplicated the way the `quota` event below is. A client that toasts it unconditionally therefore stacks the same warning over and over for an afternoon. `web/app.js` drops this kind entirely and flashes the header quota pill off the `quota` event instead; a client with nowhere to put a persistent indicator should throttle the toast itself. Everything the notice says is also in `GET /api/quota` — `windows[].status` for the current state and `events` for the history |
 | `claude-version` | **the whole `GET /api/claude-version` payload**, so there is nothing to refetch. Ungated, no `sessionId`. Sent when the summary moved: the hourly registry check found a newer version, an update finished, or a process started or ended on a version that changes `staleSessions`. Debounced by about a second |
 | `quota` | **the whole `GET /api/quota` payload**, so there is nothing to refetch. Ungated, like `drafts-changed`. Fires only when a reading actually moved — the CLI sends an identical `rate_limit_event` on every turn and those are dropped rather than pushed. Note it carries **no `sessionId`**: quota is account-wide, and which session happened to observe it says nothing. A window that has been near a limit for an hour will therefore push nothing at all, which is why `usedPercentAt` matters more than the arrival time of this event |
+| `orchestrator` | **the whole `GET /api/sessions/:id/orchestrator` payload** for one orchestrator (see §*Orchestrators*), so there is nothing to refetch. Sent on any change to it — an item filed, read or settled, a worker started, closed or queued, settings, the summary, a pause or a resume — **debounced by about 250 ms**, so a burst is one event carrying the end state. Followed by one `sessions-changed` for the whole burst, which is where the rail counts come from. `enabled: false` means the role was just turned off |
 | `standing-changed` | `{sessionId, standing}` — `standing` is `{text, source, at}` exactly as on the session summary (`text` a string, `source` `"model"` or `"extract"`, `at` epoch ms), or null. Patch that row's `standing`; there is nothing to refetch. Fires about fifteen seconds after a `turn-complete`, and only when the line was actually rewritten — a turn whose reply was already summarised sends nothing |
 | `turn-complete` | `{sessionId, isError, detail, retries, costUsd, durationMs, numTurns, stopReason}` — the runner's `lastResult` with the session id on it. `detail` is null unless `isError` |
 | `send-failed` | `{sessionId, kind, message, unsent: [text]}` — a send that never became a turn; hand the text back to the user. `unsent` is an array of **strings**, in send order, and may be empty — the event still means the send failed, and `message` is then the whole of it. `kind` is one of `busy-elsewhere` (the session is running somewhere else; offer to branch), `branch-refused` (Claude Code would not make the cut a `fromUuid` send asked for — see `POST /api/sessions/:id/send`), `no-claude`, `missing`, `unknown`, `exited` (the process ended without answering) or `retired` (the bridge shut the process down with messages still queued). Treat an unrecognised kind as `unknown`. Attachments are **not** carried: a message that had files comes back as its text alone |
@@ -3061,8 +3067,12 @@ causes auto-denials.
 ### `POST /api/sessions`
 
 `{cwd, prompt, model?, effort?, permissionMode?, test?, attachments?, fromDraft?,
-worktree?: {name: string, base?: string}}` →
-`{sessionId, status, test, worktree?: {path: string, branch: string}}`.
+worktree?: {name: string, base?: string}, orchestrator?: boolean}` →
+`{sessionId, status, test, orchestrator: boolean, worktree?: {path: string, branch: string}}`.
+
+`orchestrator: true` starts the session as an orchestrator (§*Orchestrators*), with
+its tools from the first turn. Marking an existing session instead goes through
+`PUT /api/sessions/:id/orchestrator` and costs it a process restart.
 
 `cwd` must be inside the allowed roots. `test: true` keeps it out of the everyday
 window — use it for anything exploratory. `plan` is the sensible default mode for a
@@ -4469,6 +4479,131 @@ nobody to ask.
 `outcome` values on `permission-resolved`: `allow`, `allow-always`, `deny`,
 `answered`, `dismissed`, `plan-approved`, `plan-approved-note`, `plan-rejected`,
 `auto-denied`, `superseded`, `stopped`, `cancelled`, `abandoned`.
+
+### Orchestrators
+
+A session marked as an orchestrator starts **worker** sessions and reads what they
+produce from an **inbox** the bridge keeps, instead of having it arrive in its
+conversation. Workers are ordinary sessions — each in a worktree of its own by
+default — whose summary carries `worker`. Only one level: a worker cannot be marked
+an orchestrator (`409`), and an orchestrator cannot be a worker.
+
+The orchestrator and its workers drive this through MCP tools the bridge gives them
+(`bridge/mcp.js`); the routes below that a client needs are the read side and the
+controls. The tool routes are listed at the end for completeness — a client never
+needs them, and a remote caller is refused all of them.
+
+**The payload**, from `GET /api/sessions/:id/orchestrator` and the `orchestrator`
+event:
+
+```
+{ orchestratorId: string, enabled: true,
+  settings: { maxRunning: number (1–10), worktree: boolean,
+              usageStop: { enabled: boolean, percent: number (1–100),
+                           window: "five_hour"|"seven_day"|"seven_day_opus"|"seven_day_sonnet" } },
+  paused: null | { reason: string, at: number },
+  summary: null | { text: string (markdown, ≤1500 chars), at: number },
+  workers: [{ id, title: string|null, cwd, worktree: null | {path, branch},
+              spawnedAt: number, closedAt: number|null,
+              state: "idle"|"busy"|"starting"|"stopped"|"error",
+              pending: null | "tool"|"plan"|"question" }],
+  pendingSpawns: [{ id, title: string|null, at: number }],
+  unread: number,
+  inbox: [item, …]   // newest first, at most 100 }
+```
+
+or `{orchestratorId, enabled: false}` for a session that is not one. Times are epoch
+ms. An **inbox item** is:
+
+```
+{ id, workerId: string|null, kind, text: string, at: number, seq: number,
+  status: "new"|"read"|"resolved"|"stale",
+  requestId: string|null, ask: null | {kind, tool, displayName, input},
+  outcome: string|null, by: null | "orchestrator"|"user" }
+```
+
+`kind` is `question`, `update` or `done` (a worker's own report), `turn` (the final
+message of a turn a worker finished — filed automatically, unless the worker said
+`done` in that turn), `plan`, `permission` or `ask` (a worker's ExitPlanMode, tool
+permission prompt or AskUserQuestion), or `note` (the bridge telling the
+orchestrator something, such as that the user answered an ask first). `new` is
+unread; `read` means the orchestrator pulled it. The three ask kinds carry
+`requestId`, and **are still pending on the worker exactly as any ask is**: a window
+answers one through `POST /api/sessions/:workerId/permission` as usual, and the item
+moves to `resolved` with `by: "user"`. `stale` means the ask went away unanswered —
+superseded, stopped, or the worker restarted.
+
+**A worker's asks are not auto-denied with no window open**, unlike every other
+session's: its orchestrator is the one expected to answer. And the orchestrator is
+never sent a worker's message mid-turn — only a one-line `<orchestrator-inbox
+count="N">` message, while it is idle, once per new arrival.
+
+**The usage cutoff.** When `settings.usageStop.enabled` and the window's
+`usedPercent` (from `GET /api/quota`) reaches `percent`, the bridge soft-stops the
+orchestrator and every busy worker, sets `paused`, refuses new spawns and holds
+nudges, and sends a `notice` with `kind: "orchestrator_paused"`. Messages queued on
+any of those sessions come back as `send-failed` (`kind: "retired"`) with their
+text, exactly as a Stop hands them back, rather than being dropped. `stop` and
+`close` from the orchestrator do the same for the worker they stop. Only Resume lifts
+it. The reading is only as fresh as the quota beacon; see `GET /api/quota`.
+
+#### `GET /api/sessions/:id/orchestrator`
+
+The payload above. Never 404s: a session that is not one answers `enabled: false`.
+
+#### `PUT /api/sessions/:id/orchestrator`
+
+`{enabled?: boolean, settings?: {…partial settings…}}` → the payload, plus
+`restarted: "now"|"after-turn"` when it turned the role on.
+
+- `enabled: true` on a session that is not one marks it, starting from the user's
+  defaults in `orchestrator` prefs (or `settings`, if sent). Its process is replaced
+  when it is next free, because the CLI reads its tool list once at start —
+  `restarted` says whether that was now or waits for the turn in flight. `409` for a
+  worker; `404` for an unknown session.
+- `enabled: false` turns it off. The workers carry on as ordinary sessions and the
+  inbox is discarded. A worker blocked on a plan or prompt that only the
+  orchestrator was going to answer — no window connected — has it **denied**, since
+  nothing would answer it otherwise; with a window open it is left for the window.
+  Deleting the orchestrator session does the same.
+- `settings` that lower the cutoff below the current reading pause it at once.
+- `settings` alone merges into the current settings field by field; a bad value
+  leaves that field as it was.
+
+#### `GET /api/sessions/:id/orchestrator/inbox`
+
+`{items: [item], unread: number}` — the whole inbox, newest first (at most 300 are
+kept; only settled items are ever dropped).
+
+#### `POST /api/sessions/:id/orchestrator/inbox/:itemId/dismiss`
+
+`{}` → `{ok, item}`. Marks it `resolved`, `outcome: "dismissed"`, `by: "user"`. It
+does not answer a worker's ask; that is the permission route on the worker.
+
+#### `POST /api/sessions/:id/orchestrator/resume`
+
+`{}` → the payload. Clears `paused`, starts queued spawns up to `maxRunning`, and
+nudges the orchestrator if anything is waiting. **`409 {error}` while usage is still
+over the cutoff** — the error names the window and the reading. Raise or turn off
+the cutoff with `PUT …/orchestrator` first, or wait for the window to reset.
+
+#### `GET /api/sessions/:id/orchestrator/workers` · `GET …/orchestrator/usage`
+
+The first is `{workers, pendingSpawns, maxRunning, paused}` from the payload. The
+second is `{windows: [{type, usedPercent, usedPercentAt, resetsAt, status}],
+cutoff: settings.usageStop|null, paused}`.
+
+#### The tool routes
+
+All `POST`, all refused remotely, all with the orchestrator's id in the path:
+`spawn` `{prompt, title?, cwd?, worktree?: boolean|string, permissionMode?, model?,
+effort?}` → `{queued: false, sessionId, title, cwd, worktree}` or `{queued: true, id,
+position, running, maxRunning}`; `next` `{max?}` → `{items, left}` (marks them
+read); `send` `{worker, text}`; `answer` `{itemId, decision:
+"allow"|"allow-always"|"deny", feedback?, answers?, mode?}`; `read` `{worker, mode:
+"digest"|"tail"|"full"|"ask", turns?, offset?}` → `{text, …}`; `stop` `{worker,
+hard?}`; `close` `{worker, archive?}`; `summary` `{text}`. A worker's own is
+`POST /api/sessions/:id/report` `{kind: "question"|"update"|"done", text}`.
 
 ### Other writes
 

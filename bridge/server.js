@@ -46,6 +46,8 @@ const scheduler = require('./scheduler');
 const prRefresh = require('./pr-refresh');
 const prOwners = require('./pr-owners');
 const laterDelivery = require('./later-delivery');
+const { Orchestrators } = require('./orchestrators');
+const orchestration = require('./orchestration');
 const { pair } = require('./pairing');
 // Plumbing every route shares, and the API itself — see bridge/routes/.
 const { send, NEXT } = require('./http');
@@ -114,6 +116,9 @@ const snippetStore = new Snippets();
 // expression, plus a gate — see bridge/schedule.js. Only the everyday instance
 // fires them; the tick in bridge/scheduler.js says why.
 const schedules = new Schedules();
+// Sessions marked as orchestrators, their workers, and the inbox between them —
+// see bridge/orchestrators.js. What acts on it is bridge/orchestration.js.
+const orchestrators = new Orchestrators();
 const index = new SessionIndex(flags);
 const registry = new SessionRegistry();
 const pool = new RunnerPool();
@@ -158,6 +163,9 @@ index.schedules = schedules;
 // So a rail row can say that a message is due here overnight. Absent, every
 // summary carries `later: null` and nothing else changes.
 index.later = later;
+// So a summary says which session is an orchestrator and which works for one,
+// and the rail can nest the workers. Absent, neither field appears.
+index.orchestrators = orchestrators;
 // One line per session saying where its last turn left things, for the rail. Only
 // sessions this pool runs get one — see bridge/standing.js for why, and for the
 // three things that keep it from spending quota twice on the same reply.
@@ -449,6 +457,16 @@ function remoteRefusal(pathname, method) {
     // agent on this machine to do and not a reasonable thing to reach in for from
     // a phone: the blast radius of a leaked token would be every session on the
     // machine, each spending tokens on words nobody typed.
+    // An orchestrator's own tools, and a worker's report: they start sessions in
+    // fresh worktrees, answer those sessions' permission prompts and send them
+    // work — the handoff clause below, several times over. Reading the payload,
+    // changing its settings, dismissing an item and pressing Resume stay open: a
+    // phone is a reasonable place to watch an orchestrator and to restart one the
+    // usage cutoff stopped.
+    if (/^\/api\/sessions\/[^/]+\/orchestrator\/(spawn|next|send|answer|read|stop|close|summary)$/
+        .test(pathname) || /^\/api\/sessions\/[^/]+\/report$/.test(pathname)) {
+        return 'an orchestrator\u2019s tools only work on the machine its sessions run on';
+    }
     if (/^\/api\/sessions\/[^/]+\/handoff$/.test(pathname) && method === 'POST') {
         return 'a session can only be handed work from the machine it runs on';
     }
@@ -614,6 +632,7 @@ const ROUTES = [
     require('./routes/dashboard'),
     require('./routes/github'),
     require('./routes/quota'),
+    require('./routes/orchestrators'),
     require('./routes/session'),
     require('./routes/session-workspace'),
     require('./routes/commands'),
@@ -625,7 +644,7 @@ const ROUTES = [
 const ROUTE_DEPS = {
     index, pool, registry, flags, prefs, claudeConfig, claudeDocs, spinner, suggestions,
     beacon, drafts, later, standing, snippetStore, schedules, claudeVersion, terminals,
-    slashCommands, runs, notifications, reads,
+    slashCommands, runs, notifications, reads, orchestrators,
     normalizeMode, modeRefusal, tooManyCreates, CREATE_LIMIT, sessionCwd, shutdown,
     quotaPayload, quotaPrefs, runBeaconNow, markClaudeVersionSent,
 };
@@ -831,6 +850,16 @@ pool.on('permission-resolved', (p) => {
     tickBoard();
 });
 pool.on('notice', (n) => broadcast('notice', n));
+
+orchestration.init({
+    store: orchestrators, pool, index, flags, prefs, usage, normalizeMode, sessionCwd, tooManyCreates,
+});
+// A worker's ask goes to its orchestrator's inbox as well as to any window; the
+// status listener is how an orchestrator going idle gets told what is waiting.
+pool.on('permission-request', (p) => orchestration.onPermissionRequest(p));
+pool.on('permission-resolved', (p) => orchestration.onPermissionResolved(p));
+pool.on('status', (s) => orchestration.onStatus(s));
+pool.on('quota', () => orchestration.checkUsage());
 // The identical `allowed` event arrives on every turn, so only a reading that
 // moved is worth a broadcast — `noteRateLimitEvent` says which.
 pool.on('quota', (info) => {
@@ -980,6 +1009,7 @@ pool.on('turn-complete', (r) => {
     standing.noteTurn(r);
     filed(notifications.turn(r));
     noteScheduledOutcome(r);
+    orchestration.onTurnComplete(r);
 });
 pool.on('failed', (f) => { broadcast('send-failed', f); filed(notifications.sendFailed(f)); });
 // Nothing notifies for a subagent finishing; it is logged so that "what has been
@@ -1063,6 +1093,7 @@ function shutdown(code = 0) {
     // window, and an unflushed `delivering` claim would come back up looking like
     // `pending` — the one transition this store must never make.
     try { later.flush(); } catch { /* nothing to save */ }
+    try { orchestrators.flush(); } catch { /* nothing to save */ }
     // The same argument one notch quieter: a snippet lost inside the debounce is a
     // paragraph to retype rather than a session started twice. It is on this list
     // because everything with a debounce belongs on it, and because a deletion is
@@ -1297,6 +1328,10 @@ takeBackHeld().catch((err) => {
     // `~/.tgxcode/settings.json` takes effect without a restart — the same
     // property every other preference in that file has.
     setInterval(() => { tickBeacon(); }, BEACON_TICK_MS).unref();
+    // The usage cutoff, on the beacon's clock: a reading can move without a
+    // stream event (the status-line harvest), and once a minute is plenty for a
+    // threshold measured in percent of a five-hour window.
+    setInterval(() => orchestration.checkUsage(), BEACON_TICK_MS).unref();
 
     // Warm the version check so the first window to open has an answer, then
     // ask the registry hourly. Read-only on every bridge, dev included.

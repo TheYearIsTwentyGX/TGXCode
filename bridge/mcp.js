@@ -82,6 +82,9 @@ function flag(name) {
 
 const PORT = Number(flag('port')) || 0;
 const SESSION_ID = flag('session') || null;
+// 'orchestrator', 'worker' or null — which extra tools to list. See
+// bridge/orchestrators.js. Fixed at spawn: the CLI reads the list once.
+const ROLE = flag('role') || null;
 
 // ---------------------------------------------------------------------------
 // Talking to the bridge
@@ -484,7 +487,199 @@ const SCHEDULE = {
     },
 };
 
-const TOOLS = [SUGGEST, LIST, MESSAGE, FIND_TASKS, START_TASK, SET_TASK_STATUS, SCHEDULE];
+// ---------------------------------------------------------------------------
+// Orchestration — listed only to a session with a role. See
+// bridge/orchestration.js for what each call does on the bridge side.
+// ---------------------------------------------------------------------------
+
+const WORKER_REF = { type: 'string', description: 'The worker\'s session id, from spawn_worker or list_workers.' };
+
+const SPAWN_WORKER = {
+    name: 'spawn_worker',
+    title: 'Start a worker session',
+    description: [
+        'Start a worker: a new session that does one piece of the work and reports back',
+        'to your inbox. By default it gets its own git worktree, so workers never edit',
+        'the same checkout. If too many workers are already running it is queued and',
+        'started when one finishes its turn — that is not an error.',
+        '',
+        'Write `prompt` for an agent with none of your context: what to do, which files,',
+        'what done looks like, and whether to commit, push or open a pull request.',
+    ].join('\n'),
+    inputSchema: {
+        type: 'object',
+        properties: {
+            prompt: { type: 'string', description: 'The worker\'s first message. Self-contained.' },
+            title: { type: 'string', description: 'A short name, shown in the rail.' },
+            cwd: { type: 'string', description: 'Where to run. Defaults to your own directory.' },
+            worktree: {
+                description: 'true (the default setting) for a fresh worktree, false to run in cwd itself, '
+                    + 'or a string to name the worktree.',
+                anyOf: [{ type: 'boolean' }, { type: 'string' }],
+            },
+            permissionMode: {
+                type: 'string', enum: ['plan', 'auto', 'acceptEdits', 'dontAsk'],
+                description: 'Defaults to auto. plan makes the worker send you a plan to approve '
+                    + 'with answer_worker before it changes anything.',
+            },
+            model: { type: 'string' },
+            effort: { type: 'string', enum: EFFORTS },
+        },
+        required: ['prompt'],
+    },
+};
+
+const LIST_WORKERS = {
+    name: 'list_workers',
+    title: 'List your workers',
+    description: 'Your workers: state (idle, busy, stopped), what each is waiting on, its worktree, '
+        + 'and any spawns still queued.',
+    inputSchema: { type: 'object', properties: {} },
+};
+
+const NEXT_MESSAGE = {
+    name: 'next_message',
+    title: 'Read your inbox',
+    description: [
+        'Take items from your inbox, most urgent first: plans, permission prompts and',
+        'questions a worker is blocked on come before updates and turn reports. Each',
+        'item is marked read once returned. Items with an itemId and a kind of plan,',
+        'permission or ask are answered with answer_worker.',
+    ].join('\n'),
+    inputSchema: {
+        type: 'object',
+        properties: { max: { type: 'integer', description: 'How many to take. Defaults to 1.' } },
+    },
+};
+
+const SEND_TO_WORKER = {
+    name: 'send_to_worker',
+    title: 'Message a worker',
+    description: 'Send a worker instructions or an answer to its question. If it is mid-turn it '
+        + 'reads this at its next step; if idle, this starts its next turn.',
+    inputSchema: {
+        type: 'object',
+        properties: { worker: WORKER_REF, text: { type: 'string' } },
+        required: ['worker', 'text'],
+    },
+};
+
+const ANSWER_WORKER = {
+    name: 'answer_worker',
+    title: 'Answer a worker\'s plan, question or permission prompt',
+    description: [
+        'Answer an inbox item of kind plan, permission or ask. The worker is blocked',
+        'until somebody does.',
+        '',
+        '  plan        allow approves it (the worker leaves plan mode); deny sends it back',
+        '              with `feedback` to plan against.',
+        '  permission  allow lets the tool call run; allow-always also allows that tool for',
+        '              the rest of the worker\'s session; deny refuses it.',
+        '  ask         allow with `answers`, keyed by each question\'s exact text; deny to',
+        '              dismiss it and let the worker use its own judgement.',
+    ].join('\n'),
+    inputSchema: {
+        type: 'object',
+        properties: {
+            itemId: { type: 'string', description: 'The inbox item, from next_message.' },
+            decision: { type: 'string', enum: ['allow', 'allow-always', 'deny'] },
+            feedback: { type: 'string', description: 'For a plan: what to change, or a note on approval.' },
+            answers: { type: 'object', description: 'For an ask: {"<question text>": "<chosen label>"}.' },
+            mode: {
+                type: 'string', enum: ['auto', 'acceptEdits', 'manual', 'dontAsk', 'plan'],
+                description: 'For an approved plan: the mode to continue in. Defaults to auto.',
+            },
+        },
+        required: ['itemId', 'decision'],
+    },
+};
+
+const READ_WORKER = {
+    name: 'read_worker',
+    title: 'Read a worker\'s transcript',
+    description: [
+        'See what a worker has been doing, cheapest first:',
+        '  digest  where it stands, its last message, todo list, files edited, diff stat.',
+        '  tail    the last `turns` turns as conversation, one line per tool call.',
+        '  full    the whole transcript the same way, 40k characters a page; pass the',
+        '          `next` offset it prints to read on.',
+        '  ask     have the worker summarise itself; the answer arrives in your inbox.',
+    ].join('\n'),
+    inputSchema: {
+        type: 'object',
+        properties: {
+            worker: WORKER_REF,
+            mode: { type: 'string', enum: ['digest', 'tail', 'full', 'ask'] },
+            turns: { type: 'integer', description: 'For tail. Defaults to 3.' },
+            offset: { type: 'integer', description: 'For full.' },
+        },
+        required: ['worker'],
+    },
+};
+
+const STOP_WORKER = {
+    name: 'stop_worker',
+    title: 'Stop a worker\'s turn',
+    description: 'End the turn a worker is running. It stays open and can be messaged again.',
+    inputSchema: {
+        type: 'object',
+        properties: { worker: WORKER_REF, hard: { type: 'boolean', description: 'Kill the process.' } },
+        required: ['worker'],
+    },
+};
+
+const CLOSE_WORKER = {
+    name: 'close_worker',
+    title: 'Close a worker',
+    description: 'Finish with a worker: stops it if running, stops it counting against the limit, '
+        + 'and archives it. Its worktree and branch are left alone.',
+    inputSchema: { type: 'object', properties: { worker: WORKER_REF }, required: ['worker'] },
+};
+
+const GET_USAGE = {
+    name: 'get_usage',
+    title: 'Check quota usage',
+    description: 'The account\'s usage windows (five-hour, weekly) as percentages, and the cutoff '
+        + 'at which TGXCode stops this orchestrator and its workers.',
+    inputSchema: { type: 'object', properties: {} },
+};
+
+const SET_SUMMARY = {
+    name: 'set_summary',
+    title: 'Update your summary for the user',
+    description: 'Replace the summary pinned beneath your conversation: one or two short paragraphs '
+        + 'on what is done, what is in flight and what is waiting on the user. Up to 1500 characters.',
+    inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
+};
+
+const REPORT = {
+    name: 'report_to_orchestrator',
+    title: 'Report to your orchestrator',
+    description: [
+        'File something in your orchestrator\'s inbox. It reads its inbox when it is',
+        'ready, not immediately.',
+        '  question  you are blocked on a decision. End your turn after asking; the answer',
+        '            arrives as a message.',
+        '  update    progress worth knowing before your turn ends.',
+        '  done      the work is finished: what you did and where it is (branch, PR).',
+        'Your final message each turn is forwarded anyway, so do not repeat it here.',
+    ].join('\n'),
+    inputSchema: {
+        type: 'object',
+        properties: {
+            kind: { type: 'string', enum: ['question', 'update', 'done'] },
+            text: { type: 'string' },
+        },
+        required: ['kind', 'text'],
+    },
+};
+
+const ORCHESTRATOR_TOOLS = [SPAWN_WORKER, LIST_WORKERS, NEXT_MESSAGE, SEND_TO_WORKER, ANSWER_WORKER,
+    READ_WORKER, STOP_WORKER, CLOSE_WORKER, GET_USAGE, SET_SUMMARY];
+
+const TOOLS = [SUGGEST, LIST, MESSAGE, FIND_TASKS, START_TASK, SET_TASK_STATUS, SCHEDULE,
+    ...(ROLE === 'orchestrator' ? ORCHESTRATOR_TOOLS : []),
+    ...(ROLE === 'worker' ? [REPORT] : [])];
 
 // What comes back to the model after a suggestion. It says the offer was made
 // and, more usefully, says not to go and do it — an agent told only "ok"
@@ -807,6 +1002,166 @@ async function callSchedule(id, args) {
 }
 
 // ---------------------------------------------------------------------------
+// Orchestration calls
+// ---------------------------------------------------------------------------
+
+const orchRoute = (sub) => `/api/sessions/${encodeURIComponent(SESSION_ID)}/orchestrator/${sub}`;
+
+async function orchCall(id, method, sub, body) {
+    if (!SESSION_ID) return { failed: toolError(id, 'this session does not know its own id') };
+    const r = await api(method, orchRoute(sub), body);
+    if (r.error) return { failed: toolError(id, r.error) };
+    if (!r.ok) return { failed: toolError(id, msgOf(r)) };
+    return { body: r.body || {} };
+}
+
+/** A time the bridge reported, in seconds or milliseconds, as "4m ago". */
+function ago(t) {
+    const ms = t < 1e12 ? t * 1000 : t;
+    const s = Math.round((Date.now() - ms) / 1000);
+    return s < 90 ? `${s}s ago` : s < 5400 ? `${Math.round(s / 60)}m ago` : `${Math.round(s / 3600)}h ago`;
+}
+
+async function callSpawnWorker(id, args) {
+    const { failed, body } = await orchCall(id, 'POST', 'spawn', {
+        prompt: args.prompt, title: args.title, cwd: args.cwd, worktree: args.worktree,
+        permissionMode: args.permissionMode, model: args.model, effort: args.effort,
+    });
+    if (failed) return failed;
+    if (body.queued) {
+        return say(id, `Queued: ${body.running} of ${body.maxRunning} workers are already running, so `
+            + `this one (position ${body.position}) starts when one finishes its turn. Nothing to do now.`);
+    }
+    return say(id, [
+        `Started worker "${body.title}".`,
+        `    worker: ${body.sessionId}`,
+        `    runs in: ${body.cwd}${body.worktree ? ` (worktree, branch ${body.worktree.branch})` : ''}`,
+        'Its reports will arrive in your inbox. End your turn when you have nothing else to do.',
+    ].join('\n'));
+}
+
+async function callListWorkers(id) {
+    const { failed, body } = await orchCall(id, 'GET', 'workers');
+    if (failed) return failed;
+    const rows = (body.workers || []).filter(w => !w.closedAt);
+    const lines = rows.map(w => [
+        `${w.title || '(untitled)'}  [${w.state}${w.pending ? `, waiting on a ${w.pending}` : ''}]`,
+        `    worker: ${w.id}`,
+        `    in: ${w.cwd}${w.worktree ? ` (branch ${w.worktree.branch})` : ''}`,
+    ].join('\n'));
+    const head = [`${rows.length} open worker${rows.length === 1 ? '' : 's'}, `
+        + `at most ${body.maxRunning} running at once.`];
+    if (body.paused) head.push(`PAUSED: ${body.paused.reason}`);
+    if ((body.pendingSpawns || []).length) head.push(`${body.pendingSpawns.length} spawn(s) queued.`);
+    return say(id, `${head.join(' ')}\n\n${lines.join('\n\n')}`.trim());
+}
+
+function renderItem(i) {
+    const lines = [`[${i.kind}] from worker ${i.workerId || '(TGXCode)'} — ${ago(i.at)}`];
+    if (i.requestId) lines.push(`    itemId: ${i.id}  (answer with answer_worker)`);
+    lines.push(...String(i.text || '').split('\n').map(l => `    ${l}`));
+    return lines.join('\n');
+}
+
+async function callNextMessage(id, args) {
+    const { failed, body } = await orchCall(id, 'POST', 'next', {
+        max: Number.isInteger(args.max) ? args.max : 1,
+    });
+    if (failed) return failed;
+    const items = body.items || [];
+    if (!items.length) {
+        return say(id, 'Your inbox is empty. End your turn; you will be told when something arrives.');
+    }
+    const tail = body.left ? `\n\n${body.left} more waiting.` : '\n\nInbox now empty.';
+    return say(id, items.map(renderItem).join('\n\n') + tail);
+}
+
+async function callSendToWorker(id, args) {
+    const { failed, body } = await orchCall(id, 'POST', 'send', { worker: args.worker, text: args.text });
+    if (failed) return failed;
+    return say(id, body.queued
+        ? 'Sent. The worker is mid-turn and will read it at its next step.'
+        : 'Sent. The worker is working on it.');
+}
+
+async function callAnswerWorker(id, args) {
+    const { failed } = await orchCall(id, 'POST', 'answer', {
+        itemId: args.itemId, decision: args.decision, feedback: args.feedback,
+        answers: args.answers, mode: args.mode,
+    });
+    if (failed) return failed;
+    return say(id, `Answered (${args.decision}). The worker carries on.`);
+}
+
+async function callReadWorker(id, args) {
+    const { failed, body } = await orchCall(id, 'POST', 'read', {
+        worker: args.worker, mode: args.mode || 'digest', turns: args.turns, offset: args.offset,
+    });
+    if (failed) return failed;
+    let text = body.text || '';
+    if (body.next != null) {
+        text += `\n\n— page ends; pass offset ${body.next} to read on (${body.total} characters in all).`;
+    }
+    return say(id, text);
+}
+
+async function callStopWorker(id, args) {
+    const { failed, body } = await orchCall(id, 'POST', 'stop', { worker: args.worker, hard: !!args.hard });
+    if (failed) return failed;
+    return say(id, body.how ? `Stopped (${body.how}).` : 'It had no process running.');
+}
+
+async function callCloseWorker(id, args) {
+    const { failed, body } = await orchCall(id, 'POST', 'close', { worker: args.worker });
+    if (failed) return failed;
+    return say(id, `Closed and archived.${body.worktree ? ` Its worktree is still at ${body.worktree.path}.` : ''}`);
+}
+
+async function callGetUsage(id) {
+    const { failed, body } = await orchCall(id, 'GET', 'usage');
+    if (failed) return failed;
+    const lines = (body.windows || []).map((w) => {
+        const pct = typeof w.usedPercent === 'number' ? `${Math.round(w.usedPercent)}% used` : 'unknown';
+        const at = w.usedPercentAt ? ` (as of ${ago(w.usedPercentAt)})` : '';
+        const reset = w.resetsAt
+            ? `, resets ${new Date(w.resetsAt < 1e12 ? w.resetsAt * 1000 : w.resetsAt).toLocaleString()}` : '';
+        return `${w.type}: ${pct}${at}${reset}`;
+    });
+    if (!lines.length) lines.push('No usage reading yet.');
+    const c = body.cutoff;
+    if (c) lines.push(c.enabled ? `Cutoff: everything stops at ${c.percent}% of ${c.window}.` : 'Cutoff: off.');
+    if (body.paused) lines.push(`PAUSED: ${body.paused.reason}`);
+    return say(id, lines.join('\n'));
+}
+
+async function callSetSummary(id, args) {
+    const { failed } = await orchCall(id, 'POST', 'summary', { text: args.text });
+    if (failed) return failed;
+    return say(id, 'Summary updated.');
+}
+
+async function callReport(id, args) {
+    if (!SESSION_ID) return toolError(id, 'this session does not know its own id');
+    const r = await api('POST', `/api/sessions/${encodeURIComponent(SESSION_ID)}/report`,
+        { kind: args.kind, text: args.text });
+    if (r.error) return toolError(id, r.error);
+    if (!r.ok) return toolError(id, msgOf(r));
+    return say(id, args.kind === 'question'
+        ? 'Filed. End your turn now; the answer will arrive as a message.'
+        : 'Filed in your orchestrator\'s inbox.');
+}
+
+const ROLE_CALLS = {
+    orchestrator: {
+        spawn_worker: callSpawnWorker, list_workers: callListWorkers, next_message: callNextMessage,
+        send_to_worker: callSendToWorker, answer_worker: callAnswerWorker, read_worker: callReadWorker,
+        stop_worker: callStopWorker, close_worker: callCloseWorker, get_usage: callGetUsage,
+        set_summary: callSetSummary,
+    },
+    worker: { report_to_orchestrator: callReport },
+};
+
+// ---------------------------------------------------------------------------
 // Dispatch
 // ---------------------------------------------------------------------------
 
@@ -837,6 +1192,8 @@ async function handle(msg) {
         if (name === 'start_task') return callStartTask(id, args);
         if (name === 'set_task_status') return callSetTaskStatus(id, args);
         if (name === 'schedule_session') return callSchedule(id, args);
+        const roleCall = ROLE && ROLE_CALLS[ROLE] && ROLE_CALLS[ROLE][name];
+        if (roleCall) return roleCall(id, args);
         return toolError(id, `unknown tool: ${name}`);
     }
 

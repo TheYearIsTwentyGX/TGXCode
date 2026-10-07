@@ -1,0 +1,176 @@
+/* An orchestrator's dock above the composer — web/orchestrator.js. Sits where
+   the ask dock does and is inset the same way, so the two line up when both are
+   up. Capped in height: the conversation is still the main thing on the page,
+   and a long inbox scrolls inside its own box rather than pushing it away. */
+
+.orch-dock {
+    flex: none;
+    margin: 0 calc(28px + var(--pane-right)) 6px calc(28px + var(--pane-left));
+    max-height: 42vh;
+    overflow-y: auto;
+    background: var(--s2);
+    border: 1px solid var(--s4);
+    border-radius: var(--r);
+    transition: margin var(--t-fast) var(--ease);
+}
+.orch-dock[hidden] { display: none; }
+
+.orch { max-width: 1000px; margin: 0 auto; padding: 4px 6px; }
+
+.orch-paused {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 6px 8px;
+    padding: 8px 12px;
+    border-radius: var(--r-sm);
+    background: color-mix(in srgb, var(--yellow) 14%, transparent);
+    color: var(--yellow);
+    font: 400 13px/1.45 var(--sans);
+}
+.orch-paused span { flex: 1; }
+.orch-paused button,
+.orch-worker-line button.orch-link { flex: none; }
+.orch-paused button {
+    padding: 4px 12px;
+    border: 1px solid var(--yellow);
+    border-radius: var(--r-xs);
+    background: transparent;
+    color: var(--yellow);
+    font: 500 12.5px/1.4 var(--sans);
+    cursor: pointer;
+}
+
+.orch-sec + .orch-sec { border-top: 1px solid var(--s3); }
+.orch-sec-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 7px 10px;
+    border: 0;
+    background: none;
+    color: var(--text-2);
+    font: 500 12.5px/1.4 var(--sans);
+    text-align: left;
+    cursor: pointer;
+}
+.orch-sec-head:hover { color: var(--text); }
+.orch-sec-head .twist {
+    display: inline-block;
+    width: 10px;
+    color: var(--text-4);
+    transition: transform var(--t-fast) var(--ease);
+}
+.orch-sec[data-open="true"] .twist { transform: rotate(90deg); }
+.orch-sec-title { flex: none; }
+.orch-count { margin-left: auto; color: var(--text-4); font: 400 11.5px/1.4 var(--mono); }
+.orch-count[data-hot="true"] { color: var(--blue); }
+.orch-sec-body { padding: 0 12px 10px 28px; font: 400 13px/1.5 var(--sans); color: var(--text-2); }
+
+.orch-empty { color: var(--text-4); }
+.orch-summary { color: var(--text); }
+.orch-summary p { margin: 0 0 8px; }
+.orch-summary p:last-child { margin-bottom: 0; }
+
+.orch-items, .orch-workers { list-style: none; margin: 0; padding: 0; }
+.orch-item { padding: 6px 0; }
+.orch-item + .orch-item { border-top: 1px solid var(--s3); }
+.orch-item[data-status="resolved"], .orch-item[data-status="stale"] { opacity: 0.6; }
+.orch-item-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.orch-kind {
+    flex: none;
+    padding: 0 6px;
+    border-radius: var(--r-xs);
+    background: var(--s4);
+    color: var(--text-2);
+    font: 500 10.5px/17px var(--mono);
+}
+.orch-item[data-kind="plan"] .orch-kind,
+.orch-item[data-kind="permission"] .orch-kind,
+.orch-item[data-kind="ask"] .orch-kind,
+.orch-item[data-kind="question"] .orch-kind {
+    background: color-mix(in srgb, var(--yellow) 18%, transparent);
+    color: var(--yellow);
+}
+.orch-item[data-status="new"] .orch-kind { box-shadow: inset 0 0 0 1px var(--blue); }
+.orch-when, .orch-status { color: var(--text-4); font: 400 11.5px/1.4 var(--mono); }
+.orch-status { margin-left: auto; }
+.orch-x {
+    flex: none;
+    border: 0;
+    background: none;
+    color: var(--text-4);
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+}
+.orch-x:hover { color: var(--text); }
+
+.orch-text { margin-top: 3px; }
+.orch-text summary { cursor: pointer; color: var(--text-2); list-style: none; }
+.orch-text summary::-webkit-details-marker { display: none; }
+.orch-text[open] summary { display: none; }
+.orch-text pre {
+    margin: 0;
+    max-height: 30vh;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--text);
+    font: 400 12.5px/1.5 var(--mono);
+}
+
+.orch-link {
+    min-width: 0;
+    overflow: hidden;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--blue);
+    font: inherit;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+}
+.orch-link:hover { text-decoration: underline; }
+
+.orch-workers li { display: flex; align-items: center; gap: 10px; padding: 3px 0; }
+.orch-workers li[data-closed="true"] { opacity: 0.55; }
+.orch-state { color: var(--text-3); font: 400 11.5px/1.4 var(--mono); }
+.orch-state[data-state="busy"], .orch-state[data-state="starting"] { color: var(--green); }
+.orch-branch { margin-left: auto; color: var(--text-4); font: 400 11.5px/1.4 var(--mono); }
+
+.orch-settings { display: grid; gap: 8px; }
+.orch-settings label { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.orch-settings input[type="number"] {
+    width: 56px;
+    padding: 2px 6px;
+    border: 1px solid var(--s5);
+    border-radius: var(--r-xs);
+    background: var(--s1);
+    color: var(--text);
+    font: inherit;
+}
+.orch-settings select {
+    padding: 2px 6px;
+    border: 1px solid var(--s5);
+    border-radius: var(--r-xs);
+    background: var(--s1);
+    color: var(--text);
+    font: inherit;
+}
+.orch-note { color: var(--text-4); font-size: 12px; }
+
+.orch-worker-line {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 12px;
+    color: var(--text-3);
+    font: 400 12.5px/1.4 var(--sans);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .orch-dock, .orch-sec-head .twist { transition: none; }
+}
