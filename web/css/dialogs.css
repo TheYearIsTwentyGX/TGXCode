@@ -144,6 +144,12 @@
     cursor: pointer;
 }
 .field label.check input { accent-color: var(--blue); width: 16px; height: 16px; }
+/* Several checkboxes on one line, wrapping when the dialog is narrow — the
+   Start dialog's worktree and orchestrator boxes. */
+.field .check-line { display: flex; flex-wrap: wrap; gap: 6px 28px; }
+.field .check-line label.check[hidden] { display: none; }
+/* Side by side, so the stacked boxes' spacing below does not apply. */
+.field .check-line label.check + label.check { margin-top: 0; }
 
 .picker {
     background: var(--bg);
