@@ -1521,6 +1521,18 @@ class Runner extends EventEmitter {
         if (this.state === 'busy') this._work();
     }
 
+    /**
+     * Deny the ask this session is blocked on, if any, saying why. For a worker
+     * whose orchestrator went away while it waited: delegation was the only thing
+     * that kept the no-window auto-deny off it, and an ask already held never
+     * passes that check again.
+     */
+    denyPending(reason) {
+        if (!this.pendingPermission) return false;
+        this._autoDeny(this.pendingPermission, reason);
+        return true;
+    }
+
     _autoDeny(ask, reason) {
         this._autoDenies++;
         this._respondPermission(ask, { behavior: 'deny', message: reason });
@@ -2550,11 +2562,16 @@ class RunnerPool extends EventEmitter {
         r.on('exit', () => this.emit('status', r.status()));
         // A model/effort change held for background work is applied at the first
         // moment it can be: the work finishing, or the turn running when it did.
-        r.on('background-drained', () => this._applyPending(r));
-        r.on('turn-complete', () => this._applyPending(r));
-        const retry = () => { if (r._recycle && this.runners.get(r.sessionId) === r) this.recycle(r.sessionId); };
-        r.on('background-drained', retry);
-        r.on('turn-complete', retry);
+        //
+        // The same two moments carry out a `recycle` that was waiting for a turn
+        // to end. A replacement made for a model change reads its role afresh as
+        // well, so once `_applyPending` has acted there is nothing left to recycle.
+        const settle = () => {
+            this._applyPending(r);
+            if (r._recycle && this.runners.get(r.sessionId) === r) this.recycle(r.sessionId);
+        };
+        r.on('background-drained', settle);
+        r.on('turn-complete', settle);
         r.on('forked', ({ from, to }) => {
             // Re-key so a later send reaches the copy, not the original.
             if (this.runners.get(from) === r) this.runners.delete(from);
@@ -2645,10 +2662,24 @@ class RunnerPool extends EventEmitter {
             r._recycle = true;
             return false;
         }
+        this._replace(r, { model: r.model, effort: r.effort });
+        return true;
+    }
+
+    /**
+     * Put a fresh, unstarted runner in place of `r` with the given model and
+     * effort, carrying across anything still waiting. Shared by a held settings
+     * change and by `recycle`, so the two cannot drift: the queue-carrying rule
+     * `_evict` documents is exactly the kind of fix that lands in one copy only.
+     */
+    _replace(r, { model, effort }) {
         const carried = r.takeQueue();
-        const fresh = this._make({ sessionId, cwd: r.cwd, model: r.model, effort: r.effort,
+        const fresh = this._make({ sessionId: r.sessionId, cwd: r.cwd, model, effort,
             permissionMode: r.permissionMode });
-        this.runners.set(sessionId, fresh);
+        this.runners.set(r.sessionId, fresh);
+        // The old runner's exit reports *its* settings, and a window takes the
+        // last status it hears for a session as the truth — so say the new one's
+        // again after it.
         r.once('exit', () => this.emit('status', fresh.status()));
         r.retire();
         if (carried.length) {
@@ -2657,7 +2688,7 @@ class RunnerPool extends EventEmitter {
             fresh.start();
         }
         this.emit('status', fresh.status());
-        return true;
+        return fresh;
     }
 
     statuses() {
@@ -2711,21 +2742,7 @@ class RunnerPool extends EventEmitter {
         if (this.runners.get(r.sessionId) !== r) return;
         const { model, effort } = r.pendingSettings;
         r.pendingSettings = null;
-        const carried = r.takeQueue();
-        const fresh = this._make({ sessionId: r.sessionId, cwd: r.cwd, model, effort,
-            permissionMode: r.permissionMode });
-        this.runners.set(r.sessionId, fresh);
-        // The old runner's exit reports *its* settings, and a window takes the
-        // last status it hears for a session as the truth — so say the new one's
-        // again after it.
-        r.once('exit', () => this.emit('status', fresh.status()));
-        r.retire();
-        if (carried.length) {
-            fresh.queue.push(...carried);
-            fresh._queueChanged();
-            fresh.start();
-        }
-        this.emit('status', fresh.status());
+        this._replace(r, { model, effort });
     }
 
     _evictIdle() {

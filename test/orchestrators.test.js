@@ -22,8 +22,17 @@ const os = require('os');
 const path = require('path');
 const { EventEmitter } = require('events');
 
-const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tgx-orch-'));
+const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tgx-orch-')));
 process.env.XDG_DATA_HOME = home;
+// The cap case makes real worktrees, which have to be inside the allowed roots,
+// and commits, which need somebody to have made them.
+process.env.TGXCODE_ROOTS = home;
+Object.assign(process.env, {
+    GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.com',
+    GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.com',
+    GIT_CONFIG_NOSYSTEM: '1',
+});
+const { execFileSync } = require('child_process');
 
 const {
     Orchestrators, sortInbox, shouldNudge, usageTrip, cleanSettings, describeCounts, DEFAULT_SETTINGS,
@@ -141,6 +150,42 @@ const fileOf = (n) => path.join(home, `orch-${n}.json`);
     ok('pull takes the most urgent first and marks what it took read');
 }
 
+{
+    // The everyday bridge loaded X long ago and never touched it; a dev bridge
+    // turned X off since. The everyday bridge writing for an unrelated reason
+    // must not put X back.
+    const file = fileOf('stale');
+    const everyday = new Orchestrators({ file });
+    everyday.enable('X');
+    everyday.enable('Y');
+    everyday.flush();
+    const dev = new Orchestrators({ file });
+    dev.disable('X');
+    dev.flush();
+    everyday.push('Y', { kind: 'note', text: 'unrelated' });
+    everyday.flush();
+    const after = new Orchestrators({ file });
+    assert.strictEqual(after.get('X'), null, 'the disabled orchestrator stays disabled');
+    assert.strictEqual(after.unread('Y').length, 1, 'and the unrelated write still landed');
+    assert.strictEqual(everyday.get('X'), null, 'the writer adopts the removal too');
+    ok('a bridge writes only what it changed, so another bridge\'s removal sticks');
+}
+
+{
+    const s = new Orchestrators({ file: fileOf('trim') });
+    s.enable('O');
+    s.push('O', { workerId: 'W', kind: 'plan', text: 'the plan', requestId: 'r1' });
+    s.pull('O', 1);   // read, not yet answered
+    for (let i = 0; i < 305; i++) {
+        const row = s.push('O', { workerId: 'W', kind: 'turn', text: `t${i}` });
+        if (i % 2) s.settle('O', row.id);
+    }
+    assert.ok(s.get('O').inbox.some(i => i.requestId === 'r1'),
+        'a read but unanswered plan is never trimmed');
+    assert.ok(s.get('O').inbox.length <= 305);
+    ok('trimming a full inbox drops settled items, never an ask still waiting');
+}
+
 // --- orchestration, against a fake pool ---------------------------------------
 
 class FakeRunner extends EventEmitter {
@@ -169,6 +214,9 @@ class FakeRunner extends EventEmitter {
         return { ok: true };
     }
     async stop() { this.stopped++; this.state = 'idle'; return { how: 'soft' }; }
+    handOverQueue(why) { this.handedBack = { why, texts: this.queue.map(q => q.text) }; this.queue = []; }
+    hasViewer() { return !!this.viewer; }
+    denyPending(reason) { if (!this.pendingPermission) return false; this.denied = reason; this.pendingPermission = null; return true; }
 }
 
 function harness(name) {
@@ -309,17 +357,28 @@ function harness(name) {
         h.setWindows([{ type: 'five_hour', usedPercent: 79 }]);
         orchestration.checkUsage();
         assert.strictEqual(h.store.get('O').paused, null);
+        w.queue = [{ id: 'q1', text: 'carry on with the tests' }];
         h.setWindows([{ type: 'five_hour', usedPercent: 81 }]);
         orchestration.checkUsage();
         assert.ok(h.store.get('O').paused, 'paused past the cutoff');
         assert.strictEqual(orch.stopped, 1);
         assert.strictEqual(w.stopped, 1);
+        assert.deepStrictEqual(w.handedBack.texts, ['carry on with the tests'],
+            'a queued message is handed back, not dropped');
         orchestration.checkUsage();
         assert.strictEqual(w.stopped, 1, 'and not stopped again while paused');
         await assert.rejects(orchestration.spawn('O', { prompt: 'x', worktree: false }), /paused/);
+        assert.throws(() => orchestration.resume('O'), /still over the cutoff/, 'no Resume while still over');
+        assert.ok(h.store.get('O').paused);
+        h.setWindows([{ type: 'five_hour', usedPercent: 10 }]);
         orchestration.resume('O');
         assert.strictEqual(h.store.get('O').paused, null);
-        ok('the usage cutoff stops the orchestrator and its workers once, and Resume lifts it');
+
+        h.store.setSettings('O', { usageStop: { window: 'seven_day_opus', percent: 50 } });
+        h.setWindows([{ type: 'seven_day_opus', usedPercent: 60 }]);
+        orchestration.checkUsage();
+        assert.match(h.store.get('O').paused.reason, /^seven-day-opus usage at 60%/);
+        ok('the usage cutoff stops everything once, hands queued messages back, and Resume waits for it');
     }
 
     {
@@ -337,6 +396,47 @@ function harness(name) {
         orchestration.forget('O');
         assert.strictEqual(h.store.get('O'), null, 'a deleted orchestrator stops being one');
         ok('deleting a session takes its part in an orchestration with it');
+    }
+
+    {
+        const h = harness('orphans');
+        orchestration.enable('O', null);
+        h.store.addWorker('O', { id: 'W1' });
+        h.store.addWorker('O', { id: 'W2' });
+        const w1 = h.pool.ensure('W1');
+        const w2 = h.pool.ensure('W2');
+        w1.pendingPermission = { id: 'a' };
+        w2.pendingPermission = { id: 'b' };
+        w2.viewer = true;
+        orchestration.disable('O');
+        assert.match(w1.denied, /orchestrator went away/, 'nobody left to answer: denied');
+        assert.ok(w2.pendingPermission, 'a window is open on the other: left for it');
+        ok('turning an orchestrator off denies its workers\' asks that nobody else can answer');
+    }
+
+    {
+        // The race the cap used to lose: a worker has no runner until its
+        // worktree exists, so parallel spawns and a drain all saw free slots.
+        const h = harness('race');
+        const repo = path.join(home, 'repo');
+        fs.mkdirSync(repo);
+        execFileSync('git', ['-C', repo, 'init', '-q', '-b', 'main']);
+        fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n');
+        execFileSync('git', ['-C', repo, 'add', '.']);
+        execFileSync('git', ['-C', repo, 'commit', '-q', '-m', 'first']);
+        orchestration.enable('O', { maxRunning: 2, worktree: true });
+        const out = await Promise.all([1, 2, 3, 4].map(n =>
+            orchestration.spawn('O', { prompt: `job ${n}`, title: `job ${n}`, cwd: repo })));
+        assert.strictEqual(out.filter(o => !o.queued).length, 2, 'two start');
+        assert.strictEqual(out.filter(o => o.queued).length, 2, 'two wait');
+        assert.strictEqual(h.created.length, 2);
+
+        h.store.setSettings('O', { maxRunning: 1 });
+        for (const c of h.created) h.runners.get(c.sessionId).state = 'idle';
+        orchestration.onTurnComplete({ sessionId: h.created[0].sessionId });
+        await sleep(1500);
+        assert.strictEqual(h.created.length, 3, 'a drain with one free slot starts exactly one');
+        ok('the cap holds across parallel spawns and a drain, while worktrees are being made');
     }
 })().then(() => {
     fs.rmSync(home, { recursive: true, force: true });

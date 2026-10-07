@@ -2973,7 +2973,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `notice` | `{sessionId: string, level: 'warn', kind: string, text: string}` — something worth telling the user that is not a permission ask. Every notice the bridge sends is `level: 'warn'` except `settings_deferred`, which is `level: 'info'`; treat any level other than `warn` as informational. `kind` is one of `settings_deferred` (a model/effort change held while background work runs — see the send route), `no_permission_prompt`, `permission_uninteractive`, `mode_change_failed`, `permission_auto_denied`, `permission_denied`, `api_retry`, `turn_failed`, `rate_limit` — and an unrecognised kind is a plain warning, not an error. **`rate_limit` is not one per limit: it repeats on every turn for as long as the limit holds**, because the CLI sends an identical `rate_limit_event` each time and this one is not deduplicated the way the `quota` event below is. A client that toasts it unconditionally therefore stacks the same warning over and over for an afternoon. `web/app.js` drops this kind entirely and flashes the header quota pill off the `quota` event instead; a client with nowhere to put a persistent indicator should throttle the toast itself. Everything the notice says is also in `GET /api/quota` — `windows[].status` for the current state and `events` for the history |
 | `claude-version` | **the whole `GET /api/claude-version` payload**, so there is nothing to refetch. Ungated, no `sessionId`. Sent when the summary moved: the hourly registry check found a newer version, an update finished, or a process started or ended on a version that changes `staleSessions`. Debounced by about a second |
 | `quota` | **the whole `GET /api/quota` payload**, so there is nothing to refetch. Ungated, like `drafts-changed`. Fires only when a reading actually moved — the CLI sends an identical `rate_limit_event` on every turn and those are dropped rather than pushed. Note it carries **no `sessionId`**: quota is account-wide, and which session happened to observe it says nothing. A window that has been near a limit for an hour will therefore push nothing at all, which is why `usedPercentAt` matters more than the arrival time of this event |
-| `orchestrator` | **the whole `GET /api/sessions/:id/orchestrator` payload** for one orchestrator (see §*Orchestrators*), so there is nothing to refetch. Sent on every change to it — an item filed, read or settled, a worker started, closed or queued, settings, the summary, a pause or a resume. Always followed by `sessions-changed`, which carries the new rail counts. `enabled: false` means the role was just turned off |
+| `orchestrator` | **the whole `GET /api/sessions/:id/orchestrator` payload** for one orchestrator (see §*Orchestrators*), so there is nothing to refetch. Sent on any change to it — an item filed, read or settled, a worker started, closed or queued, settings, the summary, a pause or a resume — **debounced by about 250 ms**, so a burst is one event carrying the end state. Followed by one `sessions-changed` for the whole burst, which is where the rail counts come from. `enabled: false` means the role was just turned off |
 | `standing-changed` | `{sessionId, standing}` — `standing` is `{text, source, at}` exactly as on the session summary (`text` a string, `source` `"model"` or `"extract"`, `at` epoch ms), or null. Patch that row's `standing`; there is nothing to refetch. Fires about fifteen seconds after a `turn-complete`, and only when the line was actually rewritten — a turn whose reply was already summarised sends nothing |
 | `turn-complete` | `{sessionId, isError, detail, retries, costUsd, durationMs, numTurns, stopReason}` — the runner's `lastResult` with the session id on it. `detail` is null unless `isError` |
 | `send-failed` | `{sessionId, kind, message, unsent: [text]}` — a send that never became a turn; hand the text back to the user. `unsent` is an array of **strings**, in send order, and may be empty — the event still means the send failed, and `message` is then the whole of it. `kind` is one of `busy-elsewhere` (the session is running somewhere else; offer to branch), `branch-refused` (Claude Code would not make the cut a `fromUuid` send asked for — see `POST /api/sessions/:id/send`), `no-claude`, `missing`, `unknown`, `exited` (the process ended without answering) or `retired` (the bridge shut the process down with messages still queued). Treat an unrecognised kind as `unknown`. Attachments are **not** carried: a message that had files comes back as its text alone |
@@ -4541,7 +4541,10 @@ count="N">` message, while it is idle, once per new arrival.
 **The usage cutoff.** When `settings.usageStop.enabled` and the window's
 `usedPercent` (from `GET /api/quota`) reaches `percent`, the bridge soft-stops the
 orchestrator and every busy worker, sets `paused`, refuses new spawns and holds
-nudges, and sends a `notice` with `kind: "orchestrator_paused"`. Only Resume lifts
+nudges, and sends a `notice` with `kind: "orchestrator_paused"`. Messages queued on
+any of those sessions come back as `send-failed` (`kind: "retired"`) with their
+text, exactly as a Stop hands them back, rather than being dropped. `stop` and
+`close` from the orchestrator do the same for the worker they stop. Only Resume lifts
 it. The reading is only as fresh as the quota beacon; see `GET /api/quota`.
 
 #### `GET /api/sessions/:id/orchestrator`
@@ -4559,7 +4562,11 @@ The payload above. Never 404s: a session that is not one answers `enabled: false
   `restarted` says whether that was now or waits for the turn in flight. `409` for a
   worker; `404` for an unknown session.
 - `enabled: false` turns it off. The workers carry on as ordinary sessions and the
-  inbox is discarded.
+  inbox is discarded. A worker blocked on a plan or prompt that only the
+  orchestrator was going to answer — no window connected — has it **denied**, since
+  nothing would answer it otherwise; with a window open it is left for the window.
+  Deleting the orchestrator session does the same.
+- `settings` that lower the cutoff below the current reading pause it at once.
 - `settings` alone merges into the current settings field by field; a bad value
   leaves that field as it was.
 
@@ -4576,8 +4583,9 @@ does not answer a worker's ask; that is the permission route on the worker.
 #### `POST /api/sessions/:id/orchestrator/resume`
 
 `{}` → the payload. Clears `paused`, starts queued spawns up to `maxRunning`, and
-nudges the orchestrator if anything is waiting. If usage is still over the cutoff it
-is paused again within a minute.
+nudges the orchestrator if anything is waiting. **`409 {error}` while usage is still
+over the cutoff** — the error names the window and the reading. Raise or turn off
+the cutoff with `PUT …/orchestrator` first, or wait for the window to reset.
 
 #### `GET /api/sessions/:id/orchestrator/workers` · `GET …/orchestrator/usage`
 

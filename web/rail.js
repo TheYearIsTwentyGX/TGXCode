@@ -82,28 +82,6 @@ function railTree() {
     // Scratch sessions gathered in one place, because the point of labelling one
     // is to be able to find it again and delete it. Only a development bridge
     // sends any, so the everyday window never grows this card.
-    // An orchestrator's workers are drawn under it rather than among the
-    // project's rows: they are its work, they come in batches, and they usually
-    // live in worktrees of their own that would otherwise scatter them. Only
-    // while the orchestrator itself is in the rail somewhere — a worker whose
-    // orchestrator was deleted is an ordinary session again.
-    const orchIds = new Set(ordered.filter(s => s.orchestrator).map(s => s.sessionId));
-    const workersOf = new Map();
-    const nestedWorker = (s) => !!s.worker && orchIds.has(s.worker.orchestratorId)
-        && !s.pinned && !s.archived;
-    for (const s of ordered) {
-        if (!nestedWorker(s)) continue;
-        const id = s.worker.orchestratorId;
-        if (!workersOf.has(id)) workersOf.set(id, []);
-        workersOf.get(id).push(s);
-    }
-    const after = new Map([...workersOf].map(([id, list]) => [id,
-        groupCard(`orch:${id}`, 'Workers', list, { nested: true, defaultOpen: true })]));
-    const rest = ordered.filter(s => inProjectCard(s) && !nestedWorker(s));
-    // A test orchestrator's workers are test sessions too, and belong under it
-    // like any other's rather than a second time in this card.
-    const test = ordered.filter(s => s.test && !s.pinned && !s.archived && !nestedWorker(s));
-
     // `hideDone`: drop the rows whose work has landed. Only from the project
     // cards — pinning is something you did on purpose, archived is already out of
     // the way, and the test card exists to be emptied by hand.
@@ -114,12 +92,41 @@ function railTree() {
     // for the reason `isOpen` gives for forcing groups open: a filter must not hide
     // its own results, and somebody typing the title of a merged session is looking
     // for exactly that.
+    //
+    // Worked out before the workers are nested, because whether an orchestrator
+    // is drawn at all decides whether its workers can be drawn under it.
     const hiding = state.hideDone && !state.query;
-    const finished = rest.filter(prDone);
     const gone = new Set(hiding
-        ? finished.filter(s => !state.current || state.current.sessionId !== s.sessionId)
+        ? ordered.filter(s => inProjectCard(s) && prDone(s))
+            .filter(s => !state.current || state.current.sessionId !== s.sessionId)
             .map(s => s.sessionId)
         : []);
+
+    // An orchestrator's workers are drawn under it rather than among the
+    // project's rows: they are its work, they come in batches, and they usually
+    // live in worktrees of their own that would otherwise scatter them. Only
+    // while the orchestrator's own row is drawn — every card can carry the
+    // nested Workers card, so that is any orchestrator not hidden as finished. A
+    // worker whose orchestrator was deleted, or is hidden, is drawn where any
+    // other session would be, rather than nowhere.
+    const hosts = new Set(ordered.filter(s => s.orchestrator && !gone.has(s.sessionId))
+        .map(s => s.sessionId));
+    const workersOf = new Map();
+    const nestedWorker = (s) => !!s.worker && hosts.has(s.worker.orchestratorId)
+        && !s.pinned && !s.archived;
+    for (const s of ordered) {
+        if (!nestedWorker(s) || gone.has(s.sessionId)) continue;
+        const id = s.worker.orchestratorId;
+        if (!workersOf.has(id)) workersOf.set(id, []);
+        workersOf.get(id).push(s);
+    }
+    const after = new Map([...workersOf].map(([id, list]) => [id,
+        groupCard(`orch:${id}`, 'Workers', list, { nested: true, defaultOpen: true })]));
+    const rest = ordered.filter(s => inProjectCard(s) && !nestedWorker(s));
+    const finished = rest.filter(prDone);
+    // A test orchestrator's workers are test sessions too, and belong under it
+    // like any other's rather than a second time in this card.
+    const test = ordered.filter(s => s.test && !s.pinned && !s.archived && !nestedWorker(s));
 
     const cards = [];
 
@@ -175,13 +182,13 @@ function railTree() {
             all: list,
             after,
             lead: sched.length
-                ? groupCard(`sched:${key}`, 'Scheduled', sched, { nested: true })
+                ? groupCard(`sched:${key}`, 'Scheduled', sched, { nested: true, after })
                 : null,
         }));
     }
 
     if (test.length) cards.push(groupCard('test', 'Test sessions', test, { after }));
-    if (archived.length) cards.push(groupCard('archived', 'Archived', archived));
+    if (archived.length) cards.push(groupCard('archived', 'Archived', archived, { after }));
 
     // Said out loud rather than left to look like a rail that has lost its
     // sessions — the same promise the live board makes when `hideElsewhere`

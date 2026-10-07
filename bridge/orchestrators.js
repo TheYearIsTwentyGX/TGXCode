@@ -28,8 +28,11 @@
 // **Merge-on-write, for drafts.js's reason.** Every bridge on this machine
 // shares STATE_DIR, the everyday one and each agent's dev bridge, and a whole-
 // file rewrite from a snapshot would erase another bridge's orchestrators. So
-// `flush()` reads the file back and merges per orchestrator, newer `updatedAt`
-// winning, with removals tracked rather than inferred from absence. Only the
+// `flush()` reads the file back and writes over it only the orchestrators this
+// bridge changed since its last write (newer `updatedAt` winning), with removals
+// tracked rather than inferred from absence — then adopts the file as it stands.
+// Writing back a copy it never touched is how an orchestrator another bridge had
+// disabled used to come back. Only the
 // bridge whose pool runs a worker ever acts on it, so two bridges writing the
 // *same* orchestrator is not a case that arises in practice.
 
@@ -255,6 +258,8 @@ class Orchestrators {
         /** worker id -> orchestrator id */
         this.workerOf = new Map();
         this._removed = new Set();
+        /** Ids this bridge changed since its last write — the only ones it writes. */
+        this._dirty = new Set();
         this._saveTimer = null;
         this.load();
     }
@@ -281,21 +286,30 @@ class Orchestrators {
         clearTimeout(this._saveTimer);
         this._saveTimer = null;
         try {
+            // Only what *this* bridge changed since the last write goes over the
+            // file. Everything else on disk is newer than our copy or the same,
+            // and writing our copy of an orchestrator we never touched is how one
+            // another bridge disabled used to come back: absent from the file
+            // looked the same as never written.
             const merged = readFile(this.file);
             for (const id of this._removed) merged.delete(id);
-            for (const [id, o] of this.byId) {
+            for (const id of this._dirty) {
+                const o = this.byId.get(id);
+                if (!o) continue;
                 const theirs = merged.get(id);
                 if (!theirs || theirs.updatedAt <= o.updatedAt) merged.set(id, o);
             }
-            // Adopt what another bridge wrote, so the next read here sees it.
-            for (const [id, o] of merged) if (!this.byId.has(id) && !this._removed.has(id)) this.byId.set(id, o);
-            this._reindex();
             const out = { version: VERSION, orchestrators: Object.fromEntries(merged) };
             fs.mkdirSync(path.dirname(this.file), { recursive: true });
             const tmp = `${this.file}.${process.pid}.tmp`;
             fs.writeFileSync(tmp, JSON.stringify(out, null, 2));
             fs.renameSync(tmp, this.file);
+            // And adopt the file as it now stands, removals by others included,
+            // so the next read here sees what every bridge sees.
+            this.byId = merged;
+            this._reindex();
             this._removed.clear();
+            this._dirty.clear();
         } catch (err) {
             console.error(`[tgxcode] could not write ${this.file}: ${err.message}`);
         }
@@ -303,6 +317,7 @@ class Orchestrators {
 
     _touch(o) {
         o.updatedAt = Date.now();
+        this._dirty.add(o.id);
         this.save();
         return o;
     }
@@ -350,6 +365,7 @@ class Orchestrators {
         if (!o) return false;
         this.byId.delete(sessionId);
         this._removed.add(sessionId);
+        this._dirty.delete(sessionId);
         this._reindex();
         this.save();
         return true;
@@ -462,9 +478,14 @@ class Orchestrators {
         });
         if (!row) return null;
         o.inbox.push(row);
-        // Drop the oldest settled items first; never one still waiting.
+        // Drop the oldest settled items first; never one still waiting — and a
+        // plan or prompt the orchestrator has *read* but not answered is still
+        // waiting: dropping it would leave a worker blocked on an ask nobody can
+        // name any more. Past the cap with nothing settled, the inbox grows.
+        const settled = (x) => x.status === 'resolved' || x.status === 'stale'
+            || (x.status === 'read' && !x.requestId);
         while (o.inbox.length > MAX_INBOX) {
-            const i = o.inbox.findIndex(x => x.status !== 'new');
+            const i = o.inbox.findIndex(settled);
             if (i < 0) break;
             o.inbox.splice(i, 1);
         }
