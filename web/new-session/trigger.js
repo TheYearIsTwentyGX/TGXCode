@@ -19,7 +19,7 @@ import { draftsVisible, showDrafts } from '../drafts.js';
 import { showSched } from '../schedules.js';
 import { commitAttachments } from '../composer/attachments.js';
 import { openSessionSoon } from '../transcript/conversation.js';
-import { closeNew, newC, newDialogName, newDialogValues, newDialogWorktree, openNew } from './dialog.js';
+import { closeNew, newC, newDialogName, newDialogOrchestrator, newDialogValues, newDialogWorktree, openNew } from './dialog.js';
 
 // ── the trigger picker ──────────────────────────────────────────────────────
 //
@@ -471,6 +471,11 @@ export function drToSchedule() {
     // there to read the failure.
     const body = newDialogValues();
     if (!body) return;
+    // A schedule cannot start an orchestrator (the store has no such field),
+    // and the dialog it opens hides the box — so say what was left behind.
+    if (newDialogOrchestrator()) {
+        toast('A schedule cannot start an orchestrator, so that box is not carried over.', 'warn');
+    }
 
     openNew({
         schedule: true,
@@ -504,6 +509,7 @@ export function drToSchedule() {
 export async function drSave() {
     const body = newDialogValues();
     if (!body) return;
+    const orch = newDialogOrchestrator();
     body.title = newDialogName();
 
     const editing = state.drafts.editing;
@@ -515,6 +521,13 @@ export async function drSave() {
         else await post('/api/drafts', body);
         closeNew();
         toast(editing ? 'Draft saved.' : 'Saved as a draft.', 'ok');
+        // A draft does not keep the box (the store has no such field), so say
+        // so rather than have it start as an ordinary session later. `orch` was
+        // read before the save, while the dialog was still open.
+        if (orch) {
+            toast('A draft does not remember "Start as an orchestrator" — tick it again '
+                + 'when you start it.', 'warn');
+        }
     } catch (err) {
         toast(`Could not save the draft: ${err.message}`, 'error');
         dom.newSave.textContent = label;
@@ -558,6 +571,9 @@ export async function startNew() {
     const worktree = newDialogWorktree();
     if (worktree === false) return;
     if (worktree) body.worktree = worktree;
+    // Start alone again: marked before its process starts, so it has its tools
+    // from the first turn. See the row in index.html.
+    if (newDialogOrchestrator()) body.orchestrator = true;
 
     dom.newGo.disabled = true;
     dom.newGo.textContent = 'Starting';

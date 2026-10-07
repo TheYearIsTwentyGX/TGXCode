@@ -122,8 +122,24 @@ function railTree() {
         if (!workersOf.has(id)) workersOf.set(id, []);
         workersOf.get(id).push(s);
     }
-    const after = new Map([...workersOf].map(([id, list]) => [id,
-        groupCard(`orch:${id}`, 'Workers', list, { nested: true, defaultOpen: true })]));
+    // And only while you are looking at that orchestrator — or at one of its own
+    // workers, so the card does not vanish the moment you click into a worker
+    // from it. Elsewhere its workers are not in the rail at all: they are its
+    // business, a dozen of them under every orchestrator is the clutter this
+    // nesting exists to prevent, and the orchestrator's dock lists them all. A
+    // filter shows every Workers card, for the reason `isOpen` gives: a search
+    // must not hide its own results.
+    const here = state.current
+        ? state.sessions.find(s => s.sessionId === state.current.sessionId) || state.current
+        : null;
+    const focused = !here ? null
+        : here.orchestrator ? here.sessionId
+        : here.worker ? here.worker.orchestratorId
+        : null;
+    const after = new Map([...workersOf]
+        .filter(([id]) => state.query || id === focused)
+        .map(([id, list]) => [id,
+            groupCard(`orch:${id}`, 'Workers', list, { nested: true, defaultOpen: true })]));
     const rest = ordered.filter(s => inProjectCard(s) && !nestedWorker(s));
     // A test orchestrator's workers are test sessions too, and belong under it
     // like any other's rather than a second time in this card.
