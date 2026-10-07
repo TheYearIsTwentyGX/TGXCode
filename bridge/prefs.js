@@ -278,6 +278,23 @@ const DEFAULTS = {
         // nothing, so this is a floor of five rather than a free knob.
         beaconEveryMinutes: 20,
     },
+    orchestrator: {
+        // What a session marked as an orchestrator starts with. Each one keeps
+        // its own copy afterwards (bridge/orchestrators.js), so changing these
+        // does not reach orchestrators that already exist.
+        maxRunning: 3,
+        worktree: true,
+        // Past this share of the chosen window, every busy worker and the
+        // orchestrator itself are stopped and it waits for Resume.
+        usageStopEnabled: true,
+        usageStopPercent: 90,
+        usageStopWindow: 'five_hour',
+        // Appended to every orchestrator's system prompt, after the brief that
+        // explains its tools — a CLAUDE.md for orchestrators. Read at each spawn.
+        addendum: '',
+        // The same for the workers they start.
+        workerAddendum: '',
+    },
     spinner: {
         // What a turn in progress calls itself. Off gives back the literal
         // "Thinking…" this app said for its whole life before now.
@@ -432,8 +449,14 @@ const DEFAULTS = {
 // a repository's to decide.
 //
 // `agentBrowser` is the same: whether a window opens on your desktop is yours.
+//
+// `orchestrator` is the quota argument twice over: how many sessions an
+// orchestrator may run at once, and how much of the account it may spend before
+// it is stopped, are not a checked-in repository's to raise — and its addenda
+// are text appended to a system prompt, which a repository already has CLAUDE.md
+// for.
 const USER_ONLY = new Set(['quota', 'keyboard', 'projects', 'toolbar', 'wispr',
-    'preview', 'devbrowser', 'standing', 'startup', 'agentBrowser']);
+    'preview', 'devbrowser', 'standing', 'startup', 'agentBrowser', 'orchestrator']);
 
 // What each key is allowed to be. A file is a thing people edit, so a bad value
 // is dropped and the default kept rather than taken at face value — a
@@ -499,6 +522,15 @@ const SHAPE = {
         // settings file asking for one every ten seconds is a mistake rather
         // than a preference.
         beaconEveryMinutes: (v) => Number.isInteger(v) && v >= 5 && v <= 1440,
+    },
+    orchestrator: {
+        maxRunning: (v) => Number.isInteger(v) && v >= 1 && v <= 10,
+        worktree: (v) => typeof v === 'boolean',
+        usageStopEnabled: (v) => typeof v === 'boolean',
+        usageStopPercent: (v) => Number.isInteger(v) && v >= 1 && v <= 100,
+        usageStopWindow: (v) => ['five_hour', 'seven_day', 'seven_day_opus', 'seven_day_sonnet'].includes(v),
+        addendum: (v) => typeof v === 'string' && v.length <= 20_000,
+        workerAddendum: (v) => typeof v === 'string' && v.length <= 20_000,
     },
     spinner: {
         randomize: (v) => typeof v === 'boolean',
@@ -993,6 +1025,7 @@ class Prefs {
             live: { ...DEFAULTS.live },
             projects: { ...DEFAULTS.projects, colors: { ...DEFAULTS.projects.colors } },
             quota: { ...DEFAULTS.quota },
+            orchestrator: { ...DEFAULTS.orchestrator },
             spinner: { ...DEFAULTS.spinner, weights: { ...DEFAULTS.spinner.weights } },
             keyboard: { ...DEFAULTS.keyboard, bindings: { ...DEFAULTS.keyboard.bindings } },
             toolbar: { ...DEFAULTS.toolbar, items: [...DEFAULTS.toolbar.items] },

@@ -28,6 +28,12 @@ const ACTIVE_WINDOW_MS = 90_000;
 // before the state attached to it is treated as orphaned. See note().
 const PENDING_TTL_MS = 5 * 60_000;
 
+/** The two orchestration fields of a summary, both always present. */
+function orchestration(store, sessionId) {
+    const part = store ? store.forSummary(sessionId) : {};
+    return { orchestrator: part.orchestrator || null, worker: part.worker || null };
+}
+
 class SessionIndex extends EventEmitter {
     /** @param {import('./flags').Flags} [flags] user pin/archive state */
     constructor(flags = null) {
@@ -449,6 +455,11 @@ class SessionIndex extends EventEmitter {
             // that "something arrives here at 2am" is answerable without opening
             // the session, which is the one thing nobody is going to do at 2am.
             later: this.later ? this.later.pendingFor(m.sessionId) : null,
+            // Its part in an orchestration, if it has one. `orchestrator` is
+            // `{inbox, workers, paused}` on a session marked as one; `worker` is
+            // `{orchestratorId, title, closed}` on a session one started. Null on
+            // everything else. See bridge/orchestrators.js.
+            ...orchestration(this.orchestrators, m.sessionId),
             // `{text, source, at}` — a line about where the last turn left things,
             // or null. See bridge/standing.js for where it comes from.
             standing: this.standing ? this.standing.forSession(m.sessionId) : null,

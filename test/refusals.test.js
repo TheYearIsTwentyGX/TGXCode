@@ -199,6 +199,16 @@ const HOME = os.homedir();
     check('handing work to a session', (await call('POST', '/api/sessions/abc/handoff', {
         headers: PHONE, body: { text: 'do this' },
     })).status, 403);
+    // An orchestrator's tools start sessions in fresh worktrees and answer their
+    // permission prompts — the handoff clause, several times over.
+    for (const sub of ['spawn', 'next', 'send', 'answer', 'read', 'stop', 'close', 'summary']) {
+        check(`an orchestrator's ${sub}`, (await call('POST', `/api/sessions/abc/orchestrator/${sub}`, {
+            headers: PHONE, body: {},
+        })).status, 403);
+    }
+    check('a worker\'s report', (await call('POST', '/api/sessions/abc/report', {
+        headers: PHONE, body: { kind: 'update', text: 'x' },
+    })).status, 403);
     check('runs list', (await call('GET', '/api/runs', { headers: PHONE })).status, 403);
     check('runs stream', (await call('GET', '/api/runs/x/stream', { headers: PHONE })).status, 403);
     check('runs input', (await call('POST', '/api/runs/x/input', { headers: PHONE, body: {} })).status, 403);
