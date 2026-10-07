@@ -262,6 +262,11 @@ export async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     wt.offered = !schedMode && !draft;
     wt.named = false;
     dom.newWt.checked = false;
+    // Starting as an orchestrator, on the worktree row's terms: Start only, reset
+    // on every open so the last session's choice is not carried into this one.
+    dom.newOrchRow.hidden = !wt.offered;
+    dom.newOrch.checked = false;
+    paintNewOrch();
     dom.newWtName.value = '';
     dom.newWtBase.value = '';
     paintNewWorktree();
@@ -443,6 +448,27 @@ export function paintNewWorktree() {
         'Starts in ', el('code', {}, homely(`${wt.root}/.claude/worktrees/${name}`)),
         ' on a new branch ', el('code', {}, `worktree-${name}`),
         ' from ', el('code', {}, base), '.');
+}
+
+const ORCH_NOTE = 'It starts worker sessions and reads what they report from an inbox, '
+    + 'rather than doing the work itself.';
+
+/** The orchestrator row's note, which says so when the mode will fight it. */
+function paintNewOrch() {
+    const clash = dom.newOrch.checked && dom.newPerm.value === 'plan';
+    dom.newOrchNote.classList.toggle('warn', clash);
+    dom.newOrchNote.textContent = clash
+        ? `${ORCH_NOTE} In plan mode every worker it starts waits on your approval first.`
+        : ORCH_NOTE;
+}
+
+/**
+ * The `orchestrator` field of `POST /api/sessions`: true when the row is offered
+ * and ticked. Not part of `newDialogValues`, for `newDialogWorktree`'s reason
+ * below — neither the drafts nor the schedules store has the field.
+ */
+export function newDialogOrchestrator() {
+    return !dom.newOrchRow.hidden && dom.newOrch.checked;
 }
 
 /**
@@ -660,6 +686,15 @@ export function wireNewDialog() {
     // The worktree row. The prompt writes the name until somebody types in the
     // name box; clearing that box hands it back to the prompt's next edit, and
     // leaves it empty until then.
+    // Ticking it moves Permissions off `plan`, the dialog's default: an
+    // orchestrator's whole job is calling its tools, and in plan mode each spawn
+    // would stop for approval. Only off `plan`, and only on the way in — any
+    // other mode was a choice, and so is putting it back.
+    dom.newOrch.addEventListener('change', () => {
+        if (dom.newOrch.checked && dom.newPerm.value === 'plan') dom.newPerm.value = 'auto';
+        paintNewOrch();
+    });
+    dom.newPerm.addEventListener('change', paintNewOrch);
     dom.newWt.addEventListener('change', () => {
         if (dom.newWt.checked) fillWtName();
         paintNewWorktree();
