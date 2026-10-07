@@ -4542,10 +4542,14 @@ count="N">` message, while it is idle, once per new arrival.
 `usedPercent` (from `GET /api/quota`) reaches `percent`, the bridge soft-stops the
 orchestrator and every busy worker, sets `paused`, refuses new spawns and holds
 nudges, and sends a `notice` with `kind: "orchestrator_paused"`. Messages queued on
-any of those sessions come back as `send-failed` (`kind: "retired"`) with their
-text, exactly as a Stop hands them back, rather than being dropped. `stop` and
+any of those sessions are given back rather than dropped: an instruction the
+orchestrator queued on a worker returns to the orchestrator's inbox as a `note` item
+saying it was not delivered, and anything else comes back as `send-failed`
+(`kind: "retired"`) with its text, exactly as a Stop hands it back. `stop` and
 `close` from the orchestrator do the same for the worker they stop. Only Resume lifts
-it. The reading is only as fresh as the quota beacon; see `GET /api/quota`.
+it. The reading is only as fresh as the quota beacon; see `GET /api/quota`. A
+reading whose window's `resetsAt` has passed does not count — it describes a period
+that is over.
 
 #### `GET /api/sessions/:id/orchestrator`
 
@@ -4562,18 +4566,21 @@ The payload above. Never 404s: a session that is not one answers `enabled: false
   `restarted` says whether that was now or waits for the turn in flight. `409` for a
   worker; `404` for an unknown session.
 - `enabled: false` turns it off. The workers carry on as ordinary sessions and the
-  inbox is discarded. A worker blocked on a plan or prompt that only the
-  orchestrator was going to answer — no window connected — has it **denied**, since
-  nothing would answer it otherwise; with a window open it is left for the window.
-  Deleting the orchestrator session does the same.
-- `settings` that lower the cutoff below the current reading pause it at once.
+  inbox is discarded. **A worker blocked on a plan, question or permission prompt
+  has it denied**, whether or not a window is open — a window open on some other
+  session is not somebody answering this one, and with the inbox gone nothing would
+  point anybody at it. Deleting the orchestrator session does the same.
+- `settings` that lower the cutoff below the current reading pause it at once, even
+  with nothing of that orchestrator running yet (just after a bridge restart).
 - `settings` alone merges into the current settings field by field; a bad value
   leaves that field as it was.
 
 #### `GET /api/sessions/:id/orchestrator/inbox`
 
-`{items: [item], unread: number}` — the whole inbox, newest first (at most 300 are
-kept; only settled items are ever dropped).
+`{items: [item], unread: number}` — the whole inbox, newest first. About 300 are
+kept: only settled items are dropped — never an ask a worker is still blocked on,
+even once read. A worker that is closed or deleted has its unanswered asks marked
+`stale` (`outcome: "worker-closed"`).
 
 #### `POST /api/sessions/:id/orchestrator/inbox/:itemId/dismiss`
 

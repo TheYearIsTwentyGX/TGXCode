@@ -407,21 +407,40 @@ async function spawn(orchId, opts) {
         return { queued: true, id: row.id, position: store.get(orchId).pendingSpawns.length,
             running: running(orchId), maxRunning: o.settings.maxRunning };
     }
-    // Reserved before the first await, so the next caller sees this slot taken.
-    reserve(orchId);
     return { queued: false, ...(await startWorker(orchId, opts)) };
 }
 
-/** Start one worker. The caller has reserved its slot; this releases it. */
+/**
+ * Start one worker, holding a slot for it from the first line.
+ *
+ * The reservation is taken here rather than by each caller: an async function
+ * runs synchronously up to its first await, so this still happens before any
+ * other spawn or drain can look — and there is no second call site to forget.
+ * It is given back the moment the worker's runner exists (from then on the
+ * runner itself counts), or when the start fails — and a failure lets the
+ * queue move, since nothing else would: a queue only drains when a running
+ * worker's turn ends, and the one that failed never had one.
+ */
 async function startWorker(orchId, opts) {
-    try {
-        return await launch(orchId, opts);
-    } finally {
+    reserve(orchId);
+    let held = true;
+    const free = () => {
+        if (!held) return;
+        held = false;
         release(orchId);
+    };
+    try {
+        return await launch(orchId, opts, free);
+    } catch (err) {
+        free();
+        drainSpawns(orchId);
+        throw err;
+    } finally {
+        free();
     }
 }
 
-async function launch(orchId, opts) {
+async function launch(orchId, opts, free) {
     const o = store.get(orchId);
     const summary = index.summary(orchId);
     const base = opts.cwd || (summary ? sessionCwd(summary) : null);
@@ -461,6 +480,8 @@ async function launch(orchId, opts) {
         store.closeWorker(orchId, sessionId);
         throw refuse(400, err.message);
     }
+    // The runner counts now; the reservation would count it twice.
+    free();
     const parentFlags = flags.get(orchId);
     flags.set(sessionId, { title, ...(parentFlags.test ? { test: true } : {}) });
     index.note(sessionId);
@@ -473,7 +494,6 @@ function drainSpawns(orchId) {
     if (!o || o.paused) return;
     while (o.pendingSpawns.length && running(orchId) < o.settings.maxRunning) {
         const next = store.takeSpawn(orchId);
-        reserve(orchId);
         startWorker(orchId, { ...next.opts, prompt: next.prompt, title: next.title }).catch((err) => {
             file(orchId, { kind: 'note', text: `A queued worker "${next.title || 'untitled'}" could `
                 + `not be started: ${err.message}` });
@@ -568,13 +588,34 @@ function answer(orchId, itemId, decision, extra = {}) {
     return { ok: true };
 }
 
+const ORCH_MESSAGE = '<orchestrator-message';
+
 /**
- * Stop a session's turn on the bridge's own initiative. Whatever was queued on
- * it — a chip the user typed, an instruction the orchestrator sent — goes back
- * as a `send-failed` with its text, the way the Stop button hands it to the
- * composer, rather than vanishing with `stop()`'s return value.
+ * Stop a session's turn on the bridge's own initiative, without losing what was
+ * queued on it. `stop()` returns the queue and drops it; this gives each message
+ * back to whoever wrote it. An instruction the orchestrator sent comes back to
+ * the orchestrator's inbox as a note — it assumed delivery, and a composer on a
+ * page nobody is looking at would be the worst place for it. Anything else was
+ * typed by a person, and goes back as a `send-failed`, the way the Stop button
+ * hands it to the composer.
  */
 function stopKeeping(r, why, opts = {}) {
+    const owner = store.orchestratorOf(r.sessionId);
+    if (owner) {
+        const mine = r.queue.filter(q => String(q.text || '').startsWith(ORCH_MESSAGE));
+        if (mine.length) {
+            r.queue = r.queue.filter(q => !mine.includes(q));
+            const w = store.worker(owner.id, r.sessionId);
+            const strip = (t) => t.replace(/^<orchestrator-message[^>]*>\n?/, '')
+                .replace(/\n?<\/orchestrator-message>\s*$/, '');
+            file(owner.id, {
+                workerId: r.sessionId, kind: 'note',
+                text: `Not delivered to ${w && w.title ? `"${w.title}"` : 'that worker'} — ${why} `
+                    + `Send again once it is running if it still applies:\n\n`
+                    + mine.map(q => strip(q.text)).join('\n\n---\n\n'),
+            });
+        }
+    }
     r.handOverQueue(why);
     return r.stop(opts);
 }
@@ -583,7 +624,7 @@ async function stopWorker(orchId, workerId, { hard = false } = {}) {
     const w = ownWorker(orchId, workerId);
     const r = pool.get(w.id);
     if (!r) return { ok: true, how: null };
-    const out = await stopKeeping(r, 'Its orchestrator stopped this session before these were sent.', { hard });
+    const out = await stopKeeping(r, 'it was stopped before these were sent.', { hard });
     return { ok: true, how: out.how };
 }
 
@@ -591,7 +632,7 @@ async function closeWorker(orchId, workerId, { archive = true } = {}) {
     const w = ownWorker(orchId, workerId);
     const r = pool.get(w.id);
     if (r && r.state === 'busy') {
-        await stopKeeping(r, 'Its orchestrator closed this session before these were sent.');
+        await stopKeeping(r, 'it was closed before these were sent.');
     }
     store.closeWorker(orchId, workerId);
     if (archive) flags.set(workerId, { archived: true });
@@ -623,10 +664,18 @@ function ours(o) {
     return !!pool.get(o.id) || o.workers.some(w => pool.get(w.id));
 }
 
-function checkUsage() {
+/**
+ * Pause any orchestrator past its cutoff. On the clock and on quota events only
+ * the ones this bridge runs something of are considered — the store is shared
+ * with every other bridge. `onlyId` is a settings change made here: that one is
+ * checked whether or not anything of it is running yet, so a cutoff lowered
+ * just after a restart still takes effect before its next spawn.
+ */
+function checkUsage(onlyId = null) {
     const ws = windows();
     for (const o of store.byId.values()) {
-        if (o.paused || !ours(o)) continue;
+        if (o.paused) continue;
+        if (onlyId ? o.id !== onlyId : !ours(o)) continue;
         const trip = usageTrip(o.settings, ws);
         if (trip) pause(o.id, tripReason(trip));
     }
@@ -643,7 +692,7 @@ function pause(orchId, reason) {
     for (const id of [orchId, ...o.workers.filter(w => !w.closedAt).map(w => w.id)]) {
         const r = pool.get(id);
         if (r && r.state === 'busy') {
-            stopKeeping(r, 'The usage cutoff stopped this session before these were sent.')
+            stopKeeping(r, 'the usage cutoff stopped it before these were sent.')
                 .catch(() => { /* already gone */ });
         }
     }
@@ -683,18 +732,19 @@ function enable(sessionId, settings) {
 }
 
 /**
- * Deny whatever this orchestrator's workers are blocked on, where no window is
- * open to answer it instead. Called as the orchestrator goes away: delegation
- * was the only thing keeping the no-window auto-deny off those asks, and one
- * already held never passes that check again — so without this the worker
- * waits, silently, until somebody happens to open its page.
+ * Deny whatever this orchestrator's workers are blocked on. Called as the
+ * orchestrator goes away, and unconditionally: "a window is open" means a
+ * window on *any* session, not one looking at this worker, and with the inbox
+ * gone nothing would point anybody at it — the worker would wait, silently,
+ * until somebody happened to open its page. Denied, it carries on with its own
+ * judgement and says so in its reply.
  */
 function releaseAsks(orchId) {
     for (const w of store.openWorkers(orchId)) {
         const r = pool.get(w.id);
-        if (r && r.pendingPermission && !r.hasViewer()) {
-            r.denyPending('Its orchestrator went away before answering, and no TGXCode window was '
-                + 'open to answer instead, so this was denied.');
+        if (r && r.pendingPermission) {
+            r.denyPending('Its orchestrator went away before answering this, so it was denied. '
+                + 'Use your own judgement, or ask the user.');
         }
     }
 }

@@ -77,7 +77,7 @@ async function handle(req, res, url, pathname, seg) {
         orchestration.emit(id);
         // A cutoff lowered under the current reading takes effect now, not at
         // the next minute's check.
-        orchestration.checkUsage();
+        orchestration.checkUsage(id);
         return send(res, 200, orchestration.payload(id));
     }
 

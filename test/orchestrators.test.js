@@ -80,6 +80,10 @@ const fileOf = (n) => path.join(home, `orch-${n}.json`);
         [{ type: 'five_hour', usedPercent: 100 }]), null, 'off is off');
     assert.ok(usageTrip(cleanSettings({ usageStop: { window: 'seven_day', percent: 90 } }), ws));
     assert.strictEqual(usageTrip(s, [{ type: 'five_hour', usedPercent: null }]), null, 'no reading, no trip');
+    const nowS = Math.floor(Date.now() / 1000);
+    assert.strictEqual(usageTrip(s, [{ type: 'five_hour', usedPercent: 92, resetsAt: nowS - 60 }]), null,
+        'a reading from before the window reset does not count');
+    assert.ok(usageTrip(s, [{ type: 'five_hour', usedPercent: 92, resetsAt: nowS + 600 }]));
     ok('the usage cutoff trips at the threshold of the chosen window, and not when off');
 }
 
@@ -184,6 +188,32 @@ const fileOf = (n) => path.join(home, `orch-${n}.json`);
         'a read but unanswered plan is never trimmed');
     assert.ok(s.get('O').inbox.length <= 305);
     ok('trimming a full inbox drops settled items, never an ask still waiting');
+
+    s.addWorker('O', { id: 'W' });
+    s.closeWorker('O', 'W');
+    assert.strictEqual(s.get('O').inbox.find(i => i.requestId === 'r1').status, 'stale',
+        'closing a worker settles the asks it left behind');
+    ok('a closed worker\'s unanswered asks go stale, so the inbox can be trimmed again');
+}
+
+{
+    // A newer build, or a torn file: unreadable is not empty, and must not be
+    // written over with only what this bridge just changed.
+    const file = fileOf('newer');
+    const s = new Orchestrators({ file });
+    s.enable('A');
+    s.flush();
+    const theirs = JSON.stringify({ version: 2, orchestrators: { A: {}, B: {}, C: {} } });
+    fs.writeFileSync(file, theirs);
+    s.push('A', { kind: 'note', text: 'x' });
+    s.flush();
+    assert.strictEqual(fs.readFileSync(file, 'utf8'), theirs, 'the newer file is left alone');
+    assert.ok(s.get('A'), 'and what this bridge holds is kept in memory');
+    fs.writeFileSync(file, '{"version": 1, "orchestr');
+    s.push('A', { kind: 'note', text: 'y' });
+    s.flush();
+    assert.strictEqual(fs.readFileSync(file, 'utf8'), '{"version": 1, "orchestr', 'a torn file too');
+    ok('an unreadable or newer-format file is never written over');
 }
 
 // --- orchestration, against a fake pool ---------------------------------------
@@ -357,7 +387,8 @@ function harness(name) {
         h.setWindows([{ type: 'five_hour', usedPercent: 79 }]);
         orchestration.checkUsage();
         assert.strictEqual(h.store.get('O').paused, null);
-        w.queue = [{ id: 'q1', text: 'carry on with the tests' }];
+        w.queue = [{ id: 'q1', text: 'carry on with the tests' },
+            { id: 'q2', text: '<orchestrator-message from="O">\nalso fix the lint\n</orchestrator-message>' }];
         h.setWindows([{ type: 'five_hour', usedPercent: 81 }]);
         orchestration.checkUsage();
         assert.ok(h.store.get('O').paused, 'paused past the cutoff');
@@ -365,6 +396,10 @@ function harness(name) {
         assert.strictEqual(w.stopped, 1);
         assert.deepStrictEqual(w.handedBack.texts, ['carry on with the tests'],
             'a queued message is handed back, not dropped');
+        const bounced = h.store.unread('O').find(i => i.kind === 'note');
+        assert.ok(bounced && /Not delivered/.test(bounced.text) && /also fix the lint/.test(bounced.text),
+            'the orchestrator\'s own queued instruction comes back to its inbox');
+        assert.ok(!/orchestrator-message/.test(bounced.text), 'without the envelope');
         orchestration.checkUsage();
         assert.strictEqual(w.stopped, 1, 'and not stopped again while paused');
         await assert.rejects(orchestration.spawn('O', { prompt: 'x', worktree: false }), /paused/);
@@ -374,9 +409,14 @@ function harness(name) {
         orchestration.resume('O');
         assert.strictEqual(h.store.get('O').paused, null);
 
+        // A settings change checks that orchestrator even with nothing of it
+        // running here — the state just after a bridge restart.
+        h.runners.clear();
         h.store.setSettings('O', { usageStop: { window: 'seven_day_opus', percent: 50 } });
         h.setWindows([{ type: 'seven_day_opus', usedPercent: 60 }]);
         orchestration.checkUsage();
+        assert.strictEqual(h.store.get('O').paused, null, 'the clock skips what this bridge does not run');
+        orchestration.checkUsage('O');
         assert.match(h.store.get('O').paused.reason, /^seven-day-opus usage at 60%/);
         ok('the usage cutoff stops everything once, hands queued messages back, and Resume waits for it');
     }
@@ -410,8 +450,9 @@ function harness(name) {
         w2.viewer = true;
         orchestration.disable('O');
         assert.match(w1.denied, /orchestrator went away/, 'nobody left to answer: denied');
-        assert.ok(w2.pendingPermission, 'a window is open on the other: left for it');
-        ok('turning an orchestrator off denies its workers\' asks that nobody else can answer');
+        assert.match(w2.denied, /orchestrator went away/,
+            'an open window elsewhere is not somebody answering this worker');
+        ok('turning an orchestrator off denies its workers\' held asks');
     }
 
     {
@@ -437,6 +478,24 @@ function harness(name) {
         await sleep(1500);
         assert.strictEqual(h.created.length, 3, 'a drain with one free slot starts exactly one');
         ok('the cap holds across parallel spawns and a drain, while worktrees are being made');
+    }
+
+    {
+        // The first start fails (no repository to make a worktree in) after the
+        // second was queued behind its reservation. Nothing else would ever drain
+        // that queue: no worker is running to end a turn.
+        const h = harness('failed-start');
+        orchestration.enable('O', { maxRunning: 1 });
+        const [first, second] = await Promise.allSettled([
+            orchestration.spawn('O', { prompt: 'doomed', cwd: home, worktree: true }),
+            orchestration.spawn('O', { prompt: 'next', worktree: false }),
+        ]);
+        assert.strictEqual(first.status, 'rejected');
+        assert.strictEqual(second.value.queued, true);
+        await sleep(50);
+        assert.strictEqual(h.created.length, 1, 'the queued one starts once the failed one lets go');
+        assert.strictEqual(h.created[0].prompt, 'next');
+        ok('a start that fails gives its slot to the next queued worker');
     }
 })().then(() => {
     fs.rmSync(home, { recursive: true, force: true });
