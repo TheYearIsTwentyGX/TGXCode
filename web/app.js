@@ -92,6 +92,7 @@ import {
     flashNode, hideTurnPop, jumpToTurn, markActiveTurn, revealNode,
 } from './transcript/turn-rail.js';
 import { applyRunChange, cmdDir, loadCommands, renderCommands } from './commands.js';
+import { onOrchestratorEvent, toggleOrchestrator } from './orchestrator.js';
 import { adoptAttachments, dragHasFiles, wireAttachments } from './composer/attachments.js';
 import { applyLater, closeLater, loadLater, wireLater } from './composer/later.js';
 import { updateMentionMenu } from './composer/mentions.js';
@@ -2758,6 +2759,10 @@ function connect() {
         }
     });
 
+    // An orchestrator's inbox, workers, settings or summary moved. The whole
+    // payload rides on the event, so the dock is replaced rather than refetched.
+    es.addEventListener('orchestrator', (e) => onOrchestratorEvent(JSON.parse(e.data)));
+
     es.addEventListener('permission-request', (e) => {
         const p = JSON.parse(e.data);
         // Ahead of the early return, as with turn-complete: the asks worth
@@ -3413,6 +3418,8 @@ dom.btnNew.addEventListener('click', () => openNew());
 dom.btnPin.addEventListener('click', () => {
     if (state.current) setFlags(state.current, { pinned: !state.current.pinned });
 });
+
+dom.btnOrch.addEventListener('click', () => toggleOrchestrator());
 
 dom.btnArchive.addEventListener('click', () => {
     if (state.current) setFlags(state.current, { archived: !state.current.archived });

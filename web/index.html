@@ -36,6 +36,7 @@
 <link rel="stylesheet" href="./css/viewers.css">
 <link rel="stylesheet" href="./css/colours.css">
 <link rel="stylesheet" href="./css/preview.css">
+<link rel="stylesheet" href="./css/orchestrator.css">
 </head>
 <body>
 
@@ -379,6 +380,19 @@
                  them: a row of labels reads as a toolbar, and putting them after
                  the icons would read as an afterthought. -->
             <div id="cmds" class="cmds"></div>
+            <!-- Marks this session as an orchestrator of worker sessions —
+                 web/orchestrator.js. Hidden on a worker, which cannot be one. -->
+            <button id="btn-orch" class="icon-btn" type="button" aria-pressed="false"
+                    title="Make this session an orchestrator of worker sessions">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <circle cx="12" cy="5.5" r="2.5" stroke="currentColor" stroke-width="1.7"/>
+                <circle cx="5.5" cy="18" r="2.2" stroke="currentColor" stroke-width="1.7"/>
+                <circle cx="12" cy="18" r="2.2" stroke="currentColor" stroke-width="1.7"/>
+                <circle cx="18.5" cy="18" r="2.2" stroke="currentColor" stroke-width="1.7"/>
+                <path d="M12 8v7.8M12 11.5H6.5a1 1 0 0 0-1 1v3.3M12 11.5h5.5a1 1 0 0 1 1 1v3.3"
+                      stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+              </svg>
+            </button>
             <button id="btn-pin" class="icon-btn" type="button" title="Pin this session">
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                 <path d="M9 3h6l-.7 5.2 3 2.6V13H6.7v-2.2l3-2.6L9 3Z"
@@ -615,6 +629,10 @@
              is stopped on it, so it belongs next to the box you would otherwise
              be typing in, not somewhere you can scroll away from. -->
         <div id="ask-dock" class="ask-dock" hidden></div>
+
+        <!-- An orchestrator's inbox, workers, settings and pinned summary, or a
+             worker's line back to its orchestrator. Drawn by web/orchestrator.js. -->
+        <div id="orch-dock" class="orch-dock" hidden></div>
 
         <div class="composer" id="composer">
           <div class="composer-inner">

@@ -75,6 +75,9 @@ async function handle(req, res, url, pathname, seg) {
         }
         if (body.settings) store.setSettings(id, body.settings);
         orchestration.emit(id);
+        // A cutoff lowered under the current reading takes effect now, not at
+        // the next minute's check.
+        orchestration.checkUsage();
         return send(res, 200, orchestration.payload(id));
     }
 

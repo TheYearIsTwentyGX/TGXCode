@@ -408,6 +408,18 @@ class Orchestrators {
         return w;
     }
 
+    /** Take a worker off the list altogether — for a session that was deleted. */
+    removeWorker(orchId, workerId) {
+        const o = this.byId.get(orchId);
+        if (!o) return false;
+        const before = o.workers.length;
+        o.workers = o.workers.filter(w => w.id !== workerId);
+        if (o.workers.length === before) return false;
+        this.workerOf.delete(workerId);
+        this._touch(o);
+        return true;
+    }
+
     openWorkers(orchId) {
         const o = this.byId.get(orchId);
         return o ? o.workers.filter(w => !w.closedAt) : [];

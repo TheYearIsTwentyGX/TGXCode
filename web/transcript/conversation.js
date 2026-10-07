@@ -26,6 +26,7 @@ import { cvStaleFor } from '../quota.js';
 import { state } from '../state.js';
 import { notePrRepo } from '../pr-refs.js';
 import { loadCommands } from '../commands.js';
+import { loadOrchestrator, paintOrchestratorButton } from '../orchestrator.js';
 import { showTerm, termOpen } from '../term-pane.js';
 import {
     applyRunner, closePanels, grouping, loadAttach, loadDraft, loadSessions, markSessionNotesRead,
@@ -115,6 +116,7 @@ export async function openSession(id, { quiet = false, keepPanels = false } = {}
         state.runner = data.runner || null;
 
         renderHeader();
+        loadOrchestrator();
         // Drops the skeleton — and with it a row drawn at Send while this fetch was
         // still in flight, which is reachable because the composer is live over a
         // skeleton. Forget it rather than re-append it: the transcript that is about
@@ -475,6 +477,7 @@ export async function loadPrStatus() {
 export function renderHeaderActions() {
     const s = state.current;
     if (!s) return;
+    paintOrchestratorButton();
     dom.btnPin.classList.toggle('on', !!s.pinned);
     dom.btnPin.setAttribute('aria-pressed', String(!!s.pinned));
     dom.btnPin.title = s.pinned ? 'Unpin this session' : 'Pin this session to the top';

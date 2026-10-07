@@ -232,6 +232,9 @@ export const state = {
     queueSig: '',           // what the chips were last built from, to avoid churn
     queueFocus: null,       // the chip holding the queue's single tab stop
     ask: null,              // the approval this session is blocked on, if any
+    // The `orchestrator` payload for the session on screen — its own, or its
+    // orchestrator's when it is a worker. web/orchestrator.js.
+    orch: null,
     planAside: false,       // the plan view is collapsed to its one-line bar
     planFor: null,          // which requestId that was decided about
     // The mode the bridge last reported, per session, so that a mode which moves

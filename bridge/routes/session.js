@@ -21,6 +21,7 @@
 // so their order, their fall-through and their status codes are what they were.
 
 const changes = require('../changes');
+const orchestration = require('../orchestration');
 const { broadcast } = require('../events');
 const { openFile } = require('../explorer');
 const { HandoffLimit, stateOf: handoffState, wakeFailure, wakes } = require('../handoff');
@@ -196,6 +197,7 @@ async function handle(req, res, url, pathname, seg, who) {
             // follow: what was about this session goes when the session does.
             if (later.forget(sessionId)) broadcast('later-changed', laterPayload());
             if (standing) standing.forget(sessionId);
+            orchestration.forget(sessionId);
 
             // Two events: one for windows showing this conversation, which have
             // to leave it, and the ordinary list refresh for everybody else.

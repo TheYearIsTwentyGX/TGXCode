@@ -82,8 +82,27 @@ function railTree() {
     // Scratch sessions gathered in one place, because the point of labelling one
     // is to be able to find it again and delete it. Only a development bridge
     // sends any, so the everyday window never grows this card.
-    const test = ordered.filter(s => s.test && !s.pinned && !s.archived);
-    const rest = ordered.filter(inProjectCard);
+    // An orchestrator's workers are drawn under it rather than among the
+    // project's rows: they are its work, they come in batches, and they usually
+    // live in worktrees of their own that would otherwise scatter them. Only
+    // while the orchestrator itself is in the rail somewhere — a worker whose
+    // orchestrator was deleted is an ordinary session again.
+    const orchIds = new Set(ordered.filter(s => s.orchestrator).map(s => s.sessionId));
+    const workersOf = new Map();
+    const nestedWorker = (s) => !!s.worker && orchIds.has(s.worker.orchestratorId)
+        && !s.pinned && !s.archived;
+    for (const s of ordered) {
+        if (!nestedWorker(s)) continue;
+        const id = s.worker.orchestratorId;
+        if (!workersOf.has(id)) workersOf.set(id, []);
+        workersOf.get(id).push(s);
+    }
+    const after = new Map([...workersOf].map(([id, list]) => [id,
+        groupCard(`orch:${id}`, 'Workers', list, { nested: true, defaultOpen: true })]));
+    const rest = ordered.filter(s => inProjectCard(s) && !nestedWorker(s));
+    // A test orchestrator's workers are test sessions too, and belong under it
+    // like any other's rather than a second time in this card.
+    const test = ordered.filter(s => s.test && !s.pinned && !s.archived && !nestedWorker(s));
 
     // `hideDone`: drop the rows whose work has landed. Only from the project
     // cards — pinning is something you did on purpose, archived is already out of
@@ -105,7 +124,7 @@ function railTree() {
     const cards = [];
 
     // Pinned first, across every project — that is the point of pinning.
-    if (pinned.length) cards.push(groupCard('pinned', 'Pinned', pinned));
+    if (pinned.length) cards.push(groupCard('pinned', 'Pinned', pinned, { after }));
 
     const groups = new Map();
     for (const s of rest) {
@@ -154,13 +173,14 @@ function railTree() {
             // rows are counted for the same reason — the project has them, and
             // the button in the rail head is where the hiding is accounted for.
             all: list,
+            after,
             lead: sched.length
                 ? groupCard(`sched:${key}`, 'Scheduled', sched, { nested: true })
                 : null,
         }));
     }
 
-    if (test.length) cards.push(groupCard('test', 'Test sessions', test));
+    if (test.length) cards.push(groupCard('test', 'Test sessions', test, { after }));
     if (archived.length) cards.push(groupCard('archived', 'Archived', archived));
 
     // Said out loud rather than left to look like a rail that has lost its
@@ -234,6 +254,13 @@ function isOpen(key, nested) {
     return nested ? state.schedOpen.has(key) : !state.collapsed.has(key);
 }
 
+/**
+ * Whether a group's open state lives in `schedOpen` (default shut) rather than
+ * `collapsed` (default open). A nested card is shut until asked for, except an
+ * orchestrator's Workers, which are the thing you came to look at.
+ */
+const shutByDefault = (opts) => !!opts.nested && !opts.defaultOpen;
+
 /** One of web/icons.js's ICON glyphs, as a vnode. Its icon() is the DOM twin. */
 function icon(name, size = 15) {
     return html`<svg width=${size} height=${size} viewBox="0 0 24 24" fill="none"
@@ -251,7 +278,7 @@ function icon(name, size = 15) {
  * `isOpen`.
  */
 function groupCard(key, label, list, opts = {}) {
-    const open = isOpen(key, opts.nested);
+    const open = isOpen(key, shutByDefault(opts));
     const counted = opts.all || list;
     const live = counted.filter(s => s.active || (s.runner && s.runner.state === 'busy')).length;
     const bodyId = `group-${key.replace(/[^\w-]/g, '_')}`;
@@ -287,7 +314,7 @@ function groupCard(key, label, list, opts = {}) {
                 aria-controls=${bodyId}
                 draggable=${drag ? 'true' : null}
                 title=${drag ? 'Drag to reorder projects' : null}
-                onClick=${() => { toggleGroup(key, open, opts.nested); renderRail(); }}
+                onClick=${() => { toggleGroup(key, open, shutByDefault(opts)); renderRail(); }}
                 onDragStart=${drag ? (e) => onRailDragStart(e, opts.project.cwd) : null}
                 onDragEnd=${drag ? onRailDragEnd : null}>
                 ${drag ? html`<span class="group-grip">${icon('grip', 13)}</span>` : null}
@@ -308,7 +335,8 @@ function groupCard(key, label, list, opts = {}) {
             ${open ? html`
                 <div class="group-body" id=${bodyId}>
                     ${opts.lead || null}
-                    ${list.map(strip)}
+                    ${list.map(s => (opts.after && opts.after.has(s.sessionId)
+                        ? [strip(s), opts.after.get(s.sessionId)] : strip(s)))}
                 </div>` : null}
         </section>`;
 }
@@ -343,6 +371,7 @@ function strip(s) {
                 <span class="strip-meta">
                     ${s.pinned ? html`<span class="tag-pin" title="Pinned">${icon('pin', 11)}</span>` : null}
                     ${s.test ? html`<span class="tag-test">test</span>` : null}
+                    ${orchestratorBadge(s)}
                     ${(s.live && s.live.kind === 'bg')
                         ? html`<span class="tag-bg" title="A background agent">bg</span>` : null}
                     ${stalled ? stalledBadge() : null}
@@ -395,6 +424,20 @@ function strip(s) {
                 >${icon('trash')}</button>`}
             </div>
         </div>`;
+}
+
+/**
+ * An orchestrator's tag: how many inbox items it has not read, or that the usage
+ * cutoff paused it. Up with the other tags, which are the part of the line that
+ * is never cut short.
+ */
+function orchestratorBadge(s) {
+    const o = s.orchestrator;
+    if (!o) return null;
+    if (o.paused) return html`<span class="tag-orch paused" title="Paused by the usage cutoff">paused</span>`;
+    return html`<span class="tag-orch" title=${o.inbox
+        ? `Orchestrator — ${o.inbox} inbox item${o.inbox === 1 ? '' : 's'} unread`
+        : 'Orchestrator'}>${o.inbox ? `orch · ${o.inbox}` : 'orch'}</span>`;
 }
 
 /**

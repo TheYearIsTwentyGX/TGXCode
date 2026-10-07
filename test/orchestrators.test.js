@@ -330,6 +330,13 @@ function harness(name) {
         assert.match(orchestration.roleOf('W').brief, /You are a worker/);
         assert.strictEqual(orchestration.roleOf('nobody'), null);
         ok('each role gets its own brief, and a session with none gets nothing');
+
+        orchestration.forget('W');
+        assert.strictEqual(h.store.roleOf('W'), null, 'a deleted worker leaves the list');
+        assert.strictEqual(h.store.get('O').workers.length, 0);
+        orchestration.forget('O');
+        assert.strictEqual(h.store.get('O'), null, 'a deleted orchestrator stops being one');
+        ok('deleting a session takes its part in an orchestration with it');
     }
 })().then(() => {
     fs.rmSync(home, { recursive: true, force: true });

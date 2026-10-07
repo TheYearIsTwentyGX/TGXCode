@@ -613,6 +613,19 @@ function disable(sessionId) {
     return payload(sessionId);
 }
 
+/**
+ * A session deleted. An orchestrator stops being one; a worker leaves its
+ * orchestrator's list. Its inbox items stay — what it said still happened.
+ */
+function forget(sessionId) {
+    if (store.get(sessionId)) {
+        store.disable(sessionId);
+        return;
+    }
+    const o = store.orchestratorOf(sessionId);
+    if (o && store.removeWorker(o.id, sessionId)) emit(o.id);
+}
+
 function setSummary(orchId, text) {
     if (!store.setSummary(orchId, text)) throw refuse(404, 'that session is not an orchestrator');
     emit(orchId);
@@ -621,6 +634,6 @@ function setSummary(orchId, text) {
 
 module.exports = {
     init, payload, roleOf, enable, disable, spawn, sendTo, read, answer, stopWorker, closeWorker,
-    report, resume, usageFor, setSummary, checkUsage, nudge, scheduleNudge, emit, defaultSettings,
+    report, resume, usageFor, setSummary, checkUsage, forget, nudge, scheduleNudge, emit, defaultSettings,
     onPermissionRequest, onPermissionResolved, onTurnComplete, onStatus,
 };
