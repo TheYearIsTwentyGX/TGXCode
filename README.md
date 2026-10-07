@@ -391,6 +391,7 @@ Two rules worth knowing before you send a patch:
 | `web/transcript/layout.js` | The width the log lays itself out at, the composer's insets, and sliding a side column in and out |
 | `web/transcript/context-menu.js` | The right-click menu, and the file menu on a changed file |
 | `web/transcript/earlier.js` | Opening a long conversation from its end, and loading earlier stretches on the way up |
+| `web/transcript/window.js` | Windowing the session log: settled rows wrapped in chunks that leave the document behind a spacer of their measured height while far from the viewport (`ensureAttached`, `layoutTop` for anything that measures a row) |
 | `web/transcript/turn-rail.js` | The turn rail, and revealing and flashing a row in the log |
 | `web/transcript/find.js` | Ctrl+F over the transcript and its subagents |
 | `web/terminal.js` | The terminal pane — a shell, or a run's output |

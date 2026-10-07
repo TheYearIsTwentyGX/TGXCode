@@ -32,6 +32,14 @@ export function clockOf(ts) {
     return `${hm}:${pad(d.getSeconds())}${meridiem}`;
 }
 
+// One formatter, made on first use and kept. `toLocaleDateString` with options
+// builds a fresh Intl.DateTimeFormat on every call, and every row of a long
+// transcript older than a day asks for one: on a 2 600-call session that was
+// 157ms of opening it, the second-largest item in the profile after layout.
+let monthDayFmt = null;
+const monthDay = () => (monthDayFmt
+    ||= new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }));
+
 // The date a message was recorded, or '' when the clock alone places it.
 //
 // Both conditions are required. A message from earlier today needs no date
@@ -55,7 +63,7 @@ export function dateOf(ts, now = Date.now()) {
         && d.getMonth() === n.getMonth()
         && d.getDate() === n.getDate();
     if (sameDay || now - t <= 12 * 3600e3) return '';
-    const date = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    const date = monthDay().format(d);
     // A year only when it is not this one. 'Dec 3' on a session from last
     // December reads as three weeks ago rather than a year, and that is a date
     // a reader would act on.

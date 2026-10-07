@@ -387,7 +387,9 @@ function renderAgentDone(ev) {
 function redrawEvent(ev) {
     for (const nodes of [state.nodes, state.agentNodes]) {
         const entry = nodes.get(ev.id);
-        if (!entry || !entry.node.isConnected) continue;
+        // `parentNode`, not `isConnected`: a row the window has taken out of the
+        // document is still the row, and its peer card still wants the name.
+        if (!entry || !entry.node.parentNode) continue;
         const next = renderEvent(ev, { actions: nodes === state.nodes });
         if (!next) return;
         entry.node.replaceWith(next);

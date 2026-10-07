@@ -14,6 +14,7 @@ import { AGENT_VIEW, SESSION_VIEW } from './conversation.js';
 import { agentRows, closeAgent, openAgent } from './subagents.js';
 import { fillTool, todoItemsOf, toolSummary } from './tools.js';
 import { revealNode, turnText } from './turn-rail.js';
+import { ensureAttached, layoutBox } from './window.js';
 
 // ── find in conversation ─────────────────────────────────────────────────
 //
@@ -281,6 +282,7 @@ export function paintFind() {
     let at = null;
 
     for (const row of inBand(rows, view)) {
+        if (!(row.fold || row.node).isConnected) continue;
         if (row.fold) {
             // Nothing of the row itself is visible; the fold says how many are
             // in there and opening it is what shows them.
@@ -354,8 +356,12 @@ function paintable(view, pane) {
  * wrong — it reads as being at the top of the window, and both searches below
  * are binary and need the answer to be monotonic down the list. A fold is a real
  * box in the right place, and several rows sharing one is fine.
+ *
+ * Through layoutBox for the same reason: a row the window has taken out of the
+ * document has no box either, so it answers with its chunk's, which is in the
+ * right place for the search. paintFind skips those rows — nothing to paint.
  */
-const rowBox = (row) => (row.fold || row.node).getBoundingClientRect();
+const rowBox = (row) => layoutBox(row.fold || row.node);
 
 /** The first row at or below `edge`, or -1. Binary, hence rowBox above. */
 function firstRowFrom(rows, edge) {
@@ -603,6 +609,10 @@ export async function gotoHit(i) {
     const view = activeView();
     const entry = view.nodes.get(h.evId);
     if (!entry) { renderFindCount(); return; }
+
+    // Back into the document first, if the window had taken it out — ranges in
+    // a detached row measure as nothing, and the jump would land nowhere.
+    if (!view.isAgent) ensureAttached(entry.node);
 
     // Materialize what the match is inside, and do it *now*. Assigning `open`
     // does fire the toggle listener renderTool leaves for this — but a
