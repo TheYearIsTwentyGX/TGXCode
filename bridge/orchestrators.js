@@ -133,11 +133,19 @@ function shouldNudge(orch, status) {
  * The usage window that trips the cutoff, or null. `windows` is
  * `usage.snapshot().windows`.
  */
-function usageTrip(settings, windows) {
+function usageTrip(settings, windows, now = Date.now()) {
     const u = settings && settings.usageStop;
     if (!u || !u.enabled) return null;
     const w = (windows || []).find(x => x && x.type === u.window);
     if (!w || typeof w.usedPercent !== 'number') return null;
+    // A reading from before the window reset describes a period that is over.
+    // While paused nothing runs, so nothing brings a fresh one — and a stale 92%
+    // would keep refusing Resume long after the window had emptied. `resetsAt`
+    // is unix seconds from bridge/usage.js; milliseconds are tolerated.
+    if (Number.isFinite(w.resetsAt) && w.resetsAt > 0) {
+        const resetMs = w.resetsAt < 1e12 ? w.resetsAt * 1000 : w.resetsAt;
+        if (resetMs <= now) return null;
+    }
     return w.usedPercent >= u.percent ? { window: w.type, usedPercent: w.usedPercent, percent: u.percent } : null;
 }
 
@@ -231,12 +239,24 @@ function cleanOrch(id, o) {
     };
 }
 
+/**
+ * The file as a map — empty when there is no file — or **null when there is one
+ * this build cannot read**: torn, hand-broken, or written by a newer build with
+ * another `version`. Null is not empty. A save that treated it as empty would
+ * write back only what it had just changed and adopt the result, which quietly
+ * un-makes every other orchestrator on the machine.
+ */
 function readFile(file) {
     let raw;
-    try { raw = fs.readFileSync(file, 'utf8'); } catch { return new Map(); }
+    try { raw = fs.readFileSync(file, 'utf8'); } catch (err) {
+        return err.code === 'ENOENT' ? new Map() : null;
+    }
     try {
         const data = JSON.parse(raw.replace(/^﻿/, ''));
-        if (data.version !== VERSION || !data.orchestrators) return new Map();
+        if (data.version !== VERSION || !data.orchestrators) {
+            console.error(`[tgxcode] not touching ${file}: version ${data.version} is not ${VERSION}`);
+            return null;
+        }
         const out = new Map();
         for (const [id, o] of Object.entries(data.orchestrators)) {
             const c = cleanOrch(id, o);
@@ -244,8 +264,8 @@ function readFile(file) {
         }
         return out;
     } catch (err) {
-        console.error(`[tgxcode] ignoring unreadable ${file}: ${err.message}`);
-        return new Map();
+        console.error(`[tgxcode] not touching unreadable ${file}: ${err.message}`);
+        return null;
     }
 }
 
@@ -265,7 +285,9 @@ class Orchestrators {
     }
 
     load() {
-        this.byId = readFile(this.file);
+        // Unreadable reads as empty here, so the bridge still starts; `flush`
+        // reads again and refuses to write over a file it cannot read.
+        this.byId = readFile(this.file) || new Map();
         this._reindex();
     }
 
@@ -292,6 +314,12 @@ class Orchestrators {
             // another bridge disabled used to come back: absent from the file
             // looked the same as never written.
             const merged = readFile(this.file);
+            if (!merged) {
+                // Keep what we have in memory and leave the file alone: writing
+                // over a newer build's file, or a torn one somebody is mending,
+                // loses everything in it that this bridge never saw.
+                return;
+            }
             for (const id of this._removed) merged.delete(id);
             for (const id of this._dirty) {
                 const o = this.byId.get(id);
@@ -420,8 +448,24 @@ class Orchestrators {
         const w = this.worker(orchId, workerId);
         if (!w) return null;
         w.closedAt = Date.now();
+        this._staleAsks(this.byId.get(orchId), workerId);
         this._touch(this.byId.get(orchId));
         return w;
+    }
+
+    /**
+     * A closed or removed worker's open asks are gone with it. Trimming never
+     * drops an ask still waiting, so without this they would be "waiting"
+     * forever and the inbox would grow past its cap for the life of the
+     * orchestrator.
+     */
+    _staleAsks(o, workerId) {
+        for (const i of o.inbox) {
+            if (i.workerId === workerId && i.requestId && (i.status === 'new' || i.status === 'read')) {
+                i.status = 'stale';
+                i.outcome = 'worker-closed';
+            }
+        }
     }
 
     /** Take a worker off the list altogether — for a session that was deleted. */
@@ -432,6 +476,7 @@ class Orchestrators {
         o.workers = o.workers.filter(w => w.id !== workerId);
         if (o.workers.length === before) return false;
         this.workerOf.delete(workerId);
+        this._staleAsks(o, workerId);
         this._touch(o);
         return true;
     }

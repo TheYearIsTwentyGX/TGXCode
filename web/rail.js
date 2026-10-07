@@ -96,9 +96,11 @@ function railTree() {
     // Worked out before the workers are nested, because whether an orchestrator
     // is drawn at all decides whether its workers can be drawn under it.
     const hiding = state.hideDone && !state.query;
+    // Workers nested under an orchestrator included: they are hidden like any
+    // other finished session, so the button that hides them counts them too.
+    const finished = ordered.filter(s => inProjectCard(s) && prDone(s));
     const gone = new Set(hiding
-        ? ordered.filter(s => inProjectCard(s) && prDone(s))
-            .filter(s => !state.current || state.current.sessionId !== s.sessionId)
+        ? finished.filter(s => !state.current || state.current.sessionId !== s.sessionId)
             .map(s => s.sessionId)
         : []);
 
@@ -123,7 +125,6 @@ function railTree() {
     const after = new Map([...workersOf].map(([id, list]) => [id,
         groupCard(`orch:${id}`, 'Workers', list, { nested: true, defaultOpen: true })]));
     const rest = ordered.filter(s => inProjectCard(s) && !nestedWorker(s));
-    const finished = rest.filter(prDone);
     // A test orchestrator's workers are test sessions too, and belong under it
     // like any other's rather than a second time in this card.
     const test = ordered.filter(s => s.test && !s.pinned && !s.archived && !nestedWorker(s));
