@@ -78,6 +78,7 @@ import {
 import { watchPaneInsets } from './transcript/layout.js';
 import { closeReview } from './transcript/review.js';
 import { warmPeers } from './transcript/rows.js';
+import { wireSendTo } from './transcript/send-to.js';
 import {
     agentRows, closeAgent, leaveAgent, loadAgents, openAgent,
 } from './transcript/subagents.js';
@@ -3043,6 +3044,29 @@ function paintLock() {
 const lower = (s) => s.charAt(0).toLowerCase() + s.slice(1);
 
 /**
+ * The permission mode a send to this session should carry, by paintPerm's order of
+ * authority. Exported for a send to a session that is *not* on screen — Send to
+ * another session — which has to name a mode as much as the composer does, because
+ * the send route reads an absent one as `auto`.
+ *
+ * @param {string|null} id
+ * @param {object|null} summary its rail row or `state.current`, for the mode the
+ *   transcript was last seen in
+ */
+export function modeFor(id, summary) {
+    const live = state.current && state.current.sessionId === id ? state.runner : null;
+    return (id && state.permChoice.get(id))
+        || (live && live.permissionMode)
+        // The last mode a bridge actually reported, which outranks the file:
+        // the transcript records the mode each *message* was sent in, and
+        // approving a plan sends no message, so a session approved out of plan
+        // mode reads as `plan` from the file for as long as it exists.
+        || (id && state.runnerMode.get(id))
+        || (summary && summary.permissionMode)
+        || DEFAULT_PERM;
+}
+
+/**
  * Which permission mode the composer shows for the session it is pointing at.
  *
  * One control is shared by every session, so it has to be set on every open
@@ -3054,15 +3078,7 @@ const lower = (s) => s.charAt(0).toLowerCase() + s.slice(1);
  */
 export function paintPerm() {
     const id = state.current && state.current.sessionId;
-    const mode = (id && state.permChoice.get(id))
-        || (state.runner && state.runner.permissionMode)
-        // The last mode a bridge actually reported, which outranks the file:
-        // the transcript records the mode each *message* was sent in, and
-        // approving a plan sends no message, so a session approved out of plan
-        // mode reads as `plan` from the file for as long as it exists.
-        || (id && state.runnerMode.get(id))
-        || (state.current && state.current.permissionMode)
-        || DEFAULT_PERM;
+    const mode = modeFor(id, state.current);
     // A mode this build does not offer — an older CLI's vocabulary, or a newer
     // one's — must not leave the control blank, because "" is what would then be
     // sent. Fall back rather than inventing an option for it.
@@ -3264,6 +3280,7 @@ for (const type of ['dragover', 'drop']) {
     });
 }
 wireSnippets();
+wireSendTo();
 wireLater();
 
 // Wrapped, not passed: openNew now takes an options bag, and a MouseEvent is

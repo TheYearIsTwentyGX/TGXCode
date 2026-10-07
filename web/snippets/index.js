@@ -136,6 +136,19 @@ export function fillSnipBody(body, params, answers) {
 }
 
 /**
+ * Open the editor on a new snippet holding a message you already sent — the
+ * Save as snippet action on your own turns. Titled with its first line, which you
+ * will usually shorten; nothing is saved until you press Save, and then by the same
+ * POST the New button makes.
+ */
+export function saveAsSnippet(text) {
+    const body = String(text || '').trim();
+    if (!body) return;
+    const first = body.split('\n').find(l => l.trim()) || '';
+    openSnipEditor(null, null, { title: clip(first.replace(/^[#>*\-\s]+/, ''), 60), body });
+}
+
+/**
  * Every listener the snippets surfaces register at load.
  *
  * Called by app.js where these always registered, beside the rest of the

@@ -41,10 +41,18 @@ const modal = () => dom.snipEditScrim.querySelector('.modal');
 // last one's state into the next snippet.
 let opened = 0;
 
-export function openSnipEditor(s, groupId = null) {
+/**
+ * @param {object|null} s the snippet to edit, or null for a new one
+ * @param {string|null} [groupId] the group a new one starts in
+ * @param {{title?: string, body?: string}|null} [seed] prefill for a new one —
+ *   Save as snippet on a message you sent. Still a new snippet: `editing` stays
+ *   null, so Save is the same POST the New button makes.
+ */
+export function openSnipEditor(s, groupId = null, seed = null) {
     state.snippets.editing = s ? s.id : null;
     opened += 1;
     paint(modal(), html`<${SnipEditor} key=${opened} snippet=${s} groupId=${groupId}
+        seed=${s ? null : seed}
         groups=${state.snippets.groups} projects=${state.settings.projects} />`);
     dom.snipEditScrim.hidden = false;
     const first = dom.snipEditScrim.querySelector('#snip-title');
@@ -86,6 +94,70 @@ function placeholderNote(body, params) {
     return said.join(' ');
 }
 
+/** Every occurrence of `lit`, but not as the start of a longer word: `#12` is not in `#123`. */
+function replaceLiteral(body, lit, to) {
+    const esc = lit.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const tail = /\w$/.test(lit) ? '(?![\\w])' : '';
+    return body.replace(new RegExp(esc + tail, 'g'), () => to);
+}
+
+/**
+ * The specifics in a message worth offering as parameters, and only offered.
+ *
+ * Save as snippet starts from a message that was written for one occasion —
+ * `#151`, `web/app.js`, a URL — and the snippet usually wants that part asked for
+ * next time. Guessing wrong costs a chip nobody clicks; applying a guess would
+ * cost a message that no longer says what was sent. So: conservative patterns,
+ * nothing applied until clicked, and recomputed every render, so a chip goes
+ * away once its literal is no longer in the body.
+ *
+ * @returns {Array<{match: string, prefix: string, value: string, name: string,
+ *   type: string, label: string}>} `match` is what is replaced, by `prefix` and the
+ *   placeholder; `value` is the parameter's default — `#151` becomes `#{{pr}}`
+ *   with 151, because an integer field cannot hold the `#`.
+ */
+export function suggestPlaceholders(body, params = []) {
+    // Placeholders already in the body are not text to suggest from.
+    const text = String(body || '').replace(SNIP_PLACEHOLDER, ' ');
+    const taken = new Set(params.map(p => (p.name || '').trim()));
+    const seen = new Set();
+    const out = [];
+    const nameFor = (base) => {
+        let n = base;
+        for (let i = 2; taken.has(n); i++) n = `${base}${i}`;
+        taken.add(n);
+        return n;
+    };
+    const add = (match, base, type, label, prefix = '') => {
+        if (!match || seen.has(match)) return;
+        seen.add(match);
+        out.push({ match, prefix, value: match.slice(prefix.length), name: nameFor(base), type, label });
+    };
+
+    const urls = [];
+    for (const m of text.matchAll(/\bhttps?:\/\/[^\s<>()`'"]+[^\s<>()`'".,;:!?]/g)) {
+        // A pull request's URL is a pull request, not a URL to remember.
+        const pr = /\/pull\/(\d+)\b/.exec(m[0]);
+        if (pr) add(m[0], 'pr_url', 'text', 'Pull request URL');
+        else add(m[0], 'url', 'text', 'URL');
+        urls.push([m.index, m.index + m[0].length]);
+    }
+    const inUrl = (i) => urls.some(([a, b]) => i >= a && i < b);
+
+    for (const m of text.matchAll(/(^|[\s(,])#(\d{1,6})\b/g)) {
+        add(`#${m[2]}`, 'pr', 'integer', 'PR number', '#');
+    }
+    // Something with a slash and an extension, or a path that is plainly one by
+    // how it starts. A bare `and/or` has neither.
+    const PATH = /(?:^|[\s(`'"])((?:~|\.{1,2})?\/?(?:[\w.@-]+\/)+[\w.@-]+\.[A-Za-z0-9]{1,8}|(?:~|\.{1,2})\/[\w./@-]+|\/(?:[\w.@-]+\/)+[\w.@-]*)(?::\d+)?(?=$|[\s)`'",;:!?]|\.(?:\s|$))/g;
+    for (const m of text.matchAll(PATH)) {
+        const at = m.index + m[0].indexOf(m[1]);
+        if (inUrl(at)) continue;
+        add(m[1].replace(/\.$/, ''), 'path', 'text', 'Path');
+    }
+    return out;
+}
+
 /**
  * The form.
  *
@@ -94,10 +166,10 @@ function placeholderNote(body, params) {
  * moved the selector, and a snippet that silently changed the permission mode of
  * the next thing you send would be the one surprise here worth avoiding.
  */
-function SnipEditor({ snippet: s, groupId, groups, projects }) {
+function SnipEditor({ snippet: s, groupId, seed, groups, projects }) {
     const [f, setF] = useState(() => ({
-        title: s ? s.title : '',
-        body: s ? s.body : '',
+        title: s ? s.title : ((seed && seed.title) || ''),
+        body: s ? s.body : ((seed && seed.body) || ''),
         groupId: s ? (s.groupId || '') : (groupId || ''),
         insert: s ? s.insert : 'overwrite',
         autoSubmit: s ? s.autoSubmit : false,
@@ -188,7 +260,19 @@ function SnipEditor({ snippet: s, groupId, groups, projects }) {
         }
     };
 
+    // Turn one literal into a parameter: every occurrence in the body, and a
+    // parameter whose default is the literal, so the snippet still sends exactly
+    // what it did until somebody types something else.
+    const takeSuggestion = (g) => setF(prev => ({
+        ...prev,
+        body: replaceLiteral(prev.body, g.match, `${g.prefix}{{${g.name}}}`),
+        params: [...prev.params, withKey({
+            name: g.name, label: g.label, type: g.type, required: false, default: g.value,
+        })],
+    }));
+
     const note = placeholderNote(f.body, f.params);
+    const hints = suggestPlaceholders(f.body, f.params);
 
     return html`
         <div class="modal-head">
@@ -217,6 +301,13 @@ function SnipEditor({ snippet: s, groupId, groups, projects }) {
                     placeholder="What to send. Write {{name}} where a parameter goes."
                     value=${f.body} onInput=${(e) => set({ body: e.target.value })}></textarea>
                 <div id="snip-placeholders" class="note" hidden=${!note}>${note}</div>
+                <div id="snip-suggest" class="snip-suggest" hidden=${!hints.length}>
+                    <span class="note">Make a parameter of</span>
+                    ${hints.map(g => html`<button key=${g.match} type="button"
+                        class="snip-chip snip-suggest-chip"
+                        title=${`Replace ${g.match} with ${g.prefix}{{${g.name}}}, keeping ${g.value} as the default`}
+                        onClick=${() => takeSuggestion(g)}><code>${g.match}</code></button>`)}
+                </div>
             </div>
             <div class="field">
                 <label>Parameters</label>
