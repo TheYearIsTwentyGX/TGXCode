@@ -113,6 +113,29 @@ body {
 button, input, textarea, select { font: inherit; color: inherit; background: none; border: none; }
 button { cursor: pointer; }
 
+/* The up/down arrows on a number input. Left native, Chromium draws its stock
+   light-grey spinner on a dark field. `appearance: none` drops only the drawing:
+   clicking the top half still steps up, the bottom half steps down, and holding
+   it repeats, so no input needs a wrapper or a handler. The glyph is a mask
+   rather than a background image so it can take its colour from the palette;
+   `img-src` allows the data: URL. */
+input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    appearance: none;
+    flex: none;
+    align-self: stretch;
+    width: 10px;
+    margin-left: 4px;
+    cursor: pointer;
+    background-color: var(--text-3);
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 16'%3E%3Cpath d='M5 2.5 8.5 6.5h-7zM5 13.5 1.5 9.5h7z'/%3E%3C/svg%3E") center / 10px 16px no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 16'%3E%3Cpath d='M5 2.5 8.5 6.5h-7zM5 13.5 1.5 9.5h7z'/%3E%3C/svg%3E") center / 10px 16px no-repeat;
+}
+input[type="number"]::-webkit-inner-spin-button:hover { background-color: var(--text); }
+input[type="number"]:disabled::-webkit-inner-spin-button { opacity: 0.4; cursor: default; }
+input[type="number"]:disabled::-webkit-inner-spin-button:hover { background-color: var(--text-3); }
+input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+
 :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: var(--r-xs); }
 
 a { color: var(--blue); text-decoration: none; }
