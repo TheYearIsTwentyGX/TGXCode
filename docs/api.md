@@ -571,7 +571,13 @@ strings by a client that then rendered `[object Object]`:
 | `suggestion` | `prompt` string · `why`, `title` strings or null · `cwd` string — follow-up work an agent offered rather than did |
 | `peer-message` | `from` (socket address), `fromName` (the peer's name, which is its address), `text` |
 | `handoff` | `text` string — work another session handed this one, which is what woke it · `from` (the sending session's id), `fromTitle`, `fromProject`, `title`, all strings or null |
+| `orchestrator-inbox` | `count` number · **`counts` object or null** — `{<kind>: n}` over the inbox item kinds (`plan`, `permission`, `ask`, `question`, `update`, `done`, `turn`, `note`); `null` on a nudge written before the bridge recorded it · `summary` string or null — the prose the model was sent, e.g. `"1 plan to approve, 2 turn reports"`, the fallback when `counts` is null. The bridge waking an idle orchestrator; nobody typed it |
+| `orchestrator-message` | `text` string — an instruction from the orchestrator this session is a worker for · `from` (the orchestrator's session id), `fromTitle`, strings or null |
 | `compact` | `text` string |
+
+`handoff`, `orchestrator-inbox` and `orchestrator-message` arrive as ordinary user
+messages on disk but are **not counted as turns**: they do not move `userMessages`,
+`lastUserTs` (which the session list sorts on) or `firstPrompt`.
 
 **`tool.status` is `"pending"`, not absent, while a call is running**, and `"ok"` or
 `"error"` once it resolves. A client switching on it needs three cases, and the third
@@ -4536,7 +4542,11 @@ superseded, stopped, or the worker restarted.
 **A worker's asks are not auto-denied with no window open**, unlike every other
 session's: its orchestrator is the one expected to answer. And the orchestrator is
 never sent a worker's message mid-turn — only a one-line `<orchestrator-inbox
-count="N">` message, while it is idle, once per new arrival.
+count="N" kinds="plan:1,turn:2">` message, while it is idle, once per new arrival.
+An orchestrator's message to a worker reaches the worker wrapped in
+`<orchestrator-message from="<orchestratorId>" from-title="…">`. In a transcript
+both come back as their own event kinds, `orchestrator-inbox` and
+`orchestrator-message` (see the event table), never as `user`.
 
 **The usage cutoff.** When `settings.usageStop.enabled` and the window's
 `usedPercent` (from `GET /api/quota`) reaches `percent`, the bridge soft-stops the

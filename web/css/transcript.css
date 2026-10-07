@@ -922,6 +922,24 @@
 }
 .ev-handoff .subagent-btns { margin-top: 8px; }
 
+/* an orchestrator instructing this worker. The handoff card's shape, since it
+   is the same act — another session telling this one what to do — in blue so a
+   worker's log can tell its orchestrator apart from a one-off handoff. */
+.ev-orchestrator-message .ev-body {
+    border-left: 2px solid var(--blue);
+    padding: 4px 0 10px 12px;
+    margin: 6px 0;
+}
+.ev-orchestrator-message .ev-label { color: var(--blue); }
+.ev-orchestrator-message .subagent-btns { margin-top: 8px; }
+
+/* the bridge nudging an idle orchestrator: a line, not a card */
+.ev-orchestrator-inbox .ev-body {
+    margin: 4px 0;
+    font: 400 12px/1.5 var(--sans);
+    color: var(--text-4);
+}
+
 /* system notices */
 .ev-system .ev-body {
     background: var(--blue-tint);

@@ -328,6 +328,14 @@ function scanMeta(filePath) {
                     const parsed = safeParse(line);
                     if (parsed && isHandoff(userText(parsed))) continue;
                 }
+                // The orchestrator's wrappers, for the same reason: a nudge
+                // arrives every time a worker reports, and counting it would
+                // pull the orchestrator to the top of the rail each time.
+                if (line.includes(ORCH_INBOX_TAG) || line.includes(ORCH_MESSAGE_TAG)) {
+                    const parsed = safeParse(line);
+                    const t = parsed && userText(parsed);
+                    if (t && (isOrchestratorInbox(t) || isOrchestratorMessage(t))) continue;
+                }
                 meta.userMessages++;
                 // A prompt given outside every worktree: the one kind of entry
                 // that says the session has come home. See `trail` above.
@@ -930,6 +938,19 @@ function buildEvents(entries, ctx = {}) {
             continue;
         }
 
+        // The orchestrator's wrappers: the bridge nudging an idle orchestrator,
+        // and an orchestrator instructing a worker. See ORCH_INBOX_TAG.
+        const inbox = parseOrchestratorInbox(text);
+        if (inbox) {
+            events.push({ id: e.uuid, kind: 'orchestrator-inbox', ts: e.timestamp, ...inbox });
+            continue;
+        }
+        const orchMsg = parseOrchestratorMessage(text);
+        if (orchMsg) {
+            events.push({ id: e.uuid, kind: 'orchestrator-message', ts: e.timestamp, ...orchMsg });
+            continue;
+        }
+
         const images = Array.isArray(content)
             ? content.filter(b => b.type === 'image').map(imageRef)
             : [];
@@ -1294,6 +1315,100 @@ function parseHandoff(text) {
         fromTitle: attr('from-title'),
         fromProject: attr('from-project'),
         title: attr('title'),
+        text: (close === -1 ? rest : rest.slice(0, close)).trim(),
+    };
+}
+
+// The orchestrator's two wrappers, written by bridge/orchestration.js and read
+// back here for the reason the handoff pair above is: one format, one file.
+//
+//   <orchestrator-inbox count="3" kinds="plan:1,turn:2">
+//   3 items waiting in your inbox (1 plan to approve, 2 turn reports). Call next_message to read them.
+//   </orchestrator-inbox>
+//
+//   <orchestrator-message from="<orchestratorId>" from-title="…">
+//   …the instruction…
+//   </orchestrator-message>
+//
+// The first is the bridge waking an idle orchestrator, the second an
+// orchestrator talking to one of its workers. Both arrive down stdin as ordinary
+// user messages, so without these they draw as raw tags in a "You" bubble and —
+// the part that does not show — count as turns you took, so every nudge moved
+// the session up the rail. `kinds` is newer than the tag; a nudge written before
+// it still parses, with `counts` null and the prose summary to fall back on.
+const ORCH_INBOX_TAG = '<orchestrator-inbox';
+const ORCH_MESSAGE_TAG = '<orchestrator-message';
+
+/** Shared by both parsers: an attribute read that `title` cannot match inside `from-title`. */
+function tagAttr(attrs, name) {
+    const m = new RegExp(`(?:^|\\s)${name}="([^"]*)"`).exec(attrs);
+    return m ? m[1] : null;
+}
+
+/**
+ * The nudge. `counts` is {kind: n} over the unread items; `summary` is the long
+ * prose form, which is what the model reads.
+ */
+function orchestratorInboxEnvelope({ count, counts, summary }) {
+    const n = Number(count) || 0;
+    const kinds = Object.entries(counts || {})
+        .filter(([k, v]) => /^[a-z]+$/.test(k) && Number.isInteger(v) && v > 0)
+        .map(([k, v]) => `${k}:${v}`).join(',');
+    return [
+        `<orchestrator-inbox count="${n}"${kinds ? ` kinds="${kinds}"` : ''}>`,
+        `${n} item${n === 1 ? '' : 's'} waiting in your inbox `
+            + `(${summary || ''}). Call next_message to read them.`,
+        '</orchestrator-inbox>',
+    ].join('\n');
+}
+
+function isOrchestratorInbox(text) {
+    return String(text || '').trimStart().startsWith(ORCH_INBOX_TAG);
+}
+
+function parseOrchestratorInbox(text) {
+    if (!isOrchestratorInbox(text)) return null;
+    const t = String(text);
+    const open = /<orchestrator-inbox([^>]*)>/.exec(t);
+    if (!open) return null;
+    let counts = null;
+    const kinds = tagAttr(open[1], 'kinds');
+    if (kinds) {
+        for (const pair of kinds.split(',')) {
+            const m = /^([a-z]+):(\d+)$/.exec(pair.trim());
+            if (m) (counts || (counts = {}))[m[1]] = Number(m[2]);
+        }
+    }
+    const body = t.slice(open.index + open[0].length);
+    const paren = /\(([^)]*)\)/.exec(body);
+    return {
+        count: Number(tagAttr(open[1], 'count')) || 0,
+        counts,
+        summary: paren && paren[1].trim() ? paren[1].trim() : null,
+    };
+}
+
+/** An orchestrator's message to a worker. Attributes scrubbed as handoffEnvelope's are. */
+function orchestratorMessageEnvelope({ from, fromTitle, text }) {
+    const attr = (name, v) => (v ? ` ${name}="${String(v).replace(/["<>]/g, '')}"` : '');
+    return `<orchestrator-message${attr('from', from)}${attr('from-title', fromTitle)}>\n`
+        + `${String(text || '').trim()}\n</orchestrator-message>`;
+}
+
+function isOrchestratorMessage(text) {
+    return String(text || '').trimStart().startsWith(ORCH_MESSAGE_TAG);
+}
+
+function parseOrchestratorMessage(text) {
+    if (!isOrchestratorMessage(text)) return null;
+    const t = String(text);
+    const open = /<orchestrator-message([^>]*)>/.exec(t);
+    if (!open) return null;
+    const rest = t.slice(open.index + open[0].length);
+    const close = rest.lastIndexOf('</orchestrator-message>');
+    return {
+        from: tagAttr(open[1], 'from'),
+        fromTitle: tagAttr(open[1], 'from-title'),
         text: (close === -1 ? rest : rest.slice(0, close)).trim(),
     };
 }
@@ -1832,6 +1947,10 @@ module.exports = {
     // here, so they are exported together — one format, one file, the same rule the
     // attachment note follows below.
     handoffEnvelope, parseHandoff, isHandoff, HANDOFF_TAG,
+    // The orchestrator's two wrappers, written by bridge/orchestration.js and
+    // read back here — exported in pairs for the handoff's reason.
+    orchestratorInboxEnvelope, parseOrchestratorInbox, isOrchestratorInbox, ORCH_INBOX_TAG,
+    orchestratorMessageEnvelope, parseOrchestratorMessage, isOrchestratorMessage, ORCH_MESSAGE_TAG,
     // Exported for bridge/commands.js, which has to answer the same question
     // about a directory that scanMeta answers about a transcript: which checkout
     // is this, and is it a worktree of one.

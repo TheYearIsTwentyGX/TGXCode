@@ -45,6 +45,9 @@ const { resolveWorkdir } = require('./runner');
 const { createWorktree } = require('./worktree');
 const { shouldNudge, usageTrip, describeCounts, cleanSettings, DEFAULT_SETTINGS } = require('./orchestrators');
 const workerRead = require('./worker-read');
+const {
+    orchestratorInboxEnvelope, orchestratorMessageEnvelope, isOrchestratorMessage, parseOrchestratorMessage,
+} = require('./transcript');
 
 // Handed over by server.js.
 let store = null;
@@ -232,12 +235,11 @@ function nudge(orchId) {
     const summary = index.summary(orchId);
     if (!summary) return false;
     const unread = store.unread(orchId);
-    const text = [
-        `<orchestrator-inbox count="${unread.length}">`,
-        `${unread.length} item${unread.length === 1 ? '' : 's'} waiting in your inbox `
-            + `(${describeCounts(unread)}). Call next_message to read them.`,
-        '</orchestrator-inbox>',
-    ].join('\n');
+    const counts = {};
+    for (const i of unread) counts[i.kind] = (counts[i.kind] || 0) + 1;
+    const text = orchestratorInboxEnvelope({
+        count: unread.length, counts, summary: describeCounts(unread),
+    });
     const runner = r || pool.ensure(orchId, {
         cwd: sessionCwd(summary), permissionMode: normalizeMode(summary.permissionMode),
     });
@@ -520,8 +522,7 @@ function runnerFor(w) {
 
 function envelope(orchId, text) {
     const s = index.summary(orchId);
-    const title = s && s.title ? ` from-title="${String(s.title).replace(/["<>]/g, '')}"` : '';
-    return `<orchestrator-message from="${orchId}"${title}>\n${String(text).trim()}\n</orchestrator-message>`;
+    return orchestratorMessageEnvelope({ from: orchId, fromTitle: s && s.title, text });
 }
 
 function sendTo(orchId, workerId, text) {
@@ -588,8 +589,6 @@ function answer(orchId, itemId, decision, extra = {}) {
     return { ok: true };
 }
 
-const ORCH_MESSAGE = '<orchestrator-message';
-
 /**
  * Stop a session's turn on the bridge's own initiative, without losing what was
  * queued on it. `stop()` returns the queue and drops it; this gives each message
@@ -602,17 +601,15 @@ const ORCH_MESSAGE = '<orchestrator-message';
 function stopKeeping(r, why, opts = {}) {
     const owner = store.orchestratorOf(r.sessionId);
     if (owner) {
-        const mine = r.queue.filter(q => String(q.text || '').startsWith(ORCH_MESSAGE));
+        const mine = r.queue.filter(q => isOrchestratorMessage(q.text));
         if (mine.length) {
             r.queue = r.queue.filter(q => !mine.includes(q));
             const w = store.worker(owner.id, r.sessionId);
-            const strip = (t) => t.replace(/^<orchestrator-message[^>]*>\n?/, '')
-                .replace(/\n?<\/orchestrator-message>\s*$/, '');
             file(owner.id, {
                 workerId: r.sessionId, kind: 'note',
                 text: `Not delivered to ${w && w.title ? `"${w.title}"` : 'that worker'} — ${why} `
                     + `Send again once it is running if it still applies:\n\n`
-                    + mine.map(q => strip(q.text)).join('\n\n---\n\n'),
+                    + mine.map(q => parseOrchestratorMessage(q.text).text).join('\n\n---\n\n'),
             });
         }
     }

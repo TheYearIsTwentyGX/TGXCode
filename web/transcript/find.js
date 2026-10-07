@@ -11,6 +11,7 @@ import { get } from '../api.js';
 import { dom, el } from '../dom.js';
 import { state } from '../state.js';
 import { AGENT_VIEW, SESSION_VIEW } from './conversation.js';
+import { inboxSummary } from './rows.js';
 import { agentRows, closeAgent, openAgent } from './subagents.js';
 import { fillTool, todoItemsOf, toolSummary } from './tools.js';
 import { revealNode, turnText } from './turn-rail.js';
@@ -108,6 +109,12 @@ function searchableText(ev) {
             break;
         case 'handoff':
             parts.push(ev.fromTitle, ev.title, ev.fromProject, ev.text);
+            break;
+        case 'orchestrator-inbox':
+            parts.push(inboxSummary(ev));
+            break;
+        case 'orchestrator-message':
+            parts.push(ev.fromTitle, ev.text);
             break;
         case 'system':
             parts.push(ev.subtype, ev.text);
