@@ -512,7 +512,8 @@
    The one real trap here is the native date and time inputs. `.field
    input[type="text"]` is type-scoped, so those pick up nothing but the global
    reset and arrive unstyled; and with no `color-scheme` anywhere in this file,
-   Chromium draws their pickers and spinners light-on-light inside a dark dialog.
+   Chromium draws their pickers light-on-light inside a dark dialog. (The number
+   spinner is drawn by base.css for every number input, not here.)
    Both are fixed on `.when-in` rather than on `:root`, because a global
    `color-scheme` would repaint every scrollbar and native control in the app. */
 
@@ -571,7 +572,7 @@
     padding: 6px 9px;
     font-family: var(--mono);
     font-size: 12.5px;
-    /* Without this the native picker and its spinners come out light-on-light.
+    /* Without this the native date and time pickers come out light-on-light.
        Scoped here rather than on :root — see the section note. */
     color-scheme: dark;
 }

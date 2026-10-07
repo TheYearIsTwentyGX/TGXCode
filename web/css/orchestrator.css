@@ -151,6 +151,7 @@
     background: var(--s1);
     color: var(--text);
     font: inherit;
+    color-scheme: dark;
 }
 .orch-settings select {
     padding: 2px 6px;
