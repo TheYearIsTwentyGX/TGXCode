@@ -50,6 +50,7 @@ import { closeTaskDialog, loadTasks, loadTasksSoon, renderTasks } from './sugges
 import { fillTool } from './tools.js';
 import { hideTurnPop, renderTurns, REVIEWABLE } from './turn-rail.js';
 import { mountEarlier, OPEN_TURNS } from './earlier.js';
+import { resetWindow, scheduleSeal } from './window.js';
 
 // ── conversation ─────────────────────────────────────────────────────────
 
@@ -181,6 +182,7 @@ function beginOpen(summary, { keepPanels = false } = {}) {
     state.turnIndex = [];
     state.windowStart = 0;
     state.orphanResults.clear();
+    resetWindow();      // the log is about to be replaced; its chunks go with it
     state.pinned = true;
     state.agents = [];  // the previous session's agents are not this one's
     resetFind();
@@ -615,6 +617,10 @@ export function appendEvents(events, view = SESSION_VIEW, { live = false } = {})
         // A Task call that has only just appeared belongs on the strip now, not
         // after the next poll.
         if (sawAgent) { renderAgents(); loadAgents(); }
+        // Rows that have stopped changing are wrapped into chunks the window can
+        // take out of the document — see window.js. The prepended stretch is
+        // sealed by earlier.js, once it is in the log and the offset is kept.
+        scheduleSeal();
     }
     markFindDirty();
 }

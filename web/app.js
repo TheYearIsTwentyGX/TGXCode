@@ -88,6 +88,7 @@ import {
     startSuggestion,
 } from './transcript/suggestions.js';
 import { toolSummary } from './transcript/tools.js';
+import { resetWindow } from './transcript/window.js';
 import {
     flashNode, hideTurnPop, jumpToTurn, markActiveTurn, revealNode,
 } from './transcript/turn-rail.js';
@@ -808,6 +809,7 @@ function clearCurrent() {
     renderChanges();        // hides the drawer: there is no session to be about
     resetChecklist();
     renderChecklist();      // and the same for the task list on the other side
+    resetWindow();
     dom.log.replaceChildren();
     dom.turns.replaceChildren();
     dom.agents.replaceChildren();

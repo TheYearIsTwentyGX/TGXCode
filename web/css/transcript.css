@@ -489,7 +489,18 @@
    built lazily an event is a single light row, and the cost of the browser
    skipping and unskipping 1700 of them measured ~40% *slower* to scroll than
    simply laying them out (p50 22.8ms vs 16.8ms over the same sweep), with no
-   gain on open. It is worth revisiting only if rows get heavy again. */
+   gain on open. It is worth revisiting only if rows get heavy again.
+
+   Measured again for transcript/window.js, on a real 3 400-event session fully
+   loaded: the median frame improved (30ms to 21ms) but p95 went from 40ms to
+   57ms, with 1.3s of long tasks per sweep against none — unskipping a row is
+   a hitch taken mid-scroll. What replaced it is that module's chunks. */
+
+/* A stretch of settled rows that window.js may take out of the document. Only
+   a wrapper: `flow-root` so a child's margin cannot collapse through it and
+   make the height it is held at short. */
+.vchunk { display: flow-root; }
+
 .ev {
     display: grid;
     grid-template-columns: var(--gutter) 1fr;

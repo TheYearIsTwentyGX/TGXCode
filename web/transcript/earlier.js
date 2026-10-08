@@ -35,6 +35,7 @@ import { dom, el, toast } from '../dom.js';
 import { state } from '../state.js';
 import { appendEvents, closeRun, patchTool } from './conversation.js';
 import { renderTurns } from './turn-rail.js';
+import { scheduleSeal } from './window.js';
 
 /** Turns loaded when a session is opened. */
 export const OPEN_TURNS = 8;
@@ -152,4 +153,7 @@ function prependEvents(events) {
     sc.scrollTop = top + (sc.scrollHeight - before);
     sc.style.overflowAnchor = prevAnchor;
     sc.style.scrollBehavior = prevBehavior;
+    // After the offset is kept, not before: wrapping these rows into chunks
+    // changes no heights, but it is not worth having to know that here.
+    scheduleSeal();
 }
