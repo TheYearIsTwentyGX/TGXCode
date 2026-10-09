@@ -347,6 +347,7 @@ Two rules worth knowing before you send a patch:
 | `web/boot.js` | What the page was handed in `<meta>` tags — `BOOT_PREFS` and its fallback, the host paths, the pairing token — read synchronously at load |
 | `web/state.js` | `state`, the page's one mutable store, and `DEFAULT_PERM`. What a surface remembers goes on here, not in a module-level `let` |
 | `web/dom.js` | `dom` (every id in index.html, looked up once), `el`, `toast`, and the rules modal dialogs share |
+| `web/motion.js` | Moving things on and off the page: `present`/`exit`/`enter` (fade or pop, then `hidden` or removal), `grow` and `fill` (height, so the transcript resizes with a dock), `morph`, `flip`. Web Animations, durations read from `--t-fast`/`--t-med`, which reduced motion sets to 0 |
 | `web/format.js` | Timestamps, durations, paths and model ids as short text. Pure, so the Node tests import it directly |
 | `web/icons.js` | `ICON`, the SVG glyphs every surface draws, `PR_ICON`, and `icon()` to make one |
 | `web/notifications.js` | Desktop notifications and the chime for a turn that finished or is waiting on you, and the page side of `sw.js` — registering it, and opening the session a notification's button was about |

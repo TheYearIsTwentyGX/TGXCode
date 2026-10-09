@@ -27,7 +27,7 @@
     background: var(--s3);
     border-radius: var(--r);
     box-shadow: 0 10px 30px #000a;
-    animation: bell-in var(--t-fast) var(--ease);
+    animation: menu-in var(--t-fast) var(--ease);
     transform-origin: top left;
 }
 .ctx-menu[hidden] { display: none; }

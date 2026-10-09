@@ -27,6 +27,7 @@ import { dom, toast } from './dom.js';
 import { get, post, put } from './api.js';
 import { ago, clip } from './format.js';
 import { renderMarkdown } from './markdown.js';
+import { grow, isUp, morph } from './motion.js';
 
 const KIND_LABEL = {
     plan: 'Plan', permission: 'Permission', ask: 'Question for it', question: 'Question',
@@ -107,13 +108,52 @@ export function paintOrchestratorButton() {
         : 'Make this session an orchestrator of worker sessions';
 }
 
+/**
+ * Draw the dock, growing it open or shrinking it shut as it comes and goes.
+ *
+ * It sits in the flex column under the transcript, so the transcript lengthens
+ * and shortens with it frame by frame rather than jumping by the dock's height.
+ * A dock already up and only changing — a section opened, a worker arriving, a
+ * different orchestrator's dock replacing this one — animates between the two
+ * heights. A closing one keeps what it showed until it has shut, so it does not
+ * empty first and then collapse an empty box.
+ */
 export function paintOrchestrator() {
-    if (!dom.orchDock) return;
+    const d = dom.orchDock;
+    if (!d) return;
     const s = state.current;
     const p = state.orch;
     const show = !!s && !!p && (s.sessionId === p.orchestratorId || !!s.worker);
-    dom.orchDock.hidden = !show;
-    render(show ? (s.worker ? workerLine(s, p) : dock(p)) : null, dom.orchDock);
+    if (!show) {
+        grow(d, false, { onGone: () => render(null, d) });
+        return;
+    }
+    const tree = s.worker ? workerLine(s, p) : dock(p);
+    if (isUp(d)) { morph(d, () => render(tree, d)); return; }
+    render(tree, d);
+    grow(d, true);
+}
+
+/**
+ * Hold the dock's place while a session's orchestrator payload is on the wire.
+ *
+ * Called as a conversation is opened, from what the rail already knows: a
+ * session that has no part in an orchestrator loses the dock at once, rather
+ * than when its transcript finishes loading, and one that has a part shows a
+ * placeholder instead of the dock of the session you just left.
+ */
+export function holdOrchestrator(s) {
+    const d = dom.orchDock;
+    if (!d) return;
+    state.orch = null;
+    if (!s || (!s.orchestrator && !s.worker)) { paintOrchestrator(); return; }
+    const tree = html`<div class="orch orch-loading" role="status" aria-label="Loading the orchestrator">
+        ${s.worker ? html`<div class="skel orch-skel-line"></div>`
+            : [0, 1, 2, 3].map(i => html`<div key=${i} class="skel orch-skel-line"></div>`)}
+    </div>`;
+    if (isUp(d)) { morph(d, () => render(tree, d)); return; }
+    render(tree, d);
+    grow(d, true);
 }
 
 function toggle(key) {

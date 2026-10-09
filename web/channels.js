@@ -11,6 +11,7 @@ import { state } from './state.js';
 import { dom, el, toast } from './dom.js';
 import { icon } from './icons.js';
 import { openPreview, openTitle } from './app.js';
+import { fill } from './motion.js';
 
 // ── dev-server channel strip ─────────────────────────────────────────────
 
@@ -45,7 +46,7 @@ export function renderChannels() {
                     + 'session started, so it is not shown here.',
         }, `${n} elsewhere`));
     }
-    dom.channels.replaceChildren(...chips);
+    fill(dom.channels, chips);
 }
 
 /**

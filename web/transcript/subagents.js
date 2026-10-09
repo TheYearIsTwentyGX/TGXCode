@@ -20,6 +20,7 @@ import { AGENT_VIEW, appendEvents, renderHeader } from './conversation.js';
 import { markFindDirty, syncFindSubs } from './find.js';
 import { toolSummary } from './tools.js';
 import { hideTurnPop } from './turn-rail.js';
+import { fill } from '../motion.js';
 
 // ── subagents ────────────────────────────────────────────────────────────
 // A subagent is a conversation the session had on its own. Two things about it
@@ -96,9 +97,7 @@ export function agentRows() {
 export function renderAgents() {
     const rows = agentRows();
     syncFindSubs(rows);
-    dom.agents.replaceChildren();
-    if (!rows.length) return;
-
+    const chips = [];
     for (const a of rows) {
         // A running agent that nothing has written to in a minute and a half is
         // not working — it is a session that went away mid-call. Say so rather
@@ -108,7 +107,7 @@ export function renderAgents() {
             ? (stalled ? `idle ${ago(a.activityTs || a.startedAt)}` : clip(a.activity || 'working', 34))
             : [dur(a.durationMs), a.toolUses && `${a.toolUses} tools`].filter(Boolean).join(' · ');
 
-        dom.agents.append(el('button', {
+        chips.push(el('button', {
             class: 'agent-chip',
             type: 'button',
             'data-status': a.status,
@@ -125,6 +124,7 @@ export function renderAgents() {
             el('span', { class: 'go' }, 'View'),
         ));
     }
+    fill(dom.agents, chips);
 }
 
 /**
