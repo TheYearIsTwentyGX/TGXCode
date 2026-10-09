@@ -1799,11 +1799,18 @@ is that it changes when something else on the card does.
 `waiting` is the count worth putting on a badge.
 
 `sessions` is "running now, plus pinned" and is the answer to *who is blocked on me*.
-`recent` is a second list, of sessions with no process at all but touched recently, for a
+`recent` is a second list, of sessions with nothing running but touched recently, for a
 surface that also has to answer *what was I doing yesterday* — a board of nothing but
 pinned cards is what the mornings looked like without it. It is a separate array rather
 than more reasons in `sessions` so that a client reading only `sessions` keeps getting
 exactly what it got before.
+
+"Nothing running" means no turn, not no process. A recent session this bridge started
+usually still has its idle `claude`, so its card carries `live.running: true` **and** a
+`runner` with `state: "idle"` — the runner is what says the process is ours. Only a recent
+card this bridge holds no process for has `runner: null`. (Until this was fixed every recent
+card had `runner: null`, so a client applying the rule "`live.running` and no runner means
+elsewhere" called the bridge's own idle sessions another window's.)
 
 "Recently" is not a rolling window, which is wrong at both ends of a day. Before noon it
 reaches back to noon yesterday — or to noon Friday on a Monday; after noon, only to
