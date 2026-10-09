@@ -16,6 +16,7 @@ import { dom, el, toast } from './dom.js';
 import { state } from './state.js';
 import { paintTermHead, renderTermTabs, setTermTab, showTerm, termPane } from './term-pane.js';
 import { openPreview, opensInDevBrowser, previewPane } from './app.js';
+import { fill } from './motion.js';
 
 // ── project commands ─────────────────────────────────────────────────────
 // What the session's directory declares in .tgxcode/, as a button each. The
@@ -110,7 +111,7 @@ function commandButton(cmd) {
 export function renderCommands() {
     const payload = state.cmds;
     const list = payload ? payload.commands : [];
-    dom.cmds.replaceChildren(...list.map(commandButton));
+    fill(dom.cmds, list.map(commandButton));
 
     // Problems go on the container rather than into a row of their own: a
     // config file with a typo in it should be findable, not shouty.

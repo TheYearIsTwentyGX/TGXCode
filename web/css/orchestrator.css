@@ -175,3 +175,10 @@
 @media (prefers-reduced-motion: reduce) {
     .orch-dock, .orch-sec-head .twist { transition: none; }
 }
+
+/* The stand-in drawn while a conversation's orchestrator payload loads — see
+   holdOrchestrator. Four lines at the height of four collapsed section heads, so
+   the dock opens at roughly its real size and does not jump when it lands. */
+.orch-loading { padding: 8px 14px; }
+.orch-skel-line { height: 12px; width: 38%; margin: 12px 0; }
+.orch-skel-line:nth-child(2n) { width: 26%; }

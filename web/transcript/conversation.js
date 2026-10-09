@@ -26,7 +26,8 @@ import { cvStaleFor } from '../quota.js';
 import { state } from '../state.js';
 import { notePrRepo } from '../pr-refs.js';
 import { loadCommands } from '../commands.js';
-import { loadOrchestrator, paintOrchestratorButton } from '../orchestrator.js';
+import { holdOrchestrator, loadOrchestrator, paintOrchestratorButton } from '../orchestrator.js';
+import { dur as motionMs, enter, exit, fill, settle } from '../motion.js';
 import { showTerm, termOpen } from '../term-pane.js';
 import {
     applyRunner, closePanels, grouping, loadAttach, loadDraft, loadSessions, markSessionNotesRead,
@@ -117,13 +118,13 @@ export async function openSession(id, { quiet = false, keepPanels = false } = {}
         state.runner = data.runner || null;
 
         renderHeader();
-        loadOrchestrator();
         // Drops the skeleton — and with it a row drawn at Send while this fetch was
         // still in flight, which is reachable because the composer is live over a
         // skeleton. Forget it rather than re-append it: the transcript that is about
         // to be drawn may already contain the message, and putting the row back
         // would be guessing about where in this fetch it belongs. The message is
         // safe either way, and the state has to agree with the log.
+        liftSkeleton();
         dom.log.replaceChildren();
         clearPendingSend();
         appendEvents(data.events);
@@ -133,6 +134,8 @@ export async function openSession(id, { quiet = false, keepPanels = false } = {}
         renderRail();
         applyRunner(data.runner);
         scrollToEnd(true);
+        // The transcript fades in under the skeleton fading out — see liftSkeleton.
+        if (veil) enter(dom.log, { kind: 'fade', speed: 'med' });
         // After the scroll, not before: it would be undone by it.
         takePendingJump();
 
@@ -185,6 +188,13 @@ function beginOpen(summary, { keepPanels = false } = {}) {
     resetWindow();      // the log is about to be replaced; its chunks go with it
     state.pinned = true;
     state.agents = [];  // the previous session's agents are not this one's
+    // And neither are its strips: they used to stay up until this session's own
+    // answers arrived, showing one conversation's subagents and dev servers under
+    // another's title. Shut now; loadAgents and loadChannels grow them back.
+    state.channels = [];
+    state.channelsElsewhere = 0;
+    fill(dom.agents, []);
+    fill(dom.channels, []);
     resetFind();
     state.prStatus = null;      // nor are its pull requests
     state.ask = null;   // approvals belong to the session that is blocked on them
@@ -238,6 +248,11 @@ function beginOpen(summary, { keepPanels = false } = {}) {
     paintPanels();
 
     renderHeader();
+    // Before the transcript is fetched rather than after: the dock below the log
+    // belongs to the session it was drawn for, and a switch used to leave the old
+    // one up until this session's events had loaded.
+    holdOrchestrator(summary);
+    loadOrchestrator();
     hideTurnPop();
     // Emptied, but keeping its 30px until renderTurns says whether the new
     // conversation has a rail — otherwise the column blinks out and back while
@@ -246,6 +261,11 @@ function beginOpen(summary, { keepPanels = false } = {}) {
     // not gain a reserved strip.
     if (paneUp(dom.turns)) dom.turns.classList.add('holding');
     dom.turns.replaceChildren();
+    // Instantly, on purpose: everything else in the window moves, but the
+    // conversation you left is gone the moment you leave it. A skeleton that
+    // faded in over it would show the old transcript under the new header.
+    dropVeil();
+    settle(dom.log);
     dom.log.replaceChildren(skeleton());
     dom.scroll.scrollTop = 0;
     renderRail();       // the clicked row takes the current-session mark now
@@ -285,7 +305,44 @@ function beginOpen(summary, { keepPanels = false } = {}) {
     rememberView();
 }
 
+/** The skeleton, lifted off the log and fading out over it. */
+let veil = null;
+
+function dropVeil() {
+    if (veil) { settle(veil); veil.remove(); }
+    veil = null;
+}
+
+/**
+ * Take the skeleton out of the log and leave it fading over the transcript that
+ * replaces it, so the two cross rather than cut.
+ *
+ * It goes into a box laid exactly over `.scroll`, in `.conv-main` — which is
+ * positioned — and inside a `.log` of its own, so its rows keep the width and
+ * gutter they had. Under reduced motion there is nothing to cross and it is just
+ * dropped.
+ */
+function liftSkeleton() {
+    dropVeil();
+    const sk = dom.log.querySelector(':scope > .skeleton');
+    const host = dom.scroll.closest('.conv-main');
+    if (!sk || !host || motionMs('med') <= 0) return;
+    const a = host.getBoundingClientRect(), b = dom.scroll.getBoundingClientRect();
+    const v = el('div', { class: 'skel-veil', 'aria-hidden': 'true',
+        style: `left:${b.left - a.left}px;top:${b.top - a.top}px;width:${b.width}px;height:${b.height}px` },
+    el('div', { class: 'log' }, sk));
+    host.append(v);
+    veil = v;
+    // The pane can change height under it — the orchestrator's dock growing in
+    // below as the transcript arrives — and a veil left at the old height would
+    // lie over the dock.
+    const ro = new ResizeObserver(() => { v.style.height = `${dom.scroll.clientHeight}px`; });
+    ro.observe(dom.scroll);
+    exit(v, { kind: 'fade', speed: 'med', onGone: () => { ro.disconnect(); if (veil === v) veil = null; } });
+}
+
 function showOpenFailed(id, err) {
+    dropVeil();
     dom.log.replaceChildren(el('div', { class: 'load-failed' },
         el('p', {}, `This conversation could not be loaded: ${err.message}`),
         el('button', { class: 'more-btn', type: 'button',

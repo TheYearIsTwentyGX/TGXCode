@@ -1534,3 +1534,13 @@ select.flash { animation: flash-select 1.3s var(--ease); }
     color: #131314;
 }
 
+
+/* The skeleton on its way out, laid over the transcript arriving under it — see
+   liftSkeleton in web/transcript/conversation.js. Placed over `.scroll` by the
+   script, which knows where that is once the side columns have settled. */
+.skel-veil {
+    position: absolute;
+    z-index: 2;
+    overflow: hidden;
+    pointer-events: none;
+}

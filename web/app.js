@@ -3613,6 +3613,15 @@ dom.scroll.addEventListener('scroll', () => {
     });
 }, { passive: true });
 
+// The pane changes height under the reader as the docks below it grow and shrink
+// — the orchestrator's, the question dock, the terminal — and nothing scrolls to
+// say so: a pane that shrinks keeps its scrollTop, so the end of the
+// conversation slides out of view under the dock. Whoever was at the end stays
+// there, every frame of the animation.
+new ResizeObserver(() => {
+    if (state.pinned && !state.agent && !state.find.open) scrollToEnd(true);
+}).observe(dom.scroll);
+
 // The subagent pane scrolls separately and needs the same repaint. Nothing else
 // here is about it: `pinned` and the turn rail are the session's alone.
 let agentScrollFrame = 0;
