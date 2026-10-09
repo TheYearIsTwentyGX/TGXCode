@@ -59,7 +59,8 @@ const VIEWPORTS = {
     fit: null,
     phone: { w: 375, h: 812 },
     tablet: { w: 768, h: 1024 },
-    desktop: { w: 1440, h: 900 },
+    // A shape, not a size: the largest 16:9 the pane has room for.
+    desktop: { w: 16, h: 9, fill: true },
 };
 
 export function previewUrl(port, path = '') {
@@ -399,6 +400,10 @@ export class PreviewPane {
      * one — and scaled down to the canvas, aspect kept, when they do not.
      * DevBrowser always scales to fill; that makes "Phone" mean "tall" rather
      * than "375 wide", which is not what anybody picking it is asking.
+     *
+     * Desktop is the exception, and `fill` marks it: nobody picking it means a
+     * particular width, they mean "a monitor-shaped page", so it is the largest
+     * 16:9 the canvas holds and follows the pane as it resizes.
      */
     paintDevice() {
         const e = this.el;
@@ -418,12 +423,16 @@ export class PreviewPane {
         const room = 80 + 48;   // canvas padding, plus the thickest bezel pair
         const availW = Math.max(100, e.canvas.clientWidth - room);
         const availH = Math.max(100, e.canvas.clientHeight - room);
-        const scale = Math.min(1, availW / w0, availH / h0);
+        const scale = preset.fill
+            ? Math.min(availW / w0, availH / h0)
+            : Math.min(1, availW / w0, availH / h0);
         const w = Math.round(w0 * scale);
         const h = Math.round(h0 * scale);
         e.device.style.width = `${w}px`;
         e.device.style.height = `${h}px`;
-        e.badge.textContent = scale < 1
+        e.badge.textContent = preset.fill
+            ? `${w} × ${h} — ${w0}:${h0}, as large as fits`
+            : scale < 1
             ? `${w} × ${h} — ${w0} × ${h0} scaled to fit`
             : `${w} × ${h}`;
     }
