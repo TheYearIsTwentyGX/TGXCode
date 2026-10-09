@@ -14,6 +14,7 @@ import { showCv, showQuota } from '../quota.js';
 import { devBrowserShown } from '../app.js';
 import { showNewMenu } from '../new-session/recent.js';
 import { saveSetting } from './index.js';
+import { isUp, present } from '../motion.js';
 
 // ── the top bar's layout ─────────────────────────────────────────────────
 //
@@ -150,7 +151,7 @@ function paintBarMore() {
 
 export function showBarMore(on) {
     if (on && dom.barMoreWrap.hidden) return;
-    dom.barMoreMenu.hidden = !on;
+    present(dom.barMoreMenu, on, { kind: 'pop' });
     dom.barMore.setAttribute('aria-expanded', String(on));
     if (on) { showQuota(false); showNewMenu(false); showCv(false); }
 }
@@ -165,7 +166,7 @@ function barMoreRows() {
 export function wireToolbar() {
     dom.barMore.addEventListener('click', (e) => {
         e.stopPropagation();
-        showBarMore(dom.barMoreMenu.hidden);
+        showBarMore(!isUp(dom.barMoreMenu));
     });
 
     dom.barMore.addEventListener('keydown', (e) => {

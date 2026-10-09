@@ -20,7 +20,7 @@ import { AGENT_VIEW, appendEvents, renderHeader } from './conversation.js';
 import { markFindDirty, syncFindSubs } from './find.js';
 import { toolSummary } from './tools.js';
 import { hideTurnPop } from './turn-rail.js';
-import { fill } from '../motion.js';
+import { enter, fill } from '../motion.js';
 
 // ── subagents ────────────────────────────────────────────────────────────
 // A subagent is a conversation the session had on its own. Two things about it
@@ -160,6 +160,7 @@ export async function openAgent(toolUseId, { quiet = false } = {}) {
         hideTurnPop();
 
         appendEvents(d.events, AGENT_VIEW);
+        enter(dom.agentScroll, { kind: 'rise', speed: 'med' });
         renderAgentHeader();
         renderAgents();
         applyComposerScope();
@@ -201,6 +202,9 @@ export function leaveAgent() {
 export function closeAgent() {
     if (!state.agent) return;
     leaveAgent();
+    // Here and not in leaveAgent, which a chat switch also runs — and a switch
+    // goes straight to its skeleton, with nothing played in.
+    enter(dom.scroll, { kind: 'fade', speed: 'med' });
     renderHeader();
     renderAgents();
     subscribe();        // stop the bridge following a file nobody is reading

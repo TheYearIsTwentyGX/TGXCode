@@ -177,7 +177,7 @@ export function enter(node, { kind = 'fade', speed = 'fast', collapse = false } 
 
 const ZERO = {
     height: '0px', paddingTop: '0px', paddingBottom: '0px', marginTop: '0px', marginBottom: '0px',
-    borderTopWidth: '0px', borderBottomWidth: '0px',
+    borderTopWidth: '0px', borderBottomWidth: '0px', minHeight: '0px',
 };
 
 /** The vertical box an element has now, as keyframe values. */
@@ -188,6 +188,9 @@ function boxOf(node) {
         paddingTop: cs.paddingTop, paddingBottom: cs.paddingBottom,
         marginTop: cs.marginTop, marginBottom: cs.marginBottom,
         borderTopWidth: cs.borderTopWidth, borderBottomWidth: cs.borderBottomWidth,
+        // Off for the length of the animation, at both ends: a min-height would
+        // stop a shrink at it and then drop the rest in a frame.
+        minHeight: '0px',
     };
 }
 
@@ -320,4 +323,14 @@ export function fill(node, kids) {
         { ...boxOf(node), opacity: 1, overflow: 'hidden' },
         { ...ZERO, opacity: 0, overflow: 'hidden' },
     ], dur('med'), () => { leaving.delete(node); node.replaceChildren(); });
+}
+
+/**
+ * Play a one-off animation on a node that stays where it is — a dialog box
+ * scaling with the scrim around it, say. The frames are ordinary keyframes; a
+ * single frame with `offset: 0` animates from it to the node's own style.
+ */
+export function animate(node, frames, { speed = 'fast' } = {}) {
+    if (!node) return;
+    play(node, frames, dur(speed));
 }

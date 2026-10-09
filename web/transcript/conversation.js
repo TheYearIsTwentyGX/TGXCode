@@ -27,7 +27,7 @@ import { state } from '../state.js';
 import { notePrRepo } from '../pr-refs.js';
 import { loadCommands } from '../commands.js';
 import { holdOrchestrator, loadOrchestrator, paintOrchestratorButton } from '../orchestrator.js';
-import { dur as motionMs, enter, exit, fill, settle } from '../motion.js';
+import { dur as motionMs, enter, exit, fill, isUp, settle } from '../motion.js';
 import { showTerm, termOpen } from '../term-pane.js';
 import {
     applyRunner, closePanels, grouping, loadAttach, loadDraft, loadSessions, markSessionNotesRead,
@@ -553,7 +553,7 @@ export function renderHeaderActions() {
         ? 'Hide what this session changed' : 'What this session changed';
     dom.btnFolder.title = `Show ${s.cwd} in File Explorer`;
     dom.btnTerm.title = keys.hint(
-        dom.termPane.hidden ? `Open a terminal in ${s.cwd}` : 'Hide the terminal',
+        !isUp(dom.termPane) ? `Open a terminal in ${s.cwd}` : 'Hide the terminal',
         'terminal.toggle');
 }
 

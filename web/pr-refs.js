@@ -21,6 +21,7 @@ import { reposOf, resolvePrRef, targetLabel, targetsOf } from './pr-resolve.js';
 import { state } from './state.js';
 import { openContextMenu } from './transcript/context-menu.js';
 import { openSession } from './transcript/conversation.js';
+import { present } from './motion.js';
 
 // The bridge keeps its answer for thirty seconds; asking more often than that
 // buys nothing, and `prs-changed` refetches regardless.
@@ -118,7 +119,7 @@ function showCard(a) {
         )),
         el('div', { class: 'pr-pop-foot' }, many ? 'Click to choose a chat' : 'Click to open chat'),
     );
-    pop.hidden = false;
+    present(pop, true, { kind: 'pop' });
 
     // Under the mention, flipped above when there is no room, kept on screen.
     const r = a.getBoundingClientRect();
@@ -131,7 +132,7 @@ function showCard(a) {
 
 export function hideCard() {
     clearTimeout(hoverTimer);
-    if (dom.prPop) dom.prPop.hidden = true;
+    if (dom.prPop) present(dom.prPop, false, { kind: 'pop' });
 }
 
 // ── the click ─────────────────────────────────────────────────────────────

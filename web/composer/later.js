@@ -21,6 +21,7 @@ import { clearAttach, readyAttachments, revokePreviews } from './attachments.js'
 import { autoGrow } from './send.js';
 import { closeMenus, live } from './slash.js';
 import { closeWispr } from './wispr.js';
+import { flip, grow, isUp, morph, present } from '../motion.js';
 
 // ── send later ───────────────────────────────────────────────────────────
 // The same message, at a time you pick. A send held back rather than a schedule:
@@ -101,10 +102,12 @@ export function renderLater() {
     // While a subagent is on screen the composer belongs to nothing you can send
     // to, so its chips are out of scope too — renderQueue's rule.
     const show = mine.length > 0 && !state.agent;
-    dom.later.hidden = !show;
-    if (!show) return dom.later.replaceChildren();
-
-    dom.later.replaceChildren(...mine.map((m) => {
+    if (!show) {
+        grow(dom.later, false, { onGone: () => { if (dom.later.hidden) dom.later.replaceChildren(); } });
+        return;
+    }
+    const opening = !isUp(dom.later);
+    morph(dom.later, () => flip(dom.later, (n) => n.dataset.id, () => dom.later.replaceChildren(...mine.map((m) => {
         const open = state.laterOpen.has(m.id);
         const done = m.state !== 'pending' && m.state !== 'delivering';
         const bad = m.state === 'missed' || m.state === 'failed';
@@ -147,7 +150,8 @@ export function renderLater() {
                 'aria-label': m.state === 'pending' ? 'Cancel this message' : 'Clear this row',
                 onclick: () => cancelLater(m),
             }, '×')));
-    }));
+    }))));
+    if (opening) grow(dom.later, true);
 }
 
 /** Deliver one now. The bridge runs the same path its clock would. */
@@ -210,16 +214,15 @@ function showLater(on) {
     closeSnips(live);
     if (live.wispr) closeWispr(live.wispr);
     state.laterPick = false;
-    dom.laterMenu.hidden = false;
+    present(dom.laterMenu, true, { kind: 'pop' });
     dom.btnLater.setAttribute('aria-expanded', 'true');
     drawLater();
     positionLater();
 }
 
 export function closeLater({ focus = false } = {}) {
-    if (dom.laterMenu.hidden) return;
-    dom.laterMenu.hidden = true;
-    dom.laterMenu.replaceChildren();
+    if (!isUp(dom.laterMenu)) return;
+    present(dom.laterMenu, false, { kind: 'pop', onGone: () => dom.laterMenu.replaceChildren() });
     dom.btnLater.setAttribute('aria-expanded', 'false');
     if (focus) dom.btnLater.focus();
 }
@@ -362,7 +365,7 @@ export function wireLater() {
     // stopPropagation, so the click-outside rule below does not close what it opened.
     dom.btnLater.addEventListener('click', (e) => {
         e.stopPropagation();
-        showLater(dom.laterMenu.hidden);
+        showLater(!isUp(dom.laterMenu));
     });
     // A click inside the popover is not a click outside it. Needed because the fields
     // at the foot of it are things you interact with for a while — picking a date,

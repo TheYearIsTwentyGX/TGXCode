@@ -8,7 +8,7 @@
 // and throws in the temporal dead zone, and only loading the page shows it.
 
 import { get, post } from '../api.js';
-import { dom, el, toast } from '../dom.js';
+import { dom, closeModal, el, openModal, toast } from '../dom.js';
 import { renderMarkdown } from '../markdown.js';
 import { state } from '../state.js';
 import { openNew } from '../new-session/dialog.js';
@@ -216,7 +216,7 @@ export function openTaskDialog(ev) {
     dom.taskDlgCwd.hidden = !ev.cwd;
 
     paintTaskDialogActions(ev);
-    dom.taskScrim.hidden = false;
+    openModal(dom.taskScrim);
     dom.taskDlgCopy.focus();
 }
 
@@ -227,7 +227,7 @@ function paintTaskDialogActions(ev) {
 
 export function closeTaskDialog() {
     if (dom.taskScrim.hidden) return;
-    dom.taskScrim.hidden = true;
+    closeModal(dom.taskScrim);
     const id = state.taskDialog;
     state.taskDialog = null;
     // Back to the summary the dialog was opened from, so the keyboard does not

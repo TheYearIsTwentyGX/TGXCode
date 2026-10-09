@@ -17,6 +17,7 @@ import { loadEarlier } from './earlier.js';
 import { markOutcome, openReview } from './review.js';
 import { toolSummary } from './tools.js';
 import { ensureAttached, layoutTop } from './window.js';
+import { present } from '../motion.js';
 
 // ── turn rail ────────────────────────────────────────────────────────────
 // A tick per thing you said, down the right edge of the transcript, and one for
@@ -153,7 +154,7 @@ function showTurnPop(tick, m) {
         ),
         el('div', { class: 'pop-text' + (isCmd ? ' cmd' : '') }, clipLines(body, 460)),
     );
-    pop.hidden = false;
+    present(pop, true, { kind: 'pop' });
 
     // Sits to the left of the rail, centred on its tick, kept on screen.
     const r = tick.getBoundingClientRect();
@@ -164,7 +165,7 @@ function showTurnPop(tick, m) {
 }
 
 export function hideTurnPop() {
-    dom.turnPop.hidden = true;
+    present(dom.turnPop, false, { kind: 'pop' });
 }
 
 export async function jumpToTurn(t) {

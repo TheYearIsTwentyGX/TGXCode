@@ -31,6 +31,7 @@ import { showBarMore } from '../settings/toolbar.js';
 import { wireAttachments } from './attachments.js';
 import { acceptMention, mentionRow, updateMentionMenu } from './mentions.js';
 import { enableSend } from './send.js';
+import { isUp, present } from '../motion.js';
 
 // ── slash-command completion ─────────────────────────────────────────────
 //
@@ -111,7 +112,7 @@ export function makeComposer({ input, slashNode, mentionNode, id, ctx, container
     return c;
 }
 
-export const menuOpen = (m) => !m.node.hidden;
+export const menuOpen = (m) => isUp(m.node);
 
 /** The other popover on the same composer. */
 const otherMenu = (m) => (m === m.c.slash ? m.c.mention : m.c.slash);
@@ -257,10 +258,9 @@ function matchSlashCommands(items, frag) {
  * both were somehow up — unreachable, and now unreachable by construction.
  */
 export function closeMenu(m) {
-    if (m.node.hidden) return;
-    m.node.hidden = true;
-    m.node.replaceChildren();
-    if (otherMenu(m).node.hidden) {
+    if (!isUp(m.node)) return;
+    present(m.node, false, { kind: 'pop', onGone: () => m.node.replaceChildren() });
+    if (!isUp(otherMenu(m).node)) {
         m.c.input.setAttribute('aria-expanded', 'false');
         m.c.input.removeAttribute('aria-activedescendant');
     }
@@ -343,7 +343,7 @@ function slashRow(m, cmd, i) {
 export function drawMenu(m, rows, note) {
     // Two popovers on screen at once is nobody's intention. Only on the way
     // open: this redraws on every keystroke, and the others are already shut.
-    if (m.node.hidden) { m.c.closeOthers(); closeMenu(otherMenu(m)); }
+    if (!isUp(m.node)) { m.c.closeOthers(); closeMenu(otherMenu(m)); }
 
     // A note is a message, not a list. Clearing the rows behind it matters:
     // otherwise Enter during "Loading…" would accept whatever the *previous*
@@ -365,7 +365,7 @@ export function drawMenu(m, rows, note) {
     });
 
     m.node.replaceChildren(...(note ? [el('div', { class: 'menu-note' }, note)] : kids));
-    m.node.hidden = false;
+    present(m.node, true, { kind: 'pop' });
     // After it is on screen and before the highlight is painted: paintSelection
     // scrolls a row into view, and it should be scrolling inside a box that has
     // already been given its height.

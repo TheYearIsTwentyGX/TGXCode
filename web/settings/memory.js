@@ -7,7 +7,7 @@
 // because every module under web/settings/ evaluates before app.js's body runs.
 
 import { get, put } from '../api.js';
-import { dom, el, toast } from '../dom.js';
+import { dom, closeModal, el, openModal, toast } from '../dom.js';
 import { shortPath } from '../format.js';
 import { renderMarkdown } from '../markdown.js';
 import { state } from '../state.js';
@@ -553,7 +553,7 @@ function openMemoDialog() {
     if (s.draft === null) s.draft = row.text === null ? '' : row.text;
     const box = dom.setBody.querySelector('.cfg-md');
     if (box) s.caret = box.selectionStart || 0;
-    dom.memoScrim.hidden = false;
+    openModal(dom.memoScrim);
     paintMemoDialog();
     // The preview is rendered now rather than on the next frame, so the
     // scroll sync below has a height to work with.
@@ -576,7 +576,7 @@ function setMemoDialogView(view) {
 export function closeMemoDialog() {
     const s = docsState();
     s.caret = dom.memoBig.selectionStart || 0;
-    dom.memoScrim.hidden = true;
+    closeModal(dom.memoScrim);
     // Redraw the inline card from the draft the dialog was editing.
     renderSettings();
 }

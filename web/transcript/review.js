@@ -7,7 +7,7 @@
 // that way: a top-level `const X = someImport(...)` runs before app.js's body
 // and throws in the temporal dead zone, and only loading the page shows it.
 
-import { dom, el } from '../dom.js';
+import { dom, closeModal, el, openModal } from '../dom.js';
 import { clip, clockOf, dateOf } from '../format.js';
 import { renderMarkdown } from '../markdown.js';
 import { state } from '../state.js';
@@ -53,7 +53,7 @@ export function openReview(evId) {
     closeContextMenu({ focus: false });
     hideTurnPop();
     paintReview();
-    dom.reviewScrim.hidden = false;
+    openModal(dom.reviewScrim);
     // The dialog itself, not its body: focus has to come inside the scrim or the
     // keyboard is still out in the rail behind it, but a body that fills the
     // dialog wears the focus ring as a border around everything, which reads as
@@ -65,7 +65,7 @@ export function openReview(evId) {
 export function closeReview() {
     if (dom.reviewScrim.hidden) return;
     state.review.evId = null;
-    dom.reviewScrim.hidden = true;
+    closeModal(dom.reviewScrim);
     // A plan is tens of kilobytes of rendered markdown and a four-question
     // review is a few hundred nodes of options and previews. Same reason
     // closeDiff empties its body rather than leaving it attached to a hidden

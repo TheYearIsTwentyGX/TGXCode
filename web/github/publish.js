@@ -13,7 +13,7 @@
 // through a word.
 
 import { get, post } from '../api.js';
-import { closeOnClickOutside, dom, el, toast } from '../dom.js';
+import { dom, closeModal, closeOnClickOutside, el, openModal, toast } from '../dom.js';
 
 /** The open dialog, or null. */
 let cur = null;
@@ -54,7 +54,7 @@ function freshForm(st, who) {
 export async function openPublish(cwd, { onDone } = {}) {
     cur = { cwd, onDone, st: null, who: null, tpl: null, teams: {}, form: null, busy: false, mode: 'wait' };
     const mine = cur;
-    dom.ghScrim.hidden = false;
+    openModal(dom.ghScrim);
     dom.ghFootNote.textContent = '';
     setGo('Create repository', true);
     dom.ghBody.replaceChildren(el('div', { class: 'gh-wait' }, 'Asking GitHub…'));
@@ -79,7 +79,7 @@ export async function openPublish(cwd, { onDone } = {}) {
 export function closePublish() {
     if (cur?.busy) return;   // the steps are running; closing would hide their answer
     cur = null;
-    dom.ghScrim.hidden = true;
+    closeModal(dom.ghScrim);
 }
 
 export function wirePublish() {

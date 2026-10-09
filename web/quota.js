@@ -20,6 +20,7 @@ import { showNewMenu } from './new-session/recent.js';
 import { openSession, renderHeader } from './transcript/conversation.js';
 import { openContextMenu } from './transcript/context-menu.js';
 import { showBarMore } from './settings/toolbar.js';
+import { isUp, present } from './motion.js';
 
 // ── quota ────────────────────────────────────────────────────────────────
 //
@@ -673,7 +674,7 @@ async function refreshQuotaNow() {
 }
 
 export function showQuota(on) {
-    dom.quotaMenu.hidden = !on;
+    present(dom.quotaMenu, on, { kind: 'pop' });
     dom.quotaPill.setAttribute('aria-expanded', String(on));
     // The two popovers must not sit open together, and each one's outside-click
     // listener is stopped by the other's trigger. There were three of these
@@ -713,7 +714,7 @@ dom.quotaRestart.addEventListener('click', (e) => {
 
 dom.quotaPill.addEventListener('click', (e) => {
     e.stopPropagation();
-    showQuota(dom.quotaMenu.hidden);
+    showQuota(!isUp(dom.quotaMenu));
 });
 
 document.addEventListener('click', (e) => {
@@ -826,8 +827,8 @@ function renderCvPanel() {
 }
 
 export function showCv(on) {
-    if (on === !dom.cvMenu.hidden) return;
-    dom.cvMenu.hidden = !on;
+    if (on === isUp(dom.cvMenu)) return;
+    present(dom.cvMenu, on, { kind: 'pop' });
     dom.cvPill.setAttribute('aria-expanded', String(on));
     if (on) { renderCvPanel(); showQuota(false); showNewMenu(false); showBarMore(false); }
 }
@@ -886,7 +887,7 @@ export function cvSettingsNote() {
 
 dom.cvPill.addEventListener('click', (e) => {
     e.stopPropagation();
-    showCv(dom.cvMenu.hidden);
+    showCv(!isUp(dom.cvMenu));
 });
 /**
  * The release notes for a version. GitHub anchors each CHANGELOG.md heading by

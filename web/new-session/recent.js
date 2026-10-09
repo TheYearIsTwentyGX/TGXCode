@@ -16,6 +16,7 @@ import { showQuota } from '../quota.js';
 import { projectColor } from '../app.js';
 import { showBarMore } from '../settings/toolbar.js';
 import { loadProjects, openNew } from './dialog.js';
+import { isUp, present } from '../motion.js';
 
 // ── the recent-directories menu ──────────────────────────────────────────
 
@@ -26,7 +27,7 @@ const NEW_MENU_MAX = 6;
 let newMenuSeq = 0;
 
 export function showNewMenu(on, { focusFirst = false } = {}) {
-    dom.newMenu.hidden = !on;
+    present(dom.newMenu, on, { kind: 'pop' });
     dom.btnNewMenu.setAttribute('aria-expanded', String(on));
     if (on) { showQuota(false); showBarMore(false); fillNewMenu({ focusFirst }); }
 }
@@ -128,7 +129,7 @@ function onNewMenuKey(e, i) {
 export function wireNewMenu() {
     dom.btnNewMenu.addEventListener('click', (e) => {
         e.stopPropagation();
-        showNewMenu(dom.newMenu.hidden);
+        showNewMenu(!isUp(dom.newMenu));
     });
 
     // Down on the caret is the keyboard's "open this and start choosing". The fill
@@ -136,7 +137,7 @@ export function wireNewMenu() {
     dom.btnNewMenu.addEventListener('keydown', (e) => {
         if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
         e.preventDefault();
-        if (dom.newMenu.hidden) showNewMenu(true, { focusFirst: true });
+        if (!isUp(dom.newMenu)) showNewMenu(true, { focusFirst: true });
         else focusNewMenuAt(e.key === 'ArrowDown' ? 0 : -1);
     });
 

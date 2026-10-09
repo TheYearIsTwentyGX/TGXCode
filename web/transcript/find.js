@@ -16,6 +16,7 @@ import { agentRows, closeAgent, openAgent } from './subagents.js';
 import { fillTool, todoItemsOf, toolSummary } from './tools.js';
 import { revealNode, turnText } from './turn-rail.js';
 import { ensureAttached, layoutBox } from './window.js';
+import { present } from '../motion.js';
 
 // ── find in conversation ─────────────────────────────────────────────────
 //
@@ -498,7 +499,7 @@ export function openFind() {
         || !dom.taskScrim.hidden) return;
 
     f.open = true;
-    dom.find.hidden = false;
+    present(dom.find, true, { kind: 'drop' });
     syncFindSubs();
     // You are reading, not tailing. Without this the next chunk of a live turn
     // scrolls the pane out from under the match you just landed on.
@@ -517,7 +518,7 @@ export function closeFind({ focus = false } = {}) {
     f.hits = [];
     f.matched = [];
     f.painted = [];
-    dom.find.hidden = true;
+    present(dom.find, false, { kind: 'drop' });
     if (CSS.highlights) {
         CSS.highlights.delete('cs-find');
         CSS.highlights.delete('cs-find-at');
