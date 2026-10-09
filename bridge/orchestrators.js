@@ -64,12 +64,27 @@ const MAX_SUMMARY = 1500;
 const MAX_WORKERS = 50;
 
 const WINDOWS = ['five_hour', 'seven_day', 'seven_day_opus', 'seven_day_sonnet'];
+// What `usageStop.window` may be: one window, measured against `percent`, or
+// `all`, where each window has its own threshold in `limits` and any one of
+// them past its own trips the cutoff.
+const STOP_WINDOWS = [...WINDOWS, 'all'];
 
 const DEFAULT_SETTINGS = Object.freeze({
     maxRunning: 3,
     worktree: true,
-    usageStop: Object.freeze({ enabled: true, percent: 90, window: 'five_hour' }),
+    usageStop: Object.freeze({
+        enabled: true,
+        percent: 90,
+        window: 'five_hour',
+        // For `window: "all"`. Null leaves that window out.
+        limits: Object.freeze({ five_hour: 90, seven_day: 95, seven_day_opus: null, seven_day_sonnet: null }),
+        // Lift the pause by itself once the window that tripped it resets, and
+        // tell the orchestrator so it can carry on. Off: wait for Resume.
+        autoResume: false,
+    }),
 });
+
+const pct = (v) => Number.isInteger(v) && v >= 1 && v <= 100;
 
 /**
  * Settings as the store keeps them, from whatever arrived. A field that fails is
@@ -85,11 +100,25 @@ function cleanSettings(raw, base = DEFAULT_SETTINGS) {
         worktree: typeof s.worktree === 'boolean' ? s.worktree : base.worktree,
         usageStop: {
             enabled: typeof u.enabled === 'boolean' ? u.enabled : bu.enabled,
-            percent: Number.isInteger(u.percent) && u.percent >= 1 && u.percent <= 100
-                ? u.percent : bu.percent,
-            window: WINDOWS.includes(u.window) ? u.window : bu.window,
+            percent: pct(u.percent) ? u.percent : bu.percent,
+            window: STOP_WINDOWS.includes(u.window) ? u.window : bu.window,
+            limits: cleanLimits(u.limits, bu.limits || DEFAULT_SETTINGS.usageStop.limits),
+            autoResume: typeof u.autoResume === 'boolean' ? u.autoResume
+                : (typeof bu.autoResume === 'boolean' ? bu.autoResume : false),
         },
     };
+}
+
+/** One threshold per window; a key that fails keeps `base`'s, null clears it. */
+function cleanLimits(raw, base) {
+    const r = raw && typeof raw === 'object' ? raw : {};
+    const out = {};
+    for (const w of WINDOWS) {
+        if (r[w] === null) out[w] = null;
+        else if (pct(r[w])) out[w] = r[w];
+        else out[w] = base && w in base ? base[w] : null;
+    }
+    return out;
 }
 
 /**
@@ -129,24 +158,53 @@ function shouldNudge(orch, status) {
     return true;
 }
 
+/** `resetsAt` as epoch ms — unix seconds from bridge/usage.js, ms tolerated — or null. */
+function resetMs(w) {
+    if (!w || !Number.isFinite(w.resetsAt) || w.resetsAt <= 0) return null;
+    return w.resetsAt < 1e12 ? w.resetsAt * 1000 : w.resetsAt;
+}
+
 /**
- * The usage window that trips the cutoff, or null. `windows` is
- * `usage.snapshot().windows`.
+ * Every window over its threshold: `[{window, usedPercent, percent, resetsAt}]`,
+ * `resetsAt` epoch ms or null. Empty when the cutoff is off or nothing is over.
+ * `windows` is `usage.snapshot().windows`.
+ *
+ * One window against `percent`, or with `window: "all"` each window against its
+ * own entry in `limits` — so five-hour past 90 *or* weekly past 95.
  */
-function usageTrip(settings, windows, now = Date.now()) {
+function usageTrips(settings, windows, now = Date.now()) {
     const u = settings && settings.usageStop;
-    if (!u || !u.enabled) return null;
-    const w = (windows || []).find(x => x && x.type === u.window);
-    if (!w || typeof w.usedPercent !== 'number') return null;
-    // A reading from before the window reset describes a period that is over.
-    // While paused nothing runs, so nothing brings a fresh one — and a stale 92%
-    // would keep refusing Resume long after the window had emptied. `resetsAt`
-    // is unix seconds from bridge/usage.js; milliseconds are tolerated.
-    if (Number.isFinite(w.resetsAt) && w.resetsAt > 0) {
-        const resetMs = w.resetsAt < 1e12 ? w.resetsAt * 1000 : w.resetsAt;
-        if (resetMs <= now) return null;
+    if (!u || !u.enabled) return [];
+    const wanted = u.window === 'all'
+        ? WINDOWS.filter(w => u.limits && pct(u.limits[w])).map(w => [w, u.limits[w]])
+        : [[u.window, u.percent]];
+    const out = [];
+    for (const [type, percent] of wanted) {
+        const w = (windows || []).find(x => x && x.type === type);
+        if (!w || typeof w.usedPercent !== 'number') continue;
+        // A reading from before the window reset describes a period that is
+        // over. While paused nothing runs, so nothing brings a fresh one — and a
+        // stale 92% would keep refusing Resume long after the window had emptied.
+        const reset = resetMs(w);
+        if (reset !== null && reset <= now) continue;
+        if (w.usedPercent >= percent) out.push({ window: type, usedPercent: w.usedPercent, percent, resetsAt: reset });
     }
-    return w.usedPercent >= u.percent ? { window: w.type, usedPercent: w.usedPercent, percent: u.percent } : null;
+    return out;
+}
+
+/** The first window over its threshold, or null — `usageTrips` for a yes or no. */
+function usageTrip(settings, windows, now = Date.now()) {
+    return usageTrips(settings, windows, now)[0] || null;
+}
+
+/**
+ * When a pause for these trips can lift by itself: the *latest* reset among
+ * them, since until every tripped window has reset the cutoff would trip again
+ * at once. Null when any of them has no reset time to wait for.
+ */
+function resumeAtFor(trips) {
+    if (!trips.length || trips.some(t => t.resetsAt === null)) return null;
+    return Math.max(...trips.map(t => t.resetsAt));
 }
 
 /** "1 plan, 2 turn reports" — what a nudge says is waiting. */
@@ -217,6 +275,24 @@ function cleanSpawn(p) {
     };
 }
 
+/**
+ * A pause as the store keeps it. `resumeAt` (epoch ms) is when it lifts by
+ * itself, or null for Resume only; `by` is the port of the bridge that set it,
+ * which is the only one that will lift it — the store is shared by every bridge;
+ * `interrupted` the sessions the cutoff stopped mid-turn, for the note the
+ * orchestrator gets when it wakes.
+ */
+function cleanPaused(p, at) {
+    return {
+        reason: str(p.reason, 500) || 'paused',
+        at,
+        resumeAt: Number.isFinite(p.resumeAt) && p.resumeAt > 0 ? p.resumeAt : null,
+        by: Number.isInteger(p.by) ? p.by : null,
+        interrupted: Array.isArray(p.interrupted)
+            ? p.interrupted.filter(x => typeof x === 'string').slice(0, MAX_WORKERS) : [],
+    };
+}
+
 function cleanOrch(id, o) {
     if (!o || typeof o !== 'object') return null;
     return {
@@ -225,7 +301,7 @@ function cleanOrch(id, o) {
         updatedAt: Number.isFinite(o.updatedAt) ? o.updatedAt : 0,
         settings: cleanSettings(o.settings),
         paused: o.paused && typeof o.paused === 'object'
-            ? { reason: str(o.paused.reason, 500) || 'paused', at: Number(o.paused.at) || 0 }
+            ? cleanPaused(o.paused, Number(o.paused.at) || 0)
             : null,
         summary: o.summary && typeof o.summary.text === 'string'
             ? { text: o.summary.text.slice(0, MAX_SUMMARY), at: Number(o.summary.at) || 0 }
@@ -403,7 +479,10 @@ class Orchestrators {
         const o = this.byId.get(sessionId);
         if (!o) return null;
         const merged = { ...o.settings, ...patch,
-            usageStop: { ...o.settings.usageStop, ...(patch && patch.usageStop) } };
+            usageStop: {
+                ...o.settings.usageStop, ...(patch && patch.usageStop),
+                limits: { ...o.settings.usageStop.limits, ...(patch && patch.usageStop && patch.usageStop.limits) },
+            } };
         o.settings = cleanSettings(merged, o.settings);
         return this._touch(o);
     }
@@ -419,7 +498,7 @@ class Orchestrators {
     setPaused(sessionId, paused) {
         const o = this.byId.get(sessionId);
         if (!o) return null;
-        o.paused = paused ? { reason: String(paused.reason || 'paused'), at: Date.now() } : null;
+        o.paused = paused ? cleanPaused(paused, Date.now()) : null;
         return this._touch(o);
     }
 
@@ -613,5 +692,6 @@ function refusal(message) {
 
 module.exports = {
     Orchestrators, cleanSettings, sortInbox, shouldNudge, usageTrip, describeCounts,
-    DEFAULT_SETTINGS, REPORT_KINDS, KINDS, WINDOWS, MAX_SUMMARY,
+    usageTrips, resumeAtFor,
+    DEFAULT_SETTINGS, REPORT_KINDS, KINDS, WINDOWS, STOP_WINDOWS, MAX_SUMMARY,
 };

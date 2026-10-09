@@ -162,6 +162,11 @@
     font: inherit;
 }
 .orch-note { color: var(--text-4); font-size: 12px; }
+/* "All limits": one threshold per window, indented under the line that chose it. */
+.orch-limits { display: flex; flex-wrap: wrap; gap: 6px 18px; padding-left: 24px; }
+.orch-limits label { display: flex; align-items: center; gap: 6px; }
+.orch-limits .orch-note { flex-basis: 100%; }
+.orch-wake { opacity: 0.85; }
 
 .orch-worker-line {
     display: flex;

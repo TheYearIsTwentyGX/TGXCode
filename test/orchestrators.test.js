@@ -35,7 +35,8 @@ Object.assign(process.env, {
 const { execFileSync } = require('child_process');
 
 const {
-    Orchestrators, sortInbox, shouldNudge, usageTrip, cleanSettings, describeCounts, DEFAULT_SETTINGS,
+    Orchestrators, sortInbox, shouldNudge, usageTrip, usageTrips, resumeAtFor, cleanSettings, describeCounts,
+    DEFAULT_SETTINGS,
 } = require('../bridge/orchestrators');
 const orchestration = require('../bridge/orchestration');
 
@@ -75,7 +76,7 @@ const fileOf = (n) => path.join(home, `orch-${n}.json`);
     const ws = [{ type: 'five_hour', usedPercent: 49.9 }, { type: 'seven_day', usedPercent: 99 }];
     assert.strictEqual(usageTrip(s, ws), null);
     assert.deepStrictEqual(usageTrip(s, [{ type: 'five_hour', usedPercent: 50 }]),
-        { window: 'five_hour', usedPercent: 50, percent: 50 });
+        { window: 'five_hour', usedPercent: 50, percent: 50, resetsAt: null });
     assert.strictEqual(usageTrip(cleanSettings({ usageStop: { enabled: false, percent: 1 } }),
         [{ type: 'five_hour', usedPercent: 100 }]), null, 'off is off');
     assert.ok(usageTrip(cleanSettings({ usageStop: { window: 'seven_day', percent: 90 } }), ws));
@@ -93,6 +94,29 @@ const fileOf = (n) => path.join(home, `orch-${n}.json`);
     assert.strictEqual(describeCounts([{ kind: 'turn' }, { kind: 'plan' }, { kind: 'turn' }]),
         '2 turn reports, 1 plan to approve');
     ok('bad settings fall back field by field; a nudge counts what is waiting');
+}
+
+{
+    // "All limits": each window against its own threshold, any one trips it.
+    const all = cleanSettings({ usageStop: { window: 'all', limits: { five_hour: 90, seven_day: 95 } } });
+    const at = (fh, wk) => [{ type: 'five_hour', usedPercent: fh }, { type: 'seven_day', usedPercent: wk }];
+    assert.deepStrictEqual(usageTrips(all, at(89, 94)), [], 'under both');
+    assert.deepStrictEqual(usageTrips(all, at(91, 94)).map(t => t.window), ['five_hour'], 'five-hour alone');
+    assert.deepStrictEqual(usageTrips(all, at(50, 96)).map(t => t.window), ['seven_day'], 'weekly alone');
+    assert.deepStrictEqual(usageTrips(all, at(91, 96)).map(t => t.window), ['five_hour', 'seven_day']);
+    const noWeekly = cleanSettings({ usageStop: { window: 'all', limits: { five_hour: 90, seven_day: null } } });
+    assert.deepStrictEqual(usageTrips(noWeekly, at(50, 100)), [], 'a window left empty is ignored');
+    assert.strictEqual(usageTrips(all, [{ type: 'five_hour', usedPercent: 99 }])[0].window, 'five_hour',
+        'a window with no reading is skipped, not tripped');
+    assert.strictEqual(cleanSettings({ usageStop: { window: 'nope' } }).usageStop.window, 'five_hour');
+    assert.strictEqual(cleanSettings({ usageStop: { limits: { five_hour: 0 } } }).usageStop.limits.five_hour, 90,
+        'a bad threshold keeps the old one');
+
+    // When a pause can lift by itself: after the *last* tripped window resets.
+    assert.strictEqual(resumeAtFor([{ resetsAt: 1000 }, { resetsAt: 5000 }]), 5000);
+    assert.strictEqual(resumeAtFor([{ resetsAt: 1000 }, { resetsAt: null }]), null, 'one unknown: wait for Resume');
+    assert.strictEqual(resumeAtFor([]), null);
+    ok('"all limits" trips on any window past its own threshold; a pause waits for the last reset');
 }
 
 // --- the store ---------------------------------------------------------------
@@ -278,6 +302,8 @@ function harness(name) {
         normalizeMode: (m) => m || 'auto',
         sessionCwd: (s) => s.cwd,
         tooManyCreates: () => false,
+        // Wake the moment a window resets, so the cases need not wait a minute.
+        resumeGraceMs: 0,
     });
     return { pool, runners, created, store, flagRows, setWindows: (w) => { windows = w; } };
 }
@@ -429,6 +455,91 @@ function harness(name) {
         assert.match(orchestration.roleOf('W').brief, /You are a worker/);
         assert.strictEqual(orchestration.roleOf('nobody'), null);
         ok('each role gets its own brief, and a session with none gets nothing');
+    }
+
+    {
+        // 3:15, five-hour at 92% against 90, resetting shortly: stop everything,
+        // wake at the reset, and tell the orchestrator who was cut off.
+        const h = harness('wake');
+        orchestration.enable('O', { usageStop: { window: 'all', limits: { five_hour: 90, seven_day: 95 },
+            autoResume: true } });
+        const orch = h.pool.ensure('O');
+        orch.state = 'busy';
+        h.store.addWorker('O', { id: 'W', title: 'tests' });
+        const w = h.pool.ensure('W');
+        w.state = 'busy';
+        const reset = Date.now() + 800;
+        h.setWindows([{ type: 'five_hour', usedPercent: 92, resetsAt: reset },
+            { type: 'seven_day', usedPercent: 40, resetsAt: Date.now() + 86_400_000 }]);
+        orchestration.checkUsage();
+        const p = h.store.get('O').paused;
+        assert.ok(p, 'paused');
+        assert.strictEqual(p.resumeAt, reset, 'wakes when the five-hour window resets');
+        assert.deepStrictEqual(p.interrupted.sort(), ['O', 'W'], 'and remembers who it stopped');
+        await sleep(1200);
+        assert.strictEqual(h.store.get('O').paused, null, 'the timer lifted the pause');
+        const note = h.store.unread('O').find(i => i.kind === 'note');
+        assert.ok(note && /window has reset/.test(note.text) && /"tests"/.test(note.text)
+            && /own turn was stopped/.test(note.text), 'and the orchestrator is told what to pick up');
+        ok('past the cutoff with auto-resume: stop everything, wake at the reset, say who was cut off');
+    }
+
+    {
+        // Two windows over: it waits for the later reset, not the first.
+        const h = harness('wake-two');
+        orchestration.enable('O', { usageStop: { window: 'all', limits: { five_hour: 90, seven_day: 95 },
+            autoResume: true } });
+        h.pool.ensure('O');
+        const fiveReset = Date.now() + 60_000;
+        const weekReset = Date.now() + 3_600_000;
+        h.setWindows([{ type: 'five_hour', usedPercent: 92, resetsAt: fiveReset },
+            { type: 'seven_day', usedPercent: 97, resetsAt: weekReset }]);
+        orchestration.checkUsage();
+        assert.strictEqual(h.store.get('O').paused.resumeAt, weekReset);
+
+        // No reset time for a tripped window: wait for Resume.
+        const h2 = harness('wake-unknown');
+        orchestration.enable('O2', { usageStop: { autoResume: true, percent: 50 } });
+        h2.pool.ensure('O2');
+        h2.setWindows([{ type: 'five_hour', usedPercent: 60 }]);
+        orchestration.checkUsage();
+        assert.strictEqual(h2.store.get('O2').paused.resumeAt, null);
+
+        // Auto-resume off: no wake time; turning it on while paused starts one.
+        const h3 = harness('wake-off');
+        orchestration.enable('O3', { usageStop: { percent: 50 } });
+        h3.pool.ensure('O3');
+        const r3 = Date.now() + 120_000;
+        h3.setWindows([{ type: 'five_hour', usedPercent: 60, resetsAt: r3 }]);
+        orchestration.checkUsage();
+        assert.strictEqual(h3.store.get('O3').paused.resumeAt, null, 'off: waits for Resume');
+        h3.store.setSettings('O3', { usageStop: { autoResume: true } });
+        orchestration.rearmPause('O3');
+        assert.strictEqual(h3.store.get('O3').paused.resumeAt, r3, 'turned on while paused: the clock starts');
+        h3.store.setSettings('O3', { usageStop: { autoResume: false } });
+        orchestration.rearmPause('O3');
+        assert.strictEqual(h3.store.get('O3').paused.resumeAt, null, 'and off again stops it');
+        ok('a pause waits for the last reset, or for Resume when there is none to wait for');
+    }
+
+    {
+        // The reset came but another window is still over: pause again for that.
+        const h = harness('wake-again');
+        orchestration.enable('O', { usageStop: { window: 'all', limits: { five_hour: 90, seven_day: 95 },
+            autoResume: true } });
+        h.pool.ensure('O');
+        const soon = Date.now() + 300;
+        h.setWindows([{ type: 'five_hour', usedPercent: 92, resetsAt: soon }]);
+        orchestration.checkUsage();
+        const later = Date.now() + 600_000;
+        h.setWindows([{ type: 'five_hour', usedPercent: 92, resetsAt: soon },
+            { type: 'seven_day', usedPercent: 99, resetsAt: later }]);
+        await sleep(600);
+        const p = h.store.get('O').paused;
+        assert.ok(p, 'still paused');
+        assert.strictEqual(p.resumeAt, later, 'now waiting for the weekly reset');
+        assert.match(p.reason, /seven-day usage at 99%/);
+        ok('waking into another window still over pauses again until that one resets');
 
         orchestration.forget('W');
         assert.strictEqual(h.store.roleOf('W'), null, 'a deleted worker leaves the list');

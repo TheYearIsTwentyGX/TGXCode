@@ -186,7 +186,9 @@ function dock(p) {
     const openWorkers = p.workers.filter(w => !w.closedAt);
     return html`<div class="orch">
         ${p.paused ? html`<div class="orch-paused">
-            <span>${`Paused — ${p.paused.reason}.`}</span>
+            <span>${`Paused — ${p.paused.reason}.`}${p.paused.resumeAt
+                ? html` <span class="orch-wake">${`Carries on by itself at ${clockAt(p.paused.resumeAt)}.`}</span>`
+                : null}</span>
             <button class="btn-small" type="button" onClick=${resume}>Resume</button>
         </div>` : null}
         ${section('inbox', 'Inbox',
@@ -262,9 +264,28 @@ function workers(p) {
     </ul>`;
 }
 
+// The windows "all limits" checks, in the order a person reads them.
+const LIMITS = [
+    ['five_hour', 'Five-hour'], ['seven_day', 'Weekly'],
+    ['seven_day_opus', 'Weekly, Opus'], ['seven_day_sonnet', 'Weekly, Sonnet'],
+];
+
+/** "4:00 PM", or "Fri 4:00 PM" when it is not today — when a pause lifts. */
+function clockAt(ms) {
+    const d = new Date(ms);
+    const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const day = d.toDateString() === new Date().toDateString()
+        ? time : `${d.toLocaleDateString([], { weekday: 'short' })} ${time}`;
+    // How far off, which is the number somebody glancing at it wants.
+    const mins = Math.max(1, Math.round((ms - Date.now()) / 60_000));
+    return `${day} (in ${mins < 90 ? `${mins}m` : `${Math.round(mins / 60)}h`})`;
+}
+
 function settings(p) {
     const s = p.settings;
     const save = (patch) => saveSettings(p, patch);
+    const off = !s.usageStop.enabled;
+    const all = s.usageStop.window === 'all';
     return html`<div class="orch-settings">
         <label>At most
             <input type="number" min="1" max="10" defaultValue=${s.maxRunning}
@@ -276,18 +297,33 @@ function settings(p) {
             Start each worker in its own worktree</label>
         <label><input type="checkbox" checked=${s.usageStop.enabled}
             onChange=${(e) => save({ usageStop: { enabled: e.target.checked } })} />
-            Stop everything at
+            Stop everything ${all ? 'past any of these limits' : html`at
             <input type="number" min="1" max="100" defaultValue=${s.usageStop.percent}
-                key=${`pct:${s.usageStop.percent}`} disabled=${!s.usageStop.enabled}
+                key=${`pct:${s.usageStop.percent}`} disabled=${off}
                 onChange=${(e) => save({ usageStop: { percent: Number(e.target.value) } })} />
-            % of
-            <select value=${s.usageStop.window} disabled=${!s.usageStop.enabled}
+            % of`}
+            <select value=${s.usageStop.window} disabled=${off}
                 onChange=${(e) => save({ usageStop: { window: e.target.value } })}>
                 <option value="five_hour">the five-hour window</option>
                 <option value="seven_day">the weekly window</option>
                 <option value="seven_day_opus">the weekly Opus window</option>
                 <option value="seven_day_sonnet">the weekly Sonnet window</option>
+                <option value="all">all limits</option>
             </select></label>
+        ${all ? html`<div class="orch-limits">${LIMITS.map(([w, label]) => html`
+            <label key=${w}>${label}
+                <input type="number" min="1" max="100" placeholder="off"
+                    defaultValue=${s.usageStop.limits[w] ?? ''} disabled=${off}
+                    key=${`lim:${w}:${s.usageStop.limits[w] ?? ''}`}
+                    onChange=${(e) => {
+                        const v = e.target.value.trim();
+                        save({ usageStop: { limits: { [w]: v === '' ? null : Number(v) } } });
+                    }} />%</label>`)}
+            <div class="orch-note">Leave one empty to ignore that window.</div>
+        </div>` : null}
+        <label><input type="checkbox" checked=${!!s.usageStop.autoResume} disabled=${off}
+            onChange=${(e) => save({ usageStop: { autoResume: e.target.checked } })} />
+            Carry on by itself when the window resets</label>
         <div class="orch-note">The defaults for new orchestrators, and text added to every
             orchestrator's instructions, are in Settings › Orchestrators.</div>
     </div>`;

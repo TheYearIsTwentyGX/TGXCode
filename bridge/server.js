@@ -1331,7 +1331,15 @@ takeBackHeld().catch((err) => {
     // The usage cutoff, on the beacon's clock: a reading can move without a
     // stream event (the status-line harvest), and once a minute is plenty for a
     // threshold measured in percent of a five-hour window.
-    setInterval(() => orchestration.checkUsage(), BEACON_TICK_MS).unref();
+    setInterval(() => {
+        orchestration.checkUsage();
+        // And lift any pause whose window has reset — the timeout armed at the
+        // pause is the fast path; this catches one lost to a restart, or too far
+        // off for setTimeout to hold.
+        orchestration.checkWakes();
+    }, BEACON_TICK_MS).unref();
+    // A pause set before this bridge started still has its wake time on disk.
+    for (const id of orchestrators.byId.keys()) orchestration.armWake(id);
 
     // Warm the version check so the first window to open has an answer, then
     // ask the registry hourly. Read-only on every bridge, dev included.

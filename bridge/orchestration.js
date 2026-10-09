@@ -43,7 +43,9 @@ const cfg = require('./config');
 const { broadcast } = require('./events');
 const { resolveWorkdir } = require('./runner');
 const { createWorktree } = require('./worktree');
-const { shouldNudge, usageTrip, describeCounts, cleanSettings, DEFAULT_SETTINGS } = require('./orchestrators');
+const {
+    shouldNudge, usageTrips, resumeAtFor, describeCounts, cleanSettings, DEFAULT_SETTINGS,
+} = require('./orchestrators');
 const workerRead = require('./worker-read');
 const {
     orchestratorInboxEnvelope, orchestratorMessageEnvelope, isOrchestratorMessage, parseOrchestratorMessage,
@@ -66,8 +68,13 @@ const nudgeTimers = new Map();
 // that follows can say who answered it.
 const answeredByOrchestrator = new Set();
 
+// How long after a window's reset a paused orchestrator wakes. A minute, so the
+// first turn after it lands on the new window rather than racing the reset.
+let resumeGraceMs = 60_000;
+
 function init(deps) {
     ({ store, pool, index, flags, prefs, usage, normalizeMode, sessionCwd, tooManyCreates } = deps);
+    if (Number.isFinite(deps.resumeGraceMs)) resumeGraceMs = deps.resumeGraceMs;
     pool.roleOf = roleOf;
     pool.delegateFor = (id) => store.roleOf(id) === 'worker';
 }
@@ -82,7 +89,11 @@ function defaultSettings() {
     return cleanSettings({
         maxRunning: p.maxRunning,
         worktree: p.worktree,
-        usageStop: { enabled: p.usageStopEnabled, percent: p.usageStopPercent, window: p.usageStopWindow },
+        usageStop: {
+            enabled: p.usageStopEnabled, percent: p.usageStopPercent, window: p.usageStopWindow,
+            limits: { five_hour: p.usageStopAllFiveHour, seven_day: p.usageStopAllWeekly },
+            autoResume: p.usageStopAutoResume,
+        },
     }, DEFAULT_SETTINGS);
 }
 
@@ -116,7 +127,9 @@ function orchestratorBrief(id) {
         '  full only when you need detail, and ask to have the worker summarise itself.',
         '- At most a few workers run at once; extra spawns are queued, not refused.',
         '- get_usage shows the account\'s quota. If it passes the configured cutoff,',
-        '  TGXCode stops everything and waits for the user.',
+        '  TGXCode stops everything: you and your workers mid-turn. Depending on the',
+        '  settings it waits for the user, or wakes you once the window resets with a',
+        '  note listing the workers that were cut off — tell those to carry on.',
         '- close_worker when a worker is finished with, so it stops counting.',
         '',
         'Keep a summary for the user with set_summary: one or two short paragraphs on',
@@ -673,8 +686,8 @@ function checkUsage(onlyId = null) {
     for (const o of store.byId.values()) {
         if (o.paused) continue;
         if (onlyId ? o.id !== onlyId : !ours(o)) continue;
-        const trip = usageTrip(o.settings, ws);
-        if (trip) pause(o.id, tripReason(trip));
+        const trips = usageTrips(o.settings, ws);
+        if (trips.length) pause(o.id, trips);
     }
 }
 
@@ -683,19 +696,158 @@ function tripReason(trip) {
         + `past the ${trip.percent}% cutoff`;
 }
 
-function pause(orchId, reason) {
-    store.setPaused(orchId, { reason });
+/** "4:00 PM (in 45m)" — when a pause lifts, for a notice and a note. */
+function whenText(ms) {
+    const mins = Math.max(1, Math.round((ms - Date.now()) / 60_000));
+    const span = mins < 90 ? `${mins}m` : `${Math.round(mins / 60)}h`;
+    return `${new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} (in ${span})`;
+}
+
+/**
+ * When this pause would lift by itself: the latest reset among the tripped
+ * windows plus the grace, or null — auto-resume off, or a tripped window with no
+ * reset time to wait for.
+ */
+function wakeAt(o, trips) {
+    if (!o.settings.usageStop.autoResume) return null;
+    const at = resumeAtFor(trips);
+    return at === null ? null : at + resumeGraceMs;
+}
+
+function pause(orchId, trips) {
     const o = store.get(orchId);
+    const reason = trips.map(tripReason).join('; ');
+    const interrupted = [];
     for (const id of [orchId, ...o.workers.filter(w => !w.closedAt).map(w => w.id)]) {
         const r = pool.get(id);
         if (r && r.state === 'busy') {
+            interrupted.push(id);
             stopKeeping(r, 'the usage cutoff stopped it before these were sent.')
                 .catch(() => { /* already gone */ });
         }
     }
+    const resumeAt = wakeAt(o, trips);
+    store.setPaused(orchId, { reason, resumeAt, by: cfg.PORT, interrupted });
+    armWake(orchId);
+    const then = resumeAt ? ` It carries on by itself at ${whenText(resumeAt)}, after the window resets.`
+        : o.settings.usageStop.autoResume ? ' No reset time is known for that window, so it waits for Resume.'
+        : ' Resume it when you are ready.';
     broadcast('notice', { sessionId: orchId, level: 'warn', kind: 'orchestrator_paused',
-        text: `Orchestrator paused: ${reason}. Every running worker was stopped. Resume it when you are ready.` });
+        text: `Orchestrator paused: ${reason}. Every running worker was stopped.${then}` });
     emit(orchId);
+}
+
+// ---------------------------------------------------------------------------
+// Waking up after a reset
+// ---------------------------------------------------------------------------
+//
+// A paused orchestrator cannot set a timer of its own — every turn it had was
+// stopped — so the bridge keeps it: `paused.resumeAt`, in the store so it
+// survives a restart, armed here as a timeout and checked again on the
+// minute's tick in case the timeout was lost. Only the bridge that paused it
+// (`paused.by`) wakes it; the store is shared with every other bridge.
+
+const wakeTimers = new Map();
+// setTimeout's ceiling. A weekly window can reset further off than that; the
+// minute's tick picks it up when it is due.
+const MAX_TIMER_MS = 2 ** 31 - 1;
+
+function armWake(orchId) {
+    clearTimeout(wakeTimers.get(orchId));
+    wakeTimers.delete(orchId);
+    const o = store.get(orchId);
+    const p = o && o.paused;
+    if (!p || !p.resumeAt || p.by !== cfg.PORT) return;
+    const ms = Math.max(0, p.resumeAt - Date.now());
+    if (ms > MAX_TIMER_MS) return;
+    const t = setTimeout(() => { wakeTimers.delete(orchId); wake(orchId); }, ms);
+    t.unref();
+    wakeTimers.set(orchId, t);
+}
+
+/** Every pause due to lift, from the minute's tick. */
+function checkWakes() {
+    for (const o of store.byId.values()) {
+        const p = o.paused;
+        if (p && p.resumeAt && p.by === cfg.PORT && p.resumeAt <= Date.now()) wake(o.id);
+    }
+}
+
+/**
+ * The window should have reset: carry on, or — when another window is still
+ * over, or the reading has not moved — pause again until that one resets.
+ */
+function wake(orchId) {
+    const o = store.get(orchId);
+    const p = o && o.paused;
+    if (!p || !p.resumeAt || p.by !== cfg.PORT) return false;
+    if (!o.settings.usageStop.autoResume) return false;
+    const trips = usageTrips(o.settings, windows());
+    if (trips.length) {
+        const resumeAt = wakeAt(o, trips);
+        store.setPaused(orchId, { ...p, reason: trips.map(tripReason).join('; '), resumeAt });
+        armWake(orchId);
+        broadcast('notice', { sessionId: orchId, level: 'warn', kind: 'orchestrator_paused',
+            text: `Orchestrator still paused: ${trips.map(tripReason).join('; ')}.${resumeAt
+                ? ` Trying again at ${whenText(resumeAt)}.` : ' Waiting for Resume.'}` });
+        emit(orchId);
+        return false;
+    }
+    lift(orchId, 'auto');
+    return true;
+}
+
+/**
+ * Take the pause off and get going again: queued spawns start, and the
+ * orchestrator is told — in its inbox, so the nudge wakes it — what happened
+ * and which sessions the cutoff stopped mid-turn, since nothing else will tell
+ * those workers to carry on.
+ */
+function lift(orchId, how) {
+    const o = store.get(orchId);
+    const p = o.paused;
+    store.setPaused(orchId, null);
+    armWake(orchId);
+    const stopped = (p && p.interrupted || [])
+        .filter(id => id !== orchId)
+        .map((id) => {
+            const w = store.worker(orchId, id);
+            return w && !w.closedAt ? `- "${w.title || 'untitled'}" (worker ${id})` : null;
+        })
+        .filter(Boolean);
+    const lines = [
+        how === 'auto'
+            ? `You were paused by the usage cutoff (${p ? p.reason : 'over the limit'}). The window has `
+                + 'reset, so TGXCode lifted the pause and you can carry on.'
+            : `The user resumed you after the usage cutoff paused you (${p ? p.reason : 'over the limit'}).`,
+    ];
+    if (stopped.length) {
+        lines.push('', 'These workers were stopped mid-turn and are waiting. Tell each to carry on with '
+            + 'send_to_worker if its work still applies:', ...stopped);
+    }
+    if (p && p.interrupted && p.interrupted.includes(orchId)) {
+        lines.push('', 'Your own turn was stopped too; pick up where you left off.');
+    }
+    if (how === 'auto' || stopped.length || (p && p.interrupted && p.interrupted.length)) {
+        file(orchId, { kind: 'note', text: lines.join('\n') });
+    }
+    emit(orchId);
+    drainSpawns(orchId);
+    scheduleNudge(orchId);
+}
+
+/**
+ * The pause's wake time, recomputed after the settings changed: turning
+ * auto-resume on while paused should start the clock, and turning it off should
+ * stop it.
+ */
+function rearmPause(orchId) {
+    const o = store.get(orchId);
+    if (!o || !o.paused) return;
+    const trips = usageTrips(o.settings, windows());
+    const resumeAt = trips.length ? wakeAt(o, trips) : (o.settings.usageStop.autoResume ? Date.now() : null);
+    store.setPaused(orchId, { ...o.paused, resumeAt, by: o.paused.by || cfg.PORT });
+    armWake(orchId);
 }
 
 function resume(orchId) {
@@ -704,15 +856,12 @@ function resume(orchId) {
     // Resuming while still over the line would start the queued workers and
     // nudge the orchestrator, only for the next reading to stop them again a
     // minute later — turns spent on work that is cut off before it gets anywhere.
-    const trip = usageTrip(o.settings, windows());
-    if (trip) {
-        throw refuse(409, `still over the cutoff (${tripReason(trip)}). Raise or turn off `
-            + 'the cutoff in this orchestrator\u2019s settings, or wait for the window to reset.');
+    const trips = usageTrips(o.settings, windows());
+    if (trips.length) {
+        throw refuse(409, `still over the cutoff (${trips.map(tripReason).join('; ')}). Raise or turn `
+            + 'off the cutoff in this orchestrator\u2019s settings, or wait for the window to reset.');
     }
-    store.setPaused(orchId, null);
-    emit(orchId);
-    drainSpawns(orchId);
-    scheduleNudge(orchId);
+    if (o.paused) lift(orchId, 'user');
     return payload(orchId);
 }
 
@@ -776,6 +925,6 @@ function setSummary(orchId, text) {
 
 module.exports = {
     init, payload, roleOf, enable, disable, spawn, sendTo, read, answer, stopWorker, closeWorker,
-    report, resume, usageFor, setSummary, checkUsage, forget, nudge, scheduleNudge, emit, defaultSettings,
+    report, resume, usageFor, setSummary, checkUsage, checkWakes, rearmPause, armWake, forget, nudge, scheduleNudge, emit, defaultSettings,
     onPermissionRequest, onPermissionResolved, onTurnComplete, onStatus,
 };

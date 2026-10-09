@@ -1129,8 +1129,21 @@ async function callGetUsage(id) {
     });
     if (!lines.length) lines.push('No usage reading yet.');
     const c = body.cutoff;
-    if (c) lines.push(c.enabled ? `Cutoff: everything stops at ${c.percent}% of ${c.window}.` : 'Cutoff: off.');
-    if (body.paused) lines.push(`PAUSED: ${body.paused.reason}`);
+    if (c && !c.enabled) lines.push('Cutoff: off.');
+    else if (c && c.window === 'all') {
+        const each = Object.entries(c.limits || {}).filter(([, v]) => v != null)
+            .map(([w, v]) => `${w} ${v}%`);
+        lines.push(`Cutoff: everything stops when any of these is passed — ${each.join(', ') || 'none set'}.`);
+    } else if (c) lines.push(`Cutoff: everything stops at ${c.percent}% of ${c.window}.`);
+    if (c && c.enabled) {
+        lines.push(c.autoResume
+            ? 'After a stop, you are woken a minute after the window resets.'
+            : 'After a stop, everything waits for the user to resume it.');
+    }
+    if (body.paused) {
+        lines.push(`PAUSED: ${body.paused.reason}${body.paused.resumeAt
+            ? ` — carries on at ${new Date(body.paused.resumeAt).toLocaleString()}` : ''}`);
+    }
     return say(id, lines.join('\n'));
 }
 
