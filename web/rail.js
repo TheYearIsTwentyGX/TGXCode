@@ -52,6 +52,7 @@ import {
 } from './app.js';
 import { openSession } from './transcript/conversation.js';
 import { stalledBadge, StopButton } from './boards/parts.js';
+import { flipAll } from './motion.js';
 
 /**
  * Draw the rail into #rail. Called only by renderRail() in app.js, which paints
@@ -61,7 +62,15 @@ import { stalledBadge, StopButton } from './boards/parts.js';
  */
 export function drawRail() {
     const { tree, finished } = railTree();
-    render(tree, dom.rail);
+    // A session that moves — new activity lifting it, a pin, a drop — slides to
+    // its place, and one that appears fades in. Web Animations only, so nothing
+    // Preact owns is written to. Not mid-drag: the order there follows the
+    // pointer, and sliding behind it would lag.
+    if (state.railDrag) render(tree, dom.rail);
+    else {
+        flipAll(dom.rail, () => dom.rail.querySelectorAll('[data-id]'), (n) => n.dataset.id,
+            () => render(tree, dom.rail));
+    }
     return finished;
 }
 

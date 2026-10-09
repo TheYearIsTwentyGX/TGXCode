@@ -261,16 +261,25 @@ export function morph(node, mutate, { speed = 'med' } = {}) {
  * for a list Preact re-renders as well as one built by hand. New children fade
  * in; children that left are the caller's to play out.
  */
-export function flip(container, keyOf, mutate, { speed = 'med', enterNew = true } = {}) {
-    if (!container || dur(speed) <= 0) { mutate(); return; }
+export function flip(container, keyOf, mutate, opts = {}) {
+    flipAll(container, () => (container ? container.children : []), keyOf, mutate, opts);
+}
+
+/**
+ * flip() for items anywhere under `root` rather than only its children — the
+ * rail's rows, which sit inside the groups that hold them. `items` is asked for
+ * the set before and again after.
+ */
+export function flipAll(root, items, keyOf, mutate, { speed = 'med', enterNew = true } = {}) {
+    if (!root || dur(speed) <= 0) { mutate(); return; }
     const before = new Map();
-    for (const c of container.children) {
+    for (const c of items()) {
         const k = keyOf(c);
         if (k != null) before.set(k, c.getBoundingClientRect());
     }
     mutate();
     if (!before.size) return;      // a first paint is not a change
-    for (const c of container.children) {
+    for (const c of items()) {
         const k = keyOf(c);
         if (k == null) continue;
         const was = before.get(k);
@@ -278,6 +287,9 @@ export function flip(container, keyOf, mutate, { speed = 'med', enterNew = true 
         const now = c.getBoundingClientRect();
         const dy = was.top - now.top, dx = was.left - now.left;
         if (Math.abs(dy) < 1 && Math.abs(dx) < 1) continue;
+        // Only what the eye can follow: a row that crossed half the screen in a
+        // re-sort reads better arriving than flying.
+        if (Math.abs(dy) > window.innerHeight / 2) { enter(c, { kind: 'fade', speed: 'fast' }); continue; }
         play(c, [
             { transform: `translate(${dx}px, ${dy}px)` },
             { transform: 'none' },
