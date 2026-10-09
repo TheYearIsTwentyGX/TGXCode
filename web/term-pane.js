@@ -23,6 +23,7 @@ import { state } from './state.js';
 import { TerminalPane } from './terminal.js';
 import { opensInDevBrowser, openTitle } from './app.js';
 import { renderHeaderActions } from './transcript/conversation.js';
+import { grow, isUp } from './motion.js';
 
 // ── terminal ─────────────────────────────────────────────────────────────
 
@@ -238,7 +239,12 @@ export function setTermTab(key) {
 /** Show or hide the pane. The shell itself is unaffected either way. */
 export function showTerm(on, { focus = false } = {}) {
     setTermOpen(state.current && state.current.sessionId, on);
-    dom.termPane.hidden = !on;
+    // Grown open and shrunk shut, so the transcript above gives up and takes back
+    // the room a frame at a time. The height is set first, so the grow knows
+    // where it is going; the shell is let go only once the pane has closed, so it
+    // does not go blank and then shrink.
+    if (on) setTermHeight(termHeight());
+    grow(dom.termPane, on, { onGone: () => { if (dom.termPane.hidden) termPane.detach(); } });
     dom.btnTerm.classList.toggle('on', on);
     dom.btnTerm.setAttribute('aria-pressed', String(on));
     renderHeaderActions();
@@ -248,11 +254,9 @@ export function showTerm(on, { focus = false } = {}) {
         // the next keystroke would go nowhere. The composer is where you were
         // going anyway.
         if (dom.termPane.contains(document.activeElement) && !dom.input.disabled) dom.input.focus();
-        termPane.detach();
         return;
     }
 
-    setTermHeight(termHeight());
     syncTerm();
     if (focus) termPane.focus();
 }
@@ -314,7 +318,7 @@ function startTermDrag(e) {
 export function wireTerm() {
     dom.btnTerm.addEventListener('click', () => {
         if (!state.current) return;
-        showTerm(dom.termPane.hidden, { focus: true });
+        showTerm(!isUp(dom.termPane), { focus: true });
     });
     dom.termClose.addEventListener('click', () => showTerm(false));
     dom.termRestart.addEventListener('click', async () => {

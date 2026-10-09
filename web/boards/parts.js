@@ -23,6 +23,7 @@ import { toast } from '../dom.js';
 import { clip, dur } from '../format.js';
 import { ICON } from '../icons.js';
 import { awayWords, loadDraft, saveDraft } from '../app.js';
+import { flipAll } from '../motion.js';
 
 /** One of web/icons.js's ICON glyphs, as a vnode. Its icon() is the DOM twin. */
 export function icon(name, size = 15) {
@@ -46,7 +47,12 @@ export function paint(container, tree) {
         claimed.add(container);
         container.textContent = '';
     }
-    render(tree, container);
+    // A card that changes column or place slides there, and one that arrives
+    // fades in. Cards carry their session in `data-id`, or their task in
+    // `data-task`; anything else on a board is not tracked and just updates.
+    flipAll(container, () => container.querySelectorAll('[data-id], [data-task]'),
+        (n) => (n.dataset.task ? `task:${n.dataset.task}` : n.dataset.id),
+        () => render(tree, container));
 }
 
 /** How many messages are waiting behind the turn. Same words the rail uses. */

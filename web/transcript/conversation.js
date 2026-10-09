@@ -27,7 +27,7 @@ import { state } from '../state.js';
 import { notePrRepo } from '../pr-refs.js';
 import { loadCommands } from '../commands.js';
 import { holdOrchestrator, loadOrchestrator, paintOrchestratorButton } from '../orchestrator.js';
-import { dur as motionMs, enter, exit, fill, settle } from '../motion.js';
+import { dur as motionMs, enter, exit, fill, isUp, settle } from '../motion.js';
 import { showTerm, termOpen } from '../term-pane.js';
 import {
     applyRunner, closePanels, grouping, loadAttach, loadDraft, loadSessions, markSessionNotesRead,
@@ -553,7 +553,7 @@ export function renderHeaderActions() {
         ? 'Hide what this session changed' : 'What this session changed';
     dom.btnFolder.title = `Show ${s.cwd} in File Explorer`;
     dom.btnTerm.title = keys.hint(
-        dom.termPane.hidden ? `Open a terminal in ${s.cwd}` : 'Hide the terminal',
+        !isUp(dom.termPane) ? `Open a terminal in ${s.cwd}` : 'Hide the terminal',
         'terminal.toggle');
 }
 
@@ -596,6 +596,10 @@ export function appendEvents(events, view = SESSION_VIEW, { live = false } = {})
     let newMark = false;
     let sawAgent = false;
     let newTasks = false;
+    // Rows that arrive on a live tail are played in; a transcript drawn whole on
+    // open, or a stretch loaded above, is not — that is history appearing, not
+    // something happening.
+    const arrived = live ? [] : null;
     for (const ev of events) {
         if (ev.kind === 'tool-result') { patchTool(ev, view); continue; }
         // A suggested follow-up is not part of the conversation, it is an offer
@@ -653,11 +657,15 @@ export function appendEvents(events, view = SESSION_VIEW, { live = false } = {})
             if (!view.isAgent && !view.prepend && state.pendingSend && state.current
                 && state.pendingSend.sessionId === state.current.sessionId) {
                 clearPendingSend();
+                frag.append(node);
+                continue;   // and not played in: the swap is meant to be invisible
             }
         }
         frag.append(node);
+        if (arrived) arrived.push(node);
     }
     flush();
+    if (arrived) for (const n of arrived) enter(n, { kind: 'rise', speed: 'med' });
     // A transcript that ends in tool calls has no message coming to close the
     // last run — openSession replays a finished conversation in one call, and
     // that run would otherwise stay unfolded forever. Only when nothing is

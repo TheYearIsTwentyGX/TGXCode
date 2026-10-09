@@ -26,6 +26,7 @@ import { newC } from '../new-session/dialog.js';
 import { renderSettings, showSettings } from '../settings/index.js';
 import { closeLater } from './later.js';
 import { closeMenus, live } from './slash.js';
+import { isUp, present } from '../motion.js';
 
 // ── Wispr Flow transforms ────────────────────────────────────────────────
 //
@@ -85,7 +86,7 @@ function showWispr(w, on) {
     if (w.c === live) closeLater();
     for (const other of WISPR) if (other !== w) closeWispr(other);
 
-    w.node.hidden = false;
+    present(w.node, true, { kind: 'pop' });
     w.btn.setAttribute('aria-expanded', 'true');
     drawWispr(w);
     positionWispr(w);
@@ -93,9 +94,8 @@ function showWispr(w, on) {
 }
 
 export function closeWispr(w, { focus = false } = {}) {
-    if (w.node.hidden) return;
-    w.node.hidden = true;
-    w.node.replaceChildren();
+    if (!isUp(w.node)) return;
+    present(w.node, false, { kind: 'pop', onGone: () => w.node.replaceChildren() });
     w.btn.setAttribute('aria-expanded', 'false');
     if (focus) w.btn.focus();
 }
@@ -318,7 +318,7 @@ export function wireWispr() {
     for (const w of WISPR) {
         w.btn.addEventListener('click', (e) => {
             e.stopPropagation();
-            showWispr(w, w.node.hidden);
+            showWispr(w, !isUp(w.node));
         });
         w.node.addEventListener('keydown', (e) => onWisprKey(e, w));
     }

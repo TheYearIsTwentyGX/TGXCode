@@ -286,8 +286,8 @@ export const state = {
         // width — side by side in a narrow window is two unreadable columns.
         sized: localStorage.getItem('diffSplit') != null,
     },
-    // The right-click menu. `dom.ctxMenu.hidden` is whether it is open, the way
-    // `dom.newMenu.hidden` is; this holds only what to give focus back to.
+    // The right-click menu. `isUp(dom.ctxMenu)` is whether it is open, the way
+    // `isUp(dom.newMenu)` is; this holds only what to give focus back to.
     ctx: { from: null },
     // The session's own task list. `on` and `shut` are the same two window
     // properties the drawers either side of the transcript have, remembered for

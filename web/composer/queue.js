@@ -18,6 +18,7 @@ import { clip } from '../format.js';
 import { state } from '../state.js';
 import { applyRunner, restoreToComposer } from '../app.js';
 import { sendMessage } from './send.js';
+import { flip, grow, morph } from '../motion.js';
 
 // ── send queue ───────────────────────────────────────────────────────────
 // Anything you write while an agent is working waits. The bridge holds those
@@ -44,9 +45,10 @@ export function renderQueue(s) {
     // While a subagent is on screen the composer belongs to nothing you can send
     // to, so its queue is out of scope too.
     const show = q.length > 0 && !state.agent;
-    dom.queue.hidden = !show;
+    // Grown and shrunk, so the transcript above moves with it — see motion.js.
+    // The chips stay in it while it closes and are cleared once it has.
+    grow(dom.queue, show, { onGone: () => { if (!state.queue.length) dom.queueList.replaceChildren(); } });
     if (!show) {
-        dom.queueList.replaceChildren();
         state.queueSig = '';
         return;
     }
@@ -80,7 +82,10 @@ export function renderQueue(s) {
     const holdId = held ? held.dataset.id : null;
     const holdPart = held ? active.dataset.part : null;
 
-    dom.queueList.replaceChildren(...q.map((entry, i) => queueItem(entry, i, rovingId())));
+    // Chips that stay slide to their new places — a reorder, or the one above
+    // them sent — and the box eases to its new height rather than jumping.
+    morph(dom.queue, () => flip(dom.queueList, (n) => n.dataset.id,
+        () => dom.queueList.replaceChildren(...q.map((entry, i) => queueItem(entry, i, rovingId())))));
 
     if (holdId) {
         const back = dom.queueList.querySelector(`[data-id="${CSS.escape(holdId)}"]`);

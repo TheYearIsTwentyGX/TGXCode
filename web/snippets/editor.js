@@ -24,7 +24,7 @@
 import { html, useState } from '../vendor/preact.js';
 import { patch, post } from '../api.js';
 import { state } from '../state.js';
-import { dom, toast } from '../dom.js';
+import { dom, closeModal, openModal, toast } from '../dom.js';
 import { shortPath } from '../format.js';
 import { icon, paint } from '../boards/parts.js';
 import { SNIP_PLACEHOLDER } from './index.js';
@@ -46,13 +46,13 @@ export function openSnipEditor(s, groupId = null) {
     opened += 1;
     paint(modal(), html`<${SnipEditor} key=${opened} snippet=${s} groupId=${groupId}
         groups=${state.snippets.groups} projects=${state.settings.projects} />`);
-    dom.snipEditScrim.hidden = false;
+    openModal(dom.snipEditScrim);
     const first = dom.snipEditScrim.querySelector('#snip-title');
     if (first) first.focus();
 }
 
 export function closeSnipEditor() {
-    dom.snipEditScrim.hidden = true;
+    closeModal(dom.snipEditScrim);
     state.snippets.editing = null;
     paint(modal(), null);
 }

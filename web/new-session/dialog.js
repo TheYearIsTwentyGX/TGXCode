@@ -20,7 +20,7 @@
 // same reason: a `const` read at load has to be this file's own.
 
 import { get } from '../api.js';
-import { closeOnClickOutside, dom, el, toast } from '../dom.js';
+import { dom, closeModal, closeOnClickOutside, el, openModal, toast } from '../dom.js';
 import { clip } from '../format.js';
 import { state } from '../state.js';
 import { homely } from '../term-pane.js';
@@ -179,7 +179,7 @@ export async function openNew({ cwd = '', tab = null, prompt = '', draft = null,
     // debris on screen.
     closeMenus(live);
 
-    dom.newScrim.hidden = false;
+    openModal(dom.newScrim);
     dom.newPrompt.value = src ? src.prompt : prompt;
     growPrompt();
     // Written on every open in both directions, the rule this docstring states:
@@ -504,7 +504,7 @@ export function publishFromNew(cwd) {
 }
 
 export function closeNew() {
-    dom.newScrim.hidden = true;
+    closeModal(dom.newScrim);
     // Hiding the scrim does not blur the box inside it, so the blur-to-close
     // never fires and a popover would still be up — fixed to the viewport, over
     // nothing — the next time the dialog opened.

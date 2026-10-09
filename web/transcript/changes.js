@@ -14,7 +14,7 @@
 
 import { get } from '../api.js';
 import { openPath } from '../app.js';
-import { dom, el, toast } from '../dom.js';
+import { dom, closeModal, el, openModal, toast } from '../dom.js';
 import { ago } from '../format.js';
 import { state } from '../state.js';
 import { statusWord } from '../boards/dashboard.js';
@@ -440,7 +440,7 @@ function openDiff(row, kind) {
         d.sized = true;
     }
 
-    dom.diffScrim.hidden = false;
+    openModal(dom.diffScrim);
     paintDiff();
     dom.diffBody.focus();
     fetchDiff();
@@ -453,10 +453,10 @@ export function closeDiff() {
     // Any answer still in flight is now for a dialog nobody is looking at.
     d.req++;
     d.text = null;
-    dom.diffScrim.hidden = true;
     // A five-thousand-line side-by-side diff is around twenty thousand nodes.
-    // Leaving them attached to a hidden dialog costs that until the next open.
-    dom.diffBody.replaceChildren();
+    // Leaving them attached to a hidden dialog costs that until the next open —
+    // but only once it has faded, or it fades out empty.
+    closeModal(dom.diffScrim, () => { if (!d.open) dom.diffBody.replaceChildren(); });
     // Back to the drawer, deliberately not to the row: renderChanges may well
     // have replaced it while this was open.
     if (state.changes.on && !state.changes.shut) dom.changesBody.focus({ preventScroll: true });

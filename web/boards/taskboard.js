@@ -487,7 +487,7 @@ function tbFocusWords(d, projects, shown) {
 function tbTaskCard(t) {
     const where = t.session || {};
     return html`
-        <article key=${`task:${t.id}`} class="tb-card tb-task" data-archived=${String(!!t.archived)}
+        <article key=${`task:${t.id}`} data-task=${t.id} class="tb-card tb-task" data-archived=${String(!!t.archived)}
             onClick=${(e) => { if (tbCardClickOpens(e)) openTaskDialog(t); }}>
             <header class="tb-card-head">
                 <span class="tb-dot"></span>

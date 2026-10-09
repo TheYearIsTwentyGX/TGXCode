@@ -31,7 +31,7 @@ export { paintDashBadge, renderLive };
 import { del, get, patch, post, put } from './api.js';
 import { PREFS_FALLBACK, BOOT_PREFS, BOOT_HOST, pairToken } from './boot.js';
 import { DEFAULT_PERM, state } from './state.js';
-import { dom, el, toast, modalUp, closeOnClickOutside } from './dom.js';
+import { dom, closeModal, closeOnClickOutside, el, modalUp, openModal, toast } from './dom.js';
 import { ago, clip, dur, noteHome, setClock, shortPath } from './format.js';
 import { loadChannels } from './channels.js';
 import { PR_ICON, icon } from './icons.js';
@@ -116,6 +116,7 @@ import {
     drSave, drToSchedule, paintGateFields, schedSave, startNew, whenBuild,
 } from './new-session/trigger.js';
 import { setTermOpen, setTermTab, showTerm, termPane, wireTerm } from './term-pane.js';
+import { enter, isUp, present } from './motion.js';
 
 // ── settings ─────────────────────────────────────────────────────────────
 
@@ -737,12 +738,12 @@ export function askDelete(summary) {
         summary.test ? el('span', { class: 'sep' }, '·') : null,
         summary.test ? el('span', { class: 'tag-test' }, 'test') : null,
     ].filter(Boolean));
-    dom.delScrim.hidden = false;
+    openModal(dom.delScrim);
     dom.delGo.focus();
 }
 
 function closeDelete() {
-    dom.delScrim.hidden = true;
+    closeModal(dom.delScrim);
     state.pendingDelete = null;
     dom.delGo.disabled = false;
     dom.delGo.textContent = 'Delete permanently';
@@ -1454,6 +1455,15 @@ export function paintPanels() {
     const preview = state.preview.open && !covered;
     const liveUnder = preview && (state.preview.overLive || !docked || state.preview.max);
 
+    // Every surface `main` can hold, as it stood before this paint — so whatever
+    // this paint brings on screen can be played in. Only the arrival moves: the
+    // `hidden` writes below stay instant, because half the app reads `conv.hidden`
+    // and `live.hidden` straight after this returns as the answer to "what is on
+    // screen", and an exit that kept a panel up for its length would make that a
+    // lie. The one leaving is covered by the one arriving anyway.
+    const surfaces = [...PANELS.map(p => dom[p]), dom.preview, dom.live, dom.conv, dom.placeholder];
+    const before = surfaces.map(n => n.hidden);
+
     for (const p of PANELS) dom[p].hidden = !state[p].open;
     dom.preview.hidden = !preview;
     dom.live.hidden = !state.live.open || (covered && !kept) || liveUnder;
@@ -1488,6 +1498,7 @@ export function paintPanels() {
     if (kept && drawnFor !== `${dom.live.hidden}/${dom.live.dataset.mode}/${dom.main.dataset.dock}`) {
         renderLive();
     }
+    surfaces.forEach((n, i) => { if (before[i] && !n.hidden) enter(n, { kind: 'rise', speed: 'med' }); });
 }
 
 export function showDash(on) {
@@ -2002,13 +2013,13 @@ function repaintProjectColors() {
  */
 function openPcolor(project) {
     pcolorFor = { cwd: project.cwd, name: project.name };
-    dom.pcolorScrim.hidden = false;
+    openModal(dom.pcolorScrim);
     paintPcolorDialog();
     dom.pcolorDone.focus();
 }
 
 function closePcolor() {
-    dom.pcolorScrim.hidden = true;
+    closeModal(dom.pcolorScrim);
     pcolorFor = null;
 }
 
@@ -2071,7 +2082,7 @@ function paintPcolorDialog() {
  */
 export function showProjMenu(project, btn) {
     state.projMenu = { key: project.key, cwd: project.cwd, name: project.name };
-    dom.projMenu.hidden = false;
+    present(dom.projMenu, true, { kind: 'pop' });
     renderRail();   // the ⋮ draws itself expanded
     const row = (label, act, disabled) => el('button', {
         class: 'picker-row', type: 'button', role: 'menuitem', disabled: disabled || null,
@@ -2150,7 +2161,7 @@ function originRow(cwd, row, publish) {
  */
 export function showStripMenu(s, btn) {
     state.projMenu = { sessionId: s.sessionId };
-    dom.projMenu.hidden = false;
+    present(dom.projMenu, true, { kind: 'pop' });
     renderRail();   // the ⋮ draws itself expanded
     const now = () => state.sessions.find(x => x.sessionId === s.sessionId) || s;
     const row = (label, act, cls) => el('button', {
@@ -2173,7 +2184,7 @@ export function showStripMenu(s, btn) {
 export function closeProjMenu() {
     if (!state.projMenu) return;
     state.projMenu = null;
-    dom.projMenu.hidden = true;
+    present(dom.projMenu, false, { kind: 'pop' });
     renderRail();
 }
 
@@ -2374,7 +2385,7 @@ export function paintRailSort() {
 function openSortMenu() {
     state.sortMenu = true;
     const current = BOOT_PREFS.projects.sort;
-    dom.sortMenu.hidden = false;
+    present(dom.sortMenu, true, { kind: 'pop' });
     dom.sortMenu.replaceChildren(
         el('div', { class: 'menu-note' }, 'Order projects by'),
         el('div', { class: 'sep' }),
@@ -2408,7 +2419,7 @@ function openSortMenu() {
 function closeSortMenu() {
     if (!state.sortMenu) return;
     state.sortMenu = false;
-    dom.sortMenu.hidden = true;
+    present(dom.sortMenu, false, { kind: 'pop' });
     paintRailSort();
 }
 
@@ -3613,6 +3624,31 @@ dom.scroll.addEventListener('scroll', () => {
     });
 }, { passive: true });
 
+// A tool card, a folded run or anything else built on <details> eases its body
+// open rather than dropping it in. Opening only: a closing <details> has hidden
+// its body before any event says so, and holding it open to play it out would
+// mean taking the summary's click away from the browser.
+//
+// Only one somebody opened. patchTool re-opens a card it has just rebuilt, on
+// every tool result, and playing that in would make a card you are reading
+// flicker each time its call reports. A click on a summary — Enter on one is a
+// click too — is what marks the next toggle as yours.
+let clickedOpen = null;
+for (const log of [dom.log, dom.agentLog]) {
+    log.addEventListener('click', (e) => {
+        const sum = e.target.closest && e.target.closest('summary');
+        clickedOpen = sum ? sum.parentElement : null;
+    }, true);
+    log.addEventListener('toggle', (e) => {
+        const d = e.target;
+        if (!(d instanceof HTMLDetailsElement) || !d.open || d !== clickedOpen) return;
+        clickedOpen = null;
+        for (const k of d.children) {
+            if (k.tagName !== 'SUMMARY') enter(k, { kind: 'fade', speed: 'fast', collapse: true });
+        }
+    }, true);
+}
+
 // The pane changes height under the reader as the docks below it grow and shrink
 // — the orchestrator's, the question dock, the terminal — and nothing scrolls to
 // say so: a pane that shrinks keeps its scrollTop, so the end of the
@@ -3713,7 +3749,7 @@ dom.diffOpen.addEventListener('click', () => {
 // would close the menu and open the diff. The menu itself has to be excluded or
 // its rows never receive the click that runs them.
 document.addEventListener('pointerdown', (e) => {
-    if (dom.ctxMenu.hidden) return;
+    if (!isUp(dom.ctxMenu)) return;
     if (e.target.closest && e.target.closest('#ctx-menu')) return;
     closeContextMenu({ focus: false });
 }, true);
@@ -3726,7 +3762,7 @@ document.addEventListener('pointerdown', (e) => {
 // the menu that click had just opened, in the same event, and right-click would
 // read as doing nothing at all.
 document.addEventListener('contextmenu', (e) => {
-    if (dom.ctxMenu.hidden) return;
+    if (!isUp(dom.ctxMenu)) return;
     if (e.target.closest && e.target.closest(CTX_OWNERS)) return;
     closeContextMenu({ focus: false });
 });
@@ -4151,7 +4187,7 @@ document.addEventListener('keydown', (e) => {
     if (command === 'terminal.toggle') {
         if (!state.current) return;   // no session, no shell — as the button does
         e.preventDefault();
-        if (dom.termPane.hidden) showTerm(true, { focus: true });
+        if (!isUp(dom.termPane)) showTerm(true, { focus: true });
         else if (!inTerm) termPane.focus();
         else showTerm(false);
         return;
@@ -4162,7 +4198,7 @@ document.addEventListener('keydown', (e) => {
         const c = composers.find(x => x.input === document.activeElement) || live;
         if (c.snips.btn.disabled) return;
         e.preventDefault();
-        showSnips(c, c.snips.node.hidden);
+        showSnips(c, !isUp(c.snips.node));
         return;
     }
     // Same resolution as the snippets chord above, and for the same reason: the

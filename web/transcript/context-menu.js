@@ -12,6 +12,7 @@ import { dom, el, toast } from '../dom.js';
 import { state } from '../state.js';
 import { openAgent } from './subagents.js';
 import { jumpToTurn } from './turn-rail.js';
+import { isUp, present } from '../motion.js';
 
 // ── the right-click menu ───────────────────────────────────────────────────
 //
@@ -65,7 +66,7 @@ export function openContextMenu(ev, items) {
         return row;
     }));
 
-    menu.hidden = false;
+    present(menu, true, { kind: 'pop' });
 
     // Measured after it is in the layout, and clamped to both axes. The flip is
     // what matters here and does not for #turn-pop: the changes drawer is pinned
@@ -93,8 +94,8 @@ export function openContextMenu(ev, items) {
 }
 
 export function closeContextMenu({ focus = false } = {}) {
-    if (dom.ctxMenu.hidden) return;
-    dom.ctxMenu.hidden = true;
+    if (!isUp(dom.ctxMenu)) return;
+    present(dom.ctxMenu, false, { kind: 'pop' });
     const back = state.ctx.from;
     state.ctx.from = null;
     if (focus && back && back.isConnected) back.focus();

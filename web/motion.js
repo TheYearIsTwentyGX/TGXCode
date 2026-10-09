@@ -177,7 +177,7 @@ export function enter(node, { kind = 'fade', speed = 'fast', collapse = false } 
 
 const ZERO = {
     height: '0px', paddingTop: '0px', paddingBottom: '0px', marginTop: '0px', marginBottom: '0px',
-    borderTopWidth: '0px', borderBottomWidth: '0px',
+    borderTopWidth: '0px', borderBottomWidth: '0px', minHeight: '0px',
 };
 
 /** The vertical box an element has now, as keyframe values. */
@@ -188,6 +188,9 @@ function boxOf(node) {
         paddingTop: cs.paddingTop, paddingBottom: cs.paddingBottom,
         marginTop: cs.marginTop, marginBottom: cs.marginBottom,
         borderTopWidth: cs.borderTopWidth, borderBottomWidth: cs.borderBottomWidth,
+        // Off for the length of the animation, at both ends: a min-height would
+        // stop a shrink at it and then drop the rest in a frame.
+        minHeight: '0px',
     };
 }
 
@@ -258,16 +261,25 @@ export function morph(node, mutate, { speed = 'med' } = {}) {
  * for a list Preact re-renders as well as one built by hand. New children fade
  * in; children that left are the caller's to play out.
  */
-export function flip(container, keyOf, mutate, { speed = 'med', enterNew = true } = {}) {
-    if (!container || dur(speed) <= 0) { mutate(); return; }
+export function flip(container, keyOf, mutate, opts = {}) {
+    flipAll(container, () => (container ? container.children : []), keyOf, mutate, opts);
+}
+
+/**
+ * flip() for items anywhere under `root` rather than only its children — the
+ * rail's rows, which sit inside the groups that hold them. `items` is asked for
+ * the set before and again after.
+ */
+export function flipAll(root, items, keyOf, mutate, { speed = 'med', enterNew = true } = {}) {
+    if (!root || dur(speed) <= 0) { mutate(); return; }
     const before = new Map();
-    for (const c of container.children) {
+    for (const c of items()) {
         const k = keyOf(c);
         if (k != null) before.set(k, c.getBoundingClientRect());
     }
     mutate();
     if (!before.size) return;      // a first paint is not a change
-    for (const c of container.children) {
+    for (const c of items()) {
         const k = keyOf(c);
         if (k == null) continue;
         const was = before.get(k);
@@ -275,6 +287,9 @@ export function flip(container, keyOf, mutate, { speed = 'med', enterNew = true 
         const now = c.getBoundingClientRect();
         const dy = was.top - now.top, dx = was.left - now.left;
         if (Math.abs(dy) < 1 && Math.abs(dx) < 1) continue;
+        // Only what the eye can follow: a row that crossed half the screen in a
+        // re-sort reads better arriving than flying.
+        if (Math.abs(dy) > window.innerHeight / 2) { enter(c, { kind: 'fade', speed: 'fast' }); continue; }
         play(c, [
             { transform: `translate(${dx}px, ${dy}px)` },
             { transform: 'none' },
@@ -320,4 +335,14 @@ export function fill(node, kids) {
         { ...boxOf(node), opacity: 1, overflow: 'hidden' },
         { ...ZERO, opacity: 0, overflow: 'hidden' },
     ], dur('med'), () => { leaving.delete(node); node.replaceChildren(); });
+}
+
+/**
+ * Play a one-off animation on a node that stays where it is — a dialog box
+ * scaling with the scrim around it, say. The frames are ordinary keyframes; a
+ * single frame with `offset: 0` animates from it to the node's own style.
+ */
+export function animate(node, frames, { speed = 'fast' } = {}) {
+    if (!node) return;
+    play(node, frames, dur(speed));
 }

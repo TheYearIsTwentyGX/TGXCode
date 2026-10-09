@@ -7,6 +7,8 @@
 // something in passing; modalUp() and closeOnClickOutside() the rules every
 // modal dialog shares.
 
+import { animate, exit, isUp, present } from './motion.js';
+
 const $ = (id) => document.getElementById(id);
 export const dom = {};
 for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-sub',
@@ -125,20 +127,22 @@ export function toast(text, kind = 'info', opts = {}) {
     const { ms = 4200, action = null } = typeof opts === 'number' ? { ms: opts } : opts;
     const t = el('div', { class: 'toast', 'data-kind': kind },
         el('span', { class: 'toast-text' }, text));
+    // Fades and closes its gap, so the toasts under it slide up rather than jump.
+    const gone = () => exit(t, { kind: 'rise', speed: 'med', collapse: true });
 
     if (action) {
         t.append(el('button', {
             class: 'toast-action', type: 'button',
-            onclick: () => { t.remove(); action.onClick(); },
+            onclick: () => { gone(); action.onClick(); },
         }, action.label));
     }
     t.append(el('button', {
         class: 'toast-close', type: 'button', 'aria-label': 'Dismiss',
-        onclick: () => t.remove(),
+        onclick: () => gone(),
     }, '✕'));
 
     dom.toasts.append(t);
-    if (!action) setTimeout(() => t.remove(), ms);
+    if (!action) setTimeout(gone, ms);
     return t;
 }
 
@@ -159,33 +163,56 @@ export function toast(text, kind = 'info', opts = {}) {
  * from a drag; see closeOnClickOutside().
  */
 export function modalUp() {
-    return !dom.newScrim.hidden || !dom.delScrim.hidden
-        || !dom.restartScrim.hidden || !dom.taskScrim.hidden
+    return isUp(dom.newScrim) || isUp(dom.delScrim)
+        || isUp(dom.restartScrim) || isUp(dom.taskScrim)
         // Both snippet dialogs hold work that only exists in the page — typed
         // parameter values, and a whole snippet body — so the rule above covers
         // them for the reason it covers Start-a-session. The parameter one can
         // also be up *over* Start-a-session, which is why it is a second term
         // rather than a case: Escape must be swallowed either way.
-        || !dom.snipFillScrim.hidden || !dom.snipEditScrim.hidden
+        || isUp(dom.snipFillScrim) || isUp(dom.snipEditScrim)
         // And the full-height CLAUDE.md editor, which is the plainest case on
         // this list: what it holds is a whole file somebody is part-way through
         // writing. Closing it keeps the draft, so Escape here would not have
         // *lost* anything — but six dialogs swallow the key and a seventh that
         // answered it would be the special case this function exists to stop.
-        || !dom.memoScrim.hidden
+        || isUp(dom.memoScrim)
         // The diff viewer is the one on this list that holds no work at all — it
         // is a read-only view and closing it loses nothing, so the paragraph
         // above is not what puts it here. The sentence after it is: six dialogs
         // swallow the key and a seventh that answered it would be exactly the
         // special case this function exists to stop.
-        || !dom.diffScrim.hidden
+        || isUp(dom.diffScrim)
         // The plan/question review, which is the diff viewer's case exactly: a
         // read-only replay holding no work, so the paragraph above is not what
         // puts it here either. The sentence after it is.
-        || !dom.reviewScrim.hidden
+        || isUp(dom.reviewScrim)
         // Publish to GitHub holds a filled-in form, and can be up over
         // Start-a-session, which is the snippet dialog's case.
-        || !dom.ghScrim.hidden;
+        || isUp(dom.ghScrim);
+}
+
+/**
+ * Put a modal up: the scrim fades in and the dialog in it grows from just under
+ * its size. Every `.scrim` dialog opens and closes through these two, so they
+ * all move alike.
+ */
+export function openModal(scrim) {
+    present(scrim, true, { kind: 'fade' });
+    const box = scrim.querySelector(':scope > .modal');
+    if (box) animate(box, [{ opacity: 0, transform: 'translateY(8px) scale(0.98)', offset: 0 }], { speed: 'med' });
+}
+
+/**
+ * Take a modal down, playing the opening backwards. A scrim on its way out no
+ * longer counts in modalUp(). `onGone` runs once it has gone — the place to
+ * empty a dialog whose content should stay up while it fades.
+ */
+export function closeModal(scrim, onGone) {
+    if (!isUp(scrim)) { if (scrim.hidden && onGone) onGone(); return; }
+    const box = scrim.querySelector(':scope > .modal');
+    if (box) animate(box, [{ transform: 'none' }, { transform: 'translateY(6px) scale(0.98)' }]);
+    present(scrim, false, { kind: 'fade', onGone });
 }
 
 /**

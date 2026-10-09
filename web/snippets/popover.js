@@ -31,7 +31,7 @@
 
 import { html } from '../vendor/preact.js';
 import { state } from '../state.js';
-import { dom, toast } from '../dom.js';
+import { dom, closeModal, openModal, toast } from '../dom.js';
 import { paint } from '../boards/parts.js';
 import { closeMenus, composers, live } from '../composer/slash.js';
 import { insertAt } from '../composer/mentions.js';
@@ -42,6 +42,7 @@ import { startNew } from '../new-session/trigger.js';
 import { openContextMenu } from '../transcript/context-menu.js';
 import { isBusy } from '../transcript/conversation.js';
 import { fillSnipBody, snipAccent, snipPreview, snipVisible } from './index.js';
+import { isUp, present } from '../motion.js';
 
 /** What a parameter of each type is asked for with. */
 const SNIP_INPUT = {
@@ -210,7 +211,7 @@ export function showSnips(c, on) {
     for (const other of composers) if (other.wispr) closeWispr(other.wispr);
 
     m.index = 0;
-    m.node.hidden = false;
+    present(m.node, true, { kind: 'pop' });
     m.btn.setAttribute('aria-expanded', 'true');
     drawSnips(c);
     positionSnips(c);
@@ -219,9 +220,8 @@ export function showSnips(c, on) {
 
 export function closeSnips(c, { focus = false } = {}) {
     const m = c.snips;
-    if (m.node.hidden) return;
-    m.node.hidden = true;
-    paint(m.node, null);
+    if (!isUp(m.node)) return;
+    present(m.node, false, { kind: 'pop', onGone: () => paint(m.node, null) });
     m.btn.setAttribute('aria-expanded', 'false');
     if (focus) m.btn.focus();
 }
@@ -354,7 +354,7 @@ function openSnipFill(c, s) {
                 required=${Boolean(p.required)} value=${p.default || ''} ...${SNIP_INPUT[p.type] || SNIP_INPUT.text} />
         </div>`;
     }));
-    dom.snipFillScrim.hidden = false;
+    openModal(dom.snipFillScrim);
     const first = dom.snipFillForm.querySelector('input');
     if (first) { first.focus(); first.select(); }
 }
@@ -388,7 +388,7 @@ export function confirmSnipFill() {
 }
 
 export function closeSnipFill() {
-    dom.snipFillScrim.hidden = true;
+    closeModal(dom.snipFillScrim);
     paint(dom.snipFillForm, null);
     state.snippets.fill = null;
 }

@@ -15,6 +15,7 @@ import { state } from '../state.js';
 import { paintPerm, scrollToEnd } from '../app.js';
 import { closeFind } from './find.js';
 import { toolSummary } from './tools.js';
+import { exit, grow, isLeaving, isUp, present } from '../motion.js';
 
 // ── approvals, plans and questions ───────────────────────────────────────
 // A blocked turn, never a toast: toasts are dismissible and this is not — the
@@ -118,14 +119,14 @@ export function refreshAsk(runnerAsk) {
 
 /** Is the surface for the ask on screen already? */
 const askShowing = () => Boolean(
-    dom.log.querySelector('.perm') || !dom.askDock.hidden || !dom.planPane.hidden);
+    liveCard() || isUp(dom.askDock) || isUp(dom.planPane));
 
 /** Whichever element is currently carrying the ask, for dimming. */
 function askRoot() {
     const kind = state.ask && state.ask.kind;
     if (kind === 'plan') return dom.planPane;
     if (kind === 'question') return dom.askDock;
-    return dom.log.querySelector('.perm');
+    return liveCard();
 }
 
 /**
@@ -145,32 +146,46 @@ function askControls() {
 
 /** Show, replace or clear whatever the session is blocked on. */
 export function renderAsk() {
-    const old = dom.log.querySelector('.perm');
-    if (old) old.remove();
-    dom.askDock.hidden = true;
+    const ask = state.ask;
+    const kind = ask && !state.agent ? (ask.kind || 'tool') : null;
+
+    // What is going away plays out, and what is staying is redrawn in place. A
+    // card replaced by another card is swapped outright — the new one has its own
+    // entrance — but one that is simply answered closes its gap in the log.
+    const old = liveCard();
+    if (old) {
+        if (kind === 'tool') old.remove();
+        else exit(old, { kind: 'fade', speed: 'med', collapse: true });
+    }
     delete dom.askDock.dataset.pending;
-    dom.planPane.hidden = true;
     delete dom.planPane.dataset.pending;
     delete dom.planPane.dataset.collapsed;
 
     // The dock's controls are where the answers live, so it is emptied only
     // once it is no longer the dock for the ask in hand. Going to read a
     // subagent hides it, and must not cost you the options you had picked.
-    const ask = state.ask;
     const keep = ask && ask.kind === 'question' && dom.askDock.dataset.request === ask.requestId;
-    if (!keep) {
-        dom.askDock.replaceChildren();
-        delete dom.askDock.dataset.request;
+    if (!keep) delete dom.askDock.dataset.request;
+    if (kind !== 'question') {
+        // Shrunk with its last question still in it, and emptied once shut —
+        // unless a question has been put back in it by then.
+        grow(dom.askDock, false, { onGone: () => {
+            if (!dom.askDock.dataset.request) dom.askDock.replaceChildren();
+        } });
     }
+    if (kind !== 'plan') present(dom.planPane, false, { kind: 'rise', speed: 'med' });
 
-    if (!ask || state.agent) return;
-
-    const kind = ask.kind || 'tool';
+    if (!kind) return;
     if (kind === 'plan') renderPlanPane(ask);
     else if (kind === 'question') {
-        if (keep) dom.askDock.hidden = false;
+        if (keep) grow(dom.askDock, true);
         else renderQuestionDock(ask);
     } else renderToolCard(ask);
+}
+
+/** The permission card in the log, not counting one playing its way out. */
+function liveCard() {
+    return [...dom.log.querySelectorAll('.perm')].find(n => !isLeaving(n)) || null;
 }
 
 /** "May I run this?" — the original card, in the original place. */
@@ -258,7 +273,7 @@ function renderPlanPane(ask) {
         : [planButtons(), el('div', { class: 'perm-why' },
             'Approving leaves plan mode and sets the permission mode under the composer.')]));
 
-    dom.planPane.hidden = false;
+    present(dom.planPane, true, { kind: 'rise', speed: 'med' });
     closeFind();
     setPlanAside(state.planAside);
     if (!state.planAside) dom.planBody.scrollTop = 0;
@@ -560,7 +575,7 @@ function renderQuestionDock(ask) {
 
     dom.askDock.replaceChildren(inner);
     dom.askDock.dataset.request = ask.requestId;
-    dom.askDock.hidden = false;
+    grow(dom.askDock, true);
     dom.askDock.setAttribute('aria-label', 'A question waiting for your answer');
     show(0);
 }

@@ -21,6 +21,7 @@ import { live } from './slash.js';
 import { renderPins } from '../snippets/pins.js';
 import { openSessionSoon } from '../transcript/conversation.js';
 import { branchFor, cancelBranch } from './branch.js';
+import { enter } from '../motion.js';
 
 // ── composer ─────────────────────────────────────────────────────────────
 
@@ -97,6 +98,7 @@ function showPendingSend(sessionId, text, files, previews) {
     });
     node.dataset.pending = '1';
     dom.log.append(node);
+    enter(node, { kind: 'rise', speed: 'med' });
     state.pendingSend = {
         sessionId, node, previews, timer: setTimeout(clearPendingSend, PENDING_MS),
     };
