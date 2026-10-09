@@ -41,6 +41,8 @@ const NOTIFY = {
 export const notify = {
     desktop: localStorage.getItem('notifyDesktop') !== '0',
     sound: localStorage.getItem('notifySound') !== '0',
+    // Off unless asked for: an orchestrator's workers chime like any session.
+    muteWorkers: localStorage.getItem('notifyMuteWorkers') === '1',
     sw: null,           // the worker registration, once it is ready — see sw.js
     fired: new Map(),   // sessionId -> when something last fired for it
     busy: new Map(),    // sessionId -> when its running turn started
@@ -170,7 +172,7 @@ export function announceAsk(p) {
     // would leave the old one on screen offering to answer a dead request.
     // Only the noise is rationed, below.
     showAsk(`${clip(sessionTitle(p.sessionId), 60)} — ${head}`, askBody(p, kind), p, kind);
-    if (allowedNow(p.sessionId)) chime('ask');
+    if (allowedNow(p.sessionId)) chime('ask', p.sessionId);
 }
 
 const ASK_TITLE = {
@@ -251,7 +253,7 @@ export function announceStall(p) {
     const mins = Math.max(1, Math.round((p.stalledAfterMs || 0) / 60_000));
     const title = `${clip(sessionTitle(p.sessionId), 60)} — may be stuck`;
     const body = `Still working, but nothing for ${mins} min: no output, no tool running.`;
-    chime('ask');
+    chime('ask', p.sessionId);
     if (!notify.desktop || notifyPermission() !== 'granted') return;
     if (notify.sw) {
         notify.sw.showNotification(title, {
@@ -292,7 +294,7 @@ export function clearStall(sessionId) {
  * the click after a reload is better than losing the notification.
  */
 export function announce(title, body, tone, sessionId) {
-    chime(tone);
+    chime(tone, sessionId);
     if (!notify.desktop || notifyPermission() !== 'granted') return;
     const opts = {
         body,
@@ -341,14 +343,27 @@ export function announce(title, body, tone, sessionId) {
  * An unrecognised tone is silence, so a caller that has already made its own
  * noise can pass none.
  */
+/**
+ * A session an orchestrator started with spawn_worker. Its toast still shows —
+ * only the noise is muted — because the orchestrator is the one meant to field
+ * it, and a run of workers otherwise chimes in chorus. A worker whose
+ * orchestrator has closed keeps the field, so it stays quiet too.
+ */
+function isWorker(sessionId) {
+    if (!sessionId) return false;
+    const row = state.sessions.find(s => s.sessionId === sessionId);
+    return !!(row && row.worker);
+}
+
 const CHIME = {
     done: [[587.33, 0, 0.16, 0.11], [880, 0.11, 0.34, 0.1]],   // D5 → A5
     fail: [[311.13, 0, 0.44, 0.09]],                            // E♭4, alone
     ask: [[698.46, 0, 0.11, 0.1], [698.46, 0.17, 0.22, 0.1]],   // F5, twice
 };
 
-export function chime(tone) {
+export function chime(tone, sessionId) {
     if (!notify.sound) return;
+    if (notify.muteWorkers && isWorker(sessionId)) return;
     const notes = CHIME[tone];
     if (!notes) return;
     const ctx = audioContext();

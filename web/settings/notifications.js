@@ -40,6 +40,8 @@ const NOTE = {
 const DESKTOP_NOTE = 'Ticking this is what asks the browser for permission — nothing '
     + 'else does, because a prompt no gesture invited is the one people press Block on.';
 const SOUND_NOTE = 'A short chime, synthesised in the page rather than fetched.';
+const WORKERS_NOTE = 'Sessions an orchestrator started stay quiet. Their notifications '
+    + 'still show; only the chime is dropped.';
 
 /** The group, as a vnode for renderSettings. */
 export function notifyCard() {
@@ -81,6 +83,11 @@ function NotifyGroup() {
         // This click is a gesture, which is what an AudioContext has been waiting
         // for if the page has not been touched yet.
         if (notify.sound) { wakeAudio(); chime('done'); }
+        again();
+    };
+    const onMuteWorkers = (e) => {
+        notify.muteWorkers = e.target.checked;
+        localStorage.setItem('notifyMuteWorkers', notify.muteWorkers ? '1' : '0');
         again();
     };
     // Worth having: Focus Assist and Do Not Disturb drop notifications without a
@@ -126,6 +133,20 @@ function NotifyGroup() {
                 <label class="settings-check">
                     <input id="opt-sound" type="checkbox" checked=${notify.sound}
                         onChange=${onSound} />
+                    <span class="settings-box"></span>
+                </label>
+            </div>
+        </div>
+
+        <div class="settings-row">
+            <div class="settings-row-text">
+                <div class="settings-row-label">Mute sounds from orchestrator workers${settingTip(WORKERS_NOTE)}</div>
+                ${settingDesc(WORKERS_NOTE)}
+            </div>
+            <div class="settings-row-ctl">
+                <label class="settings-check">
+                    <input id="opt-mute-workers" type="checkbox" checked=${notify.muteWorkers}
+                        disabled=${!notify.sound} onChange=${onMuteWorkers} />
                     <span class="settings-box"></span>
                 </label>
             </div>
