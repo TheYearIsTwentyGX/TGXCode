@@ -78,6 +78,9 @@ async function handle(req, res, url, pathname, seg) {
         // A cutoff lowered under the current reading takes effect now, not at
         // the next minute's check.
         orchestration.checkUsage(id);
+        // Already paused: the wake time follows the new settings — auto-resume
+        // turned on starts the clock, turned off stops it.
+        if (body.settings && body.settings.usageStop) orchestration.rearmPause(id);
         return send(res, 200, orchestration.payload(id));
     }
 

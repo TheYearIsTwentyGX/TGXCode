@@ -285,10 +285,16 @@ const DEFAULTS = {
         maxRunning: 3,
         worktree: true,
         // Past this share of the chosen window, every busy worker and the
-        // orchestrator itself are stopped and it waits for Resume.
+        // orchestrator itself are stopped and it waits for Resume. `all` checks
+        // every window against its own threshold below, and trips on any one.
         usageStopEnabled: true,
         usageStopPercent: 90,
         usageStopWindow: 'five_hour',
+        usageStopAllFiveHour: 90,
+        usageStopAllWeekly: 95,
+        // Instead of waiting for Resume, carry on by itself once the window that
+        // tripped it resets.
+        usageStopAutoResume: false,
         // Appended to every orchestrator's system prompt, after the brief that
         // explains its tools — a CLAUDE.md for orchestrators. Read at each spawn.
         addendum: '',
@@ -528,7 +534,10 @@ const SHAPE = {
         worktree: (v) => typeof v === 'boolean',
         usageStopEnabled: (v) => typeof v === 'boolean',
         usageStopPercent: (v) => Number.isInteger(v) && v >= 1 && v <= 100,
-        usageStopWindow: (v) => ['five_hour', 'seven_day', 'seven_day_opus', 'seven_day_sonnet'].includes(v),
+        usageStopWindow: (v) => ['five_hour', 'seven_day', 'seven_day_opus', 'seven_day_sonnet', 'all'].includes(v),
+        usageStopAllFiveHour: (v) => Number.isInteger(v) && v >= 1 && v <= 100,
+        usageStopAllWeekly: (v) => Number.isInteger(v) && v >= 1 && v <= 100,
+        usageStopAutoResume: (v) => typeof v === 'boolean',
         addendum: (v) => typeof v === 'string' && v.length <= 20_000,
         workerAddendum: (v) => typeof v === 'string' && v.length <= 20_000,
     },

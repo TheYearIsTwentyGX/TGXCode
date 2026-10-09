@@ -4506,8 +4506,12 @@ event:
 { orchestratorId: string, enabled: true,
   settings: { maxRunning: number (1–10), worktree: boolean,
               usageStop: { enabled: boolean, percent: number (1–100),
-                           window: "five_hour"|"seven_day"|"seven_day_opus"|"seven_day_sonnet" } },
-  paused: null | { reason: string, at: number },
+                           window: "five_hour"|"seven_day"|"seven_day_opus"|"seven_day_sonnet"|"all",
+                           limits: { five_hour, seven_day, seven_day_opus, seven_day_sonnet:
+                                     number (1–100) | null },
+                           autoResume: boolean } },
+  paused: null | { reason: string, at: number, resumeAt: number|null, by: number|null,
+                   interrupted: [string] },
   summary: null | { text: string (markdown, ≤1500 chars), at: number },
   workers: [{ id, title: string|null, cwd, worktree: null | {path, branch},
               spawnedAt: number, closedAt: number|null,
@@ -4549,17 +4553,31 @@ both come back as their own event kinds, `orchestrator-inbox` and
 `orchestrator-message` (see the event table), never as `user`.
 
 **The usage cutoff.** When `settings.usageStop.enabled` and the window's
-`usedPercent` (from `GET /api/quota`) reaches `percent`, the bridge soft-stops the
-orchestrator and every busy worker, sets `paused`, refuses new spawns and holds
-nudges, and sends a `notice` with `kind: "orchestrator_paused"`. Messages queued on
+`usedPercent` (from `GET /api/quota`) reaches `percent` — or, with `window: "all"`,
+when *any* window reaches its own threshold in `limits` (a `null` threshold leaves
+that window out) — the bridge soft-stops the orchestrator and every busy worker,
+sets `paused`, refuses new spawns and holds nudges, and sends a `notice` with
+`kind: "orchestrator_paused"`. `paused.reason` names every window that was over,
+`;`-separated, and `paused.interrupted` lists the session ids (the orchestrator's
+own included) that were stopped mid-turn. Messages queued on
 any of those sessions are given back rather than dropped: an instruction the
 orchestrator queued on a worker returns to the orchestrator's inbox as a `note` item
 saying it was not delivered, and anything else comes back as `send-failed`
 (`kind: "retired"`) with its text, exactly as a Stop hands it back. `stop` and
-`close` from the orchestrator do the same for the worker they stop. Only Resume lifts
-it. The reading is only as fresh as the quota beacon; see `GET /api/quota`. A
-reading whose window's `resetsAt` has passed does not count — it describes a period
-that is over.
+`close` from the orchestrator do the same for the worker they stop. The reading is
+only as fresh as the quota beacon; see `GET /api/quota`. A reading whose window's
+`resetsAt` has passed does not count — it describes a period that is over.
+
+**Lifting it.** Resume always does. With `usageStop.autoResume`, the pause also lifts
+by itself: `paused.resumeAt` (epoch ms) is a minute after the *latest* `resetsAt`
+among the windows that tripped it, and only the bridge on port `paused.by` acts on it
+(every bridge shares the store). It is checked again when it comes due — another
+window still over pauses it again, with a new `resumeAt`, and a new `notice`.
+`resumeAt` is `null` when auto-resume is off or a tripped window had no reset time;
+turning auto-resume on or off while paused starts or stops the clock. Either way of
+lifting starts queued spawns and files a `note` in the orchestrator's inbox saying it
+was resumed and listing the workers in `interrupted`, so it can tell them to carry
+on.
 
 #### `GET /api/sessions/:id/orchestrator`
 

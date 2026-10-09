@@ -229,15 +229,28 @@ export const SETTINGS = [
                 label: 'Start each worker in its own worktree' },
             { key: 'usageStopEnabled', type: 'bool',
                 label: 'Stop everything past a usage threshold',
-                note: 'Stops the orchestrator and every running worker, and waits for Resume.' },
-            { key: 'usageStopPercent', type: 'int', min: 1, max: 100,
-                label: 'Threshold, in percent' },
+                note: 'Stops the orchestrator and every running worker.' },
             { key: 'usageStopWindow', type: 'choice',
                 label: 'Of which window',
+                note: 'All limits checks the five-hour and weekly windows against their own '
+                    + 'thresholds below, and stops at whichever is passed first.',
                 options: [
                     ['five_hour', 'Five-hour'], ['seven_day', 'Weekly'],
                     ['seven_day_opus', 'Weekly, Opus'], ['seven_day_sonnet', 'Weekly, Sonnet'],
+                    ['all', 'All limits'],
                 ] },
+            { key: 'usageStopPercent', type: 'int', min: 1, max: 100,
+                label: 'Threshold, in percent',
+                note: 'For a single window.' },
+            { key: 'usageStopAllFiveHour', type: 'int', min: 1, max: 100,
+                label: 'All limits: five-hour, in percent' },
+            { key: 'usageStopAllWeekly', type: 'int', min: 1, max: 100,
+                label: 'All limits: weekly, in percent' },
+            { key: 'usageStopAutoResume', type: 'bool',
+                label: 'Carry on when the window resets',
+                note: 'Instead of waiting for Resume: the orchestrator wakes a minute after the '
+                    + 'window that stopped it resets, and is told which workers were cut off '
+                    + 'mid-turn so it can set them going again.' },
             { key: 'addendum', type: 'text',
                 label: 'Instructions for every orchestrator',
                 note: 'Added to each orchestrator’s system prompt, after the brief that explains '
