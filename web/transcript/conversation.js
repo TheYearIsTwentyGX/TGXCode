@@ -596,6 +596,10 @@ export function appendEvents(events, view = SESSION_VIEW, { live = false } = {})
     let newMark = false;
     let sawAgent = false;
     let newTasks = false;
+    // Rows that arrive on a live tail are played in; a transcript drawn whole on
+    // open, or a stretch loaded above, is not — that is history appearing, not
+    // something happening.
+    const arrived = live ? [] : null;
     for (const ev of events) {
         if (ev.kind === 'tool-result') { patchTool(ev, view); continue; }
         // A suggested follow-up is not part of the conversation, it is an offer
@@ -653,11 +657,15 @@ export function appendEvents(events, view = SESSION_VIEW, { live = false } = {})
             if (!view.isAgent && !view.prepend && state.pendingSend && state.current
                 && state.pendingSend.sessionId === state.current.sessionId) {
                 clearPendingSend();
+                frag.append(node);
+                continue;   // and not played in: the swap is meant to be invisible
             }
         }
         frag.append(node);
+        if (arrived) arrived.push(node);
     }
     flush();
+    if (arrived) for (const n of arrived) enter(n, { kind: 'rise', speed: 'med' });
     // A transcript that ends in tool calls has no message coming to close the
     // last run — openSession replays a finished conversation in one call, and
     // that run would otherwise stay unfolded forever. Only when nothing is

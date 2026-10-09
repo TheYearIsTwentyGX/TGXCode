@@ -3624,6 +3624,31 @@ dom.scroll.addEventListener('scroll', () => {
     });
 }, { passive: true });
 
+// A tool card, a folded run or anything else built on <details> eases its body
+// open rather than dropping it in. Opening only: a closing <details> has hidden
+// its body before any event says so, and holding it open to play it out would
+// mean taking the summary's click away from the browser.
+//
+// Only one somebody opened. patchTool re-opens a card it has just rebuilt, on
+// every tool result, and playing that in would make a card you are reading
+// flicker each time its call reports. A click on a summary — Enter on one is a
+// click too — is what marks the next toggle as yours.
+let clickedOpen = null;
+for (const log of [dom.log, dom.agentLog]) {
+    log.addEventListener('click', (e) => {
+        const sum = e.target.closest && e.target.closest('summary');
+        clickedOpen = sum ? sum.parentElement : null;
+    }, true);
+    log.addEventListener('toggle', (e) => {
+        const d = e.target;
+        if (!(d instanceof HTMLDetailsElement) || !d.open || d !== clickedOpen) return;
+        clickedOpen = null;
+        for (const k of d.children) {
+            if (k.tagName !== 'SUMMARY') enter(k, { kind: 'fade', speed: 'fast', collapse: true });
+        }
+    }, true);
+}
+
 // The pane changes height under the reader as the docks below it grow and shrink
 // — the orchestrator's, the question dock, the terminal — and nothing scrolls to
 // say so: a pane that shrinks keeps its scrollTop, so the end of the
