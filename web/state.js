@@ -183,7 +183,7 @@ export const state = {
     pendingDelete: null,    // the session the confirm dialog is asking about
     busyTimer: null,        // ticks the elapsed-time readout while a turn runs
     queue: [],              // the current session's waiting messages, from the bridge
-    queueDrag: null,        // id of the chip being dragged
+    queueDrag: null,        // {id, order} while a chip is dragged — order is where the pointer has it
     queueOpen: new Set(),   // ids of chips expanded to their full text
     // Messages waiting on a clock — every session's, not just this one's, because
     // that is the shape the `later-changed` event carries and the rail wants the
@@ -191,6 +191,7 @@ export const state = {
     later: [],
     laterOpen: new Set(),   // ids of chips expanded to their full text
     laterPick: false,       // is the popover showing the pick-a-time fields?
+    laterSending: new Set(),   // ids whose Send now is in flight, so the button stays disabled
     // Slash commands the composer can complete, per working directory — the
     // bridge keys them that way because that is what decides them. Held here so
     // that pressing `/` draws from memory rather than waiting on a fetch; the
@@ -229,7 +230,7 @@ export const state = {
     // by object so a decision taken inside it can find its way back to the same
     // task after the panel behind has been rebuilt.
     taskDialog: null,
-    queueSig: '',           // what the chips were last built from, to avoid churn
+    queueSig: '',           // what the chips were last animated from — morph only when it changes
     queueFocus: null,       // the chip holding the queue's single tab stop
     ask: null,              // the approval this session is blocked on, if any
     // The `orchestrator` payload for the session on screen — its own, or its
