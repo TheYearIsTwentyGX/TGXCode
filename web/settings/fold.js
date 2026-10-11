@@ -2,11 +2,12 @@
 // plugins, the verb-group pills, the shortcut table. Each is a list that can
 // run to dozens of entries and push every group under it out of reach.
 //
-// **Driven by state, not by <details>.** The Claude Code group is rebuilt with
-// el() on every renderSettings(), which is twice per save, so an `open`
-// attribute the browser kept on the node would be lost the moment anything was
-// saved. The fold is a fact in `state.settings.folds` and the row is drawn from
-// it, the way `hk-more` recomputes its own `open`.
+// **Driven by state, not by <details>.** The groups that use these were rebuilt
+// with el() on every renderSettings(), which is twice per save, so an `open`
+// attribute the browser kept on the node was lost the moment anything was
+// saved. They are Preact now and would keep it, but the fold stays a fact in
+// `state.settings.folds`: it is remembered across visits, and a row's summary
+// line and LONG default are drawn from it.
 //
 // **Only an explicit choice is stored.** A row nobody has touched is open while
 // it is short and shut once it is long (LONG entries), so a list of two rules

@@ -1,22 +1,40 @@
 // The hooks editor inside the Claude Code group: a draft of the `hooks` block,
-// its review, and the save. Moved out of app.js as it was.
+// its review, and the save.
+//
+// Preact, as part of the Claude Code group (claude-config.js). It used to be
+// built with el() and rebuilt with the group on every renderSettings, which is
+// why typing here patched the footer and the problem marks by hand rather than
+// redrawing. Now the row is a component, HooksRow, and what it decided:
+//
+// - **A keystroke redraws the row, not the panel.** hkDirtied() marks the
+//   draft edited and asks HooksRow to redraw itself — the footer, the problem
+//   marks and the review are all drawn from state. A structural change (a hook
+//   added, moved or removed) still goes through renderSettings.
+// - **The draft's boxes are uncontrolled**, keyed by the hook's `_k`, its type
+//   and the field. Several of them normalise what is typed — a timeout of `0`
+//   is dropped, `a, ` becomes `["a"]`, half-typed JSON is not applied — so a
+//   controlled value would fight the typing. Reseeding the draft mints new
+//   `_k`s, which remounts every box from what was read.
+// - **Events, groups and hooks are keyed by `_k`**, so moving one moves its
+//   nodes, focus and all.
 //
 // Imports from app.js, which imports this — safe because nothing here reads an
 // app.js binding while the module evaluates, only when a function is called.
 // Keep it that way: a module-level `const` built from an app.js `const` throws,
 // because every module under web/settings/ evaluates before app.js's body runs.
 
+import { html, useState } from '../vendor/preact.js';
 import { put } from '../api.js';
-import { dom, el, toast } from '../dom.js';
+import { toast } from '../dom.js';
 import { shortPath } from '../format.js';
-import { icon } from '../icons.js';
-import { snipDeleteButton } from '../snippets/settings.js';
+import { icon } from '../boards/parts.js';
+import { DeleteButton } from '../snippets/settings.js';
 import { grow } from '../composer/send.js';
 import {
-    CLAUDE_SCOPES, claudeDir, claudeJsonLink, claudeSavedNote, claudeState, claudeTargetRow,
-    loadClaudeConfig,
+    CLAUDE_SCOPES, claudeDir, claudeFlashClass, claudeJsonLink, claudeSavedNote, claudeState,
+    claudeTargetRow, loadClaudeConfig,
 } from './claude-config.js';
-import { foldLabel, isOpen, setFold } from './fold.js';
+import { foldLabelV, isOpen, setFold } from './fold.js';
 import { renderSettings } from './index.js';
 import { clone, hasOwn } from './project-commands.js';
 
@@ -103,30 +121,35 @@ function hkForWire() {
     return Object.keys(out).length ? out : null;
 }
 
-/** Mark the draft edited, and repaint only the footer — see cmdDirty(). */
+/**
+ * How the hooks row redraws itself — set by HooksRow each time it draws. There
+ * is one hooks row on the page, and until it has drawn there is nothing of its
+ * to redraw, so the fallback is the whole panel.
+ */
+let hkRedraw = () => renderSettings();
+
+/**
+ * Mark the draft edited, and redraw the row. Only the row: the panel around it
+ * has nothing that depends on the draft, and a keystroke should cost a diff of
+ * the editor, not of sixty controls.
+ */
 function hkDirtied() {
-    const s = claudeState();
-    s.hooksDirty = true;
-    s.hooksReview = false;
-    // The problems belong to the draft that was checked, not this one. Their
-    // marks come off in place rather than by a redraw, which would take the
-    // caret out of the box being typed into.
-    if (s.hooksProblems) {
-        s.hooksProblems = null;
-        const row = dom.setBody && dom.setBody.querySelector('.settings-row[data-path="hooks"]');
-        if (row) {
-            row.querySelectorAll('.hk-problem').forEach(n => n.remove());
-            row.querySelectorAll('.hk-hook.bad, .hk-event.bad').forEach(n => n.classList.remove('bad'));
-        }
-    }
-    const foot = dom.setBody && dom.setBody.querySelector('.hk-foot');
-    if (foot) hkPaintFoot(foot);
+    hkMark();
+    hkRedraw();
 }
 
 /** Structural change: the draft moved, so the panel is redrawn. */
 function hkChanged() {
-    hkDirtied();
+    hkMark();
     renderSettings();
+}
+
+function hkMark() {
+    const s = claudeState();
+    s.hooksDirty = true;
+    s.hooksReview = false;
+    // The problems belong to the draft that was checked, not this one.
+    s.hooksProblems = null;
 }
 
 export function hkClearDraft(s) {
@@ -240,40 +263,47 @@ function hkChanges() {
  * deleting the events and saving, through the same review as everything else.
  */
 export function claudeHooksRow(row) {
+    return html`<${HooksRow} key=${row.path} row=${row} />`;
+}
+
+function HooksRow({ row }) {
+    const [, redraw] = useState(0);
+    hkRedraw = () => redraw(n => n + 1);
+
     const s = claudeState();
     const fileRow = hkFileRow();
     const target = claudeTargetRow();
     const editable = !!target && target.writable && !target.symlink && !(target.exists && !target.parsed);
     const off = s.data.effective.disableAllHooks;
 
-    const text = el('div', { class: 'settings-row-text' },
-        el('div', { class: 'settings-row-label' },
-            row.label, el('code', { class: 'cfg-path', text: row.path })),
-        el('div', { class: 'settings-row-note' },
-            'Each event holds groups; a group’s matcher picks what it fires for, and '
-            + 'its hooks run in order. Nothing here is written until you save.'));
+    const text = html`<div class="settings-row-text">
+        <div class="settings-row-label">${row.label}<code class="cfg-path">${row.path}</code></div>
+        <div class="settings-row-note">${'Each event holds groups; a group’s matcher picks what it fires for, and '
+            + 'its hooks run in order. Nothing here is written until you save.'}</div>
+    </div>`;
 
-    const body = el('div', { class: 'hk' });
+    const body = [];
     if (off && off.value === true) {
-        body.append(el('div', { class: 'hk-off' },
-            el('strong', { text: 'Every hook is turned off' }),
+        body.push(html`<div key="off" class="hk-off"><strong>Every hook is turned off</strong>${
             ` by disableAllHooks in ${CLAUDE_SCOPES[off.scope] || 'another file'}. `
-            + 'You can still edit them; none of them runs until that is cleared.'));
+            + 'You can still edit them; none of them runs until that is cleared.'}</div>`);
     }
 
     const onDisk = hkOnDisk();
     if (fileRow && fileRow.exists && !fileRow.parsed) {
-        body.append(el('div', { class: 'cfg-broken' },
-            el('p', null, el('strong', { text: 'This file does not parse, so its hooks cannot be shown.' }),
-                ' The JSON tab has it exactly as it is on disk.'),
-            claudeJsonLink('hooks', 'Open the JSON tab')));
+        body.push(html`<div key="broken" class="cfg-broken">
+            <p><strong>This file does not parse, so its hooks cannot be shown.</strong>${
+                ' The JSON tab has it exactly as it is on disk.'}</p>
+            ${claudeJsonLink('hooks', 'Open the JSON tab')}
+        </div>`);
         return hkWrap(row, text, body);
     }
     if (onDisk !== undefined && !isPlainObj(onDisk)) {
-        body.append(el('div', { class: 'cfg-broken' },
-            el('p', null, el('strong', { text: 'hooks here is not an object.' }),
-                ' Claude Code will ignore it, and the editor will not guess what it meant.'),
-            claudeJsonLink('hooks', 'Fix it as JSON')));
+        body.push(html`<div key="not-object" class="cfg-broken">
+            <p><strong>hooks here is not an object.</strong>${
+                ' Claude Code will ignore it, and the editor will not guess what it meant.'}</p>
+            ${claudeJsonLink('hooks', 'Fix it as JSON')}
+        </div>`);
         return hkWrap(row, text, body);
     }
 
@@ -282,50 +312,41 @@ export function claudeHooksRow(row) {
     // for why — and Save stays refused until the reader has looked.
     const now = JSON.stringify(onDisk === undefined ? null : onDisk);
     if (hkIsStale()) {
-        body.append(el('div', { class: 'cfg-stale' },
-            el('div', { class: 'cfg-stale-head' }, 'The hooks in this file changed on disk since you started.'),
-            el('p', null, 'Nothing was overwritten, and your edits are kept. Saving would replace '
-                + 'what is there now, so the page wants you to choose.'),
-            el('details', null, el('summary', { text: 'What is on disk' }),
-                el('pre', { class: 'cfg-stale-text', text: JSON.stringify(onDisk ?? null, null, 2) })),
-            el('div', { class: 'hk-actions' },
-                el('button', {
-                    class: 'btn small', type: 'button',
-                    onclick: () => { s.hooksSeed = now; s.hooksReview = false; renderSettings(); },
-                }, 'Keep my edits'),
-                el('button', {
-                    class: 'btn quiet small', type: 'button',
-                    onclick: () => { hkClearDraft(s); renderSettings(); },
-                }, 'Take what is on disk'))));
+        body.push(html`<div key="stale" class="cfg-stale">
+            <div class="cfg-stale-head">The hooks in this file changed on disk since you started.</div>
+            <p>${'Nothing was overwritten, and your edits are kept. Saving would replace '
+                + 'what is there now, so the page wants you to choose.'}</p>
+            <details><summary>What is on disk</summary><pre class="cfg-stale-text">${
+                JSON.stringify(onDisk ?? null, null, 2)}</pre></details>
+            <div class="hk-actions">
+                <button class="btn small" type="button"
+                    onClick=${() => { s.hooksSeed = now; s.hooksReview = false; renderSettings(); }}>Keep my edits</button>
+                <button class="btn quiet small" type="button"
+                    onClick=${() => { hkClearDraft(s); renderSettings(); }}>Take what is on disk</button>
+            </div>
+        </div>`);
     }
 
-    if (!draft.length) {
-        body.append(el('div', { class: 'cfg-list-none', text: 'No hooks in this file.' }));
-    }
+    if (!draft.length) body.push(html`<div key="none" class="cfg-list-none">No hooks in this file.</div>`);
     const problems = s.hooksProblems || [];
-    for (const [i, ev] of draft.entries()) body.append(hkEventCard(ev, i, editable, problems));
-    if (editable) body.append(hkAddEvent(draft));
-    body.append(hkElsewhere());
-    if (editable || s.hooksDirty) {
-        const foot = el('div', { class: 'cmd-foot hk-foot' });
-        hkPaintFoot(foot);
-        body.append(foot);
-    }
-    body.append(el('div', { class: 'cfg-list-add' }, claudeJsonLink('hooks', 'Edit as JSON')));
+    for (const [i, ev] of draft.entries()) body.push(hkEventCard(ev, i, editable, problems));
+    if (editable) body.push(hkAddEvent(draft));
+    body.push(hkElsewhere());
+    if (editable || s.hooksDirty) body.push(hkFoot());
+    body.push(html`<div key="json" class="cfg-list-add">${claudeJsonLink('hooks', 'Edit as JSON')}</div>`);
     return hkWrap(row, text, body);
 }
 
 function hkWrap(row, text, body) {
-    return el('div', { class: 'settings-row is-wide', 'data-path': row.path },
-        el('div', { class: 'settings-row-head' }, text),
-        el('div', { class: 'settings-row-wide' }, body));
+    return html`<div class=${`settings-row is-wide${claudeFlashClass(row.path)}`} data-path=${row.path}>
+        <div class="settings-row-head">${text}</div>
+        <div class="settings-row-wide"><div class="hk">${body}</div></div>
+    </div>`;
 }
 
 /** A small text button — ↑, ↓, duplicate — in the style of the list's ×. */
-const hkMini = (label, title, disabled, go) => el('button', {
-    class: 'cfg-list-x hk-mini', type: 'button', title, 'aria-label': title,
-    disabled: disabled || null, onclick: go,
-}, label);
+const hkMini = (label, title, disabled, go) => html`<button class="cfg-list-x hk-mini" type="button"
+    title=${title} aria-label=${title} disabled=${!!disabled} onClick=${go}>${label}</button>`;
 
 /** Swap two neighbours, if there is one in that direction. */
 function hkMove(list, i, by) {
@@ -348,36 +369,35 @@ function hkEventCard(ev, i, editable, problems) {
         || g.hooks.some(h => p.k === h._k)));
     const open = inside || isOpen(key, draft.length > 3);
     const hooks = ev.groups.reduce((n, g) => n + g.hooks.length, 0);
-    const card = el('div', { class: `cmd-card hk-event${bad.length ? ' bad' : ''}${open ? '' : ' is-folded'}` },
-        el('div', { class: 'cmd-card-head' },
-            foldLabel(key, open, el('code', { class: 'cmd-card-id', text: ev.event }), 'set-fold is-card'),
-            info ? el('span', { class: 'cmd-card-name', text: info.blurb.replace(/`/g, '') })
-                : el('span', { class: 'cfg-tab-tag', title: 'Kept as it is — Claude Code may know it even if this page does not' },
-                    'an event this page does not know'),
-            !open
-                ? el('span', { class: 'set-fold-sum is-inline' },
+    return html`<div key=${ev._k} class=${`cmd-card hk-event${bad.length ? ' bad' : ''}${open ? '' : ' is-folded'}`}>
+        <div class="cmd-card-head">
+            ${foldLabelV(key, open, html`<code class="cmd-card-id">${ev.event}</code>`, 'set-fold is-card')}
+            ${info
+                ? html`<span class="cmd-card-name">${info.blurb.replace(/`/g, '')}</span>`
+                : html`<span class="cfg-tab-tag"
+                    title="Kept as it is — Claude Code may know it even if this page does not"
+                    >an event this page does not know</span>`}
+            ${!open
+                ? html`<span class="set-fold-sum is-inline">${
                     `${ev.groups.length} ${ev.groups.length === 1 ? 'group' : 'groups'} · `
-                    + `${hooks} ${hooks === 1 ? 'hook' : 'hooks'}`)
-                : null,
-            el('div', { class: 'cmd-card-spacer' }),
-            editable ? snipDeleteButton(`Remove every ${ev.event} hook`, () => {
-                draft.splice(i, 1);
+                    + `${hooks} ${hooks === 1 ? 'hook' : 'hooks'}`}</span>`
+                : null}
+            <div class="cmd-card-spacer"></div>
+            ${editable ? html`<${DeleteButton} label=${`Remove every ${ev.event} hook`} go=${() => {
+                const at = draft.indexOf(ev);
+                if (at !== -1) draft.splice(at, 1);
                 hkChanged();
-            }) : null));
-    if (!open) return card;
-    for (const p of bad) card.append(el('p', { class: 'cmd-field-bad hk-problem', text: p.message }));
-    ev.groups.forEach((g, gi) => card.append(hkGroup(ev, g, gi, info, editable, problems)));
-    if (editable) {
-        card.append(el('div', { class: 'cfg-list-add' },
-            el('button', {
-                class: 'linkish', type: 'button',
-                onclick: () => {
-                    ev.groups.push(hkNewGroup());
-                    hkChanged();
-                },
-            }, info && info.matcher === null ? 'Add another group' : 'Add a matcher')));
-    }
-    return card;
+            }} />` : null}
+        </div>
+        ${open ? bad.map((p, n) => html`<p key=${`bad:${n}`} class="cmd-field-bad hk-problem">${p.message}</p>`) : null}
+        ${open ? ev.groups.map((g, gi) => hkGroup(ev, g, gi, info, editable, problems)) : null}
+        ${open && editable
+            ? html`<div class="cfg-list-add"><button class="linkish" type="button" onClick=${() => {
+                ev.groups.push(hkNewGroup());
+                hkChanged();
+            }}>${info && info.matcher === null ? 'Add another group' : 'Add a matcher'}</button></div>`
+            : null}
+    </div>`;
 }
 
 const hkNewHook = () => ({ _k: hkKey(), _script: null, type: 'command', command: '' });
@@ -397,49 +417,47 @@ function hkGroup(ev, g, gi, info, editable, problems) {
         ? (claudeState().data.toolNames || [])
         : (info.values || []);
     const removeGroup = () => {
-        ev.groups.splice(gi, 1);
+        const at = ev.groups.indexOf(g);
+        if (at !== -1) ev.groups.splice(at, 1);
         if (!ev.groups.length) hkDraft().splice(hkDraft().indexOf(ev), 1);
         hkChanged();
     };
-    const wrap = el('div', { class: 'hk-group' },
-        el('div', { class: 'hk-group-head' },
-            takesMatcher
-                ? el('label', { class: 'hk-matcher' },
-                    el('span', { class: 'cmd-field-label', text: info && info.matcher === 'tool' ? 'Tool' : 'Matches' }),
-                    el('input', {
-                        class: 'settings-text cmd-mono', type: 'text', spellcheck: 'false',
-                        list: options.length ? listId : null,
-                        value: typeof g.matcher === 'string' ? g.matcher : '',
-                        placeholder: 'any', disabled: !editable || null,
-                        oninput: (e) => {
+    return html`<div key=${g._k} class="hk-group">
+        <div class="hk-group-head">
+            ${takesMatcher
+                ? html`<label class="hk-matcher">
+                    <span class="cmd-field-label">${info && info.matcher === 'tool' ? 'Tool' : 'Matches'}</span>
+                    <input key=${`${g._k}:matcher`} class="settings-text cmd-mono" type="text" spellcheck=${false}
+                        list=${options.length ? listId : null}
+                        defaultValue=${typeof g.matcher === 'string' ? g.matcher : ''}
+                        placeholder="any" disabled=${!editable}
+                        onInput=${(e) => {
                             if (e.target.value) g.matcher = e.target.value;
                             else delete g.matcher;
                             hkDirtied();
-                        },
-                    }),
-                    options.length
-                        ? el('datalist', { id: listId }, options.map(v => el('option', { value: v })))
-                        : null)
-                : el('span', { class: 'cmd-field-label', text: 'Runs every time' }),
-            el('div', { class: 'cmd-card-spacer' }),
-            editable && ev.groups.length > 1 ? hkMini('↑', 'Move this group up', gi === 0, () => hkMove(ev.groups, gi, -1)) : null,
-            editable && ev.groups.length > 1 ? hkMini('↓', 'Move this group down', gi === ev.groups.length - 1,
-                () => hkMove(ev.groups, gi, 1)) : null,
-            editable ? snipDeleteButton('Remove this group', removeGroup) : null),
-        takesMatcher && info && info.matcher === 'tool'
-            ? el('p', { class: 'cmd-field-note' },
-                'A tool name or a regular expression — ', el('code', { text: 'Edit|Write' }), ', ',
-                el('code', { text: 'mcp__.*' }), '. Empty matches every tool.')
-            : null);
-    g.hooks.forEach((h, hi) => wrap.append(hkHook(ev, g, h, hi, editable, problems, removeGroup)));
-    if (editable) {
-        wrap.append(el('div', { class: 'cfg-list-add' },
-            el('button', {
-                class: 'linkish', type: 'button',
-                onclick: () => { g.hooks.push(hkNewHook()); hkChanged(); },
-            }, 'Add a hook to this group')));
-    }
-    return wrap;
+                        }} />
+                    ${options.length
+                        ? html`<datalist id=${listId}>${options.map(v => html`<option key=${v} value=${v} />`)}</datalist>`
+                        : null}
+                </label>`
+                : html`<span class="cmd-field-label">Runs every time</span>`}
+            <div class="cmd-card-spacer"></div>
+            ${editable && ev.groups.length > 1
+                ? hkMini('↑', 'Move this group up', gi === 0, () => hkMove(ev.groups, gi, -1)) : null}
+            ${editable && ev.groups.length > 1
+                ? hkMini('↓', 'Move this group down', gi === ev.groups.length - 1, () => hkMove(ev.groups, gi, 1)) : null}
+            ${editable ? html`<${DeleteButton} label="Remove this group" go=${removeGroup} />` : null}
+        </div>
+        ${takesMatcher && info && info.matcher === 'tool'
+            ? html`<p class="cmd-field-note">${'A tool name or a regular expression — '}<code>Edit|Write</code>${', '}<code
+                >mcp__.*</code>${'. Empty matches every tool.'}</p>`
+            : null}
+        ${g.hooks.map((h, hi) => hkHook(ev, g, h, hi, editable, problems, removeGroup))}
+        ${editable
+            ? html`<div class="cfg-list-add"><button class="linkish" type="button"
+                onClick=${() => { g.hooks.push(hkNewHook()); hkChanged(); }}>Add a hook to this group</button></div>`
+            : null}
+    </div>`;
 }
 
 /**
@@ -454,7 +472,10 @@ function hkHook(ev, g, h, hi, editable, problems, removeGroup) {
     const known = !!hkTypeInfo(h.type);
     const bad = problems.filter(p => p.k === h._k);
     const tool = (hkEventInfo(ev.event) || {}).matcher === 'tool';
-    const dis = !editable || null;
+    const dis = !editable;
+    // A box's key: the hook, its type and the field, so a type change or a
+    // reseeded draft remounts it from the draft — see the header.
+    const fk = (field) => `${h._k}:${h.type}:${field}`;
 
     const setType = (type) => {
         const keep = {};
@@ -466,71 +487,76 @@ function hkHook(ev, g, h, hi, editable, problems, removeGroup) {
         hkChanged();
     };
 
-    const head = el('div', { class: 'hk-hook-head' },
-        el('select', {
-            class: 'settings-select', disabled: dis,
-            onchange: (e) => setType(e.target.value),
-        },
-        types.map(t => el('option', { value: t.type, selected: t.type === h.type || null }, t.label)),
-        !known ? el('option', { value: h.type || '', selected: true }, `${h.type || 'no type'} (unknown)`) : null),
-        h._script
-            ? el('span', {
-                class: `cfg-script${h._script.exists ? '' : ' bad'}`, title: h._script.file,
-            }, h._script.exists ? 'script present' : `script missing — ${h._script.file}`)
-            : null,
-        el('div', { class: 'cmd-card-spacer' }),
-        editable && g.hooks.length > 1 ? hkMini('↑', 'Run this one earlier', hi === 0, () => hkMove(g.hooks, hi, -1)) : null,
-        editable && g.hooks.length > 1 ? hkMini('↓', 'Run this one later', hi === g.hooks.length - 1, () => hkMove(g.hooks, hi, 1)) : null,
-        editable ? hkMini(icon('copy', 13), 'Duplicate this hook', false, () => {
+    const head = html`<div key="head" class="hk-hook-head">
+        <select class="settings-select" disabled=${dis} value=${known ? h.type : (h.type || '')}
+            onChange=${(e) => setType(e.target.value)}>
+            ${types.map(t => html`<option key=${t.type} value=${t.type}>${t.label}</option>`)}
+            ${!known ? html`<option key="unknown" value=${h.type || ''}>${`${h.type || 'no type'} (unknown)`}</option>` : null}
+        </select>
+        ${h._script
+            ? html`<span class=${`cfg-script${h._script.exists ? '' : ' bad'}`} title=${h._script.file}>${
+                h._script.exists ? 'script present' : `script missing — ${h._script.file}`}</span>`
+            : null}
+        <div class="cmd-card-spacer"></div>
+        ${editable && g.hooks.length > 1
+            ? hkMini('↑', 'Run this one earlier', hi === 0, () => hkMove(g.hooks, hi, -1)) : null}
+        ${editable && g.hooks.length > 1
+            ? hkMini('↓', 'Run this one later', hi === g.hooks.length - 1, () => hkMove(g.hooks, hi, 1)) : null}
+        ${editable ? hkMini(icon('copy', 13), 'Duplicate this hook', false, () => {
             g.hooks.splice(hi + 1, 0, { ...clone(h), _k: hkKey(), _script: null });
             hkChanged();
-        }) : null,
-        editable ? snipDeleteButton('Remove this hook', () => {
-            g.hooks.splice(hi, 1);
+        }) : null}
+        ${editable ? html`<${DeleteButton} label="Remove this hook" go=${() => {
+            const at = g.hooks.indexOf(h);
+            if (at !== -1) g.hooks.splice(at, 1);
             if (!g.hooks.length) { removeGroup(); return; }
             hkChanged();
-        }) : null);
+        }} />` : null}
+    </div>`;
 
-    const card = el('div', { class: `hk-hook${bad.length ? ' bad' : ''}` }, head);
-    for (const p of bad) card.append(el('p', { class: 'cmd-field-bad hk-problem', text: p.message }));
+    const marks = bad.map((p, n) => html`<p key=${`bad:${n}`} class="cmd-field-bad hk-problem">${p.message}</p>`);
+    const cls = `hk-hook${bad.length ? ' bad' : ''}`;
 
     if (!known) {
-        card.append(hkJsonField(h, g, hi, dis));
-        return card;
+        return html`<div key=${h._k} class=${cls}>${head}${marks}${hkJsonField(h, dis)}</div>`;
     }
 
     // Fields by type. `str` edits one string key and deletes it when emptied,
     // so the file never collects `"statusMessage": ""`.
-    const str = (key, label, o = {}) => hkField(label, o.note, o.area
-        ? el('textarea', {
-            class: 'cmd-area', spellcheck: 'false', rows: 1, placeholder: o.ph || '', disabled: dis,
-            onfocus: (e) => grow(e.target, 26, 240),
-            oninput: (e) => { hkSet(h, key, e.target.value, o.required); if (key === 'command') h._script = null; grow(e.target, 26, 240); hkDirtied(); },
-        }, typeof h[key] === 'string' ? h[key] : '')
-        : el('input', {
-            class: `settings-text is-long${o.mono === false ? '' : ' cmd-mono'}`, type: 'text', spellcheck: 'false',
-            value: typeof h[key] === 'string' ? h[key] : '', placeholder: o.ph || '', disabled: dis,
-            oninput: (e) => { hkSet(h, key, e.target.value, o.required); hkDirtied(); },
-        }));
-    const timeout = () => hkField('Timeout (seconds)', null, el('input', {
-        class: 'settings-num', type: 'number', min: 1, max: 86400, disabled: dis,
-        value: Number.isInteger(h.timeout) ? h.timeout : '', placeholder: 'default',
-        oninput: (e) => {
+    const str = (key, label, o = {}) => hkField(fk(key), label, o.note, o.area
+        ? html`<textarea class="cmd-area" spellcheck=${false} rows="1" placeholder=${o.ph || ''}
+            disabled=${dis} defaultValue=${typeof h[key] === 'string' ? h[key] : ''}
+            onFocus=${(e) => grow(e.target, 26, 240)}
+            onInput=${(e) => {
+                hkSet(h, key, e.target.value, o.required);
+                if (key === 'command') h._script = null;
+                grow(e.target, 26, 240);
+                hkDirtied();
+            }}></textarea>`
+        : html`<input class=${`settings-text is-long${o.mono === false ? '' : ' cmd-mono'}`} type="text"
+            spellcheck=${false} defaultValue=${typeof h[key] === 'string' ? h[key] : ''}
+            placeholder=${o.ph || ''} disabled=${dis}
+            onInput=${(e) => { hkSet(h, key, e.target.value, o.required); hkDirtied(); }} />`);
+    const timeout = () => hkField(fk('timeout'), 'Timeout (seconds)', null, html`<input class="settings-num"
+        type="number" min="1" max="86400" disabled=${dis}
+        defaultValue=${Number.isInteger(h.timeout) ? h.timeout : ''} placeholder="default"
+        onInput=${(e) => {
             const n = Number(e.target.value);
             if (e.target.value === '' || !Number.isInteger(n) || n < 1) delete h.timeout;
             else h.timeout = n;
             hkDirtied();
-        },
-    }));
-    const bool = (key, label, note) => hkField(null, note, el('label', { class: 'hk-check' },
-        el('span', { class: 'settings-check' },
-            el('input', {
-                type: 'checkbox', checked: h[key] === true || null, disabled: dis,
-                onchange: (e) => { if (e.target.checked) h[key] = true; else delete h[key]; hkDirtied(); },
-            }),
-            el('span', { class: 'settings-box' })),
-        el('span', { class: 'cmd-field-label', text: label })));
+        }} />`);
+    const bool = (key, label, note) => hkField(fk(key), null, note, html`<label class="hk-check">
+        <span class="settings-check">
+            <input type="checkbox" checked=${h[key] === true} disabled=${dis}
+                onChange=${(e) => { if (e.target.checked) h[key] = true; else delete h[key]; hkDirtied(); }} />
+            <span class="settings-box"></span>
+        </span>
+        <span class="cmd-field-label">${label}</span>
+    </label>`);
+    const inline = (key, ...kids) => html`<div key=${fk(key)} class="hk-inline">${kids}</div>`;
 
+    const fields = [];
     const more = [];
     more.push(str('statusMessage', 'Status message', { mono: false, ph: 'shown on the spinner while it runs' }));
     if (tool) {
@@ -540,46 +566,43 @@ function hkHook(ev, g, h, hi, editable, problems, removeGroup) {
 
     switch (h.type) {
         case 'command':
-            card.append(str('command', 'Command', { area: true, required: true, ph: '$CLAUDE_PROJECT_DIR/.claude/hooks/check.sh',
+            fields.push(str('command', 'Command', { area: true, required: true, ph: '$CLAUDE_PROJECT_DIR/.claude/hooks/check.sh',
                 note: 'Run by the shell. The event arrives as JSON on stdin; exit 2 blocks where the event allows it.' }));
-            card.append(el('div', { class: 'hk-inline' }, timeout(),
-                bool('async', 'Run in the background', null)));
+            fields.push(inline('inline', timeout(), bool('async', 'Run in the background', null)));
             more.push(str('shell', 'Shell', { ph: 'bash' }));
             more.push(bool('asyncRewake', 'In the background, but wake Claude if it exits 2', null));
             break;
         case 'http':
-            card.append(str('url', 'URL', { required: true, ph: 'http://127.0.0.1:8080/hook',
+            fields.push(str('url', 'URL', { required: true, ph: 'http://127.0.0.1:8080/hook',
                 note: 'The event is POSTed as JSON; the response body is read as the hook’s output.' }));
-            card.append(timeout());
-            card.append(hkHeaders(h, dis));
-            more.push(hkField('Variables headers may use', 'Comma-separated. Only these are substituted into a header.',
-                el('input', {
-                    class: 'settings-text is-long cmd-mono', type: 'text', spellcheck: 'false', disabled: dis,
-                    value: Array.isArray(h.allowedEnvVars) ? h.allowedEnvVars.join(', ') : '',
-                    placeholder: 'API_TOKEN',
-                    oninput: (e) => {
+            fields.push(timeout());
+            fields.push(hkHeaders(h, dis, fk('headers')));
+            more.push(hkField(fk('allowedEnvVars'), 'Variables headers may use',
+                'Comma-separated. Only these are substituted into a header.',
+                html`<input class="settings-text is-long cmd-mono" type="text" spellcheck=${false} disabled=${dis}
+                    defaultValue=${Array.isArray(h.allowedEnvVars) ? h.allowedEnvVars.join(', ') : ''}
+                    placeholder="API_TOKEN"
+                    onInput=${(e) => {
                         const list = e.target.value.split(',').map(x => x.trim()).filter(Boolean);
                         if (list.length) h.allowedEnvVars = list; else delete h.allowedEnvVars;
                         hkDirtied();
-                    },
-                })));
+                    }} />`));
             break;
         case 'prompt':
         case 'agent':
-            card.append(str('prompt', 'Prompt', { area: true, required: true, mono: false,
+            fields.push(str('prompt', 'Prompt', { area: true, required: true, mono: false,
                 ph: 'Is this safe to run? $ARGUMENTS',
                 note: h.type === 'agent'
                     ? 'A subagent with tools answers it. $ARGUMENTS is the event’s JSON.'
                     : 'One model call answers it. $ARGUMENTS is the event’s JSON.' }));
-            card.append(el('div', { class: 'hk-inline' }, timeout(),
-                str('model', 'Model', { ph: 'default' })));
+            fields.push(inline('inline', timeout(), str('model', 'Model', { ph: 'default' })));
             break;
         case 'mcp_tool':
-            card.append(el('div', { class: 'hk-inline' },
+            fields.push(inline('inline',
                 str('server', 'Server', { required: true, ph: 'memory' }),
                 str('tool', 'Tool', { required: true, ph: 'store' })));
-            card.append(hkInputField(h, dis));
-            card.append(timeout());
+            fields.push(hkInputField(h, dis, fk('input')));
+            fields.push(timeout());
             break;
         default:
             break;
@@ -588,14 +611,27 @@ function hkHook(ev, g, h, hi, editable, problems, removeGroup) {
     // Opened by default when anything under it is set, so a field the file has
     // is never hidden behind a fold nobody knows to open.
     const anyMore = ['statusMessage', 'if', 'shell', 'asyncRewake', 'once', 'allowedEnvVars'].some(k => k in h);
-    card.append(el('details', { class: 'hk-more', open: anyMore || null },
-        el('summary', { text: 'More' }), ...more));
     const extra = hkExtraKeys(h);
-    if (extra.length) {
-        card.append(el('p', { class: 'cmd-field-note' },
-            'Also in the file, kept as it is: ', ...extra.flatMap((k, n) => [n ? ', ' : '', el('code', { text: k })])));
-    }
-    return card;
+    return html`<div key=${h._k} class=${cls}>
+        ${head}
+        ${marks}
+        ${fields}
+        <${HkMore} key=${fk('more')} open=${anyMore}>${more}</${HkMore}>
+        ${extra.length
+            ? html`<p key="extra" class="cmd-field-note">${'Also in the file, kept as it is: '}${
+                extra.flatMap((k, n) => [n ? ', ' : '', html`<code>${k}</code>`])}</p>`
+            : null}
+    </div>`;
+}
+
+/**
+ * The More fold. Whether it starts open is decided once, when it first draws:
+ * after that it is the reader's, and clearing the last field under it while
+ * typing there must not shut it on them.
+ */
+function HkMore({ open, children }) {
+    const [initial] = useState(open);
+    return html`<details class="hk-more" open=${initial}><summary>More</summary>${children}</details>`;
 }
 
 /** Keys on a hook this editor draws no control for — carried, and said. */
@@ -611,56 +647,49 @@ function hkSet(h, key, value, required) {
     else h[key] = value;
 }
 
-function hkField(label, note, control) {
-    return el('div', { class: 'cmd-field hk-field' },
-        label ? el('div', { class: 'cmd-field-head' }, el('span', { class: 'cmd-field-label', text: label })) : null,
-        control,
-        note ? el('p', { class: 'cmd-field-note', text: note }) : null);
+function hkField(key, label, note, control) {
+    return html`<div key=${key} class="cmd-field hk-field">
+        ${label ? html`<div class="cmd-field-head"><span class="cmd-field-label">${label}</span></div>` : null}
+        ${control}
+        ${note ? html`<p class="cmd-field-note">${note}</p>` : null}
+    </div>`;
 }
 
 /** HTTP headers, name and value — the env editor's rows, on a hook. */
-function hkHeaders(h, dis) {
+function hkHeaders(h, dis, key) {
     const headers = isPlainObj(h.headers) ? h.headers : {};
     const names = Object.keys(headers);
-    return hkField('Headers', 'A value may name a variable as $NAME, if it is listed under More.',
-        el('div', { class: 'cfg-list cmd-env' },
-            names.map(k => el('div', { class: 'cmd-env-row' },
-                el('input', {
-                    class: 'settings-text cmd-mono cmd-env-name', type: 'text', spellcheck: 'false',
-                    value: k, disabled: dis,
-                    onchange: (e) => {
+    return hkField(key, 'Headers', 'A value may name a variable as $NAME, if it is listed under More.',
+        html`<div class="cfg-list cmd-env">
+            ${names.map(k => html`<div key=${k} class="cmd-env-row">
+                <input class="settings-text cmd-mono cmd-env-name" type="text" spellcheck=${false}
+                    defaultValue=${k} disabled=${dis}
+                    onChange=${(e) => {
                         const next = e.target.value.trim();
                         if (next === k) return;
                         const was = headers[k];
                         delete headers[k];
                         if (next) headers[next] = was;
                         hkChanged();
-                    },
-                }),
-                el('input', {
-                    class: 'settings-text cmd-env-value cmd-mono', type: 'text', spellcheck: 'false',
-                    value: headers[k], disabled: dis,
-                    oninput: (e) => { headers[k] = e.target.value; hkDirtied(); },
-                }),
-                el('button', {
-                    class: 'cfg-list-x', type: 'button', disabled: dis, title: 'Remove', 'aria-label': `Remove ${k}`,
-                    onclick: () => {
+                    }} />
+                <input class="settings-text cmd-env-value cmd-mono" type="text" spellcheck=${false}
+                    defaultValue=${headers[k]} disabled=${dis}
+                    onInput=${(e) => { headers[k] = e.target.value; hkDirtied(); }} />
+                <button class="cfg-list-x" type="button" disabled=${dis} title="Remove" aria-label=${`Remove ${k}`}
+                    onClick=${() => {
                         delete headers[k];
                         if (!Object.keys(headers).length) delete h.headers;
                         hkChanged();
-                    },
-                }, '×'))),
-            dis ? null : el('div', { class: 'cfg-list-add' },
-                el('button', {
-                    class: 'linkish', type: 'button',
-                    onclick: () => {
-                        if (!isPlainObj(h.headers)) h.headers = {};
-                        let name = 'Authorization';
-                        for (let n = 2; hasOwn(h.headers, name); n += 1) name = `X-Header-${n}`;
-                        h.headers[name] = '';
-                        hkChanged();
-                    },
-                }, 'Add a header'))));
+                    }}>×</button>
+            </div>`)}
+            ${dis ? null : html`<div class="cfg-list-add"><button class="linkish" type="button" onClick=${() => {
+                if (!isPlainObj(h.headers)) h.headers = {};
+                let name = 'Authorization';
+                for (let n = 2; hasOwn(h.headers, name); n += 1) name = `X-Header-${n}`;
+                h.headers[name] = '';
+                hkChanged();
+            }}>Add a header</button></div>`}
+        </div>`);
 }
 
 /**
@@ -668,79 +697,86 @@ function hkHeaders(h, dis) {
  *
  * `_jsonError` is how a half-typed object stops Save rather than being lost:
  * the last good value stays on the hook, and hkProblems() refuses to send it
- * while the box says something else.
+ * while the box says something else. The box is uncontrolled, so the text that
+ * does not parse stays in it; the note under it is drawn from `_jsonError`.
  */
 function hkJsonBox(text, dis, apply, h, minRows = 2) {
-    const note = el('p', { class: 'cmd-field-bad', hidden: true });
-    const ta = el('textarea', {
-        class: 'cmd-area hk-json', spellcheck: 'false', rows: minRows, disabled: dis,
-        onfocus: (e) => grow(e.target, 40, 320),
-        oninput: (e) => {
-            grow(e.target, 40, 320);
-            try {
-                apply(JSON.parse(e.target.value || 'null'));
-                delete h._jsonError;
-                note.hidden = true;
-            } catch (err) {
-                h._jsonError = `not valid JSON — ${err.message}`;
-                note.textContent = h._jsonError;
-                note.hidden = false;
-            }
-            hkDirtied();
-        },
-    }, text);
-    return [ta, note];
+    return html`<div>
+        <textarea class="cmd-area hk-json" spellcheck=${false} rows=${minRows} disabled=${dis}
+            defaultValue=${text}
+            onFocus=${(e) => grow(e.target, 40, 320)}
+            onInput=${(e) => {
+                grow(e.target, 40, 320);
+                try {
+                    apply(JSON.parse(e.target.value || 'null'));
+                    delete h._jsonError;
+                } catch (err) {
+                    h._jsonError = `not valid JSON — ${err.message}`;
+                }
+                hkDirtied();
+            }}></textarea>
+        <p class="cmd-field-bad" hidden=${!h._jsonError}>${h._jsonError || ''}</p>
+    </div>`;
 }
 
-function hkInputField(h, dis) {
-    const [ta, note] = hkJsonBox(h.input === undefined ? '' : JSON.stringify(h.input, null, 2), dis, (v) => {
-        if (v === null) { delete h.input; return; }
-        if (!isPlainObj(v)) throw new Error('the input has to be an object');
-        h.input = v;
-    }, h);
-    return hkField('Input', 'The tool’s arguments as a JSON object. ${tool_input.file_path} and the like are filled in from the event.',
-        el('div', null, ta, note));
+function hkInputField(h, dis, key) {
+    return hkField(key, 'Input', 'The tool’s arguments as a JSON object. ${tool_input.file_path} and the like are filled in from the event.',
+        hkJsonBox(h.input === undefined ? '' : JSON.stringify(h.input, null, 2), dis, (v) => {
+            if (v === null) { delete h.input; return; }
+            if (!isPlainObj(v)) throw new Error('the input has to be an object');
+            h.input = v;
+        }, h));
 }
 
 /** A hook of a type this page does not know: the whole thing, as JSON. */
-function hkJsonField(h, g, hi, dis) {
+function hkJsonField(h, dis) {
     const { _k, _script, _jsonError, ...plain } = h;
-    const [ta, note] = hkJsonBox(JSON.stringify(plain, null, 2), dis, (v) => {
-        if (!isPlainObj(v)) throw new Error('a hook has to be an object');
-        for (const k of Object.keys(h)) if (k !== '_k') delete h[k];
-        Object.assign(h, v, { _script: null });
-    }, h, 4);
-    return hkField('As JSON', 'A type this page has no form for. It is kept exactly as written.',
-        el('div', null, ta, note));
+    // Keyed without the type: retyping it here, to another type this page does
+    // not know, must not remount the box being typed into.
+    return hkField(`${h._k}:json`, 'As JSON', 'A type this page has no form for. It is kept exactly as written.',
+        hkJsonBox(JSON.stringify(plain, null, 2), dis, (v) => {
+            if (!isPlainObj(v)) throw new Error('a hook has to be an object');
+            for (const k of Object.keys(h)) if (k !== '_k') delete h[k];
+            Object.assign(h, v, { _script: null });
+        }, h, 4));
 }
 
-/** Add an event: the ones not in this file yet, and a free name for the rest. */
+/**
+ * Add an event: the ones not in this file yet, and a free name for the rest.
+ *
+ * The select is controlled on the placeholder, and every choice ends in a
+ * redraw — so it snaps back to "Add a hook on…" whatever happened, a cancelled
+ * prompt included.
+ */
 function hkAddEvent(draft) {
     const have = new Set(draft.map(e => e.event));
     const events = (claudeState().data.hookEvents || []).filter(e => !have.has(e.name));
     const add = (name) => {
-        if (!name) return;
-        if (have.has(name)) { toast(`${name} is already here — add a matcher to it instead.`, 'warn'); return; }
+        if (!name) return false;
+        if (have.has(name)) { toast(`${name} is already here — add a matcher to it instead.`, 'warn'); return false; }
         draft.push({ _k: hkKey(), event: name, groups: [hkNewGroup()] });
         // Open, or the event you just added would arrive folded shut.
         setFold(`hook:${name}`, true);
         hkChanged();
+        return true;
     };
-    return el('div', { class: 'cfg-list-add hk-add' },
-        el('select', {
-            class: 'settings-select',
-            onchange: (e) => {
+    return html`<div key="add" class="cfg-list-add hk-add">
+        <select class="settings-select" value=""
+            onChange=${(e) => {
                 const v = e.target.value;
+                let done;
                 if (v === '__other') {
                     // eslint-disable-next-line no-alert
                     const name = (window.prompt('The event’s name, exactly as Claude Code spells it:') || '').trim();
-                    add(name);
-                } else add(v);
-            },
-        },
-        el('option', { value: '', text: 'Add a hook on…', selected: true }),
-        events.map(e => el('option', { value: e.name, text: `${e.name} — ${e.blurb.replace(/`/g, '')}` })),
-        el('option', { value: '__other', text: 'Another event…' })));
+                    done = add(name);
+                } else done = add(v);
+                if (!done) renderSettings();
+            }}>
+            <option key="" value="">Add a hook on…</option>
+            ${events.map(e => html`<option key=${e.name} value=${e.name}>${`${e.name} — ${e.blurb.replace(/`/g, '')}`}</option>`)}
+            <option key="__other" value="__other">Another event…</option>
+        </select>
+    </div>`;
 }
 
 /**
@@ -753,78 +789,67 @@ function hkAddEvent(draft) {
 function hkElsewhere() {
     const s = claudeState();
     const rows = (s.data.hooks || []).filter(h => h.scope !== s.scope);
-    if (!rows.length) return el('span', { hidden: true });
+    if (!rows.length) return null;
     const open = isOpen('hook:elsewhere', true);
-    return el('div', { class: 'cfg-inherit' },
-        el('div', { class: 'cfg-inherit-head' },
-            foldLabel('hook:elsewhere', open,
-                `${rows.length} more ${rows.length === 1 ? 'hook runs' : 'hooks run'} from other files — these add to yours`,
-                'set-fold is-quiet')),
-        !open ? null : rows.map(h => el('div', { class: 'cfg-inherit-row hk-inherit-row' },
-            el('span', { class: 'hk-inherit-scope', text: CLAUDE_SCOPES[h.scope] || h.scope }),
-            ` ${h.event}${h.matcher ? ` · ${h.matcher}` : ''} → ${h.target || h.type || '—'}`,
-            h.script && !h.script.exists
-                ? el('span', { class: 'cfg-script bad', title: h.script.file }, ' script missing')
-                : null)));
+    return html`<div key="elsewhere" class="cfg-inherit">
+        <div class="cfg-inherit-head">${foldLabelV('hook:elsewhere', open,
+            `${rows.length} more ${rows.length === 1 ? 'hook runs' : 'hooks run'} from other files — these add to yours`,
+            'set-fold is-quiet')}</div>
+        ${!open ? null : rows.map((h, n) => html`<div key=${n} class="cfg-inherit-row hk-inherit-row">
+            <span class="hk-inherit-scope">${CLAUDE_SCOPES[h.scope] || h.scope}</span>${
+                ` ${h.event}${h.matcher ? ` · ${h.matcher}` : ''} → ${h.target || h.type || '—'}`}${
+                h.script && !h.script.exists
+                    ? html`<span class="cfg-script bad" title=${h.script.file}> script missing</span>`
+                    : null}
+        </div>`)}
+    </div>`;
 }
 
-function hkPaintFoot(foot) {
+/** The footer: where the draft stands, and Save — or the review Save opens. */
+function hkFoot() {
     const s = claudeState();
     const target = claudeTargetRow();
     const editable = !!target && target.writable && !target.symlink;
     const problems = s.hooksProblems;
-    const nodes = [];
 
     if (s.hooksReview && !problems) {
         const { added, removed, reordered } = hkChanges();
-        const line = (r) => el('li', null,
-            el('code', { text: `${r.event}${r.matcher ? ` · ${r.matcher}` : ''}` }),
-            ' → ', el('code', { class: 'hk-review-target', text: hkTarget(r.hook) }));
-        nodes.push(el('div', { class: 'hk-review' },
-            el('div', { class: 'cfg-stale-head' },
-                `Write these to ${shortPath(target.file)}?`),
-            added.length
-                ? el('div', null, el('div', { class: 'hk-review-lede', text: 'Will run' }),
-                    el('ul', null, added.map(line)))
-                : null,
-            removed.length
-                ? el('div', null, el('div', { class: 'hk-review-lede', text: 'Will stop running' }),
-                    el('ul', null, removed.map(line)))
-                : null,
-            reordered ? el('p', { class: 'cmd-field-note', text: 'Only the order changes.' }) : null,
-            !added.length && !removed.length && !reordered
-                ? el('p', { class: 'cmd-field-note', text: 'Nothing that runs changes.' })
-                : null,
-            el('p', { class: 'cmd-field-note' }, claudeReachLine()),
-            el('div', { class: 'hk-actions' },
-                el('button', {
-                    class: 'btn primary small', type: 'button', disabled: s.saving || null,
-                    onclick: () => saveClaudeHooks(),
-                }, 'Write the hooks'),
-                el('button', {
-                    class: 'btn quiet small', type: 'button',
-                    onclick: () => { s.hooksReview = false; hkPaintFoot(foot); },
-                }, 'Back to editing'))));
-        foot.classList.add('is-review');
-        foot.replaceChildren(...nodes);
-        return;
+        const line = (r, n) => html`<li key=${n}><code>${`${r.event}${r.matcher ? ` · ${r.matcher}` : ''}`}</code>${
+            ' → '}<code class="hk-review-target">${hkTarget(r.hook)}</code></li>`;
+        return html`<div key="foot" class="cmd-foot hk-foot is-review">
+            <div class="hk-review">
+                <div class="cfg-stale-head">${`Write these to ${shortPath(target.file)}?`}</div>
+                ${added.length
+                    ? html`<div><div class="hk-review-lede">Will run</div><ul>${added.map(line)}</ul></div>`
+                    : null}
+                ${removed.length
+                    ? html`<div><div class="hk-review-lede">Will stop running</div><ul>${removed.map(line)}</ul></div>`
+                    : null}
+                ${reordered ? html`<p class="cmd-field-note">Only the order changes.</p>` : null}
+                ${!added.length && !removed.length && !reordered
+                    ? html`<p class="cmd-field-note">Nothing that runs changes.</p>`
+                    : null}
+                <p class="cmd-field-note">${claudeReachLine()}</p>
+                <div class="hk-actions">
+                    <button class="btn primary small" type="button" disabled=${!!s.saving}
+                        onClick=${() => saveClaudeHooks()}>Write the hooks</button>
+                    <button class="btn quiet small" type="button"
+                        onClick=${() => { s.hooksReview = false; hkRedraw(); }}>Back to editing</button>
+                </div>
+            </div>
+        </div>`;
     }
 
-    foot.classList.remove('is-review');
-    foot.replaceChildren(
-        el('span', { class: `cmd-foot-note${problems ? ' bad' : ''}` },
-            problems
-                ? `${problems.length} ${problems.length === 1 ? 'problem' : 'problems'} — fix ${problems.length === 1 ? 'it' : 'them'} to save.`
-                : (s.hooksDirty ? 'Edited — not saved.' : 'Matches the file on disk.')),
-        el('div', { class: 'cmd-card-spacer' }),
-        el('button', {
-            class: 'btn quiet small', type: 'button', disabled: !s.hooksDirty || null,
-            onclick: () => { hkClearDraft(s); renderSettings(); },
-        }, 'Revert'),
-        el('button', {
-            class: 'btn primary small', type: 'button',
-            disabled: !editable || !s.hooksDirty || s.saving || null,
-            onclick: () => {
+    return html`<div key="foot" class="cmd-foot hk-foot">
+        <span class=${`cmd-foot-note${problems ? ' bad' : ''}`}>${problems
+            ? `${problems.length} ${problems.length === 1 ? 'problem' : 'problems'} — fix ${problems.length === 1 ? 'it' : 'them'} to save.`
+            : (s.hooksDirty ? 'Edited — not saved.' : 'Matches the file on disk.')}</span>
+        <div class="cmd-card-spacer"></div>
+        <button class="btn quiet small" type="button" disabled=${!s.hooksDirty}
+            onClick=${() => { hkClearDraft(s); renderSettings(); }}>Revert</button>
+        <button class="btn primary small" type="button"
+            disabled=${!editable || !s.hooksDirty || !!s.saving}
+            onClick=${() => {
                 if (hkIsStale()) {
                     toast('The hooks changed on disk — choose above which to keep first.', 'warn');
                     return;
@@ -832,13 +857,13 @@ function hkPaintFoot(foot) {
                 const found = hkProblems();
                 if (found.length) {
                     s.hooksProblems = found;
-                    renderSettings();
+                    hkRedraw();
                     return;
                 }
                 s.hooksReview = true;
-                hkPaintFoot(foot);
-            },
-        }, 'Review and save'));
+                hkRedraw();
+            }}>Review and save</button>
+    </div>`;
 }
 
 /** The sentence claudeReachNote() says, for the review. */
