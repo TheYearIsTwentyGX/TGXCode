@@ -11,6 +11,13 @@
 // that way: a top-level `const X = someImport(...)` runs before app.js's body
 // and throws in the temporal dead zone, and only loading the page shows it.
 //
+// The line under the title, `#conv-sub`, is drawn with Preact (renderHeader
+// here, renderAgentHeader in subagents.js — both, because they share the
+// container). It is redrawn on every sessions and PR push, and a rebuild took
+// the PR link out from under a pointer on its way to it. Everything else in this
+// file still builds DOM with el(): the log's rows are detached and reattached by
+// window.js, which is not something Preact can own.
+//
 // One exception: SESSION_VIEW and AGENT_VIEW capture `state.*` at load. That is
 // safe because state.js imports nothing, so it has always finished evaluating
 // before this file runs. Do not extend the exception to any other import.
@@ -20,7 +27,9 @@ import { BOOT_PREFS } from '../boot.js';
 import { loadChannels } from '../channels.js';
 import { dom, el, toast } from '../dom.js';
 import { ago, clip, clockOf, dateOf, dur, shortModel } from '../format.js';
-import { icon, PR_ICON } from '../icons.js';
+import { PR_ICON } from '../icons.js';
+import { html, render } from '../vendor/preact.js';
+import { icon } from '../boards/parts.js';
 import * as keys from '../keys.js';
 import { cvStaleFor } from '../quota.js';
 import { state } from '../state.js';
@@ -411,38 +420,30 @@ export function renderHeader() {
     const s = state.current;
     dom.convTitle.textContent = s.title;
 
+    // Keyed by what each bit is, so a PR that appears or goes does not shift
+    // the nodes after it into new ones.
     const bits = [];
-    bits.push(el('span', {}, s.projectName));
+    const sep = (key, mark = '·') => html`<span key=${`${key}-sep`} class="sep">${mark}</span>`;
+    bits.push(html`<span key="project">${s.projectName}</span>`);
     if (s.worktree) {
-        bits.push(el('span', { class: 'sep' }, '/'));
-        bits.push(el('span', { class: 'branch' }, s.worktree.name));
+        bits.push(sep('branch', '/'), html`<span key="branch" class="branch">${s.worktree.name}</span>`);
     } else if (s.gitBranch && s.gitBranch !== 'HEAD') {
-        bits.push(el('span', { class: 'sep' }, '/'));
-        bits.push(el('span', { class: 'branch' }, s.gitBranch));
+        bits.push(sep('branch', '/'), html`<span key="branch" class="branch">${s.gitBranch}</span>`);
     }
-    if (s.model) {
-        bits.push(el('span', { class: 'sep' }, '·'));
-        bits.push(el('span', {}, shortModel(s.model)));
-    }
+    if (s.model) bits.push(sep('model'), html`<span key="model">${shortModel(s.model)}</span>`);
     // Only when this session's process predates the installed binary, which is
     // the case where a feature somebody just read about is not here yet.
     const oldClaude = cvStaleFor(s.sessionId);
     if (oldClaude) {
-        bits.push(el('span', { class: 'sep' }, '·'));
-        bits.push(el('span', { class: 'cv-old', title: `This session's process is Claude Code `
-            + `${oldClaude.version}; ${state.cv.installed} is installed. It moves over when the process restarts.` },
-        `Claude ${oldClaude.version} (older)`));
+        bits.push(sep('cv'), html`<span key="cv" class="cv-old" title=${`This session's process is Claude Code `
+            + `${oldClaude.version}; ${state.cv.installed} is installed. It moves over when the process restarts.`}
+            >${`Claude ${oldClaude.version} (older)`}</span>`);
     }
-    bits.push(el('span', { class: 'sep' }, '·'));
-    bits.push(el('span', {}, `${s.userMessages} turns`));
-    for (const pr of headerPrs()) {
-        bits.push(el('span', { class: 'sep' }, '·'));
-        bits.push(prLink(pr));
-    }
-    bits.push(el('span', { class: 'sep' }, '·'));
-    bits.push(el('span', { class: 'cwd', title: s.cwd }, clip(s.cwd, 42)));
+    bits.push(sep('turns'), html`<span key="turns">${`${s.userMessages} turns`}</span>`);
+    for (const pr of headerPrs()) bits.push(sep(pr.url), prLink(pr));
+    bits.push(sep('cwd'), html`<span key="cwd" class="cwd" title=${s.cwd}>${clip(s.cwd, 42)}</span>`);
 
-    dom.convSub.replaceChildren(...bits);
+    render(bits, dom.convSub);
     renderHeaderActions();
 }
 
@@ -496,10 +497,9 @@ function prLink(pr) {
             .filter(Boolean).join(' · '),
     ].filter(Boolean).join('\n');
 
-    return el('a', {
-        class: 'pr', 'data-status': status, title: tip,
-        href: pr.url, target: '_blank', rel: 'noreferrer',
-    }, icon(PR_ICON[status] || 'pr', 13), `PR #${pr.number}`);
+    return html`<a key=${pr.url} class="pr" data-status=${status} title=${tip}
+        href=${pr.url} target="_blank" rel="noreferrer"
+        >${icon(PR_ICON[status] || 'pr', 13)}${`PR #${pr.number}`}</a>`;
 }
 
 /**

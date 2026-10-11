@@ -1,12 +1,19 @@
 // Subagents: the list of them beside the transcript, and the pane that opens
 // one's own transcript through AGENT_VIEW.
 //
+// The header line a subagent shows, `#conv-sub`, is drawn with Preact — see
+// renderAgentHeader for why it has to be. The chip list (`fill(dom.agents, …)`)
+// and the subagent's log are still built with el(): the log is transcript rows,
+// which web/transcript/window.js detaches, and the chips go through motion.js's
+// fill, which needs nodes of its own to play in.
+//
 // This imports app.js and sibling modules here, which import it back. That is
 // safe only because nothing in this file reads an imported binding while the
 // module is evaluating — every use is inside a function called later. Keep it
 // that way: a top-level `const X = someImport(...)` runs before app.js's body
 // and throws in the temporal dead zone, and only loading the page shows it.
 
+import { html, render } from '../vendor/preact.js';
 import { get } from '../api.js';
 import { dom, el, toast } from '../dom.js';
 import { ago, clip, dur, shortModel } from '../format.js';
@@ -211,9 +218,14 @@ export function closeAgent() {
     rememberView();
 }
 
-// Writes the same `.conv-sub` as renderHeader, and deliberately without the
+// Draws the same `.conv-sub` as renderHeader, and deliberately without the
 // session's pull requests: a subagent did not raise them, and the line is about
 // the agent you are looking at. They come back when you leave it.
+//
+// With Preact, like renderHeader — the two take turns at one container, so both
+// have to render into it or Preact's record of what is there goes stale. Each
+// bit is keyed by what it says rather than where it falls, so the running
+// activity keeps its node as `loadAgents` refreshes it.
 function renderAgentHeader() {
     const a = agentRows().find(r => r.toolUseId === state.agent);
     if (!a) return;
@@ -224,19 +236,23 @@ function renderAgentHeader() {
 
     const stalled = a.status === 'running' && !a.warm && a.bytes > 0;
     const bits = [
-        el('span', { class: `agent-state ${a.status}` },
-            stalled ? 'stopped' : STATUS_WORD[a.status]),
+        html`<span key="state" class=${`agent-state ${a.status}`}>${
+            stalled ? 'stopped' : STATUS_WORD[a.status]}</span>`,
     ];
-    const push = (node) => { bits.push(el('span', { class: 'sep' }, '·'), node); };
-    if (a.agentType) push(el('span', { class: 'branch' }, a.agentType));
-    if (a.model) push(el('span', {}, shortModel(a.model)));
-    if (a.durationMs) push(el('span', {}, dur(a.durationMs)));
-    if (a.toolUses) push(el('span', {}, `${a.toolUses} tools`));
-    if (a.tokens) push(el('span', {}, `${a.tokens.toLocaleString()} tokens`));
-    if (a.status === 'running' && a.activity) {
-        push(el('span', { class: 'pulse' }, clip(a.activity, 40)));
+    const push = (key, node) => {
+        bits.push(html`<span key=${`${key}-sep`} class="sep">·</span>`, node);
+    };
+    if (a.agentType) push('type', html`<span key="type" class="branch">${a.agentType}</span>`);
+    if (a.model) push('model', html`<span key="model">${shortModel(a.model)}</span>`);
+    if (a.durationMs) push('dur', html`<span key="dur">${dur(a.durationMs)}</span>`);
+    if (a.toolUses) push('tools', html`<span key="tools">${`${a.toolUses} tools`}</span>`);
+    if (a.tokens) {
+        push('tokens', html`<span key="tokens">${`${a.tokens.toLocaleString()} tokens`}</span>`);
     }
-    dom.convSub.replaceChildren(...bits);
+    if (a.status === 'running' && a.activity) {
+        push('act', html`<span key="act" class="pulse">${clip(a.activity, 40)}</span>`);
+    }
+    render(bits, dom.convSub);
 }
 
 /**

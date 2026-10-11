@@ -1332,19 +1332,6 @@ async function primeWaiting() {
     } catch { /* the first permission event will start the count off anyway */ }
 }
 
-/**
- * A session's task list, as a bar — the DOM twin of web/boards/parts.js's
- * taskBar, for the checklist in web/transcript/checklist.js, which is still
- * built by hand.
- */
-export function taskBar(t) {
-    const pct = t.total ? Math.round((t.done / t.total) * 100) : 0;
-    return el('div', {
-        class: 'tbar', title: `${t.done} of ${t.total} tasks done`,
-        role: 'progressbar', 'aria-valuenow': t.done, 'aria-valuemin': 0, 'aria-valuemax': t.total,
-    }, el('span', { class: 'tbar-fill', style: `width:${pct}%` }));
-}
-
 // ── dashboard ────────────────────────────────────────────────────────────
 // The rail answers "what have I been talking to". This answers "what have I
 // left behind" — changes nobody committed, pull requests nobody merged — which

@@ -76,7 +76,7 @@ export function stalledBadge() {
         >stalled</span>`;
 }
 
-/** A session's task list, as a bar. app.js keeps the DOM twin for the checklist. */
+/** A session's task list, as a bar. The boards' cards and the checklist column. */
 export function taskBar(t) {
     const pct = t.total ? Math.round((t.done / t.total) * 100) : 0;
     return html`<div class="tbar" title=${`${t.done} of ${t.total} tasks done`}

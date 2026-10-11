@@ -219,6 +219,9 @@ export const state = {
     // starts folded whatever its status, so absence means folded rather than
     // "not decided yet".
     taskOpen: new Map(),      // toolUseId -> bool
+    // Tasks whose Start is on the wire, so the button says "Starting" wherever
+    // it is drawn and a second click does not start a second session.
+    taskStarting: new Set(),  // toolUseId
     // Whether the aside is showing at all. A property of the window rather than
     // of a session, like the terminal pane's height — you either want these in
     // view while you work or you do not.
