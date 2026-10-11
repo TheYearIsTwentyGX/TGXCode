@@ -1,12 +1,39 @@
 // A blocked turn: the permission card, the plan pane and the question dock,
 // and sending the answer back to the bridge.
 //
+// **The question dock and the plan footer are drawn with Preact.** Both used to
+// be emptied and built again on every redraw, which threw away whatever you had
+// half done in them — picked options, a sentence typed into Other, a note to a
+// plan, the focus, a click whose mouseup landed on a button that was no longer in
+// the document. The dock dodged that with a "keep" check and a `dataset.request`
+// on the node; now a redraw of the same ask is a diff, and the dock is keyed by
+// requestId, so only a *different* question starts it fresh. web/rail.js has the
+// pattern and the reasons.
+//
+// What moved into `state` so no Preact-owned node is edited by hand:
+// `askDockFor` (which question is mounted — was `dataset.request`), `askPending`
+// (an answer is in flight, so the buttons draw disabled — was a loop setting
+// `.disabled`), and `planFeedback` (the plan's feedback box is open). The answers
+// themselves are the dock's own hook state: nothing outside it reads them until
+// it sends them. The containers — `#ask-dock`, `#plan-pane` — are markup, not
+// Preact's, so their `hidden`, `aria-label` and `dataset.pending` are still set
+// here directly, and web/motion.js animates them.
+//
+// Order matters when the dock opens: render, then `grow` (which unhides it and
+// measures what it holds), then focus — an element still `hidden` takes no focus.
+//
+// **The permission card stays `el()`.** It is a row of the transcript log, and
+// web/transcript/window.js moves the log's children about; it is built once per
+// request and never redrawn in place, so a diff would buy it nothing. The plan
+// document stays rendered markdown (`innerHTML`), outside the footer's container.
+//
 // This imports app.js and sibling modules here, which import it back. That is
 // safe only because nothing in this file reads an imported binding while the
 // module is evaluating — every use is inside a function called later. Keep it
 // that way: a top-level `const X = someImport(...)` runs before app.js's body
 // and throws in the temporal dead zone, and only loading the page shows it.
 
+import { html, render, useLayoutEffect, useRef, useState } from '../vendor/preact.js';
 import { post } from '../api.js';
 import { dom, el, toast } from '../dom.js';
 import { clip } from '../format.js';
@@ -109,8 +136,9 @@ export function refreshAsk(runnerAsk) {
     const same = ask && state.ask && ask.requestId === state.ask.requestId;
     // Redraw on any change, and also when the surface should be up but is not —
     // coming back from a subagent leaves the pane without one. Never otherwise:
-    // this runs on every status tick and every tail, and rebuilding the question
-    // dock would throw away answers that are half typed.
+    // this runs on every status tick and every tail. The dock and the plan footer
+    // would survive a redraw now, but the plan document, its scroll and the
+    // focus rules around them are cheaper never to replay.
     if (!same || (ask && !askShowing())) {
         state.ask = ask;
         renderAsk();
@@ -129,21 +157,6 @@ function askRoot() {
     return liveCard();
 }
 
-/**
- * The buttons that answer the ask, which is narrower than the element carrying
- * it. The plan view's chrome — Set aside, and the bar that brings the plan back
- * — lives in the same section as the answer, and is not an answer: it says
- * nothing to the bridge and stays live even while an answer is in flight.
- *
- * Disabling by askRoot() instead left both of them dead from the first answered
- * plan onwards, since only the footer is rebuilt for the next one. That is the
- * bug this exists for.
- */
-function askControls() {
-    if (state.ask && state.ask.kind === 'plan') return dom.planFoot;
-    return askRoot();
-}
-
 /** Show, replace or clear whatever the session is blocked on. */
 export function renderAsk() {
     const ask = state.ask;
@@ -157,30 +170,40 @@ export function renderAsk() {
         if (kind === 'tool') old.remove();
         else exit(old, { kind: 'fade', speed: 'med', collapse: true });
     }
-    delete dom.askDock.dataset.pending;
-    delete dom.planPane.dataset.pending;
+    // An answer in flight belongs to its request; a redraw of that same request
+    // keeps it dimmed and its buttons dead, so it cannot be sent twice.
+    if (!ask || state.askPending !== ask.requestId) state.askPending = null;
+    if (!state.askPending) {
+        delete dom.askDock.dataset.pending;
+        delete dom.planPane.dataset.pending;
+    }
     delete dom.planPane.dataset.collapsed;
 
     // The dock's controls are where the answers live, so it is emptied only
     // once it is no longer the dock for the ask in hand. Going to read a
     // subagent hides it, and must not cost you the options you had picked.
-    const keep = ask && ask.kind === 'question' && dom.askDock.dataset.request === ask.requestId;
-    if (!keep) delete dom.askDock.dataset.request;
+    const keep = ask && ask.kind === 'question' && state.askDockFor === ask.requestId;
+    if (!keep) state.askDockFor = null;
     if (kind !== 'question') {
         // Shrunk with its last question still in it, and emptied once shut —
         // unless a question has been put back in it by then.
         grow(dom.askDock, false, { onGone: () => {
-            if (!dom.askDock.dataset.request) dom.askDock.replaceChildren();
+            if (!state.askDockFor) render(null, dom.askDock);
         } });
     }
     if (kind !== 'plan') present(dom.planPane, false, { kind: 'rise', speed: 'med' });
 
     if (!kind) return;
     if (kind === 'plan') renderPlanPane(ask);
-    else if (kind === 'question') {
-        if (keep) grow(dom.askDock, true);
-        else renderQuestionDock(ask);
-    } else renderToolCard(ask);
+    else if (kind === 'question') renderQuestionDock(ask, keep);
+    else renderToolCard(ask);
+}
+
+/** Redraw whichever Preact surface carries the ask — no motion, no focus. */
+function paintAsk() {
+    const kind = state.ask && state.ask.kind;
+    if (kind === 'plan') paintPlanFoot();
+    else if (kind === 'question') paintDock();
 }
 
 /** The permission card in the log, not counting one playing its way out. */
@@ -246,7 +269,7 @@ function renderToolCard(ask) {
  *
  * The pane itself is markup, not built here — it persists across renders, so
  * its listeners are wired once at the foot of web/app.js rather than stacked up
- * one deep per status tick.
+ * one deep per status tick. Only its footer is Preact's.
  */
 function renderPlanPane(ask) {
     dom.planDoc.innerHTML = renderMarkdown((ask.input && ask.input.plan) || ask.description || '');
@@ -255,51 +278,70 @@ function renderPlanPane(ask) {
     dom.planPane.dataset.readonly = ask.readOnly ? '1' : '';
     if (!ask.readOnly) delete dom.planPane.dataset.readonly;
 
-    // A new plan always arrives open. Setting one aside is a decision about
-    // that plan, and it should not carry over to the next one.
-    if (state.planFor !== ask.requestId) {
+    // A new plan always arrives open, at the top, with no note started. Setting
+    // one aside is a decision about that plan, and it should not carry over to
+    // the next one — but a redraw of the same plan must not undo where you were
+    // reading or what you were typing.
+    const fresh = state.planFor !== ask.requestId;
+    if (fresh) {
         state.planFor = ask.requestId;
         state.planAside = false;
+        state.planFeedback = null;
     }
 
-    dom.planFoot.replaceChildren(...(ask.readOnly
-        // Read here, answered there. Which window is not something that can be
-        // said — the registry names the process, not the bridge in front of it —
-        // so it says what is true and stops.
-        ? [el('div', { class: 'plan-elsewhere' },
-            el('span', { class: 'plan-elsewhere-mark' }, '◇'),
-            'This session is running in another window. The plan can be read here,'
-            + ' and has to be approved where it is running.')]
-        : [planButtons(), el('div', { class: 'perm-why' },
-            'Approving leaves plan mode and sets the permission mode under the composer.')]));
-
+    paintPlanFoot();
     present(dom.planPane, true, { kind: 'rise', speed: 'med' });
     closeFind();
-    setPlanAside(state.planAside);
-    if (!state.planAside) dom.planBody.scrollTop = 0;
+    setPlanAside(state.planAside, !dom.planFoot.contains(document.activeElement));
+    if (fresh && !state.planAside) dom.planBody.scrollTop = 0;
 }
 
-/** `auto` is the default because it is how these sessions run when you are
- *  sitting in front of one: Claude judges each call and asks when a call
- *  warrants it. Blanket-accepting edits is the deliberate second choice. */
-function planButtons() {
-    return el('div', { class: 'perm-btns' },
-        el('button', { class: 'perm-btn allow', type: 'button',
-            title: 'Start work, asking about calls that warrant it',
-            onclick: () => answerAsk({ decision: 'allow', mode: 'auto' }) },
-            'Approve ', el('kbd', {}, 'Y')),
-        el('button', { class: 'perm-btn', type: 'button',
-            title: 'Start work, and let file edits through without asking',
-            onclick: () => answerAsk({ decision: 'allow', mode: 'acceptEdits' }) },
-            'Approve — auto-accept edits ', el('kbd', {}, 'A')),
-        el('button', { class: 'perm-btn', type: 'button',
-            title: 'Approve the plan, with something to bear in mind while doing it',
-            onclick: () => openFeedback(dom.planFoot, 'approve') },
-            'Approve with feedback ', el('kbd', {}, 'F')),
-        el('button', { class: 'perm-btn deny', type: 'button',
-            onclick: () => openFeedback(dom.planFoot, 'reject') },
-            'Keep planning ', el('kbd', {}, 'N')),
-    );
+function paintPlanFoot() {
+    const ask = state.ask;
+    if (!ask || ask.kind !== 'plan') return;
+    render(planFoot(ask, state.askPending === ask.requestId, state.planFeedback), dom.planFoot);
+}
+
+/**
+ * The plan's footer: the answers, or the feedback box standing in for them.
+ *
+ * `auto` is the default because it is how these sessions run when you are
+ * sitting in front of one: Claude judges each call and asks when a call warrants
+ * it. Blanket-accepting edits is the deliberate second choice.
+ *
+ * The plan view's chrome — Set aside, and the bar that brings the plan back —
+ * lives in the same section as the answer and is not an answer: it says nothing
+ * to the bridge and stays live while an answer is in flight. That is why
+ * `pending` reaches these buttons and nothing else in the pane.
+ */
+function planFoot(ask, pending, feedback) {
+    // Read here, answered there. Which window is not something that can be said
+    // — the registry names the process, not the bridge in front of it — so it
+    // says what is true and stops.
+    if (ask.readOnly) {
+        return html`<div key="elsewhere" class="plan-elsewhere"><span class="plan-elsewhere-mark">◇</span>${
+            'This session is running in another window. The plan can be read here,'
+            + ' and has to be approved where it is running.'}</div>`;
+    }
+    return [
+        html`<div key="btns" class="perm-btns" hidden=${!!feedback}>
+            <button class="perm-btn allow" type="button" disabled=${pending}
+                title="Start work, asking about calls that warrant it"
+                onClick=${() => answerAsk({ decision: 'allow', mode: 'auto' })}>Approve <kbd>Y</kbd></button>
+            <button class="perm-btn" type="button" disabled=${pending}
+                title="Start work, and let file edits through without asking"
+                onClick=${() => answerAsk({ decision: 'allow', mode: 'acceptEdits' })}>Approve — auto-accept edits <kbd>A</kbd></button>
+            <button class="perm-btn" type="button" disabled=${pending}
+                title="Approve the plan, with something to bear in mind while doing it"
+                onClick=${() => openFeedback('approve')}>Approve with feedback <kbd>F</kbd></button>
+            <button class="perm-btn deny" type="button" disabled=${pending}
+                onClick=${() => openFeedback('reject')}>Keep planning <kbd>N</kbd></button>
+        </div>`,
+        feedback
+            ? html`<${Feedback} key=${`fb:${ask.requestId}:${feedback}`} how=${feedback} pending=${pending} />`
+            : null,
+        html`<div key="why" class="perm-why">Approving leaves plan mode and sets the permission mode under the composer.</div>`,
+    ];
 }
 
 /**
@@ -308,14 +350,18 @@ function planButtons() {
  * Set aside, the ask is still outstanding — this is not an answer and does not
  * tell the bridge anything. It is for the times the plan only makes sense
  * against what was said before it, which is directly underneath.
+ *
+ * @param {boolean} aside
+ * @param {boolean} [focus] false to leave the focus where it is — a redraw must
+ *   not pull it out of a note half typed in the footer
  */
-export function setPlanAside(aside) {
+export function setPlanAside(aside, focus = true) {
     state.planAside = aside;
     if (aside) dom.planPane.dataset.collapsed = '1';
     else delete dom.planPane.dataset.collapsed;
     // Focus so Y/A/F/N answer without a click — same rule as everywhere else,
     // never taking it from another window or from something being typed.
-    if (!aside && document.hasFocus() && !dom.input.matches(':focus')) {
+    if (focus && !aside && document.hasFocus() && !dom.input.matches(':focus')) {
         dom.planPane.focus({ preventScroll: true });
     }
 }
@@ -330,41 +376,37 @@ export function setPlanAside(aside) {
  * is usually just re-sent shorter. Approved, it is appended to the plan itself,
  * because a condition you attach to a yes is part of what was agreed to.
  *
- * It swaps the button row in place, wherever that row lives — the plan view's
- * pinned footer today — so the answer stays where the eye already is.
+ * It swaps the footer's button row for a box in place, so the answer stays where
+ * the eye already is. Whether it is open is `state.planFeedback`, which is also
+ * what the pane's keyboard handler in web/app.js asks.
  *
- * @param {HTMLElement} host the element holding the `.perm-btns` row
  * @param {'approve'|'reject'} how
  */
-export function openFeedback(host, how) {
-    const btns = host.querySelector('.perm-btns');
-    if (!btns || host.querySelector('.perm-feedback')) return;
+export function openFeedback(how) {
+    const ask = state.ask;
+    if (!ask || ask.kind !== 'plan' || ask.readOnly || state.planFeedback) return;
+    state.planFeedback = how;
+    paintPlanFoot();
+}
+
+/** The feedback box. Its text is the textarea's own: nothing reads it until it is sent. */
+function Feedback({ how, pending }) {
     const approving = how === 'approve';
+    const ta = useRef(null);
+    useLayoutEffect(() => { ta.current.focus(); }, []);
 
-    const ta = el('textarea', { class: 'perm-fb', rows: '3',
-        'aria-label': approving ? 'What should Claude bear in mind?'
-            : 'What should change about this plan?',
-        placeholder: approving
-            ? 'Anything to bear in mind? Enter to approve, Esc to go back.'
-            : 'What should change? Enter to send, Esc to go back.' });
-    const send = () => answerAsk(approving
-        ? { decision: 'allow', mode: 'auto', feedback: ta.value }
-        : { decision: 'deny', feedback: ta.value });
-    const cancel = () => {
-        box.remove();
-        btns.hidden = false;
-        const back = host.closest('[tabindex]') || host;
-        back.focus({ preventScroll: true });
+    const send = () => {
+        const feedback = ta.current.value;
+        answerAsk(approving
+            ? { decision: 'allow', mode: 'auto', feedback }
+            : { decision: 'deny', feedback });
     };
-
-    const box = el('div', { class: 'perm-feedback' }, ta,
-        el('div', { class: 'perm-btns' },
-            el('button', { class: `perm-btn ${approving ? 'allow' : 'deny'}`, type: 'button',
-                onclick: send },
-                approving ? 'Approve with this note ' : 'Send it back ', el('kbd', {}, '⏎')),
-            el('button', { class: 'perm-btn', type: 'button', onclick: cancel }, 'Cancel')));
-
-    ta.addEventListener('keydown', (e) => {
+    const cancel = () => {
+        state.planFeedback = null;
+        paintPlanFoot();
+        dom.planPane.focus({ preventScroll: true });
+    };
+    const onKeyDown = (e) => {
         if (e.key !== 'Escape' && !(e.key === 'Enter' && !e.shiftKey)) return;
         e.preventDefault();
         // The surface behind this box answers Escape too — by setting a plan
@@ -372,11 +414,61 @@ export function openFeedback(host, how) {
         // already removed the box the surface would have tested for.
         e.stopPropagation();
         if (e.key === 'Escape') cancel(); else send();
-    });
+    };
 
-    btns.hidden = true;
-    btns.after(box);
-    ta.focus();
+    return html`<div class="perm-feedback">
+        <textarea ref=${ta} class="perm-fb" rows="3" onKeyDown=${onKeyDown}
+            aria-label=${approving ? 'What should Claude bear in mind?' : 'What should change about this plan?'}
+            placeholder=${approving
+                ? 'Anything to bear in mind? Enter to approve, Esc to go back.'
+                : 'What should change? Enter to send, Esc to go back.'}></textarea>
+        <div class="perm-btns">
+            <button class=${`perm-btn ${approving ? 'allow' : 'deny'}`} type="button" disabled=${pending}
+                onClick=${send}>${approving ? 'Approve with this note ' : 'Send it back '}<kbd>⏎</kbd></button>
+            <button class="perm-btn" type="button" disabled=${pending} onClick=${cancel}>Cancel</button>
+        </div>
+    </div>`;
+}
+
+/**
+ * Open the dock for a question. `keep` is the same question coming back — from
+ * reading a subagent, say — and it is a redraw, not a new start: the answers are
+ * the mounted dock's state, and the key keeps that dock.
+ */
+function renderQuestionDock(ask, keep) {
+    state.askDockFor = ask.requestId;
+    paintDock();
+    grow(dom.askDock, true);
+    if (keep) return;
+    dom.askDock.setAttribute('aria-label', 'A question waiting for your answer');
+    focusQuestion();
+}
+
+function paintDock() {
+    const ask = state.ask;
+    if (!ask || state.askDockFor !== ask.requestId) return;
+    render(html`<${QuestionDock} key=${ask.requestId} ask=${ask}
+        pending=${state.askPending === ask.requestId} />`, dom.askDock);
+}
+
+/**
+ * Landing on the first control of the question on show makes the arrow keys pick
+ * options and Enter send, so a set of questions can be answered without the mouse.
+ */
+function focusQuestion() {
+    const first = dom.askDock.querySelector('.perm-q:not([hidden]) input');
+    if (first && document.hasFocus() && !dom.input.matches(':focus')) {
+        first.focus({ preventScroll: true });
+    }
+}
+
+/** One question's answer, as the string the model will be handed. Several
+ *  selections read back as a list, which is how they were asked. */
+function answerOf(q, a) {
+    const chosen = (q.options || []).filter((_, oi) => a.picks.includes(oi)).map(o => o.label || '');
+    const other = a.other ? a.text.trim() : '';
+    if (other) chosen.push(other);
+    return chosen.join(', ');
 }
 
 /**
@@ -387,197 +479,180 @@ export function openFeedback(host, how) {
  * exactly the moment not to have reinvented a form control. Every question has
  * an "Other" row, because the honest answer is often none of the above.
  *
- * All of them are built at once and all of them stay in the DOM — only the one
- * you are on is shown. That is what makes browsing free: the controls hold the
- * answers, so there is nothing to save and restore on the way past.
+ * All of them are drawn at once and all of them stay in the DOM — only the one
+ * you are on is shown. The answers are this component's state, one entry per
+ * question, and the controls are drawn from it.
  */
-function renderQuestionDock(ask) {
+function QuestionDock({ ask, pending }) {
     const questions = (ask.input && ask.input.questions) || [];
-    const readers = [];
-    const groups = [];
-    const dots = [];
+    const n = questions.length;
+    const [answers, setAnswers] = useState(() => questions.map(() => ({ picks: [], other: false, text: '' })));
+    const [at, setAt] = useState(0);
+    const [, bump] = useState(0);
+    // Read by the auto-advance timer, which outlives the render that set it.
+    const live = useRef({ at: 0, answers });
+    live.current.answers = answers;
     // A question moves you on once. Coming back to change an answer must not
     // fling you forward again — that is the moment you wanted to stay.
-    const advanced = new Set();
-    let at = 0;
+    const advanced = useRef(new Set());
+    const timers = useRef([]);
+    const body = useRef(null);
+    const landing = useRef(false);
 
-    const body = el('div', { class: 'ask-dock-body' }, el('div', { class: 'perm-qs' }));
-    const wrap = body.firstChild;
-
-    questions.forEach((q, qi) => {
-        const group = el('div', { class: 'perm-q', role: 'group',
-            'aria-label': q.question || q.header || `Question ${qi + 1}` });
-        group.append(el('div', { class: 'perm-q-head' },
-            q.header ? el('span', { class: 'perm-q-chip' }, q.header) : null,
-            el('span', { class: 'perm-q-text' }, q.question || '')));
-
-        const name = `perm-q${qi}`;
-        const type = q.multiSelect ? 'checkbox' : 'radio';
-        const picks = [];
-
-        for (const [oi, opt] of (q.options || []).entries()) {
-            const box = el('input', { type, name, id: `${name}-o${oi}`, value: opt.label || '' });
-            box.addEventListener('change', () => picked(qi, q));
-            picks.push({ box, label: opt.label || '' });
-            group.append(el('label', { class: 'perm-opt', for: `${name}-o${oi}` }, box,
-                el('span', { class: 'perm-opt-body' },
-                    el('span', { class: 'perm-opt-label' }, opt.label || ''),
-                    opt.description ? el('span', { class: 'perm-opt-desc' }, opt.description) : null,
-                    // Simply there. A preview is what you are comparing, and one
-                    // that only appears under the pointer cannot be compared.
-                    opt.preview ? el('pre', { class: 'perm-opt-preview' }, opt.preview) : null)));
-        }
-
-        const otherBox = el('input', { type, name, id: `${name}-other` });
-        const otherText = el('input', { type: 'text', class: 'perm-other', autocomplete: 'off',
-            'aria-label': `A different answer to "${q.question || ''}"`, placeholder: 'Something else…' });
-        // Choosing "Other" is the one pick that never moves you on: the answer
-        // is the sentence you are about to type, not the radio.
-        otherBox.addEventListener('change', update);
-        // Typing is choosing; making people also click the radio is a trap.
-        otherText.addEventListener('input', () => {
-            if (otherText.value.trim()) otherBox.checked = true;
-            update();
-        });
-        group.append(el('label', { class: 'perm-opt perm-opt-other', for: `${name}-other` }, otherBox,
-            el('span', { class: 'perm-opt-body' },
-                el('span', { class: 'perm-opt-label' }, 'Other'), otherText)));
-
-        // One question's answer, as the string the model will be handed. Several
-        // selections read back as a list, which is how they were asked.
-        readers.push(() => {
-            const chosen = picks.filter(p => p.box.checked).map(p => p.label);
-            const other = otherBox.checked ? otherText.value.trim() : '';
-            if (other) chosen.push(other);
-            return { question: q.question, answer: chosen.join(', ') };
-        });
-
-        groups.push(group);
-        wrap.append(group);
+    useLayoutEffect(() => () => timers.current.forEach(clearTimeout), []);
+    useLayoutEffect(() => {
+        if (!landing.current) return;
+        landing.current = false;
+        body.current.scrollTop = 0;
+        focusQuestion();
     });
 
-    // ── the answer row ───────────────────────────────────────────────────
-    const submit = el('button', { class: 'perm-btn allow', type: 'button',
-        onclick: () => answerAsk({ decision: 'allow', answers: collect() }) },
-        questions.length > 1 ? 'Send answers ' : 'Send answer ', el('kbd', {}, '⏎'));
-    const remain = el('span', { class: 'ask-remain' });
-    const btns = el('div', { class: 'perm-btns' }, submit,
-        el('button', { class: 'perm-btn deny', type: 'button',
-            title: 'Answer nothing and let Claude decide for itself',
-            onclick: () => answerAsk({ decision: 'deny' }) },
-            'Skip'),
-        remain);
-
-    // ── browsing ─────────────────────────────────────────────────────────
-    const prev = el('button', { class: 'ask-step', type: 'button',
-        'aria-label': 'The question before this one', onclick: () => show(at - 1) }, '‹');
-    const next = el('button', { class: 'ask-step', type: 'button',
-        'aria-label': 'The next question', onclick: () => show(at + 1) }, '›');
-    const count = el('span', { class: 'ask-nav-count' });
-    const dotWrap = el('div', { class: 'ask-dots' });
-    questions.forEach((q, qi) => {
-        const dot = el('button', { class: 'ask-dot', type: 'button',
-            title: q.header || clip(q.question || '', 60) || `Question ${qi + 1}`,
-            'aria-label': `Question ${qi + 1}: ${q.header || q.question || ''}`,
-            onclick: () => show(qi) });
-        dots.push(dot);
-        dotWrap.append(dot);
-    });
-    const nav = el('div', { class: 'ask-nav' }, prev, dotWrap, count, next);
+    const done = answers.filter((a, qi) => answerOf(questions[qi], a)).length;
+    // Claude asked all of them; answering some and leaving the rest to guesswork
+    // is the outcome this dock exists to avoid. Which ones are still open is on
+    // the dots and spelled out beside the button.
+    const complete = done === n;
 
     function show(i) {
-        if (i < 0 || i >= groups.length) return;
-        at = i;
-        groups.forEach((g, gi) => { g.hidden = gi !== i; });
-        body.scrollTop = 0;
-        update();
-        // Landing on the first control makes the arrow keys pick options and
-        // Enter send, so a set of questions can be answered without the mouse.
-        const first = groups[i].querySelector('input');
-        if (first && document.hasFocus() && !dom.input.matches(':focus')) {
-            first.focus({ preventScroll: true });
-        }
+        if (i < 0 || i >= n) return;
+        live.current.at = i;
+        landing.current = true;
+        setAt(i);
+        bump(x => x + 1);   // land again even when already there
     }
 
     /** The next question with no answer yet, wrapping — or -1 if there is none. */
     function nextOpen(from) {
-        for (let n = 1; n < readers.length; n++) {
-            const i = (from + n) % readers.length;
-            if (!readers[i]().answer) return i;
+        const list = live.current.answers;
+        for (let k = 1; k < n; k++) {
+            const i = (from + k) % n;
+            if (!answerOf(questions[i], list[i])) return i;
         }
         return -1;
     }
 
     function picked(qi, q) {
-        update();
-        if (q.multiSelect || advanced.has(qi)) return;
-        advanced.add(qi);
+        if (q.multiSelect || advanced.current.has(qi)) return;
+        advanced.current.add(qi);
         // Long enough that the option you chose is seen to be chosen before the
         // question changes under you — at half this it read as the question
         // being yanked away rather than as an answer landing.
-        setTimeout(() => {
-            if (at !== qi) return;
+        timers.current.push(setTimeout(() => {
+            if (live.current.at !== qi) return;
             const to = nextOpen(qi);
             if (to >= 0) show(to);
-        }, 450);
+        }, 450));
     }
 
     function collect() {
         const out = {};
-        for (const read of readers) {
-            const { question, answer } = read();
-            if (answer) out[question] = answer;
-        }
+        questions.forEach((q, qi) => {
+            const answer = answerOf(q, answers[qi]);
+            if (answer) out[q.question] = answer;
+        });
         return out;
     }
 
-    // Claude asked all of them; answering some and leaving the rest to guesswork
-    // is the outcome this dock exists to avoid. Which ones are still open is on
-    // the dots and spelled out beside the button — it used to be a tooltip on a
-    // disabled control, which is to say nowhere.
-    function update() {
-        const done = Object.keys(collect()).length;
-        submit.disabled = done !== readers.length;
-        dots.forEach((dot, di) => {
-            if (readers[di]().answer) dot.dataset.done = '1';
-            else delete dot.dataset.done;
-            dot.setAttribute('aria-current', di === at ? 'true' : 'false');
-        });
-        count.textContent = `${at + 1} of ${groups.length}`;
-        prev.disabled = at === 0;
-        next.disabled = at === groups.length - 1;
-        const left = readers.length - done;
-        remain.textContent = left ? `${left} still to answer` : '';
-    }
+    const send = () => answerAsk({ decision: 'allow', answers: collect() });
+    const setOne = (qi, fn) => setAnswers(list => list.map((a, i) => (i === qi ? fn(a) : a)));
 
-    const inner = el('div', { class: 'ask-dock-inner' },
-        el('div', { class: 'ask-dock-head' },
-            el('span', { class: 'perm-tool' }, 'Question'),
-            el('span', { class: 'perm-title' },
-                ask.agentId ? 'from a subagent' : 'waiting on you'),
-            el('span', { class: 'spacer' }),
-            questions.length > 1 ? nav : null),
-        body, btns);
-
-    inner.addEventListener('keydown', (e) => {
+    const onKeyDown = (e) => {
         if (e.ctrlKey || e.metaKey) return;
         if (e.key === 'Enter' && !e.shiftKey) {
-            if (submit.disabled) return;
+            if (pending || !complete) return;
             e.preventDefault();
-            submit.click();
+            send();
         // Plain arrows belong to the radio group under the cursor; the modifier
         // is what makes these about the set rather than the options.
         } else if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
             e.preventDefault();
             show(at + (e.key === 'ArrowRight' ? 1 : -1));
         }
-    });
+    };
 
-    dom.askDock.replaceChildren(inner);
-    dom.askDock.dataset.request = ask.requestId;
-    grow(dom.askDock, true);
-    dom.askDock.setAttribute('aria-label', 'A question waiting for your answer');
-    show(0);
+    const group = (q, qi) => {
+        const a = answers[qi];
+        const name = `perm-q${qi}`;
+        const type = q.multiSelect ? 'checkbox' : 'radio';
+        const options = (q.options || []).map((opt, oi) => {
+            const id = `${name}-o${oi}`;
+            const onChange = (e) => {
+                const on = e.currentTarget.checked;
+                if (q.multiSelect) {
+                    setOne(qi, x => ({ ...x,
+                        picks: on ? [...x.picks, oi].sort((l, r) => l - r) : x.picks.filter(p => p !== oi) }));
+                } else setOne(qi, x => ({ ...x, picks: [oi], other: false }));
+                picked(qi, q);
+            };
+            return html`<label key=${oi} class="perm-opt" for=${id}><input type=${type} name=${name} id=${id}
+                value=${opt.label || ''} checked=${a.picks.includes(oi)} onChange=${onChange} /><span class="perm-opt-body">
+                <span class="perm-opt-label">${opt.label || ''}</span>
+                ${opt.description ? html`<span class="perm-opt-desc">${opt.description}</span>` : null}
+                ${/* Simply there. A preview is what you are comparing, and one
+                     that only appears under the pointer cannot be compared. */
+                  opt.preview ? html`<pre class="perm-opt-preview">${opt.preview}</pre>` : null}
+            </span></label>`;
+        });
+
+        // Choosing "Other" is the one pick that never moves you on: the answer is
+        // the sentence you are about to type, not the radio.
+        const onOther = (e) => {
+            const on = e.currentTarget.checked;
+            setOne(qi, x => (q.multiSelect ? { ...x, other: on } : { ...x, picks: [], other: true }));
+        };
+        // Typing is choosing; making people also click the radio is a trap.
+        const onText = (e) => {
+            const text = e.currentTarget.value;
+            setOne(qi, x => (text.trim()
+                ? { ...x, text, other: true, picks: q.multiSelect ? x.picks : [] }
+                : { ...x, text }));
+        };
+
+        return html`<div key=${qi} class="perm-q" role="group" hidden=${qi !== at}
+                aria-label=${q.question || q.header || `Question ${qi + 1}`}>
+            <div class="perm-q-head">${q.header ? html`<span class="perm-q-chip">${q.header}</span>` : null}<span class="perm-q-text">${q.question || ''}</span></div>
+            ${options}
+            <label key="other" class="perm-opt perm-opt-other" for=${`${name}-other`}><input type=${type} name=${name}
+                id=${`${name}-other`} checked=${a.other} onChange=${onOther} /><span class="perm-opt-body">
+                <span class="perm-opt-label">Other</span>
+                <input type="text" class="perm-other" autocomplete="off" value=${a.text} onInput=${onText}
+                    aria-label=${`A different answer to "${q.question || ''}"`} placeholder="Something else…" />
+            </span></label>
+        </div>`;
+    };
+
+    const nav = n > 1 ? html`<div class="ask-nav">
+        <button class="ask-step" type="button" aria-label="The question before this one"
+            disabled=${pending || at === 0} onClick=${() => show(at - 1)}>‹</button>
+        <div class="ask-dots">${questions.map((q, qi) => html`<button key=${qi} class="ask-dot" type="button"
+            title=${q.header || clip(q.question || '', 60) || `Question ${qi + 1}`}
+            aria-label=${`Question ${qi + 1}: ${q.header || q.question || ''}`}
+            aria-current=${qi === at ? 'true' : 'false'}
+            data-done=${answerOf(q, answers[qi]) ? '1' : undefined}
+            disabled=${pending} onClick=${() => show(qi)}></button>`)}</div>
+        <span class="ask-nav-count">${`${at + 1} of ${n}`}</span>
+        <button class="ask-step" type="button" aria-label="The next question"
+            disabled=${pending || at === n - 1} onClick=${() => show(at + 1)}>›</button>
+    </div>` : null;
+
+    const left = n - done;
+    return html`<div class="ask-dock-inner" onKeyDown=${onKeyDown}>
+        <div class="ask-dock-head">
+            <span class="perm-tool">Question</span>
+            <span class="perm-title">${ask.agentId ? 'from a subagent' : 'waiting on you'}</span>
+            <span class="spacer"></span>
+            ${nav}
+        </div>
+        <div class="ask-dock-body" ref=${body}><div class="perm-qs">${questions.map(group)}</div></div>
+        <div class="perm-btns">
+            <button class="perm-btn allow" type="button" disabled=${pending || !complete}
+                onClick=${send}>${n > 1 ? 'Send answers ' : 'Send answer '}<kbd>⏎</kbd></button>
+            <button class="perm-btn deny" type="button" disabled=${pending}
+                title="Answer nothing and let Claude decide for itself"
+                onClick=${() => answerAsk({ decision: 'deny' })}>Skip</button>
+            <span class="ask-remain">${left ? `${left} still to answer` : ''}</span>
+        </div>
+    </div>`;
 }
 
 /**
@@ -597,6 +672,12 @@ export function answerAskFor(sessionId, requestId, payload) {
 /**
  * Send an answer for the session on screen.
  *
+ * Only the buttons that answer go dead while it is in flight — the plan footer,
+ * not the pane around it, whose Set aside and bring-back bar say nothing to the
+ * bridge. Disabling the whole pane once left both dead from the first answered
+ * plan onwards. The dock and the footer draw that from `state.askPending`; the
+ * permission card is `el()`, so its buttons are set directly.
+ *
  * @param {{decision:'allow'|'allow-always'|'deny', mode?:string,
  *          answers?:object, feedback?:string}} payload
  */
@@ -607,9 +688,15 @@ export async function answerAsk(payload) {
     // on this bridge to answer, and its requestId is not one.
     if (ask.readOnly) return;
     const root = askRoot();
-    const controls = askControls();
+    const card = (ask.kind || 'tool') === 'tool' ? liveCard() : null;
+    const busy = (on) => {
+        if (card) for (const b of card.querySelectorAll('button')) b.disabled = on;
+        else if (on) state.askPending = ask.requestId;
+        else if (state.askPending === ask.requestId) state.askPending = null;
+        if (!card && state.ask === ask) paintAsk();
+    };
     if (root) root.dataset.pending = '1';
-    if (controls) for (const b of controls.querySelectorAll('button')) b.disabled = true;
+    busy(true);
     try {
         await answerAskFor(state.current.sessionId, ask.requestId, payload);
         if (payload.mode) adoptMode(payload.mode);
@@ -618,7 +705,7 @@ export async function answerAsk(payload) {
         // follows takes the surface down with the right reason on it.
         toast(`Could not answer: ${err.message}`, 'error');
         if (root) delete root.dataset.pending;
-        if (controls) for (const b of controls.querySelectorAll('button')) b.disabled = false;
+        busy(false);
     }
 }
 

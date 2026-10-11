@@ -241,6 +241,15 @@ export const state = {
     orch: null,
     planAside: false,       // the plan view is collapsed to its one-line bar
     planFor: null,          // which requestId that was decided about
+    // The plan footer's feedback box: 'approve', 'reject' or null when shut.
+    // Belongs to planFor, and is reset with it. web/transcript/approvals.js.
+    planFeedback: null,
+    // Which question is mounted in the dock. Kept once the dock is hidden, so
+    // reading a subagent and coming back finds your picks where you left them.
+    askDockFor: null,
+    // The requestId whose answer is on its way to the bridge; the dock and the
+    // plan footer draw their buttons disabled while it matches.
+    askPending: null,
     // The mode the bridge last reported, per session, so that a mode which moves
     // under a session can be told apart from one being seen for the first time.
     runnerMode: new Map(),
