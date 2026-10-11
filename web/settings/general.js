@@ -91,12 +91,14 @@ export const SETTINGS_CATEGORIES = [
 ];
 
 // Most groups are built from `rows`. The rest are not, and say how they are
-// drawn instead: `render` (built by hand with el() — Claude Code, its Memory,
-// Project commands, whose content only the bridge has), `node` (written out in
+// drawn instead: `render` (built by hand with el() — Claude Code, whose
+// content only the bridge has), `node` (written out in
 // web/index.html, because none is backed by the settings file — one is a store
 // of its own, one is per-browser storage and the last is a task rather than a
 // setting; renderSettings moves the markup into place, so it takes its turn in
-// this order), or `card` (a Preact component of its own).
+// this order), or `card` (a Preact component of its own — Claude Code's
+// Memory and Project commands among them, which also draw what only the
+// bridge has).
 //
 // `render` and `node` are handed to Preact as foreign DOM (see Foreign in
 // index.js). `card` and `rows` groups are Preact all the way down.
@@ -410,14 +412,14 @@ export const SETTINGS = [
         title: 'Claude Code', section: 'claude', category: 'claude', tocTitle: 'Settings',
         render: () => renderClaudeConfig(),
     },
-    // The same owner's other files, and a `render` for the same reason: what it
+    // The same owner's other files, drawn from the bridge for the same reason: what it
     // draws is a document that only the bridge has. Directly under the group
     // above rather than a tab inside it, because those are settings with a
     // precedence chain and these are instructions that add up — one control
     // cannot mean both things. See renderClaudeDocs().
     {
         title: 'Claude Code · Memory', section: 'memory', category: 'claude', tocTitle: 'Memory',
-        render: () => renderClaudeDocs(),
+        card: () => renderClaudeDocs(),
     },
     {
         title: 'Projects', section: 'projects', category: 'projects', node: 'setGProjects',
@@ -476,12 +478,13 @@ export const SETTINGS = [
         after: () => { renderProjectOrder(); renderProjectBackdrop(); renderProjectColors(); },
     },
     // The commands this project declares, which are the buttons in the
-    // conversation header. A `render` for the same reason Claude Code's two use
-    // one — what it draws is a pair of files only the bridge has read — and
+    // conversation header. A `card` of its own rather than `rows`, for the same
+    // reason as Claude Code's two — what it draws is a pair of files only the
+    // bridge has read — and
     // filed with Projects, because it is about a project rather than this window.
     {
         title: 'Project commands', section: 'commands', category: 'projects', tocTitle: 'Commands',
-        render: () => renderCmdConfig(),
+        card: () => renderCmdConfig(),
     },
     {
         title: 'Notifications', section: 'notify', category: 'connect', card: () => notifyCard(),
