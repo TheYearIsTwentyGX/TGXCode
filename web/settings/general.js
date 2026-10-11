@@ -30,7 +30,7 @@ import {
 } from '../app.js';
 import { renderSnipSettings } from '../snippets/settings.js';
 import { renderWisprSettings, wisprAvailable } from '../composer/wispr.js';
-import { renderClaudeConfig } from './claude-config.js';
+import { claudeConfigCard } from './claude-config.js';
 import {
     renderSettings, saveSetting, saveSettings, SCOPE_NAMES, settingOrigin, settingsTargetRow,
 } from './index.js';
@@ -403,14 +403,14 @@ export const SETTINGS = [
                     + 'sessions started from now on; one already running keeps its browser.' },
         ],
     },
-    // Claude Code's own settings — a different owner's files, and the one group
-    // built by a `render` rather than from `rows` or from markup. It has to be:
+    // Claude Code's own settings — a different owner's files, and a group
+    // drawn by a `card` rather than from `rows` or from markup. It has to be:
     // what it draws comes from the bridge at load time rather than from a table
     // here, because the whole point is that a key this app has never heard of
-    // still gets a control. See renderClaudeConfig().
+    // still gets a control. See claudeConfigCard().
     {
         title: 'Claude Code', section: 'claude', category: 'claude', tocTitle: 'Settings',
-        render: () => renderClaudeConfig(),
+        card: () => claudeConfigCard(),
     },
     // The same owner's other files, drawn from the bridge for the same reason: what it
     // draws is a document that only the bridge has. Directly under the group

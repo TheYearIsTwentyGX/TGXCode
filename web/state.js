@@ -474,6 +474,10 @@ export const state = {
         scope: 'user', tab: 'form', data: null, loading: false, error: null,
         saving: false, draft: null, dirty: false, jsonError: null,
         stale: null, jumpTo: null,
+        // `rev` remounts the typed-into boxes after a save that did not move
+        // the stored value (settingsRevert()'s idea); `flash` is the set of
+        // rows a reload from elsewhere changed, drawn lit for a moment.
+        rev: 0, flash: null,
         // The hooks editor's draft, which is the second one here: hooks are
         // written whole, on Save, after a review — see claudeHooksRow().
         // `hooksSeed` is the block the draft started from, as JSON, so a change

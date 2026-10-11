@@ -350,9 +350,9 @@ async function commitSnipOrder() {
  * tuned rather than one you just wrote.
  *
  * Two of them, for the two ways a surface is drawn: `DeleteButton` for Preact,
- * where "armed" is the component's state, and `snipDeleteButton` for the Settings
- * groups still built by hand with `el()` — hooks, project commands, Wispr — which
- * own their nodes and may write to them.
+ * where "armed" is the component's state, and `snipDeleteButton` for what is still
+ * built by hand with `el()` — Wispr's transforms — which owns its nodes and may
+ * write to them.
  */
 export function DeleteButton({ label, go }) {
     const [armed, setArmed] = useState(0);
