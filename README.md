@@ -153,25 +153,78 @@ Or skip the shell entirely — `npm run bridge`, then open
 <http://127.0.0.1:45888>. The UI is identical; what you give up is the window
 raising itself when you click a notification.
 
-### Windows
+### Windows (WSL2), from scratch
 
-From PowerShell, in the checkout:
+The bridge runs inside WSL and the window is a Windows Electron app, so there
+are two machines' worth of setup. Starting from nothing but an Ubuntu distro
+installed in WSL:
 
-```powershell
-.\install.ps1
+**1. Mirrored networking.** The window reaches the bridge on `127.0.0.1`, which
+is only the same loopback on both sides when WSL mirrors the host's networking.
+In `%USERPROFILE%\.wslconfig`:
+
+```ini
+[wsl2]
+networkingMode=mirrored
+dnsTunneling=true
+autoProxy=true
+firewall=true
 ```
 
-or from WSL, `npm run build`.
+then `wsl --shutdown` from PowerShell so the next start picks it up.
 
-It checks that WSL can find the bridge, stages the Electron shell into
-`%LOCALAPPDATA%`, packages it, and runs the installer. Packaging happens
-Windows-side on purpose: electron-builder is slow and flaky over the
+**2. Node on Windows as well.** Packaging happens Windows-side (below), so
+`install.ps1` runs the *Windows* `npm install` and electron-builder. Node in WSL
+alone is not enough to build; install the Windows LTS from nodejs.org.
+
+**3. The userland, inside Ubuntu.** Most of the table under
+[Requirements](#requirements) ships with Ubuntu already; `gh` usually does not:
+
+```bash
+sudo apt update
+sudo apt install -y git curl python3 util-linux iproute2 procps xdg-utils gh
+```
+
+**4. Node in WSL.** nvm is fine — `bridge/launch.sh` finds it even from the
+login shell the Windows app starts the bridge through, which never reads
+`~/.bashrc`:
+
+```bash
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/master/install.sh | bash
+source ~/.bashrc && nvm install --lts
+```
+
+**5. Claude Code, logged in.** Install it, then run `claude` once to
+authenticate. It has to be on `PATH`, or named by `TGXCODE_CLAUDE_BIN`.
+
+**6. GitHub, logged in.** `gh auth login` — pull requests, the dashboard and
+`npm run land` all go through it.
+
+**7. Clone and build.** From WSL:
+
+```bash
+git clone https://github.com/TheYearIsTwentyGX/TGXCode.git
+cd TGXCode
+npm run build       # runs install.ps1 through powershell.exe
+```
+
+or, from PowerShell in the checkout, `.\install.ps1`. Either way it checks that
+WSL can start the bridge (if that fails with "no node found", it is step 4),
+stages the Electron shell into `%LOCALAPPDATA%\TGXCode-build`, downloads Electron
+(~100 MB on the first run), packages it, and runs the installer. Packaging
+happens Windows-side on purpose: electron-builder is slow and flaky over the
 `\\wsl.localhost` share.
 
 ```powershell
 .\install.ps1 -NoInstall                    # build the installer, don't run it
 .\install.ps1 -BridgeDir '~/src/tgxcode' -Distro Ubuntu
 ```
+
+**8. Launch TGXCode.** On its first run the bridge creates its API token at
+`~/.local/share/tgxcode/token` and listens on 45888.
+
+To try it before building anything, steps 1, 3–5 and 7's clone are enough:
+`npm run bridge` in WSL, then open <http://127.0.0.1:45888> in a Windows browser.
 
 The script bakes the bridge location into `app/config.json`. To change it later
 without rebuilding, edit that file next to the installed executable, or create
@@ -182,6 +235,38 @@ one in `%APPDATA%\tgxcode\` (on Linux, `~/.config/tgxcode/`):
 ```
 
 `distro` is read only on Windows; on Linux there is no relay for it to name.
+
+### After installing
+
+None of these are needed to use the app; each is something the repo cannot set
+up for you.
+
+- **The nightly restart.** A cron entry restarts the everyday bridge onto
+  whatever code the checkout has. It lives in the machine's crontab, not the
+  repo, so a new machine needs it written again (`crontab -e`), with the
+  absolute path to your checkout:
+
+  ```
+  SHELL=/bin/bash
+  MAILTO=""
+  0 0 * * * /path/to/tgxcode/scripts/restart-bridge.sh >/tmp/bridge.log 2>&1
+  ```
+
+  [`docs/manual.md`](docs/manual.md) §Picking up new code covers how to tell
+  whether it ran.
+- **The quota status line.** `node scripts/install-quota-statusline.js` points
+  `~/.claude/settings.json` at `scripts/quota-statusline.py`; it refuses to
+  overwrite a status line you already have.
+- **A phone.** Tailscale, then [`docs/remote.md`](docs/remote.md).
+
+**Moving from another machine?** What is yours rather than the repo's lives in
+three places — copy them across before the first launch:
+
+| | |
+|---|---|
+| `~/.tgxcode/` | Settings, and the spinner's verbs |
+| `~/.local/share/tgxcode/` | Schedules, snippets, drafts, the API token and the rest of the bridge's state — everything but the `host-*.sock` sockets |
+| `~/.claude/projects/` | The transcripts — every session the rail shows |
 
 ## Getting around
 
