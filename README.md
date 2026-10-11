@@ -140,6 +140,28 @@ add WSL2 with `networkingMode=mirrored`, and PowerShell for the build.
 
 ## Install
 
+### A new machine, in one go
+
+`scripts/setup.sh` does everything below, on WSL or plain Linux, skipping
+whatever is already done — so it is also safe to rerun when something failed
+half-way. Before there is a checkout:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TheYearIsTwentyGX/TGXCode/main/scripts/setup.sh | bash
+```
+
+or `bash scripts/setup.sh` from inside one. `--dry-run` prints what it would do,
+`--cron` and `--statusline` add the extras under [After installing](#after-installing),
+and `--no-build` stops short of packaging. It clones to `~/TGXCode` unless `--dir`
+says otherwise.
+
+It finishes with what it cannot do for you: logging in to Claude Code, and, if
+it touched `.wslconfig`, `wsl --shutdown` — which ends every WSL process,
+including this one. Two choices it makes that the manual steps leave open:
+Windows gets Node from `winget`, not nvm-windows, since nobody switches Node
+versions on the side that only runs the packager; and if TGXCode is already
+running it asks before building, because the installer closes it.
+
 ### Linux
 
 ```bash
@@ -153,7 +175,7 @@ Or skip the shell entirely — `npm run bridge`, then open
 <http://127.0.0.1:45888>. The UI is identical; what you give up is the window
 raising itself when you click a notification.
 
-### Windows (WSL2), from scratch
+### Windows (WSL2), by hand
 
 The bridge runs inside WSL and the window is a Windows Electron app, so there
 are two machines' worth of setup. Starting from nothing but an Ubuntu distro
@@ -419,6 +441,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/legacy-dirs.js` | Moves `…/claude-sessions` state and cache directories to `…/tgxcode`, leaving a symlink behind |
 | `scripts/dev.js` | `npm run dev` — a development bridge and window that refuse the everyday port |
 | `scripts/start.js` | `npm start` — finds the built app and launches it, on WSL or Linux |
+| `scripts/setup.sh` | A new machine from bare Ubuntu to a built app — packages, Node on both sides, Claude Code, `.wslconfig`, the build |
 | `scripts/build.js` | `npm run build` — `install.ps1` from WSL, electron-builder on Linux |
 | `scripts/win.js` | Helpers for reaching the Windows side from WSL |
 | `scripts/restart-bridge.sh` | `npm run restart` — restart the everyday bridge onto new code, and the nightly cron's entry point |
