@@ -6,6 +6,16 @@
 // time. Do not turn that into an import: a UMD bundle imported as a module
 // throws before the page runs a line (see CLAUDE.md, *Vendor a bundle*).
 //
+// The drawer's body and the diff dialog's title and stat are drawn with Preact
+// (web/vendor/preact.js; see web/rail.js for the pattern). The body used to be
+// emptied and rebuilt on every load, refresh and turn end, which took hover, focus
+// and any click in flight with it, and closed a right-click menu because its row
+// was gone. Rows are keyed now — an edit or tree row by its path, a scratchpad row
+// by its directory key and path — so a refresh keeps every row that is still
+// there. Markup and class names are what el() built, so no CSS changed. Nothing
+// in the body animated before and nothing does now. The diff *body* is not
+// Preact and must not become it: it is diff2html's innerHTML.
+//
 // This imports app.js and sibling modules here, which import it back. That is
 // safe only because nothing in this file reads an imported binding while the
 // module is evaluating — every use is inside a function called later. Keep it
@@ -15,6 +25,8 @@
 import { get } from '../api.js';
 import { openPath } from '../app.js';
 import { dom, closeModal, el, openModal, toast } from '../dom.js';
+import { isUp } from '../motion.js';
+import { html, render } from '../vendor/preact.js';
 import { ago } from '../format.js';
 import { state } from '../state.js';
 import { statusWord } from '../boards/dashboard.js';
@@ -131,18 +143,28 @@ export async function loadChanges({ refresh = false } = {}) {
     }
 }
 
-export function renderChanges() {
-    // replaceChildren below destroys whichever row a context menu is anchored to,
-    // and a menu left floating over a list that has moved under it is worse than
-    // one that closes.
-    closeContextMenu({ focus: false });
+// The row a context menu was opened from, if it was one of this drawer's, and the
+// menu's first item as it was filled for that row. The menu element is shared
+// with the rest of the app and refilled on every open, so the item is how a
+// render tells *this* menu from one somebody opened elsewhere since.
+let menuRow = null;
+let menuMark = null;
 
+/** Open a row's menu, remembering which row it belongs to. */
+function rowMenu(e, open) {
+    const row = e.currentTarget;
+    open();
+    menuRow = row;
+    menuMark = dom.ctxMenu.firstElementChild;
+}
+
+export function renderChanges() {
     // No pending hold here: whether this drawer is up is a window property, so
     // it does not change when the conversation does and there is nothing to wait
     // for. It slides for the same reason the other two do — the header button.
     const present = !!state.changes.on && !!state.current;
     slidePane(dom.changes, present);
-    if (!present) return;
+    if (!present) return dropOrphanMenu(true);
 
     const d = state.changes.data;
     const edits = (d && d.edits) || [];
@@ -156,21 +178,40 @@ export function renderChanges() {
     dom.changesOpen.hidden = state.changes.shut;
     dom.changes.classList.toggle('shut', state.changes.shut);
     dom.changesRefresh.disabled = state.changes.loading;
-    if (state.changes.shut) return;   // nothing behind the strip needs building
+    // Nothing behind the strip needs building. What was last drawn stays mounted
+    // and hidden; opening again comes back through here and redraws it from
+    // state before it is seen.
+    if (state.changes.shut) return dropOrphanMenu(true);
 
+    render(changesTree(d), dom.changesBody);
+    dropOrphanMenu(false);
+}
+
+/**
+ * Close a context menu whose row has gone.
+ *
+ * This used to close the menu on every render, because the render replaced every
+ * row and with it the one the menu was anchored to. Rows are keyed now and a
+ * refresh keeps them, so a menu stays open across one; it closes only when its
+ * row really left — dropped from the list, or the drawer hidden or shut — since a
+ * menu floating over a list that has moved under it is worse than one that closes.
+ * The items themselves are closures over the row's values, never the node, so a
+ * menu that survives a refresh still does what it says.
+ */
+function dropOrphanMenu(gone) {
+    if (!menuRow) return;
+    const ours = isUp(dom.ctxMenu) && dom.ctxMenu.firstElementChild === menuMark;
+    if (ours && !gone && menuRow.isConnected) return;
+    menuRow = menuMark = null;
+    if (ours) closeContextMenu({ focus: false });
+}
+
+function changesTree(d) {
     if (state.changes.error) {
-        dom.changesBody.replaceChildren(
-            el('p', { class: 'ch-note bad' }, state.changes.error),
-        );
-        return;
+        return html`<p key="error" class="ch-note bad">${state.changes.error}</p>`;
     }
-    if (!d) {
-        dom.changesBody.replaceChildren(el('p', { class: 'ch-note' }, 'Looking…'));
-        return;
-    }
-
-    dom.changesBody.replaceChildren(editsSection(d), treeSection(d.git),
-        scratchSection(state.changes.scratch));
+    if (!d) return html`<p key="looking" class="ch-note">Looking…</p>`;
+    return [editsSection(d), treeSection(d.git), scratchSection(state.changes.scratch)];
 }
 
 /** The transcript's answer. */
@@ -180,23 +221,22 @@ function editsSection(d) {
 
     const rows = edits.length
         ? edits.map(editRow)
-        : [el('p', { class: 'ch-note' }, d.agents && d.agents.total
+        : html`<p key="none" class="ch-note">${d.agents && d.agents.total
             ? 'Nothing in this conversation or its subagents changed a file.'
-            : 'Nothing in this conversation changed a file.')];
+            : 'Nothing in this conversation changed a file.'}</p>`;
 
-    return el('section', { class: 'ch-sec' },
-        el('div', { class: 'ch-head' },
-            el('span', { class: 'ch-title' }, 'Changed by this session'),
-            edits.length ? plusMinus(d) : null,
-        ),
-        // Only worth a line when some of the work was not done in this
-        // conversation at all — which is exactly when the count looks wrong.
-        fromAgents
-            ? el('p', { class: 'ch-note' },
-                `${fromAgents} of these ${fromAgents === 1 ? 'was' : 'were'} edited by a subagent.`)
-            : null,
-        el('ul', { class: 'ch-list' }, rows),
-    );
+    // Only worth a line when some of the work was not done in this
+    // conversation at all — which is exactly when the count looks wrong.
+    return html`<section key="edits" class="ch-sec">
+        <div class="ch-head">
+            <span class="ch-title">Changed by this session</span>
+            ${edits.length ? plusMinus(d) : null}
+        </div>
+        ${fromAgents
+            ? html`<p class="ch-note">${fromAgents} of these ${fromAgents === 1 ? 'was' : 'were'} edited by a subagent.</p>`
+            : null}
+        <ul class="ch-list">${rows}</ul>
+    </section>`;
 }
 
 /**
@@ -219,29 +259,30 @@ function editRow(f) {
         agent && `by a ${agent.agentType || 'subagent'}${agent.description ? `: ${agent.description}` : ''}`,
         f.lastTs && `last ${ago(f.lastTs)} ago`].filter(Boolean).join('\n');
 
-    return el('li', {},
-        el('button', {
-            class: 'ch-row', type: 'button', title: tip,
-            onclick: () => openDiff(fileTarget(f, 'edit'), 'edit'),
-            oncontextmenu: (e) => openFileMenu(e, f, 'edit'),
-        },
-            filePath(f.relPath),
-            plusMinus(f),
-            // One word, not the agent's type: the types run to `general-purpose`
-            // and the column would then be wider than the paths. Which agent it
-            // was is in the tooltip, where there is room for the description too.
-            el('span', { class: 'ch-meta' }, agent ? 'agent' : `${f.edits}×`),
-        ));
+    // One word, not the agent's type: the types run to `general-purpose` and the
+    // column would then be wider than the paths. Which agent it was is in the
+    // tooltip, where there is room for the description too.
+    return html`<li key=${f.path}>
+        <button class="ch-row" type="button" title=${tip}
+                onClick=${() => openDiff(fileTarget(f, 'edit'), 'edit')}
+                onContextMenu=${(e) => rowMenu(e, () => openFileMenu(e, f, 'edit'))}>
+            ${filePath(f.relPath)}
+            ${plusMinus(f)}
+            <span class="ch-meta">${agent ? 'agent' : `${f.edits}×`}</span>
+        </button>
+    </li>`;
 }
 
 /** The working tree's answer. */
 function treeSection(g) {
-    const head = (...bits) => el('div', { class: 'ch-head' },
-        el('span', { class: 'ch-title' }, 'Working tree'), ...bits);
+    const head = (bit) => html`<div class="ch-head">
+        <span class="ch-title">Working tree</span>${bit}</div>`;
 
     if (!g || !g.ok) {
-        return el('section', { class: 'ch-sec' }, head(),
-            el('p', { class: 'ch-note' }, treeReason(g)));
+        return html`<section key="tree" class="ch-sec">
+            ${head(null)}
+            <p class="ch-note">${treeReason(g)}</p>
+        </section>`;
     }
 
     const files = g.sample || [];
@@ -251,14 +292,16 @@ function treeSection(g) {
         g.behind ? `${g.behind} behind` : null,
     ].filter(Boolean).join(' · ');
 
-    return el('section', { class: 'ch-sec' },
-        head(g.files ? el('span', { class: 'ch-tally' }, `${g.files} uncommitted`) : null),
-        branch ? el('p', { class: 'ch-branch' }, branch) : null,
-        files.length
-            ? el('ul', { class: 'ch-list' }, files.map(treeFileRow),
-                g.truncated ? el('li', { class: 'ch-note' }, `and ${g.truncated} more`) : null)
-            : el('p', { class: 'ch-note' }, 'Nothing uncommitted.'),
-    );
+    return html`<section key="tree" class="ch-sec">
+        ${head(g.files ? html`<span class="ch-tally">${g.files} uncommitted</span>` : null)}
+        ${branch ? html`<p class="ch-branch">${branch}</p>` : null}
+        ${files.length
+            ? html`<ul class="ch-list">
+                ${files.map(treeFileRow)}
+                ${g.truncated ? html`<li key="more" class="ch-note">and ${g.truncated} more</li>` : null}
+            </ul>`
+            : html`<p class="ch-note">Nothing uncommitted.</p>`}
+    </section>`;
 }
 
 /**
@@ -274,23 +317,24 @@ function treeSection(g) {
  */
 function treeFileRow(f) {
     const inert = f.binary || /\/$/.test(f.path || '');
-    const body = [
-        el('span', { class: 'fstat', 'data-s': f.status }, statusWord(f.status)),
-        filePath(f.path),
-        // Untracked files are not in `git diff` and so have no counts. The
-        // status word already said "new", which is the honest answer.
-        f.added == null ? null : plusMinus(f),
-    ];
+    // Untracked files are not in `git diff` and so have no counts. The status
+    // word already said "new", which is the honest answer.
+    const body = html`
+        <span class="fstat" data-s=${f.status}>${statusWord(f.status)}</span>
+        ${filePath(f.path)}
+        ${f.added == null ? null : plusMinus(f)}`;
 
-    if (inert) return el('li', {}, el('div', { class: 'ch-row flat', title: f.path }, ...body));
+    if (inert) {
+        return html`<li key=${f.path}><div class="ch-row flat" title=${f.path}>${body}</div></li>`;
+    }
 
-    return el('li', {},
-        el('button', {
-            class: 'ch-row', type: 'button', title: f.path,
-            onclick: () => openDiff(fileTarget(f, 'tree'), 'tree'),
-            oncontextmenu: (e) => openFileMenu(e, f, 'tree'),
-        }, ...body));
+    return html`<li key=${f.path}>
+        <button class="ch-row" type="button" title=${f.path}
+                onClick=${() => openDiff(fileTarget(f, 'tree'), 'tree')}
+                onContextMenu=${(e) => rowMenu(e, () => openFileMenu(e, f, 'tree'))}>${body}</button>
+    </li>`;
 }
+
 
 function treeReason(g) {
     const reason = (g && g.reason) || 'status-failed';
@@ -313,14 +357,18 @@ function treeReason(g) {
  * which one only when there is more than one to tell apart.
  */
 function scratchSection(s) {
-    const head = el('div', { class: 'ch-head' },
-        el('span', { class: 'ch-title' }, 'Scratchpad'),
-        s && s.files.length ? el('span', { class: 'ch-tally' }, String(s.files.length)) : null);
-    if (!s) return el('section', { class: 'ch-sec' }, head,
-        el('p', { class: 'ch-note' }, 'The bridge could not list the scratchpad.'));
-    if (!s.files.length) return el('section', { class: 'ch-sec' }, head,
-        el('p', { class: 'ch-note' },
-            'No scratchpad files — this session never wrote one, or a restart cleared /tmp.'));
+    const head = html`<div class="ch-head">
+        <span class="ch-title">Scratchpad</span>
+        ${s && s.files.length ? html`<span class="ch-tally">${String(s.files.length)}</span>` : null}
+    </div>`;
+    if (!s) {
+        return html`<section key="scratch" class="ch-sec">${head}
+            <p class="ch-note">The bridge could not list the scratchpad.</p></section>`;
+    }
+    if (!s.files.length) {
+        return html`<section key="scratch" class="ch-sec">${head}
+            <p class="ch-note">No scratchpad files — this session never wrote one, or a restart cleared /tmp.</p></section>`;
+    }
 
     const byKey = new Map(s.dirs.map(d => [d.key, d]));
     const rows = [];
@@ -328,31 +376,33 @@ function scratchSection(s) {
         const mine = s.files.filter(f => f.dir === d.key);
         if (!mine.length) continue;
         if (s.dirs.length > 1) {
-            rows.push(el('li', { class: 'ch-group', title: d.path }, d.where || 'main checkout'));
+            rows.push(html`<li key=${`g:${d.key}`} class="ch-group" title=${d.path}>${d.where || 'main checkout'}</li>`);
         }
         rows.push(...mine.map(f => scratchRow(f, byKey.get(f.dir))));
     }
-    return el('section', { class: 'ch-sec' }, head,
-        el('ul', { class: 'ch-list' }, rows,
-            s.truncated ? el('li', { class: 'ch-note' }, 'and more, not listed') : null));
+    return html`<section key="scratch" class="ch-sec">${head}
+        <ul class="ch-list">
+            ${rows}
+            ${s.truncated ? html`<li key="more" class="ch-note">and more, not listed</li>` : null}
+        </ul>
+    </section>`;
 }
 
 function scratchRow(f, dir) {
     const absPath = `${dir.path}/${f.path}`;
-    return el('li', {},
-        el('button', {
-            class: 'ch-row', type: 'button',
-            title: `${absPath}\n${size(f.size)} · ${new Date(f.mtimeMs).toLocaleString()}`,
-            onclick: () => openScratch({ key: f.dir, path: f.path, absPath, size: f.size }),
-            oncontextmenu: (e) => openContextMenu(e, [
-                { label: 'Open', onClick: () => openPath(absPath) },
-                { label: 'Show in folder', onClick: () => openPath(absPath, { reveal: true }) },
-            ]),
-        },
-            filePath(f.path),
-            el('span', { class: 'ch-meta' }, size(f.size)),
-            el('span', { class: 'ch-meta' }, ago(f.mtimeMs)),
-        ));
+    return html`<li key=${`${f.dir}/${f.path}`}>
+        <button class="ch-row" type="button"
+                title=${`${absPath}\n${size(f.size)} · ${new Date(f.mtimeMs).toLocaleString()}`}
+                onClick=${() => openScratch({ key: f.dir, path: f.path, absPath, size: f.size })}
+                onContextMenu=${(e) => rowMenu(e, () => openContextMenu(e, [
+                    { label: 'Open', onClick: () => openPath(absPath) },
+                    { label: 'Show in folder', onClick: () => openPath(absPath, { reveal: true }) },
+                ]))}>
+            ${filePath(f.path)}
+            <span class="ch-meta">${size(f.size)}</span>
+            <span class="ch-meta">${ago(f.mtimeMs)}</span>
+        </button>
+    </li>`;
 }
 
 function size(n) {
@@ -370,21 +420,21 @@ function size(n) {
 function filePath(p) {
     const text = String(p || '');
     const cut = text.replace(/\/$/, '').lastIndexOf('/');
-    return el('span', { class: 'fpath' },
-        cut === -1 ? null : el('span', { class: 'fdir' }, text.slice(0, cut + 1)),
-        el('span', { class: 'fbase' }, cut === -1 ? text : text.slice(cut + 1)));
+    return html`<span class="fpath">${
+        cut === -1 ? null : html`<span class="fdir">${text.slice(0, cut + 1)}</span>`
+    }<span class="fbase">${cut === -1 ? text : text.slice(cut + 1)}</span></span>`;
 }
 
 /** `+84 −12`, or the word for a file git will not count. */
 function plusMinus(f) {
-    const box = el('span', { class: 'ch-nums' });
-    if (f.binary) return el('span', { class: 'ch-nums ch-meta' }, 'binary');
-    if (f.added) box.append(el('span', { class: 'ch-add' }, `+${f.added}`));
-    if (f.deleted) box.append(el('span', { class: 'ch-del' }, `−${f.deleted}`));
+    if (f.binary) return html`<span class="ch-nums ch-meta">binary</span>`;
+    const bits = [];
+    if (f.added) bits.push(html`<span key="add" class="ch-add">+${f.added}</span>`);
+    if (f.deleted) bits.push(html`<span key="del" class="ch-del">−${f.deleted}</span>`);
     // An edit that added and removed nothing is a file written with the contents
     // it already had. Rare, and worth not drawing as a blank column.
-    if (!box.childNodes.length) box.append(el('span', { class: 'ch-meta' }, '±0'));
-    return box;
+    if (!bits.length) bits.push(html`<span key="none" class="ch-meta">±0</span>`);
+    return html`<span class="ch-nums">${bits}</span>`;
 }
 
 // ── one file, in full ──────────────────────────────────────────────────────
@@ -457,8 +507,8 @@ export function closeDiff() {
     // Leaving them attached to a hidden dialog costs that until the next open —
     // but only once it has faded, or it fades out empty.
     closeModal(dom.diffScrim, () => { if (!d.open) dom.diffBody.replaceChildren(); });
-    // Back to the drawer, deliberately not to the row: renderChanges may well
-    // have replaced it while this was open.
+    // Back to the drawer, deliberately not to the row: a refresh keeps rows now,
+    // but one that changed the list may well have dropped this one.
     if (state.changes.on && !state.changes.shut) dom.changesBody.focus({ preventScroll: true });
 }
 
@@ -671,12 +721,16 @@ function paintDiff() {
     const d = state.diff;
     if (!d.open) return;
 
-    dom.diffTitle.replaceChildren(filePath(d.path));
+    // The title and the stat are Preact; the two containers are not, so the
+    // tooltip is still written on the title's own element.
+    render(filePath(d.path), dom.diffTitle);
     dom.diffTitle.title = d.absPath || d.path;
-    dom.diffStat.replaceChildren(...[
-        d.status ? el('span', { class: 'fstat', 'data-s': d.status }, statusWord(d.status)) : null,
+    render([
+        d.status
+            ? html`<span key="s" class="fstat" data-s=${d.status}>${statusWord(d.status)}</span>`
+            : null,
         d.meta && (d.meta.added || d.meta.deleted || d.meta.binary) ? plusMinus(d.meta) : null,
-    ].filter(Boolean));
+    ], dom.diffStat);
 
     dom.diffUnified.setAttribute('aria-pressed', String(!d.split));
     dom.diffSplit.setAttribute('aria-pressed', String(d.split));

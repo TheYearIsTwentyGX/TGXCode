@@ -262,10 +262,11 @@ export const state = {
     },
     // The file on screen in the diff viewer.
     //
-    // Values copied off a row, never the row itself. `renderChanges` calls
-    // replaceChildren on every load, every refresh and every turn that ends, so
-    // an element or a closure this held would be an orphan within seconds of the
-    // dialog opening — and the dialog outlives several of those by design.
+    // Values copied off a row, never the row itself. `renderChanges` redraws on
+    // every load, every refresh and every turn that ends; rows are keyed and kept
+    // when they survive, but a file that left the list takes its row with it, so
+    // an element or a closure this held could be an orphan by the time the
+    // dialog, which outlives several of those by design, comes to use it.
     //
     // `req` is a sequence rather than a loading flag, for the reason
     // `loadChanges` has an `at`: an answer that arrives for a file you have since
