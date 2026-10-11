@@ -1,8 +1,34 @@
 // The send queue: messages typed while a turn is running, drawn as chips above
 // the composer, which can be reordered, edited back into the box or dropped.
-// Moved out of app.js as it was. What is queued is the bridge's — see
-// bridge/runner.js's `inFlight` — and this only draws it and asks it to change.
-// wireQueue() binds the list's listeners and is called by app.js where they ran.
+// What is queued is the bridge's — see bridge/runner.js's `inFlight` — and this
+// only draws it and asks it to change. wireQueue() binds the list's listeners and
+// is called by app.js where they ran.
+//
+// **Drawn with Preact**, the way web/rail.js settled. `runner-status` arrives
+// every time the activity line moves, several times a turn, and the hand-built
+// list answered by emptying #queue-list and building every chip again — which
+// lost the focus a keyboard user was on, the hover under the cursor and any click
+// that straddled the rebuild, and needed a signature gate, a "the drag owns the
+// DOM" early return and a focus re-finder to get away with it. Chips are keyed by
+// queue id, so a render keeps their nodes. Markup and class names are what el()
+// built, so the CSS did not change. What it decided:
+//
+//   - **The roving tab stop is rendered, not written.** `state.queueFocus` names
+//     the chip holding it and the render gives that one `tabindex="0"`; focusing
+//     a chip updates the state and renders again.
+//   - **A drag goes through the render.** `state.queueDrag` is `{id, order}`, the
+//     shape of `state.railDrag`: dragover works out the order the cursor has
+//     reached, stores it, and renders — so a status push mid-drag redraws with the
+//     carried chip still where the pointer put it, and the carried node is the same
+//     node throughout, which keeps the browser's drag alive. The bridge is told
+//     once, on drop, from that order rather than from the DOM.
+//   - **Morph and flip only when the queue changed.** morph() stops whatever is
+//     playing on #queue, so wrapping every status push in it would cut a grow off
+//     half-way. `state.queueSig` decides when a render is worth animating; the
+//     rest render plainly, which is a no-op when nothing changed.
+//   - **Focus is still put back after a reorder.** Chromium 126 has no
+//     `moveBefore`, so a chip Preact moves (Alt+↑/↓) loses focus. The restore only
+//     calls focus(); it writes nothing to the nodes.
 //
 // Imports app.js and its siblings, which import it back. That is safe only
 // because nothing here reads an imported binding while the module evaluates —
@@ -12,8 +38,9 @@
 // api.js, boot.js and format.js import nothing, and icons.js only dom.js, so
 // reading those at load is fine; nothing else here is.
 
+import { html, render } from '../vendor/preact.js';
 import { del, get, post } from '../api.js';
-import { dom, el, toast } from '../dom.js';
+import { dom, toast } from '../dom.js';
 import { clip } from '../format.js';
 import { state } from '../state.js';
 import { applyRunner, restoreToComposer } from '../app.js';
@@ -47,7 +74,7 @@ export function renderQueue(s) {
     const show = q.length > 0 && !state.agent;
     // Grown and shrunk, so the transcript above moves with it — see motion.js.
     // The chips stay in it while it closes and are cleared once it has.
-    grow(dom.queue, show, { onGone: () => { if (!state.queue.length) dom.queueList.replaceChildren(); } });
+    grow(dom.queue, show, { onGone: () => { if (!state.queue.length) render(null, dom.queueList); } });
     if (!show) {
         state.queueSig = '';
         return;
@@ -65,33 +92,62 @@ export function renderQueue(s) {
             : `${q.length} messages waiting${busy ? ', in this order' : ''}`;
     dom.queueClear.textContent = q.length === 1 ? 'Drop it' : 'Drop all';
 
-    // Runner status arrives every time the activity line moves, several times a
-    // turn. Rebuilding the chips on each one would throw away focus, an expanded
-    // message and any drag in progress, so only rebuild when the queue itself
-    // actually changed.
-    if (state.queueDrag) return;   // the drag owns the DOM until it ends
-    const sig = q.map(x => x.id + (x.handed ? '*' : '')).join(',')
+    drawQueue();
+}
+
+/** Render the chips, animating only when what they show actually changed. */
+function drawQueue() {
+    const list = orderedQueue();
+    const roving = rovingId();
+    const tree = list.map((entry, i) => queueItem(entry, i, list.length, roving));
+
+    // Mid-drag the order follows the pointer, and sliding behind it would lag.
+    if (state.queueDrag) {
+        render(tree, dom.queueList);
+        return;
+    }
+
+    const sig = state.queue.map(x => x.id + (x.handed ? '*' : '')).join(',')
         + '|' + [...state.queueOpen].sort().join(',');
-    if (sig === state.queueSig && dom.queueList.children.length === q.length) return;
+    if (sig === state.queueSig && dom.queueList.children.length === list.length) {
+        render(tree, dom.queueList);
+        return;
+    }
     state.queueSig = sig;
 
-    // Keep the keyboard where it was: reordering with Alt+arrows repaints the
-    // list under the very control being used.
+    // Keep the keyboard where it was: reordering with Alt+arrows moves the very
+    // chip being used, and a moved node loses focus.
     const active = document.activeElement;
     const held = active && active.closest && active.closest('.queue-item');
-    const holdId = held ? held.dataset.id : null;
-    const holdPart = held ? active.dataset.part : null;
+    const holdId = held && dom.queueList.contains(held) ? held.dataset.id : null;
+    const holdPart = holdId ? active.dataset.part : null;
 
     // Chips that stay slide to their new places — a reorder, or the one above
     // them sent — and the box eases to its new height rather than jumping.
     morph(dom.queue, () => flip(dom.queueList, (n) => n.dataset.id,
-        () => dom.queueList.replaceChildren(...q.map((entry, i) => queueItem(entry, i, rovingId())))));
+        () => render(tree, dom.queueList)));
 
     if (holdId) {
-        const back = dom.queueList.querySelector(`[data-id="${CSS.escape(holdId)}"]`);
+        const back = chipNode(holdId);
         const target = back && (holdPart ? back.querySelector(`[data-part="${holdPart}"]`) : back);
-        if (target) target.focus();
+        if (target && document.activeElement !== target) target.focus();
     }
+}
+
+/**
+ * The queue in the order to draw it: the bridge's, or mid-drag the order the
+ * pointer has reached — with anything sent meanwhile left out and anything queued
+ * meanwhile on the end.
+ */
+function orderedQueue() {
+    const order = state.queueDrag && state.queueDrag.order;
+    if (!order) return state.queue;
+    const byId = new Map(state.queue.map(x => [x.id, x]));
+    return orderOf(order).map(id => byId.get(id));
+}
+
+function chipNode(id) {
+    return dom.queueList.querySelector(`.queue-item[data-id="${CSS.escape(id)}"]`);
 }
 
 /**
@@ -109,19 +165,13 @@ function rovingId() {
     return remembered || q[q.length - 1].id;
 }
 
-/** Move the single tab stop without rebuilding the chips. */
-function setRovingTab() {
-    const id = rovingId();
-    for (const li of dom.queueList.children) {
-        li.tabIndex = li.dataset.id === id ? 0 : -1;
-    }
-}
-
 function focusChipAt(i) {
-    const li = dom.queueList.children[i];
+    const entry = orderedQueue()[i];
+    if (!entry) return false;
+    state.queueFocus = entry.id;
+    drawQueue();
+    const li = chipNode(entry.id);
     if (!li) return false;
-    state.queueFocus = li.dataset.id;
-    setRovingTab();
     li.focus();
     return true;
 }
@@ -135,7 +185,7 @@ function focusChipAt(i) {
  * focusable thing, its buttons are taken out of the tab order, and everything
  * they do has a key on the row instead.
  */
-function queueItem(entry, i, roving) {
+function queueItem(entry, i, total, roving) {
     const files = entry.attachments || [];
     const open = state.queueOpen.has(entry.id);
     const toggleOpen = () => {
@@ -146,60 +196,75 @@ function queueItem(entry, i, roving) {
 
     // Handed to the running turn: its place is fixed, so there is nothing to drag.
     const handed = !!entry.handed;
-    const li = el('li', {
-        class: 'queue-item' + (open ? ' open' : '') + (handed ? ' handed' : ''),
-        'data-id': entry.id,
-        draggable: handed ? 'false' : 'true',
-        tabindex: entry.id === roving ? '0' : '-1',
-        'aria-label': `${handed ? 'Message for the next step' : 'Waiting message'} `
-            + `${i + 1} of ${state.queue.length}: ${clip(entry.text, 80)}`,
-        onfocus: () => { state.queueFocus = entry.id; setRovingTab(); },
-        onkeydown: (e) => onChipKey(e, entry, i, toggleOpen),
-    },
-        handed
-            ? el('span', { class: 'queue-grip', title: 'Claude reads this after the current step' }, '↳')
-            : el('span', { class: 'queue-grip', title: 'Drag to reorder', 'aria-hidden': 'true' }, '⠿'),
-        el('span', { class: 'queue-n' }, String(i + 1)),
-        // A count, not the names. The chip is one line and the message is what it is
-        // for; the point is only that Edit will bring files back with it, so dropping
-        // this chip is dropping them too.
-        files.length ? el('span', {
-            class: 'queue-files',
-            title: files.map(f => f.name || f.relPath).join('\n'),
-        }, `📎${files.length > 1 ? files.length : ''}`) : null,
-        el('button', {
-            class: 'queue-text', type: 'button', 'data-part': 'text', tabindex: '-1',
-            title: open ? 'Show less' : 'Show the whole message',
-            onclick: toggleOpen,
-        }, open ? entry.text : clip(entry.text, 110)),
-        el('div', { class: 'queue-acts' },
-            el('button', {
-                class: 'queue-act', type: 'button', 'data-part': 'edit', tabindex: '-1',
-                title: 'Take it out of the queue and back into the box',
-                onclick: () => editQueued(entry),
-            }, 'Edit'),
-            el('button', {
-                class: 'queue-act danger', type: 'button', 'data-part': 'drop', tabindex: '-1',
-                title: 'Drop this message', 'aria-label': `Drop waiting message ${i + 1}`,
-                onclick: () => dropQueued(entry),
-            }, '×'),
-        ),
-    );
+    const dragging = !!state.queueDrag && state.queueDrag.id === entry.id;
+    // The 📎 is a count, not the names. The chip is one line and the message is
+    // what it is for; the point is only that Edit will bring files back with it,
+    // so dropping this chip is dropping them too.
+    const cls = 'queue-item' + (open ? ' open' : '') + (handed ? ' handed' : '')
+        + (dragging ? ' dragging' : '');
+    return html`<li key=${entry.id} class=${cls} data-id=${entry.id}
+        draggable=${handed ? 'false' : 'true'}
+        tabindex=${entry.id === roving ? '0' : '-1'}
+        aria-label=${`${handed ? 'Message for the next step' : 'Waiting message'} `
+            + `${i + 1} of ${total}: ${clip(entry.text, 80)}`}
+        onFocus=${() => {
+            if (state.queueFocus === entry.id) return;
+            state.queueFocus = entry.id;
+            drawQueue();
+        }}
+        onKeyDown=${(e) => onChipKey(e, entry, i, toggleOpen)}
+        onDragStart=${(e) => onChipDragStart(e, entry)}
+        onDragEnd=${onChipDragEnd}>
+        ${handed
+            ? html`<span class="queue-grip" title="Claude reads this after the current step">↳</span>`
+            : html`<span class="queue-grip" title="Drag to reorder" aria-hidden="true">⠿</span>`}
+        <span class="queue-n">${String(i + 1)}</span>
+        ${files.length ? html`<span class="queue-files"
+            title=${files.map(f => f.name || f.relPath).join('\n')}>${`📎${files.length > 1 ? files.length : ''}`}</span>` : null}
+        <button class="queue-text" type="button" data-part="text" tabindex="-1"
+            title=${open ? 'Show less' : 'Show the whole message'}
+            onClick=${toggleOpen}>${open ? entry.text : clip(entry.text, 110)}</button>
+        <div class="queue-acts">
+            <button class="queue-act" type="button" data-part="edit" tabindex="-1"
+                title="Take it out of the queue and back into the box"
+                onClick=${() => editQueued(entry)}>Edit</button>
+            <button class="queue-act danger" type="button" data-part="drop" tabindex="-1"
+                title="Drop this message" aria-label=${`Drop waiting message ${i + 1}`}
+                onClick=${() => dropQueued(entry)}>×</button>
+        </div>
+    </li>`;
+}
 
-    li.addEventListener('dragstart', (e) => {
-        if (handed) { e.preventDefault(); return; }
-        state.queueDrag = entry.id;
-        li.classList.add('dragging');
-        e.dataTransfer.effectAllowed = 'move';
-        // Firefox ignores a drag with nothing on the transfer.
-        e.dataTransfer.setData('text/plain', entry.id);
-    });
-    li.addEventListener('dragend', () => {
-        li.classList.remove('dragging');
-        state.queueDrag = null;
-        commitQueueOrder();
-    });
-    return li;
+function onChipDragStart(e, entry) {
+    if (entry.handed) { e.preventDefault(); return; }
+    state.queueDrag = { id: entry.id, order: null };
+    e.dataTransfer.effectAllowed = 'move';
+    // Firefox ignores a drag with nothing on the transfer.
+    e.dataTransfer.setData('text/plain', entry.id);
+    drawQueue();   // the chip takes `.dragging`
+}
+
+function onChipDragEnd() {
+    const drag = state.queueDrag;
+    state.queueDrag = null;
+    const ids = drag && drag.order ? orderOf(drag.order) : null;
+    const changed = ids && ids.join() !== state.queue.map(q => q.id).join();
+    // The order just reached is the one to show until the bridge answers, so the
+    // chip does not jump back for the length of the request.
+    if (changed) {
+        const byId = new Map(state.queue.map(x => [x.id, x]));
+        state.queue = ids.map(id => byId.get(id));
+    }
+    renderQueue(state.runner);   // and the chip loses `.dragging`
+    if (changed) commitQueueOrder(ids);
+}
+
+/** A drag order made whole: ids sent meanwhile out, ids queued meanwhile on the end. */
+function orderOf(order) {
+    const have = new Set(state.queue.map(x => x.id));
+    const out = order.filter(id => have.has(id));
+    for (const x of state.queue) if (!out.includes(x.id)) out.push(x.id);
+    return out;
 }
 
 /**
@@ -244,25 +309,24 @@ function onChipKey(e, entry, i, toggleOpen) {
 
 /**
  * Reordering moves the row under the cursor as you go, so the list you drop on
- * is the list you get. The bridge is told once, on drop.
+ * is the list you get. The positions are read off the chips and the order goes
+ * into state; the render moves the node. Nothing renders unless the order the
+ * pointer reached is a different one — dragover fires continuously.
  */
 function onQueueDragOver(e) {
     if (!state.queueDrag) return;
     e.preventDefault();
-    const dragged = dom.queueList.querySelector('.dragging');
+    const chips = [...dom.queueList.querySelectorAll(':scope > .queue-item')];
+    const dragged = chips.find(n => n.dataset.id === state.queueDrag.id);
     const over = e.target.closest && e.target.closest('.queue-item');
-    if (!dragged || !over || over === dragged) return;
+    if (!dragged || !over || over === dragged || !dom.queueList.contains(over)) return;
     const box = over.getBoundingClientRect();
     const after = e.clientY > box.top + box.height / 2;
-    dom.queueList.insertBefore(dragged, after ? over.nextSibling : over);
-    renumberQueue();
-}
-
-function renumberQueue() {
-    [...dom.queueList.children].forEach((li, i) => {
-        const n = li.querySelector('.queue-n');
-        if (n) n.textContent = String(i + 1);
-    });
+    const order = chips.filter(n => n !== dragged).map(n => n.dataset.id);
+    order.splice(order.indexOf(over.dataset.id) + (after ? 1 : 0), 0, dragged.dataset.id);
+    if (order.join('\n') === chips.map(n => n.dataset.id).join('\n')) return;
+    state.queueDrag.order = order;
+    drawQueue();
 }
 
 /** Nudge one message up or down the queue, keeping the keyboard focus on it. */
@@ -278,23 +342,24 @@ async function moveQueued(id, delta) {
         applyRunner(r.status);
         // Follow the message, not the position: holding Alt+↑ should keep walking
         // the same message up the queue.
-        const moved = dom.queueList.querySelector(`[data-id="${CSS.escape(id)}"]`);
-        if (moved) { state.queueFocus = id; setRovingTab(); moved.focus(); }
+        state.queueFocus = id;
+        drawQueue();
+        const moved = chipNode(id);
+        if (moved && document.activeElement !== moved) moved.focus();
     } catch (err) {
         toast(`Could not reorder the queue: ${err.message}`, 'error');
     }
 }
 
-async function commitQueueOrder() {
+/** Tell the bridge the order a drag ended on. state.queue already shows it. */
+async function commitQueueOrder(ids) {
     if (!state.current) return;
-    const ids = [...dom.queueList.children].map(li => li.dataset.id);
-    if (ids.join() === state.queue.map(q => q.id).join()) return;
     try {
         const r = await post(`/api/sessions/${state.current.sessionId}/queue/reorder`, { ids });
         applyRunner(r.status);
     } catch (err) {
         toast(`Could not reorder the queue: ${err.message}`, 'error');
-        renderQueue(state.runner);   // back to what the bridge actually has
+        refreshQueue();   // back to what the bridge actually has
     }
 }
 
