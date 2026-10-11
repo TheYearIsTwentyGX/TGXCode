@@ -1,15 +1,26 @@
 // The session's own task list — the column on the left of the transcript that
 // the agent keeps with TodoWrite or TaskCreate/TaskUpdate.
 //
+// The body, `#checklist-body`, is drawn with Preact the way web/rail.js draws the
+// rail. It re-renders on every `task-list` push, which arrives *during* a turn —
+// exactly when somebody is hovering a row or reaching for one — and a rebuild
+// took the row from under the pointer. Rows are keyed by the task's id, which
+// only the directory source has; a TodoWrite item has none and is keyed by its
+// place in the list, which is right for it because every TodoWrite rewrites the
+// whole list anyway. The progress bar is web/boards/parts.js's taskBar, so
+// app.js no longer keeps a DOM twin of it. The counts, the strip and the column's
+// `hidden`/`.shut` are outside the render container and stay hand-written.
+//
 // This imports app.js and sibling modules here, which import it back. That is
 // safe only because nothing in this file reads an imported binding while the
 // module is evaluating — every use is inside a function called later. Keep it
 // that way: a top-level `const X = someImport(...)` runs before app.js's body
 // and throws in the temporal dead zone, and only loading the page shows it.
 
-import { dom, el, toast } from '../dom.js';
+import { html, render } from '../vendor/preact.js';
+import { dom, toast } from '../dom.js';
 import { state } from '../state.js';
-import { taskBar } from '../app.js';
+import { taskBar } from '../boards/parts.js';
 import { renderHeaderActions } from './conversation.js';
 import { paneUp, slidePane, syncPaneInsets } from './layout.js';
 import { jumpToTurn } from './turn-rail.js';
@@ -107,7 +118,7 @@ function callForTask(item) {
 }
 
 /** One task. Clicking jumps to the call that last touched it. */
-function checklistRow(item) {
+function checklistRow(item, n) {
     const entry = callForTask(item);
 
     // More than the description, the way an edit row's tooltip is more than the
@@ -118,24 +129,22 @@ function checklistRow(item) {
         item.status === 'in_progress' && item.activeForm,
         item.blockedBy.length && `blocked by ${item.blockedBy.join(', ')}`,
     ].filter(Boolean);
-    const tip = extra.length ? [item.subject, ...extra].join('\n\n') : null;
+    const tip = extra.length ? [item.subject, ...extra].join('\n\n') : undefined;
 
-    return el('li', {},
-        el('button', {
-            // A button either way. An item nothing matches yet may match later
-            // once the call lands, and a row that is sometimes a button is worse
-            // than one that always is and sometimes says why not.
-            class: `cl-row${entry ? '' : ' flat'}`,
-            type: 'button',
-            'data-status': item.status,
-            ...(tip ? { title: tip, 'data-desc': item.description || '' } : {}),
-            onclick: () => {
+    // A button either way. An item nothing matches yet may match later once the
+    // call lands, and a row that is sometimes a button is worse than one that
+    // always is and sometimes says why not.
+    return html`<li key=${item.id || `t${n}`}>
+        <button class=${`cl-row${entry ? '' : ' flat'}`} type="button"
+            data-status=${item.status}
+            title=${tip} data-desc=${tip ? item.description || '' : undefined}
+            onClick=${() => {
                 if (entry) return jumpToTurn(entry);
                 toast('No call in this conversation has touched that item.', 'warn');
-            },
-        },
-        el('span', { class: 'cl-mark', 'aria-hidden': 'true' }, statusMark(item.status)),
-        el('span', { class: 'cl-name' }, item.subject)));
+            }}
+        ><span class="cl-mark" aria-hidden="true">${statusMark(item.status)}</span><span
+            class="cl-name">${item.subject}</span></button>
+    </li>`;
 }
 
 /** The whole panel, rebuilt from state.checklist. Cheap: there are never many. */
@@ -162,7 +171,7 @@ export function renderChecklist() {
         // whichever session was here before, and a hidden panel holding another
         // conversation's list is the kind of thing that resurfaces later looking
         // like a bug in whatever reveals it.
-        dom.checklistBody.replaceChildren();
+        render(null, dom.checklistBody);
         dom.checklistCount.textContent = present ? '…' : '';
         dom.checklistStripCount.textContent = present ? '…' : '';
         return;
@@ -177,16 +186,17 @@ export function renderChecklist() {
     dom.checklist.classList.toggle('shut', state.checklist.shut);
     if (state.checklist.shut) return;   // nothing behind the strip needs building
 
-    const body = [taskBar(d)];
     // The step it is on, spelled out. `current` is the in-progress task's
     // activeForm, which is written for exactly this.
-    if (d.current) body.push(el('div', { class: 'cl-current' }, d.current));
-    body.push(el('ul', { class: 'cl-list' }, ...items.map(checklistRow)));
+    //
     // The cap is a bug somewhere else, but say so rather than showing a short
     // list as if it were the whole one.
-    if (d.truncated) {
-        body.push(el('div', { class: 'cl-note' },
-            `and ${d.truncated} more not shown`));
-    }
-    dom.checklistBody.replaceChildren(...body);
+    render([
+        taskBar(d),
+        d.current ? html`<div key="cur" class="cl-current">${d.current}</div>` : null,
+        html`<ul key="list" class="cl-list">${items.map(checklistRow)}</ul>`,
+        d.truncated
+            ? html`<div key="note" class="cl-note">${`and ${d.truncated} more not shown`}</div>`
+            : null,
+    ], dom.checklistBody);
 }
