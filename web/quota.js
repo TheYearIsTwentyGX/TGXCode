@@ -7,10 +7,39 @@
 // reconnect, and the `apply*` pair by the event stream, so those names are
 // the module's contract with the streaming code.
 //
+// **Drawn with Preact**, the way web/rail.js settled. These surfaces update from
+// the event stream while the popover is open with the pointer on it, and the old
+// `textContent = ''`-and-rebuild threw away hover, focus and a click whose
+// mousedown and mouseup straddled a snapshot. Five containers are Preact's now —
+// #quota-pill-body, #quota-windows, #quota-events, #quota-note and #cv-body —
+// each rendered synchronously from `quota`/`state`, list children keyed by window
+// type, event, or session id. Markup and classes are what el() built, so the CSS
+// did not change.
+//
+// Everything around those containers is static index.html and is still edited by
+// hand, deliberately: the pill button's title, aria-label and flash class, the
+// wraps' `hidden`, the Refresh/Restart/Update buttons (restart.js toggles the
+// restart button's classes itself), and `present()` on the two menus. None of
+// those nodes is Preact's, so writing to them is not the hand-edit rail.js warns
+// about.
+//
+// The one-second countdown used to write `textContent` into the marked nodes. Those
+// nodes are Preact's now, so the tick re-renders the pill body (and the panel's
+// windows while it is open) — a diff that moves one text node — and still leaves
+// the pill's title and accessible name to the thirty-second repaint.
+//
+// `cvSettingsNote()` stays an el() builder because its caller, the Update channel
+// row in web/settings/claude-config.js, is an el() tree, and paintCvSettingsNote
+// swaps it in place there. That swap is for the el() caller only, and is inert
+// until cvSettingsNote() has been called: a Preact settings tree should render
+// `cvSettingsNoteV()` instead, which reads only `state` and touches no DOM, and
+// redraw it itself when `state.cv` moves (renderCv is where that happens).
+//
 // This imports the menus it closes when it opens, `openSession` and friends from app.js, which imports this — safe because
 // nothing here reads an app.js binding at module top level, only when a
 // function is called.
 
+import { html, render } from './vendor/preact.js';
 import { get, post } from './api.js';
 import { state } from './state.js';
 import { dom, el, toast } from './dom.js';
@@ -134,18 +163,73 @@ function quotaBar(pct, stale) {
     // an empty bar reads as zero used, which is a very different claim from
     // "nobody has told us".
     if (pct === null) return null;
-    return el('span', { class: 'q-bar' },
-        el('i', { style: `width:${Math.max(stale ? 0 : 2, Math.min(100, pct))}%` }));
+    return html`<span class="q-bar"><i style=${`width:${Math.max(stale ? 0 : 2, Math.min(100, pct))}%`}></i></span>`;
+}
+
+/** The windows the pill draws: any with a percentage or a status. */
+function quotaShown() {
+    const windows = (quota.snap && quota.snap.windows) || [];
+    return windows.filter(w => w.usedPercent !== null || w.status);
+}
+
+/**
+ * The pill's contents, into #quota-pill-body. Its own function because the
+ * one-second tick calls it too — without the title and aria-label work in
+ * renderQuotaPill, which must not change every second.
+ */
+function drawQuotaPill() {
+    const shown = quotaShown();
+    if (!shown.length) {
+        // The same label-then-number shape a window gets below, so an empty pill
+        // reads as "quota: nothing yet" rather than as a stray mark in the bar.
+        // The dash is already this file's word for a window with no percentage.
+        render(html`<span class="q-win" key="empty">
+            <span class="q-label">Quota</span><span class="q-num">—</span>
+        </span>`, dom.quotaPillBody);
+        return;
+    }
+
+    const groups = shown.map((w) => {
+        const age = quotaAge(w.usedPercentAt);
+        const stale = age !== null && age > QUOTA_STALE_AFTER;
+        const pct = w.usedPercent;
+        return html`<span key=${w.type} class=${'q-win' + (stale ? ' stale' : '')} data-status=${w.status || ''}>
+            <span class="q-label">${w.shortLabel}</span>
+            ${quotaBar(pct, stale)}
+            <span class="q-num">${pct === null ? '—' : `${Math.round(pct)}%`}</span>
+        </span>`;
+    });
+
+    // When the window comes back. The percentage says whether to worry; this
+    // says whether to wait, and it is the half you plan an afternoon around.
+    //
+    // The first window that has one, rather than a hardcoded `five_hour`: the
+    // bridge orders the 5-hour window first, so that is what this is in
+    // practice, but a machine that only ever reports a weekly window still gets
+    // a countdown instead of nothing.
+    //
+    // data-resets-at is what quotaClockNodes finds. It carries the timestamp
+    // rather than the rendered text, so the clock needs to know nothing about
+    // the shape of a snapshot.
+    const clock = shown.find(w => typeof w.resetsAt === 'number');
+    const reset = clock && html`<span key="reset" class="q-reset" title=${`${clock.label} resets`}>
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/>
+            <path d="M12 7v5.2l3.4 2" stroke="currentColor" stroke-width="2"
+                  stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span data-resets-at=${String(clock.resetsAt)}>${fmtLeft(clock.resetsAt)}</span>
+    </span>`;
+
+    render([...groups, reset], dom.quotaPillBody);
 }
 
 /** The pill: one compact group per window, worst first is not needed — the
  *  server already orders them 5-hour then weekly, which is how people ask. */
 function renderQuotaPill() {
-    const body = dom.quotaPillBody;
-    body.textContent = '';
+    drawQuotaPill();
 
-    const windows = (quota.snap && quota.snap.windows) || [];
-    const shown = windows.filter(w => w.usedPercent !== null || w.status);
+    const shown = quotaShown();
     if (!shown.length) {
         // The restart row lives in this popover now, so a local window keeps the
         // pill even with nothing to report — hiding it would hide the only way
@@ -153,12 +237,6 @@ function renderQuotaPill() {
         // or no trusted directory never gets a reading at all. A remote caller
         // cannot restart anything, so for them an empty pill is still empty.
         dom.quotaWrap.hidden = state.remote;
-        // The same label-then-number shape a window gets below, so an empty pill
-        // reads as "quota: nothing yet" rather than as a stray mark in the bar.
-        // The dash is already this file's word for a window with no percentage.
-        body.append(el('span', { class: 'q-win' },
-            el('span', { class: 'q-label', text: 'Quota' }),
-            el('span', { class: 'q-num', text: '—' })));
         dom.quotaPill.title = 'No quota reading yet';
         dom.quotaPill.setAttribute('aria-label', 'No quota reading yet. Bridge controls');
         return;
@@ -168,22 +246,7 @@ function renderQuotaPill() {
     const titles = [];
     for (const w of shown) {
         const age = quotaAge(w.usedPercentAt);
-        const stale = age !== null && age > QUOTA_STALE_AFTER;
         const pct = w.usedPercent;
-
-        const group = el('span', {
-            class: 'q-win' + (stale ? ' stale' : ''),
-            'data-status': w.status || '',
-        }, el('span', { class: 'q-label', text: w.shortLabel }));
-
-        const bar = quotaBar(pct, stale);
-        if (bar) group.append(bar);
-        group.append(el('span', {
-            class: 'q-num',
-            text: pct === null ? '—' : `${Math.round(pct)}%`,
-        }));
-        body.append(group);
-
         titles.push(pct === null
             ? `${w.label}: no reading yet`
             : `${w.label}: ${Math.round(pct)}% used${age === null ? '' : ` (${fmtAge(age)})`}`);
@@ -199,34 +262,6 @@ function renderQuotaPill() {
         }
     }
 
-    // When the window comes back. The percentage says whether to worry; this
-    // says whether to wait, and it is the half you plan an afternoon around.
-    //
-    // The first window that has one, rather than a hardcoded `five_hour`: the
-    // bridge orders the 5-hour window first, so that is what this is in
-    // practice, but a machine that only ever reports a weekly window still gets
-    // a countdown instead of nothing.
-    const clock = shown.find(w => typeof w.resetsAt === 'number');
-    if (clock) {
-        // `html` rather than child elements: el() namespaces an <svg> tag but
-        // builds its children with createElement, which yields unknown HTML
-        // nodes that never draw. innerHTML on an SVG element parses in the
-        // right namespace, so the shape stays declarative and no helper is
-        // needed for the one icon this file draws.
-        body.append(el('span', { class: 'q-reset', title: `${clock.label} resets` },
-            el('svg', {
-                width: '11', height: '11', viewBox: '0 0 24 24', fill: 'none',
-                'aria-hidden': 'true',
-                html: '<circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/>'
-                    + '<path d="M12 7v5.2l3.4 2" stroke="currentColor" stroke-width="2"'
-                    + ' stroke-linecap="round" stroke-linejoin="round"/>',
-            }),
-            // data-resets-at is what tickQuotaClocks finds. It carries the
-            // timestamp rather than the rendered text, so the tick needs to
-            // know nothing about the shape of a snapshot.
-            el('span', { 'data-resets-at': String(clock.resetsAt), text: fmtLeft(clock.resetsAt) })));
-    }
-
     const summary = titles.join(' · ');
     dom.quotaPill.title = summary;
     // The button's own text is "5h 98% 12m", which is a fine glance and a poor
@@ -237,26 +272,22 @@ function renderQuotaPill() {
     dom.quotaPill.setAttribute('aria-label', `Quota used. ${summary}`);
 }
 
-function renderQuotaPanel() {
-    const rows = dom.quotaWindows;
-    rows.textContent = '';
-
+/** One row per window, into #quota-windows. The tick calls this too while the
+ *  panel is open, for the countdowns in it. */
+function drawQuotaWindows() {
     const windows = (quota.snap && quota.snap.windows) || [];
-    for (const w of windows) {
+    if (!windows.length) {
+        render(html`<div class="q-row-sub" key="none">
+            <span>Nothing observed yet. A turn or an open terminal will fill this in.</span>
+        </div>`, dom.quotaWindows);
+        return;
+    }
+
+    render(windows.map((w) => {
         const age = quotaAge(w.usedPercentAt);
         const stale = age !== null && age > QUOTA_STALE_AFTER;
         const pct = w.usedPercent;
-
-        const row = el('div', { class: 'q-row' + (stale ? ' stale' : '') });
-        row.append(el('div', { class: 'q-row-top' },
-            el('span', { text: w.label }),
-            el('span', { class: 'q-pct', text: pct === null ? 'no reading' : `${pct.toFixed(1)}%` })));
-
         const bar = quotaBar(pct, stale);
-        if (bar) {
-            const holder = el('span', { class: 'q-win', 'data-status': w.status || '' }, bar);
-            row.append(holder);
-        }
 
         // Left: where the number came from and when. Right: the reset, which is
         // the other half of the question and comes from the stream, so it stays
@@ -265,133 +296,122 @@ function renderQuotaPanel() {
             ? (w.status ? 'status only — no percentage sent' : 'not observed yet')
             : `${w.usedPercentSource === 'stream' ? 'from a turn' : 'from the status line'}, ${fmtAge(age)}`;
 
-        const sub = el('div', { class: 'q-row-sub' },
-            el('span', { class: stale ? 'warn' : '', text: left }));
-
         // The reset gets an element of its own rather than being joined into
-        // one string: tickQuotaClocks rewrites its text every second, and it
-        // cannot do that to a span that also holds the overage note.
-        const right = el('span', {
-            class: w.status === 'rejected' ? 'bad' : w.status === 'allowed_warning' ? 'warn' : '',
-        });
-        if (w.resetsAt) {
-            right.append('resets in ',
-                el('span', { 'data-resets-at': String(w.resetsAt), text: fmtLeft(w.resetsAt) }));
-        }
-        if (w.isUsingOverage) right.append(w.resetsAt ? ' · on overage' : 'on overage');
-        sub.append(right);
-        row.append(sub);
-        rows.append(row);
-    }
+        // one string, so the countdown is one text node the tick's diff moves
+        // and the overage note beside it is left alone.
+        return html`<div key=${w.type} class=${'q-row' + (stale ? ' stale' : '')}>
+            <div class="q-row-top">
+                <span>${w.label}</span>
+                <span class="q-pct">${pct === null ? 'no reading' : `${pct.toFixed(1)}%`}</span>
+            </div>
+            ${bar && html`<span class="q-win" data-status=${w.status || ''}>${bar}</span>`}
+            <div class="q-row-sub">
+                <span class=${stale ? 'warn' : ''}>${left}</span>
+                <span class=${w.status === 'rejected' ? 'bad' : w.status === 'allowed_warning' ? 'warn' : ''}>
+                    ${w.resetsAt ? html`resets in <span data-resets-at=${String(w.resetsAt)}>${fmtLeft(w.resetsAt)}</span>` : null}
+                    ${w.isUsingOverage ? (w.resetsAt ? ' · on overage' : 'on overage') : null}
+                </span>
+            </div>
+        </div>`;
+    }), dom.quotaWindows);
+}
 
-    if (!windows.length) {
-        rows.append(el('div', { class: 'q-row-sub' },
-            el('span', { text: 'Nothing observed yet. A turn or an open terminal will fill this in.' })));
-    }
+function renderQuotaPanel() {
+    drawQuotaWindows();
 
     // The history. Only status changes are kept, so this is short by
     // construction and empty most of the time.
-    const evs = dom.quotaEvents;
-    evs.textContent = '';
     const events = (quota.snap && quota.snap.events) || [];
-    if (events.length) {
-        evs.append(el('div', { class: 'q-ev-head', text: 'Limit events' }));
-        for (const ev of events.slice(0, 6)) {
+    render(events.length ? [
+        html`<div key="head" class="q-ev-head">Limit events</div>`,
+        ...events.slice(0, 6).map((ev) => {
             const when = fmtAge(quotaAge(ev.at));
             const what = ev.from ? `${ev.from} → ${ev.to}` : ev.to;
-            evs.append(el('div', { text: `${ev.label}: ${what.replace(/_/g, ' ')} · ${when}` }));
-        }
-    }
+            return html`<div key=${`${ev.type}:${ev.at}:${ev.to}`}>${`${ev.label}: ${what.replace(/_/g, ' ')} · ${when}`}</div>`;
+        }),
+    ] : null, dom.quotaEvents);
 
-    // And the one thing the user can act on.
-    const note = dom.quotaNote;
-    note.textContent = '';
+    render(quotaNoteLines(), dom.quotaNote);
+}
+
+/** The panel's note: the one thing the user can act on. Keyed by what each line
+ *  is, so a line that stays put keeps its node while the ones around it change. */
+function quotaNoteLines() {
+    const out = [];
+    const line = (key, text, cls) => out.push(html`<div key=${key} class=${cls}>${text}</div>`);
     const sl = quota.snap && quota.snap.statusLine;
     const bc = quota.snap && quota.snap.beacon;
 
     if (sl && !sl.present) {
-        note.append(el('div', { text: 'Percentages come from the Claude Code status line, which only runs in a terminal. To turn it on:' }));
-        note.append(el('code', { text: 'node scripts/install-quota-statusline.js' }));
+        line('sl', 'Percentages come from the Claude Code status line, which only runs in a terminal. To turn it on:');
+        out.push(html`<code key="sl-cmd">node scripts/install-quota-statusline.js</code>`);
     } else if (sl && sl.present) {
-        note.append(el('div', {
-            text: `Last harvested from the status line ${fmtAge(quotaAge(sl.capturedAt))}.`,
-        }));
+        line('sl', `Last harvested from the status line ${fmtAge(quotaAge(sl.capturedAt))}.`);
     }
 
     // Why the number is or is not moving. Without this a stale reading is
     // unexplained, which is the failure this whole feature is arranged against
     // — the pill can say a number is old, but only the beacon knows why.
-    if (!bc) return;
+    if (!bc) return out;
 
     // The button was pressed and could not even start. Above the rest, because
     // it is about the thing the user just did.
-    if (quota.refreshError) {
-        note.append(el('div', { class: 'warn', text: `Refresh: ${quota.refreshError}` }));
-    }
+    if (quota.refreshError) line('refresh', `Refresh: ${quota.refreshError}`, 'warn');
 
     if (!bc.dir) {
-        note.append(el('div', {
-            text: 'Refreshing it without a terminal open needs the quota beacon: '
-                + 'set quota.beacon and quota.beaconDir in ~/.tgxcode/settings.json. '
-                + 'Open Claude Code in that directory yourself once first — the beacon '
-                + 'will not answer the trust prompt.',
-        }));
-        return;
+        line('bc', 'Refreshing it without a terminal open needs the quota beacon: '
+            + 'set quota.beacon and quota.beaconDir in ~/.tgxcode/settings.json. '
+            + 'Open Claude Code in that directory yourself once first — the beacon '
+            + 'will not answer the trust prompt.');
+        return out;
     }
 
     // A directory is set but the timer is off. Refresh still works — it is the
     // timer that flag governs — so say that rather than repeating the setup
     // instructions at somebody who has already followed them.
     if (!bc.enabled) {
-        note.append(el('div', {
-            text: `Automatic refresh is off (quota.beacon), so the percentage only `
-                + `moves while a terminal is open — or when you press Refresh, which `
-                + `runs it once in ${bc.dir}.`,
-        }));
-        return;
+        line('bc', `Automatic refresh is off (quota.beacon), so the percentage only `
+            + `moves while a terminal is open — or when you press Refresh, which `
+            + `runs it once in ${bc.dir}.`);
+        return out;
     }
 
     // On, but not on this bridge. Worth saying rather than showing a last-run
     // age that will never move: on a dev window the beacon is the everyday
     // instance's job, and the reading here is whatever that one last harvested.
     if (bc.suppressed === 'dev-bridge') {
-        note.append(el('div', {
-            text: 'Automatic refresh is off on a dev bridge — the everyday instance '
-                + 'runs the clock. The percentages here are whatever it last '
-                + 'harvested, and Refresh still works if you want one now.',
-        }));
-        return;
+        line('bc', 'Automatic refresh is off on a dev bridge — the everyday instance '
+            + 'runs the clock. The percentages here are whatever it last '
+            + 'harvested, and Refresh still works if you want one now.');
+        return out;
     }
 
     const every = bc.everyMinutes ? `every ${bc.everyMinutes}m` : '';
     if (bc.running) {
-        note.append(el('div', { text: `Beacon running now in ${bc.dir}.` }));
+        line('bc', `Beacon running now in ${bc.dir}.`);
     } else if (bc.ok === false) {
         // The interesting case: it is on, and not working. Say which directory
         // and what went wrong, because the usual cause is a dialog waiting in a
         // TUI nobody can see.
-        note.append(el('div', { class: 'warn', text: `Beacon failing — ${bc.reason}` }));
+        line('bc', `Beacon failing — ${bc.reason}`, 'warn');
         // `probed` splits the two failures that used to look identical, and the
         // user's next move is different for each: a run that never rendered is
         // sitting behind a dialog they have to go and answer, while one that
         // rendered and got no percentage is the CLI's own quota probe not
         // firing, which no amount of clicking here will fix.
-        note.append(el('div', {
-            text: bc.probed
-                ? 'It started fine — the CLI just never produced a percentage. '
-                    + 'Nothing to answer; the reading below stands until it does.'
-                : 'It never got as far as drawing a status line. Open Claude Code '
-                    + `in ${bc.dir} yourself and clear whatever is waiting.`,
-        }));
-        if (bc.screen) note.append(el('code', { text: bc.screen }));
+        line('bc-why', bc.probed
+            ? 'It started fine — the CLI just never produced a percentage. '
+                + 'Nothing to answer; the reading below stands until it does.'
+            : 'It never got as far as drawing a status line. Open Claude Code '
+                + `in ${bc.dir} yourself and clear whatever is waiting.`);
+        if (bc.screen) out.push(html`<code key="bc-screen">${bc.screen}</code>`);
     } else if (bc.ok) {
-        note.append(el('div', {
-            text: `Beacon on, ${every}, in ${bc.dir} — last run ${fmtAge(quotaAge(bc.at))}`
-                + `${typeof bc.ms === 'number' ? ` (${(bc.ms / 1000).toFixed(1)}s)` : ''}.`,
-        }));
+        line('bc', `Beacon on, ${every}, in ${bc.dir} — last run ${fmtAge(quotaAge(bc.at))}`
+            + `${typeof bc.ms === 'number' ? ` (${(bc.ms / 1000).toFixed(1)}s)` : ''}.`);
     } else {
-        note.append(el('div', { text: `Beacon on, ${every}, in ${bc.dir} — not run yet.` }));
+        line('bc', `Beacon on, ${every}, in ${bc.dir} — not run yet.`);
     }
+    return out;
 }
 
 /**
@@ -456,12 +476,13 @@ function quotaLeft(resetsAt) {
 }
 
 /**
- * Every countdown currently on screen, pill and panel alike.
+ * Every countdown currently on screen, pill and panel alike. Read off the
+ * rendered DOM — reading Preact's nodes is fine; it is writing them that is not.
  *
  * The panel only counts while it is open. Closing it hides #quota-menu without
  * emptying it, so its rows are still in the document — ticking them would keep
  * the interval alive over text nobody can see, and worse, would keep it alive
- * after the pill's own countdown had run out. Reopening rebuilds the rows, so
+ * after the pill's own countdown had run out. Reopening redraws the rows, so
  * nothing stale is ever shown.
  */
 function quotaClockNodes() {
@@ -473,13 +494,14 @@ function quotaClockNodes() {
 /**
  * Move every countdown on the pill and in the panel.
  *
- * **Text only, on purpose.** The obvious implementation of a per-second
- * countdown is renderQuota on a one-second interval, and that is wrong twice
- * over: renderQuotaPill empties #quota-pill-body and rebuilds it, so anything
- * decorating a window group would be destroyed roughly once a second, and it
- * redraws two bars and a whole panel to move one digit. Shaped after what the
- * live board's tickCardClocks did before that board moved to Preact — find the
- * marked nodes, rewrite their text, touch nothing else.
+ * **Not renderQuota on a one-second interval.** That would redraw the events and
+ * the note, rewrite the Refresh and Restart buttons, and change the pill's
+ * accessible name every second. This draws only the two places a countdown
+ * lives — the pill body, and the panel's windows while the panel is open — and
+ * because they are Preact renders now, the diff moves the countdown's text node
+ * and leaves every other node, hover and focus where it was. It used to write
+ * `textContent` into the marked nodes directly; those are Preact's now, and a
+ * hand edit there would be undone, or worse, not, by the next render.
  *
  * `title` and `aria-label` are deliberately left to the thirty-second repaint.
  * They are the pill's accessible name, and a name that changes every second is
@@ -488,11 +510,13 @@ function quotaClockNodes() {
 function tickQuotaClocks() {
     if (!quota.snap) return stopQuotaClock();
 
+    drawQuotaPill();
+    if (!dom.quotaMenu.hidden) drawQuotaWindows();
+
     let counting = false;
     let last = 0;
     for (const n of quotaClockNodes()) {
         const at = Number(n.dataset.resetsAt);
-        n.textContent = fmtLeft(at);
         if (quotaLeft(at) > 0) counting = true;
         last = at;
     }
@@ -779,40 +803,35 @@ function renderCv() {
 function renderCvPanel() {
     const cv = state.cv;
     if (!cv) return;
-    const rows = [];
-    rows.push(el('div', { class: 'q-row cv-row' },
-        el('span', {}, 'Installed'), el('b', {}, cv.installed || 'unknown')));
-    rows.push(el('div', { class: 'q-row cv-row' },
-        el('span', {}, `Newest on ${cv.channel}`),
-        el('b', {}, cv.latest || '—')));
-    if (cv.error) {
-        rows.push(el('div', { class: 'quota-note' },
-            el('div', { class: 'warn' }, `Could not ask the registry: ${cv.error}`)));
-    }
     const stale = cvStale();
-    if (stale.length) {
-        const byId = new Map(state.sessions.map(s => [s.sessionId, s]));
-        rows.push(el('div', { class: 'q-row' },
-            el('div', { class: 'cv-stale-head' },
-                `Running an older binary (${stale.length})`),
-            ...stale.map(x => {
+    const byId = new Map(state.sessions.map(s => [s.sessionId, s]));
+    // Keyed by what each row is, so the stale list can come and go without the
+    // two version rows above it being rebuilt, and a session's button keeps its
+    // node — and the pointer on it — across the `claude-version` push that
+    // arrives while you are reaching for it.
+    render([
+        html`<div key="installed" class="q-row cv-row"><span>Installed</span><b>${cv.installed || 'unknown'}</b></div>`,
+        html`<div key="newest" class="q-row cv-row"><span>${`Newest on ${cv.channel}`}</span><b>${cv.latest || '—'}</b></div>`,
+        cv.error && html`<div key="error" class="quota-note">
+            <div class="warn">${`Could not ask the registry: ${cv.error}`}</div>
+        </div>`,
+        stale.length > 0 && html`<div key="stale" class="q-row">
+            <div class="cv-stale-head">${`Running an older binary (${stale.length})`}</div>
+            ${stale.map((x) => {
                 const s = byId.get(x.id);
-                return el('button', {
-                    class: 'cv-stale', type: 'button', title: 'Open this session',
-                    onclick: (e) => { e.stopPropagation(); showCv(false); openSession(x.id); },
-                }, el('span', { class: 'cv-stale-title' }, s ? s.title : x.id.slice(0, 8)),
-                el('span', { class: 'cv-stale-ver' }, x.version));
-            }),
-            el('div', { class: 'quota-note' },
-                'Each keeps the binary it started on until its process ends. '
-                + 'Stop one and send it a message to move it to the installed version.')));
-    }
-    if (cv.lastUpdate && !cv.lastUpdate.ok) {
-        rows.push(el('div', { class: 'quota-note' },
-            el('div', { class: 'warn' }, 'The last update failed:'),
-            el('code', {}, cv.lastUpdate.output || 'no output')));
-    }
-    dom.cvBody.replaceChildren(...rows);
+                return html`<button key=${x.id} class="cv-stale" type="button" title="Open this session"
+                        onClick=${(e) => { e.stopPropagation(); showCv(false); openSession(x.id); }}>
+                    <span class="cv-stale-title">${s ? s.title : x.id.slice(0, 8)}</span>
+                    <span class="cv-stale-ver">${x.version}</span>
+                </button>`;
+            })}
+            <div class="quota-note">Each keeps the binary it started on until its process ends. Stop one and send it a message to move it to the installed version.</div>
+        </div>`,
+        cv.lastUpdate && !cv.lastUpdate.ok && html`<div key="failed" class="quota-note">
+            <div class="warn">The last update failed:</div>
+            <code>${cv.lastUpdate.output || 'no output'}</code>
+        </div>`,
+    ], dom.cvBody);
 
     const busy = state.cvBusy || cv.updating;
     dom.cvUpdate.hidden = !cv.behind && !busy;
@@ -860,17 +879,31 @@ async function updateClaudeNow() {
  * The Update channel row in Claude settings, which is where somebody looking for
  * "what version am I on" goes. Patched in place rather than by re-rendering the
  * settings page, which would throw away whatever is being typed there.
+ *
+ * **For the el() caller only.** A settings row drawn by Preact renders
+ * cvSettingsNoteV() instead, and a node swapped or appended into it here would
+ * be a hand edit on a tree Preact owns. So this does nothing until something has
+ * asked for the el() note — once the settings page renders the vnode and never
+ * calls cvSettingsNote(), this is inert, and that caller redraws the note itself.
  */
+let cvNoteElUsed = false;
 function paintCvSettingsNote() {
+    if (!cvNoteElUsed) return;
     const row = document.querySelector('.settings-row[data-path="autoUpdatesChannel"] .settings-row-text');
     if (!row) return;
     const old = row.querySelector('.cv-note');
-    const note = cvSettingsNote();
+    const note = buildCvSettingsNote();
     if (old) old.replaceWith(note || '');
     else if (note) row.append(note);
 }
 
+/** The settings note as a DOM node, for an el() settings row. See cvSettingsNoteV. */
 export function cvSettingsNote() {
+    cvNoteElUsed = true;
+    return buildCvSettingsNote();
+}
+
+function buildCvSettingsNote() {
     const cv = state.cv;
     if (!cv || !cv.installed) return null;
     const busy = state.cvBusy || cv.updating;
@@ -883,6 +916,23 @@ export function cvSettingsNote() {
                 onclick: updateClaudeNow,
             }, busy ? ' Updating…' : ' Update now')
             : '');
+}
+
+/**
+ * The same note as a vnode, for a settings row drawn by Preact. Reads `state`
+ * and nothing else, so it can sit in any tree; whoever renders it redraws it
+ * when `state.cv` moves. Returns null when there is nothing to say.
+ */
+export function cvSettingsNoteV() {
+    const cv = state.cv;
+    if (!cv || !cv.installed) return null;
+    const busy = state.cvBusy || cv.updating;
+    return html`<div key="cv-note" class="settings-row-note cv-note">
+        ${`Installed ${cv.installed}`}${cv.latest ? ` · newest on this channel ${cv.latest}` : ''}${
+            cv.behind && !state.remote
+                ? html`<button class="linkish" type="button" disabled=${busy} onClick=${updateClaudeNow}>${busy ? ' Updating…' : ' Update now'}</button>`
+                : null}
+    </div>`;
 }
 
 dom.cvPill.addEventListener('click', (e) => {
@@ -949,8 +999,7 @@ dom.cvUpdate.addEventListener('click', (e) => {
 // crossing into stale, and cheap enough to leave running.
 //
 // The countdown does not wait for this — tickQuotaClocks runs it at 1 Hz. What
-// this interval still owns for the countdown is the marking: it is a full
-// render, so it is what puts data-resets-at back on a rebuilt pill, and its
-// syncQuotaClock is the safety net that starts the tick if a reset time ever
-// arrives by a path that forgets to render.
+// this interval still owns for the countdown is its syncQuotaClock, the safety
+// net that starts the tick if a reset time ever arrives by a path that forgets
+// to render.
 quota.timer = setInterval(renderQuota, 30000);
