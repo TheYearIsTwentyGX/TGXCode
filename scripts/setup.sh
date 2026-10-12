@@ -8,6 +8,9 @@
 #   bash scripts/setup.sh --statusline    also install the quota status line
 #   bash scripts/setup.sh --no-build      stop before packaging the app
 #   bash scripts/setup.sh --dir PATH      where to clone, when not run from a checkout
+#   bash scripts/setup.sh --windows-node=nvm
+#                                         Windows Node through nvm-windows, not the plain
+#                                         Node LTS package (both via winget; WSL only)
 #
 # Or, before there is a checkout at all:
 #
@@ -21,7 +24,8 @@
 #   3. clone the repo, unless this script is already running out of one
 #   4. nvm and a Node LTS in Linux
 #   5. Claude Code, from its native installer
-#   6. WSL only: Node LTS on Windows, through winget
+#   6. WSL only: Node LTS on Windows, through winget — the Node package, or
+#      nvm-windows and then `nvm install lts` with --windows-node=nvm
 #   7. WSL only: networkingMode=mirrored in %USERPROFILE%\.wslconfig
 #   8. the build — install.ps1 on WSL, electron-builder on Linux
 #   9. --cron / --statusline, if asked for
@@ -32,15 +36,18 @@
 #
 # Decisions worth knowing before changing this:
 #
-# - **Windows gets Node from winget, not nvm-windows.** The Windows Node exists
-#   for one job — install.ps1's npm install and electron-builder — and nobody
-#   switches versions there. nvm-windows makes `nvm use` a symlink under Program
-#   Files that needs an elevated shell every time, which is a worse thing to
-#   drive from WSL than one UAC prompt for an MSI.
-# - **The build is run with a refreshed Windows PATH.** WSL captures the Windows
-#   environment when the distro starts, so a Node winget installed a minute ago
-#   is invisible to `npm run build`'s powershell.exe. The build below reloads
-#   PATH from the registry before calling install.ps1 for exactly that reason.
+# - **Windows Node defaults to the plain package, not nvm-windows.** The Windows
+#   Node exists for one job — install.ps1's npm install and electron-builder —
+#   and nobody switches versions there. nvm-windows makes `nvm use` a symlink
+#   that needs elevation every time it changes, which is a worse thing to drive
+#   from WSL than one UAC prompt for an MSI. `--windows-node=nvm` is there for
+#   a machine that wants nvm on Windows anyway; either way an existing Windows
+#   node is left alone.
+# - **Every PowerShell call reloads the Windows environment.** WSL captures it
+#   when the distro starts, so a Node winget installed a minute ago is invisible
+#   to `npm run build`'s powershell.exe. $WIN_ENV below reads PATH back from the
+#   registry first — and NVM_HOME and NVM_SYMLINK, which nvm-windows's PATH
+#   entries are written in terms of and which are just as new.
 # - **install.ps1 force-closes a running TGXCode.** Harmless on a new machine,
 #   and the opposite on a machine already using it, so the build asks first when
 #   it finds one running and skips it when there is no terminal to ask at.
@@ -64,6 +71,7 @@ CRON=0
 STATUSLINE=0
 BUILD=1
 DIR=""
+WIN_NODE_FROM=winget
 TODO=()
 
 say()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
@@ -157,6 +165,8 @@ while [ $# -gt 0 ]; do
         --no-build) BUILD=0 ;;
         --dir) shift; DIR="${1:-}"; [ -n "$DIR" ] || die "--dir needs a path" ;;
         --dir=*) DIR="${1#--dir=}" ;;
+        --windows-node) shift; WIN_NODE_FROM="${1:-}" ;;
+        --windows-node=*) WIN_NODE_FROM="${1#--windows-node=}" ;;
         --merge-wslconfig) shift; [ -n "${1:-}" ] || die "--merge-wslconfig needs a file"
                            merge_wslconfig "$1"; exit $? ;;
         -h|--help) sed -n '3,/^# What it does/p' "${BASH_SOURCE[0]}" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
@@ -164,6 +174,11 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+
+case "$WIN_NODE_FROM" in
+    winget|nvm) ;;
+    *) die "--windows-node is winget or nvm, not '$WIN_NODE_FROM'" ;;
+esac
 
 [ "$(id -u)" = 0 ] && die "run this as your own user, not root — it uses sudo where it has to"
 command -v apt-get >/dev/null 2>&1 || die "this script knows apt, and there is no apt-get here"
@@ -267,11 +282,14 @@ fi
 
 # ── 6–7. the Windows side ───────────────────────────────────────────────────
 
-# Run PowerShell with PATH reloaded from the registry, from /mnt/c because
-# Windows tools refuse a \\wsl.localhost working directory.
+# The Windows environment as the registry has it now, not as WSL captured it at
+# boot. The NVM_* variables go first because the PATH entries name them.
+WIN_ENV='foreach ($v in "NVM_HOME","NVM_SYMLINK") { $x = [Environment]::GetEnvironmentVariable($v,"User"); if (-not $x) { $x = [Environment]::GetEnvironmentVariable($v,"Machine") }; if ($x) { Set-Item "env:$v" $x } }; $env:Path = [Environment]::ExpandEnvironmentVariables([Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User"));'
+
+# Run PowerShell in that environment, from /mnt/c because Windows tools refuse
+# a \\wsl.localhost working directory.
 winps() {
-    (cd /mnt/c && powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \
-        "\$env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User'); $1") \
+    (cd /mnt/c && powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$WIN_ENV $1") \
         | tr -d '\r'
 }
 
@@ -284,10 +302,28 @@ if [ "$WSL" = 1 ]; then
     WIN_NODE="$(winps "(Get-Command node -ErrorAction SilentlyContinue).Source")"
     if [ -n "$WIN_NODE" ]; then
         ok "node at $WIN_NODE"
-    else
+    elif [ "$WIN_NODE_FROM" = winget ]; then
         echo "    winget will ask Windows for permission (a UAC prompt) to install the MSI."
         run_sh "cd /mnt/c && winget.exe install --id OpenJS.NodeJS.LTS -e --silent --accept-source-agreements --accept-package-agreements" \
             || die "winget could not install Node; install the Windows LTS from nodejs.org and rerun"
+    else
+        if [ -z "$(winps "(Get-Command nvm -ErrorAction SilentlyContinue).Source")" ]; then
+            echo "    winget will ask Windows for permission (a UAC prompt) to install nvm-windows."
+            run_sh "cd /mnt/c && winget.exe install --id CoreyButler.NVMforWindows -e --silent --accept-source-agreements --accept-package-agreements" \
+                || die "winget could not install nvm-windows; install it from github.com/coreybutler/nvm-windows and rerun"
+        fi
+        # `nvm use` points the symlink at the new version, and asks for its own
+        # elevation to do it — a second UAC prompt.
+        if [ "$DRY" = 1 ]; then
+            run nvm install lts
+            run nvm use lts
+        else
+            winps "nvm install lts; if (\$LASTEXITCODE) { exit \$LASTEXITCODE }; nvm use lts; exit \$LASTEXITCODE" \
+                || die "nvm-windows could not install Node; run \`nvm install lts\` and \`nvm use lts\` in PowerShell and rerun"
+            WIN_NODE="$(winps "(Get-Command node -ErrorAction SilentlyContinue).Source")"
+            [ -n "$WIN_NODE" ] || die "nvm-windows installed Node, but node is not on the Windows PATH; open a new PowerShell, run \`nvm use lts\`, and rerun"
+            ok "node at $WIN_NODE"
+        fi
     fi
 
     say "WSL networking"
@@ -338,7 +374,7 @@ elif [ "$WSL" = 1 ]; then
         else
             # Not through winps: its tr would buffer install.ps1's progress.
             (cd /mnt/c && powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \
-                "\$env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User'); & '$WIN_SCRIPT'; exit \$LASTEXITCODE") || die "install.ps1 failed — the output above says where"
+                "$WIN_ENV & '$WIN_SCRIPT'; exit \$LASTEXITCODE") || die "install.ps1 failed — the output above says where"
         fi
     fi
 else

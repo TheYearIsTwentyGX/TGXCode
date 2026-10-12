@@ -158,8 +158,9 @@ says otherwise.
 It finishes with what it cannot do for you: logging in to Claude Code, and, if
 it touched `.wslconfig`, `wsl --shutdown` — which ends every WSL process,
 including this one. Two choices it makes that the manual steps leave open:
-Windows gets Node from `winget`, not nvm-windows, since nobody switches Node
-versions on the side that only runs the packager; and if TGXCode is already
+Windows gets the plain Node package from `winget`, since nobody switches Node
+versions on the side that only runs the packager — `--windows-node=nvm` installs
+nvm-windows and a Node LTS through it instead; and if TGXCode is already
 running it asks before building, because the installer closes it.
 
 ### Linux
