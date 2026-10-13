@@ -12,7 +12,7 @@
 /* ── tool calls ──────────────────────────────────────────────────────── */
 
 .tool {
-    margin: 3px 0;
+    margin: var(--sp-2) 0;
     background: var(--s2);
     border-radius: var(--r);
     overflow: hidden;
@@ -22,12 +22,17 @@
 
 /* The row itself is shared with the fold a run of tool calls collapses into
    (.trow, below) — one more row of the same kind, and it should be impossible
-   for the two to drift apart by editing only one of them. */
+   for the two to drift apart by editing only one of them.
+
+   On the baseline, so the name, the argument and the time — three sizes and
+   two faces — read as one line, and so the row has a baseline of its own for
+   the time gutter beside it to sit on (.ev). The dot, which has no text,
+   centres instead. */
 :is(.tool > summary, .trow) {
     display: flex;
-    align-items: center;
-    gap: 11px;
-    padding: 8px 15px;
+    align-items: baseline;
+    gap: var(--sp-4);
+    padding: var(--sp-4) var(--sp-7);
     cursor: pointer;
     list-style: none;
     font: 400 var(--fs-md)/var(--lh-base) var(--sans);
@@ -38,10 +43,15 @@
 .tool > summary::-webkit-details-marker { display: none; }
 :is(.tool > summary, .trow):hover { background: var(--s3); }
 
-/* Status is a dot, not a coloured slab. */
+/* Status is a dot, not a coloured slab — and the row's only marker. There used
+   to be a disclosure caret beside it, two glyphs before every summary saying
+   "this is a row" between them. The dot carries the status, which the caret
+   never did; that the row opens is said by its hover ground and its cursor,
+   and by <details> to anything reading the page. */
 :is(.tool > summary, .trow)::before {
     content: "";
     flex: none;
+    align-self: center;
     width: 6px; height: 6px;
     border-radius: 50%;
     background: var(--text-4);
@@ -80,15 +90,6 @@
     font-variant-numeric: tabular-nums;
 }
 
-:is(.tool, .trow) .caret {
-    flex: none;
-    width: 10px;
-    font-size: 9px;
-    color: var(--text-4);
-    transition: transform var(--t-fast) var(--ease);
-}
-.tool[open] .caret { transform: rotate(90deg); }
-
 /* A run of tool calls, folded into one row once a message closed it.
    The <summary> is display:block and the grid lives inside it, so the rows the
    fold holds stay top-level .ev grids: nesting them inside an .ev-body would
@@ -101,26 +102,23 @@
 }
 .trun > summary::-webkit-details-marker { display: none; }
 .trow {
-    margin: 3px 0;
+    margin: var(--sp-2) 0;
     background: var(--s2);
 }
-/* `> summary`, not a descendant: the fold holds tool blocks with carets of
-   their own, and those answer to their own open state. */
-.trun[open] > summary .caret { transform: rotate(90deg); }
 
-.tool-body { padding: 4px 15px 14px; }
+.tool-body { padding: var(--sp-2) var(--sp-7) var(--sp-7); }
 
-.tool-section { margin-top: 12px; }
+.tool-section { margin-top: var(--sp-6); }
 .tool-section > h4 {
-    margin: 0 0 6px;
-    font: 500 var(--fs-sm)/1 var(--sans);
+    margin: 0 0 var(--sp-3);
+    font: 500 var(--fs-sm)/var(--lh-none) var(--sans);
     color: var(--text-4);
     letter-spacing: 0.02em;
 }
 
 .io {
     margin: 0;
-    padding: 12px 14px;
+    padding: var(--sp-6);
     background: var(--bg);
     border-radius: var(--r-sm);
     font: 400 var(--fs-md)/var(--lh-prose) var(--mono);
@@ -136,9 +134,9 @@
 .kv {
     display: grid;
     grid-template-columns: max-content 1fr;
-    gap: 4px 16px;
+    gap: var(--sp-2) var(--sp-7);
     font: 400 var(--fs-md)/var(--lh-prose) var(--mono);
-    padding: 12px 14px;
+    padding: var(--sp-6);
     background: var(--bg);
     border-radius: var(--r-sm);
 }
@@ -146,10 +144,10 @@
 .kv dd { margin: 0; color: var(--text-2); word-break: break-all; }
 
 .more-btn {
-    margin-top: 10px;
+    margin-top: var(--sp-5);
     height: 32px;
-    padding: 0 16px;
-    font: 500 var(--fs-md)/1 var(--sans);
+    padding: 0 var(--sp-7);
+    font: 500 var(--fs-md)/var(--lh-none) var(--sans);
     color: var(--blue);
     background: transparent;
     border-radius: var(--pill);
@@ -164,14 +162,14 @@
     border-radius: var(--r-sm);
     font: 400 var(--fs-md)/var(--lh-prose) var(--mono);
     overflow-x: auto;
-    padding: 6px 0;
+    padding: var(--sp-3) 0;
 }
 .diff .hunk {
-    padding: 4px 14px;
+    padding: var(--sp-2) var(--sp-6);
     color: var(--text-4);
     font-size: var(--fs-sm);
 }
-.diff .dl { padding: 0 14px; white-space: pre; }
+.diff .dl { padding: 0 var(--sp-6); white-space: pre; }
 /* Kept low-saturation: a long diff should not become a wall of colour. */
 .diff .dl.add { background: var(--diff-add-bg); color: var(--diff-add-fg); }
 .diff .dl.del { background: var(--diff-del-bg); color: var(--diff-del-fg); }
@@ -179,11 +177,11 @@
 
 /* subagent */
 .subagent-log {
-    margin-top: 10px;
-    padding-left: 16px;
+    margin-top: var(--sp-5);
+    padding-left: var(--sp-7);
     border-left: 2px solid var(--outline-soft);
 }
-.subagent-log .ev { grid-template-columns: 44px 1fr; column-gap: 12px; }
+.subagent-log .ev { grid-template-columns: 44px 1fr; column-gap: var(--sp-6); }
 
 .subagent-meta {
     font: 400 var(--fs-xs)/var(--lh-prose) var(--mono);
@@ -192,7 +190,7 @@
 .subagent[data-status="running"] .subagent-meta { color: var(--yellow); }
 .subagent[data-status="failed"] .subagent-meta { color: var(--red); }
 
-.subagent-btns { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.subagent-btns { display: flex; align-items: center; gap: var(--sp-4); flex-wrap: wrap; }
 .more-btn.primary { background: var(--blue-tint); }
 .more-btn.primary:hover { background: var(--blue-deep); color: var(--on-blue-deep); }
 
@@ -203,13 +201,13 @@
 
 /* ── prose ───────────────────────────────────────────────────────────── */
 
-.prose { font-size: var(--fs-base); line-height: 1.72; color: var(--text-2); }
+.prose { font-size: var(--fs-base); line-height: var(--lh-prose); color: var(--text-2); }
 .prose > *:first-child { margin-top: 0; }
 .prose > *:last-child { margin-bottom: 0; }
 .prose p { margin: 0 0 0.8em; }
 .prose h1, .prose h2, .prose h3, .prose h4, .prose h5, .prose h6 {
     margin: 1.5em 0 0.55em;
-    line-height: 1.35;
+    line-height: var(--lh-tight);
     font-weight: 500;
     color: var(--text);
     letter-spacing: -0.002em;
@@ -221,12 +219,12 @@
 .prose ul, .prose ol { margin: 0 0 0.8em; padding-left: 1.45em; }
 .prose li { margin: 0.22em 0; }
 .prose li::marker { color: var(--text-4); }
-.prose li.task { list-style: none; margin-left: -1.3em; display: flex; gap: 9px; }
-.prose li.task input { margin-top: 5px; accent-color: var(--blue); }
+.prose li.task { list-style: none; margin-left: -1.3em; display: flex; gap: var(--sp-4); }
+.prose li.task input { margin-top: var(--sp-2); accent-color: var(--blue); }
 .prose li > p { margin: 0 0 0.35em; }
 .prose blockquote {
     margin: 0 0 0.8em;
-    padding: 2px 0 2px 16px;
+    padding: var(--sp-1) 0 var(--sp-1) var(--sp-7);
     border-left: 3px solid var(--outline);
     color: var(--text-3);
 }
@@ -251,7 +249,7 @@
 .prose a.fs-path:hover { text-decoration: underline solid currentColor; }
 
 .prose code {
-    font: 400 0.87em/1.5 var(--mono);
+    font: 400 0.87em/var(--lh-base) var(--mono);
     background: var(--s3);
     border-radius: var(--r-xs);
     padding: 0.12em 0.4em;
@@ -261,7 +259,7 @@
 
 .table-wrap { overflow-x: auto; margin: 0 0 1em; border-radius: var(--r-sm); }
 .prose table { border-collapse: collapse; font-size: var(--fs-md); min-width: 100%; }
-.prose th, .prose td { padding: 8px 14px; text-align: left; }
+.prose th, .prose td { padding: var(--sp-4) var(--sp-6); text-align: left; }
 .prose th {
     background: var(--s3);
     font-weight: 500;
@@ -282,29 +280,29 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 6px 8px 6px 16px;
+    padding: var(--sp-3) var(--sp-4) var(--sp-3) var(--sp-7);
     min-height: 34px;
 }
 .code-lang {
-    font: 400 var(--fs-sm)/1 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-none) var(--sans);
     color: var(--text-4);
     letter-spacing: 0.02em;
 }
 .copy-btn {
     margin-left: auto;
     height: 26px;
-    padding: 0 12px;
+    padding: 0 var(--sp-6);
     border-radius: var(--pill);
-    font: 500 var(--fs-sm)/1 var(--sans);
+    font: 500 var(--fs-sm)/var(--lh-none) var(--sans);
     color: var(--text-3);
     transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
 .copy-btn:hover { color: var(--text); background: var(--s3); }
 .copy-btn.done { color: var(--green); }
 
-.code-block pre { margin: 0; padding: 4px 16px 16px; overflow-x: auto; max-height: 520px; }
+.code-block pre { margin: 0; padding: var(--sp-2) var(--sp-7) var(--sp-7); overflow-x: auto; max-height: 520px; }
 .code-block code {
-    font: 400 var(--fs-md)/1.65 var(--mono);
+    font: 400 var(--fs-md)/var(--lh-prose) var(--mono);
     background: none;
     padding: 0;
     color: var(--text-2);
@@ -354,7 +352,7 @@
 .term-grip {
     flex: none;
     height: 7px;
-    margin-top: -4px;
+    margin-top: calc(-1 * var(--sp-2));
     cursor: row-resize;
     background: transparent;
     transition: background var(--t-fast) var(--ease);
@@ -365,8 +363,8 @@
     flex: none;
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 2px 12px 4px;
+    gap: var(--sp-5);
+    padding: var(--sp-1) var(--sp-6) var(--sp-2);
 }
 /* Shrinkable, not fixed: this holds the shell's directory, which homely() has
    already shortened, but also a run's whole command line, which nothing has. */
@@ -395,7 +393,7 @@
 
 .term-btn {
     flex: none;
-    padding: 3px 10px;
+    padding: var(--sp-1) var(--sp-5);
     border-radius: var(--pill);
     font: 400 var(--fs-sm)/var(--lh-snug) var(--sans);
     color: var(--text-3);
@@ -417,7 +415,7 @@
     flex: none;
     display: flex;
     align-items: center;
-    gap: 2px;
+    gap: var(--sp-1);
 }
 .term-tabs[hidden] { display: none; }
 
@@ -425,8 +423,8 @@
     flex: none;
     display: flex;
     align-items: center;
-    gap: 5px;
-    padding: 3px 9px;
+    gap: var(--sp-2);
+    padding: var(--sp-1) var(--sp-4);
     border-radius: var(--pill);
     font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
     color: var(--text-4);
@@ -450,7 +448,7 @@
 .term-body {
     flex: 1;
     min-height: 0;
-    padding: 0 6px 6px 12px;
+    padding: 0 var(--sp-3) var(--sp-3) var(--sp-6);
     overflow: hidden;
 }
 .term-body .xterm { height: 100%; }

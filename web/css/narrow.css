@@ -19,8 +19,8 @@
     :root, :root[data-clock="12h"] { --rail: 250px; --gutter: 0px; }
     .ev { grid-template-columns: 1fr; column-gap: 0; }
     .ev-time { display: none; }
-    .log { padding: 6px 16px 40px; }
-    .conv-head { padding: 14px 16px 0; }
+    .log { padding: var(--sp-6) var(--sp-7) var(--sp-10); }
+    .conv-head { padding: var(--sp-6) var(--sp-7) 0; }
     .composer { padding: 4px calc(16px + var(--turns)) 14px 16px; }
 
     /* Two rows of two rather than four thin strips. Every column survives —
