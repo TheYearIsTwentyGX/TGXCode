@@ -532,6 +532,8 @@ Two rules worth knowing before you send a patch:
 | `web/preview-picker.js` | The preview's element picker, copied from DevBrowser; runs inside the previewed page |
 | `web/keys.js` | Which chord means which command, and the one function that decides it |
 | `web/orchestrator.js` | An orchestrator's dock above the composer — inbox, workers, settings and its pinned summary — and a worker's line back to it; the header's orchestrator toggle |
+| `web/palette.js` | The command palette (Ctrl+K), in Preact on web/rail.js's pattern: sessions, views and actions in one fuzzy-matched list, keyboard first. Answers Escape itself, from a capture listener, so the panel behind it stays up |
+| `web/palette/` | The palette's parts: `score.js` the fuzzy scorer (pure, tested by `palette-score`), `registry.js` the list any module can add an action to with `registerAction()`, `builtin.js` the entries that ship — each calls the function, or presses the button, that already does the thing |
 | `web/rail.js` | The sessions rail, drawn with Preact — keyed by session and by group, so an update keeps the rows it did not change. The first surface moved off `app.js`'s rebuild-everything rendering, and the pattern for the next |
 | `web/css/` | The stylesheets, by area — once one `styles.css`, split along its section headers so a surface can be worked on without loading the rest. `index.html` links them in the order below, which *is* the cascade: in that order they concatenate back to the old file section for section, so moving a rule between files moves it in the cascade too |
 | `web/css/base.css` | The `:root` tokens (palette, radii, fonts, timings), the resets, the top bar and its menus, and the quota pill. First, because every other file reads its variables |
@@ -548,6 +550,7 @@ Two rules worth knowing before you send a patch:
 | `web/css/viewers.css` | The right-click menu and the diff viewer's re-theming of `vendor/diff2html.css`, which is linked before every file here so no `!important` is needed |
 | `web/css/colours.css` | Project colours across the surfaces above, and Wispr Flow transforms. Late because it overrides them |
 | `web/css/preview.css` | The browser preview pane |
+| `web/css/palette.css` | The command palette |
 | `web/vendor/` | The libraries worth not writing — xterm; diff2html for the diff viewer; and `preact.js`, htm's standalone build (Preact 10 + hooks + htm in one ESM file) for components written without JSX. Checked-in prebuilt bundles, not a `node_modules` |
 | `app/main.js` | The Electron shell, and the rules for what a preview `<webview>` may load |
 | `app/preload.js` | The page's only doors into the shell: raise the window, and the preview's two clipboard writes |
