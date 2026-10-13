@@ -16,6 +16,7 @@ const path = require('path');
 const cfg = require('./config');
 const auth = require('./auth');
 const { SessionIndex } = require('./sessions');
+const { SpendIndex } = require('./spend-index');
 const { SessionRegistry } = require('./registry');
 const { RunnerPool, PERMISSION_MODES } = require('./runner');
 const hostClient = require('./host-client');
@@ -120,6 +121,8 @@ const schedules = new Schedules();
 // see bridge/orchestrators.js. What acts on it is bridge/orchestration.js.
 const orchestrators = new Orchestrators();
 const index = new SessionIndex(flags);
+// Tokens and API-equivalent cost out of the transcripts — see bridge/spend-index.js.
+const spend = new SpendIndex();
 const registry = new SessionRegistry();
 const pool = new RunnerPool();
 // Installed Claude Code against the registry, and which live processes predate
@@ -632,6 +635,7 @@ const ROUTES = [
     require('./routes/dashboard'),
     require('./routes/github'),
     require('./routes/quota'),
+    require('./routes/analytics'),
     require('./routes/orchestrators'),
     require('./routes/session'),
     require('./routes/session-workspace'),
@@ -642,7 +646,7 @@ const ROUTES = [
 ];
 
 const ROUTE_DEPS = {
-    index, pool, registry, flags, prefs, claudeConfig, claudeDocs, spinner, suggestions,
+    index, spend, pool, registry, flags, prefs, claudeConfig, claudeDocs, spinner, suggestions,
     beacon, drafts, later, standing, snippetStore, schedules, claudeVersion, terminals,
     slashCommands, runs, notifications, reads, orchestrators,
     normalizeMode, modeRefusal, tooManyCreates, CREATE_LIMIT, sessionCwd, shutdown,
@@ -1010,6 +1014,11 @@ pool.on('turn-complete', (r) => {
     filed(notifications.turn(r));
     noteScheduledOutcome(r);
     orchestration.onTurnComplete(r);
+    // The header's running total. The turn's own `costUsd` is 0 on a
+    // subscription, so the transcript is re-read rather than trusted.
+    spend.refreshSession(index, r.sessionId).then((out) => {
+        if (out) broadcast('session-spend', { sessionId: r.sessionId, totals: out.totals });
+    }).catch(() => { /* the next request catches up */ });
 });
 pool.on('failed', (f) => { broadcast('send-failed', f); filed(notifications.sendFailed(f)); });
 // Nothing notifies for a subagent finishing; it is logged so that "what has been
@@ -1224,6 +1233,10 @@ takeBackHeld().catch((err) => {
     const t0 = Date.now();
     await index.start();
     console.log(`[tgxcode] indexed ${index.sessions.size} sessions in ${Date.now() - t0}ms`);
+    // Warm the spend index in the background: a cold pass reads every
+    // transcript once, and the first visit to the board should not be that.
+    spend.refresh(index).catch(err => console.error(
+        `[tgxcode] spend index: ${err.message}`));
 
     if (cfg.IS_DEV) {
         console.log('[tgxcode] development instance — the everyday one on '
