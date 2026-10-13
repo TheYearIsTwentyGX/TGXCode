@@ -218,6 +218,12 @@ reorder and delete snippets freely, and may not save one naming either of the tw
 modes. It is refused twice over: here, so the snippet cannot be stashed, and again by
 `POST /api/sessions/:id/send` when it is used.
 
+The template routes are open on the drafts' terms, with one more exception: a
+template with a non-null `worktree` cannot be written remotely (`403`), because
+`POST /api/sessions` refuses a worktree from a remote caller and a template saved that
+way could never be used there. `resolve` is open, since it only reads, and git runs
+only in a directory inside the allowed roots.
+
 Note that `PUT /api/prefs` above is local-only and the snippet routes are not, which
 looks inconsistent and is not. That route is refused because it writes a file in the
 user's home directory or inside a checkout, and one of its keys names a directory the
@@ -1947,6 +1953,63 @@ had ticked would mean losing it. The flag only decides what the session becomes.
 Also pushed as the `drafts-changed` SSE event, which is how the UI reads it. That event
 carries this same payload, so a client never has to come back here after the first load.
 
+### `GET /api/templates[?cwd=<path>]`
+
+Session templates: a create call kept for starting from again, with placeholders in
+the first message and the worktree name. A template is **not** consumed by use, and
+using one starts nothing by itself. See `POST /api/templates/:id/resolve` below.
+
+```json
+{
+  "at": 1791908859400,
+  "templates": [
+    { "id": "b617115f-69dd-44c3-8dd7-8637dc2a22b5",
+      "name": "Feature work",
+      "project": "/home/dylan_hays/Other/claude-sessions",
+      "projectName": "claude-sessions",
+      "cwd": null,
+      "prompt": "Implement {{task}} on {{branch}}",
+      "model": null, "effort": null, "permissionMode": "auto",
+      "worktree": { "name": "{{task}}", "base": null },
+      "orchestrator": true, "test": false,
+      "builtins": ["branch"], "asks": ["task"],
+      "createdAt": 1791908859273, "updatedAt": 1791908859273 }
+  ],
+  "counts": { "total": 1 }
+}
+```
+
+| Field | Type |
+|---|---|
+| `id` | string, a UUID |
+| `name` | string, non-empty, at most 100 characters. What the picker lists it as |
+| **`project`** | **string or null.** `null` is a global template, offered everywhere. A string is an absolute directory with no trailing `/`: the template applies there, anywhere under it, and in that project's worktrees (`<project>/.claude/worktrees/<name>`, which are siblings rather than children). It does not have to exist on this machine |
+| `projectName` | string or null. Derived from `project`, not stored |
+| **`cwd`** | **string or null.** Where a session from this template starts. `null` means it uses whatever the client's directory box holds, or `project`. Expanded and checked against the allowed roots when it was saved, like a draft's |
+| `prompt` | string, possibly `""`. A *skeleton* holding `{{name}}` placeholders, not something to send as it is |
+| `model`, `effort` | string or null, exactly as on a draft |
+| `permissionMode` | string, one of the six |
+| **`worktree`** | **`{name: string, base: string \| null}` or null.** `name` is a *pattern* that may hold placeholders, so it is not yet a valid worktree name. `resolve` fills it and turns it into one |
+| `orchestrator` | boolean. The `orchestrator` field of `POST /api/sessions` |
+| `test` | boolean, the flag the started session gets |
+| **`builtins`** | **string[]**, derived. The placeholders the bridge fills itself that this template uses, a subset of `branch`, `date`, `project` |
+| **`asks`** | **string[]**, derived. Every other placeholder name in `prompt` or `worktree.name`, once each, in order of first appearance. These are the questions a client asks before `resolve` |
+| `createdAt`, `updatedAt` | numbers, epoch ms |
+
+Ordered newest `updatedAt` first. `?cwd=` narrows the list to the global templates and
+the ones whose `project` applies to that directory. Without it, every template is
+returned, which is what the desktop picker uses, grouped by project.
+
+**Placeholders** are `{{name}}` with `name` a run of word characters (spaces inside
+the braces are allowed). It is the same syntax snippets and schedule prompts use.
+There is no escaping, no default value and no filter: anything that does not match is
+plain text.
+
+Stored in `templates.json` in the state directory, shared by every bridge on the
+machine and merged on write, like drafts. Not in a project's `.tgxcode/`.
+
+Also pushed as `templates-changed`, carrying this same payload, unfiltered.
+
 ### `GET /api/later`
 
 Messages written now and delivered to a session that **already exists**, at a time you
@@ -2956,6 +3019,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `overview` | the board; sent only when it has actually changed |
 | `taskboard` | the task board; every ~3s while watched, and only when it has actually changed. Never carries `?idle=all` |
 | `drafts-changed` | `{at, drafts[], counts}` — the whole `GET /api/drafts` payload, so there is nothing to refetch. **Not gated by a `POST /api/subscribe` flag**, unlike `overview` and `taskboard`: a draft only changes because somebody changed it, so there is no tick to switch on and every window gets every change. Fires on create, edit, delete, and on anything that consumes one — `POST /api/drafts/:id/start`, and a `fromDraft` on `POST /api/sessions` or `POST /api/schedules` |
+| `templates-changed` | `{at, templates[], counts}` — the whole unfiltered `GET /api/templates` payload. Ungated, exactly as `drafts-changed` is, and it only fires when somebody creates, edits or deletes a template. A client that fetched with `?cwd=` must filter this itself |
 | `later-changed` | `{at, messages[], counts}` — the whole `GET /api/later` payload, so there is nothing to refetch. Ungated, exactly as `drafts-changed` is. Like `schedules-changed` and unlike `drafts-changed` it also fires **without anybody having done anything**: a delivery, a message going past its window, and a failed wake all move it. That is how a chip starts saying "sent 02:00" while nobody is looking at it, and it is the only signal a client gets that a scheduled message has left — the session list is not pushed for it |
 | `snippets-changed` | `{at, snippets[], groups[], counts}` — the whole `GET /api/snippets` payload, so there is nothing to refetch. Ungated, exactly as `drafts-changed` is, and like it, it never fires without somebody having done something: a snippet or group created, edited or deleted, and a reorder **that actually moved a row** — a drag that lands where it started pushes nothing. Both arrays every time, because deleting a group re-homes its snippets and sending half the answer would leave a client drawing a card that no longer exists. **Always unfiltered by `cwd`**, so a client that fetched with `?cwd=` must apply the filter itself here or watch its list silently widen |
 | `schedules-changed` | `{at, schedules[], counts}` — the whole `GET /api/schedules` payload. Ungated, exactly as `drafts-changed` is. Unlike that one it fires **without anybody having done anything**: a schedule firing, skipping a slot, or having its outcome recorded when the turn ends all push it. So a client that assumed the payload only moves in response to a user action will be wrong here, and pleasantly so — this is how a card starts saying "ran 2h ago — BLOCK" while nobody is looking at it |
@@ -3336,6 +3400,86 @@ that loaded a draft into its own form and then started or scheduled the edited v
 rather than saving it. Use this route when nothing was edited: it needs no body, and the
 arguments it spawns with are the ones on the file rather than ones the caller has to
 send back.
+
+### `POST /api/templates`
+
+Body: `{name, project?, cwd?, prompt?, model?, effort?, permissionMode?, worktree?,
+orchestrator?, test?}` → `{template}`, in the shape `GET /api/templates` lists.
+
+Checked the way `POST /api/drafts` checks a draft (the same `draftFields`), except
+that `cwd` and `prompt` may be left out:
+
+- **`name`** is required, a non-empty string of at most 100 characters → `400`.
+- **`cwd`**, if given, must resolve inside the allowed roots → `400`. `~` is expanded.
+- **`project`** must be a string or null → `400`. It is *not* checked for existence:
+  it is a filter, not where a process starts.
+- **`worktree`** must be null or `{name: non-empty string, base?: string}` → `400`.
+  From a **remote** caller a non-null `worktree` is `403 {error, remote: true}`,
+  because `POST /api/sessions` refuses a worktree remotely and a template that can
+  never be started remotely should not be saved from there.
+- **`permissionMode`** is normalised, and a mode a remote caller may not start is
+  `403 {error, remote: true}`, as for drafts.
+- `orchestrator` is true only for the JSON value `true`. Any key not listed here is
+  dropped, including a draft's `title`.
+
+`409` at 200 templates. Pushes `templates-changed`.
+
+### `PATCH /api/templates/:id`
+
+A real patch: any subset of the `POST` fields; a key left out is left alone, and `null`
+clears (`worktree: null` turns the worktree off). → `{template}`. The same checks as
+`POST`, run **before** the id is looked up, so a refused mode or remote worktree is a
+`403` whether or not the id exists. `404` for an unknown id. Renaming is a PATCH of
+`name`. Pushes `templates-changed`.
+
+### `DELETE /api/templates/:id`
+
+→ `{ok: true, id}`; `404` if there is no such template. Pushes `templates-changed`.
+
+### `POST /api/templates/:id/resolve`
+
+Body: `{cwd?: string, values?: {[name]: string}}` →
+
+```json
+{
+  "fields": {
+    "cwd": "/home/dylan_hays/Other/claude-sessions",
+    "prompt": "Implement login redirect on main",
+    "model": null, "effort": null, "permissionMode": "auto",
+    "worktree": { "name": "login-redirect", "base": null },
+    "orchestrator": true, "test": false
+  },
+  "missing": []
+}
+```
+
+Fills a template's placeholders and returns the fields. **It starts nothing and
+changes nothing.** `fields` is meant to be shown to the user and then sent, perhaps
+edited, as the body of `POST /api/sessions` (add `attachments` if you have any). Every
+refusal on that route still applies, so a template is never a way round one.
+
+- **`cwd`** is the body's `cwd`, else the template's `cwd`, else its `project`, else
+  `null`.
+- **Built-ins** are filled by the bridge. `{{date}}` is the bridge's local date as
+  `YYYY-MM-DD`. `{{project}}` is the last path component of `cwd`, with a
+  `/.claude/worktrees/<name>` suffix removed first, so a worktree reports its project.
+  `{{branch}}` is the current branch of `cwd`, read with git. It is only filled when
+  `cwd` resolves inside the allowed roots and is a repository not on a detached HEAD.
+- **`values`** answers the template's `asks`. A non-empty string here also overrides
+  a built-in. Values are trimmed, and empty or non-string values are ignored.
+- **A placeholder with no value is left in the text exactly as written,** never
+  replaced with `""`. Every name still unfilled is listed in `missing` (built-ins
+  first), so a client can say so rather than send a prompt with `{{task}}` in it.
+- **`worktree.name`** is the filled pattern turned into a valid worktree name:
+  lowercased, every run of characters outside `[a-z0-9._-]` made one `-`, leading `.`
+  and `-` stripped, cut to 60 characters, and trailing `.`, `-` and `.lock` removed.
+  It is **`null`** when the pattern still holds a placeholder or nothing usable is
+  left. That is distinct from `worktree: null`, which means the template has no
+  worktree. A client must ask for a name before sending it to `POST /api/sessions`,
+  which would refuse `{name: null}`.
+
+`404` for an unknown id. Allowed remotely: it only reads. A remote client still gets a
+`403` from `POST /api/sessions` if it then sends a non-null `worktree`.
 
 ### `POST /api/sessions/:id/later`
 

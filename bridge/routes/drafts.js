@@ -68,14 +68,22 @@ function draftsPayload() {
  * validated as missing. `cwd` comes back expanded, which is what gets stored, so
  * a `~` typed into the dialog means the same thing a shell would make of it.
  *
+ * `requireCwd` and `requirePrompt` are for bridge/routes/templates.js, whose rows
+ * may leave either blank — a template for "any project" has no directory, and one
+ * that only sets a model and a mode has no message. Both default to true, so a
+ * draft is checked exactly as it always was. Left out, `cwd` is stored as null
+ * and `prompt` as ''.
+ *
  * @returns {{fields: object} | {error: string, status: number, remote?: boolean}}
  */
-function draftFields(body, who, { partial }) {
+function draftFields(body, who, { partial, requireCwd = true, requirePrompt = true }) {
     const fields = {};
 
     if (!partial || body.cwd !== undefined) {
-        if (!body.cwd) return { error: 'cwd is required', status: 400 };
-        try {
+        if (!body.cwd) {
+            if (requireCwd) return { error: 'cwd is required', status: 400 };
+            fields.cwd = null;
+        } else try {
             fields.cwd = resolveWorkdir(String(body.cwd));
         } catch (err) {
             return { error: err.message, status: 400 };
@@ -84,8 +92,8 @@ function draftFields(body, who, { partial }) {
 
     if (!partial || body.prompt !== undefined) {
         const prompt = body.prompt && String(body.prompt).trim();
-        if (!prompt) return { error: 'prompt is required', status: 400 };
-        fields.prompt = prompt;
+        if (!prompt && requirePrompt) return { error: 'prompt is required', status: 400 };
+        fields.prompt = prompt || '';
     }
 
     if (!partial || body.permissionMode !== undefined) {
@@ -223,4 +231,4 @@ async function handle(req, res, url, pathname, seg, who) {
     return NEXT;
 }
 
-module.exports = { init, handle, draftsPayload };
+module.exports = { init, handle, draftsPayload, draftFields };

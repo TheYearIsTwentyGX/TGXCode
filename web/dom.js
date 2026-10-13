@@ -80,6 +80,8 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'new-mkdir-gh', 'new-mkdir-gh-row', 'new-gh',
     'new-start-row', 'new-orch-row', 'new-orch', 'new-orch-note',
     'new-wt-row', 'new-wt', 'new-wt-fields', 'new-wt-name', 'new-wt-base', 'new-wt-note',
+    'new-tpl-row', 'new-tpl', 'new-tpl-edit', 'new-tpl-del', 'new-tpl-fill', 'new-tpl-save',
+    'new-tpl-save-row', 'new-tpl-name', 'new-tpl-scope', 'new-tpl-save-go', 'new-tpl-save-cancel',
     'gh-scrim', 'gh-body', 'gh-go', 'gh-foot-note',
     'del-scrim', 'del-what', 'del-meta', 'del-go',
     'diff-scrim', 'diff-title', 'diff-stat', 'diff-unified', 'diff-split',

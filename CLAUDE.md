@@ -300,7 +300,7 @@ the accident the rest of this file is about.
 
 The suite is `auth`, `temp`, `recent`, `pulls`, `pr-store`, `pr-owners`, `taskboard`, `ports`,
 `spinner`, `changes`, `restart`, `handoff`, `drafts`, `later`, `snippets`,
-`notifications`, `schedule`, `usage`, `harvester`, `runner`, `host`, `titles`,
+`templates`, `notifications`, `schedule`, `usage`, `harvester`, `runner`, `host`, `titles`,
 `tasks`, `prefs`, `paths`, `link-policy`, `logwidth`, `platform`, `preview`, `devservers`, `claude-config`,
 `claude-docs`, `ask-result`, `commands`, `message-date`, `folded`,
 `claude-version`, `wispr`, `legacy`, `suggestions`, `mcp`, `flags`, `worktree`, `scratchpad`, `turn-index`, `github`, `standing`, `worktree-create`, `orchestrators` and `setup` on their own — no bridge needed

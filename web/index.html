@@ -37,6 +37,7 @@
 <link rel="stylesheet" href="./css/colours.css">
 <link rel="stylesheet" href="./css/preview.css">
 <link rel="stylesheet" href="./css/orchestrator.css">
+<link rel="stylesheet" href="./css/templates.css">
 </head>
 <body>
 
@@ -1314,6 +1315,23 @@
       <button class="modal-close" data-close type="button" aria-label="Close">✕</button>
     </div>
     <div class="modal-body">
+      <!-- Session templates — web/new-session/templates.js. Plain Start only:
+           picking one fills the fields below, and Start is still the button that
+           runs it. `#new-tpl-fill` holds one box per placeholder the template
+           asks about, drawn when one is picked. -->
+      <div class="field" id="new-tpl-row" hidden>
+        <label for="new-tpl">Template</label>
+        <div class="tpl-line">
+          <select id="new-tpl"></select>
+          <button id="new-tpl-edit" class="btn small" type="button" disabled>Edit</button>
+          <button id="new-tpl-del" class="btn small" type="button" disabled>Delete</button>
+          <!-- Keep what is on screen for next time. Here rather than in the
+               footer, which has no room for a fifth button. It opens
+               #new-tpl-save-row, because a template needs a name and a scope. -->
+          <button id="new-tpl-save" class="btn small" type="button">Save as…</button>
+        </div>
+        <div id="new-tpl-fill" class="tpl-fill" hidden></div>
+      </div>
       <div class="field">
         <label for="new-cwd">Working directory</label>
         <input id="new-cwd" type="text" spellcheck="false">
@@ -1612,6 +1630,24 @@
           bridge posts the review and a <code>review-clean</code> /
           <code>review-concerns</code> / <code>review-blocked</code> label when
           the session finishes. A test schedule never posts.</div>
+      </div>
+      <!-- Saving the dialog as a template: opened by Save as template… in the
+           footer, and always open while a template is being edited, where it is
+           also how you rename one. The scope list is drawn per open from the
+           directory in the box. -->
+      <div class="field" id="new-tpl-save-row" hidden>
+        <label for="new-tpl-name">Template name</label>
+        <div class="tpl-line">
+          <input id="new-tpl-name" type="text" spellcheck="false" autocomplete="off"
+                 placeholder="What the picker lists it as">
+          <select id="new-tpl-scope" aria-label="Where the template is offered"></select>
+          <button id="new-tpl-save-go" class="btn small primary" type="button">Save template</button>
+          <button id="new-tpl-save-cancel" class="btn small quiet" type="button">Cancel</button>
+        </div>
+        <div class="note">Write <code>{{task}}</code> (any name) in the first message or the
+          worktree name to be asked for it when the template is used.
+          <code>{{branch}}</code>, <code>{{date}}</code> and <code>{{project}}</code>
+          are filled in for you.</div>
       </div>
       <!-- Only shown by a development bridge; see markInstance(). -->
       <div class="field" id="new-test-row" hidden>

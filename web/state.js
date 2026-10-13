@@ -385,6 +385,10 @@ export const state = {
     // `editing` is the id the dialog is currently editing, or null when it is
     // about to make a new one. It is what tells Save which verb to use.
     drafts: { open: false, rows: [], at: 0, loading: false, error: null, editing: null },
+    // Session templates, pushed whole on `templates-changed` like the drafts.
+    // `editing` is the template the dialog is open on, or null; `picked` the one
+    // chosen in the picker this open, which Fill resolves.
+    templates: { rows: [], editing: null, picked: null },
     // The project card whose ⋮ menu is open, or null. The menu is fixed and
     // outside the rail, so this is how the card's ⋮ knows to draw itself
     // expanded, and how syncProjMenu() finds the button to follow.

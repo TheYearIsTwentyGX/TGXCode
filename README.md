@@ -362,6 +362,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/routes/orchestrators.js` | `/api/sessions/:id/orchestrator…` — an orchestrator's payload, role, settings, inbox and Resume, and the routes its MCP tools call — plus a worker's `/api/sessions/:id/report` |
 | `bridge/routes/later.js` | `/api/later`, and the wire shape and validation `POST /api/sessions/:id/later` shares |
 | `bridge/routes/snippets.js` | `/api/snippets` and `/api/snippet-groups` |
+| `bridge/routes/templates.js` | `/api/templates`, validated through drafts' `draftFields`, and `resolve`, which fills a template's placeholders |
 | `bridge/routes/schedules.js` | `/api/schedules` |
 | `bridge/routes/dashboard.js` | `/api/dashboard` and `/api/prs` |
 | `bridge/routes/github.js` | `/api/github/*`: account, templates, teams, repo state, name check, publish |
@@ -427,6 +428,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/worker-read.js` | A worker's transcript for its orchestrator to read: a digest, the last few turns, or the whole thing a page at a time |
 | `bridge/later-delivery.js` | Delivering one: the tick, the path it shares with `POST /api/later/:id/send`, and owning up to an interrupted delivery |
 | `bridge/snippets.js` | Canned messages and the groups they sit in |
+| `bridge/templates.js` | Session templates: a create call kept for reuse, with `{{placeholders}}`, global or scoped to a project |
 | `bridge/usage.js` | How much of the 5-hour window and the week are gone, merged from turn events and the status line |
 | `bridge/beacon.js` | A `claude` started for four seconds and killed, so the quota percentages refresh with no terminal open |
 | `bridge/schedule.js` | Sessions that start on a clock — the store, the cron, and what counts as new since last time |
@@ -518,6 +520,7 @@ Two rules worth knowing before you send a patch:
 | `web/new-session/dialog.js` | Opening and closing it, the working-directory box, the values Start and Save send, and its first-message box (`newC`) |
 | `web/new-session/picker.js` | The Recent and Browse tabs over one directory, and the New-folder row |
 | `web/github/publish.js` | The Publish to GitHub dialog, opened from the project ⋮ menu and from Start-a-session |
+| `web/new-session/templates.js` | The template picker, its placeholder boxes, Save as…, and the dialog's edit-a-template mode |
 | `web/new-session/recent.js` | The recent-directories menu on the New button's split half |
 | `web/new-session/trigger.js` | The schedule picker that composes cron, the gate fields, and the Start, Save-draft and Schedule buttons |
 | `web/commands.js` | The header's project-command buttons — `.tgxcode/commands.json` for the session's directory — and the runs they start |
@@ -548,6 +551,7 @@ Two rules worth knowing before you send a patch:
 | `web/css/viewers.css` | The right-click menu and the diff viewer's re-theming of `vendor/diff2html.css`, which is linked before every file here so no `!important` is needed |
 | `web/css/colours.css` | Project colours across the surfaces above, and Wispr Flow transforms. Late because it overrides them |
 | `web/css/preview.css` | The browser preview pane |
+| `web/css/templates.css` | The template rows in the Start-a-session dialog. Layout only, pending the dialog restyle |
 | `web/vendor/` | The libraries worth not writing — xterm; diff2html for the diff viewer; and `preact.js`, htm's standalone build (Preact 10 + hooks + htm in one ESM file) for components written without JSX. Checked-in prebuilt bundles, not a `node_modules` |
 | `app/main.js` | The Electron shell, and the rules for what a preview `<webview>` may load |
 | `app/preload.js` | The page's only doors into the shell: raise the window, and the preview's two clipboard writes |

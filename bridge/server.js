@@ -31,6 +31,7 @@ const { Drafts } = require('./drafts');
 const { Later } = require('./later');
 const { Standing } = require('./standing');
 const { Snippets } = require('./snippets');
+const { Templates } = require('./templates');
 const { Schedules } = require('./schedule');
 const { SlashCommandCache } = require('./slash-commands');
 const { NotificationLog, ReadState } = require('./notifications');
@@ -112,6 +113,9 @@ const later = new Later();
 // `snippetStore` rather than `snippets` so that nothing here has to wonder
 // whether it is looking at the store or at the array of rows the payload carries.
 const snippetStore = new Snippets();
+// Create calls kept for reuse, with placeholders — the Start dialog's template
+// picker. See bridge/templates.js.
+const templates = new Templates();
 // Sessions that start on a clock. A draft that is never consumed, plus a cron
 // expression, plus a gate — see bridge/schedule.js. Only the everyday instance
 // fires them; the tick in bridge/scheduler.js says why.
@@ -628,6 +632,7 @@ const ROUTES = [
     require('./routes/drafts'),
     require('./routes/later'),
     require('./routes/snippets'),
+    require('./routes/templates'),
     require('./routes/schedules'),
     require('./routes/dashboard'),
     require('./routes/github'),
@@ -643,7 +648,7 @@ const ROUTES = [
 
 const ROUTE_DEPS = {
     index, pool, registry, flags, prefs, claudeConfig, claudeDocs, spinner, suggestions,
-    beacon, drafts, later, standing, snippetStore, schedules, claudeVersion, terminals,
+    beacon, drafts, later, standing, snippetStore, templates, schedules, claudeVersion, terminals,
     slashCommands, runs, notifications, reads, orchestrators,
     normalizeMode, modeRefusal, tooManyCreates, CREATE_LIMIT, sessionCwd, shutdown,
     quotaPayload, quotaPrefs, runBeaconNow, markClaudeVersionSent,
@@ -1089,6 +1094,7 @@ function shutdown(code = 0) {
     // losing it means the draft comes back and can be started a second time.
     // flush() merges, so writing here cannot trample another bridge either.
     try { drafts.flush(); } catch { /* nothing to save */ }
+    try { templates.flush(); } catch { /* nothing to save */ }
     // Load-bearing rather than tidy: the process exits well inside the debounce
     // window, and an unflushed `delivering` claim would come back up looking like
     // `pending` — the one transition this store must never make.
