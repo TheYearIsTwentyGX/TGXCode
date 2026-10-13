@@ -229,7 +229,7 @@
 .tb-card[data-col="needs"] .tb-dot   { background: var(--yellow); }
 .tb-card[data-col="working"] .tb-dot {
     background: var(--green);
-    animation: breathe 1.6s var(--ease) infinite;
+    animation: breathe var(--dur-loop) var(--ease) infinite;
 }
 /* Stalled: the live card's rule, web/css/dashboard.css. */
 .tb-card[data-stalled="true"] .tb-dot { background: var(--red); animation: none; }

@@ -1102,7 +1102,7 @@
     border-right: 1.5px solid var(--text-4);
     border-bottom: 1.5px solid var(--text-4);
     transform: rotate(-45deg);
-    transition: transform 0.12s;
+    transition: transform var(--dur-fast) var(--ease-standard);
 }
 .cmd-card-toggle[aria-expanded="true"]::before { transform: rotate(45deg); }
 .cmd-card-toggle:hover .cmd-card-id { color: var(--text); }

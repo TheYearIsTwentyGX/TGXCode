@@ -224,7 +224,7 @@
 }
 .agent-chip[data-status="running"] .led {
     background: var(--yellow);
-    animation: breathe 1.6s var(--ease) infinite;
+    animation: breathe var(--dur-loop) var(--ease) infinite;
 }
 /* Running, but nothing has written to it in 90 seconds: the session that owned
    this agent went away. A steady grey light, not a hopeful pulse. */
@@ -1278,7 +1278,6 @@
     border-radius: var(--r);
     box-shadow: var(--shadow-pop);
     pointer-events: none;
-    animation: pop-in var(--t-fast) var(--ease);
 }
 .turn-pop[hidden] { display: none; }
 
@@ -1321,7 +1320,7 @@
 
 /* The card a linked mention shows. #turn-pop's surface and type, anchored under
    the mention, one section per project when the chat spans more than one. */
-.pr-pop { width: auto; min-width: 220px; max-width: 360px; animation-name: pop-down; }
+.pr-pop { width: auto; min-width: 220px; max-width: 360px; }
 .pr-pop .pop-head { margin-bottom: 4px; }
 .pr-pop-sec + .pr-pop-sec { margin-top: 9px; padding-top: 8px; border-top: 1px solid var(--outline); }
 .pr-pop-proj {
@@ -1354,17 +1353,6 @@
 .pr-pop-chat .note { color: var(--text-4); }
 .pr-pop-foot { margin-top: 8px; font: 400 var(--fs-xs)/var(--lh-snug) var(--sans); color: var(--text-4); }
 
-@keyframes pop-down {
-    from { opacity: 0; transform: translateY(-3px); }
-    to { opacity: 1; transform: none; }
-}
-
-@keyframes pop-in {
-    from { opacity: 0; transform: translateX(4px); }
-    to { opacity: 1; transform: none; }
-}
-@media (prefers-reduced-motion: reduce) { .turn-pop, .pr-pop { animation: none; } }
-
 /* Where a jump landed, so the eye finds it without hunting.
  *
  * Two rules, because the keyframes have to end on the row's own resting
@@ -1373,12 +1361,12 @@
  * as an opaque grey box once the animation stopped. The second rule is not
  * theoretical: `editRow` and `takePendingJump` both jump to tool calls, and
  * until it existed they flashed nothing at all. */
-.ev-user.flash .ev-body { animation: flash 1.3s var(--ease); }
+.ev-user.flash .ev-body { animation: flash var(--dur-flash) var(--ease); }
 @keyframes flash {
     0%, 55% { background: var(--blue-cont); }
     100% { background: var(--s3); }
 }
-.ev:not(.ev-user).flash .ev-body { animation: flash-row 1.3s var(--ease); }
+.ev:not(.ev-user).flash .ev-body { animation: flash-row var(--dur-flash) var(--ease); }
 @keyframes flash-row {
     0%, 55% { background: var(--blue-tint); }
     100% { background: transparent; }
@@ -1390,7 +1378,7 @@
  * needs. See claudeFlash() in web/app.js. */
 .settings-row.flash {
     border-radius: var(--r-sm);
-    animation: flash-settings-row 1.3s var(--ease);
+    animation: flash-settings-row var(--dur-flash) var(--ease);
 }
 /* The transcript's `flash-row` timing exactly — hold, then fade — but the
  * highlight is carried out past the row by a spread `box-shadow` as well as
@@ -1412,7 +1400,7 @@
  * resting background of its own; a select has one, so ending there would leave
  * the pill flat until the next repaint. The spread `box-shadow` follows the
  * pill's own border-radius and takes no part in layout. */
-select.flash { animation: flash-select 1.3s var(--ease); }
+select.flash { animation: flash-select var(--dur-flash) var(--ease); }
 @keyframes flash-select {
     0%, 55% { box-shadow: 0 0 0 3px var(--blue-tint); }
     100% { box-shadow: 0 0 0 3px transparent; }
@@ -1441,16 +1429,9 @@ select.flash { animation: flash-select 1.3s var(--ease); }
     border-radius: var(--pill);
     background: var(--s2);
     box-shadow: var(--shadow-float);
-    animation: find-in var(--t-fast) var(--ease);
 }
 /* display:flex above would otherwise beat the hidden attribute. */
 .find[hidden] { display: none; }
-
-@keyframes find-in {
-    from { opacity: 0; transform: translateY(-4px); }
-    to { opacity: 1; transform: none; }
-}
-@media (prefers-reduced-motion: reduce) { .find { animation: none; } }
 
 #find-input {
     width: 230px;

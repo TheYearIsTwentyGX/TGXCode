@@ -538,7 +538,6 @@
     font-size: var(--fs-base);
     line-height: var(--lh-base);
     box-shadow: var(--shadow-toast);
-    animation: rise var(--t-med) var(--ease);
 }
 .toast[data-kind="error"] { background: var(--inverse-err-bg); color: var(--inverse-err-fg); }
 .toast[data-kind="ok"] { background: var(--inverse-ok-bg); color: var(--inverse-ok-fg); }
@@ -569,12 +568,6 @@
     transition: opacity var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
 }
 .toast-close:hover { opacity: 1; background: color-mix(in srgb, var(--inverse-fg) 10%, transparent); }
-
-@keyframes rise {
-    from { opacity: 0; transform: translateY(8px); }
-    to { opacity: 1; transform: none; }
-}
-@media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
 
 /* ── Publish to GitHub (web/github/publish.js) ───────────────────────────── */
 

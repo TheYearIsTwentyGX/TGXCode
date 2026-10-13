@@ -398,7 +398,7 @@
 }
 .lcard[data-reason="here"] .lcard-dot {
     background: var(--yellow);
-    animation: breathe 1.6s var(--ease) infinite;
+    animation: breathe var(--dur-loop) var(--ease) infinite;
 }
 .lcard[data-reason="ask"] .lcard-dot { background: var(--yellow); }
 /* Running and saying nothing — web/css/rail.css's `.strip` rule, for the same
@@ -894,7 +894,7 @@
 .schip[data-state="active"] .schip-dot { background: var(--blue); }
 .schip[data-state="running"] .schip-dot {
     background: var(--green);
-    animation: schip-breathe 1.8s ease-in-out infinite;
+    animation: schip-breathe var(--dur-loop) ease-in-out infinite;
 }
 @keyframes schip-breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 

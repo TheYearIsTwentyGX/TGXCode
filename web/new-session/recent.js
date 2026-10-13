@@ -27,7 +27,7 @@ const NEW_MENU_MAX = 6;
 let newMenuSeq = 0;
 
 export function showNewMenu(on, { focusFirst = false } = {}) {
-    present(dom.newMenu, on, { kind: 'pop' });
+    present(dom.newMenu, on, { as: 'menu' });
     dom.btnNewMenu.setAttribute('aria-expanded', String(on));
     if (on) { showQuota(false); showBarMore(false); fillNewMenu({ focusFirst }); }
 }

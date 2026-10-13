@@ -41,13 +41,13 @@
     color: var(--text-3);
 }
 .status-line .led { width: 7px; height: 7px; border-radius: 50%; background: var(--text-4); flex: none; }
-.status-line[data-state="busy"] .led { background: var(--yellow); animation: breathe 1.6s var(--ease) infinite; }
+.status-line[data-state="busy"] .led { background: var(--yellow); animation: breathe var(--dur-loop) var(--ease) infinite; }
 .status-line[data-state="error"] .led { background: var(--red); }
 .status-line[data-state="idle"] .led { background: var(--green); }
 /* Still running, but something is wrong — an API call being retried. */
 .status-line[data-state="retrying"] .led {
     background: var(--yellow);
-    animation: breathe 1.6s var(--ease) infinite;
+    animation: breathe var(--dur-loop) var(--ease) infinite;
 }
 /* Running and saying nothing — bridge/runner.js. Still, like the rail's dot. */
 .status-line[data-state="stalled"] .led { background: var(--red); }
@@ -655,7 +655,6 @@
     background: var(--s3);
     border-radius: var(--r);
     box-shadow: var(--shadow-pop);
-    animation: menu-in var(--t-fast) var(--ease);
     transform-origin: bottom left;
 }
 .slash-menu[hidden] { display: none; }
@@ -768,7 +767,6 @@
 /* Same treatment the live composer gets, so a drop reads as a drop in both. */
 .composer-field.drop-target { outline: 2px dashed var(--blue); outline-offset: 4px; }
 
-@media (prefers-reduced-motion: reduce) { .slash-menu { animation: none; } }
 
 .input-row {
     /* The menu above is absolute against this. */
@@ -865,7 +863,6 @@
     background: var(--s3);
     border-radius: var(--r);
     box-shadow: var(--shadow-pop);
-    animation: menu-in var(--t-fast) var(--ease);
     transform-origin: top right;
     /* Groups beside each other, in columns as wide as they need. Auto-flow rather
        than a fixed template because the number of groups *is* the data, and
@@ -885,7 +882,6 @@
    padding, background and the width positionSnips left on the inline style, with
    nothing in it. */
 .snip-menu[hidden] { display: none; }
-@media (prefers-reduced-motion: reduce) { .snip-menu { animation: none; } }
 
 .snip-card {
     --snip-accent: var(--text-3);

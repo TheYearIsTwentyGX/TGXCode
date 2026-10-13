@@ -1485,7 +1485,7 @@ export function paintPanels() {
     if (kept && drawnFor !== `${dom.live.hidden}/${dom.live.dataset.mode}/${dom.main.dataset.dock}`) {
         renderLive();
     }
-    surfaces.forEach((n, i) => { if (before[i] && !n.hidden) enter(n, { kind: 'rise', speed: 'med' }); });
+    surfaces.forEach((n, i) => { if (before[i] && !n.hidden) enter(n, { as: 'arrive' }); });
 }
 
 export function showDash(on) {
@@ -2069,7 +2069,7 @@ function paintPcolorDialog() {
  */
 export function showProjMenu(project, btn) {
     state.projMenu = { key: project.key, cwd: project.cwd, name: project.name };
-    present(dom.projMenu, true, { kind: 'pop' });
+    present(dom.projMenu, true, { as: 'menu' });
     renderRail();   // the ⋮ draws itself expanded
     const row = (label, act, disabled) => el('button', {
         class: 'picker-row', type: 'button', role: 'menuitem', disabled: disabled || null,
@@ -2148,7 +2148,7 @@ function originRow(cwd, row, publish) {
  */
 export function showStripMenu(s, btn) {
     state.projMenu = { sessionId: s.sessionId };
-    present(dom.projMenu, true, { kind: 'pop' });
+    present(dom.projMenu, true, { as: 'menu' });
     renderRail();   // the ⋮ draws itself expanded
     const now = () => state.sessions.find(x => x.sessionId === s.sessionId) || s;
     const row = (label, act, cls) => el('button', {
@@ -2171,7 +2171,7 @@ export function showStripMenu(s, btn) {
 export function closeProjMenu() {
     if (!state.projMenu) return;
     state.projMenu = null;
-    present(dom.projMenu, false, { kind: 'pop' });
+    present(dom.projMenu, false, { as: 'menu' });
     renderRail();
 }
 
@@ -2372,7 +2372,7 @@ export function paintRailSort() {
 function openSortMenu() {
     state.sortMenu = true;
     const current = BOOT_PREFS.projects.sort;
-    present(dom.sortMenu, true, { kind: 'pop' });
+    present(dom.sortMenu, true, { as: 'menu' });
     dom.sortMenu.replaceChildren(
         el('div', { class: 'menu-note' }, 'Order projects by'),
         el('div', { class: 'sep' }),
@@ -2406,7 +2406,7 @@ function openSortMenu() {
 function closeSortMenu() {
     if (!state.sortMenu) return;
     state.sortMenu = false;
-    present(dom.sortMenu, false, { kind: 'pop' });
+    present(dom.sortMenu, false, { as: 'menu' });
     paintRailSort();
 }
 
@@ -3631,7 +3631,7 @@ for (const log of [dom.log, dom.agentLog]) {
         if (!(d instanceof HTMLDetailsElement) || !d.open || d !== clickedOpen) return;
         clickedOpen = null;
         for (const k of d.children) {
-            if (k.tagName !== 'SUMMARY') enter(k, { kind: 'fade', speed: 'fast', collapse: true });
+            if (k.tagName !== 'SUMMARY') enter(k, { as: 'reveal', collapse: true });
         }
     }, true);
 }

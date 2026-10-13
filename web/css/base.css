@@ -227,6 +227,7 @@
     --dur-base:  180ms;
     --dur-slow:  240ms;
     --dur-loop:  1.6s;
+    --dur-flash: 1.3s;   /* the highlight on whatever a jump landed on */
 
     /* standard — something already on screen changing: colour, position, size
        out    — something arriving: decelerates into place
@@ -497,7 +498,6 @@ a:hover { text-decoration: underline; }
     background: var(--s3);
     border-radius: var(--r);
     box-shadow: var(--shadow-pop);
-    animation: menu-in var(--t-fast) var(--ease);
     transform-origin: top right;
 }
 .bar-more-menu[hidden] { display: none; }
@@ -517,7 +517,6 @@ a:hover { text-decoration: underline; }
 /* A button whose label you turned off on the bar still needs one in a list. */
 .bar-more-menu .bar-btn.icon-only > span:not(.bar-badge) { display: inline; }
 .bar-more-menu .bar-badge { margin-left: auto; }
-@media (prefers-reduced-motion: reduce) { .bar-more-menu { animation: none; } }
 
 /* ── quota ───────────────────────────────────────────────────────────── */
 
@@ -654,21 +653,6 @@ a:hover { text-decoration: underline; }
 }
 .q-reset svg { flex: none; }
 
-/* The shared open of every popover in this window — the quota panel, the
-   recent-directories menu and the slash/mention menus. It was `bell-in` while
-   the notification bell was the first thing to use it; the bell has since moved
-   into the settings page and the name was the only thing left of it.
-
-   Not `pop-in`, which is already taken further down by `.turn-pop` and moves on
-   a different axis — renaming into that would have quietly changed all three of
-   these. */
-@keyframes menu-in {
-    from { opacity: 0; transform: translateY(-4px) scale(0.98); }
-}
-@media (prefers-reduced-motion: reduce) {
-    .quota-menu, .new-menu, .slash-menu { animation: none; }
-}
-
 .quota-menu {
     position: absolute;
     top: calc(100% + 8px);
@@ -679,7 +663,6 @@ a:hover { text-decoration: underline; }
     background: var(--s3);
     border-radius: var(--r);
     box-shadow: var(--shadow-pop);
-    animation: menu-in var(--t-fast) var(--ease);
     transform-origin: top right;
 }
 .quota-menu[hidden] { display: none; }
@@ -817,7 +800,6 @@ a:hover { text-decoration: underline; }
 .qr-sub { font: 400 var(--fs-xs)/var(--lh-snug) var(--sans); color: var(--text-4); overflow-wrap: anywhere; }
 .qr-sub:empty { display: none; }
 
-@media (prefers-reduced-motion: reduce) { .quota-menu { animation: none; } }
 
 /* The Claude Code version badge — the quota pill's shape, and only drawn when
    something is behind, so it carries the one tint that says so. See renderCv()

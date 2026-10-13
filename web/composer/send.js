@@ -98,7 +98,7 @@ function showPendingSend(sessionId, text, files, previews) {
     });
     node.dataset.pending = '1';
     dom.log.append(node);
-    enter(node, { kind: 'rise', speed: 'med' });
+    enter(node, { as: 'arrive' });
     state.pendingSend = {
         sessionId, node, previews, timer: setTimeout(clearPendingSend, PENDING_MS),
     };

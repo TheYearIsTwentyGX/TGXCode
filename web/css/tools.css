@@ -50,7 +50,7 @@
 :is(.tool[data-status="error"] > summary, .trow[data-status="error"])::before { background: var(--red); }
 .tool[data-status="pending"] > summary::before {
     background: var(--yellow);
-    animation: breathe 1.6s var(--ease) infinite;
+    animation: breathe var(--dur-loop) var(--ease) infinite;
 }
 
 :is(.tool, .trow) .tname {

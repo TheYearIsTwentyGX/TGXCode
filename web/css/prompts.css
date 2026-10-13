@@ -24,7 +24,7 @@
     border-radius: var(--r);
     padding: 12px 15px 13px;
     outline: none;
-    animation: perm-in var(--t-med) var(--ease);
+    animation: perm-in var(--dur-base) var(--ease-out);
 }
 .perm:focus-visible { box-shadow: 0 0 0 var(--focus-w) var(--focus-colour); }
 .perm[data-pending] { opacity: 0.55; }
@@ -33,7 +33,6 @@
     from { opacity: 0; transform: translateY(4px); }
     to   { opacity: 1; transform: none; }
 }
-@media (prefers-reduced-motion: reduce) { .perm { animation: none; } }
 
 .perm-head {
     display: flex;
@@ -118,11 +117,9 @@
     /* Opaque: it is over a live transcript, not beside one. */
     background: var(--s1);
     outline: none;
-    animation: perm-in var(--t-med) var(--ease);
 }
 .plan-pane[hidden] { display: none; }
 .plan-pane[data-pending] { opacity: 0.55; }
-@media (prefers-reduced-motion: reduce) { .plan-pane { animation: none; } }
 
 /* Head, plan and footer share one column. The plan is measured for reading and
    so sits narrower than the pane; a title and a row of buttons flush to the
@@ -235,7 +232,7 @@
     height: 7px;
     border-radius: 50%;
     background: var(--yellow);
-    animation: breathe 1.6s var(--ease) infinite;
+    animation: breathe var(--dur-loop) var(--ease) infinite;
 }
 @media (prefers-reduced-motion: reduce) { .plan-bar-led { animation: none; } }
 .plan-bar-text { flex: 1; min-width: 0; }
@@ -276,12 +273,10 @@
     background: var(--s2);
     border: 1px solid var(--yellow);
     border-radius: var(--r);
-    animation: perm-in var(--t-med) var(--ease);
     transition: margin var(--t-fast) var(--ease);
 }
 .ask-dock[hidden] { display: none; }
 .ask-dock[data-pending] { opacity: 0.55; }
-@media (prefers-reduced-motion: reduce) { .ask-dock { animation: none; transition: none; } }
 
 .ask-dock-inner {
     max-width: 1000px;
@@ -621,7 +616,7 @@
 
 .status-line[data-state="ask"] .led {
     background: var(--yellow);
-    animation: breathe 1.6s var(--ease) infinite;
+    animation: breathe var(--dur-loop) var(--ease) infinite;
 }
 .btn-stop.force { color: var(--red); background: var(--red-cont); }
 .btn-stop.force:hover { background: var(--red-cont-hover); }

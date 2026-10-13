@@ -232,7 +232,7 @@ function showLater(on) {
     closeSnips(live);
     if (live.wispr) closeWispr(live.wispr);
     state.laterPick = false;
-    present(dom.laterMenu, true, { kind: 'pop' });
+    present(dom.laterMenu, true, { as: 'menu' });
     dom.btnLater.setAttribute('aria-expanded', 'true');
     drawLater();
     positionLater();
@@ -240,7 +240,7 @@ function showLater(on) {
 
 export function closeLater({ focus = false } = {}) {
     if (!isUp(dom.laterMenu)) return;
-    present(dom.laterMenu, false, { kind: 'pop', onGone: () => render(null, dom.laterMenu) });
+    present(dom.laterMenu, false, { as: 'menu', onGone: () => render(null, dom.laterMenu) });
     dom.btnLater.setAttribute('aria-expanded', 'false');
     if (focus) dom.btnLater.focus();
 }

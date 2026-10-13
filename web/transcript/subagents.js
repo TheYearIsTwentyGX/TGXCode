@@ -167,7 +167,7 @@ export async function openAgent(toolUseId, { quiet = false } = {}) {
         hideTurnPop();
 
         appendEvents(d.events, AGENT_VIEW);
-        enter(dom.agentScroll, { kind: 'rise', speed: 'med' });
+        enter(dom.agentScroll, { as: 'arrive' });
         renderAgentHeader();
         renderAgents();
         applyComposerScope();
@@ -211,7 +211,7 @@ export function closeAgent() {
     leaveAgent();
     // Here and not in leaveAgent, which a chat switch also runs — and a switch
     // goes straight to its skeleton, with nothing played in.
-    enter(dom.scroll, { kind: 'fade', speed: 'med' });
+    enter(dom.scroll, { as: 'reveal' });
     renderHeader();
     renderAgents();
     subscribe();        // stop the bridge following a file nobody is reading
