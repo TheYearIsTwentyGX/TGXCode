@@ -39,6 +39,7 @@
 <link rel="stylesheet" href="./css/colours.css">
 <link rel="stylesheet" href="./css/preview.css">
 <link rel="stylesheet" href="./css/orchestrator.css">
+<link rel="stylesheet" href="./css/search.css">
 </head>
 <body>
 
@@ -53,7 +54,8 @@
         <path d="M10.5 10.5 14 14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
       </svg>
       <input id="search" type="search" placeholder="Filter sessions" autocomplete="off"
-             aria-label="Filter sessions">
+             aria-label="Filter sessions"
+             title="Filter the rail by title — press Enter to search inside every transcript">
     </label>
 
     <span class="bar-spacer"></span>
@@ -1104,6 +1106,33 @@
         <button id="dr-new" class="dash-btn" type="button">New draft</button>
       </header>
       <div id="dr-body" class="dr-body"></div>
+    </section>
+
+    <!-- Full-text search across every transcript (web/search.js). A whole panel
+         rather than a dropdown under the bar's filter, because a result is a
+         line of somebody's conversation and needs the room to be read. The
+         filter in the bar answers "which session is called that"; this answers
+         "where did somebody say that". -->
+    <section id="sx" class="sx" hidden aria-label="Search transcripts">
+      <header class="sx-head">
+        <div class="sx-head-text">
+          <h1 class="sx-title">Search transcripts</h1>
+          <p id="sx-sub" class="sx-sub">Everything you and Claude said, in every session.</p>
+        </div>
+      </header>
+      <div class="sx-bar">
+        <label class="sx-field">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.6"/>
+            <path d="M10.5 10.5 14 14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+          </svg>
+          <input id="sx-input" type="search" autocomplete="off" spellcheck="false"
+                 placeholder='Words, or a "quoted phrase"' aria-label="Search transcripts">
+        </label>
+        <button id="sx-tools" class="sx-toggle" type="button" aria-pressed="false"
+                title="Also search tool calls and their output">Include tools</button>
+      </div>
+      <div id="sx-body" class="sx-body" aria-live="polite"></div>
     </section>
 
     <!-- Sessions that start on a clock. Beside Drafts rather than inside it: a

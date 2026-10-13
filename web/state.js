@@ -390,6 +390,11 @@ export const state = {
     // `editing` is the id the dialog is currently editing, or null when it is
     // about to make a new one. It is what tells Save which verb to use.
     drafts: { open: false, rows: [], at: 0, loading: false, error: null, editing: null },
+    // Full-text search across every transcript — web/search.js; `sx` because
+    // `dom.search` is the bar's filter and a panel's key names its section. `data` is the
+    // last `/api/search` answer for `q`; `seq` drops an answer that arrives
+    // after a newer question was asked.
+    sx: { open: false, q: '', tools: false, data: null, loading: false, error: null, seq: 0 },
     // The project card whose ⋮ menu is open, or null. The menu is fixed and
     // outside the rail, so this is how the card's ⋮ knows to draw itself
     // expanded, and how syncProjMenu() finds the button to follow.

@@ -17,6 +17,7 @@ const cfg = require('./config');
 const auth = require('./auth');
 const { SessionIndex } = require('./sessions');
 const { SpendIndex } = require('./spend-index');
+const { Warmer } = require('./search-index');
 const { SessionRegistry } = require('./registry');
 const { RunnerPool, PERMISSION_MODES } = require('./runner');
 const hostClient = require('./host-client');
@@ -646,6 +647,7 @@ const ROUTES = [
     require('./routes/snippets'),
     require('./routes/schedules'),
     require('./routes/dashboard'),
+    require('./routes/search'),
     require('./routes/github'),
     require('./routes/worktrees'),
     require('./routes/quota'),
@@ -659,8 +661,13 @@ const ROUTES = [
     require('./routes/files'),
 ];
 
+// Builds the full-text index in the background, a few milliseconds at a time.
+// Started once the session index has its first scan. See bridge/search-index.js.
+const searchWarmer = new Warmer(index.searchIndex,
+    () => index.searchCandidates({ includeTest: true }));
+
 const ROUTE_DEPS = {
-    index, spend, pool, registry, flags, prefs, claudeConfig, claudeDocs, spinner, suggestions,
+    index, spend, searchWarmer, pool, registry, flags, prefs, claudeConfig, claudeDocs, spinner, suggestions,
     beacon, drafts, later, standing, snippetStore, schedules, claudeVersion, terminals,
     slashCommands, runs, notifications, reads, orchestrators,
     normalizeMode, modeRefusal, tooManyCreates, CREATE_LIMIT, sessionCwd, shutdown,
@@ -1090,6 +1097,9 @@ function shutdown(code = 0) {
         // between a turn left running in the host and one that is lost.
         console.error(`[tgxcode] runner shutdown failed: ${err && err.stack || err}`);
     }
+    // Not load-bearing — a stale manifest only means an index is re-read once.
+    searchWarmer.stop();
+    try { index.searchIndex.flushManifest(); } catch { /* best effort */ }
     // Terminals run in their own process groups, so unlike turns they would
     // outlive us if we did not take them with us. A run is the same, and worse
     // if left: its stdout is a pipe nobody is reading any more, so it would fill
@@ -1252,6 +1262,7 @@ takeBackHeld().catch((err) => {
     // transcript once, and the first visit to the board should not be that.
     spend.refresh(index).catch(err => console.error(
         `[tgxcode] spend index: ${err.message}`));
+    searchWarmer.start();
 
     if (cfg.IS_DEV) {
         console.log('[tgxcode] development instance — the everyday one on '
