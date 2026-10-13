@@ -15,7 +15,7 @@ const os = require('os');
 const path = require('path');
 
 const { buildEvents, parseLines } = require('../bridge/transcript.js');
-const { TurnIndex, boundaries } = require('../bridge/turn-index.js');
+const { TurnIndex, boundaries, INDEX_VERSION } = require('../bridge/turn-index.js');
 
 let pass = 0;
 const ok = (name) => { pass++; console.log(`  ok  ${name}`); };
@@ -141,6 +141,91 @@ const first = [
         assert.ok(off === 0 || buf[off - 1] === 0x0a, `offset ${off} is a line start`);
     }
     ok('windows cut at the index offsets add up to the full read');
+}
+
+// --- the minimap's kinds: edits, subagents, failures and pull requests -------
+const prLink = (n) => ({
+    type: 'pr-link', sessionId: 's', timestamp: ts(), prNumber: n,
+    prUrl: `https://github.com/o/r/pull/${n}`, prRepository: 'o/r',
+});
+const work = [
+    user('m1', 'Change the file'),
+    call('ma1', 'e1', 'Edit', { file_path: '/repo/a.js', old_string: 'x', new_string: 'y' }),
+    result('mr1', 'e1', 'ok'),
+    call('ma2', 'e2', 'Write', { file_path: '/repo/b.js', content: 'z' }),
+    result('mr2', 'e2', 'File has not been read yet', true),
+    call('ma3', 'b9', 'Bash', { command: 'false' }),
+    // Big and failed: parsed for the failure, not for its size.
+    result('mr3', 'b9', 'Exit code 1\n' + noise, true),
+    call('ma4', 'b8', 'Bash', { command: 'rm -rf /' }),
+    result('mr4', 'b8', "The user doesn't want to proceed with this tool use.", true),
+    call('ma5', 'p2', 'ExitPlanMode', { plan: '# Again' }),
+    result('mr5', 'p2', 'User rejected the plan; keep planning', true),
+    prLink(7),
+    user('m2', 'And a helper'),
+    call('ma6', 't1', 'Task', { description: 'Survey the tests', prompt: 'look' }),
+    prLink(7),
+];
+const kindsOf = (idx) => idx.marks.map(m => `${m.kind}:${m.id}`);
+{
+    write(work);
+    const idx = new TurnIndex(path.join(TMP, 'idx4')).update('s', file);
+    assert.deepStrictEqual(kindsOf(idx), [
+        'turn:m1', 'edit:e1', 'edit:e2', 'error:e2:error', 'error:b9:error', 'plan:p2',
+        'pr:pr:https://github.com/o/r/pull/7', 'turn:m2', 'subagent:t1',
+    ]);
+    const m = Object.fromEntries(idx.marks.map(x => [x.id, x]));
+    assert.strictEqual(m.e1.path, '/repo/a.js');
+    assert.strictEqual(m['e2:error'].name, 'Write');
+    assert.strictEqual(m['e2:error'].text, 'File has not been read yet');
+    // A Bash call is never parsed — it is most of a transcript — so its failure
+    // is marked by what it said rather than by name.
+    assert.strictEqual(m['b9:error'].name, null);
+    assert.strictEqual(m['b9:error'].text, 'Exit code 1');
+    assert.strictEqual(m.p2.status, 'error', 'a plan sent back is an outcome, not an error mark');
+    assert.strictEqual(m.t1.text, 'Survey the tests');
+    assert.strictEqual(m['pr:https://github.com/o/r/pull/7'].number, 7);
+    // Turn offsets are untouched: the same as a v1 index would have said.
+    const buf = fs.readFileSync(file);
+    const cuts = boundaries(idx);
+    assert.deepStrictEqual([...cuts].sort((a, b) => a - b),
+        [0, ...idx.marks.filter(x => x.kind === 'turn').map(x => x.offset)].filter((v, i, a) => a.indexOf(v) === i));
+    for (const x of idx.marks) {
+        const turn = [...idx.marks].reverse().find(t => t.kind === 'turn' && t.offset <= x.at);
+        assert.strictEqual(x.offset, turn.offset, `${x.id} sits on its turn`);
+        assert.ok(x.at >= x.offset, `${x.id}: at is inside its turn`);
+        assert.ok(x.at === 0 || buf[x.at - 1] === 0x0a, `${x.id}: at is a line start`);
+    }
+    ok('edits, subagents, failures and PRs are marked, each on its own line and in its turn');
+}
+
+// --- a failure whose call is in an earlier read ----------------------------
+{
+    write(work.slice(0, 6));
+    const ti = new TurnIndex(path.join(TMP, 'idx5'));
+    ti.update('s', file);
+    append(work.slice(6));
+    const idx = ti.update('s', file);
+    const whole = new TurnIndex(path.join(TMP, 'idx6')).update('s', file);
+    assert.deepStrictEqual(idx.marks, whole.marks);
+    assert.strictEqual(idx.marks.find(x => x.id === 'e2:error').name, 'Write',
+        'named from the edit mark the earlier read left');
+    ok('an incremental read marks a failure whose call it never saw, and agrees with a rebuild');
+}
+
+// --- an index from before the minimap is rebuilt, not served ----------------
+{
+    const dir = path.join(TMP, 'idx7');
+    write(work);
+    fs.mkdirSync(dir, { recursive: true });
+    const stat = fs.statSync(file);
+    fs.writeFileSync(path.join(dir, 's.json'), JSON.stringify({
+        version: 1, file, head: null, consumed: stat.size, marks: [], pending: [],
+    }));
+    const idx = new TurnIndex(dir).update('s', file);
+    assert.strictEqual(idx.version, INDEX_VERSION);
+    assert.ok(idx.marks.some(m => m.kind === 'edit'));
+    ok('a version 1 index is rebuilt with the new kinds');
 }
 
 // --- forget ---------------------------------------------------------------

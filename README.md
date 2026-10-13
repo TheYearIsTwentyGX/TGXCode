@@ -390,7 +390,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/taskboard.js` | The task board: everything outstanding, in a column per state |
 | `bridge/sessions.js` | The session index — incremental, cached, watched |
 | `bridge/registry.js` | Which sessions have a process, from Claude Code's own registry |
-| `bridge/turn-index.js` | Per-session index of turns, plans and questions with byte offsets, so a long session opens from its end |
+| `bridge/turn-index.js` | Per-session index of turns, plans, questions, edits, subagents, failures and PRs with byte offsets, so a long session opens from its end and the minimap is whole |
 | `bridge/transcript.js` | JSONL → render events; pairs tool calls with results; reads subagent transcripts |
 | `bridge/tasks.js` | A session's own task list — the items, and how far through them it is |
 | `bridge/attachments.js` | Files pasted into the composer — where they land, and out of git |
@@ -502,7 +502,8 @@ Two rules worth knowing before you send a patch:
 | `web/transcript/context-menu.js` | The right-click menu, and the file menu on a changed file |
 | `web/transcript/earlier.js` | Opening a long conversation from its end, and loading earlier stretches on the way up |
 | `web/transcript/window.js` | Windowing the session log: settled rows wrapped in chunks that leave the document behind a spacer of their measured height while far from the viewport (`ensureAttached`, `layoutTop` for anything that measures a row) |
-| `web/transcript/turn-rail.js` | The turn rail, and revealing and flashing a row in the log |
+| `web/transcript/turn-rail.js` | The minimap down the transcript's right edge, and revealing and flashing a row in the log |
+| `web/transcript/minimap-layout.js` | Pure placement for the minimap: marks by turn, clustering per lane, the viewport band |
 | `web/transcript/find.js` | Ctrl+F over the transcript and its subagents |
 | `web/terminal.js` | The terminal pane — a shell, or a run's output |
 | `web/composer/` | The message boxes — the one under a conversation and the Start-a-session dialog's — and everything that sends from them. Like `transcript/`, none may read an imported binding at top level; load-time listeners are in a `wire*()` that app.js calls |
