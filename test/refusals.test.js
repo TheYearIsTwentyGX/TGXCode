@@ -421,6 +421,25 @@ const HOME = os.homedir();
     check('an unknown draft is a 404, not a refusal', (await call('DELETE',
         '/api/drafts/nope', { headers: LOCAL })).status, 404);
 
+    // Templates go through the same draftFields, plus the worktree rule from
+    // POST /api/sessions. Every case here is refused before anything is written,
+    // because this bridge shares the real state directory.
+    console.log('\n--- templates ---');
+    check('saving a bypassPermissions template remotely', (await call('POST', '/api/templates', {
+        headers: PHONE, body: { name: 'x', permissionMode: 'bypassPermissions' },
+    })).status, 403);
+    check('saving a template with a worktree remotely', (await call('POST', '/api/templates', {
+        headers: PHONE, body: { name: 'x', worktree: { name: 'x' } },
+    })).status, 403);
+    check('adding a worktree to a template remotely, before the id is looked up',
+        (await call('PATCH', '/api/templates/nope', {
+            headers: PHONE, body: { worktree: { name: 'x' } },
+        })).status, 403);
+    check('a phone may read templates', (await call('GET', '/api/templates',
+        { headers: PHONE })).status, 200);
+    check('an unknown template is a 404', (await call('DELETE',
+        '/api/templates/nope', { headers: LOCAL })).status, 404);
+
     // The same rule on a schedule, where the stakes are higher and the second
     // gate is different. A draft in a refused mode still needs somebody to press
     // Start, and that somebody is checked in turn — which is why refusing the

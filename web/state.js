@@ -395,6 +395,10 @@ export const state = {
     // last `/api/search` answer for `q`; `seq` drops an answer that arrives
     // after a newer question was asked.
     sx: { open: false, q: '', tools: false, data: null, loading: false, error: null, seq: 0 },
+    // Session templates, pushed whole on `templates-changed` like the drafts.
+    // `editing` is the template the dialog is open on, or null; `picked` the one
+    // chosen in the picker this open, which Fill resolves.
+    templates: { rows: [], editing: null, picked: null },
     // The project card whose ⋮ menu is open, or null. The menu is fixed and
     // outside the rail, so this is how the card's ⋮ knows to draw itself
     // expanded, and how syncProjMenu() finds the button to follow.

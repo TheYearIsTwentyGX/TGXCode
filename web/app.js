@@ -19,6 +19,7 @@ import { applySessionSpend, loadAnalytics, loadSessionSpend, renderAnalytics } f
 import { renderNotes } from './boards/history.js';
 import { applyDrafts, loadDrafts, renderDrafts, showDrafts } from './drafts.js';
 import { jumpToHit, openSearch, showSearch, wireSearch } from './search.js';
+import { applyTemplates, loadTemplates, wireTemplates } from './new-session/templates.js';
 import { applySched, loadSched, showSched } from './schedules.js';
 import { applySnippets, loadSnippets, wireSnippets } from './snippets/index.js';
 import { paintPinTitles } from './snippets/pins.js';
@@ -2522,6 +2523,8 @@ function connect() {
         // watching flag to reset here — the push is unconditional, so a
         // reconnected window starts receiving them again with no subscribe.
         loadDrafts();
+        // And the session templates, for the drafts' reason.
+        loadTemplates();
         // And the snippets, which matter here a little more than the drafts do:
         // the pinned buttons are on screen whether or not any panel is open, so a
         // missed push leaves a wrong button sitting in the composer rather than a
@@ -2629,6 +2632,7 @@ function connect() {
     // is also how a draft saved or started in another window disappears from
     // this one.
     es.addEventListener('drafts-changed', (e) => applyDrafts(JSON.parse(e.data)));
+    es.addEventListener('templates-changed', (e) => applyTemplates(JSON.parse(e.data)));
     es.addEventListener('snippets-changed', (e) => applySnippets(JSON.parse(e.data)));
     es.addEventListener('schedules-changed', (e) => applySched(JSON.parse(e.data)));
     // Fires without anybody having done anything, exactly as `schedules-changed`
@@ -3527,6 +3531,7 @@ wireTerm();
 dom.newGo.addEventListener('click', startNew);
 dom.newSave.addEventListener('click', drSave);
 dom.newSched.addEventListener('click', drToSchedule);
+wireTemplates();
 dom.dbStatus.addEventListener('click', refreshDevBrowser);
 dom.btnBack.addEventListener('click', closeAgent);
 
