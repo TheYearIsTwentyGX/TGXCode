@@ -27,6 +27,7 @@ import { dom, toast } from './dom.js';
 import { get, post, put } from './api.js';
 import { ago, clip } from './format.js';
 import { renderMarkdown } from './markdown.js';
+import { ICON } from './icons.js';
 import { grow, isUp, morph } from './motion.js';
 
 const KIND_LABEL = {
@@ -175,7 +176,8 @@ function section(key, title, extra, body) {
     return html`<section class=${`orch-sec orch-${key}`} data-open=${String(open[key])}>
         <button class="orch-sec-head" type="button" aria-expanded=${String(open[key])}
             onClick=${() => toggle(key)}>
-            <span class="twist">▸</span><span class="orch-sec-title">${title}</span>${extra}
+            <span class="twist"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true"
+                dangerouslySetInnerHTML=${{ __html: ICON.caret }}></svg></span><span class="orch-sec-title">${title}</span>${extra}
         </button>
         ${open[key] ? html`<div class="orch-sec-body">${body()}</div>` : null}
     </section>`;
