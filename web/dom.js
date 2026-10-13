@@ -201,7 +201,37 @@ export function modalUp() {
 export function openModal(scrim) {
     present(scrim, true, { as: 'scrim' });
     const box = scrim.querySelector(':scope > .modal');
-    if (box) pose(box, 'in', { as: 'dialog' });
+    if (!box) return;
+    pose(box, 'in', { as: 'dialog' });
+    watchScroll(box);
+}
+
+/**
+ * `data-scrolled` on a `.modal` while its body is scrolled off the top, which is
+ * what draws the line under the head (dialogs.css). Without it a field cut off at
+ * the top edge reads as a clipped label rather than as "more above".
+ *
+ * One capturing listener on the box rather than one on the body: the snippet
+ * editor's body is Preact's and is built afresh on every open, so a listener on
+ * the body would be on a node that is gone by the next one. The box is markup in
+ * every dialog, so the attribute on it is nobody else's to undo.
+ */
+const scrollWatched = new WeakSet();
+function watchScroll(box) {
+    const mark = () => {
+        const body = box.querySelector('.modal-body');
+        box.toggleAttribute('data-scrolled', Boolean(body && body.scrollTop > 0));
+    };
+    if (!scrollWatched.has(box)) {
+        scrollWatched.add(box);
+        box.addEventListener('scroll', (e) => {
+            if (e.target.classList && e.target.classList.contains('modal-body')) mark();
+        }, { capture: true, passive: true });
+    }
+    // Whatever the last open left behind, and again once the opener has filled
+    // the dialog and moved the focus, which can scroll the body by itself.
+    mark();
+    requestAnimationFrame(mark);
 }
 
 /**
