@@ -96,6 +96,7 @@ import {
 } from './transcript/turn-rail.js';
 import { applyRunChange, cmdDir, loadCommands, renderCommands } from './commands.js';
 import { onOrchestratorEvent, toggleOrchestrator } from './orchestrator.js';
+import { digestOnResolved, digestOnRunner, wireDigest } from './digest.js';
 import { adoptAttachments, dragHasFiles, wireAttachments } from './composer/attachments.js';
 import { applyLater, closeLater, loadLater, wireLater } from './composer/later.js';
 import { updateMentionMenu } from './composer/mentions.js';
@@ -2783,6 +2784,7 @@ function connect() {
     es.addEventListener('runner-status', (e) => {
         const s = JSON.parse(e.data);
         noteRunner(s);   // when this turn started, for the notification rules
+        digestOnRunner(s);
         if (state.current && s.sessionId === state.current.sessionId) applyRunner(s);
         // The rail's own copy. The session list is only re-sent when the list
         // changes, and none of what moves while a turn runs changes it — the tool
@@ -2838,6 +2840,7 @@ function connect() {
         // However it was answered — here, in another window, from the toast
         // itself, or by the two-minute auto-deny — the toast has to go.
         clearAsk(p.sessionId);
+        digestOnResolved(p);
         state.waiting.delete(p.sessionId);
         paintLiveBadge();
         paintTaskboardBadge();
@@ -3425,6 +3428,7 @@ for (const type of ['dragover', 'drop']) {
 }
 wireSnippets();
 wireLater();
+wireDigest();
 
 // Wrapped, not passed: openNew now takes an options bag, and a MouseEvent is
 // not one.

@@ -32,7 +32,8 @@ const UNIT = ['auth.test.js', 'temp.test.js', 'recent.test.js', 'pulls.test.js',
     'suggestions.test.js', 'mcp.test.js', 'flags.test.js', 'worktree.test.js',
     'scratchpad.test.js', 'turn-index.test.js', 'github.test.js', 'standing.test.js',
     'worktree-create.test.js', 'orchestrators.test.js', 'setup.test.js',
-    'viewers.test.js', 'spend.test.js', 'worktrees.test.js', 'search-index.test.js'];
+    'viewers.test.js', 'spend.test.js', 'worktrees.test.js', 'search-index.test.js',
+    'digest.test.js'];
 const LIVE = ['gate.test.js', 'browser.test.js', 'refusals.test.js', 'unpaired.test.js'];
 
 const given = Number(process.argv[2]);

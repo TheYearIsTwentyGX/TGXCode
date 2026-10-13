@@ -356,6 +356,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/routes/bridge.js` | The process itself: health, shutdown, restart, the installed Claude Code and updating it, `/api/pairing` |
 | `bridge/routes/settings.js` | `/api/prefs`, `/api/keymap`, `/api/spinner/groups`, and Claude Code's own settings and memory files |
 | `bridge/routes/notifications.js` | The notification history, marking it read, clearing it |
+| `bridge/routes/digest.js` | `GET /api/digest` — gathers the inputs for bridge/digest.js |
 | `bridge/routes/sessions.js` | Sessions as a collection: listing, `addressable`, starting one, `/api/slash-commands`. Asked before `session.js`, which is load-bearing |
 | `bridge/routes/suggestions.js` | Suggested follow-ups across every session, and taking one up |
 | `bridge/routes/drafts.js` | `/api/drafts`, and the validation a draft shares with a create |
@@ -416,6 +417,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/wispr.js` | Presses a Wispr Flow transform's chord on the Windows desktop through PowerShell's SendInput, and the chord grammar `wispr.transforms` is written in |
 | `bridge/platform.js` | Whether there is a Windows on the other side of this bridge, and the env var that lets a test pretend otherwise |
 | `bridge/notifications.js` | The notification log, what is worth raising, and what you have already read |
+| `bridge/digest.js` | "While you were away": what happened since a time the client names, assembled from stores the bridge already keeps (pure) |
 | `bridge/flags.js` | Pinned, archived and test state |
 | `bridge/prefs.js` | Settings from `~/.tgxcode/` and from the project — which file each one came from, and which one a save goes to |
 | `bridge/claude-config.js` | Claude Code's *own* settings files — the chain, what each one says, and the preconditions on writing somebody else's format |
@@ -467,6 +469,7 @@ Two rules worth knowing before you send a patch:
 | `web/motion.js` | Moving things on and off the page: `present`/`exit`/`enter` (then `hidden` or removal), `grow` and `fill` (height, so the transcript resizes with a dock), `morph`, `flip`, `pose`. Every call names a preset from `PRESETS` (`menu`, `dialog`, `toast`, `dock`…); durations and curves are read from `--dur-*`/`--ease-*` in base.css, and reduced motion keeps a short fade without the movement. See docs/plans/22-ui-overhaul.md |
 | `web/format.js` | Timestamps, durations, paths and model ids as short text. Pure, so the Node tests import it directly |
 | `web/icons.js` | `ICON`, the SVG glyphs every surface draws, `PR_ICON`, and `icon()` to make one |
+| `web/digest.js` | The while-you-were-away card — deciding when you were away, and drawing what `/api/digest` says happened |
 | `web/notifications.js` | Desktop notifications and the chime for a turn that finished or is waiting on you, and the page side of `sw.js` — registering it, and opening the session a notification's button was about |
 | `web/quota.js` | The quota pill and the Claude Code version pill, and their popovers. `loadQuota`/`loadCv` are what a reconnect calls |
 | `web/restart.js` | Pull and restart — the quota popover's button that fast-forwards the checkout and hands over to `scripts/restart-bridge.sh`, and the dialog for a refusal |
@@ -562,6 +565,7 @@ Two rules worth knowing before you send a patch:
 | `web/css/colours.css` | Project colours across the surfaces above, and Wispr Flow transforms. Late because it overrides them |
 | `web/css/preview.css` | The browser preview pane |
 | `web/css/search.css` | The Search transcripts panel. Last in the cascade and self-contained, reading only the shared tokens |
+| `web/css/digest.css` | The while-you-were-away card (web/digest.js), from existing tokens only |
 | `web/vendor/` | The libraries worth not writing — xterm; diff2html for the diff viewer; and `preact.js`, htm's standalone build (Preact 10 + hooks + htm in one ESM file) for components written without JSX. Checked-in prebuilt bundles, not a `node_modules` |
 | `app/main.js` | The Electron shell, and the rules for what a preview `<webview>` may load |
 | `app/preload.js` | The page's only doors into the shell: raise the window, and the preview's two clipboard writes |

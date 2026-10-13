@@ -640,6 +640,7 @@ const ROUTES = [
     require('./routes/bridge'),
     require('./routes/settings'),
     require('./routes/notifications'),
+    require('./routes/digest'),
     require('./routes/sessions'),
     require('./routes/suggestions'),
     require('./routes/drafts'),

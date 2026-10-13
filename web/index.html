@@ -40,6 +40,7 @@
 <link rel="stylesheet" href="./css/preview.css">
 <link rel="stylesheet" href="./css/orchestrator.css">
 <link rel="stylesheet" href="./css/search.css">
+<link rel="stylesheet" href="./css/digest.css">
 </head>
 <body>
 
@@ -2081,6 +2082,9 @@
 </div>
 
 <div id="toasts" class="toasts" aria-live="polite"></div>
+
+<!-- "While you were away" — web/digest.js draws into this. -->
+<div id="digest" class="digest"></div>
 
 <!-- A classic script, not the side-effect `import` vendor/xterm.js gets, and the
      difference is not stylistic. xterm.js is the ESM build renamed; this is a UMD
