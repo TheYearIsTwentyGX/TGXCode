@@ -317,7 +317,6 @@ function renderThinking(ev) {
     const words = ev.text.trim().split(/\s+/).length;
     const det = el('details', { class: 'tool thinking' },
         el('summary', {},
-            el('span', { class: 'caret' }, '▶'),
             el('span', { class: 'tname' }, 'Thought'),
             el('span', { class: 'targ' }, clip(ev.text, 90)),
             el('span', { class: 'tmeta' }, `${words} words`),
@@ -362,7 +361,6 @@ function renderAgentDone(ev) {
     if (ev.result) {
         body.push(el('details', { class: 'tool' },
             el('summary', {},
-                el('span', { class: 'caret' }, '▶'),
                 el('span', { class: 'tname' }, 'Result'),
                 el('span', { class: 'targ' }, clip(ev.result, 90)),
             ),
@@ -531,8 +529,10 @@ export function inboxSummary(ev) {
 function renderOrchestratorInbox(ev) {
     const n = ev.count || 0;
     const what = inboxSummary(ev);
+    // No 📥 in front: an emoji is a glyph only where an emoji font is installed,
+    // and on a Linux host without one it was a box.
     return row(ev, 'orchestrator-inbox',
-        `📥 ${n} item${n === 1 ? '' : 's'} waiting${what ? ` — ${what}` : ''}`);
+        `${n} item${n === 1 ? '' : 's'} waiting${what ? ` — ${what}` : ''}`);
 }
 
 /**

@@ -83,7 +83,6 @@ export function renderTool(ev) {
 
     const det = el('details', { class: 'tool', 'data-status': status },
         el('summary', {},
-            el('span', { class: 'caret' }, '▶'),
             el('span', { class: 'tname' }, ev.name),
             el('span', { class: 'targ' }, summary),
             el('span', { class: 'tmeta' },

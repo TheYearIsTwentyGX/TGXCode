@@ -241,6 +241,13 @@
     --t-fast: var(--dur-fast);
     --t-med:  var(--dur-base);
     --ease:   var(--ease-standard);
+
+    /* Chunk A (wave 2). The horizontal inset of a pane in the main column —
+       the conversation header, the log, the composer and the docks above it,
+       the boards. A layout dimension like --gutter and --rail rather than a
+       step on the spacing scale: it is the one edge all of those line up on,
+       and naming it is what keeps them lined up. */
+    --pane-x: 28px;
 }
 
 /* Everything CSS animates, stopped in one place for a reader who asked for less
@@ -376,17 +383,21 @@ a:hover { text-decoration: underline; }
     grid-area: bar;
     display: flex;
     align-items: center;
-    gap: 16px;
-    padding: 0 14px 0 18px;
+    /* Tight, because the view buttons have no ground at rest and their own
+       padding is what spaces them. The wordmark and the groups add their own
+       room below. */
+    gap: var(--sp-1);
+    padding: 0 var(--sp-6) 0 var(--sp-7);
     -webkit-app-region: drag;
 }
-.bar > * { -webkit-app-region: no-drag; }
+.bar > * { -webkit-app-region: no-drag; flex: none; }
 
 .wordmark {
     display: flex;
     align-items: center;
-    gap: 9px;
-    font: 500 15px/1 var(--sans);
+    gap: var(--sp-4);
+    margin-right: var(--sp-7);
+    font: 500 var(--fs-lg)/var(--lh-none) var(--sans);
     color: var(--text-2);
     white-space: nowrap;
     letter-spacing: 0.01em;
@@ -395,26 +406,32 @@ a:hover { text-decoration: underline; }
 
 /* Only present on a development instance — the everyday window has no badge. */
 .dev-badge {
-    margin-left: 4px;
-    padding: 3px 9px;
+    margin-left: var(--sp-2);
+    padding: var(--sp-1) var(--sp-4);
     border-radius: var(--pill);
     background: var(--amber-cont);
     color: var(--yellow);
-    font: 500 var(--fs-xs)/1 var(--mono);
+    font: 500 var(--fs-xs)/var(--lh-snug) var(--mono);
     letter-spacing: 0.02em;
 }
 
+/* The one thing on the bar that grows and shrinks. Everything else is
+   `flex: none`, and when there is still not room fitBar() in
+   web/settings/toolbar.js takes it from the buttons, never from this below its
+   floor. The floor is read back by fitBar(), so it is the only place to set it. */
 .bar-search {
-    flex: 1;
+    flex: 1 1 auto;
+    min-width: 160px;
     max-width: 520px;
     display: flex;
     align-items: center;
-    gap: 10px;
-    height: 40px;
-    padding: 0 16px;
+    gap: var(--sp-5);
+    height: 34px;
+    margin-right: var(--sp-7);
+    padding: 0 var(--sp-7);
     background: var(--s2);
     border-radius: var(--pill);
-    transition: background var(--t-fast) var(--ease);
+    transition: background var(--dur-fast) var(--ease-standard);
 }
 .bar-search:hover { background: var(--s3); }
 .bar-search:focus-within { background: var(--s3); }
@@ -422,26 +439,31 @@ a:hover { text-decoration: underline; }
 .bar-search input { flex: 1; min-width: 0; font-size: var(--fs-base); }
 .bar-search input::placeholder { color: var(--text-3); }
 
-.bar-spacer { flex: 1; }
+.bar > .bar-spacer { flex: 1 1 0; }
 
-/* Shares the shape of the DevBrowser pill next to it — both are window-level
-   state, and a bar of matching lozenges reads as one control group. */
+/* The view buttons — Tasks, Live, Dashboard, History, Drafts, Schedules,
+   Settings. Places to go, so they are quiet: no ground until the pointer is on
+   one, and the open view's `.on` is the only blue on the bar. The window-state
+   pills further along (quota, version, DevBrowser) keep a ground of their own,
+   which is what tells the two kinds apart. */
 .bar-btn {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--sp-4);
     height: 34px;
-    padding: 0 14px;
-    font: 500 var(--fs-md)/1 var(--sans);
+    padding: 0 var(--sp-6);
+    font: 500 var(--fs-md)/var(--lh-none) var(--sans);
     color: var(--text-2);
-    background: var(--s2);
+    background: transparent;
     border-radius: var(--pill);
     white-space: nowrap;
-    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+    transition: background var(--dur-fast) var(--ease-standard), color var(--dur-fast) var(--ease-standard);
 }
-.bar-btn:hover { background: var(--s3); color: var(--text); }
-.bar-btn svg { color: var(--text-3); }
+.bar-btn:hover { background: var(--s2); color: var(--text); }
+.bar-btn svg { flex: none; color: var(--text-3); transition: color var(--dur-fast) var(--ease-standard); }
+.bar-btn:hover svg { color: var(--text-2); }
 .bar-btn.on { background: var(--blue-cont); color: var(--on-blue-cont); }
+.bar-btn.on:hover { background: var(--blue-cont-hover); }
 .bar-btn.on svg { color: var(--blue); }
 
 /* A square button for a setup step you do once per device, rather than one that
@@ -450,43 +472,74 @@ a:hover { text-decoration: underline; }
 /* The label goes; a count stays, since it is the reason to look at the button.
    With one showing, the square widens to a pill around the icon and the count. */
 .bar-btn.icon-only > span:not(.bar-badge) { display: none; }
-.bar-btn.icon-only:has(> .bar-badge:not([hidden])) { width: auto; padding: 0 10px; gap: 6px; }
+.bar-btn.icon-only:has(> .bar-badge:not([hidden])) { width: auto; padding: 0 var(--sp-5); gap: var(--sp-3); }
+
+/* The bar's first concession to a narrow window (fitBar()): every view button
+   keeps its icon and its count and loses its word. Clipped rather than
+   `display: none`, so the word is still the button's accessible name — these
+   buttons carry no aria-label unless Settings turned the label off. Direct
+   children only: a button in the More menu is a row, and a row has its words. */
+.bar.compact > .bar-btn:not(.icon-only) { padding: 0; width: 34px; justify-content: center; gap: 0; }
+.bar.compact > .bar-btn:not(.icon-only):has(> .bar-badge:not([hidden])) { width: auto; padding: 0 var(--sp-5); gap: var(--sp-3); }
+.bar.compact > .bar-btn > span:not(.bar-badge) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+.bar.compact > .bar-btn { position: relative; }
+
+/* Where a run of view buttons meets the state pills, or the other way round —
+   fitBar() marks the first of each run, so this follows whatever order
+   Settings put them in. Space, not a rule: the grounds already say which is
+   which. */
+.bar > [data-group-start] { margin-left: var(--sp-7); }
+/* The state pills sit closer to each other than the views do to them. */
+.bar > :is(.quota-wrap, .db-status) + :is(.quota-wrap, .db-status):not([data-group-start]) { margin-left: var(--sp-2); }
 
 
 /* A count, not an alert: unfinished work is the normal state of this machine. */
 .bar-badge {
-    min-width: 19px;
-    height: 19px;
-    padding: 0 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 var(--sp-3);
     border-radius: var(--pill);
-    background: var(--s4);
+    background: var(--s3);
     color: var(--text-2);
-    font: 500 var(--fs-xs)/19px var(--mono);
-    text-align: center;
+    font: 500 var(--fs-xs)/var(--lh-none) var(--mono);
     font-variant-numeric: tabular-nums;
 }
 .bar-badge[hidden] { display: none; }
+.bar-btn:hover .bar-badge { background: var(--s4); }
 .bar-btn.on .bar-badge { background: var(--blue-cont-active); color: var(--on-blue-cont); }
 
 .db-status {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--sp-4);
     height: 34px;
-    padding: 0 14px;
-    font: 500 var(--fs-md)/1 var(--sans);
+    padding: 0 var(--sp-6);
+    font: 500 var(--fs-md)/var(--lh-none) var(--sans);
     color: var(--text-2);
     background: var(--s2);
     border-radius: var(--pill);
-    transition: background var(--t-fast) var(--ease);
+    white-space: nowrap;
+    transition: background var(--dur-fast) var(--ease-standard), color var(--dur-fast) var(--ease-standard);
 }
 .db-status:hover { background: var(--s3); color: var(--text); }
-.db-status .led { width: 7px; height: 7px; border-radius: 50%; background: var(--text-4); }
+.db-status .led { width: 6px; height: 6px; border-radius: 50%; background: var(--text-4); }
 .db-status[data-up="true"] .led { background: var(--green); }
 
 /* The bar's overflow. The buttons in it are the bar's own, moved here by
-   paintToolbar() rather than copied, so these rules restyle a pill as a menu
-   row: full width, always labelled, and the count pushed to the far edge. */
+   paintToolbar() rather than copied — either because Settings put them here,
+   or because fitBar() ran out of room for them — so these rules restyle a
+   pill as a menu row: full width, always labelled, and the count pushed to
+   the far edge. */
 .bar-more-wrap { position: relative; }
 .bar-more-wrap[hidden] { display: none; }
 .bar [data-bar-hidden] { display: none; }
@@ -495,26 +548,25 @@ a:hover { text-decoration: underline; }
    corner instead. */
 #bar-more .bar-badge {
     position: absolute;
-    top: -5px;
-    right: -6px;
-    min-width: 17px;
-    height: 17px;
-    padding: 0 5px;
+    top: calc(-1 * var(--sp-2));
+    right: calc(-1 * var(--sp-2));
+    min-width: 16px;
+    height: 16px;
+    padding: 0 var(--sp-2);
     font-size: var(--fs-2xs);
-    line-height: 17px;
 }
-#bar-more[aria-expanded="true"] { background: var(--s3); color: var(--text); }
+#bar-more[aria-expanded="true"] { background: var(--s2); color: var(--text); }
 
 .bar-more-menu {
     position: absolute;
-    top: calc(100% + 8px);
+    top: calc(100% + var(--sp-4));
     right: 0;
     z-index: var(--z-pop);
     min-width: 200px;
-    padding: 6px;
+    padding: var(--sp-3);
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: var(--sp-1);
     background: var(--s3);
     border-radius: var(--r);
     box-shadow: var(--shadow-pop);
@@ -525,8 +577,8 @@ a:hover { text-decoration: underline; }
 .bar-more-menu .db-status {
     width: 100%;
     height: 34px;
-    padding: 0 10px;
-    gap: 10px;
+    padding: 0 var(--sp-5);
+    gap: var(--sp-5);
     justify-content: flex-start;
     background: transparent;
     border-radius: var(--r-xs);
@@ -536,7 +588,7 @@ a:hover { text-decoration: underline; }
 .bar-more-menu .bar-btn.on { background: var(--blue-cont); }
 /* A button whose label you turned off on the bar still needs one in a list. */
 .bar-more-menu .bar-btn.icon-only > span:not(.bar-badge) { display: inline; }
-.bar-more-menu .bar-badge { margin-left: auto; }
+.bar-more-menu .bar-badge { margin-left: auto; background: var(--s4); }
 
 /* ── quota ───────────────────────────────────────────────────────────── */
 
@@ -546,10 +598,11 @@ a:hover { text-decoration: underline; }
 .quota-pill {
     display: flex;
     align-items: center;
-    gap: 9px;
+    gap: var(--sp-4);
     height: 34px;
-    padding: 0 13px;
-    font: 500 var(--fs-md)/1 var(--sans);
+    padding: 0 var(--sp-6);
+    font: 500 var(--fs-md)/var(--lh-none) var(--sans);
+    white-space: nowrap;
     color: var(--text-2);
     background: var(--s2);
     border-radius: var(--pill);
@@ -570,7 +623,7 @@ a:hover { text-decoration: underline; }
    while the pointer is over the pill.
 
    The ring is a spread `box-shadow` for the reason flash-settings-row gives
-   further down this file: the pill has `padding: 0 13px` and a background of its
+   further down this file: the pill has padding and a background of its
    own, so a highlight has to be carried out past it by something that takes no
    part in layout. The shadow inherits `border-radius: var(--pill)`, so it comes
    out as a ring around a capsule rather than as a rectangle clipped to the text.
@@ -622,10 +675,10 @@ a:hover { text-decoration: underline; }
     }
 }
 
-.quota-pill #quota-pill-body { display: flex; align-items: center; gap: 9px; }
+.quota-pill #quota-pill-body { display: flex; align-items: center; gap: var(--sp-5); }
 
 /* One window's worth: a label, a bar, a number. */
-.q-win { display: flex; align-items: center; gap: 5px; }
+.q-win { display: flex; align-items: center; gap: var(--sp-3); }
 .q-win .q-label { color: var(--text-4); font-size: var(--fs-sm); }
 
 .q-bar {
@@ -661,8 +714,8 @@ a:hover { text-decoration: underline; }
 .q-reset {
     display: flex;
     align-items: center;
-    gap: 4px;
-    padding-left: 9px;
+    gap: var(--sp-2);
+    padding-left: var(--sp-5);
     border-left: 1px solid var(--s4);
     color: var(--text-4);
     font-variant-numeric: tabular-nums;
@@ -675,11 +728,11 @@ a:hover { text-decoration: underline; }
 
 .quota-menu {
     position: absolute;
-    top: calc(100% + 8px);
+    top: calc(100% + var(--sp-4));
     right: 0;
     z-index: var(--z-pop);
     width: 306px;
-    padding: 13px 15px 12px;
+    padding: var(--sp-6) var(--sp-7);
     background: var(--s3);
     border-radius: var(--r);
     box-shadow: var(--shadow-pop);
@@ -687,22 +740,22 @@ a:hover { text-decoration: underline; }
 }
 .quota-menu[hidden] { display: none; }
 
+/* The popover's title. Sentence case: it names one thing, it does not head a
+   list — "Limit events" below does, and keeps its overline. */
 .quota-head {
     display: flex;
     align-items: center;
-    gap: 8px;
-    margin-bottom: 10px;
-    font: 500 var(--fs-xs)/1 var(--sans);
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: var(--text-4);
+    gap: var(--sp-4);
+    margin-bottom: var(--sp-5);
+    font: 500 var(--fs-md)/var(--lh-tight) var(--sans);
+    color: var(--text-2);
 }
 
 /* Sibling of .tasks-collapse, which is the same affordance in the changes
    panel. Not uppercase like the label beside it: it is a verb, not a heading. */
 .quota-refresh {
     margin-left: auto;
-    padding: 2px 7px;
+    padding: var(--sp-1) var(--sp-3);
     border: 0;
     border-radius: var(--r-xs);
     background: none;
@@ -712,7 +765,7 @@ a:hover { text-decoration: underline; }
     text-transform: none;
     cursor: pointer;
 }
-.quota-refresh:hover:not(:disabled) { background: var(--s3); color: var(--text-2); }
+.quota-refresh:hover:not(:disabled) { background: var(--s4); color: var(--text-2); }
 /* Two in one head (the version panel's Changelog and Check again): the first
    takes the push to the right edge and the second sits beside it. */
 .quota-refresh + .quota-refresh { margin-left: 0; }
@@ -722,21 +775,21 @@ a:hover { text-decoration: underline; }
 .quota-refresh:disabled { opacity: 0.45; cursor: default; }
 .quota-refresh.busy { cursor: wait; }
 
-.q-row { padding: 7px 0; border-top: 1px solid var(--s2); }
+.q-row { padding: var(--sp-4) 0; border-top: 1px solid var(--s2); }
 .q-row:first-child { border-top: 0; padding-top: 0; }
 
 .q-row-top {
     display: flex;
     align-items: baseline;
     justify-content: space-between;
-    gap: 10px;
+    gap: var(--sp-5);
     font: 400 var(--fs-md)/var(--lh-snug) var(--sans);
     color: var(--text-2);
 }
 .q-row-top .q-pct { font: 500 var(--fs-md)/var(--lh-snug) var(--sans); color: var(--text); font-variant-numeric: tabular-nums; }
 .q-row.stale .q-row-top .q-pct { color: var(--text-4); }
 
-.q-row .q-bar { width: 100%; height: 5px; margin: 6px 0 5px; }
+.q-row .q-bar { width: 100%; height: 4px; margin: var(--sp-3) 0; }
 
 /* tabular-nums because the right-hand half of this row is a countdown that
    ticks every second (tickQuotaClocks), and proportional digits make the whole
@@ -744,7 +797,7 @@ a:hover { text-decoration: underline; }
 .q-row-sub {
     display: flex;
     justify-content: space-between;
-    gap: 10px;
+    gap: var(--sp-5);
     font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
     color: var(--text-4);
     font-variant-numeric: tabular-nums;
@@ -753,27 +806,27 @@ a:hover { text-decoration: underline; }
 .q-row-sub .bad { color: var(--red); }
 
 .quota-events {
-    margin-top: 10px;
+    margin-top: var(--sp-5);
     font: 400 var(--fs-sm)/var(--lh-prose) var(--sans);
     color: var(--text-4);
 }
 .quota-events:empty { display: none; }
 .quota-events .q-ev-head {
-    font: 500 var(--fs-xs)/1 var(--sans);
+    font: 500 var(--fs-xs)/var(--lh-none) var(--sans);
     letter-spacing: 0.04em;
     text-transform: uppercase;
     color: var(--text-4);
-    margin-bottom: 5px;
+    margin-bottom: var(--sp-3);
 }
-.quota-events div + .q-ev-head { margin-top: 9px; }
+.quota-events div + .q-ev-head { margin-top: var(--sp-5); }
 
 .quota-note {
-    margin-top: 10px;
-    font: 400 var(--fs-sm)/1.55 var(--sans);
+    margin-top: var(--sp-5);
+    font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
     color: var(--text-4);
 }
 .quota-note:empty { display: none; }
-.quota-note div + div { margin-top: 7px; }
+.quota-note div + div { margin-top: var(--sp-3); }
 .quota-note .warn { color: var(--yellow); }
 .quota-note code {
     font: 400 var(--fs-xs)/var(--lh-base) var(--mono);
@@ -782,7 +835,7 @@ a:hover { text-decoration: underline; }
 }
 
 /* The foot of the popover rather than a widget inside it: the menu has
-   `padding: 13px 15px 12px`, so a row that stopped short of those edges would
+   its own padding, so a row that stopped short of those edges would
    read as a card within a card. The negative margins bleed it back out to the
    corners and the bottom radius finishes them.
 
@@ -795,10 +848,10 @@ a:hover { text-decoration: underline; }
     /* Not centred: the sub line wraps to two on a worktree path, and a centred
        icon then sits beside the path rather than beside the label it belongs to. */
     align-items: flex-start;
-    gap: 9px;
-    width: calc(100% + 30px);
-    margin: 11px -15px -12px;
-    padding: 9px 15px 10px;
+    gap: var(--sp-5);
+    width: calc(100% + 2 * var(--sp-7));
+    margin: var(--sp-5) calc(-1 * var(--sp-7)) calc(-1 * var(--sp-6));
+    padding: var(--sp-5) var(--sp-7);
     border: 0;
     border-top: 1px solid var(--s2);
     border-radius: 0 0 var(--r) var(--r);
@@ -811,9 +864,9 @@ a:hover { text-decoration: underline; }
 .quota-restart:hover:not(:disabled) { background: var(--s4); color: var(--text); }
 .quota-restart:disabled { opacity: 0.45; cursor: default; }
 .quota-restart.busy { cursor: wait; }
-.quota-restart svg { flex: none; margin-top: 2px; }
+.quota-restart svg { flex: none; margin-top: var(--sp-1); }
 
-.qr-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.qr-text { display: flex; flex-direction: column; gap: var(--sp-1); min-width: 0; }
 .qr-label { font: 400 var(--fs-md)/var(--lh-tight) var(--sans); }
 /* A worktree checkout is a long path with no spaces in it, and this popover is
    306px wide — without this it runs off the edge rather than wrapping. */
@@ -827,13 +880,13 @@ a:hover { text-decoration: underline; }
 .cv-wrap { flex: none; }
 .cv-pill { color: var(--yellow); white-space: nowrap; }
 .cv-pill:hover, .cv-pill[aria-expanded="true"] { color: var(--yellow); }
-.cv-row { display: flex; justify-content: space-between; gap: 12px;
+.cv-row { display: flex; justify-content: space-between; gap: var(--sp-6);
     font: 400 var(--fs-md)/var(--lh-snug) var(--sans); color: var(--text-3); }
 .cv-row b { font: 500 var(--fs-sm)/var(--lh-snug) var(--mono); color: var(--text); }
-.cv-stale-head { font: 400 var(--fs-md)/var(--lh-snug) var(--sans); color: var(--text-3); margin-bottom: 4px; }
+.cv-stale-head { font: 400 var(--fs-md)/var(--lh-snug) var(--sans); color: var(--text-3); margin-bottom: var(--sp-2); }
 .cv-stale {
-    display: flex; justify-content: space-between; gap: 10px;
-    width: 100%; padding: 4px 6px; margin: 0 -6px;
+    display: flex; justify-content: space-between; gap: var(--sp-5);
+    width: calc(100% + 2 * var(--sp-3)); padding: var(--sp-2) var(--sp-3); margin: 0 calc(-1 * var(--sp-3));
     border: 0; border-radius: var(--r-xs);
     background: none; color: var(--text-2); text-align: left; cursor: pointer;
     font: 400 var(--fs-sm)/var(--lh-snug) var(--sans);

@@ -902,7 +902,6 @@ function paintRunSummary(det) {
             ),
             el('div', { class: 'ev-body' },
                 el('div', { class: 'trow', 'data-status': status },
-                    el('span', { class: 'caret' }, '\u25b6'),
                     el('span', { class: 'tname' },
                         `${tools.length} tool call${tools.length === 1 ? '' : 's'}`),
                     el('span', { class: 'targ' }, parts.join(' \u00b7 ')),

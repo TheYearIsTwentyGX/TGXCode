@@ -153,6 +153,10 @@ agree. Glyph sizes may stay literal.
   *Defined, not yet applied.* Every surface uses odd steps (5, 7, 9, 11, 13,
   15px). Snapping them is wave 2's main job; see each chunk's list. Optical
   adjustments of ±1px are allowed, but write a comment when you keep one.
+- **Pane inset** — `--pane-x` 28 (added by chunk A). The horizontal inset of a
+  pane in the main column: the conversation header and the log use it, and the
+  composer, the docks above it and the board heads should. A layout dimension
+  like `--gutter` and `--rail`, not a spacing step.
 - **Radii** — `--r-2xs` 3 · `--r-xs` 6 · `--r-sm` 8 · `--r` 12 · `--r-lg` 16 ·
   `--r-xl` 24 · `--pill`. **Inner is one step under outer:** a button in a 12px
   card is 8px or a pill, never 12px. Strays left: 1, 2, 4, 5, 9px in a few
