@@ -145,6 +145,20 @@ export const SETTINGS = [
         ],
     },
     {
+        title: 'While you were away', section: 'digest', category: 'workspace', userOnly: true,
+        note: 'A card in the corner when you come back, with what finished, failed or '
+            + 'is waiting on you since you left.',
+        rows: [
+            { key: 'enabled', type: 'bool',
+                label: 'Show what happened while you were away' },
+            { key: 'awayMinutes', type: 'int', min: 1, max: 480,
+                when: (p) => p.digest && p.digest.enabled === true,
+                label: 'Count as away after, in minutes',
+                note: 'How long the window has to be hidden, or go untouched, before '
+                    + 'coming back to it shows the card.' },
+        ],
+    },
+    {
         title: 'Live board', section: 'live', category: 'workspace',
         note: 'The board behind Live — every session running right now.',
         rows: [

@@ -1216,7 +1216,7 @@ it opens is on this machine's desktop, which a phone cannot look at.
 ### `GET /api/prefs?cwd=<path>&files=1`
 
 `{ version, transcript: {…}, live: {…}, projects: {…}, quota: {…}, spinner: {…},
-keyboard: {…}, toolbar: {…}, wispr: {…}, sources: [string], problems: [{file, message}] }` — how the person using the app
+keyboard: {…}, toolbar: {…}, wispr: {…}, …, digest: {…}, sources: [string], problems: [{file, message}] }` — how the person using the app
 wants it to behave. `sources` is file paths, weakest first; each `problems` entry
 is an **object**, `{file, message}`, naming the file that carried a value the key
 does not allow and what was wrong with it.
@@ -1259,8 +1259,9 @@ rather than taken at face value; the default stands. Without `?cwd=` you get the
 user-level answer, which is also what every page is served in a `tgx-prefs`
 `<meta>` tag (minus `sources` and `problems`).
 
-**Ten sections may only be set in the user's own file**: `quota`, `keyboard`,
-`projects`, `toolbar`, `wispr`, `preview`, `devbrowser`, `standing`, `startup` and `agentBrowser`. A project file that carries one is ignored and says so in
+**Twelve sections may only be set in the user's own file**: `quota`, `keyboard`,
+`projects`, `toolbar`, `wispr`, `preview`, `devbrowser`, `standing`, `startup`, `agentBrowser`,
+`orchestrator` and `digest`. A project file that carries one is ignored and says so in
 `problems`. What directory this app starts `claude` in, and which keys your
 hands use, are not a repository's business — and a repository that could rebind
 your keys could make the window unusable with hand-editing the file as the only
@@ -1276,7 +1277,9 @@ pressed on your machine is not a preference. `preview` and `devbrowser` decide
 which browser on this machine you look at pages in and whether a click launches
 one, which is the same class of thing. `startup` is the `toolbar` argument again:
 what your window opens to is not a repository's to arrange. `agentBrowser` is the same: whether a window
-opens on your desktop is yours.
+opens on your desktop is yours. `orchestrator` caps how much of the account an
+orchestrator may spend, which is not a checked-in file's to raise. `digest` is when
+you count as having walked away, which is about you.
 
 `transcript` today: `groupToolCalls` (fold a run of tool calls into one row once
 a message closes it), `groupMinCalls` (how long a run has to be — at least 2),
@@ -1535,6 +1538,15 @@ file only**, and **applied by the bridge when it spawns `claude`**, not by a cli
 | Key | Type | |
 |---|---|---|
 | `mode` | **`"visible"` or `"headless"`**, default `"visible"` | `"headless"` sets `PLAYWRIGHT_MCP_HEADLESS=true` in the environment of each session the bridge starts, so the Playwright MCP server launches its browser without a window. `"visible"` sets nothing and leaves the bridge's own environment in charge. Read at spawn: a session already running keeps the browser it has until its `claude` is restarted. Sessions started outside this bridge (a terminal, VS Code) are unaffected. |
+
+`digest` is the desktop's "while you were away" card. **User file only**, and
+**applied by the client** — the bridge stores it and `GET /api/digest` does not read
+it, so a phone is free to use its own rule or ignore the section:
+
+| Key | Type | |
+|---|---|---|
+| `enabled` | **boolean**, default `true` | Whether coming back to the window shows the card at all. |
+| `awayMinutes` | **integer 1–480**, default `20` | How long a window has to go hidden or untouched before the next sign of life counts as a return. |
 
 ### `GET /api/wispr`
 
@@ -2566,6 +2578,46 @@ not be for the log, because the file is merged in before it is replaced and the 
 of two timestamps always wins. Watermarks older than the log's own 14 days are dropped
 on load; every surviving row is newer than one of those, so it could not have applied.
 
+### `GET /api/digest?since=<ms>`
+
+What happened since a moment **the caller** names — the desktop's "while you were
+away" card, and the same question a phone asks when it comes back to the
+foreground. The bridge keeps nothing per client: `since` is when *you* stopped
+looking, which only the client knows. Every input is a store the bridge persists
+(the notification log, schedules, orchestrator inboxes, the PR cache, transcripts),
+so the answer is the same before and after a bridge restart.
+
+**`since`** is required: an integer, epoch **milliseconds**. `400` if it is missing
+or not an integer, if it is in the future, or if it is older than the notification
+log keeps (14 days) — that response also carries `oldest` (epoch ms), the earliest
+`since` that would be accepted. Refused rather than clamped, so a client bug does not
+quietly turn into "the last fortnight". Open to a remote caller, like
+`GET /api/notifications`. Test sessions are included only on a dev bridge, by the
+same rule.
+
+```
+{ since: number, now: number, total: number,
+  counts: { waiting, failed, finished, prs, schedules, suggestions, reports },   // numbers
+  waiting: […], failed: […], finished: […], prs: […],
+  schedules: […], suggestions: […], reports: […] }
+```
+
+Each list is **newest first and capped at 50**; `counts` are the totals *before* the
+cap, so `counts.finished - finished.length` is how many were left out. `total` is the
+sum of `counts`. All times are epoch ms unless the field says ISO.
+
+| Group | Item shape | |
+|---|---|---|
+| `waiting` | `{sessionId, title: string\|null, project: string\|null, kind: "tool"\|"plan"\|"question", tool: string\|null, requestId: string\|null, askedAt: number\|null}` | **Live, not "since"**: every ask pending *now*, whenever it was raised. An ask raised and answered while you were away is not here; one raised before you left still is. Answer it with `POST /api/sessions/:id/permission`; watch `permission-resolved` and `runner-status` to drop a row the moment it is answered elsewhere |
+| `failed` | `{id, sessionId: string\|null, title, project: string\|null, type, summary: string\|null, at, anchorId: string\|null}` | Notification rows of type `failed`, `stalled`, `schedule-failed`, `schedule-missed`, `later-failed`, `later-missed`. `id` and `anchorId` are the notification row's, so a client can open it exactly as it opens a History row. **`sessionId` may be null** (a schedule that never produced a session) |
+| `finished` | `{sessionId, title, project: string\|null, turns: number, lastAt: number, standing: {text, source: "model"\|"extract", at}\|null}` | `finished` notification rows grouped **one entry per session**; `turns` is how many, `lastAt` the newest. `standing` is the session's current standing line, as on `/api/sessions` rows. A finish re-emitted by a bridge adopting a turn after a restart (two within 5 s) is counted once |
+| `prs` | `{repo, number, url, title: string\|null, change: "opened"\|"merged"\|"closed", at: number, approx: boolean}` | From the PR cache, so only repositories some session has touched. `opened` is GitHub's `createdAt`. For `merged`/`closed`, `at` is GitHub's `mergedAt`/`closedAt` when the cache has it; otherwise it is **when this bridge noticed** the PR had settled, and `approx` is `true` — draw that as approximate, it can be well after the fact |
+| `schedules` | `{id, title, lastFiredAt: number, lastSessionId: string\|null, lastOutcome: string\|null, lastError: string\|null, runs: number, findings: string\|null}` | Schedules whose **last** run fired since `since`; a schedule that fired twice appears once. `findings` is the summary of a `schedule-findings` row for that run, when a review found something |
+| `suggestions` | `{sessionId, id, title: string\|null, ts: string (ISO), status: "open"\|"started"\|"dismissed"\|"completed", from: string\|null}` | Follow-ups filed with `suggest_session` since `since`. `id` is the tool-use id, as in `GET /api/suggestions`; `from` the title of the session that filed it |
+| `reports` | `{orchestratorId, orchestratorTitle: string\|null, workerId, workerTitle: string\|null, kind: "question"\|"update"\|"done", text, at}` | Worker `report_to_orchestrator` items from every orchestrator's inbox. Turn-end, ask and note items are left out — those are in the other groups |
+
+A client that wants a card only when there is something to say checks `total`.
+
 ### `GET /api/suggestions?session=&project=&status=&q=&limit=`
 
 `{ suggestions: [task], ready: bool }`, newest first. A task is
@@ -2965,7 +3017,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `handoff` | `{at, sessionId, from, count}` — another session handed this one work, and it was resumed to deal with it. Same shape and same reasoning as above; watched in the transcript rather than reported by the route, so it fires when the message *arrived* rather than when it was queued |
 | `suggestion-changed` | `{at, sessionId, toolUseId}` — a suggested follow-up was started, completed, dismissed, or undone, possibly in another window |
 | `session-deleted` | `{sessionId, title}` |
-| `prefs` | the **user-level** settings, in the same shape as the `tgx-prefs` `<meta>` tag: `{version, transcript, live, projects, quota, spinner, keyboard, toolbar, wispr, preview, devbrowser, standing, startup, agentBrowser}`, with no `sources` or `problems`. Fired on every `PUT /api/prefs` including your own, so a second window does not sit on a stale copy — two are routinely open here. A project's answer is deliberately not sent: it is the open session's business and arrives with `GET /api/sessions/:id` |
+| `prefs` | the **user-level** settings, in the same shape as the `tgx-prefs` `<meta>` tag: `{version, transcript, live, projects, quota, orchestrator, spinner, keyboard, toolbar, wispr, preview, devbrowser, standing, startup, agentBrowser, digest}`, with no `sources` or `problems`. Fired on every `PUT /api/prefs` including your own, so a second window does not sit on a stale copy — two are routinely open here. A project's answer is deliberately not sent: it is the open session's business and arrives with `GET /api/sessions/:id` |
 | `claude-config` | `{at: number, scope: 'user'\|'project'\|'project-local'\|'managed', file: string}` — the *fact* that one of Claude Code's settings files changed, and deliberately **not** its content. Unlike `prefs` there is no `<meta>` copy for a page to keep in sync and nothing in this app behaves differently because of those files, so the event is a nudge to re-read; pushing the contents of a file whose route is local-only down every open channel would be a poor trade for saving a fetch. Fired on every successful `PUT /api/claude-config`, including your own — **and on a change this bridge did not make**: `claude` writes these files itself, so `theme` or `editorMode` from `/config`, `enabledPlugins` from a plugin toggle, and a rule appended to `settings.local.json` when somebody approves a permission mid-turn all arrive here too. `scope` may then be `managed`, which no `PUT` can produce. **Two caveats a client has to hold.** It is best-effort: the bridge watches directories with `fs.watch`, which throws on some filesystems and silently does nothing on others, so a change can go unannounced — keep treating `409 {code:'stale'}` from `PUT /api/claude-config` as the guarantee, and this only as the convenience that usually saves you from meeting it. And a project's two files are watched only once `GET /api/claude-config?cwd=<dir>` has been called for that directory, only for a small number of directories at a time (least-recently-read dropped first), and not after ten minutes without another read of it; the user file and the managed file are watched throughout. So poll or re-`GET` if you need certainty about a directory you have not asked about |
 | `claude-docs` | `{at, scope, file}` — the same trade for a `CLAUDE.md`: the fact one was written, never its contents. `scope` is `"user"` or `"project"`. Fired on every successful `PUT /api/claude-docs`, including your own. **A client holding an unsaved draft must not reload on this** — show a conflict and keep what the person typed; the whole draft here is somebody's prose rather than one key |
 | `notification` | a whole notification row, just filed — the same shape `GET /api/notifications` returns, `read` included — plus `unread`, the badge count after this row. So an open history view need not refetch, and need not guess whether the new row counts |

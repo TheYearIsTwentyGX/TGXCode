@@ -71,7 +71,7 @@ const REPO_TTL_MS = 10 * 60_000;
 // not wearing any more — `--remove-label` errors on a label that is not there, so
 // the only safe way to set one of three is to know which are on.
 const PR_FIELDS = 'number,title,url,headRefName,headRefOid,baseRefName,labels,'
-    + 'isDraft,updatedAt,createdAt,'
+    + 'isDraft,updatedAt,createdAt,mergedAt,closedAt,'
     + 'reviewDecision,author,state,mergeable,statusCheckRollup';
 
 const cache = {
@@ -196,6 +196,10 @@ const normalise = (p, repo) => ({
     author: (p.author && (p.author.login || p.author.name)) || null,
     createdAt: p.createdAt || null,
     updatedAt: p.updatedAt || null,
+    // When it settled, for the away digest (bridge/digest.js). Null on an open
+    // pull request, and on a settled one cached before these were asked for.
+    mergedAt: p.mergedAt || null,
+    closedAt: p.closedAt || null,
     // `gh pr list --state open` does report `state`, but default it anyway: this
     // shape is also built from callers that filtered for open and dropped it.
     state: p.state || 'OPEN',

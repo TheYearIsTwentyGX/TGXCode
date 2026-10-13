@@ -709,8 +709,8 @@ in the rail for the same reason — the groups enabled by default are all short.
 **Settings** in the bar (or the ⋯ menu, if you moved it there), or `Ctrl+8`.
 Every key in `~/.tgxcode/settings.json` with a control in front of it — the
 reading settings above, the live board, the browser preview and DevBrowser,
-project colours, the spinner, the quota beacon, the keyboard, the toolbar and
-Wispr Flow — alongside editors for Claude Code's own settings and memory and for
+project colours, the spinner, the quota beacon, the keyboard, the toolbar,
+Wispr Flow and the while-you-were-away card — alongside editors for Claude Code's own settings and memory and for
 the project's commands, plus two
 groups that are not in that file: **Notifications**, which is per-browser, and
 **Connect a phone**, which is a task rather than a setting. Both used to be
@@ -1257,6 +1257,27 @@ is that there is not.
 In a browser, the first tick of *Show a desktop notification* is what asks
 permission — the click is the gesture browsers require, and a prompt nobody
 invited is the one people press Block on. The packaged app grants it already.
+
+### While you were away
+
+Come back to a window after twenty minutes or more — it was hidden, or nobody
+touched it — and a card appears in the top-right corner saying what happened in
+the meantime: sessions **waiting on you** first, each one click from its
+conversation, then turns that failed or stalled, turns that finished (with each
+session's standing line), pull requests opened, merged or closed, schedules that
+ran, worker reports to an orchestrator, and follow-ups filed. Rows past five in a
+group fold behind *+N more*.
+
+It does not block anything. Clicking a row opens it and leaves the card up, so you
+can work down it; ✕ or Esc dismisses it. Going away again before you dismiss it
+widens the same card rather than stacking a second one. An ask answered while the
+card is up — here, in another window, or from a phone — leaves the card at once.
+
+"Away" is one rule: the time since the last pointer, key or wheel event, or since
+the window was hidden. The moment is kept in the browser, so a window opened in
+the morning shows the night before. **Settings → While you were away** has the
+threshold and an off switch. A merged PR's time is GitHub's when the bridge has
+it; otherwise it is when the bridge noticed, and the card marks that with ≈.
 
 ### How dev servers are found
 

@@ -65,6 +65,11 @@
 // whoever is typing elsewhere, which is the reason it exists. **User-only**: what
 // pops up on your desktop is not a repository's to decide.
 //
+// `digest` is the "while you were away" card: whether it appears at all, and how
+// long the window has to go unwatched — hidden, or untouched — before coming
+// back counts as having been away. See web/digest.js. **User-only**: when you
+// count as away is about you, not about whichever checkout is open.
+//
 // **Where the file lives is the deliberate part.** `~/.tgxcode/settings.json`,
 // not STATE_DIR. Everything under STATE_DIR is state the app owns and nobody is
 // expected to open — a token, a set of archived ids. This is a file a person
@@ -425,6 +430,15 @@ const DEFAULTS = {
         // drawn. Read at spawn — see sessionEnv() in bridge/runner.js.
         mode: 'visible',
     },
+    digest: {
+        // Whether coming back to the window shows what happened while you were
+        // gone. See bridge/digest.js and web/digest.js.
+        enabled: true,
+        // How long the window has to be hidden or untouched before coming back
+        // counts. Short enough to catch a lunch break, long enough that reading
+        // something in another window does not raise a card on every return.
+        awayMinutes: 20,
+    },
 };
 
 // Sections a project may not set, however the precedence would otherwise fall.
@@ -461,8 +475,11 @@ const DEFAULTS = {
 // it is stopped, are not a checked-in repository's to raise — and its addenda
 // are text appended to a system prompt, which a repository already has CLAUDE.md
 // for.
+//
+// `digest` is when you count as having walked away, which is about you.
 const USER_ONLY = new Set(['quota', 'keyboard', 'projects', 'toolbar', 'wispr',
-    'preview', 'devbrowser', 'standing', 'startup', 'agentBrowser', 'orchestrator']);
+    'preview', 'devbrowser', 'standing', 'startup', 'agentBrowser', 'orchestrator',
+    'digest']);
 
 // What each key is allowed to be. A file is a thing people edit, so a bad value
 // is dropped and the default kept rather than taken at face value — a
@@ -608,6 +625,11 @@ const SHAPE = {
     },
     agentBrowser: {
         mode: (v) => v === 'visible' || v === 'headless',
+    },
+    digest: {
+        enabled: (v) => typeof v === 'boolean',
+        // Eight hours is a working day; past that the card is about yesterday.
+        awayMinutes: (v) => Number.isInteger(v) && v >= 1 && v <= 480,
     },
 };
 
@@ -1044,6 +1066,7 @@ class Prefs {
             standing: { ...DEFAULTS.standing },
             startup: { ...DEFAULTS.startup },
             agentBrowser: { ...DEFAULTS.agentBrowser },
+            digest: { ...DEFAULTS.digest },
             sources: [],
             problems: [],
         };

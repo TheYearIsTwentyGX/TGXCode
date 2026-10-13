@@ -45,6 +45,7 @@ export const PREFS_FALLBACK = {
     standing: { mode: 'model' },
     startup: { view: 'conversation', live: false },
     agentBrowser: { mode: 'visible' },
+    digest: { enabled: true, awayMinutes: 20 },
 };
 
 
