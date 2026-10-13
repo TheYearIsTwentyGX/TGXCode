@@ -34,6 +34,7 @@ import * as keys from '../keys.js';
 import { cvStaleFor } from '../quota.js';
 import { state } from '../state.js';
 import { notePrRepo } from '../pr-refs.js';
+import { renderHeaderReview, reviewChip, reviewKey, toggleHeaderReview } from '../pr-review.js';
 import { loadCommands } from '../commands.js';
 import { holdOrchestrator, loadOrchestrator, paintOrchestratorButton } from '../orchestrator.js';
 import { dur as motionMs, enter, exit, fill, isUp, settle } from '../motion.js';
@@ -206,6 +207,7 @@ function beginOpen(summary, { keepPanels = false } = {}) {
     fill(dom.channels, []);
     resetFind();
     state.prStatus = null;      // nor are its pull requests
+    state.prReviewOpen = null;  // nor the review panel one of them had open
     state.ask = null;   // approvals belong to the session that is blocked on them
     state.suggestions.clear();  // what was acted on belongs to the session it was raised in
     state.tasks.clear();        // and so do the offers themselves
@@ -440,10 +442,24 @@ export function renderHeader() {
             >${`Claude ${oldClaude.version} (older)`}</span>`);
     }
     bits.push(sep('turns'), html`<span key="turns">${`${s.userMessages} turns`}</span>`);
-    for (const pr of headerPrs()) bits.push(sep(pr.url), prLink(pr));
+    const prs = headerPrs();
+    for (const pr of prs) {
+        bits.push(sep(pr.url), prLink(pr));
+        // The nightly review's verdict, beside the PR it reviewed; opening it
+        // draws the findings in #pr-review-pop under the header.
+        const live = state.prStatus && state.prStatus.get(pr.url);
+        if (live && live.review && live.repo) {
+            const key = reviewKey(live.repo, live.number);
+            bits.push(reviewChip(live.review, {
+                key: `${pr.url}-review`, open: state.prReviewOpen === key,
+                onToggle: () => toggleHeaderReview(key, renderHeader),
+            }));
+        }
+    }
     bits.push(sep('cwd'), html`<span key="cwd" class="cwd" title=${s.cwd}>${clip(s.cwd, 42)}</span>`);
 
     render(bits, dom.convSub);
+    renderHeaderReview(state.prStatus ? [...state.prStatus.values()] : [], s.cwd, renderHeader);
     renderHeaderActions();
 }
 

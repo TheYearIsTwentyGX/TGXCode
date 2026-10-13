@@ -114,6 +114,14 @@ export const state = {
     // url -> {status, label, detail, title, updatedAt} from /api/sessions/:id/prs.
     // Null until that answers; the header draws its PRs from the summary either way.
     prStatus: null,
+    // 'owner/name#N' -> {review, pending, loading, error} from GET /api/pr-review —
+    // the nightly review's findings, fetched when a review chip is opened and
+    // forgotten on `pr-reviews-changed`. See web/pr-review.js.
+    prReviews: new Map(),
+    // The review open in the panel under the conversation header, by that key.
+    prReviewOpen: null,
+    // '<key>:<finding index>' or '<key>:all' while a Fix button's request is out.
+    prReviewFixing: new Set(),
     // {sessionId, repo} — the repository that session's checkout points at, from the
     // same response. What a bare `#N` in it means; see web/pr-refs.js.
     prRepo: null,
@@ -316,7 +324,7 @@ export const state = {
     },
     // The board of unfinished work. `at` is when the bridge last answered, so
     // opening it again does not re-run git over every worktree on the machine.
-    dash: { open: false, data: null, at: 0, loading: false, error: null, files: new Set() },
+    dash: { open: false, data: null, at: 0, loading: false, error: null, files: new Set(), reviewOpen: null },
     // The browser preview (web/preview.js). Not one of PANELS: those cover it the
     // way they cover the conversation, and it comes back when they close.
     // `overLive` is decided at open — whether this preview covers a docked Live

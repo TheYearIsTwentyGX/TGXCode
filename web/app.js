@@ -15,6 +15,7 @@ import { liveStrip, renderLive } from './boards/live.js';
 import { html } from './vendor/preact.js';
 import { paint, tickCardClocks } from './boards/parts.js';
 import { loadDash, paintDashBadge, renderDash } from './boards/dashboard.js';
+import { closeHeaderReview, forgetReviews } from './pr-review.js';
 import { renderNotes } from './boards/history.js';
 import { applyDrafts, loadDrafts, renderDrafts, showDrafts } from './drafts.js';
 import { applySched, loadSched, showSched } from './schedules.js';
@@ -2493,6 +2494,7 @@ function connect() {
         // appeared while the stream was down would otherwise stay invisible until
         // something else about that repository changed. Reads the store; no gh.
         loadRailPrs();
+        forgetReviews();
         if (state.current) loadPrStatus();
         // Same reasoning for the status line, which onerror left reading
         // "Reconnecting to the bridge…". applyRunner derives it from what we
@@ -2596,6 +2598,15 @@ function connect() {
         // A PR raised elsewhere is the likeliest thing to have moved, and it is
         // what turns a plain `#N` in this conversation into a link.
         loadPrOwners();
+        if (state.dash.open) loadDash();
+    });
+
+    // The nightly review of some PR was read or rewritten. The rows' verdict chips
+    // come with the two fetches below; the findings of an open one are asked for
+    // again when the redraw finds them forgotten.
+    es.addEventListener('pr-reviews-changed', () => {
+        forgetReviews();
+        if (state.current) loadPrStatus();
         if (state.dash.open) loadDash();
     });
 
@@ -4076,6 +4087,9 @@ document.addEventListener('keydown', (e) => {
     // instead. This listener is the last of the three registered on the
     // document, so returning here really is the end of the road for the key.
     if (e.key === 'Escape' && modalUp()) return;
+    // The review panel under the conversation header is a popover too, but one
+    // that only exists with no whole-screen panel over it, so it sits here.
+    if (e.key === 'Escape' && !state.dash.open && closeHeaderReview()) return;
     if (e.key === 'Escape' && state.taskboard.open) { showTaskboard(false); return; }
     if (e.key === 'Escape' && state.dash.open) { showDash(false); return; }
     if (e.key === 'Escape' && state.notes.open) { showNotes(false); return; }
