@@ -553,9 +553,14 @@ reads less as well: it returns the events from the start of the Kth-last turn to
 end of the file, and adds two fields. `K` is at least 1. It takes precedence over
 `tail` if both are sent.
 
-- **`turns[]`** — the whole conversation's rail, in file order, whatever was loaded.
-  Each entry is a turn, a plan or a question:
-  `{kind: "turn"|"plan"|"question", id string, offset number, ts ISO string or null, …}`.
+- **`turns[]`** — the whole conversation's map, in file order, whatever was loaded.
+  Each entry is a turn, a plan, a question, a file edit, a subagent, a failed tool
+  call or a pull request:
+  `{kind: "turn"|"plan"|"question"|"edit"|"subagent"|"error"|"pr", id string,
+  offset number, at number, ts ISO string or null, …}`.
+  **Ignore a `kind` you do not know** — this list has grown once and will again, and
+  every entry's `offset` stays a valid window boundary whatever its kind. To count
+  turns, count `kind: "turn"`, never the array.
   - `kind: "turn"` adds `text` string (clipped to 460 chars) · **`command` object or
     null** — `{name, args}` as on a `user` event · `images` number (a count, not the
     images).
@@ -564,11 +569,32 @@ end of the file, and adds two fields. `K` is at least 1. It takes precedence ove
     a plan, `{questions: [{header, question}]}` for a question · `result`
     `{text, planWasEdited}` or null. Enough to draw the tick and its tooltip, not the
     card.
-  - `id` is the id the same moment has as an event (`user` event id, `tool` event id),
-    so a client can tell which entries it has loaded.
-  - `offset` is a byte position that a window may start at. **A plan's or question's
+  - `kind: "edit"` (Edit, MultiEdit, Write, NotebookEdit) adds `name` string ·
+    `path` string (the file, clipped to 200; empty if the call named none).
+  - `kind: "subagent"` (Task, Agent) adds `name` string · `text` string (its
+    description, clipped to 200).
+  - `kind: "error"` is a tool call whose result was `is_error`, except a plan or a
+    question (those are `status: "error"` on their own entry) and a call the user
+    declined or stopped. Adds `toolId` string (the failed `tool` event's id) · `name`
+    string or **null** — known only when the call was an edit or a subagent; a failed
+    Bash has no name here, because Bash calls are not indexed · `text` string (the
+    result's first line, clipped to 200). Its `id` is `<toolId>:error`, which is
+    *not* an event id: look the call up by `toolId`.
+  - `kind: "pr"` is a `pr-link` line — a PR the session opened. Adds `url` string ·
+    `number` number or null · `repo` string (`owner/name`) or null. One per url. Its
+    `id` is `pr:<url>`, and there is no event for it: PRs opened after the request
+    appear only in the next `turns[]`, not on the tail.
+  - `id` is the id the same moment has as an event (`user` event id, `tool` event id)
+    for turns, plans, questions, edits and subagents, so a client can tell which
+    entries it has loaded. See `error` and `pr` above for the two that differ.
+  - `offset` is a byte position that a window may start at. **Every non-turn entry's
     `offset` is that of the turn it belongs to,** not its own line, so no window starts
-    halfway through a turn.
+    halfway through a turn. (Before the first turn, it is 0.)
+  - `at` is the entry's own line's byte position, for placing it *within* its turn —
+    the desktop's minimap spaces turns equally and positions everything else by `at`
+    between its turn's `offset` and the next turn's. It is not a window boundary:
+    never pass it to `/range`. For a turn, `at` equals `offset`. Use the response's
+    top-level `offset` as the end of the last turn.
 - **`window {start, startTurn}`** — `start` is the byte offset `events` begins at (0
   when the whole transcript was returned) and `startTurn` is the index into the turns
   (`kind: "turn"` entries only) of the first one included.
@@ -579,7 +605,13 @@ without `turns`.
 
 Use `?turns=K` over `?tail=N` when you can: the index is cached per transcript in
 `~/.cache/tgxcode/turns/` and grows incrementally, so a warm open of a 50 MB transcript
-is milliseconds rather than a full parse. The desktop opens with `?turns=8`.
+is milliseconds rather than a full parse. The desktop opens with `?turns=8`. A bridge
+that changes what the index holds rebuilds each session's index the first time that
+session is opened — about 200 ms for a 50 MB transcript, once — and never at startup.
+
+`turns[]` is not small on a long session that edited a lot: a 48 MB transcript with
+87 turns and 550 edits is ~750 entries and ~200 KB. A client that only wants the turns
+should still filter it rather than assume it is turn-sized.
 
 ### `GET /api/sessions/:id/range?from=A&to=B`
 

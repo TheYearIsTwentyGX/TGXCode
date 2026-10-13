@@ -96,7 +96,7 @@ import {
 import { toolSummary } from './transcript/tools.js';
 import { resetWindow } from './transcript/window.js';
 import {
-    flashNode, hideTurnPop, jumpToTurn, markActiveTurn, revealNode,
+    clearRail, flashNode, hideTurnPop, jumpToTurn, markActiveTurn, revealNode,
 } from './transcript/turn-rail.js';
 import { applyRunChange, cmdDir, loadCommands, renderCommands } from './commands.js';
 import { onOrchestratorEvent, toggleOrchestrator } from './orchestrator.js';
@@ -803,7 +803,6 @@ function clearCurrent() {
     state.run.length = 0;
     state.prefs = null;     // the next session's project may answer differently
     state.turns = [];
-    state.turnTicks = [];
     state.activeTurn = -1;
     state.turnIndex = [];
     state.windowStart = 0;
@@ -820,7 +819,7 @@ function clearCurrent() {
     renderChecklist();      // and the same for the task list on the other side
     resetWindow();
     dom.log.replaceChildren();
-    dom.turns.replaceChildren();
+    clearRail();
     dom.agents.replaceChildren();
     dom.channels.replaceChildren();
     hideTurnPop();
@@ -3749,9 +3748,6 @@ dom.agentScroll.addEventListener('scroll', () => {
         if (state.find.open) paintFind();
     });
 }, { passive: true });
-
-// The tooltip is positioned against a tick, so it cannot follow one that moves.
-dom.turns.addEventListener('scroll', hideTurnPop);
 
 // `#151` in a message: a hover card for whose PR it is and a click to that chat.
 wirePrRefs();
