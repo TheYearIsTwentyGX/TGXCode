@@ -7,7 +7,7 @@
 // something in passing; modalUp() and closeOnClickOutside() the rules every
 // modal dialog shares.
 
-import { animate, exit, isUp, present } from './motion.js';
+import { enter, exit, isUp, pose, present } from './motion.js';
 
 const $ = (id) => document.getElementById(id);
 export const dom = {};
@@ -128,7 +128,7 @@ export function toast(text, kind = 'info', opts = {}) {
     const t = el('div', { class: 'toast', 'data-kind': kind },
         el('span', { class: 'toast-text' }, text));
     // Fades and closes its gap, so the toasts under it slide up rather than jump.
-    const gone = () => exit(t, { kind: 'rise', speed: 'med', collapse: true });
+    const gone = () => exit(t, { as: 'toast', collapse: true });
 
     if (action) {
         t.append(el('button', {
@@ -142,6 +142,7 @@ export function toast(text, kind = 'info', opts = {}) {
     }, '✕'));
 
     dom.toasts.append(t);
+    enter(t, { as: 'toast' });
     if (!action) setTimeout(gone, ms);
     return t;
 }
@@ -198,9 +199,9 @@ export function modalUp() {
  * all move alike.
  */
 export function openModal(scrim) {
-    present(scrim, true, { kind: 'fade' });
+    present(scrim, true, { as: 'scrim' });
     const box = scrim.querySelector(':scope > .modal');
-    if (box) animate(box, [{ opacity: 0, transform: 'translateY(8px) scale(0.98)', offset: 0 }], { speed: 'med' });
+    if (box) pose(box, 'in', { as: 'dialog' });
 }
 
 /**
@@ -211,8 +212,8 @@ export function openModal(scrim) {
 export function closeModal(scrim, onGone) {
     if (!isUp(scrim)) { if (scrim.hidden && onGone) onGone(); return; }
     const box = scrim.querySelector(':scope > .modal');
-    if (box) animate(box, [{ transform: 'none' }, { transform: 'translateY(6px) scale(0.98)' }]);
-    present(scrim, false, { kind: 'fade', onGone });
+    if (box) pose(box, 'out', { as: 'dialog' });
+    present(scrim, false, { as: 'scrim', onGone });
 }
 
 /**

@@ -259,7 +259,7 @@ function matchSlashCommands(items, frag) {
  */
 export function closeMenu(m) {
     if (!isUp(m.node)) return;
-    present(m.node, false, { kind: 'pop', onGone: () => m.node.replaceChildren() });
+    present(m.node, false, { as: 'menu', onGone: () => m.node.replaceChildren() });
     if (!isUp(otherMenu(m).node)) {
         m.c.input.setAttribute('aria-expanded', 'false');
         m.c.input.removeAttribute('aria-activedescendant');
@@ -365,7 +365,7 @@ export function drawMenu(m, rows, note) {
     });
 
     m.node.replaceChildren(...(note ? [el('div', { class: 'menu-note' }, note)] : kids));
-    present(m.node, true, { kind: 'pop' });
+    present(m.node, true, { as: 'menu' });
     // After it is on screen and before the highlight is painted: paintSelection
     // scrolls a row into view, and it should be scrolling inside a box that has
     // already been given its height.

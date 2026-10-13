@@ -154,7 +154,7 @@ function showTurnPop(tick, m) {
         ),
         el('div', { class: 'pop-text' + (isCmd ? ' cmd' : '') }, clipLines(body, 460)),
     );
-    present(pop, true, { kind: 'pop' });
+    present(pop, true, { as: 'menu' });
 
     // Sits to the left of the rail, centred on its tick, kept on screen.
     const r = tick.getBoundingClientRect();
@@ -165,7 +165,7 @@ function showTurnPop(tick, m) {
 }
 
 export function hideTurnPop() {
-    present(dom.turnPop, false, { kind: 'pop' });
+    present(dom.turnPop, false, { as: 'menu' });
 }
 
 export async function jumpToTurn(t) {

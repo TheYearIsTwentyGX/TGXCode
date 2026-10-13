@@ -499,7 +499,7 @@ export function openFind() {
         || !dom.taskScrim.hidden) return;
 
     f.open = true;
-    present(dom.find, true, { kind: 'drop' });
+    present(dom.find, true, { as: 'drop' });
     syncFindSubs();
     // You are reading, not tailing. Without this the next chunk of a live turn
     // scrolls the pane out from under the match you just landed on.
@@ -518,7 +518,7 @@ export function closeFind({ focus = false } = {}) {
     f.hits = [];
     f.matched = [];
     f.painted = [];
-    present(dom.find, false, { kind: 'drop' });
+    present(dom.find, false, { as: 'drop' });
     if (CSS.highlights) {
         CSS.highlights.delete('cs-find');
         CSS.highlights.delete('cs-find-at');

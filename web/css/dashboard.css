@@ -23,8 +23,8 @@
     text-align: center;
     padding: 32px;
 }
-.empty h2 { margin: 0; font: 400 19px/1.3 var(--sans); color: var(--text-2); }
-.empty p { margin: 0; max-width: 400px; font-size: 14px; line-height: 1.65; }
+.empty h2 { margin: 0; font: 400 19px/var(--lh-tight) var(--sans); color: var(--text-2); }
+.empty p { margin: 0; max-width: 400px; font-size: var(--fs-base); line-height: 1.65; }
 
 /* ── dashboard ───────────────────────────────────────────────────────── */
 /* Work that outlived its conversation. Laid out as a board rather than as more
@@ -54,11 +54,11 @@
     gap: 16px;
     padding: 22px 28px 16px;
 }
-.live-title { margin: 0; font: 400 21px/1.3 var(--sans); color: var(--text); }
+.live-title { margin: 0; font: 400 var(--fs-2xl)/var(--lh-tight) var(--sans); color: var(--text); }
 .live-sub {
     margin: 5px 0 0;
-    font-size: 13px;
-    line-height: 1.6;
+    font-size: var(--fs-md);
+    line-height: var(--lh-prose);
     color: var(--text-3);
 }
 
@@ -99,8 +99,8 @@
     align-items: baseline;
     gap: 10px;
 }
-.live[data-mode="dock"] .live-title { font-size: 12.5px; color: var(--text-3); }
-.live[data-mode="dock"] .live-sub { margin: 0; font-size: 11.5px; }
+.live[data-mode="dock"] .live-title { font-size: var(--fs-md); color: var(--text-3); }
+.live[data-mode="dock"] .live-sub { margin: 0; font-size: var(--fs-sm); }
 
 /* A count in the subtitle that scrolls its group into view. Deliberately not a
    button to look at — it sits inside a sentence of plain facts, and only the
@@ -112,10 +112,10 @@
     border: 0;
     background: none;
     cursor: pointer;
-    border-radius: 3px;
+    border-radius: var(--r-2xs);
 }
 .live-jump:hover { color: var(--text); text-decoration: underline; }
-.live-jump:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.live-jump:focus-visible { outline: var(--focus-w) solid var(--focus-colour); outline-offset: var(--focus-offset); }
 .live-sep { white-space: pre; }
 
 .live[data-mode="dock"] .live-body {
@@ -159,7 +159,7 @@
     margin: 0;
     /* The rail's group headings, quieter: these label a segment rather than
        offering to collapse it, so no hover state and no caret. */
-    font: 500 11px/1.4 var(--sans);
+    font: 500 var(--fs-xs)/var(--lh-snug) var(--sans);
     letter-spacing: 0.04em;
     text-transform: uppercase;
     color: var(--text-4);
@@ -351,7 +351,7 @@
     background: var(--s2);
     border-radius: var(--r);
     color: var(--text-3);
-    font-size: 13.5px;
+    font-size: var(--fs-base);
 }
 .live-note p { margin: 0; }
 
@@ -373,7 +373,7 @@
     min-width: 0;
     /* The band a card is sorted into, said again in colour along its edge, so
        that "who is blocked on me" survives a screen too full to read. */
-    box-shadow: inset 3px 0 0 var(--s4);
+    box-shadow: inset var(--edge-w) 0 0 var(--s4);
 }
 /* Stopped at the facts line by `live.compact`. Four short rows in a row-gap
    chosen for a card that also held a preview and a message box reads as a
@@ -381,12 +381,12 @@
    colours above still do the work of saying which band it is in. */
 .lcard[data-compact="1"] { gap: 7px; padding: 12px 15px 11px; }
 
-.lcard[data-reason="ask"]   { box-shadow: inset 3px 0 0 var(--yellow); background: #232017; }
-.lcard[data-reason="error"] { box-shadow: inset 3px 0 0 var(--red); }
-.lcard[data-reason="here"]  { box-shadow: inset 3px 0 0 var(--green); }
+.lcard[data-reason="ask"]   { box-shadow: inset var(--edge-w) 0 0 var(--yellow); background: var(--yellow-tint); }
+.lcard[data-reason="error"] { box-shadow: inset var(--edge-w) 0 0 var(--red); }
+.lcard[data-reason="here"]  { box-shadow: inset var(--edge-w) 0 0 var(--green); }
 /* Running, but not ours to stop — dimmer than the green of a turn this window
    is driving, and still clearly not the grey of an idle card. */
-.lcard[data-reason="elsewhere"] { box-shadow: inset 3px 0 0 #3f6b4c; }
+.lcard[data-reason="elsewhere"] { box-shadow: inset var(--edge-w) 0 0 var(--green-edge); }
 
 .lcard-head { display: flex; align-items: center; gap: 8px; }
 
@@ -398,7 +398,7 @@
 }
 .lcard[data-reason="here"] .lcard-dot {
     background: var(--yellow);
-    animation: breathe 1.6s var(--ease) infinite;
+    animation: breathe var(--dur-loop) var(--ease) infinite;
 }
 .lcard[data-reason="ask"] .lcard-dot { background: var(--yellow); }
 /* Running and saying nothing — web/css/rail.css's `.strip` rule, for the same
@@ -418,7 +418,7 @@
     background: none;
     border: 0;
     text-align: left;
-    font: 500 13.5px/1.35 var(--sans);
+    font: 500 var(--fs-base)/1.35 var(--sans);
     color: var(--text);
     cursor: pointer;
     overflow: hidden;
@@ -450,7 +450,7 @@
     flex: 0 1 auto;
     min-width: 0;
     max-width: 40%;
-    font: 400 11px/1 var(--mono);
+    font: 400 var(--fs-xs)/1 var(--mono);
     color: var(--text-4);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -461,7 +461,7 @@
 .lstate {
     flex: 1;
     min-width: 0;
-    font-size: 12.5px;
+    font-size: var(--fs-md);
     color: var(--text-2);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -471,13 +471,13 @@
 .lstate.warn  { color: var(--yellow); }
 .lstate.err   { color: var(--red); }
 .lstate.ask   { color: var(--yellow); font-weight: 500; }
-.lcard-clock { flex: none; font: 400 11.5px/1 var(--mono); color: var(--text-4); }
+.lcard-clock { flex: none; font: 400 var(--fs-xs)/1 var(--mono); color: var(--text-4); }
 
 /* Where the last turn left things — bridge/standing.js. One line, cut rather
    than wrapped, and kept on a compact card. */
 .lcard-standing {
     min-width: 0;
-    font-size: 12px;
+    font-size: var(--fs-sm);
     line-height: 1.45;
     color: var(--text-3);
     overflow: hidden;
@@ -506,10 +506,10 @@
     flex-wrap: wrap;
     min-width: 0;
     gap: 4px 8px;
-    font-size: 11.5px;
+    font-size: var(--fs-sm);
     color: var(--text-4);
 }
-.lcard-facts .wait { font-size: 10.5px; }
+.lcard-facts .wait { font-size: var(--fs-xs); }
 .lcard-ago { margin-left: auto; }
 
 .lchip {
@@ -521,7 +521,7 @@
     border-radius: var(--pill);
     background: var(--blue-tint);
     color: var(--blue);
-    font: 500 10.5px/17px var(--mono);
+    font: 500 var(--fs-xs)/17px var(--mono);
     cursor: pointer;
 }
 /* A DevBrowser tab name can be long, and a chip does not wrap — so the name
@@ -548,10 +548,10 @@
     background: var(--s1);
     border-radius: var(--r);
 }
-.lask-what { font-size: 12px; line-height: 1.45; color: var(--text-3); }
+.lask-what { font-size: var(--fs-sm); line-height: 1.45; color: var(--text-3); }
 .lask-what b {
     display: block;
-    font: 500 12px/1.4 var(--mono);
+    font: 500 var(--fs-sm)/var(--lh-snug) var(--mono);
     color: var(--text-2);
 }
 .lask-acts { display: flex; gap: 6px; }
@@ -563,7 +563,7 @@
     list-style: none;
     background: var(--s1);
     border-radius: var(--r);
-    font: 400 11.5px/1.7 var(--mono);
+    font: 400 var(--fs-xs)/1.7 var(--mono);
     color: var(--text-4);
 }
 .lcard-log li {
@@ -598,12 +598,12 @@
     background: none;
     resize: none;
     color: var(--text);
-    font: 400 12.5px/16px var(--sans);
+    font: 400 var(--fs-md)/16px var(--sans);
     overflow-y: auto;
 }
 .lsend-box::placeholder { color: var(--text-4); }
 .lsend-box:disabled { opacity: 0.5; }
-.lsend-go { height: 30px; padding: 0 11px; font-size: 11.5px; }
+.lsend-go { height: 30px; padding: 0 11px; font-size: var(--fs-sm); }
 
 /* The one case that gets no box: a session with a process that is not ours. */
 .lsend.locked {
@@ -611,8 +611,8 @@
     padding: 7px 11px;
     background: var(--s1);
     color: var(--text-4);
-    font-size: 11.5px;
-    line-height: 1.5;
+    font-size: var(--fs-sm);
+    line-height: var(--lh-base);
 }
 
 .lcard-acts { display: flex; gap: 6px; padding-top: 2px; }
@@ -625,17 +625,17 @@
     border-radius: var(--pill);
     background: var(--s3);
     color: var(--text-2);
-    font: 500 12px/1 var(--sans);
+    font: 500 var(--fs-sm)/1 var(--sans);
     cursor: pointer;
     transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
 .lbtn:hover { background: var(--s4); color: var(--text); }
 .lbtn.ok { background: var(--blue-cont); color: var(--blue); }
-.lbtn.no:hover { background: #3a2422; color: var(--red); }
+.lbtn.no:hover { background: var(--red-cont); color: var(--red); }
 .lbtn:disabled { opacity: 0.45; cursor: default; }
 
 /* An urgent badge is a count of people waiting, not of things happening. */
-.bar-badge.urgent { background: var(--yellow); color: #241f07; }
+.bar-badge.urgent { background: var(--yellow); color: var(--on-yellow); }
 
 /* The board's own header controls: the Focus toggle sits here, beside the count. */
 .live-btn {
@@ -650,13 +650,13 @@
     border-radius: var(--pill);
     background: var(--s3);
     color: var(--text-3);
-    font: 500 12px/1 var(--sans);
+    font: 500 var(--fs-sm)/1 var(--sans);
     cursor: pointer;
     transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
 .live-btn:hover { background: var(--s4); color: var(--text); }
 .live-btn.on { background: var(--blue-cont); color: var(--blue); }
-.live[data-mode="dock"] .live-btn { height: 24px; padding: 0 10px; font-size: 11.5px; }
+.live[data-mode="dock"] .live-btn { height: 24px; padding: 0 10px; font-size: var(--fs-sm); }
 
 /* Focus mode: the board with the window to itself, for a second monitor.
    Everything that is about driving one conversation goes, because there is no
@@ -685,13 +685,13 @@
     padding: 22px 28px 16px;
 }
 
-.dash-title { margin: 0; font: 400 21px/1.3 var(--sans); color: var(--text); }
+.dash-title { margin: 0; font: 400 var(--fs-2xl)/var(--lh-tight) var(--sans); color: var(--text); }
 
 .dash-sub {
     margin: 5px 0 0;
     max-width: 640px;
-    font-size: 13px;
-    line-height: 1.6;
+    font-size: var(--fs-md);
+    line-height: var(--lh-prose);
     color: var(--text-3);
 }
 
@@ -703,7 +703,7 @@
     border-radius: var(--pill);
     background: var(--s3);
     color: var(--text-2);
-    font: 500 12.5px/1 var(--sans);
+    font: 500 var(--fs-md)/1 var(--sans);
     transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
 .dash-btn:hover { background: var(--s4); color: var(--text); }
@@ -722,11 +722,11 @@
     background: var(--s2);
     border-radius: var(--r);
     color: var(--text-3);
-    font-size: 13.5px;
+    font-size: var(--fs-base);
 }
 .dash-note p { margin: 0; }
-.dash-note.warn { color: var(--yellow); background: #2e2717; }
-.dash-note.error { color: var(--red); background: #2f2120; }
+.dash-note.warn { color: var(--yellow); background: var(--yellow-cont); }
+.dash-note.error { color: var(--red); background: var(--red-cont); }
 
 /* One card per project, the same idea as a rail group: where one project ends
    is a change of surface, not a hairline. */
@@ -743,11 +743,11 @@
     gap: 10px;
     padding: 12px 16px 8px;
 }
-.dproj-name { font: 500 14px/1.3 var(--sans); color: var(--text); }
-.dproj-repo { font: 400 11.5px/1.3 var(--mono); color: var(--text-4); }
+.dproj-name { font: 500 var(--fs-base)/var(--lh-tight) var(--sans); color: var(--text); }
+.dproj-repo { font: 400 var(--fs-xs)/var(--lh-tight) var(--mono); color: var(--text-4); }
 .dproj-counts {
     margin-left: auto;
-    font: 400 11.5px/1.3 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-tight) var(--sans);
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
 }
@@ -767,7 +767,7 @@
 }
 
 .ws-name {
-    font: 500 13.5px/1.4 var(--sans);
+    font: 500 var(--fs-base)/var(--lh-snug) var(--sans);
     color: var(--text);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -779,14 +779,14 @@
 
 .ws-branch {
     flex: none;
-    font: 400 11.5px/1.4 var(--mono);
+    font: 400 var(--fs-xs)/var(--lh-snug) var(--mono);
     color: var(--text-4);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     max-width: 34ch;
 }
-.ws-note { font: 400 11.5px/1.4 var(--sans); color: var(--text-4); font-style: italic; }
+.ws-note { font: 400 var(--fs-sm)/var(--lh-snug) var(--sans); color: var(--text-4); font-style: italic; }
 
 /* Signals sit on the right of every row at the same tab stops, so a column of
    them can be read down rather than hunted for. */
@@ -807,15 +807,15 @@
     height: 26px;
     padding: 0 11px;
     border-radius: var(--pill);
-    font: 500 11.5px/1 var(--sans);
+    font: 500 var(--fs-sm)/1 var(--sans);
     white-space: nowrap;
     background: var(--s4);
     color: var(--text-2);
 }
-.sig.dirty { background: #3a3320; color: var(--yellow); }
-.sig.dirty:hover, .sig.dirty.on { background: #4a4128; }
+.sig.dirty { background: var(--yellow-cont-hover); color: var(--yellow); }
+.sig.dirty:hover, .sig.dirty.on { background: var(--yellow-cont-strong); }
 .sig.quiet { background: var(--s3); color: var(--text-3); }
-.sig.bad { background: #3a2422; color: var(--red); }
+.sig.bad { background: var(--red-cont); color: var(--red); }
 
 /* The hue is the shared one; the ground is mixed from it so a chip stays a pill
    rather than becoming plain coloured text like the other two surfaces. The
@@ -850,7 +850,7 @@
     padding: 10px 12px;
     background: var(--bg);
     border-radius: var(--r-sm);
-    font: 400 12px/1.9 var(--mono);
+    font: 400 var(--fs-sm)/1.9 var(--mono);
 }
 .ws-files li { display: flex; gap: 12px; }
 .ws-files .fstat { flex: none; width: 9ch; color: var(--text-4); }
@@ -878,7 +878,7 @@
     border-radius: var(--pill);
     background: var(--s3);
     color: var(--text-2);
-    font: 400 12px/1 var(--sans);
+    font: 400 var(--fs-sm)/1 var(--sans);
     max-width: 100%;
     transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
@@ -894,12 +894,12 @@
 .schip[data-state="active"] .schip-dot { background: var(--blue); }
 .schip[data-state="running"] .schip-dot {
     background: var(--green);
-    animation: schip-breathe 1.8s ease-in-out infinite;
+    animation: schip-breathe var(--dur-loop) ease-in-out infinite;
 }
 @keyframes schip-breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
 .schip-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.schip-ago { flex: none; color: var(--text-4); font-size: 11px; }
+.schip-ago { flex: none; color: var(--text-4); font-size: var(--fs-xs); }
 
-.ws-more { font: 400 11.5px/1 var(--sans); color: var(--text-4); padding: 0 4px; }
+.ws-more { font: 400 var(--fs-sm)/1 var(--sans); color: var(--text-4); padding: 0 4px; }
 

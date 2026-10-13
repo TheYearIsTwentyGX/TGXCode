@@ -21,13 +21,12 @@
    not appear behind the menu that asked for it. */
 .ctx-menu {
     position: fixed;
-    z-index: 70;
+    z-index: var(--z-over);
     min-width: 168px;
     padding: 6px;
     background: var(--s3);
     border-radius: var(--r);
-    box-shadow: 0 10px 30px #000a;
-    animation: menu-in var(--t-fast) var(--ease);
+    box-shadow: var(--shadow-pop);
     transform-origin: top left;
 }
 .ctx-menu[hidden] { display: none; }
@@ -57,13 +56,13 @@
        vertical room is the product. */
     max-height: 92vh;
 }
-.diff-title { flex: 1; min-width: 0; display: flex; font: 400 15px/1.4 var(--mono); }
+.diff-title { flex: 1; min-width: 0; display: flex; font: 400 15px/var(--lh-snug) var(--mono); }
 .diff-title .fpath { flex: 1; min-width: 0; display: flex; }
 .diff-title .fdir { color: var(--text-4); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .diff-title .fbase { color: var(--text); flex: none; }
 .diff-stat { display: flex; align-items: center; gap: 8px; margin: 0 12px; flex: none; }
-.diff-stat .fstat { font: 400 11px/1.4 var(--mono); }
-.diff-stat .ch-nums { font: 400 12px/1.4 var(--mono); }
+.diff-stat .fstat { font: 400 var(--fs-xs)/var(--lh-snug) var(--mono); }
+.diff-stat .ch-nums { font: 400 var(--fs-sm)/var(--lh-snug) var(--mono); }
 
 .diff-bar {
     display: flex;
@@ -83,7 +82,7 @@
     border-radius: var(--pill);
     background: none;
     color: var(--text-3);
-    font: 500 12px/1 var(--sans);
+    font: 500 var(--fs-sm)/1 var(--sans);
     cursor: pointer;
 }
 .diff-seg-btn[aria-pressed="true"] { background: var(--blue-cont); color: var(--text); }
@@ -91,7 +90,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    font: 400 12px/1 var(--sans);
+    font: 400 var(--fs-sm)/1 var(--sans);
     color: var(--text-3);
     cursor: pointer;
 }
@@ -102,9 +101,9 @@
     border-radius: var(--r-xs);
     background: var(--s1);
     color: var(--text-2);
-    font: 400 12px/1 var(--sans);
+    font: 400 var(--fs-sm)/1 var(--sans);
 }
-.diff-note { font: 400 11.5px/1.4 var(--sans); color: var(--text-4); text-align: right; }
+.diff-note { font: 400 var(--fs-sm)/var(--lh-snug) var(--sans); color: var(--text-4); text-align: right; }
 /* The reload button earns a tint only when there is a reason to press it. */
 .diff-bar .btn.accent { color: var(--yellow); }
 
@@ -120,14 +119,14 @@
        low-saturation for that block's reason: a long diff should not become a
        wall of colour. The word-level highlights are one step up from them,
        which is the only place a stronger tint is doing work. */
-    --d2h-dark-ins-bg-color: #14211a;
-    --d2h-dark-del-bg-color: #241819;
-    --d2h-dark-ins-highlight-bg-color: #24523a;
-    --d2h-dark-del-highlight-bg-color: #5a2f2c;
-    --d2h-dark-ins-border-color: #1f3a2a;
-    --d2h-dark-del-border-color: #3d2626;
-    --d2h-dark-change-ins-color: #14211a;
-    --d2h-dark-change-del-color: #2a2413;
+    --d2h-dark-ins-bg-color: var(--diff-add-bg);
+    --d2h-dark-del-bg-color: var(--diff-del-bg);
+    --d2h-dark-ins-highlight-bg-color: var(--diff-add-hl);
+    --d2h-dark-del-highlight-bg-color: var(--diff-del-hl);
+    --d2h-dark-ins-border-color: var(--diff-add-edge);
+    --d2h-dark-del-border-color: var(--diff-del-edge);
+    --d2h-dark-change-ins-color: var(--diff-add-bg);
+    --d2h-dark-change-del-color: var(--diff-change-bg);
 
     --d2h-dark-bg-color: var(--bg);
     --d2h-dark-color: var(--text-2);
@@ -148,14 +147,14 @@
     --d2h-dark-change-label-color: var(--yellow);
     --d2h-dark-moved-label-color: var(--blue);
 }
-.diff-body .ch-note { margin: 16px 4px; font-size: 13px; }
+.diff-body .ch-note { margin: 16px 4px; font-size: var(--fs-md); }
 
 /* The rules diff2html does not put behind a variable. */
-.diff-body .d2h-diff-table { font: 400 12.5px/1.6 var(--mono); }
+.diff-body .d2h-diff-table { font: 400 var(--fs-md)/var(--lh-prose) var(--mono); }
 .diff-body .d2h-file-header {
     height: auto;
     padding: 8px 12px;
-    font: 400 12.5px/1.4 var(--sans);
+    font: 400 var(--fs-md)/var(--lh-snug) var(--sans);
 }
 .diff-body .d2h-file-wrapper {
     border-radius: var(--r-sm);
@@ -208,8 +207,8 @@
 .diff-body.file-view .d2h-info { display: none; }
 .diff-body .d2h-file-side-diff { overflow-x: auto; }
 .diff-body .d2h-file-list-wrapper { margin-bottom: 14px; }
-.diff-body .d2h-file-list-title { font: 500 12.5px/1.4 var(--sans); color: var(--text-3); }
-.diff-body .d2h-file-name { font: 400 12px/1.5 var(--mono); }
+.diff-body .d2h-file-list-title { font: 500 var(--fs-md)/var(--lh-snug) var(--sans); color: var(--text-3); }
+.diff-body .d2h-file-name { font: 400 var(--fs-sm)/var(--lh-base) var(--mono); }
 
 /* Wrap the content span, not the line box. .d2h-code-line is
    `width: calc(100% - 16em)` against an absolutely positioned 7.5em gutter, so

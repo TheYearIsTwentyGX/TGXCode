@@ -12,11 +12,11 @@
 .scrim {
     position: fixed;
     inset: 0;
-    background: #00000099;
+    background: var(--scrim);
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 50;
+    z-index: var(--z-scrim);
     padding: 24px;
 }
 .scrim[hidden] { display: none; }
@@ -28,7 +28,7 @@
     flex-direction: column;
     background: var(--s2);
     border-radius: var(--r-xl);
-    box-shadow: 0 24px 64px #000a;
+    box-shadow: var(--shadow-dialog);
     overflow: hidden;
 }
 /* The snippet editor. A parameters table beside a body textarea does not fit in
@@ -40,7 +40,7 @@
     display: flex;
     align-items: center;
     padding: 20px 24px 6px;
-    font: 400 20px/1.3 var(--sans);
+    font: 400 20px/var(--lh-tight) var(--sans);
     color: var(--text);
 }
 .modal-close {
@@ -101,7 +101,7 @@
 .field > label {
     display: block;
     margin-bottom: 7px;
-    font: 500 12.5px/1 var(--sans);
+    font: 500 var(--fs-md)/1 var(--sans);
     color: var(--text-3);
 }
 .field textarea, .field input[type="text"] {
@@ -109,37 +109,37 @@
     background: var(--bg);
     border-radius: var(--r);
     padding: 12px 15px;
-    font-size: 13.5px;
-    line-height: 1.6;
+    font-size: var(--fs-base);
+    line-height: var(--lh-prose);
     transition: box-shadow var(--t-fast) var(--ease);
 }
 .field textarea { min-height: 100px; resize: vertical; }
 /* Sized by script from its contents (see grow()), so it needs no floor of its
    own — and it scrolls rather than growing without limit once it hits the cap. */
 .field textarea.grow { min-height: 0; resize: none; overflow-y: auto; }
-.field input[type="text"] { font-family: var(--mono); font-size: 12.5px; }
+.field input[type="text"] { font-family: var(--mono); font-size: var(--fs-md); }
 /* The one text input in this dialog that is not a path. A name is prose you
    read, so it gets the prose face rather than the monospace the directory box
    wants for lining up slashes. */
-#new-name { font-family: var(--sans); font-size: 13px; }
+#new-name { font-family: var(--sans); font-size: var(--fs-md); }
 /* A search over names as much as paths, so the prose face, and slimmer than the
    directory box above it: it is a tool on the list, not a field of the form. */
 .field input.picker-filter {
-    font-family: var(--sans); font-size: 13px;
+    font-family: var(--sans); font-size: var(--fs-md);
     padding: 8px 12px; margin-bottom: 6px;
 }
 .field textarea:focus, .field input:focus {
     outline: none;
-    box-shadow: inset 0 0 0 2px var(--blue);
+    box-shadow: var(--ring-inset);
 }
-.field .note { margin-top: 7px; font-size: 12px; color: var(--text-4); line-height: 1.5; }
+.field .note { margin-top: 7px; font-size: var(--fs-sm); color: var(--text-4); line-height: var(--lh-base); }
 
 .field label.check {
     display: flex;
     align-items: center;
     gap: 10px;
     margin: 0;
-    font: 400 13.5px/1.4 var(--sans);
+    font: 400 var(--fs-base)/var(--lh-snug) var(--sans);
     color: var(--text-2);
     cursor: pointer;
 }
@@ -166,17 +166,17 @@
     text-align: left;
     padding: 8px 12px;
     border-radius: var(--r-sm);
-    font: 400 13px/1.4 var(--sans);
+    font: 400 var(--fs-md)/var(--lh-snug) var(--sans);
     color: var(--text-2);
     transition: background var(--t-fast) var(--ease);
 }
 .picker-row:hover { background: var(--s3); }
-.picker-row .path { font-family: var(--mono); font-size: 11.5px; color: var(--text-4); }
-.picker-row .tag { margin-left: auto; font-size: 11.5px; color: var(--green); }
+.picker-row .path { font-family: var(--mono); font-size: var(--fs-xs); color: var(--text-4); }
+.picker-row .tag { margin-left: auto; font-size: var(--fs-sm); color: var(--green); }
 /* Where the input currently points — so the folder you just climbed out of is
    findable in the list you land back in. */
 .picker-row[aria-current="true"] { background: var(--blue-cont); color: var(--blue); }
-.picker-row[aria-current="true"]:hover { background: #26406c; }
+.picker-row[aria-current="true"]:hover { background: var(--blue-cont-hover); }
 .picker-row .tag.dim { color: var(--text-4); }
 .picker-row.up { color: var(--text-3); }
 
@@ -185,7 +185,7 @@
 .picker-tab {
     padding: 6px 12px;
     border-radius: var(--pill);
-    font: 500 12.5px/1 var(--sans);
+    font: 500 var(--fs-md)/1 var(--sans);
     color: var(--text-3);
     transition: background var(--t-fast) var(--ease);
 }
@@ -198,7 +198,7 @@
     align-items: center;
     gap: 2px;
     padding: 0 2px 7px;
-    font: 400 11.5px/1.6 var(--mono);
+    font: 400 var(--fs-xs)/var(--lh-prose) var(--mono);
     color: var(--text-4);
 }
 .crumb {
@@ -212,7 +212,7 @@
 .crumb[aria-current="page"] { color: var(--text); }
 
 .browse-foot { display: flex; align-items: center; gap: 8px; padding-top: 10px; }
-.btn.small { height: 30px; padding: 0 14px; font-size: 12.5px; }
+.btn.small { height: 30px; padding: 0 14px; font-size: var(--fs-md); }
 .browse-foot .note { margin-top: 0; flex: 1; min-width: 0; }
 .mkdir-name {
     flex: 1;
@@ -221,18 +221,18 @@
     border-radius: var(--r);
     padding: 7px 12px;
     font-family: var(--mono);
-    font-size: 12.5px;
+    font-size: var(--fs-sm);
 }
-.mkdir-name:focus { outline: none; box-shadow: inset 0 0 0 2px var(--blue); }
+.mkdir-name:focus { outline: none; box-shadow: var(--ring-inset); }
 
 /* Nothing to list, or nothing readable. Sits inside .picker in place of rows. */
-.picker-msg { padding: 10px 12px; font-size: 12px; line-height: 1.5; color: var(--text-4); }
+.picker-msg { padding: 10px 12px; font-size: var(--fs-sm); line-height: var(--lh-base); color: var(--text-4); }
 
 .btn {
     height: 40px;
     padding: 0 24px;
     border-radius: var(--pill);
-    font: 500 13.5px/1 var(--sans);
+    font: 500 var(--fs-md)/1 var(--sans);
     color: var(--blue);
     /* A button is a label, not a paragraph. Left to wrap, "Save as draft" broke
        across two lines and took the footer's height with it. */
@@ -240,7 +240,7 @@
     transition: background var(--t-fast) var(--ease);
 }
 .btn:hover { background: var(--blue-tint); }
-.btn.primary { background: var(--blue); color: #062e6f; }
+.btn.primary { background: var(--blue); color: var(--on-blue); }
 .btn.primary:hover { background: var(--blue); filter: brightness(1.08); }
 .btn:disabled { opacity: 0.45; cursor: default; }
 
@@ -258,7 +258,7 @@
 
 /* The one button in the app that destroys something. Filled, in the error
    colour, so it can never be mistaken for the confirm it sits next to. */
-.btn.destructive { background: var(--red); color: #4a0d09; }
+.btn.destructive { background: var(--red); color: var(--on-red); }
 .btn.destructive:hover { background: var(--red); filter: brightness(1.08); }
 
 /* ── notification history ────────────────────────────────────────────────
@@ -275,12 +275,12 @@
     gap: 16px;
     padding: 22px 28px 16px;
 }
-.notes-title { margin: 0; font: 400 21px/1.3 var(--sans); color: var(--text); }
+.notes-title { margin: 0; font: 400 var(--fs-2xl)/var(--lh-tight) var(--sans); color: var(--text); }
 .notes-sub {
     margin: 5px 0 0;
     max-width: 640px;
-    font-size: 13px;
-    line-height: 1.6;
+    font-size: var(--fs-md);
+    line-height: var(--lh-prose);
     color: var(--text-3);
 }
 
@@ -306,7 +306,7 @@
     padding: 0 14px;
     border-radius: var(--pill);
     color: var(--text-3);
-    font: 500 12.5px/1 var(--sans);
+    font: 500 var(--fs-md)/1 var(--sans);
     transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
 .seg-btn:hover { color: var(--text); }
@@ -353,14 +353,14 @@
     /* Fixed width so every kind word starts and ends in the same place and the
        titles line up beside them. */
     width: 104px;
-    font: 500 11.5px/1.4 var(--sans);
+    font: 500 var(--fs-sm)/var(--lh-snug) var(--sans);
     color: var(--accent);
     letter-spacing: 0.01em;
 }
 .note-title {
     flex: 1;
     min-width: 0;
-    font: 500 13.5px/1.4 var(--sans);
+    font: 500 var(--fs-base)/var(--lh-snug) var(--sans);
     color: var(--text);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -368,7 +368,7 @@
 }
 .note-when {
     flex: none;
-    font: 400 11.5px/1.4 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-snug) var(--sans);
     color: var(--text-4);
 }
 
@@ -376,7 +376,7 @@
     display: block;
     margin-top: 2px;
     padding-left: 114px;
-    font: 400 12.5px/1.5 var(--sans);
+    font: 400 var(--fs-md)/var(--lh-base) var(--sans);
     color: var(--text-3);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -388,7 +388,7 @@
     gap: 10px;
     margin-top: 4px;
     padding-left: 114px;
-    font: 400 11.5px/1.4 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-snug) var(--sans);
     color: var(--text-4);
 }
 .note-outcome { color: var(--text-3); }
@@ -442,7 +442,7 @@
 /* What is about to go, named — the whole reason this is a dialog and not a
    confirm(): a title and a turn count are enough to catch the wrong row. */
 .del-what {
-    font: 400 15px/1.5 var(--sans);
+    font: 400 15px/var(--lh-base) var(--sans);
     color: var(--text);
     padding: 12px 14px;
     background: var(--bg);
@@ -456,14 +456,14 @@
     padding: 0 14px 12px;
     background: var(--bg);
     border-radius: 0 0 var(--r) var(--r);
-    font: 400 12px/1.5 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
     color: var(--text-4);
 }
 .del-meta .sep { opacity: 0.7; }
 .del-warn {
     margin: 16px 0 4px;
-    font-size: 13px;
-    line-height: 1.6;
+    font-size: var(--fs-md);
+    line-height: var(--lh-prose);
     color: var(--red);
 }
 
@@ -471,7 +471,7 @@
 
 .restart-lede {
     margin: 0 0 14px;
-    font: 400 14px/1.6 var(--sans);
+    font: 400 var(--fs-base)/var(--lh-prose) var(--sans);
     color: var(--text-2);
 }
 .restart-problems {
@@ -488,7 +488,7 @@
     border-radius: var(--r);
 }
 .restart-why {
-    font: 400 14px/1.55 var(--sans);
+    font: 400 var(--fs-base)/1.55 var(--sans);
     color: var(--text);
 }
 /* Machine output — git's stderr — so its line breaks are kept and it scrolls
@@ -497,7 +497,7 @@
     display: block;
     white-space: pre-wrap;
     overflow-x: auto;
-    font: 400 12px/1.65 var(--mono);
+    font: 400 var(--fs-sm)/1.65 var(--mono);
     color: var(--text-2);
 }
 /* Paths, so mono — and they are the part being pointed at, hence the indent
@@ -508,7 +508,7 @@
     padding: 0 0 0 2px;
     list-style: none;
     overflow-x: auto;
-    font: 400 12px/1.7 var(--mono);
+    font: 400 var(--fs-sm)/1.7 var(--mono);
     color: var(--text-3);
 }
 .restart-files > li { white-space: pre; }
@@ -521,7 +521,7 @@
     bottom: 20px;
     left: 50%;
     transform: translateX(-50%);
-    z-index: 80;
+    z-index: var(--z-toast);
     display: flex;
     flex-direction: column-reverse;
     gap: 8px;
@@ -532,17 +532,16 @@
     align-items: center;
     gap: 6px;
     padding: 11px 12px 11px 20px;
-    background: #e3e3e3;
-    color: #1f1f1f;
+    background: var(--inverse-bg);
+    color: var(--inverse-fg);
     border-radius: var(--r-sm);
-    font-size: 13.5px;
-    line-height: 1.5;
-    box-shadow: 0 4px 14px #0008;
-    animation: rise var(--t-med) var(--ease);
+    font-size: var(--fs-base);
+    line-height: var(--lh-base);
+    box-shadow: var(--shadow-toast);
 }
-.toast[data-kind="error"] { background: #f9dedc; color: #410e0b; }
-.toast[data-kind="ok"] { background: #c4eed0; color: #0a2e18; }
-.toast[data-kind="warn"] { background: #fde9c4; color: #3a2503; }
+.toast[data-kind="error"] { background: var(--inverse-err-bg); color: var(--inverse-err-fg); }
+.toast[data-kind="ok"] { background: var(--inverse-ok-bg); color: var(--inverse-ok-fg); }
+.toast[data-kind="warn"] { background: var(--inverse-warn-bg); color: var(--inverse-warn-fg); }
 
 .toast-text { flex: 1; min-width: 0; }
 
@@ -551,12 +550,12 @@
     height: 32px;
     padding: 0 14px;
     border-radius: var(--pill);
-    font: 500 13px/1 var(--sans);
+    font: 500 var(--fs-md)/1 var(--sans);
     color: var(--blue-deep);
     white-space: nowrap;
     transition: background var(--t-fast) var(--ease);
 }
-.toast-action:hover { background: #0b57d01f; }
+.toast-action:hover { background: color-mix(in srgb, var(--blue-deep) 12%, transparent); }
 
 .toast-close {
     flex: none;
@@ -564,17 +563,11 @@
     place-items: center;
     width: 28px; height: 28px;
     border-radius: 50%;
-    font-size: 12px;
+    font-size: var(--fs-sm);
     opacity: 0.55;
     transition: opacity var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
 }
-.toast-close:hover { opacity: 1; background: #0000001a; }
-
-@keyframes rise {
-    from { opacity: 0; transform: translateY(8px); }
-    to { opacity: 1; transform: none; }
-}
-@media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
+.toast-close:hover { opacity: 1; background: color-mix(in srgb, var(--inverse-fg) 10%, transparent); }
 
 /* ── Publish to GitHub (web/github/publish.js) ───────────────────────────── */
 
@@ -583,14 +576,14 @@
     padding: 10px 14px;
     border-radius: var(--r);
     background: var(--bg);
-    font: 400 13px/1.55 var(--sans);
+    font: 400 var(--fs-md)/1.55 var(--sans);
     color: var(--text-2);
 }
-.gh-status code, .gh-problem code { font-size: 12px; }
+.gh-status code, .gh-problem code { font-size: var(--fs-sm); }
 .gh-status.ok { color: var(--green); }
 .gh-status a, .gh-problem a { color: var(--blue); }
 .gh-problem { color: var(--yellow); }
-.gh-wait { padding: 24px 0; color: var(--text-4); font-size: 13px; }
+.gh-wait { padding: 24px 0; color: var(--text-4); font-size: var(--fs-md); }
 
 /* Owner / name on one line, the way GitHub writes it. */
 .gh-row { display: flex; align-items: center; gap: 10px; }
@@ -598,25 +591,25 @@
 .gh-owner { flex: none; }
 .gh-name { flex: 1; min-width: 0; }
 .gh-row.top { align-items: flex-start; }
-.gh-slash { padding-top: 30px; color: var(--text-4); font-size: 18px; }
+.gh-slash { padding-top: 30px; color: var(--text-4); font-size: var(--fs-xl); }
 .gh-owner .gh-select { padding: 12px; }
 #gh-name-note[data-kind="bad"] { color: var(--yellow); }
 #gh-name-note[data-kind="ok"] { color: var(--green); }
-.field input.prose { font-family: var(--sans); font-size: 13px; }
+.field input.prose { font-family: var(--sans); font-size: var(--fs-md); }
 
 .gh-select {
     background: var(--bg);
     border-radius: var(--r);
     padding: 9px 12px;
-    font: 400 13px/1.3 var(--sans);
+    font: 400 var(--fs-md)/var(--lh-tight) var(--sans);
     color: var(--text);
     cursor: pointer;
     max-width: 260px;
 }
 .gh-select:disabled { opacity: 0.5; cursor: default; }
 .gh-pick { display: inline-flex; align-items: center; gap: 8px; }
-.gh-inline-label { font-size: 12.5px; color: var(--text-3); }
-.gh-hint { color: var(--text-4); font-size: 12px; }
+.gh-inline-label { font-size: var(--fs-md); color: var(--text-3); }
+.gh-hint { color: var(--text-4); font-size: var(--fs-sm); }
 
 .gh-radios { display: flex; gap: 8px; flex-wrap: wrap; }
 .gh-radio {
@@ -628,7 +621,7 @@
     border-radius: var(--r);
     background: var(--bg);
     cursor: pointer;
-    font-size: 13px;
+    font-size: var(--fs-md);
     color: var(--text-2);
 }
 .gh-radio input { accent-color: var(--blue); margin-top: 2px; }
@@ -649,7 +642,7 @@
 .gh-more > summary {
     cursor: pointer;
     margin-bottom: 14px;
-    font: 500 12.5px/1 var(--sans);
+    font: 500 var(--fs-md)/1 var(--sans);
     color: var(--text-3);
 }
 .gh-more > summary:hover { color: var(--text); }
@@ -660,7 +653,7 @@
     align-items: baseline;
     gap: 10px;
     padding: 6px 2px;
-    font-size: 13px;
+    font-size: var(--fs-md);
     color: var(--text-2);
 }
 .gh-mark { width: 14px; flex: none; text-align: center; }
@@ -668,14 +661,14 @@
 .gh-steps li[data-state="failed"] .gh-mark,
 .gh-steps li[data-state="failed"] .gh-detail { color: var(--red); }
 .gh-steps li[data-state="skipped"] { color: var(--text-4); }
-.gh-detail { color: var(--text-4); font-size: 12px; min-width: 0; overflow-wrap: anywhere; }
-.gh-foot-note { font-size: 12px; color: var(--text-4); }
+.gh-detail { color: var(--text-4); font-size: var(--fs-sm); min-width: 0; overflow-wrap: anywhere; }
+.gh-foot-note { font-size: var(--fs-sm); color: var(--text-4); }
 
 /* The two ways into it from Start-a-session. */
 .link-btn { color: var(--blue); font: inherit; padding: 0; margin-left: 4px; cursor: pointer; }
 .link-btn:hover { text-decoration: underline; }
 .link-btn[hidden] { display: none; }
-.mkdir-gh { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-3); white-space: nowrap; cursor: pointer; }
+.mkdir-gh { display: flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--text-3); white-space: nowrap; cursor: pointer; }
 .mkdir-gh[hidden] { display: none; }
 .mkdir-gh input { accent-color: var(--blue); }
 
@@ -686,6 +679,6 @@
 .field .wt-fields input[type="text"] { padding: 7px 12px; }
 .field .wt-fields #new-wt-name { flex: 2; }
 .field .wt-fields #new-wt-base { flex: 1; min-width: 0; }
-.wt-from { font-size: 12px; color: var(--text-4); }
+.wt-from { font-size: var(--fs-sm); color: var(--text-4); }
 #new-wt-note { margin-left: 26px; overflow-wrap: anywhere; }
 #new-wt-note.warn { color: var(--yellow); }

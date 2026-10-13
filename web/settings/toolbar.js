@@ -151,7 +151,7 @@ function paintBarMore() {
 
 export function showBarMore(on) {
     if (on && dom.barMoreWrap.hidden) return;
-    present(dom.barMoreMenu, on, { kind: 'pop' });
+    present(dom.barMoreMenu, on, { as: 'menu' });
     dom.barMore.setAttribute('aria-expanded', String(on));
     if (on) { showQuota(false); showNewMenu(false); showCv(false); }
 }

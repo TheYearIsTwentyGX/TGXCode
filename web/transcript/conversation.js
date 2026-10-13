@@ -144,7 +144,7 @@ export async function openSession(id, { quiet = false, keepPanels = false } = {}
         applyRunner(data.runner);
         scrollToEnd(true);
         // The transcript fades in under the skeleton fading out — see liftSkeleton.
-        if (veil) enter(dom.log, { kind: 'fade', speed: 'med' });
+        if (veil) enter(dom.log, { as: 'reveal' });
         // After the scroll, not before: it would be undone by it.
         takePendingJump();
 
@@ -347,7 +347,7 @@ function liftSkeleton() {
     // lie over the dock.
     const ro = new ResizeObserver(() => { v.style.height = `${dom.scroll.clientHeight}px`; });
     ro.observe(dom.scroll);
-    exit(v, { kind: 'fade', speed: 'med', onGone: () => { ro.disconnect(); if (veil === v) veil = null; } });
+    exit(v, { as: 'reveal', onGone: () => { ro.disconnect(); if (veil === v) veil = null; } });
 }
 
 function showOpenFailed(id, err) {
@@ -665,7 +665,7 @@ export function appendEvents(events, view = SESSION_VIEW, { live = false } = {})
         if (arrived) arrived.push(node);
     }
     flush();
-    if (arrived) for (const n of arrived) enter(n, { kind: 'rise', speed: 'med' });
+    if (arrived) for (const n of arrived) enter(n, { as: 'arrive' });
     // A transcript that ends in tool calls has no message coming to close the
     // last run — openSession replays a finished conversation in one call, and
     // that run would otherwise stay unfolded forever. Only when nothing is

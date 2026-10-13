@@ -81,7 +81,7 @@
     margin: 0;
     font-size: 20px;
     font-weight: 400;
-    line-height: 1.3;
+    line-height: var(--lh-tight);
     color: var(--text);
     letter-spacing: -0.003em;
 }
@@ -105,7 +105,7 @@
 .icon-btn:hover { background: var(--s3); color: var(--text); }
 .icon-btn.on { color: var(--blue); }
 .icon-btn:disabled { opacity: 0.4; cursor: default; background: none; }
-.icon-btn.danger:hover { background: #3a2422; color: var(--red); }
+.icon-btn.danger:hover { background: var(--red-cont); color: var(--red); }
 
 /* What the project declares in .tgxcode/ — a button each, words rather than an
    icon, because "Dev server" is not a thing anybody draws. */
@@ -126,7 +126,7 @@
     gap: 6px;
     padding: 5px 11px;
     border-radius: var(--pill);
-    font: 400 12.5px/1.4 var(--sans);
+    font: 400 var(--fs-md)/var(--lh-snug) var(--sans);
     color: var(--text-3);
     transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
@@ -145,7 +145,7 @@
 .cmd-btn.on .cmd-dot { background: var(--green); }
 .cmd-btn.failed .cmd-dot { background: var(--red); }
 
-.cmd-port { font: 400 11.5px/1.4 var(--mono); color: var(--text-4); }
+.cmd-port { font: 400 var(--fs-xs)/var(--lh-snug) var(--mono); color: var(--text-4); }
 .cmd-btn.on .cmd-port { color: var(--green); }
 
 @keyframes cmd-pulse { 50% { opacity: 0.35; } }
@@ -156,12 +156,12 @@
     flex-wrap: wrap;
     gap: 8px;
     margin-top: 5px;
-    font: 400 12.5px/1.5 var(--sans);
+    font: 400 var(--fs-md)/var(--lh-base) var(--sans);
     color: var(--text-3);
 }
 .conv-sub .sep { color: var(--text-4); opacity: 0.7; }
-.conv-sub .branch { font-family: var(--mono); font-size: 12px; color: var(--text-2); }
-.conv-sub .cwd { font-family: var(--mono); font-size: 11.5px; color: var(--text-4); }
+.conv-sub .branch { font-family: var(--mono); font-size: var(--fs-sm); color: var(--text-2); }
+.conv-sub .cwd { font-family: var(--mono); font-size: var(--fs-xs); color: var(--text-4); }
 
 /* Breadcrumb back to the session a subagent was spawned by. */
 .crumb {
@@ -172,7 +172,7 @@
     margin: 0 0 6px -6px;
     padding: 0 10px 0 6px;
     border-radius: var(--pill);
-    font: 400 12px/1 var(--sans);
+    font: 400 var(--fs-sm)/1 var(--sans);
     color: var(--text-3);
     max-width: 100%;
     transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
@@ -224,7 +224,7 @@
 }
 .agent-chip[data-status="running"] .led {
     background: var(--yellow);
-    animation: breathe 1.6s var(--ease) infinite;
+    animation: breathe var(--dur-loop) var(--ease) infinite;
 }
 /* Running, but nothing has written to it in 90 seconds: the session that owned
    this agent went away. A steady grey light, not a hopeful pulse. */
@@ -235,16 +235,16 @@
 .agent-chip[data-status="done"] .led { background: var(--green); }
 .agent-chip[data-status="failed"] .led { background: var(--red); }
 
-.agent-chip .depth { color: var(--text-4); font: 400 12px/1 var(--mono); }
+.agent-chip .depth { color: var(--text-4); font: 400 var(--fs-sm)/1 var(--mono); }
 .agent-chip .name {
-    font: 400 12.5px/1 var(--sans);
+    font: 400 var(--fs-md)/1 var(--sans);
     color: var(--text);
     max-width: 230px;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 .agent-chip .trail {
-    font: 400 11.5px/1 var(--mono);
+    font: 400 var(--fs-xs)/1 var(--mono);
     color: var(--text-3);
     max-width: 240px;
     overflow: hidden;
@@ -257,17 +257,17 @@
     height: 24px;
     padding: 0 11px;
     border-radius: var(--pill);
-    font: 500 11.5px/1 var(--sans);
+    font: 500 var(--fs-sm)/1 var(--sans);
     color: var(--text-3);
     background: transparent;
     transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
-.agent-chip:hover .go { background: var(--blue-deep); color: #fff; }
-.agent-chip[aria-current="true"] .go { color: #fff; }
+.agent-chip:hover .go { background: var(--blue-deep); color: var(--on-blue-deep); }
+.agent-chip[aria-current="true"] .go { color: var(--on-blue-deep); }
 
 /* The subagent's own status, where the session's project/branch line usually is. */
 .conv-sub .agent-state {
-    font: 500 12px/1 var(--sans);
+    font: 500 var(--fs-sm)/1 var(--sans);
     text-transform: lowercase;
 }
 .conv-sub .agent-state.running { color: var(--yellow); }
@@ -286,7 +286,7 @@
     align-items: center;
     gap: 5px;
     flex: none;
-    font: 500 12px/1 var(--sans);
+    font: 500 var(--fs-sm)/1 var(--sans);
     text-decoration: none;
     color: var(--pr-tint);
     opacity: var(--pr-fade);
@@ -344,12 +344,12 @@
 .channel[data-live="true"] .led { background: var(--green); }
 
 .channel .port {
-    font: 500 12.5px/1 var(--mono);
+    font: 500 var(--fs-sm)/1 var(--mono);
     color: var(--text);
     font-variant-numeric: tabular-nums;
 }
 .channel .name {
-    font: 400 12.5px/1 var(--sans);
+    font: 400 var(--fs-md)/1 var(--sans);
     color: var(--text-3);
     max-width: 200px;
     overflow: hidden;
@@ -361,14 +361,14 @@
     height: 24px;
     padding: 0 11px;
     border-radius: var(--pill);
-    font: 500 11.5px/1 var(--sans);
+    font: 500 var(--fs-sm)/1 var(--sans);
     color: var(--text-3);
     background: transparent;
     transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
 /* Lit by hovering the switch itself, not the chip: reaching for the stop button
    should not first promise to open a tab. */
-.chan-open:hover .go { background: var(--blue-deep); color: #fff; }
+.chan-open:hover .go { background: var(--blue-deep); color: var(--on-blue-deep); }
 .channel[data-live="false"] .chan-open:hover .go { background: var(--s5); color: var(--text-2); }
 /* Shown on this session's own word rather than the kernel's: nothing on the
    Linux side holds the port, which here means a server on the Windows side of
@@ -384,7 +384,7 @@
 .chan-note {
     align-self: center;
     padding: 0 4px;
-    font: 400 11.5px/1.5 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
     color: var(--text-4);
     white-space: nowrap;
     cursor: help;
@@ -406,13 +406,13 @@
     color: var(--text-4);
     transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
-.chan-stop:hover { background: #3a2422; color: var(--red); }
+.chan-stop:hover { background: var(--red-cont); color: var(--red); }
 
 /* Armed: one more click ends it. The chip says so where it said "Open", so the
    confirmation is on the thing being confirmed and not in a dialog. */
-.channel[data-arm="true"] .chan-stop { background: #3a2422; color: var(--red); }
+.channel[data-arm="true"] .chan-stop { background: var(--red-cont); color: var(--red); }
 .channel[data-arm="true"] .go,
-.channel[data-arm="true"] .chan-open:hover .go { background: #3a2422; color: var(--red); }
+.channel[data-arm="true"] .chan-open:hover .go { background: var(--red-cont); color: var(--red); }
 
 /* ── transcript ──────────────────────────────────────────────────────── */
 
@@ -482,7 +482,7 @@
     margin: 40px auto;
     text-align: center;
     color: var(--text-3);
-    font-size: 13.5px;
+    font-size: var(--fs-base);
 }
 
 /* `content-visibility: auto` was tried here and removed. Once tool bodies are
@@ -509,7 +509,7 @@
 }
 
 .ev-time {
-    font: 400 11.5px/1.9 var(--mono);
+    font: 400 var(--fs-xs)/1.9 var(--mono);
     color: var(--text-4);
     text-align: right;
     padding-top: 4px;
@@ -530,15 +530,15 @@
    is the better of the two: the clock ends up next to the text it stamps. */
 .ev-date {
     display: block;
-    font-size: 10.5px;
-    line-height: 1.5;
+    font-size: var(--fs-xs);
+    line-height: var(--lh-base);
     opacity: 0.8;
 }
 
 .ev-body { min-width: 0; }
 
 .ev-label {
-    font: 500 12px/1.4 var(--sans);
+    font: 500 var(--fs-sm)/var(--lh-snug) var(--sans);
     color: var(--text-3);
     margin-bottom: 4px;
     letter-spacing: 0.01em;
@@ -621,19 +621,19 @@
 .tool.thinking > summary::before { background: var(--purple); opacity: 0.7; }
 .tool.thinking > summary { color: var(--text-4); }
 .tool.thinking > summary:hover { background: var(--s2); }
-.tool.thinking .tname { color: var(--purple); font-family: var(--sans); font-size: 12.5px; }
-.tool.thinking .prose { color: var(--text-3); font-size: 13.5px; }
+.tool.thinking .tname { color: var(--purple); font-family: var(--sans); font-size: var(--fs-md); }
+.tool.thinking .prose { color: var(--text-3); font-size: var(--fs-base); }
 
 /* a background task reporting back — adjacent to a tool call, not to your turn */
 .ev-agent-done .ev-body { padding: 4px 0 10px; }
 .ev-agent-done .ev-label { color: var(--purple); }
 .ev-agent-done .agent-done-sum {
-    font: 400 13.5px/1.6 var(--sans);
+    font: 400 var(--fs-base)/var(--lh-prose) var(--sans);
     color: var(--text-2);
 }
 .ev-agent-done .agent-done-meta {
     margin-top: 3px;
-    font: 400 11.5px/1.6 var(--mono);
+    font: 400 var(--fs-xs)/var(--lh-prose) var(--mono);
     color: var(--text-4);
 }
 .ev-agent-done .subagent-btns { margin-top: 2px; }
@@ -711,7 +711,7 @@
     padding: 10px 12px 8px;
 }
 .tasks-title {
-    font: 500 11px/1.4 var(--sans);
+    font: 500 var(--fs-xs)/var(--lh-snug) var(--sans);
     letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--text-4);
@@ -722,7 +722,7 @@
     border-radius: 9px;
     background: var(--blue-cont);
     color: var(--blue);
-    font: 500 11px/17px var(--sans);
+    font: 500 var(--fs-xs)/17px var(--sans);
     text-align: center;
 }
 .tasks-collapse {
@@ -732,7 +732,7 @@
     border-radius: var(--r-xs);
     background: none;
     color: var(--text-4);
-    font: 400 11.5px/1.5 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
     cursor: pointer;
 }
 .tasks-collapse:hover { background: var(--s3); color: var(--text-2); }
@@ -770,7 +770,7 @@
 .tasks-strip:focus-visible { outline-offset: -3px; }
 .tasks-strip-label {
     writing-mode: vertical-rl;
-    font: 500 11px/1 var(--sans);
+    font: 500 var(--fs-xs)/1 var(--sans);
     letter-spacing: 0.08em;
     text-transform: uppercase;
 }
@@ -796,7 +796,7 @@
     padding: 8px 10px;
     cursor: pointer;
     list-style: none;
-    font: 400 12.5px/1.45 var(--sans);
+    font: 400 var(--fs-md)/1.45 var(--sans);
     color: var(--text-2);
 }
 .task > summary::-webkit-details-marker { display: none; }
@@ -822,7 +822,7 @@
     border-radius: var(--r-xs);
     background: none;
     color: var(--text-4);
-    font-size: 12px;
+    font-size: var(--fs-sm);
     line-height: 1.2;
     opacity: 0;
     cursor: pointer;
@@ -833,7 +833,7 @@
 
 .task-body { padding: 9px 10px 11px; }
 .task-why {
-    font: 400 11.5px/1.5 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
     color: var(--text-4);
     margin-bottom: 7px;
 }
@@ -843,12 +843,12 @@
     max-height: 320px;
     overflow-y: auto;
     overscroll-behavior: contain;
-    font-size: 12.5px;
+    font-size: var(--fs-md);
     color: var(--text-3);
 }
 .task-cwd {
     margin-top: 7px;
-    font: 400 11px/1.45 var(--mono);
+    font: 400 var(--fs-xs)/1.45 var(--mono);
     color: var(--text-4);
     overflow-wrap: anywhere;
 }
@@ -865,7 +865,7 @@
     gap: 8px;
     flex-wrap: wrap;
     margin-top: 9px;
-    font: 400 12px/1.5 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
     color: var(--text-4);
 }
 .linky {
@@ -878,21 +878,21 @@
     text-underline-offset: 2px;
     cursor: pointer;
 }
-.linky:hover { color: #dbe6fb; }
+.linky:hover { color: var(--on-blue-cont); }
 
 /* The same task, at a width you can actually read a briefing at. */
 .task-dlg-why {
     margin-bottom: 12px;
-    font: 400 13px/1.55 var(--sans);
+    font: 400 var(--fs-md)/1.55 var(--sans);
     color: var(--text-4);
 }
 .task-dlg-why[hidden] { display: none; }
-.task-dlg-prompt { font-size: 14px; line-height: 1.65; color: var(--text-2); }
+.task-dlg-prompt { font-size: var(--fs-base); line-height: 1.65; color: var(--text-2); }
 .task-dlg-cwd {
     margin-top: 14px;
     padding-top: 12px;
     border-top: 1px solid var(--outline-soft);
-    font: 400 11.5px/1.5 var(--mono);
+    font: 400 var(--fs-xs)/var(--lh-base) var(--mono);
     color: var(--text-4);
     overflow-wrap: anywhere;
 }
@@ -911,7 +911,7 @@
 .ev-peer-message .ev-label { color: var(--peach); }
 .ev-peer-message .peer-sub {
     margin: 1px 0 4px;
-    font: 400 12px/1.5 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
     color: var(--text-4);
 }
 .ev-peer-message .subagent-btns { margin-top: 8px; }
@@ -928,7 +928,7 @@
 .ev-handoff .ev-label { color: var(--purple); }
 .ev-handoff .peer-sub {
     margin: 1px 0 4px;
-    font: 400 12px/1.5 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
     color: var(--text-4);
 }
 .ev-handoff .subagent-btns { margin-top: 8px; }
@@ -947,7 +947,7 @@
 /* the bridge nudging an idle orchestrator: a line, not a card */
 .ev-orchestrator-inbox .ev-body {
     margin: 4px 0;
-    font: 400 12px/1.5 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
     color: var(--text-4);
 }
 
@@ -957,9 +957,9 @@
     border-radius: var(--r);
     padding: 12px 16px;
     margin: 8px 0;
-    font-size: 13.5px;
+    font-size: var(--fs-base);
 }
-.ev-system[data-error="true"] .ev-body { background: #331f1e; }
+.ev-system[data-error="true"] .ev-body { background: var(--red-cont); }
 .ev-system .ev-label { color: var(--yellow); }
 .ev-system[data-error="true"] .ev-label { color: var(--red); }
 
@@ -970,7 +970,7 @@
     align-items: center;
     gap: 14px;
     margin: 22px 0;
-    font: 400 12px/1 var(--sans);
+    font: 400 var(--fs-sm)/1 var(--sans);
     color: var(--text-4);
 }
 .ev-compact .ev-body::before,
@@ -1023,15 +1023,15 @@
     padding: 10px 4px 4px;
 }
 .ch-title {
-    font: 500 11px/1.4 var(--sans);
+    font: 500 var(--fs-xs)/var(--lh-snug) var(--sans);
     letter-spacing: 0.04em;
     color: var(--text-3);
 }
-.ch-tally { margin-left: auto; font: 400 11px/1.4 var(--mono); color: var(--text-4); }
+.ch-tally { margin-left: auto; font: 400 var(--fs-xs)/var(--lh-snug) var(--mono); color: var(--text-4); }
 /* The whole-session total, in the heading rather than in a row. */
-.ch-head .ch-nums { margin-left: auto; font: 400 11px/1.4 var(--mono); }
-.ch-branch { flex: none; margin: 0 4px 4px; font: 400 11px/1.5 var(--mono); color: var(--text-4); }
-.ch-note { flex: none; margin: 2px 4px 6px; font: 400 11.5px/1.5 var(--sans); color: var(--text-4); }
+.ch-head .ch-nums { margin-left: auto; font: 400 var(--fs-xs)/var(--lh-snug) var(--mono); }
+.ch-branch { flex: none; margin: 0 4px 4px; font: 400 var(--fs-xs)/var(--lh-base) var(--mono); color: var(--text-4); }
+.ch-note { flex: none; margin: 2px 4px 6px; font: 400 var(--fs-sm)/var(--lh-base) var(--sans); color: var(--text-4); }
 .ch-note.bad { color: var(--red); }
 
 .ch-list {
@@ -1057,7 +1057,7 @@
     border-radius: var(--r-xs);
     background: none;
     color: var(--text-2);
-    font: 400 11.5px/1.7 var(--mono);
+    font: 400 var(--fs-xs)/1.7 var(--mono);
     text-align: left;
     cursor: pointer;
 }
@@ -1105,7 +1105,7 @@
    session had more than one. */
 .ch-group {
     padding: 6px 5px 1px;
-    font: 400 10.5px/1.4 var(--sans);
+    font: 400 var(--fs-xs)/var(--lh-snug) var(--sans);
     letter-spacing: 0.03em;
     color: var(--text-4);
 }
@@ -1134,10 +1134,10 @@
 .checklist-body .tbar { margin: 2px 4px 8px; }
 .cl-current {
     margin: 0 4px 8px;
-    font: 400 11.5px/1.5 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
     color: var(--text-3);
 }
-.cl-note { margin: 6px 4px 0; font: 400 11.5px/1.5 var(--sans); color: var(--text-4); }
+.cl-note { margin: 6px 4px 0; font: 400 var(--fs-sm)/var(--lh-base) var(--sans); color: var(--text-4); }
 
 .cl-list { list-style: none; margin: 0; padding: 0; }
 
@@ -1154,7 +1154,7 @@
     border-radius: var(--r-xs);
     background: none;
     color: var(--text-2);
-    font: 400 12px/1.55 var(--sans);
+    font: 400 var(--fs-sm)/1.55 var(--sans);
     text-align: left;
     cursor: pointer;
 }
@@ -1163,7 +1163,7 @@
 
 /* The status is an attribute, so the mark is CSS rather than four inline style
    strings built per render — which is what todoView did before this existed. */
-.cl-mark { flex: none; width: 1.1em; font: 400 12px/1.55 var(--mono); }
+.cl-mark { flex: none; width: 1.1em; font: 400 var(--fs-sm)/1.55 var(--mono); }
 .cl-name { flex: 1; min-width: 0; }
 .cl-row[data-status="completed"] .cl-mark { color: var(--green); }
 .cl-row[data-status="completed"] .cl-name { color: var(--text-4); }
@@ -1271,14 +1271,13 @@
 
 .turn-pop {
     position: fixed;
-    z-index: 60;
+    z-index: var(--z-pop);
     width: 330px;
     padding: 11px 15px 13px;
     background: var(--s3);
     border-radius: var(--r);
-    box-shadow: 0 10px 30px #000a;
+    box-shadow: var(--shadow-pop);
     pointer-events: none;
-    animation: pop-in var(--t-fast) var(--ease);
 }
 .turn-pop[hidden] { display: none; }
 
@@ -1286,7 +1285,7 @@
     display: flex;
     align-items: baseline;
     gap: 8px;
-    font: 500 11px/1.4 var(--sans);
+    font: 500 var(--fs-xs)/var(--lh-snug) var(--sans);
     letter-spacing: 0.03em;
     color: var(--peach);
 }
@@ -1300,12 +1299,12 @@
     margin-top: 6px;
     max-height: 190px;
     overflow: hidden;
-    font: 400 13px/1.6 var(--sans);
+    font: 400 var(--fs-md)/var(--lh-prose) var(--sans);
     color: var(--text-2);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
 }
-.turn-pop .pop-text.cmd { font-family: var(--mono); font-size: 12.5px; color: var(--peach); }
+.turn-pop .pop-text.cmd { font-family: var(--mono); font-size: var(--fs-sm); color: var(--peach); }
 
 /* `#151` in a message - web/pr-refs.js. Plain text until it resolves to another
    chat's PR, because most `#N` do not: a mark that went nowhere drawn as a link
@@ -1317,15 +1316,15 @@
 .prose a.pr-ref { color: inherit; text-decoration: none; cursor: text; }
 .prose a.pr-ref.linked { color: var(--blue); cursor: pointer; }
 .prose a.pr-ref.linked:hover { text-decoration: underline; text-underline-offset: 3px; }
-.prose a.pr-ref.linked:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; border-radius: 2px; }
+.prose a.pr-ref.linked:focus-visible { outline: var(--focus-w) solid var(--focus-colour); outline-offset: 1px; border-radius: 2px; }
 
 /* The card a linked mention shows. #turn-pop's surface and type, anchored under
    the mention, one section per project when the chat spans more than one. */
-.pr-pop { width: auto; min-width: 220px; max-width: 360px; animation-name: pop-down; }
+.pr-pop { width: auto; min-width: 220px; max-width: 360px; }
 .pr-pop .pop-head { margin-bottom: 4px; }
 .pr-pop-sec + .pr-pop-sec { margin-top: 9px; padding-top: 8px; border-top: 1px solid var(--outline); }
 .pr-pop-proj {
-    font: 500 11px/1.4 var(--sans);
+    font: 500 var(--fs-xs)/var(--lh-snug) var(--sans);
     letter-spacing: 0.03em;
     color: var(--peach);
 }
@@ -1334,16 +1333,16 @@
     align-items: center;
     gap: 6px;
     margin: 3px 0;
-    font: 400 13px/1.45 var(--sans);
+    font: 400 var(--fs-md)/1.45 var(--sans);
     color: var(--text-2);
     min-width: 0;
 }
 .pr-pop-pr .pr { display: grid; place-items: center; color: var(--pr-tint); opacity: var(--pr-fade); flex: none; }
-.pr-pop-pr .num { font-family: var(--mono); font-size: 12px; color: var(--text-3); flex: none; }
+.pr-pop-pr .num { font-family: var(--mono); font-size: var(--fs-sm); color: var(--text-3); flex: none; }
 .pr-pop-pr .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pr-pop-chat {
     padding-left: 12px;
-    font: 400 13px/1.5 var(--sans);
+    font: 400 var(--fs-md)/var(--lh-base) var(--sans);
     color: var(--text);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1352,18 +1351,7 @@
 .pr-pop-chat::before { content: '└ '; color: var(--text-4); }
 .pr-pop-chat.self { color: var(--text-4); }
 .pr-pop-chat .note { color: var(--text-4); }
-.pr-pop-foot { margin-top: 8px; font: 400 11px/1.4 var(--sans); color: var(--text-4); }
-
-@keyframes pop-down {
-    from { opacity: 0; transform: translateY(-3px); }
-    to { opacity: 1; transform: none; }
-}
-
-@keyframes pop-in {
-    from { opacity: 0; transform: translateX(4px); }
-    to { opacity: 1; transform: none; }
-}
-@media (prefers-reduced-motion: reduce) { .turn-pop, .pr-pop { animation: none; } }
+.pr-pop-foot { margin-top: 8px; font: 400 var(--fs-xs)/var(--lh-snug) var(--sans); color: var(--text-4); }
 
 /* Where a jump landed, so the eye finds it without hunting.
  *
@@ -1373,12 +1361,12 @@
  * as an opaque grey box once the animation stopped. The second rule is not
  * theoretical: `editRow` and `takePendingJump` both jump to tool calls, and
  * until it existed they flashed nothing at all. */
-.ev-user.flash .ev-body { animation: flash 1.3s var(--ease); }
+.ev-user.flash .ev-body { animation: flash var(--dur-flash) var(--ease); }
 @keyframes flash {
     0%, 55% { background: var(--blue-cont); }
     100% { background: var(--s3); }
 }
-.ev:not(.ev-user).flash .ev-body { animation: flash-row 1.3s var(--ease); }
+.ev:not(.ev-user).flash .ev-body { animation: flash-row var(--dur-flash) var(--ease); }
 @keyframes flash-row {
     0%, 55% { background: var(--blue-tint); }
     100% { background: transparent; }
@@ -1390,7 +1378,7 @@
  * needs. See claudeFlash() in web/app.js. */
 .settings-row.flash {
     border-radius: var(--r-sm);
-    animation: flash-settings-row 1.3s var(--ease);
+    animation: flash-settings-row var(--dur-flash) var(--ease);
 }
 /* The transcript's `flash-row` timing exactly — hold, then fade — but the
  * highlight is carried out past the row by a spread `box-shadow` as well as
@@ -1412,7 +1400,7 @@
  * resting background of its own; a select has one, so ending there would leave
  * the pill flat until the next repaint. The spread `box-shadow` follows the
  * pill's own border-radius and takes no part in layout. */
-select.flash { animation: flash-select 1.3s var(--ease); }
+select.flash { animation: flash-select var(--dur-flash) var(--ease); }
 @keyframes flash-select {
     0%, 55% { box-shadow: 0 0 0 3px var(--blue-tint); }
     100% { box-shadow: 0 0 0 3px transparent; }
@@ -1440,22 +1428,15 @@ select.flash { animation: flash-select 1.3s var(--ease); }
     padding: 5px 5px 5px 12px;
     border-radius: var(--pill);
     background: var(--s2);
-    box-shadow: 0 6px 22px #0009, 0 0 0 1px var(--outline-soft);
-    animation: find-in var(--t-fast) var(--ease);
+    box-shadow: var(--shadow-float);
 }
 /* display:flex above would otherwise beat the hidden attribute. */
 .find[hidden] { display: none; }
 
-@keyframes find-in {
-    from { opacity: 0; transform: translateY(-4px); }
-    to { opacity: 1; transform: none; }
-}
-@media (prefers-reduced-motion: reduce) { .find { animation: none; } }
-
 #find-input {
     width: 230px;
     padding: 4px 0;
-    font: 400 13px/1.5 var(--sans);
+    font: 400 var(--fs-md)/var(--lh-base) var(--sans);
     outline: none;
 }
 #find-input::placeholder { color: var(--text-4); }
@@ -1465,7 +1446,7 @@ select.flash { animation: flash-select 1.3s var(--ease); }
     flex: none;
     min-width: 74px;
     text-align: right;
-    font: 400 11.5px/1.5 var(--mono);
+    font: 400 var(--fs-xs)/var(--lh-base) var(--mono);
     font-variant-numeric: tabular-nums;
     color: var(--text-4);
     white-space: nowrap;
@@ -1478,7 +1459,7 @@ select.flash { animation: flash-select 1.3s var(--ease); }
     width: 26px; height: 26px;
     border-radius: 50%;
     color: var(--text-3);
-    font-size: 12px;
+    font-size: var(--fs-sm);
     transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
 .find-btn:hover { background: var(--s4); color: var(--text); }
@@ -1493,7 +1474,7 @@ select.flash { animation: flash-select 1.3s var(--ease); }
     padding: 3px 9px 3px 6px;
     border-radius: var(--pill);
     background: var(--s3);
-    font: 400 11.5px/1.5 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
     color: var(--text-3);
     white-space: nowrap;
     cursor: pointer;
@@ -1501,7 +1482,7 @@ select.flash { animation: flash-select 1.3s var(--ease); }
 .find-subs[hidden] { display: none; }
 .find-subs:hover { color: var(--text); }
 .find-subs input { accent-color: var(--blue-deep); cursor: pointer; }
-.find-subs:has(input:checked) { background: var(--blue-cont); color: #e6edff; }
+.find-subs:has(input:checked) { background: var(--blue-cont); color: var(--on-blue-cont); }
 
 /* How many matches are hiding inside something you have not opened. Without it
    the count in the field and the marks on screen would not add up, and the gap
@@ -1511,8 +1492,8 @@ select.flash { animation: flash-select 1.3s var(--ease); }
     padding: 0 6px;
     border-radius: var(--pill);
     background: var(--yellow);
-    color: #131314;
-    font: 500 10.5px/16px var(--mono);
+    color: var(--on-yellow);
+    font: 500 var(--fs-xs)/16px var(--mono);
     font-variant-numeric: tabular-nums;
 }
 
@@ -1526,12 +1507,12 @@ select.flash { animation: flash-select 1.3s var(--ease); }
    the blue of `::selection`: a find mark that reads as a selection is a bug
    report waiting to happen. */
 ::highlight(cs-find) {
-    background-color: #4d3f10;
-    color: #f6e3ab;
+    background-color: var(--mark-bg);
+    color: var(--mark-fg);
 }
 ::highlight(cs-find-at) {
     background-color: var(--yellow);
-    color: #131314;
+    color: var(--on-yellow);
 }
 
 

@@ -697,7 +697,7 @@ async function refreshQuotaNow() {
 }
 
 export function showQuota(on) {
-    present(dom.quotaMenu, on, { kind: 'pop' });
+    present(dom.quotaMenu, on, { as: 'menu' });
     dom.quotaPill.setAttribute('aria-expanded', String(on));
     // The two popovers must not sit open together, and each one's outside-click
     // listener is stopped by the other's trigger. There were three of these
@@ -848,7 +848,7 @@ function renderCvPanel() {
 
 export function showCv(on) {
     if (on === isUp(dom.cvMenu)) return;
-    present(dom.cvMenu, on, { kind: 'pop' });
+    present(dom.cvMenu, on, { as: 'menu' });
     dom.cvPill.setAttribute('aria-expanded', String(on));
     if (on) { renderCvPanel(); showQuota(false); showNewMenu(false); showBarMore(false); }
 }

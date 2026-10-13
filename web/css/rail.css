@@ -33,7 +33,7 @@
     padding: 0 12px;
     background: var(--s2);
     color: var(--text-3);
-    font: 500 12px/1 var(--sans);
+    font: 500 var(--fs-sm)/1 var(--sans);
     border-radius: var(--pill);
     white-space: nowrap;
     transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
@@ -41,7 +41,7 @@
 .rail-filter:hover { background: var(--s3); color: var(--text); }
 .rail-filter svg { flex: none; color: var(--text-4); }
 .rail-filter-label { overflow: hidden; text-overflow: ellipsis; }
-.rail-filter[aria-pressed="true"] { background: var(--blue-cont); color: #dbe6fb; }
+.rail-filter[aria-pressed="true"] { background: var(--blue-cont); color: var(--on-blue-cont); }
 .rail-filter[aria-pressed="true"] svg { color: var(--blue); }
 
 /* How many sessions the button is talking about — the same number whether it is
@@ -51,7 +51,7 @@
     color: var(--text-4);
     font-variant-numeric: tabular-nums;
 }
-.rail-filter[aria-pressed="true"] .rail-filter-count { color: #b9cdf0; }
+.rail-filter[aria-pressed="true"] .rail-filter-count { color: var(--on-blue-cont-2); }
 .rail-filter-count[hidden] { display: none; }
 
 /* Hide finished and the order button share a row: the filter takes the width,
@@ -93,11 +93,11 @@
     padding: 0 18px;
     background: var(--s3);
     color: var(--text);
-    font: 500 14px/1 var(--sans);
+    font: 500 var(--fs-base)/1 var(--sans);
     border-radius: var(--r-lg) 0 0 var(--r-lg);
     transition: background var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
 }
-.btn-new:hover { background: var(--s4); box-shadow: 0 1px 3px #0006; }
+.btn-new:hover { background: var(--s4); box-shadow: var(--shadow-1); }
 .btn-new:active { background: var(--s5); }
 .btn-new svg { color: var(--blue); flex: none; }
 
@@ -127,7 +127,7 @@
     top: calc(100% + 8px);
     left: 0;
     right: 0;
-    z-index: 60;
+    z-index: var(--z-pop);
     /* Six rows, a rule and the escape hatch, so nothing that matters sits below
        a fold. It still scrolls on a window too short to hold that. */
     max-height: 420px;
@@ -135,8 +135,7 @@
     padding: 6px;
     background: var(--s3);
     border-radius: var(--r);
-    box-shadow: 0 10px 30px #000a;
-    animation: menu-in var(--t-fast) var(--ease);
+    box-shadow: var(--shadow-pop);
     transform-origin: top left;
 }
 .new-menu[hidden] { display: none; }
@@ -156,11 +155,10 @@
 .new-menu .sep { height: 1px; margin: 5px 8px; background: var(--outline-soft); }
 .new-menu .menu-note {
     padding: 9px 10px;
-    font: 400 12px/1.5 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
     color: var(--text-4);
 }
 
-@media (prefers-reduced-motion: reduce) { .new-menu { animation: none; } }
 
 .rail-scroll { flex: 1; overflow-y: auto; min-height: 0; padding-bottom: 12px; }
 
@@ -182,7 +180,7 @@
     width: 100%;
     padding: 10px 12px;
     border-radius: var(--r);
-    font: 500 11.5px/1.4 var(--sans);
+    font: 500 var(--fs-sm)/var(--lh-snug) var(--sans);
     letter-spacing: 0.04em;
     color: var(--text-3);
     transition: background var(--t-fast) var(--ease);
@@ -220,7 +218,7 @@
     background: var(--s2);
     margin: 2px 2px 4px;
 }
-.rail-group.nested > .group-head { padding: 7px 10px; font-size: 11px; }
+.rail-group.nested > .group-head { padding: 7px 10px; font-size: var(--fs-xs); }
 .rail-group.nested > .group-head:hover { background: var(--s3); }
 /* --row-bg is what .strip-actions fades its overlay into. Left at --s1 the
    buttons would sit on a visible seam over a card that is no longer --s1. */
@@ -245,7 +243,7 @@
 }
 .strip:hover { background: var(--s2); --row-bg: var(--s2); }
 .strip[aria-current="true"] { background: var(--blue-cont); --row-bg: var(--blue-cont); }
-.strip[aria-current="true"]:hover { background: #26406c; --row-bg: #26406c; }
+.strip[aria-current="true"]:hover { background: var(--blue-cont-hover); --row-bg: var(--blue-cont-hover); }
 
 .strip-main {
     flex: 1;
@@ -307,7 +305,7 @@
 .strip-menu-btn:hover { background: var(--s4); color: var(--text); }
 .strip-menu-btn[aria-expanded="true"] { background: var(--s4); color: var(--text); }
 .strip[aria-current="true"] > .strip-menu-btn:hover,
-.strip[aria-current="true"] > .strip-menu-btn[aria-expanded="true"] { background: #30507f; }
+.strip[aria-current="true"] > .strip-menu-btn[aria-expanded="true"] { background: var(--blue-cont-active); }
 .strip:has(> .strip-menu-btn) .strip-title { padding-right: 22px; }
 .strip[data-renaming="true"] > .strip-menu-btn { display: none; }
 /* Nothing left in the overlay but a stalled row's Stop, so without one it would
@@ -323,8 +321,8 @@
     margin: -2px 0 0 -5px;
     padding: 1px 4px;
     font: inherit;
-    font-size: 13.5px;
-    line-height: 1.4;
+    font-size: var(--fs-base);
+    line-height: var(--lh-snug);
     color: var(--text);
     background: var(--bg);
     border: 1px solid var(--blue);
@@ -338,7 +336,7 @@
     flex: none;
     color: var(--blue);
 }
-.strip[aria-current="true"] .strip-meta .tag-pin { color: #cfe0ff; }
+.strip[aria-current="true"] .strip-meta .tag-pin { color: var(--on-blue-cont); }
 
 /* ── one PR vocabulary ──────────────────────────────────────────────────────
    Three surfaces show what has become of a pull request — the rail glyph below,
@@ -381,7 +379,7 @@
 :is(.strip-meta .tag-pr, .lcard-head .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="unknown"] { --pr-tint: var(--text-4); }
 /* Still moving, so it breathes — the same light every in-flight thing here uses. */
 :is(.strip-meta .tag-pr, .lcard-head .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="checks-pending"] svg {
-    animation: breathe 1.6s var(--ease) infinite;
+    animation: breathe var(--dur-loop) var(--ease) infinite;
 }
 
 /* What the session left on GitHub, at its worst.
@@ -403,7 +401,7 @@
    are left exactly as they are. */
 .strip[aria-current="true"] .strip-meta .tag-pr[data-status="draft"],
 .strip[aria-current="true"] .strip-meta .tag-pr[data-status="unknown"],
-.strip[aria-current="true"] .strip-meta .tag-pr[data-status="closed"] { color: #b3c7ea; }
+.strip[aria-current="true"] .strip-meta .tag-pr[data-status="closed"] { color: var(--on-blue-cont-2); }
 
 .mini {
     display: grid;
@@ -415,11 +413,11 @@
 }
 .mini:hover { background: var(--s4); color: var(--text); }
 .mini.on { color: var(--blue); }
-.strip[aria-current="true"] .mini:hover { background: #30507f; }
+.strip[aria-current="true"] .mini:hover { background: var(--blue-cont-active); }
 /* Destructive controls stay the same weight as their neighbours until reached
    for — colouring one red at rest would make every row look like a warning. */
-.mini.danger:hover { background: #3a2422; color: var(--red); }
-.strip[aria-current="true"] .mini.danger:hover { background: #4a2b28; }
+.mini.danger:hover { background: var(--red-cont); color: var(--red); }
+.strip[aria-current="true"] .mini.danger:hover { background: var(--red-cont-hover); }
 
 /* Only a development bridge lists these at all; the tag says why a row is here
    in a window where it might otherwise look like real work. */
@@ -429,7 +427,7 @@
     border-radius: var(--r-xs);
     background: var(--s4);
     color: var(--text-3);
-    font: 500 10px/16px var(--mono);
+    font: 500 var(--fs-2xs)/16px var(--mono);
     letter-spacing: 0.06em;
     text-transform: uppercase;
 }
@@ -442,7 +440,7 @@
     border-radius: var(--r-xs);
     background: color-mix(in srgb, var(--blue) 22%, transparent);
     color: var(--blue);
-    font: 500 10px/16px var(--mono);
+    font: 500 var(--fs-2xs)/16px var(--mono);
     letter-spacing: 0.04em;
 }
 .tag-orch.paused {
@@ -453,45 +451,45 @@
 /* State reads as a small dot before the title, not a slab edge. */
 .strip-title {
     display: block;
-    font-size: 13.5px;
-    line-height: 1.4;
+    font-size: var(--fs-base);
+    line-height: var(--lh-snug);
     color: var(--text-2);
     overflow: hidden;
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
 }
-.strip[aria-current="true"] .strip-title { color: #d7e3ff; font-weight: 500; }
+.strip[aria-current="true"] .strip-title { color: var(--on-blue-cont); font-weight: 500; }
 
 /* Where the last turn left things — bridge/standing.js. One line, cut rather
    than wrapped: the rail is narrow and the full line is in the tooltip. */
 .strip-standing {
     display: block;
     margin-top: 2px;
-    font: 400 12px/1.45 var(--sans);
+    font: 400 var(--fs-sm)/1.45 var(--sans);
     color: var(--text-3);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 .strip-standing[data-source="extract"] { font-style: italic; }
-.strip[aria-current="true"] .strip-standing { color: #b3c7ea; }
+.strip[aria-current="true"] .strip-standing { color: var(--on-blue-cont-2); }
 
 .strip-meta {
     display: flex;
     align-items: center;
     gap: 6px;
     margin-top: 3px;
-    font: 400 11.5px/1.5 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
     color: var(--text-4);
     white-space: nowrap;
     overflow: hidden;
 }
-.strip[aria-current="true"] .strip-meta { color: #9db3d8; }
+.strip[aria-current="true"] .strip-meta { color: var(--on-blue-cont-3); }
 .strip-meta .wt {
     color: var(--text-3);
     font-family: var(--mono);
-    font-size: 11px;
+    font-size: var(--fs-xs);
     /* Gave up none of its width before, so on a pinned or labelled row it took
        what the activity line needed. It is the longest thing on the line and the
        least urgent, so it is the one that abbreviates. */
@@ -499,7 +497,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
 }
-.strip[aria-current="true"] .strip-meta .wt { color: #b3c7ea; }
+.strip[aria-current="true"] .strip-meta .wt { color: var(--on-blue-cont-2); }
 .strip-meta .dot { color: var(--text-4); opacity: 0.6; }
 
 .strip-meta .pulse {
@@ -519,7 +517,7 @@
     border-radius: var(--pill);
     background: var(--blue-tint);
     color: var(--blue);
-    font-size: 10.5px;
+    font-size: var(--fs-xs);
 }
 
 /* Messages waiting on a clock rather than on a turn. The same badge in the amber
@@ -529,9 +527,9 @@
     flex: none;
     padding: 1px 7px;
     border-radius: var(--pill);
-    background: #3a2f16;
+    background: var(--yellow-cont-hover);
     color: var(--yellow);
-    font-size: 10.5px;
+    font-size: var(--fs-xs);
 }
 
 /* Whether a session is doing anything, at the head of the line.
@@ -550,7 +548,7 @@
 }
 .strip[data-state="running"] .strip-meta::before {
     background: var(--yellow);
-    animation: breathe 1.6s var(--ease) infinite;
+    animation: breathe var(--dur-loop) var(--ease) infinite;
 }
 /* Running, but not by us — a terminal, VS Code, a background agent. Hollow to
    the filled dot of a session this window is driving, because the difference
@@ -573,7 +571,7 @@
     border-radius: var(--r-xs);
     background: var(--s3);
     color: var(--text-4);
-    font: 500 10px/16px var(--mono);
+    font: 500 var(--fs-2xs)/16px var(--mono);
     letter-spacing: 0.06em;
     text-transform: uppercase;
 }
@@ -581,9 +579,9 @@
 .rail-empty {
     padding: 34px 20px;
     color: var(--text-3);
-    font-size: 13.5px;
+    font-size: var(--fs-base);
     text-align: center;
-    line-height: 1.6;
+    line-height: var(--lh-prose);
 }
 
 
@@ -596,9 +594,9 @@
     flex: none;
     padding: 1px 7px;
     border-radius: var(--pill);
-    background: #3a2422;
+    background: var(--red-cont);
     color: var(--red);
-    font-size: 10.5px;
+    font-size: var(--fs-xs);
 }
 .strip[data-stalled="true"] .strip-meta::before {
     background: var(--red);
@@ -618,9 +616,9 @@
     width: auto;
     padding: 0 10px;
     border-radius: var(--pill);
-    font-size: 11px;
+    font-size: var(--fs-xs);
     color: var(--red);
-    background: #3a2422;
+    background: var(--red-cont);
 }
-.mini.stop:hover { background: #4a2b28; color: var(--red); }
+.mini.stop:hover { background: var(--red-cont-hover); color: var(--red); }
 .mini.stop:disabled { opacity: .6; cursor: default; }

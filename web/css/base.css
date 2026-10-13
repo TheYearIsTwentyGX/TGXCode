@@ -18,14 +18,33 @@
  * a dense screen still reads calm. Dark is the designed default.
  */
 
+/* ── tokens ─────────────────────────────────────────────────────────────
+   Every value a surface needs, named for what it is for. The rule for the rest
+   of web/css/ is that a colour, a shadow, a z-layer, a duration or an easing is
+   read from here, never written out — docs/plans/22-ui-overhaul.md has the
+   reference, the exceptions, and which token to reach for when.
+
+   Two blocks. The first is the palette and everything else that is a colour,
+   and it is the dark theme: a light theme would be a second copy of that block
+   under `:root[data-theme="light"]` and nothing more, which only works while no
+   other file writes a colour of its own. The second block is the scales —
+   type, spacing, radii, layers, elevation, motion — which do not change with
+   the theme.
+
+   The older names (--s1…--s5, --text-*, --t-fast, --t-med, --ease) are kept as
+   they were. Other branches are written against them, and --t-* and --ease are
+   now aliases into the motion scale rather than values of their own. */
+
 :root {
-    /* Tonal surface ramp — each step is a lift, not a line. */
+    /* Tonal surface ramp — each step is a lift, not a line. --s6 is the top
+       of it: a scrollbar thumb under the pointer, an idle dot on --s3. */
     --bg:      #131314;
     --s1:      #1b1c1d;
     --s2:      #202124;
     --s3:      #282a2c;
     --s4:      #303134;
     --s5:      #3c3e41;
+    --s6:      #4d5155;
 
     --outline:      #444746;
     --outline-soft: #2b2d2f;
@@ -46,12 +65,146 @@
     --purple: #d0bcff;
     --peach:  #f8b995;
 
+    /* Containers: a hue turned into a ground, for a state that is worn by a
+       whole row or button rather than by a word. `-cont` is the resting ground,
+       `-hover` the step a pointer adds; `--on-*` is text and icons on it. */
+    --blue-cont-hover:  #26406c;
+    --blue-cont-active: #30507f;   /* pressed, or a menu open off a selected row */
+    --on-blue:          #062e6f;   /* on solid --blue */
+    --on-blue-deep:     #ffffff;   /* on solid --blue-deep */
+    --on-blue-cont:     #dbe6fb;   /* on --blue-cont: titles, labels */
+    --on-blue-cont-2:   #b3c7ea;   /* … secondary text */
+    --on-blue-cont-3:   #9db3d8;   /* … meta, the quietest line */
+
+    --red-cont:       #3a2422;     /* destructive hover, a failed thing */
+    --red-cont-hover: #4a2b28;
+    --red-soft:       #f4a9a3;     /* red text that has to be read at length */
+    --on-red:         #4a0d09;     /* on solid --red */
+
+    --yellow-tint:          #232017;   /* a whole card asking for you */
+    --yellow-cont:          #2b2719;
+    --yellow-cont-hover:    #3a3320;
+    --yellow-cont-strong:   #4a4128;
+    --on-yellow:            #241f07;   /* on solid --yellow */
+    --amber-cont:           #46331a;   /* the dev badge — not a warning */
+
+    --green-tint: #14211a;
+    --green-edge: #3f6b4c;
+
+    /* Find-in-page marks: amber, so a match never reads as a selection. */
+    --mark-bg: #4d3f10;
+    --mark-fg: #f6e3ab;
+
+    --selection: #2e4a75;
+    --on-selection: #ffffff;
+    --scrim:        #00000099;
+    --scrim-strong: #000000c2;
+    --recess: #00000047;   /* a keycap sunk into a button, whatever its colour */
+    --scroll-thumb:       var(--s5);
+    --scroll-thumb-hover: var(--s6);
+
+    /* The one light surface in a dark app — toasts — and its three moods. */
+    --inverse-bg: #e3e3e3;
+    --inverse-fg: #1f1f1f;
+    --inverse-err-bg:  #f9dedc;  --inverse-err-fg:  #410e0b;
+    --inverse-ok-bg:   #c4eed0;  --inverse-ok-fg:   #0a2e18;
+    --inverse-warn-bg: #fde9c4;  --inverse-warn-fg: #3a2503;
+
+    /* Code: syntax roles (web/highlight.js names the tokens) and diffs, which
+       web/css/tools.css and the diff2html overrides in viewers.css share. */
+    --syn-comment: var(--text-4);
+    --syn-punct:   #8b9094;
+    --syn-string:  #95d3a5;
+    --syn-regex:   #86cfc4;
+    --syn-number:  #f0b96b;
+    --syn-keyword: #c9a6f5;
+    --syn-builtin: var(--blue);
+    --syn-fn:      #8fc0f0;
+    --syn-type:    #7fd0c4;
+    --syn-var:     #f2b48a;
+    --syn-flag:    #c1adf0;
+    --syn-add:     #a7e6bd;
+    --syn-del:     #f4b4ae;
+
+    --diff-add-bg:   var(--green-tint);
+    --diff-add-fg:   #9ad8b2;
+    --diff-add-hl:   #24523a;
+    --diff-add-edge: #1f3a2a;
+    --diff-del-bg:   #241819;
+    --diff-del-fg:   #e8a9a4;
+    --diff-del-hl:   #5a2f2c;
+    --diff-del-edge: #3d2626;
+    --diff-change-bg: #2a2413;
+
+    /* Shadows are black on a near-black page: they say "above", not "lit". */
+    --shadow-1:      0 1px 3px #0006;
+    --shadow-toast:  0 4px 14px #0008;
+    --shadow-pop:    0 10px 30px #000a;
+    --shadow-float:  0 6px 22px #0009, 0 0 0 1px var(--outline-soft);
+    --shadow-dialog: 0 24px 64px #000a;
+
+    --focus-colour: var(--blue);
+}
+
+:root {
+    /* Type. Integer steps: the half-pixel sizes these replaced were too close
+       to tell apart and too many to keep straight. --fs-base is body text;
+       most chrome sits at --fs-sm and --fs-md. */
+    --fs-2xs:  10px;
+    --fs-xs:   11px;
+    --fs-sm:   12px;
+    --fs-md:   13px;
+    --fs-base: 14px;
+    --fs-lg:   16px;
+    --fs-xl:   18px;
+    --fs-2xl:  21px;
+    --fs-3xl:  26px;
+
+    --lh-none:  1;
+    --lh-tight: 1.3;
+    --lh-snug:  1.4;
+    --lh-base:  1.5;
+    --lh-prose: 1.6;
+
+    --fw-regular: 400;
+    --fw-medium:  500;
+    --fw-strong:  600;
+
+    /* Spacing, on a 2px grid that thins out as it grows. */
+    --sp-1:  2px;
+    --sp-2:  4px;
+    --sp-3:  6px;
+    --sp-4:  8px;
+    --sp-5:  10px;
+    --sp-6:  12px;
+    --sp-7:  16px;
+    --sp-8:  20px;
+    --sp-9:  24px;
+    --sp-10: 32px;
+
+    /* Radii: tighter inside, softer outside. A control inside a card takes one
+       step below the card's. */
+    --r-2xs: 3px;
     --r-xs: 6px;
     --r-sm: 8px;
     --r:    12px;
     --r-lg: 16px;
     --r-xl: 24px;
     --pill: 999px;
+
+    /* Layers that cross the whole window. Smaller numbers inside a panel are
+       that panel's own business and stay literal. */
+    --z-scrim: 50;
+    --z-pop:   60;   /* menus and popovers, over the page */
+    --z-over:  70;   /* the context menu, over dialogs too */
+    --z-toast: 80;
+
+    /* An accent edge down the left of a card or row: `inset var(--edge-w) 0 0 <hue>`. */
+    --edge-w: 3px;
+
+    --focus-w: 2px;
+    --focus-offset: 2px;
+    --ring-inset: inset 0 0 0 var(--focus-w) var(--focus-colour);
 
     --gutter: 68px;
     --rail: 304px;
@@ -62,20 +215,44 @@
     --mono: "Google Sans Mono", "Roboto Mono", "Cascadia Code", "JetBrains Mono",
             Consolas, ui-monospace, SFMono-Regular, monospace;
 
-    --t-fast: 110ms;
-    --t-med: 200ms;
-    --ease: cubic-bezier(0.2, 0, 0, 1);
+    /* Motion. web/motion.js reads these by name, so a duration changed here
+       changes the JS-driven motion too. See the presets table there.
+         press  — a button going down: fast enough not to be seen as motion
+         fast   — colour and opacity changes, every exit, small popovers in
+         base   — a menu or dock opening, a list re-sorting
+         slow   — a dialog arriving
+         loop   — one breath of a pulsing status dot */
+    --dur-press: 90ms;
+    --dur-fast:  120ms;
+    --dur-base:  180ms;
+    --dur-slow:  240ms;
+    --dur-loop:  1.6s;
+    --dur-flash: 1.3s;   /* the highlight on whatever a jump landed on */
+
+    /* standard — something already on screen changing: colour, position, size
+       out    — something arriving: decelerates into place
+       in     — something leaving: accelerates away, so it is gone sooner
+       linear — constant-rate loops only */
+    --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+    --ease-out:      cubic-bezier(0.05, 0.7, 0.1, 1);
+    --ease-in:       cubic-bezier(0.3, 0, 0.8, 0.15);
+    --ease-linear:   linear;
+
+    --t-fast: var(--dur-fast);
+    --t-med:  var(--dur-base);
+    --ease:   var(--ease-standard);
 }
 
-/* Everything that moves, stopped in one place for a reader who asked for less
-   motion. The two durations go to 0, which web/motion.js reads at call time —
-   so every exit, grow and crossfade it plays becomes the instant change it
-   replaced — and any CSS animation or transition is cut to nothing. A looping
-   keyframe like `breathe` ends on its last frame and holds there, which is a
-   steady dot rather than a missing one. The rules scattered through the other
-   stylesheets predate this and are left alone: they say the same thing. */
+/* Everything CSS animates, stopped in one place for a reader who asked for less
+   motion: transitions are cut to nothing, and a looping keyframe like `breathe`
+   ends on its last frame and holds there, which is a steady dot rather than a
+   missing one.
+
+   The durations are deliberately *not* zeroed. web/motion.js checks the same
+   query itself and, rather than snapping, keeps a short opacity fade with the
+   travel, scale and height taken out — a change you can still see happen,
+   without the movement this query is about. */
 @media (prefers-reduced-motion: reduce) {
-    :root { --t-fast: 0ms; --t-med: 0ms; }
     *, *::before, *::after {
         animation-duration: 0.01ms !important;
         animation-iteration-count: 1 !important;
@@ -95,12 +272,12 @@ html, body { height: 100%; margin: 0; }
 body {
     background: var(--bg);
     color: var(--text);
-    font: 400 14px/1.6 var(--sans);
+    font: 400 var(--fs-base)/var(--lh-prose) var(--sans);
     overflow: hidden;
     -webkit-font-smoothing: antialiased;
 }
 
-::selection { background: #2e4a75; color: #fff; }
+::selection { background: var(--selection); color: var(--on-selection); }
 
 /* Text for a screen reader and nothing else. Clipped rather than `display:none`
    or `visibility:hidden`, either of which takes it out of the accessibility tree
@@ -119,12 +296,21 @@ body {
 ::-webkit-scrollbar { width: 12px; height: 12px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-    background: #3a3d40;
+    background: var(--scroll-thumb);
     border: 3.5px solid transparent;
     border-radius: var(--pill);
     background-clip: content-box;
 }
-::-webkit-scrollbar-thumb:hover { background: #4d5155; background-clip: content-box; }
+/* The thumb thickens under the pointer as well as lightening, so the thing you
+   are about to grab says so. The corner where two scrollbars meet is painted
+   white by default, which on this background is a bright square in the corner
+   of every pane that scrolls both ways. */
+::-webkit-scrollbar-thumb:hover {
+    background: var(--scroll-thumb-hover);
+    background-clip: content-box;
+    border-width: 2.5px;
+}
+::-webkit-scrollbar-corner { background: transparent; }
 
 button, input, textarea, select { font: inherit; color: inherit; background: none; border: none; }
 button { cursor: pointer; }
@@ -152,7 +338,25 @@ input[type="number"]:disabled::-webkit-inner-spin-button { opacity: 0.4; cursor:
 input[type="number"]:disabled::-webkit-inner-spin-button:hover { background-color: var(--text-3); }
 input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 
-:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: var(--r-xs); }
+:focus-visible { outline: var(--focus-w) solid var(--focus-colour); outline-offset: var(--focus-offset); border-radius: var(--r-xs); }
+
+/* A text field always matches :focus-visible, so the ring above was drawn as a
+   hard rectangle inside every rounded field that already says it has the focus
+   — the composer, the search pill, the reply box on a live card all lift their
+   ground on :focus-within. The caret and that lift are the focus state there;
+   a second ring inside them was noise. */
+:is(.input-row, .bar-search, .lsend) :is(input, textarea):focus-visible { outline: none; }
+
+/* Press: a button sinks a little under the pointer, so a click is felt before
+   whatever it does arrives. `scale` rather than `transform`, so it composes with
+   any transform a button already has instead of replacing it, and no
+   transition: this is the most frequent motion in the app and it should be
+   instant. Compact controls only — a full-width row shrinking by 3% reads as
+   the row moving, not as being pressed. */
+:is(.btn, .btn-send, .bar-btn, .icon-btn, .mini, .perm-btn, .tb-btn, .lbtn, .seg-btn,
+    .more-btn, .dash-btn, .quota-pill, .db-status):active:not(:disabled):not(.bar-more-menu *) {
+    scale: 0.97;
+}
 
 a { color: var(--blue); text-decoration: none; }
 a:hover { text-decoration: underline; }
@@ -187,16 +391,16 @@ a:hover { text-decoration: underline; }
     white-space: nowrap;
     letter-spacing: 0.01em;
 }
-.wordmark b { color: var(--blue); font-size: 11px; }
+.wordmark b { color: var(--blue); font-size: var(--fs-xs); }
 
 /* Only present on a development instance — the everyday window has no badge. */
 .dev-badge {
     margin-left: 4px;
     padding: 3px 9px;
     border-radius: var(--pill);
-    background: #46331a;
+    background: var(--amber-cont);
     color: var(--yellow);
-    font: 500 11px/1 var(--mono);
+    font: 500 var(--fs-xs)/1 var(--mono);
     letter-spacing: 0.02em;
 }
 
@@ -215,7 +419,7 @@ a:hover { text-decoration: underline; }
 .bar-search:hover { background: var(--s3); }
 .bar-search:focus-within { background: var(--s3); }
 .bar-search svg { flex: none; color: var(--text-3); }
-.bar-search input { flex: 1; min-width: 0; font-size: 14px; }
+.bar-search input { flex: 1; min-width: 0; font-size: var(--fs-base); }
 .bar-search input::placeholder { color: var(--text-3); }
 
 .bar-spacer { flex: 1; }
@@ -228,7 +432,7 @@ a:hover { text-decoration: underline; }
     gap: 8px;
     height: 34px;
     padding: 0 14px;
-    font: 500 12.5px/1 var(--sans);
+    font: 500 var(--fs-md)/1 var(--sans);
     color: var(--text-2);
     background: var(--s2);
     border-radius: var(--pill);
@@ -237,7 +441,7 @@ a:hover { text-decoration: underline; }
 }
 .bar-btn:hover { background: var(--s3); color: var(--text); }
 .bar-btn svg { color: var(--text-3); }
-.bar-btn.on { background: var(--blue-cont); color: #dbe6fb; }
+.bar-btn.on { background: var(--blue-cont); color: var(--on-blue-cont); }
 .bar-btn.on svg { color: var(--blue); }
 
 /* A square button for a setup step you do once per device, rather than one that
@@ -257,12 +461,12 @@ a:hover { text-decoration: underline; }
     border-radius: var(--pill);
     background: var(--s4);
     color: var(--text-2);
-    font: 500 11px/19px var(--mono);
+    font: 500 var(--fs-xs)/19px var(--mono);
     text-align: center;
     font-variant-numeric: tabular-nums;
 }
 .bar-badge[hidden] { display: none; }
-.bar-btn.on .bar-badge { background: #2f4d80; color: #e6eefb; }
+.bar-btn.on .bar-badge { background: var(--blue-cont-active); color: var(--on-blue-cont); }
 
 .db-status {
     display: flex;
@@ -270,7 +474,7 @@ a:hover { text-decoration: underline; }
     gap: 8px;
     height: 34px;
     padding: 0 14px;
-    font: 500 12.5px/1 var(--sans);
+    font: 500 var(--fs-md)/1 var(--sans);
     color: var(--text-2);
     background: var(--s2);
     border-radius: var(--pill);
@@ -296,7 +500,7 @@ a:hover { text-decoration: underline; }
     min-width: 17px;
     height: 17px;
     padding: 0 5px;
-    font-size: 10px;
+    font-size: var(--fs-2xs);
     line-height: 17px;
 }
 #bar-more[aria-expanded="true"] { background: var(--s3); color: var(--text); }
@@ -305,7 +509,7 @@ a:hover { text-decoration: underline; }
     position: absolute;
     top: calc(100% + 8px);
     right: 0;
-    z-index: 60;
+    z-index: var(--z-pop);
     min-width: 200px;
     padding: 6px;
     display: flex;
@@ -313,8 +517,7 @@ a:hover { text-decoration: underline; }
     gap: 2px;
     background: var(--s3);
     border-radius: var(--r);
-    box-shadow: 0 10px 30px #000a;
-    animation: menu-in var(--t-fast) var(--ease);
+    box-shadow: var(--shadow-pop);
     transform-origin: top right;
 }
 .bar-more-menu[hidden] { display: none; }
@@ -334,7 +537,6 @@ a:hover { text-decoration: underline; }
 /* A button whose label you turned off on the bar still needs one in a list. */
 .bar-more-menu .bar-btn.icon-only > span:not(.bar-badge) { display: inline; }
 .bar-more-menu .bar-badge { margin-left: auto; }
-@media (prefers-reduced-motion: reduce) { .bar-more-menu { animation: none; } }
 
 /* ── quota ───────────────────────────────────────────────────────────── */
 
@@ -347,7 +549,7 @@ a:hover { text-decoration: underline; }
     gap: 9px;
     height: 34px;
     padding: 0 13px;
-    font: 500 12.5px/1 var(--sans);
+    font: 500 var(--fs-md)/1 var(--sans);
     color: var(--text-2);
     background: var(--s2);
     border-radius: var(--pill);
@@ -424,7 +626,7 @@ a:hover { text-decoration: underline; }
 
 /* One window's worth: a label, a bar, a number. */
 .q-win { display: flex; align-items: center; gap: 5px; }
-.q-win .q-label { color: var(--text-4); font-size: 11.5px; }
+.q-win .q-label { color: var(--text-4); font-size: var(--fs-sm); }
 
 .q-bar {
     position: relative;
@@ -471,32 +673,16 @@ a:hover { text-decoration: underline; }
 }
 .q-reset svg { flex: none; }
 
-/* The shared open of every popover in this window — the quota panel, the
-   recent-directories menu and the slash/mention menus. It was `bell-in` while
-   the notification bell was the first thing to use it; the bell has since moved
-   into the settings page and the name was the only thing left of it.
-
-   Not `pop-in`, which is already taken further down by `.turn-pop` and moves on
-   a different axis — renaming into that would have quietly changed all three of
-   these. */
-@keyframes menu-in {
-    from { opacity: 0; transform: translateY(-4px) scale(0.98); }
-}
-@media (prefers-reduced-motion: reduce) {
-    .quota-menu, .new-menu, .slash-menu { animation: none; }
-}
-
 .quota-menu {
     position: absolute;
     top: calc(100% + 8px);
     right: 0;
-    z-index: 60;
+    z-index: var(--z-pop);
     width: 306px;
     padding: 13px 15px 12px;
     background: var(--s3);
     border-radius: var(--r);
-    box-shadow: 0 10px 30px #000a;
-    animation: menu-in var(--t-fast) var(--ease);
+    box-shadow: var(--shadow-pop);
     transform-origin: top right;
 }
 .quota-menu[hidden] { display: none; }
@@ -506,7 +692,7 @@ a:hover { text-decoration: underline; }
     align-items: center;
     gap: 8px;
     margin-bottom: 10px;
-    font: 500 11px/1 var(--sans);
+    font: 500 var(--fs-xs)/1 var(--sans);
     letter-spacing: 0.04em;
     text-transform: uppercase;
     color: var(--text-4);
@@ -521,7 +707,7 @@ a:hover { text-decoration: underline; }
     border-radius: var(--r-xs);
     background: none;
     color: var(--text-4);
-    font: 400 11.5px/1.5 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
     letter-spacing: normal;
     text-transform: none;
     cursor: pointer;
@@ -544,10 +730,10 @@ a:hover { text-decoration: underline; }
     align-items: baseline;
     justify-content: space-between;
     gap: 10px;
-    font: 400 13px/1.4 var(--sans);
+    font: 400 var(--fs-md)/var(--lh-snug) var(--sans);
     color: var(--text-2);
 }
-.q-row-top .q-pct { font: 500 13px/1.4 var(--sans); color: var(--text); font-variant-numeric: tabular-nums; }
+.q-row-top .q-pct { font: 500 var(--fs-md)/var(--lh-snug) var(--sans); color: var(--text); font-variant-numeric: tabular-nums; }
 .q-row.stale .q-row-top .q-pct { color: var(--text-4); }
 
 .q-row .q-bar { width: 100%; height: 5px; margin: 6px 0 5px; }
@@ -559,7 +745,7 @@ a:hover { text-decoration: underline; }
     display: flex;
     justify-content: space-between;
     gap: 10px;
-    font: 400 11.5px/1.5 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
     color: var(--text-4);
     font-variant-numeric: tabular-nums;
 }
@@ -568,12 +754,12 @@ a:hover { text-decoration: underline; }
 
 .quota-events {
     margin-top: 10px;
-    font: 400 11.5px/1.6 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-prose) var(--sans);
     color: var(--text-4);
 }
 .quota-events:empty { display: none; }
 .quota-events .q-ev-head {
-    font: 500 11px/1 var(--sans);
+    font: 500 var(--fs-xs)/1 var(--sans);
     letter-spacing: 0.04em;
     text-transform: uppercase;
     color: var(--text-4);
@@ -583,14 +769,14 @@ a:hover { text-decoration: underline; }
 
 .quota-note {
     margin-top: 10px;
-    font: 400 11.5px/1.55 var(--sans);
+    font: 400 var(--fs-sm)/1.55 var(--sans);
     color: var(--text-4);
 }
 .quota-note:empty { display: none; }
 .quota-note div + div { margin-top: 7px; }
 .quota-note .warn { color: var(--yellow); }
 .quota-note code {
-    font: 400 11px/1.5 var(--mono);
+    font: 400 var(--fs-xs)/var(--lh-base) var(--mono);
     color: var(--text-3);
     word-break: break-all;
 }
@@ -628,13 +814,12 @@ a:hover { text-decoration: underline; }
 .quota-restart svg { flex: none; margin-top: 2px; }
 
 .qr-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.qr-label { font: 400 12.5px/1.3 var(--sans); }
+.qr-label { font: 400 var(--fs-md)/var(--lh-tight) var(--sans); }
 /* A worktree checkout is a long path with no spaces in it, and this popover is
    306px wide — without this it runs off the edge rather than wrapping. */
-.qr-sub { font: 400 11px/1.4 var(--sans); color: var(--text-4); overflow-wrap: anywhere; }
+.qr-sub { font: 400 var(--fs-xs)/var(--lh-snug) var(--sans); color: var(--text-4); overflow-wrap: anywhere; }
 .qr-sub:empty { display: none; }
 
-@media (prefers-reduced-motion: reduce) { .quota-menu { animation: none; } }
 
 /* The Claude Code version badge — the quota pill's shape, and only drawn when
    something is behind, so it carries the one tint that says so. See renderCv()
@@ -643,19 +828,19 @@ a:hover { text-decoration: underline; }
 .cv-pill { color: var(--yellow); white-space: nowrap; }
 .cv-pill:hover, .cv-pill[aria-expanded="true"] { color: var(--yellow); }
 .cv-row { display: flex; justify-content: space-between; gap: 12px;
-    font: 400 12.5px/1.4 var(--sans); color: var(--text-3); }
-.cv-row b { font: 500 12.5px/1.4 var(--mono); color: var(--text); }
-.cv-stale-head { font: 400 12.5px/1.4 var(--sans); color: var(--text-3); margin-bottom: 4px; }
+    font: 400 var(--fs-md)/var(--lh-snug) var(--sans); color: var(--text-3); }
+.cv-row b { font: 500 var(--fs-sm)/var(--lh-snug) var(--mono); color: var(--text); }
+.cv-stale-head { font: 400 var(--fs-md)/var(--lh-snug) var(--sans); color: var(--text-3); margin-bottom: 4px; }
 .cv-stale {
     display: flex; justify-content: space-between; gap: 10px;
     width: 100%; padding: 4px 6px; margin: 0 -6px;
     border: 0; border-radius: var(--r-xs);
     background: none; color: var(--text-2); text-align: left; cursor: pointer;
-    font: 400 12px/1.4 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-snug) var(--sans);
 }
 .cv-stale:hover { background: var(--s4); color: var(--text); }
 .cv-stale-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cv-stale-ver { flex: none; font: 400 11px/1.6 var(--mono); color: var(--text-4); }
+.cv-stale-ver { flex: none; font: 400 var(--fs-xs)/var(--lh-prose) var(--mono); color: var(--text-4); }
 .cv-old { color: var(--yellow); }
 
 

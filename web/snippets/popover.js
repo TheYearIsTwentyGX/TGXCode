@@ -211,7 +211,7 @@ export function showSnips(c, on) {
     for (const other of composers) if (other.wispr) closeWispr(other.wispr);
 
     m.index = 0;
-    present(m.node, true, { kind: 'pop' });
+    present(m.node, true, { as: 'menu' });
     m.btn.setAttribute('aria-expanded', 'true');
     drawSnips(c);
     positionSnips(c);
@@ -221,7 +221,7 @@ export function showSnips(c, on) {
 export function closeSnips(c, { focus = false } = {}) {
     const m = c.snips;
     if (!isUp(m.node)) return;
-    present(m.node, false, { kind: 'pop', onGone: () => paint(m.node, null) });
+    present(m.node, false, { as: 'menu', onGone: () => paint(m.node, null) });
     m.btn.setAttribute('aria-expanded', 'false');
     if (focus) m.btn.focus();
 }
