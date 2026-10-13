@@ -16,7 +16,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 50;
+    z-index: var(--z-scrim);
     padding: 24px;
 }
 .scrim[hidden] { display: none; }
@@ -28,7 +28,7 @@
     flex-direction: column;
     background: var(--s2);
     border-radius: var(--r-xl);
-    box-shadow: 0 24px 64px #000a;
+    box-shadow: var(--shadow-dialog);
     overflow: hidden;
 }
 /* The snippet editor. A parameters table beside a body textarea does not fit in
@@ -130,7 +130,7 @@
 }
 .field textarea:focus, .field input:focus {
     outline: none;
-    box-shadow: inset 0 0 0 2px var(--blue);
+    box-shadow: var(--ring-inset);
 }
 .field .note { margin-top: 7px; font-size: 12px; color: var(--text-4); line-height: 1.5; }
 
@@ -223,7 +223,7 @@
     font-family: var(--mono);
     font-size: 12.5px;
 }
-.mkdir-name:focus { outline: none; box-shadow: inset 0 0 0 2px var(--blue); }
+.mkdir-name:focus { outline: none; box-shadow: var(--ring-inset); }
 
 /* Nothing to list, or nothing readable. Sits inside .picker in place of rows. */
 .picker-msg { padding: 10px 12px; font-size: 12px; line-height: 1.5; color: var(--text-4); }
@@ -521,7 +521,7 @@
     bottom: 20px;
     left: 50%;
     transform: translateX(-50%);
-    z-index: 80;
+    z-index: var(--z-toast);
     display: flex;
     flex-direction: column-reverse;
     gap: 8px;
@@ -537,7 +537,7 @@
     border-radius: var(--r-sm);
     font-size: 13.5px;
     line-height: 1.5;
-    box-shadow: 0 4px 14px #0008;
+    box-shadow: var(--shadow-toast);
     animation: rise var(--t-med) var(--ease);
 }
 .toast[data-kind="error"] { background: var(--inverse-err-bg); color: var(--inverse-err-fg); }

@@ -164,7 +164,7 @@
 .pv-device:not(.fit) {
     box-sizing: content-box;
     border: 0 solid var(--s4);
-    box-shadow: 0 25px 60px #0009;
+    box-shadow: var(--shadow-dialog);
 }
 .pv-device.phone { border-radius: 36px; border-width: 14px 12px; }
 .pv-device.tablet { border-radius: 20px; border-width: 16px; }

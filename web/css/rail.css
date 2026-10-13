@@ -97,7 +97,7 @@
     border-radius: var(--r-lg) 0 0 var(--r-lg);
     transition: background var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
 }
-.btn-new:hover { background: var(--s4); box-shadow: 0 1px 3px #0006; }
+.btn-new:hover { background: var(--s4); box-shadow: var(--shadow-1); }
 .btn-new:active { background: var(--s5); }
 .btn-new svg { color: var(--blue); flex: none; }
 
@@ -127,7 +127,7 @@
     top: calc(100% + 8px);
     left: 0;
     right: 0;
-    z-index: 60;
+    z-index: var(--z-pop);
     /* Six rows, a rule and the escape hatch, so nothing that matters sits below
        a fold. It still scrolls on a window too short to hold that. */
     max-height: 420px;
@@ -135,7 +135,7 @@
     padding: 6px;
     background: var(--s3);
     border-radius: var(--r);
-    box-shadow: 0 10px 30px #000a;
+    box-shadow: var(--shadow-pop);
     animation: menu-in var(--t-fast) var(--ease);
     transform-origin: top left;
 }

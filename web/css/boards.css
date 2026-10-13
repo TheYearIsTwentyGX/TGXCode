@@ -203,19 +203,19 @@
     cursor: pointer;
     /* Which column it is in, said again in colour along its edge, so a card
        read out of the corner of the eye still carries its state. */
-    box-shadow: inset 3px 0 0 var(--s4);
+    box-shadow: inset var(--edge-w) 0 0 var(--s4);
     transition: background var(--t-fast) var(--ease);
 }
 .tb-card:hover { background: var(--s3); }
 
-.tb-card[data-col="needs"]   { box-shadow: inset 3px 0 0 var(--yellow); background: var(--yellow-tint); }
+.tb-card[data-col="needs"]   { box-shadow: inset var(--edge-w) 0 0 var(--yellow); background: var(--yellow-tint); }
 .tb-card[data-col="needs"]:hover { background: var(--yellow-cont); }
-.tb-card[data-col="working"] { box-shadow: inset 3px 0 0 var(--green); }
-.tb-task                     { box-shadow: inset 3px 0 0 var(--blue); }
+.tb-card[data-col="working"] { box-shadow: inset var(--edge-w) 0 0 var(--green); }
+.tb-task                     { box-shadow: inset var(--edge-w) 0 0 var(--blue); }
 /* A task whose conversation has been filed away. Still offered — dismissing is
    the gesture for "not this", and archiving must not become a second, silent
    one — but visibly the loose end it is. */
-.tb-task[data-archived="true"] { opacity: 0.62; box-shadow: inset 3px 0 0 var(--s5); }
+.tb-task[data-archived="true"] { opacity: 0.62; box-shadow: inset var(--edge-w) 0 0 var(--s5); }
 
 .tb-card-head { display: flex; align-items: flex-start; gap: 8px; }
 
@@ -467,7 +467,7 @@
    draft takes the quietest one in the set rather than borrowing a meaning from
    one of those three. It is the one thing in this app not asking for anything,
    and the stripe should say so. */
-.dr-card { box-shadow: inset 3px 0 0 var(--s5); }
+.dr-card { box-shadow: inset var(--edge-w) 0 0 var(--s5); }
 
 /* The message itself, which is the point of the card. Several lines of it, then
    an ellipsis: a draft is usually a paragraph, and one that is not should not
@@ -576,7 +576,7 @@
        Scoped here rather than on :root — see the section note. */
     color-scheme: dark;
 }
-.when-in:focus { outline: none; box-shadow: inset 0 0 0 2px var(--blue); }
+.when-in:focus { outline: none; box-shadow: var(--ring-inset); }
 .when-in.num { width: 58px; text-align: right; }
 .when-args select {
     background: var(--s2);
@@ -627,7 +627,7 @@
     cursor: pointer;
 }
 .when-day:hover { background: var(--s3); color: var(--text); }
-.when-day:focus-within { box-shadow: 0 0 0 2px var(--blue); }
+.when-day:focus-within { box-shadow: 0 0 0 var(--focus-w) var(--focus-colour); }
 .when-day:has(input:checked) { background: var(--blue-cont); color: var(--blue); }
 
 /* ── the schedules panel ─────────────────────────────────────────────────
@@ -745,9 +745,9 @@
 /* The stripe says what the last run did, which is the same question the dot
    answers — two readings of one fact, because the dot is what you see scanning
    the column and the stripe is what you see having stopped at one card. */
-.sched-card { box-shadow: inset 3px 0 0 var(--s5); }
-.sched-card:has(.sched-dot.is-bad)  { box-shadow: inset 3px 0 0 var(--red); }
-.sched-card:has(.sched-dot.is-warn) { box-shadow: inset 3px 0 0 var(--yellow); }
+.sched-card { box-shadow: inset var(--edge-w) 0 0 var(--s5); }
+.sched-card:has(.sched-dot.is-bad)  { box-shadow: inset var(--edge-w) 0 0 var(--red); }
+.sched-card:has(.sched-dot.is-warn) { box-shadow: inset var(--edge-w) 0 0 var(--yellow); }
 
 /* A paused schedule is dimmed rather than hidden or moved: it is a decision you
    made and may want back, and sorting it to the bottom would mean the card you

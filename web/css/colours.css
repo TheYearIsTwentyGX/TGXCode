@@ -130,7 +130,7 @@
    as "which card" and never as "what is happening in it". */
 .rail-group { position: relative; }
 .rail-group[data-tinted] {
-    box-shadow: inset 3px 0 0 var(--proj-accent);
+    box-shadow: inset var(--edge-w) 0 0 var(--proj-accent);
 }
 .rail-group[data-tinted] > .group-head {
     padding-left: 15px;

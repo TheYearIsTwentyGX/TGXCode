@@ -26,7 +26,7 @@
     outline: none;
     animation: perm-in var(--t-med) var(--ease);
 }
-.perm:focus-visible { box-shadow: 0 0 0 2px var(--blue); }
+.perm:focus-visible { box-shadow: 0 0 0 var(--focus-w) var(--focus-colour); }
 .perm[data-pending] { opacity: 0.55; }
 
 @keyframes perm-in {
@@ -93,7 +93,7 @@
     font: 500 10px/1 var(--mono);
     padding: 3px 5px;
     border-radius: var(--r-xs);
-    background: rgba(0, 0, 0, 0.28);
+    background: var(--recess);
     color: inherit;
     opacity: 0.75;
 }

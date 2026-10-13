@@ -21,12 +21,12 @@
    not appear behind the menu that asked for it. */
 .ctx-menu {
     position: fixed;
-    z-index: 70;
+    z-index: var(--z-over);
     min-width: 168px;
     padding: 6px;
     background: var(--s3);
     border-radius: var(--r);
-    box-shadow: 0 10px 30px #000a;
+    box-shadow: var(--shadow-pop);
     animation: menu-in var(--t-fast) var(--ease);
     transform-origin: top left;
 }

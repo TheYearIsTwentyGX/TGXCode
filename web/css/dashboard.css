@@ -112,10 +112,10 @@
     border: 0;
     background: none;
     cursor: pointer;
-    border-radius: 3px;
+    border-radius: var(--r-2xs);
 }
 .live-jump:hover { color: var(--text); text-decoration: underline; }
-.live-jump:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.live-jump:focus-visible { outline: var(--focus-w) solid var(--focus-colour); outline-offset: var(--focus-offset); }
 .live-sep { white-space: pre; }
 
 .live[data-mode="dock"] .live-body {
@@ -373,7 +373,7 @@
     min-width: 0;
     /* The band a card is sorted into, said again in colour along its edge, so
        that "who is blocked on me" survives a screen too full to read. */
-    box-shadow: inset 3px 0 0 var(--s4);
+    box-shadow: inset var(--edge-w) 0 0 var(--s4);
 }
 /* Stopped at the facts line by `live.compact`. Four short rows in a row-gap
    chosen for a card that also held a preview and a message box reads as a
@@ -381,12 +381,12 @@
    colours above still do the work of saying which band it is in. */
 .lcard[data-compact="1"] { gap: 7px; padding: 12px 15px 11px; }
 
-.lcard[data-reason="ask"]   { box-shadow: inset 3px 0 0 var(--yellow); background: var(--yellow-tint); }
-.lcard[data-reason="error"] { box-shadow: inset 3px 0 0 var(--red); }
-.lcard[data-reason="here"]  { box-shadow: inset 3px 0 0 var(--green); }
+.lcard[data-reason="ask"]   { box-shadow: inset var(--edge-w) 0 0 var(--yellow); background: var(--yellow-tint); }
+.lcard[data-reason="error"] { box-shadow: inset var(--edge-w) 0 0 var(--red); }
+.lcard[data-reason="here"]  { box-shadow: inset var(--edge-w) 0 0 var(--green); }
 /* Running, but not ours to stop — dimmer than the green of a turn this window
    is driving, and still clearly not the grey of an idle card. */
-.lcard[data-reason="elsewhere"] { box-shadow: inset 3px 0 0 var(--green-edge); }
+.lcard[data-reason="elsewhere"] { box-shadow: inset var(--edge-w) 0 0 var(--green-edge); }
 
 .lcard-head { display: flex; align-items: center; gap: 8px; }
 

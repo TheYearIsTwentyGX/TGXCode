@@ -198,7 +198,7 @@
     padding: 10px 14px;
     background: var(--s2);
     border-radius: var(--r);
-    box-shadow: inset 3px 0 0 var(--yellow);
+    box-shadow: inset var(--edge-w) 0 0 var(--yellow);
     font-size: 12px;
     line-height: 1.6;
     color: var(--text-3);
@@ -334,7 +334,7 @@
 }
 .set-tip::before { content: "i"; }
 .set-tip:hover, .set-tip:focus-visible { color: var(--text-2); }
-.set-tip:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.set-tip:focus-visible { outline: var(--focus-w) solid var(--focus-colour); outline-offset: var(--focus-offset); }
 .set-tip::after {
     content: attr(data-tip);
     position: absolute;
@@ -347,7 +347,7 @@
     padding: 9px 12px;
     background: var(--set-s5);
     border-radius: var(--r-sm);
-    box-shadow: 0 6px 20px rgb(0 0 0 / 0.45);
+    box-shadow: var(--shadow-pop);
     font: 400 12px/1.6 var(--sans);
     font-style: normal;
     color: var(--text-2);
@@ -395,7 +395,7 @@
     cursor: pointer;
 }
 .set-fold:hover { color: var(--text); }
-.set-fold:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 3px; }
+.set-fold:focus-visible { outline: var(--focus-w) solid var(--focus-colour); outline-offset: var(--focus-offset); border-radius: var(--r-2xs); }
 .set-fold-caret {
     display: inline-flex;
     flex: none;
@@ -458,7 +458,7 @@
     opacity: 1;
 }
 .settings-check input:focus-visible + .settings-box,
-.settings-group-pick input:focus-visible + .settings-box { outline: 2px solid var(--blue); outline-offset: 2px; }
+.settings-group-pick input:focus-visible + .settings-box { outline: var(--focus-w) solid var(--focus-colour); outline-offset: var(--focus-offset); }
 
 .settings-num, .settings-text, .settings-select {
     flex: none;
@@ -769,7 +769,7 @@
     padding: 5px 9px;
     font: 400 12px/1.5 var(--mono);
 }
-.cfg-list-value:focus { outline: 0; box-shadow: inset 0 0 0 2px var(--blue); }
+.cfg-list-value:focus { outline: 0; box-shadow: var(--ring-inset); }
 .cfg-list-value:disabled { color: var(--text-4); }
 .cfg-list-x {
     flex: none;
@@ -920,7 +920,7 @@
     font: 400 12px/1.7 var(--mono);
     tab-size: 2;
 }
-.cfg-json:focus { outline: 0; box-shadow: inset 0 0 0 2px var(--blue); }
+.cfg-json:focus { outline: 0; box-shadow: var(--ring-inset); }
 .cfg-json:disabled { color: var(--text-4); }
 .cfg-json-foot {
     display: flex;
@@ -956,7 +956,7 @@
     white-space: pre-wrap;
     tab-size: 2;
 }
-.cfg-md:focus { outline: 0; box-shadow: inset 0 0 0 2px var(--blue); }
+.cfg-md:focus { outline: 0; box-shadow: var(--ring-inset); }
 .cfg-md:disabled { color: var(--text-4); }
 
 /* The rendered view — in place of the box under Preview, beside it under
@@ -1341,7 +1341,7 @@
 .snip-check .settings-box { flex: none; }
 .snip-check input:checked + .settings-box { background: var(--blue); border-color: var(--blue); }
 .snip-check input:checked + .settings-box::after { transform: rotate(40deg) scale(1); opacity: 1; }
-.snip-check input:focus-visible + .settings-box { outline: 2px solid var(--blue); outline-offset: 2px; }
+.snip-check input:focus-visible + .settings-box { outline: var(--focus-w) solid var(--focus-colour); outline-offset: var(--focus-offset); }
 
 .snip-sub { margin: 10px 0 0 26px; display: flex; align-items: center; gap: 10px; }
 /* An author `display` beats the UA rule for `hidden`, so every class in this file
