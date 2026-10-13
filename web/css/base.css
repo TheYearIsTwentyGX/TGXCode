@@ -18,14 +18,33 @@
  * a dense screen still reads calm. Dark is the designed default.
  */
 
+/* ── tokens ─────────────────────────────────────────────────────────────
+   Every value a surface needs, named for what it is for. The rule for the rest
+   of web/css/ is that a colour, a shadow, a z-layer, a duration or an easing is
+   read from here, never written out — docs/plans/22-ui-overhaul.md has the
+   reference, the exceptions, and which token to reach for when.
+
+   Two blocks. The first is the palette and everything else that is a colour,
+   and it is the dark theme: a light theme would be a second copy of that block
+   under `:root[data-theme="light"]` and nothing more, which only works while no
+   other file writes a colour of its own. The second block is the scales —
+   type, spacing, radii, layers, elevation, motion — which do not change with
+   the theme.
+
+   The older names (--s1…--s5, --text-*, --t-fast, --t-med, --ease) are kept as
+   they were. Other branches are written against them, and --t-* and --ease are
+   now aliases into the motion scale rather than values of their own. */
+
 :root {
-    /* Tonal surface ramp — each step is a lift, not a line. */
+    /* Tonal surface ramp — each step is a lift, not a line. --s6 is the top
+       of it: a scrollbar thumb under the pointer, an idle dot on --s3. */
     --bg:      #131314;
     --s1:      #1b1c1d;
     --s2:      #202124;
     --s3:      #282a2c;
     --s4:      #303134;
     --s5:      #3c3e41;
+    --s6:      #4d5155;
 
     --outline:      #444746;
     --outline-soft: #2b2d2f;
@@ -46,12 +65,144 @@
     --purple: #d0bcff;
     --peach:  #f8b995;
 
+    /* Containers: a hue turned into a ground, for a state that is worn by a
+       whole row or button rather than by a word. `-cont` is the resting ground,
+       `-hover` the step a pointer adds; `--on-*` is text and icons on it. */
+    --blue-cont-hover:  #26406c;
+    --blue-cont-active: #30507f;   /* pressed, or a menu open off a selected row */
+    --on-blue:          #062e6f;   /* on solid --blue */
+    --on-blue-deep:     #ffffff;   /* on solid --blue-deep */
+    --on-blue-cont:     #dbe6fb;   /* on --blue-cont: titles, labels */
+    --on-blue-cont-2:   #b3c7ea;   /* … secondary text */
+    --on-blue-cont-3:   #9db3d8;   /* … meta, the quietest line */
+
+    --red-cont:       #3a2422;     /* destructive hover, a failed thing */
+    --red-cont-hover: #4a2b28;
+    --red-soft:       #f4a9a3;     /* red text that has to be read at length */
+    --on-red:         #4a0d09;     /* on solid --red */
+
+    --yellow-tint:          #232017;   /* a whole card asking for you */
+    --yellow-cont:          #2b2719;
+    --yellow-cont-hover:    #3a3320;
+    --yellow-cont-strong:   #4a4128;
+    --on-yellow:            #241f07;   /* on solid --yellow */
+    --amber-cont:           #46331a;   /* the dev badge — not a warning */
+
+    --green-tint: #14211a;
+    --green-edge: #3f6b4c;
+
+    /* Find-in-page marks: amber, so a match never reads as a selection. */
+    --mark-bg: #4d3f10;
+    --mark-fg: #f6e3ab;
+
+    --selection: #2e4a75;
+    --scrim:        #00000099;
+    --scrim-strong: #000000c2;
+    --scroll-thumb:       var(--s5);
+    --scroll-thumb-hover: var(--s6);
+
+    /* The one light surface in a dark app — toasts — and its three moods. */
+    --inverse-bg: #e3e3e3;
+    --inverse-fg: #1f1f1f;
+    --inverse-err-bg:  #f9dedc;  --inverse-err-fg:  #410e0b;
+    --inverse-ok-bg:   #c4eed0;  --inverse-ok-fg:   #0a2e18;
+    --inverse-warn-bg: #fde9c4;  --inverse-warn-fg: #3a2503;
+
+    /* Code: syntax roles (web/highlight.js names the tokens) and diffs, which
+       web/css/tools.css and the diff2html overrides in viewers.css share. */
+    --syn-comment: var(--text-4);
+    --syn-punct:   #8b9094;
+    --syn-string:  #95d3a5;
+    --syn-regex:   #86cfc4;
+    --syn-number:  #f0b96b;
+    --syn-keyword: #c9a6f5;
+    --syn-builtin: var(--blue);
+    --syn-fn:      #8fc0f0;
+    --syn-type:    #7fd0c4;
+    --syn-var:     #f2b48a;
+    --syn-flag:    #c1adf0;
+    --syn-add:     #a7e6bd;
+    --syn-del:     #f4b4ae;
+
+    --diff-add-bg:   var(--green-tint);
+    --diff-add-fg:   #9ad8b2;
+    --diff-add-hl:   #24523a;
+    --diff-add-edge: #1f3a2a;
+    --diff-del-bg:   #241819;
+    --diff-del-fg:   #e8a9a4;
+    --diff-del-hl:   #5a2f2c;
+    --diff-del-edge: #3d2626;
+    --diff-change-bg: #2a2413;
+
+    /* Shadows are black on a near-black page: they say "above", not "lit". */
+    --shadow-1:      0 1px 3px #0006;
+    --shadow-toast:  0 4px 14px #0008;
+    --shadow-pop:    0 10px 30px #000a;
+    --shadow-float:  0 6px 22px #0009, 0 0 0 1px var(--outline-soft);
+    --shadow-dialog: 0 24px 64px #000a;
+
+    --focus-colour: var(--blue);
+}
+
+:root {
+    /* Type. Integer steps: the half-pixel sizes these replaced were too close
+       to tell apart and too many to keep straight. --fs-base is body text;
+       most chrome sits at --fs-sm and --fs-md. */
+    --fs-2xs:  10px;
+    --fs-xs:   11px;
+    --fs-sm:   12px;
+    --fs-md:   13px;
+    --fs-base: 14px;
+    --fs-lg:   16px;
+    --fs-xl:   18px;
+    --fs-2xl:  21px;
+    --fs-3xl:  26px;
+
+    --lh-none:  1;
+    --lh-tight: 1.3;
+    --lh-snug:  1.4;
+    --lh-base:  1.5;
+    --lh-prose: 1.6;
+
+    --fw-regular: 400;
+    --fw-medium:  500;
+    --fw-strong:  600;
+
+    /* Spacing, on a 2px grid that thins out as it grows. */
+    --sp-1:  2px;
+    --sp-2:  4px;
+    --sp-3:  6px;
+    --sp-4:  8px;
+    --sp-5:  10px;
+    --sp-6:  12px;
+    --sp-7:  16px;
+    --sp-8:  20px;
+    --sp-9:  24px;
+    --sp-10: 32px;
+
+    /* Radii: tighter inside, softer outside. A control inside a card takes one
+       step below the card's. */
+    --r-2xs: 3px;
     --r-xs: 6px;
     --r-sm: 8px;
     --r:    12px;
     --r-lg: 16px;
     --r-xl: 24px;
     --pill: 999px;
+
+    /* Layers that cross the whole window. Smaller numbers inside a panel are
+       that panel's own business and stay literal. */
+    --z-scrim: 50;
+    --z-pop:   60;   /* menus and popovers, over the page */
+    --z-over:  70;   /* the context menu, over dialogs too */
+    --z-toast: 80;
+
+    /* An accent edge down the left of a card or row: `inset var(--edge-w) 0 0 <hue>`. */
+    --edge-w: 3px;
+
+    --focus-w: 2px;
+    --focus-offset: 2px;
+    --ring-inset: inset 0 0 0 var(--focus-w) var(--focus-colour);
 
     --gutter: 68px;
     --rail: 304px;
@@ -62,20 +213,43 @@
     --mono: "Google Sans Mono", "Roboto Mono", "Cascadia Code", "JetBrains Mono",
             Consolas, ui-monospace, SFMono-Regular, monospace;
 
-    --t-fast: 110ms;
-    --t-med: 200ms;
-    --ease: cubic-bezier(0.2, 0, 0, 1);
+    /* Motion. web/motion.js reads these by name, so a duration changed here
+       changes the JS-driven motion too. See the presets table there.
+         press  — a button going down: fast enough not to be seen as motion
+         fast   — colour and opacity changes, every exit, small popovers in
+         base   — a menu or dock opening, a list re-sorting
+         slow   — a dialog arriving
+         loop   — one breath of a pulsing status dot */
+    --dur-press: 90ms;
+    --dur-fast:  120ms;
+    --dur-base:  180ms;
+    --dur-slow:  240ms;
+    --dur-loop:  1.6s;
+
+    /* standard — something already on screen changing: colour, position, size
+       out    — something arriving: decelerates into place
+       in     — something leaving: accelerates away, so it is gone sooner
+       linear — constant-rate loops only */
+    --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+    --ease-out:      cubic-bezier(0.05, 0.7, 0.1, 1);
+    --ease-in:       cubic-bezier(0.3, 0, 0.8, 0.15);
+    --ease-linear:   linear;
+
+    --t-fast: var(--dur-fast);
+    --t-med:  var(--dur-base);
+    --ease:   var(--ease-standard);
 }
 
-/* Everything that moves, stopped in one place for a reader who asked for less
-   motion. The two durations go to 0, which web/motion.js reads at call time —
-   so every exit, grow and crossfade it plays becomes the instant change it
-   replaced — and any CSS animation or transition is cut to nothing. A looping
-   keyframe like `breathe` ends on its last frame and holds there, which is a
-   steady dot rather than a missing one. The rules scattered through the other
-   stylesheets predate this and are left alone: they say the same thing. */
+/* Everything CSS animates, stopped in one place for a reader who asked for less
+   motion: transitions are cut to nothing, and a looping keyframe like `breathe`
+   ends on its last frame and holds there, which is a steady dot rather than a
+   missing one.
+
+   The durations are deliberately *not* zeroed. web/motion.js checks the same
+   query itself and, rather than snapping, keeps a short opacity fade with the
+   travel, scale and height taken out — a change you can still see happen,
+   without the movement this query is about. */
 @media (prefers-reduced-motion: reduce) {
-    :root { --t-fast: 0ms; --t-med: 0ms; }
     *, *::before, *::after {
         animation-duration: 0.01ms !important;
         animation-iteration-count: 1 !important;
