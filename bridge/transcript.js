@@ -707,8 +707,10 @@ function userText(entry) {
 //
 // **A command invocation is deliberately left in.** `buildEvents` runs
 // `parseCommand` over the result to draw the command chip, so taking the tags
-// off here would leave it nothing to read. Somewhere that wants the command as
-// text rather than as a chip — a title, a search haystack — calls `commandText`.
+// off here would leave it nothing to read. `buildEvents` takes them out of a
+// `user` event's `text` itself, after parsing (`stripCommandTags`). Somewhere
+// that wants the command as text rather than as a chip — a title, a search
+// haystack — calls `commandText`.
 function stripEnvelope(s) {
     return String(s)
         .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
@@ -959,14 +961,21 @@ function buildEvents(entries, ctx = {}) {
         // why these are two fields rather than one: the thumbnail is what was sent,
         // the card is the file on disk.
         const attached = parseAttachmentNote(text);
-        const body = attached ? attached.text : (text || '');
-        if (!body && !images.length && !attached) continue;
+        const raw = attached ? attached.text : (text || '');
+        // The command is parsed off the raw text and then its tags come out of
+        // `text`, so a client that renders `text` as the message does not draw
+        // a paragraph of `<command-message>` bookkeeping. A pure invocation is
+        // therefore `text: ""` with `command` set — every renderer here already
+        // draws a command turn from `command`, and the phone has to.
+        const command = parseCommand(raw);
+        const body = command ? stripCommandTags(raw) : raw;
+        if (!body && !command && !images.length && !attached) continue;
 
         events.push({
             id: e.uuid, kind: 'user', ts: e.timestamp,
             text: body, images,
             files: attached ? attached.files : [],
-            command: parseCommand(body),
+            command,
             origin: e.origin && e.origin.kind,
             // The chain entry this turn follows, which is what branching from it
             // keeps history up to: `--resume-session-at` truncates *after* the
@@ -1454,6 +1463,15 @@ function parseCommand(text) {
     return { name: name[1].trim().replace(/^\/+/, ''), args: args ? args[1].trim() : '' };
 }
 
+// The tags a slash-command invocation is written in, removed whole. Only
+// called once `parseCommand` has found a `<command-name>`: prose that merely
+// mentions one of these tags is somebody saying something, not bookkeeping.
+function stripCommandTags(text) {
+    return String(text)
+        .replace(/<(command-[a-z-]+)>[\s\S]*?<\/\1>/g, '')
+        .trim();
+}
+
 /**
  * A user message as text, with a command invocation written the way it was typed.
  *
@@ -1932,6 +1950,7 @@ function todoProgress(file) {
 module.exports = {
     parseLines, scanMeta, buildEvents, branchPoint, readSubagentIndex, readSubagentTranscript,
     lastActivity, recentActivity, todoProgress, describeTool, stripEnvelope, firstLine,
+    stripCommandTags,
     commandText,
     // The three parts of the TodoWrite format: what shape it arrived in
     // (`todoInput`), the list itself (`todoList`) and the count over it
