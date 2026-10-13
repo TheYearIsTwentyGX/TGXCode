@@ -200,8 +200,11 @@ settings, dismissing an item and Resume stay open);
 `PUT /api/prefs`;
 **every method of `/api/claude-config` and anything under it, the GET included**;
 **every method of `/api/claude-docs` likewise**;
-both attachment uploads — `POST /api/sessions/:id/attachments` and
-`POST /api/attachments`.
+`POST /api/sessions/:id/attachments/open`.
+
+The two attachment uploads are **not** refused — a phone has nowhere else to put a
+photo — but a remote caller's cap is **10MB** rather than 25MB; see
+`POST /api/sessions/:id/attachments` below.
 
 The draft routes are otherwise fully open to a remote caller, deliberately: setting
 work up at the desk and releasing it from a phone when quota frees up is the case the
@@ -4263,8 +4266,11 @@ Raw file bytes, one file per request, `Content-Type` as a hint —
 → `{ok, name, path, relPath, dir, bytes, mediaType, renamed}`.
 
 Not JSON: `readJson` caps a body at 4MB and base64 is a third larger than what it
-encodes, which would put the real limit under 3MB. The cap here is **25MB**, answered
-from `Content-Length` before the bytes travel where the client sent one.
+encodes, which would put the real limit under 3MB. The cap here is **25MB**, or
+**10MB** for a remote caller, answered from `Content-Length` before the bytes travel
+where the client sent one. The smaller remote cap is the whole of what stands between
+a leaked token and a checkout; the Android app scales photos down before sending, so
+a real one lands well under it.
 
 The file is written to `attached_assets/` at the root of the checkout the session is
 working in — the *worktree* root for a worktree session, not the checkout that owns it.
@@ -4280,7 +4286,7 @@ browses this directory. An existing name is never overwritten: `shot.png` become
 `mediaType` is sniffed from the bytes, not taken from `Content-Type`, because it is what
 decides whether the turn carries an inline image block.
 
-`413` is the cap. `403` is a directory outside the allowed roots, or a remote caller.
+`413` is the cap. `403` is a directory outside the allowed roots.
 
 ### `POST /api/attachments?cwd=…&name=…`
 
@@ -4300,7 +4306,7 @@ not on the session form: a session id names a directory the bridge chose, and a
 
 `name` is checked **before** `cwd` is looked at, so a request carrying both a bad
 name and a bad directory is refused for the name. `400` for a missing `cwd`, `413`
-for the cap, `403` for a remote caller.
+for the cap (10MB remotely, as above).
 
 **The order a client wants is upload, then create.** Stage each file here, then pass
 the returned `path` in `POST /api/sessions`'s `attachments`. There is no way to add

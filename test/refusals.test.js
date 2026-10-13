@@ -27,12 +27,12 @@ const PHONE = {
  * Deliberately close to `call` below rather than folded into it: one body encoding per
  * function keeps the JSON path — every other route in this suite — unchanged.
  */
-function upload(p, { headers, bytes, type = 'image/png' } = {}) {
+function upload(p, { headers, bytes, type = 'image/png', declare } = {}) {
     return new Promise((resolve, reject) => {
         const payload = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes || '');
         const req = http.request({
             host: '127.0.0.1', port: PORT, path: p, method: 'POST',
-            headers: { ...headers, 'Content-Type': type, 'Content-Length': payload.length },
+            headers: { ...headers, 'Content-Type': type, 'Content-Length': declare ?? payload.length },
         }, (res) => {
             const c = [];
             res.on('data', (x) => c.push(x));
@@ -41,6 +41,7 @@ function upload(p, { headers, bytes, type = 'image/png' } = {}) {
                 let parsed = null;
                 try { parsed = JSON.parse(text); } catch { /* html or empty */ }
                 resolve({ status: res.statusCode, body: parsed, text });
+                if (declare != null) req.destroy();
             });
         });
         // A refused upload is answered and then hung up on, deliberately — see
@@ -51,6 +52,14 @@ function upload(p, { headers, bytes, type = 'image/png' } = {}) {
         // socket errors to the request and an unhandled one takes the process down.
         req.on('error', () => {});
         req.on('socket', (sock) => sock.on('error', () => {}));
+        // `declare` sends a Content-Length and no body, for the size refusals. Writing
+        // the bytes as well races the hang-up: a reset that lands while megabytes are
+        // still going out can take the 413 with it, and a promise that never settles
+        // lets node exit 0 halfway through this file.
+        if (declare != null) {
+            req.flushHeaders();
+            return;
+        }
         req.write(payload);
         req.end();
     });
@@ -178,18 +187,31 @@ const HOME = os.homedir();
     check('a local save without the client header', (await call('PUT', '/api/prefs', {
         headers: { authorization: `Bearer ${TOKEN}` }, body: { scope: 'user', patch: {} },
     })).status, 403);
-    // Same argument as mkdir: attaching a file writes it into a checkout. Refused
-    // before the name or the session id is looked at, so this holds for any of them.
-    check('attaching a file', (await upload('/api/sessions/abc/attachments?name=x.png', {
+    // Uploading is *not* refused remotely — a phone has nowhere else to put a photo —
+    // so a remote upload gets as far as the session lookup, and an id that does not
+    // exist is a 404 rather than the remote 403. That is the assertion: the request
+    // got past remoteRefusal.
+    const phoneUpload = await upload('/api/sessions/abc/attachments?name=x.png', {
         headers: PHONE, bytes: 'x',
-    })).status, 403);
-    // The cwd-addressed upload is the same refusal for the same reason, and it
-    // needs its own case: the clause it used to be covered by is a regex on
-    // /api/sessions/:id/attachments, which this path does not match. Without this
-    // assertion a future prefix rule could take one and leave the other.
-    check('attaching a file by path', (await upload(`/api/attachments?cwd=${encodeURIComponent(HOME)}&name=x.png`, {
+    });
+    check('attaching a file from a phone reaches the route', phoneUpload.status, 404);
+    // The cwd-addressed upload, same rule. /etc so that nothing is written if this
+    // ever passes the roots check: the refusal is the roots one, not the remote one.
+    const phoneByPath = await upload('/api/attachments?cwd=/etc&name=x.png', {
         headers: PHONE, bytes: 'x',
-    })).status, 403);
+    });
+    check('attaching by path from a phone reaches the roots check', phoneByPath.status, 403);
+    check('and is refused for the roots, not for being remote', phoneByPath.body.remote, undefined);
+    // What a remote caller gets instead of the refusal is a smaller cap. 11MB is
+    // under the local 25MB and over the remote 10MB, and is answered from
+    // Content-Length before any lookup — so the phone hears 413 and the desktop,
+    // declaring the same length, gets as far as "session not found".
+    const eleven = 11 * 1024 * 1024;
+    check('an 11MB upload from a phone is over its cap', (await upload(
+        '/api/sessions/abc/attachments?name=big.png', { headers: PHONE, declare: eleven })).status, 413);
+    check('the same upload from this machine is not', (await upload(
+        '/api/sessions/abc/attachments?name=big.png', { headers: LOCAL, declare: eleven })).status, 404);
+    // Opening one launches a program on the desktop, and that stays local-only.
     check('opening an attachment', (await call('POST', '/api/sessions/abc/attachments/open', {
         headers: PHONE, body: { path: 'x.png' },
     })).status, 403);
