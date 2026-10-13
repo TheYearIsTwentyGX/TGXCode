@@ -2979,7 +2979,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `notice` | `{sessionId: string, level: 'warn', kind: string, text: string}` — something worth telling the user that is not a permission ask. Every notice the bridge sends is `level: 'warn'` except `settings_deferred`, which is `level: 'info'`; treat any level other than `warn` as informational. `kind` is one of `settings_deferred` (a model/effort change held while background work runs — see the send route), `no_permission_prompt`, `permission_uninteractive`, `mode_change_failed`, `permission_auto_denied`, `permission_denied`, `api_retry`, `turn_failed`, `rate_limit` — and an unrecognised kind is a plain warning, not an error. **`rate_limit` is not one per limit: it repeats on every turn for as long as the limit holds**, because the CLI sends an identical `rate_limit_event` each time and this one is not deduplicated the way the `quota` event below is. A client that toasts it unconditionally therefore stacks the same warning over and over for an afternoon. `web/app.js` drops this kind entirely and flashes the header quota pill off the `quota` event instead; a client with nowhere to put a persistent indicator should throttle the toast itself. Everything the notice says is also in `GET /api/quota` — `windows[].status` for the current state and `events` for the history |
 | `claude-version` | **the whole `GET /api/claude-version` payload**, so there is nothing to refetch. Ungated, no `sessionId`. Sent when the summary moved: the hourly registry check found a newer version, an update finished, or a process started or ended on a version that changes `staleSessions`. Debounced by about a second |
 | `quota` | **the whole `GET /api/quota` payload**, so there is nothing to refetch. Ungated, like `drafts-changed`. Fires only when a reading actually moved — the CLI sends an identical `rate_limit_event` on every turn and those are dropped rather than pushed. Note it carries **no `sessionId`**: quota is account-wide, and which session happened to observe it says nothing. A window that has been near a limit for an hour will therefore push nothing at all, which is why `usedPercentAt` matters more than the arrival time of this event |
-| `orchestrator` | **the whole `GET /api/sessions/:id/orchestrator` payload** for one orchestrator (see §*Orchestrators*), so there is nothing to refetch. Sent on any change to it — an item filed, read or settled, a worker started, closed or queued, settings, the summary, a pause or a resume — **debounced by about 250 ms**, so a burst is one event carrying the end state. Followed by one `sessions-changed` for the whole burst, which is where the rail counts come from. `enabled: false` means the role was just turned off |
+| `orchestrator` | **the whole `GET /api/sessions/:id/orchestrator` payload** for one orchestrator (see §*Orchestrators*), so there is nothing to refetch. Sent on any change to it — an item filed, read or settled, a worker started, closed or queued, a worker's `state` or `pending` changing, settings, the summary, a pause or a resume — **debounced by about 250 ms**, so a burst is one event carrying the end state. Followed by one `sessions-changed` for the whole burst, which is where the rail counts come from. `enabled: false` means the role was just turned off |
 | `standing-changed` | `{sessionId, standing}` — `standing` is `{text, source, at}` exactly as on the session summary (`text` a string, `source` `"model"` or `"extract"`, `at` epoch ms), or null. Patch that row's `standing`; there is nothing to refetch. Fires about fifteen seconds after a `turn-complete`, and only when the line was actually rewritten — a turn whose reply was already summarised sends nothing |
 | `turn-complete` | `{sessionId, isError, detail, retries, costUsd, durationMs, numTurns, stopReason}` — the runner's `lastResult` with the session id on it. `detail` is null unless `isError` |
 | `send-failed` | `{sessionId, kind, message, unsent: [text]}` — a send that never became a turn; hand the text back to the user. `unsent` is an array of **strings**, in send order, and may be empty — the event still means the send failed, and `message` is then the whole of it. `kind` is one of `busy-elsewhere` (the session is running somewhere else; offer to branch), `branch-refused` (Claude Code would not make the cut a `fromUuid` send asked for — see `POST /api/sessions/:id/send`), `no-claude`, `missing`, `unknown`, `exited` (the process ended without answering) or `retired` (the bridge shut the process down with messages still queued). Treat an unrecognised kind as `unknown`. Attachments are **not** carried: a message that had files comes back as its text alone |
@@ -4516,14 +4516,28 @@ event:
   workers: [{ id, title: string|null, cwd, worktree: null | {path, branch},
               spawnedAt: number, closedAt: number|null,
               state: "idle"|"busy"|"starting"|"stopped"|"error",
-              pending: null | "tool"|"plan"|"question" }],
+              pending: null | "tool"|"plan"|"question",
+              pr: null | { number: number, url: string|null, repo: string|null,
+                           title: string|null, status: string, label: string|null } }],
   pendingSpawns: [{ id, title: string|null, at: number }],
   unread: number,
   inbox: [item, …]   // newest first, at most 100 }
 ```
 
 or `{orchestratorId, enabled: false}` for a session that is not one. Times are epoch
-ms. An **inbox item** is:
+ms.
+
+A worker's **`pr`** is the newest pull request its transcript links (the last of
+the session summary's `prs`), or null. `status` and `label` are what the bridge's
+PR cache already holds — the same words as the rail's PR badge (`open`, `approved`,
+`changes`, `checks-failed`, `checks-pending`, `conflicting`, `draft`, `merged`,
+`closed`) — and `"unknown"` with `title: null` until the cache has seen it. Building
+the payload never asks GitHub, so a status can trail the PR by one refresh.
+
+The **inbox** in the payload is the newest 100 items, and the store drops settled
+items first once it is full. A client reconstructing a worker's history from it —
+when its plan was filed, whether that was approved — must treat a missing item as
+unknown, not as never having happened. An **inbox item** is:
 
 ```
 { id, workerId: string|null, kind, text: string, at: number, seq: number,

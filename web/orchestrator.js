@@ -9,7 +9,9 @@
 //     orchestrator has read it. A plan or a permission prompt is answered on the
 //     worker's own page — its title is a link there, where the usual card is
 //     already drawn — so this list never grows a second copy of that card.
-//   - **workers** and **settings**, shut by default.
+//   - **workers** and **settings**, shut by default. The workers section's head
+//     also opens the workers view (web/orchestrator-view.js), a board of them
+//     laid over the transcript.
 //   - the **summary**, pinned to the bottom of the conversation: a paragraph or
 //     two the orchestrator rewrites with `set_summary` as it goes. It is the
 //     thing to glance at on the way past, so it is open by default.
@@ -29,6 +31,7 @@ import { ago, clip } from './format.js';
 import { renderMarkdown } from './markdown.js';
 import { ICON } from './icons.js';
 import { grow, isUp, morph } from './motion.js';
+import { orchViewOpen, paintOrchView, toggleOrchView } from './orchestrator-view.js';
 
 const KIND_LABEL = {
     plan: 'Plan', permission: 'Permission', ask: 'Question for it', question: 'Question',
@@ -38,7 +41,7 @@ const KIND_LABEL = {
 // What is open, per window. Shut by default except the summary.
 const open = { summary: true, inbox: false, workers: false, settings: false };
 
-function goTo(id) {
+export function goTo(id) {
     // Imported at call time: conversation.js imports this module, and a static
     // import back would make the two wait on each other at load.
     import('./transcript/conversation.js').then(m => m.openSession(id));
@@ -125,6 +128,7 @@ export function paintOrchestrator() {
     const s = state.current;
     const p = state.orch;
     const show = !!s && !!p && (s.sessionId === p.orchestratorId || !!s.worker);
+    paintOrchView();
     if (!show) {
         grow(d, false, { onGone: () => render(null, d) });
         return;
@@ -147,6 +151,7 @@ export function holdOrchestrator(s) {
     const d = dom.orchDock;
     if (!d) return;
     state.orch = null;
+    paintOrchView();
     if (!s || (!s.orchestrator && !s.worker)) { paintOrchestrator(); return; }
     const tree = html`<div class="orch orch-loading" role="status" aria-label="Loading the orchestrator">
         ${s.worker ? html`<div class="skel orch-skel-line"></div>`
@@ -172,13 +177,19 @@ function workerLine(s, p) {
     </div>`;
 }
 
-function section(key, title, extra, body) {
+/**
+ * A collapsible section. `action` is a control beside the head rather than in
+ * it — the head is itself a button, and a button cannot hold another.
+ */
+function section(key, title, extra, body, action = null) {
     return html`<section class=${`orch-sec orch-${key}`} data-open=${String(open[key])}>
+        <div class="orch-sec-row">
         <button class="orch-sec-head" type="button" aria-expanded=${String(open[key])}
             onClick=${() => toggle(key)}>
             <span class="twist"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true"
                 dangerouslySetInnerHTML=${{ __html: ICON.caret }}></svg></span><span class="orch-sec-title">${title}</span>${extra}
-        </button>
+        </button>${action}
+        </div>
         ${open[key] ? html`<div class="orch-sec-body">${body()}</div>` : null}
     </section>`;
 }
@@ -196,11 +207,15 @@ function dock(p) {
         ${section('inbox', 'Inbox',
             html`<span class="orch-count" data-hot=${String(p.unread > 0)}>${
                 p.unread ? `${p.unread} unread` : 'nothing unread'}</span>`,
-            () => inbox(p))}
+            () => inboxList(p))}
         ${section('workers', 'Workers',
             html`<span class="orch-count">${`${openWorkers.length} open · ${running}/${p.settings.maxRunning} running`
                 + `${p.pendingSpawns.length ? ` · ${p.pendingSpawns.length} queued` : ''}`}</span>`,
-            () => workers(p))}
+            () => workers(p),
+            html`<button class="orch-view-btn" type="button" aria-pressed=${String(orchViewOpen(p.orchestratorId))}
+                title="Lay a board of the workers over the conversation"
+                onClick=${() => toggleOrchView(p.orchestratorId)}>${
+                    orchViewOpen(p.orchestratorId) ? 'Hide view' : 'View'}</button>`)}
         ${section('settings', 'Settings', null, () => settings(p))}
         ${section('summary', 'Summary',
             html`<span class="orch-count">${p.summary ? updatedWhen(p.summary.at) : 'none yet'}</span>`,
@@ -221,7 +236,8 @@ function workerTitle(p, id) {
     return w ? (w.title || 'untitled worker') : null;
 }
 
-function inbox(p) {
+/** The inbox, newest first — the dock's section body, and the workers view's column. */
+export function inboxList(p) {
     const items = p.inbox.slice(0, 40);
     if (!items.length) return html`<div class="orch-empty">Nothing has arrived yet.</div>`;
     return html`<ul class="orch-items">${items.map(i => html`
@@ -273,7 +289,7 @@ const LIMITS = [
 ];
 
 /** "4:00 PM", or "Fri 4:00 PM" when it is not today — when a pause lifts. */
-function clockAt(ms) {
+export function clockAt(ms) {
     const d = new Date(ms);
     const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
     const day = d.toDateString() === new Date().toDateString()
@@ -348,7 +364,7 @@ async function dismiss(p, i) {
     }
 }
 
-async function resume() {
+export async function resume() {
     const p = state.orch;
     if (!p) return;
     try {

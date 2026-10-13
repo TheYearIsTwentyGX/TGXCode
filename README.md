@@ -532,6 +532,8 @@ Two rules worth knowing before you send a patch:
 | `web/preview-picker.js` | The preview's element picker, copied from DevBrowser; runs inside the previewed page |
 | `web/keys.js` | Which chord means which command, and the one function that decides it |
 | `web/orchestrator.js` | An orchestrator's dock above the composer — inbox, workers, settings and its pinned summary — and a worker's line back to it; the header's orchestrator toggle |
+| `web/orchestrator-view.js` | The workers view: a board of an orchestrator's workers laid over the transcript — state, the ask each is stopped on (answerable there), branch, PR, last report and a spawned → PR timeline — beside the inbox and the usage cutoff |
+| `web/orchestrator-model.js` | What the workers view says about each worker, worked out from the payload: pure, and tested by `test/orchestrator-view.test.js` |
 | `web/rail.js` | The sessions rail, drawn with Preact — keyed by session and by group, so an update keeps the rows it did not change. The first surface moved off `app.js`'s rebuild-everything rendering, and the pattern for the next |
 | `web/css/` | The stylesheets, by area — once one `styles.css`, split along its section headers so a surface can be worked on without loading the rest. `index.html` links them in the order below, which *is* the cascade: in that order they concatenate back to the old file section for section, so moving a rule between files moves it in the cascade too |
 | `web/css/base.css` | The `:root` tokens (palette, radii, fonts, timings), the resets, the top bar and its menus, and the quota pill. First, because every other file reads its variables |
