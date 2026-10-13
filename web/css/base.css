@@ -301,7 +301,16 @@ body {
     border-radius: var(--pill);
     background-clip: content-box;
 }
-::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); background-clip: content-box; }
+/* The thumb thickens under the pointer as well as lightening, so the thing you
+   are about to grab says so. The corner where two scrollbars meet is painted
+   white by default, which on this background is a bright square in the corner
+   of every pane that scrolls both ways. */
+::-webkit-scrollbar-thumb:hover {
+    background: var(--scroll-thumb-hover);
+    background-clip: content-box;
+    border-width: 2.5px;
+}
+::-webkit-scrollbar-corner { background: transparent; }
 
 button, input, textarea, select { font: inherit; color: inherit; background: none; border: none; }
 button { cursor: pointer; }
@@ -337,6 +346,17 @@ input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; marg
    ground on :focus-within. The caret and that lift are the focus state there;
    a second ring inside them was noise. */
 :is(.input-row, .bar-search, .lsend) :is(input, textarea):focus-visible { outline: none; }
+
+/* Press: a button sinks a little under the pointer, so a click is felt before
+   whatever it does arrives. `scale` rather than `transform`, so it composes with
+   any transform a button already has instead of replacing it, and no
+   transition: this is the most frequent motion in the app and it should be
+   instant. Compact controls only — a full-width row shrinking by 3% reads as
+   the row moving, not as being pressed. */
+:is(.btn, .btn-send, .bar-btn, .icon-btn, .mini, .perm-btn, .tb-btn, .lbtn, .seg-btn,
+    .more-btn, .dash-btn, .quota-pill, .db-status):active:not(:disabled):not(.bar-more-menu *) {
+    scale: 0.97;
+}
 
 a { color: var(--blue); text-decoration: none; }
 a:hover { text-decoration: underline; }
