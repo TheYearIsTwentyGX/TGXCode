@@ -373,6 +373,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/routes/machine.js` | Dev servers, DevBrowser and Wispr Flow — the machine outside the app |
 | `bridge/routes/files.js` | `/api/fs`, `mkdir`, `open`, `/api/attachments`, and the attachment helpers the session routes share |
 | `bridge/events.js` | The `/api/events` stream: connections, the fan-out, the live board's and task board's ticks, transcript follows, the peer list |
+| `bridge/viewers.js` | A polling client's viewer lease (`X-TGXCode-Viewer`), so dropping the stream for polling does not auto-deny its asks |
 | `bridge/pairing.js` | `/pair` and `/pair/forget` — a pasted link becoming a cookie |
 | `bridge/config.js` | Paths, ports, allowed roots — every constant with a reason attached, and the two containment checks that decide whether a path is one a caller may name |
 | `bridge/dashboard.js` | Uncommitted changes and open PRs, per project |

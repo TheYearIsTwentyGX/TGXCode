@@ -19,6 +19,7 @@ const path = require('path');
 const os = require('os');
 const cfg = require('../config');
 const { broadcast, clients } = require('../events');
+const viewers = require('../viewers');
 const hostClient = require('../host-client');
 const { NEXT, readJson, send } = require('../http');
 const restart = require('../restart');
@@ -76,6 +77,9 @@ async function handle(req, res, url, pathname, seg, who) {
             todoTools: cfg.TODO_TOOLS,
             // Live SSE connections — a quick way to tell whether a UI attached.
             clients: clients.size, runners: Object.keys(pool.statuses()).length,
+            // Polling clients holding a viewer lease (X-TGXCode-Viewer), which
+            // count with `clients` towards holding an ask open — bridge/viewers.js.
+            pollingViewers: viewers.leases.active(),
             terminals: terminals.live().length, runs: runs.live().length,
             // Sessions with a process, from Claude Code's registry — including
             // every one running in a terminal, which no other count here sees.

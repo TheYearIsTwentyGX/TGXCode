@@ -95,6 +95,13 @@ comes up.
 
 Sending it on a GET is harmless and simplest.
 
+### `X-TGXCode-Viewer: <id>` on a poll, if you show asks
+
+Optional, and only for a client that **polls instead of holding `/api/events` open**
+and can put an ask in front of a person. It keeps that client counted as a viewer, so
+the bridge holds asks open for it rather than auto-denying them. The full rule is under
+*The live channel*, §*Polling counts as watching only if you say so*.
+
 ### One more refusal that is not about the token
 
 A **remote** request addressed to a host the bridge does not recognise is
@@ -296,7 +303,7 @@ The only unauthenticated route. Counts, a pid, and:
 { "ok": true, "app": "tgxcode", "version": "1.0.0", "port": 45888, "dev": false,
   "remote": false, "authRequired": true,
   "permissionModes": ["auto","acceptEdits","plan","manual","dontAsk","bypassPermissions"],
-  "sessions": 120, "clients": 1, "live": 4, "busy": 3, "atRisk": 0,
+  "sessions": 120, "clients": 1, "pollingViewers": 0, "live": 4, "busy": 3, "atRisk": 0,
   "sessionHost": { "pid": 5031, "protocol": 1, "startedAt": 1790098455020, "attached": 3 } }
 ```
 
@@ -307,6 +314,11 @@ the turns a restart of this bridge would **end**. A turn running in the session 
 port, so it counts in `busy` and not in `atRisk`. Anything deciding whether a restart
 is safe should read `atRisk`, and fall back to `busy` when the field is absent, since
 that is an older bridge with no host.
+
+`clients` is a number: open `/api/events` streams. `pollingViewers` is a number: polling
+clients currently holding a viewer lease (see §*Polling counts as watching only if you say
+so* under *The live channel*). Between them they decide whether an ask is held open or
+auto-denied. Absent on a bridge from before the lease existed.
 
 `sessionHost` is **an object or null**: `{pid, protocol, startedAt, attached}`, where
 `pid` and `startedAt` (epoch ms) belong to the host process, `protocol` is a number and
@@ -502,9 +514,32 @@ same fields, and it does not depend on how much of the transcript was asked for.
 it is what resumes the live tail.
 
 `?tail=N` returns only the last N events and adds
-`truncated: { dropped, total }`. Mobile clients should use it — a 60-turn session is
+`truncated: { dropped, total }` (both numbers: events withheld, events in the whole
+transcript). Mobile clients should use it — a 60-turn session is
 ~1,800 events and half a megabyte of JSON, and none of the first 1,500 is why
-someone opened their phone.
+someone opened their phone. `N` is an integer ≥ 0. `truncated` is present **only when
+something was withheld**: a `tail` at least as long as the transcript returns every
+event and no `truncated`, exactly as if `tail` had not been sent. A negative or
+non-numeric `N` is ignored the same way.
+
+**`?tail=0` means "none of them", not "no limit".** It is the liveness read for a
+client that polls instead of streaming (see *The live channel*), and returns:
+
+- `events: []`;
+- `offset` — **the same byte position a full read returns**, so `/since?offset=`
+  from it gives what is new and nothing twice;
+- `runner` — the **whole** runner status, `pendingPermission` included (the only
+  cheap way to see one session's ask without the stream);
+- `summary`, `suggestions` and `prefs`, as on a full read;
+- `truncated: {dropped: total, total}` whenever the transcript has any events at all.
+
+That last field is literally true and useless here. **Read only `runner`, `offset`
+and `summary` off a liveness read**; never merge its `events` or its `truncated` into
+a conversation you already hold, or you will draw "1,800 earlier events — load all"
+over a transcript that is all there. The field is kept rather than dropped for
+`tail=0` because dropping it would make its absence mean two different things —
+"nothing was withheld" and "everything was" — and both existing clients already read
+the shape as it is. A few hundred bytes against half a megabyte for the full read.
 
 `?tail=N` still parses the whole file on the bridge and only sends less. **`?turns=K`**
 reads less as well: it returns the events from the start of the Kth-last turn to the
@@ -2917,7 +2952,10 @@ A client that must work everywhere should detect this and fall back:
   this by watching for silence later: a comment line (`: ping`) is invisible to
   `EventSource`, so an idle-but-healthy stream is indistinguishable from a dead one.
 - **Fall back** to polling `GET /api/overview`, `GET /api/sessions/:id?tail=0` for
-  liveness, and `GET /api/sessions/:id/since?offset=` for new events. Measured
+  liveness (see `?tail=N` under `GET /api/sessions/:id` for exactly what it returns,
+  and which of it to read), and `GET /api/sessions/:id/since?offset=` for new events.
+  **Send `X-TGXCode-Viewer` on those polls**, or you lose every ask — the next
+  section. Measured
   through the same tunnel: ~60ms per call, 7KB for the board, **42 bytes** for an
   empty delta. 2.5s for the transcript and half that rate for the board is a
   measured-comfortable cadence. `GET /api/sessions/:id/tasks` is the poll that
@@ -2926,6 +2964,49 @@ A client that must work everywhere should detect this and fall back:
 
 Liveness becomes a couple of seconds granular rather than instant, which for "has
 it finished, does it need me" is a distinction without a difference.
+
+**That cadence assumes a client in the foreground.** A client that has to stay
+answerable while backgrounded — a phone service that raises a notification for an ask —
+has no visibility gate to stop it, and the cost is standing: the board alone at 7KB
+every 5s is ~84KB a minute, **~5MB an hour, indefinitely**, before any transcript
+polling. In the background, drop the transcript polls (nothing is on screen to update)
+and keep only the board — `GET /api/overview` carries every session's ask in `card.ask`
+— at the slowest rate you can live with, **but faster than once every 30s** if you are
+relying on the viewer lease below. Twenty seconds is ~1.3MB an hour.
+
+### Polling counts as watching only if you say so
+
+An ask — a tool approval, a plan, a question — is only held open while somebody is in
+a position to answer it. With nobody, the bridge **denies it at once**
+(`permission_auto_denied` notice) so the turn is not left hanging for a window that is
+not coming. "Somebody" is any open `/api/events` stream, on any session — **or** a
+polling client holding a viewer lease.
+
+Dropping the stream for polling therefore drops you from the count, and every ask raised
+afterwards is auto-denied while your client looks perfectly healthy. To stay counted,
+send
+
+```
+X-TGXCode-Viewer: <id>
+```
+
+on your polls. `id` is any non-empty string up to 128 characters that is stable for the
+client — an install id, not a per-request one (the bridge keys the lease on it, so a
+fresh id per poll is a fresh lease per poll). The rules:
+
+- **Any authenticated `/api/` request carrying it renews the lease**, GET or not. A
+  request refused for its token, or refused to a remote caller, renews nothing.
+- **A lease lasts 30 seconds** from the last request that carried it. Poll more often
+  than that. Stop polling and, within 30 seconds, asks go back to being auto-denied —
+  which is correct for a client that is gone.
+- **Only send it if you will show the ask.** That is the whole reason it is opt-in: a
+  script, a CLI or a test that sent it would keep asks waiting for an answer nobody is
+  going to give.
+- `GET /api/health` reports how many are held as `pollingViewers`.
+- A bridge from before the lease ignores the header; there, the only way to be counted
+  is an open stream. Holding a buffered `/api/events` socket that never delivers
+  anything works, because the bridge counts a stream from the moment it opens, and it
+  is no longer needed once `pollingViewers` appears in `/api/health`.
 
 `GET /api/events` — SSE, `text/event-stream`. Then tell it what to follow:
 
