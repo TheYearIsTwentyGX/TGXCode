@@ -484,7 +484,7 @@ Two rules worth knowing before you send a patch:
 | `web/settings/hooks.js` | The hooks editor inside the Claude Code group |
 | `web/settings/memory.js` | The Memory group — the CLAUDE.md files — and the full-height dialog on the same file |
 | `web/settings/project-commands.js` | The Commands group — a project's `.tgxcode/commands.json`, as a form and as JSON |
-| `web/settings/toolbar.js` | The top bar's layout and More menu, and the Toolbar group that edits them (a component that holds a drag's order until its save is over) |
+| `web/settings/toolbar.js` | The top bar's layout and More menu, and the Toolbar group that edits them (a component that holds a drag's order until its save is over). `fitBar()` fits the bar to the window: labels go first, then buttons move into More from the end, and back when there is room |
 | `web/settings/shortcuts.js` | The Shortcuts group, and the key hints in every title that names a binding |
 | `web/settings/notifications.js` | The Notifications group — this browser's switches for `web/notifications.js`, as a component (no longer markup in index.html) |
 | `web/settings/fold.js` | Folding the long rows — permission lists, hooks, plugins, verb groups, shortcuts. Shut once a list is long, open while short; an explicit choice is kept per browser in localStorage |
@@ -528,6 +528,7 @@ Two rules worth knowing before you send a patch:
 | `web/sw.js` | A service worker for one thing only: buttons on a notification. No `fetch` handler |
 | `web/preview.js` | The browser preview — a dev server's page in the window, with DevBrowser's toolbar |
 | `web/link-policy.js` | Which chat links open in the browser preview — the `preview.list` pattern matcher, pure so a test can import it |
+| `web/bar-fit.js` | What the top bar gives up in a narrow window — labels, then buttons from the end, never the quota pill — with a band of slack so it does not flicker at the edge. Pure, so a test can import it; `fitBar()` measures and moves |
 | `web/startup.js` | What a new window opens to — turns Settings › On startup into the address a launch restores, and stays out of the way on a refresh. Pure, so a test can import it |
 | `web/preview-picker.js` | The preview's element picker, copied from DevBrowser; runs inside the previewed page |
 | `web/keys.js` | Which chord means which command, and the one function that decides it |
