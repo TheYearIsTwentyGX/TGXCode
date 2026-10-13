@@ -38,6 +38,7 @@ import { loadCommands } from '../commands.js';
 import { holdOrchestrator, loadOrchestrator, paintOrchestratorButton } from '../orchestrator.js';
 import { dur as motionMs, enter, exit, fill, isUp, settle } from '../motion.js';
 import { showTerm, termOpen } from '../term-pane.js';
+import { loadSessionSpend, spendBit } from '../boards/analytics.js';
 import {
     applyRunner, closePanels, grouping, loadAttach, loadDraft, loadSessions, markSessionNotesRead,
     paintPanels, prUnknownWhy, rememberView, renderRail, saveDraft, scrollToEnd,
@@ -127,6 +128,9 @@ export async function openSession(id, { quiet = false, keepPanels = false } = {}
         state.runner = data.runner || null;
 
         renderHeader();
+        // Fetched alongside rather than carried on the summary: it reads the
+        // transcript's usage, which the rest of the open does not need to wait on.
+        loadSessionSpend(id);
         // Drops the skeleton — and with it a row drawn at Send while this fetch was
         // still in flight, which is reachable because the composer is live over a
         // skeleton. Forget it rather than re-append it: the transcript that is about
@@ -440,6 +444,8 @@ export function renderHeader() {
             >${`Claude ${oldClaude.version} (older)`}</span>`);
     }
     bits.push(sep('turns'), html`<span key="turns">${`${s.userMessages} turns`}</span>`);
+    const spend = spendBit(sep);
+    if (spend) bits.push(...spend);
     for (const pr of headerPrs()) bits.push(sep(pr.url), prLink(pr));
     bits.push(sep('cwd'), html`<span key="cwd" class="cwd" title=${s.cwd}>${clip(s.cwd, 42)}</span>`);
 

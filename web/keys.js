@@ -30,6 +30,7 @@ const FALLBACK = {
         { id: 'view.drafts', group: 'Views', label: 'Drafts', default: 'Ctrl+6' },
         { id: 'view.schedules', group: 'Views', label: 'Schedules', default: 'Ctrl+7' },
         { id: 'view.settings', group: 'Views', label: 'Settings', default: 'Ctrl+8' },
+        { id: 'view.analytics', group: 'Views', label: 'Analytics', default: 'Ctrl+9' },
         { id: 'session.new', group: 'Sessions', label: 'Start a session', default: 'Ctrl+N' },
         { id: 'rail.filter', group: 'Sessions', label: 'Filter sessions', default: 'Ctrl+K' },
         { id: 'terminal.toggle', group: 'Sessions', label: 'Terminal', default: 'Ctrl+Backquote' },

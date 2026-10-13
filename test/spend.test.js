@@ -52,6 +52,8 @@ const totalOf = (state) => Object.values(state.buckets)
         assert.strictEqual(priceFor('claude-haiku-4-5-20251001').input, 1, 'date suffix');
         assert.strictEqual(priceFor('claude-opus-5-5[1m]').input, 4, 'context marker');
         assert.strictEqual(normalizeModel('opus'), 'claude-opus-5-5', 'bare alias');
+        assert.strictEqual(normalizeModel('claude-haiku-4-5-20251001'), 'claude-haiku-4-5',
+            'a snapshot date is one model with its undated id');
         assert.strictEqual(priceFor('gpt-9'), null);
         assert.strictEqual(priceFor('claude-opus-55'), null, 'a prefix must end at a separator');
         ok('models are priced by the most specific stem, and unknown ones are not');

@@ -31,6 +31,7 @@
 <link rel="stylesheet" href="./css/dashboard.css">
 <link rel="stylesheet" href="./css/dialogs.css">
 <link rel="stylesheet" href="./css/boards.css">
+<link rel="stylesheet" href="./css/analytics.css">
 <link rel="stylesheet" href="./css/settings.css">
 <link rel="stylesheet" href="./css/narrow.css">
 <link rel="stylesheet" href="./css/viewers.css">
@@ -111,6 +112,19 @@
       </svg>
       <span>Dashboard</span>
       <span id="dash-badge" class="bar-badge" hidden></span>
+    </button>
+
+    <!-- Tokens, and what they would have cost on the API, by day and project.
+         API-equivalent: on a subscription nobody is billed this figure. -->
+    <button id="btn-analytics" class="bar-btn" type="button" aria-pressed="false"
+            title="Tokens and API-equivalent cost, by day and project">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M4 20h16" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+        <rect x="5.5" y="11" width="3" height="6" rx="1" stroke="currentColor" stroke-width="1.6"/>
+        <rect x="10.5" y="6" width="3" height="11" rx="1" stroke="currentColor" stroke-width="1.6"/>
+        <rect x="15.5" y="9" width="3" height="8" rx="1" stroke="currentColor" stroke-width="1.6"/>
+      </svg>
+      <span>Analytics</span>
     </button>
 
     <!-- What already reached you, after the fact. A toast is gone the moment
@@ -971,6 +985,19 @@
         <button id="dash-refresh" class="dash-btn" type="button">Refresh</button>
       </header>
       <div id="dash-body" class="dash-body"></div>
+    </section>
+
+    <!-- Tokens and API-equivalent cost. Drawn by web/boards/analytics.js. -->
+    <section id="analytics" class="dash an" hidden aria-label="Analytics">
+      <header class="dash-head">
+        <div>
+          <h1 class="dash-title">Analytics</h1>
+          <p id="an-sub" class="dash-sub">Tokens, and what they would have cost at
+            API list prices.</p>
+        </div>
+        <div id="an-range" class="an-range" role="group" aria-label="Range"></div>
+      </header>
+      <div id="an-body" class="dash-body an-body"></div>
     </section>
 
     <!-- One card per running session, needs-you first. Fed by a single SSE

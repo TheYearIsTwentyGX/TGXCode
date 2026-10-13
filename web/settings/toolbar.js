@@ -37,6 +37,7 @@ const TOOLBAR = [
     { id: 'tasks', node: 'btnTaskboard', name: 'Tasks', icon: true },
     { id: 'live', node: 'btnLive', name: 'Live', icon: true },
     { id: 'dashboard', node: 'btnDash', name: 'Dashboard', icon: true },
+    { id: 'analytics', node: 'btnAnalytics', name: 'Analytics', icon: true },
     { id: 'history', node: 'btnNotes', name: 'History', icon: true },
     { id: 'drafts', node: 'btnDrafts', name: 'Drafts', icon: true },
     { id: 'schedules', node: 'btnSched', name: 'Schedules', icon: true },

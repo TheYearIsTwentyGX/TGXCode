@@ -5,7 +5,8 @@
 //
 // Why the transcripts and not the runner. A turn's result carries
 // `total_cost_usd`, but only for turns this bridge ran, and on a subscription
-// plan it is 0 (bridge/usage.js). The transcripts cover every session on the
+// plan it is not a bill (bridge/usage.js). Measured against one, the figure
+// computed here came out within 1% of it. The transcripts cover every session on the
 // machine — the ones started in a terminal, and the history from before this
 // app existed — and carry the exact token counts. The cost is computed from
 // them at list prices (bridge/pricing.js), and is labelled API-equivalent
@@ -55,7 +56,7 @@ const { projectName, isTemp } = require('./sessions');
 
 const CACHE_FILE = path.join(CACHE_DIR, 'spend.json');
 // Bump when a bucket's shape or derivation changes, so old caches are re-read.
-const INDEX_VERSION = 1;
+const INDEX_VERSION = 2;
 const HEAD_BYTES = 4096;
 const CHUNK = 8 * 1024 * 1024;
 const RECENT = 16;

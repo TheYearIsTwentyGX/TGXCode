@@ -2,10 +2,10 @@
 
 // What a transcript's tokens would have cost at Anthropic's API list prices.
 //
-// Not what anybody was billed. On a subscription plan `total_cost_usd` in a
-// turn's result is literally 0 (see bridge/usage.js), so there is no bill to
-// read; the useful number is the API-equivalent — the price of the same tokens
-// bought one request at a time. Every surface that shows a figure from here
+// Not what anybody was billed. On a subscription plan there is no per-token
+// bill to read — the transcripts' cost fields are 0 (bridge/usage.js) — so the
+// useful number is the API-equivalent: the price of the same tokens bought one
+// request at a time. Every surface that shows a figure from here
 // says so, and `BASIS` is the word it uses.
 //
 // Decided:
@@ -72,9 +72,10 @@ const KEYS = Object.keys(PRICES).sort((a, b) => b.length - a.length);
 const ALIASES = { opus: 'claude-opus-5-5', sonnet: 'claude-sonnet-5-5',
     haiku: 'claude-haiku-5-5', fable: 'claude-fable-5-1' };
 
-/** The model id with context markers and whitespace removed. */
+/** The model id without its context marker or snapshot date, so one model is one row. */
 function normalizeModel(model) {
-    const m = String(model || '').trim().toLowerCase().replace(/\[[^\]]*\]$/, '');
+    const m = String(model || '').trim().toLowerCase()
+        .replace(/\[[^\]]*\]$/, '').replace(/-\d{8}$/, '');
     return ALIASES[m] || m;
 }
 

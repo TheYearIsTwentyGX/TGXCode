@@ -302,7 +302,7 @@ three places — copy them across before the first launch:
 | **Composer** | Sends to the session, resuming it in place. `@` mentions another running session. |
 | **Snippets** | Canned messages with `{{placeholders}}`, pinnable to buttons of their own. |
 
-Shortcuts: `Enter` send, `Ctrl+1`–`Ctrl+8` switch panes, `Ctrl+F` find, `Ctrl+K`
+Shortcuts: `Enter` send, `Ctrl+1`–`Ctrl+9` switch panes, `Ctrl+F` find, `Ctrl+K`
 filter, `Ctrl+N` new session, ``Ctrl+` `` terminal, `Ctrl+P` / `Ctrl+M` cycle
 permission mode and model, `Esc` back out. Nearly all are rebindable.
 
@@ -364,6 +364,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/routes/snippets.js` | `/api/snippets` and `/api/snippet-groups` |
 | `bridge/routes/schedules.js` | `/api/schedules` |
 | `bridge/routes/dashboard.js` | `/api/dashboard` and `/api/prs` |
+| `bridge/routes/analytics.js` | `/api/analytics` and `/api/analytics/sessions/:id` |
 | `bridge/routes/github.js` | `/api/github/*`: account, templates, teams, repo state, name check, publish |
 | `bridge/routes/quota.js` | `/api/quota` and refreshing it |
 | `bridge/routes/session.js` | One session's conversation: read, delete, send, later, handoff, stop, queue, permission, flags, attachments, suggestions, tasks, subagents |
@@ -391,6 +392,8 @@ Two rules worth knowing before you send a patch:
 | `bridge/sessions.js` | The session index — incremental, cached, watched |
 | `bridge/registry.js` | Which sessions have a process, from Claude Code's own registry |
 | `bridge/turn-index.js` | Per-session index of turns, plans and questions with byte offsets, so a long session opens from its end |
+| `bridge/spend-index.js` | Tokens and API-equivalent cost per session, project and day, read incrementally from `message.usage` and cached |
+| `bridge/pricing.js` | API list prices per model, and the cost of one message's usage |
 | `bridge/transcript.js` | JSONL → render events; pairs tool calls with results; reads subagent transcripts |
 | `bridge/tasks.js` | A session's own task list — the items, and how far through them it is |
 | `bridge/attachments.js` | Files pasted into the composer — where they land, and out of git |
@@ -467,6 +470,7 @@ Two rules worth knowing before you send a patch:
 | `web/boards/parts.js` | What the live board and the task board share, as vnodes — status words, the task bar, the queued badge, the ticking turn clock, the Stop button — and `paint()`, which clears a container's static markup before its first render |
 | `web/boards/live.js` | The live board's cards. Each is a component that skips its render while the bridge's `sig` for it is unchanged; sending, answering an ask and opening a dev-server chip are its state |
 | `web/boards/dashboard.js` | Work in flight — fetching it, the badge, and the projects, workspaces and session chips |
+| `web/boards/analytics.js` | Analytics — API-equivalent cost and tokens by day, project, model and session; the conversation header's running total |
 | `web/boards/history.js` | The notification history list. Its read state stays in app.js, which openSession and the stream reach into |
 | `web/boards/taskboard.js` | The task board — the held order (`tbRememberOrder`/`tbHold`), the four columns, the focused view and acting on a card |
 | `web/drafts.js` | The drafts panel — sessions set up but not started — in Preact: opening it, the badge, a column per project once there are two, and Start, Edit and Delete on a card |
@@ -543,6 +547,7 @@ Two rules worth knowing before you send a patch:
 | `web/css/dashboard.css` | The empty state, the dashboard, and the live board wherever it docks |
 | `web/css/dialogs.css` | Scrims, modals and the fields, pickers and buttons in them; notification history, the delete and restart confirmations, toasts |
 | `web/css/boards.css` | The task board, drafts, the schedule builder and the schedules panel |
+| `web/css/analytics.css` | The analytics board and the header's cost |
 | `web/css/settings.css` | Settings — its groups, the shortcut table, Claude Code's settings and memory files, project commands, the snippet editor and dialogs |
 | `web/css/narrow.css` | The narrow-desktop-window `@media` block, which reaches into several areas and so comes after the transcript, composer, dialogs, boards and Settings it overrides — but before `viewers.css`, `colours.css` and `preview.css`, so a narrow override for those loses to them at equal specificity. Not phone CSS |
 | `web/css/viewers.css` | The right-click menu and the diff viewer's re-theming of `vendor/diff2html.css`, which is linked before every file here so no `!important` is needed |

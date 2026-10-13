@@ -1014,8 +1014,8 @@ pool.on('turn-complete', (r) => {
     filed(notifications.turn(r));
     noteScheduledOutcome(r);
     orchestration.onTurnComplete(r);
-    // The header's running total. The turn's own `costUsd` is 0 on a
-    // subscription, so the transcript is re-read rather than trusted.
+    // The header's running total. The turn's own `costUsd` covers this turn
+    // alone, so the session's transcript is re-read for the whole of it.
     spend.refreshSession(index, r.sessionId).then((out) => {
         if (out) broadcast('session-spend', { sessionId: r.sessionId, totals: out.totals });
     }).catch(() => { /* the next request catches up */ });

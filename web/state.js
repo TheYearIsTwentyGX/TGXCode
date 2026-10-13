@@ -317,6 +317,11 @@ export const state = {
     // The board of unfinished work. `at` is when the bridge last answered, so
     // opening it again does not re-run git over every worktree on the machine.
     dash: { open: false, data: null, at: 0, loading: false, error: null, files: new Set() },
+    // The analytics board (web/boards/analytics.js): the last rollup, for `days`.
+    analytics: { open: false, data: null, at: 0, days: 30, loading: false, error: null },
+    // The open conversation's spend, for its header: `/api/analytics/sessions/:id`,
+    // replaced by `session-spend` pushes while it is open.
+    spend: null,
     // The browser preview (web/preview.js). Not one of PANELS: those cover it the
     // way they cover the conversation, and it comes back when they close.
     // `overLive` is decided at open — whether this preview covers a docked Live
