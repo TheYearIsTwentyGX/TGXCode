@@ -211,7 +211,9 @@ function showAsk(title, body, p, kind) {
         tag: askTag(p.sessionId),
         silent: true,
         requireInteraction: true,   // a blocked turn should not time out on screen
-        data: { sessionId: p.sessionId, requestId: p.requestId },
+        // `kind` so the worker can send a plan approval's `mode` — see answer()
+        // in web/sw.js.
+        data: { sessionId: p.sessionId, requestId: p.requestId, kind },
         actions: ASK_ACTIONS[kind] || [],
     };
     if (notify.sw) {

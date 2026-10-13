@@ -53,6 +53,7 @@ const { pair } = require('./pairing');
 const { send, NEXT } = require('./http');
 const { laterPayload } = require('./routes/later');
 const { resolveAttachments } = require('./routes/files');
+const viewers = require('./viewers');
 
 const WEB_DIR = path.join(__dirname, '..', 'web');
 // The CSRF header every non-GET /api/ call must carry. The old name is still
@@ -243,6 +244,13 @@ const server = http.createServer(async (req, res) => {
                 + `${who.peer} — ${refusal}`);
             return send(res, 403, { error: refusal, remote: true });
         }
+    }
+
+    // A polling client saying it is watching, so its asks are held for it rather
+    // than auto-denied. Only past the token and the remote refusals above, so a
+    // request that was turned away renews nothing. See bridge/viewers.js.
+    if (pathname.startsWith('/api/') && who.ok && req.headers[viewers.HEADER]) {
+        viewers.leases.touch(String(req.headers[viewers.HEADER]));
     }
 
     try {
@@ -786,9 +794,10 @@ function serveStatic(req, res, pathname, who) {
  * Any live SSE client counts, not just one already following this transcript:
  * the card is a session-level thing and a window that is open can be switched to
  * it. With nothing connected there is nobody to ask, and the runner denies —
- * which is exactly what the app did before approvals existed.
+ * which is exactly what the app did before approvals existed. A polling client
+ * that sends `X-TGXCode-Viewer` counts too, for thirty seconds per poll.
  */
-pool.hasViewer = () => clients.size > 0;
+pool.hasViewer = () => clients.size > 0 || viewers.leases.active() > 0;
 
 // And what it says while it works. Every surface that shows a session working
 // reads `runner.activity` off one SSE message, so deciding it here is what makes
