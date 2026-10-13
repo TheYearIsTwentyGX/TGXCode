@@ -50,6 +50,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'ask-dock', 'plan-pane', 'plan-bar', 'plan-aside', 'plan-agent', 'plan-title',
     'plan-body', 'plan-doc', 'plan-foot',
     'btn-dash', 'dash-badge', 'dash', 'dash-sub', 'dash-body', 'dash-refresh',
+    'btn-analytics', 'analytics', 'an-sub', 'an-range', 'an-body',
     'btn-notes', 'notes-badge', 'notes', 'notes-sub', 'notes-body',
     'btn-taskboard', 'tb-badge', 'taskboard', 'tb-sub', 'tb-body', 'tb-refresh',
     'tb-search', 'tb-unfocus',

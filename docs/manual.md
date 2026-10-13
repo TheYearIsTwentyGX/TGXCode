@@ -33,7 +33,7 @@ it, and how the pieces fit together. Start there if you have not already.
 | **Mentions** | `@` in the composer lists the other sessions running on this machine and inserts the one you pick as `@[name]` — the name an agent addresses it by. |
 
 Shortcuts: `Enter` send (or `Ctrl+Enter`, and *Settings → Keyboard* swaps the
-two), `Ctrl+1`–`Ctrl+8` the eight things the main pane can show, `Ctrl+F` find
+two), `Ctrl+1`–`Ctrl+9` the nine things the main pane can show, `Ctrl+F` find
 in the conversation with `F3`/`Shift+F3` for the next and previous match,
 `Ctrl+K` filter, `Ctrl+N` new session, ``Ctrl+` `` the terminal, `Ctrl+/`
 snippets, `Ctrl+P` / `Ctrl+M` cycle the composer's permission mode and model

@@ -1487,7 +1487,7 @@ an **array of objects** `[{id, place, label}]` in the order the bar draws them:
 
 | Field | Type | |
 |---|---|---|
-| `id` | string | one of `tasks`, `live`, `dashboard`, `history`, `drafts`, `schedules`, `settings`, `quota`, `devbrowser` |
+| `id` | string | one of `tasks`, `live`, `dashboard`, `analytics`, `history`, `drafts`, `schedules`, `settings`, `quota`, `devbrowser` |
 | `place` | `"bar"`, `"more"` or `"hidden"` | on the bar, in its More menu, or not drawn. Missing means `"bar"` |
 | `label` | bool | whether the name shows beside the icon. Missing means `true`. Only the seven views have an icon, so it means nothing on `quota` or `devbrowser` |
 
@@ -2876,6 +2876,78 @@ repository declares, and this runs one fixed operation, in a directory the user
 named and trusted, that the bridge already performs unattended on a timer. Only
 one can be in flight at a time, so it cannot be turned into a fan of processes.
 
+### `GET /api/analytics?days=N`
+
+Tokens, and what they would have cost at Anthropic's API list prices, per day, per
+project, per session and per model. **Every dollar figure is API-equivalent, not a
+bill.** On a subscription nobody is charged it; it is the price of the same tokens
+bought one request at a time. `basis` is always `"api-equivalent"`, and a client that
+shows a figure should say so.
+
+Read out of the transcripts' `message.usage`, so it covers every session on the
+machine, including ones started in a terminal and history from before this app. It
+does not come from `turn-complete`'s `costUsd`, which exists only for turns this bridge
+ran. Each request first brings the index up to date (a stat per transcript when
+nothing changed, which takes a few hundred ms warm). So a terminal session is current
+as of the request, with no event announcing it. After a bridge starts, the first full
+pass over a cold cache takes several seconds, and a request that arrives during it
+waits for it.
+
+`days` is 1–365, default 30. Anything else falls back to 30.
+
+```
+{ basis: "api-equivalent",
+  pricingAsOf: string,            // "YYYY-MM-DD" — the price table's date
+  generatedAt: number,            // epoch ms
+  days: number,
+  totals: Totals,                 // the range
+  allTime: Totals,                // every day on record, ignoring `days`
+  daily: [ { date: "YYYY-MM-DD", ...Totals } ],   // exactly `days` rows, oldest first,
+                                                  // ending today; a quiet day is all zeros
+  projects: [ { cwd: string|null, name: string, sessions: number, ...Totals } ],
+  sessions: [ { sessionId, title: string|null, projectCwd: string|null,
+                projectName: string, lastDay: "YYYY-MM-DD", ...Totals } ],
+  models: [ { model: string, ...Totals } ],
+  unpricedTokens: number }        // = totals.unpricedTokens
+
+Totals = { input, output, cacheRead, cacheWrite, tokens, messages, costUsd, unpricedTokens }
+```
+
+- **Dates are the bridge's local calendar days.** A message lands on the local date of
+  its transcript timestamp.
+- **`projects`, `sessions` and `models` cover the range only,** and are sorted by
+  `costUsd` descending. `sessions` holds the top 50. A project is keyed by its
+  `projectCwd`, and two different directories can share a `name`, so tell them apart
+  by `cwd`.
+- **`tokens`** is `input + output + cacheRead + cacheWrite`. `input` is the *uncached*
+  input only, so on a long session it is tiny next to `cacheRead`.
+- **`messages`** counts API responses, not transcript lines. Claude Code writes each
+  content block of a response as its own line with the same `message.id`, and those
+  lines are counted once.
+- **A session's subagents are included in it,** and so is every copy of a session
+  whose transcript was split by entering a worktree.
+- **`unpricedTokens`** are tokens on a model the price table does not know. They are
+  in `tokens` but contribute nothing to `costUsd`, so a non-zero value means the cost
+  is an undercount.
+- `model` is the id without its snapshot date or context marker
+  (`claude-haiku-4-5-20251001` → `claude-haiku-4-5`).
+- Sessions under `/tmp` are left out, as are test sessions except on a development
+  bridge. This matches `/api/sessions`.
+
+### `GET /api/analytics/sessions/:id`
+
+One session's all-time spend, for a conversation header. It re-reads that session's
+transcripts before answering.
+
+```
+{ basis: "api-equivalent", pricingAsOf: string, sessionId: string,
+  totals: Totals, firstDay: "YYYY-MM-DD"|null, lastDay: "YYYY-MM-DD"|null,
+  models: [ { model: string, ...Totals } ] }
+```
+
+Returns `404 {error}` for a session the index does not hold. A session created a moment
+ago (see `POST /api/sessions`) 404s here until its transcript appears.
+
 ### `GET /api/claude-version[?refresh=1]`
 
 Whether Claude Code is current, in both senses that matter: is the installed binary
@@ -3063,6 +3135,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `orchestrator` | **the whole `GET /api/sessions/:id/orchestrator` payload** for one orchestrator (see §*Orchestrators*), so there is nothing to refetch. Sent on any change to it — an item filed, read or settled, a worker started, closed or queued, settings, the summary, a pause or a resume — **debounced by about 250 ms**, so a burst is one event carrying the end state. Followed by one `sessions-changed` for the whole burst, which is where the rail counts come from. `enabled: false` means the role was just turned off |
 | `standing-changed` | `{sessionId, standing}` — `standing` is `{text, source, at}` exactly as on the session summary (`text` a string, `source` `"model"` or `"extract"`, `at` epoch ms), or null. Patch that row's `standing`; there is nothing to refetch. Fires about fifteen seconds after a `turn-complete`, and only when the line was actually rewritten — a turn whose reply was already summarised sends nothing |
 | `turn-complete` | `{sessionId, isError, detail, retries, costUsd, durationMs, numTurns, stopReason}` — the runner's `lastResult` with the session id on it. `detail` is null unless `isError` |
+| `session-spend` | `{sessionId, totals}` — `totals` is the `Totals` object of `GET /api/analytics/sessions/:id`: that session's all-time API-equivalent spend. Sent to every client shortly after a `turn-complete`, once the transcript has been re-read. Replace the header figure with it. Only for turns this bridge ran: a session in a terminal sends nothing, so re-fetch on open |
 | `send-failed` | `{sessionId, kind, message, unsent: [text]}` — a send that never became a turn; hand the text back to the user. `unsent` is an array of **strings**, in send order, and may be empty — the event still means the send failed, and `message` is then the whole of it. `kind` is one of `busy-elsewhere` (the session is running somewhere else; offer to branch), `branch-refused` (Claude Code would not make the cut a `fromUuid` send asked for — see `POST /api/sessions/:id/send`), `no-claude`, `missing`, `unknown`, `exited` (the process ended without answering) or `retired` (the bridge shut the process down with messages still queued). Treat an unrecognised kind as `unknown`. Attachments are **not** carried: a message that had files comes back as its text alone |
 | `session-forked` | `{from, to}` — follow the new id |
 | `slash-commands` | `{cwd, at}` — that directory's slash commands changed; drop what you cached |
