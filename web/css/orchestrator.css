@@ -1,53 +1,60 @@
 /* An orchestrator's dock above the composer — web/orchestrator.js. Sits where
    the ask dock does and is inset the same way, so the two line up when both are
    up. Capped in height: the conversation is still the main thing on the page,
-   and a long inbox scrolls inside its own box rather than pushing it away. */
+   and a long inbox scrolls inside its own box rather than pushing it away.
+   42vh left the transcript about 200px at 900px tall, so the cap is now a third
+   of the window and never more than 320px, whichever is less. */
 
 .orch-dock {
     flex: none;
-    margin: 0 calc(28px + var(--pane-right)) 6px calc(28px + var(--pane-left));
-    max-height: 42vh;
+    margin: 0 calc(var(--pane-x, 28px) + var(--pane-right)) var(--sp-3) calc(var(--pane-x, 28px) + var(--pane-left));
+    max-height: min(34vh, 320px);
     overflow-y: auto;
     background: var(--s2);
     border: 1px solid var(--s4);
     border-radius: var(--r);
-    transition: margin var(--t-fast) var(--ease);
+    transition: margin var(--dur-fast) var(--ease-standard);
 }
 .orch-dock[hidden] { display: none; }
 
-.orch { max-width: 1000px; margin: 0 auto; padding: 4px 6px; }
+.orch { max-width: 1000px; margin: 0 auto; padding: var(--sp-2) var(--sp-3); }
 
 .orch-paused {
     display: flex;
     align-items: center;
-    gap: 12px;
-    margin: 6px 8px;
-    padding: 8px 12px;
+    gap: var(--sp-6);
+    margin: var(--sp-3) var(--sp-4);
+    padding: var(--sp-4) var(--sp-6);
     border-radius: var(--r-sm);
-    background: color-mix(in srgb, var(--yellow) 14%, transparent);
+    background: var(--yellow-cont);
     color: var(--yellow);
-    font: 400 var(--fs-md)/1.45 var(--sans);
+    font: 400 var(--fs-md)/var(--lh-base) var(--sans);
 }
 .orch-paused span { flex: 1; }
 .orch-paused button,
 .orch-worker-line button.orch-link { flex: none; }
+/* The one thing to do about it, so a filled pill on the line's own hue rather
+   than an outline: an outlined button on a tinted ground read as a second box. */
 .orch-paused button {
-    padding: 4px 12px;
-    border: 1px solid var(--yellow);
-    border-radius: var(--r-xs);
-    background: transparent;
+    height: 28px;
+    padding: 0 var(--sp-6);
+    border: 0;
+    border-radius: var(--pill);
+    background: var(--yellow-cont-hover);
     color: var(--yellow);
-    font: 500 var(--fs-md)/var(--lh-snug) var(--sans);
+    font: 500 var(--fs-md)/var(--lh-none) var(--sans);
     cursor: pointer;
+    transition: background var(--dur-fast) var(--ease-standard);
 }
+.orch-paused button:hover { background: var(--yellow-cont-strong); }
 
 .orch-sec + .orch-sec { border-top: 1px solid var(--s3); }
 .orch-sec-head {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--sp-4);
     width: 100%;
-    padding: 7px 10px;
+    padding: var(--sp-4) var(--sp-5);
     border: 0;
     background: none;
     color: var(--text-2);
@@ -56,41 +63,49 @@
     cursor: pointer;
 }
 .orch-sec-head:hover { color: var(--text); }
+/* The shared caret (icons.js), not a ▸ character: the glyph's size and even its
+   presence depended on the font. */
 .orch-sec-head .twist {
-    display: inline-block;
-    width: 10px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 12px;
+    height: 12px;
     color: var(--text-4);
-    transition: transform var(--t-fast) var(--ease);
+    transition: transform var(--dur-fast) var(--ease-standard);
 }
 .orch-sec[data-open="true"] .twist { transform: rotate(90deg); }
 .orch-sec-title { flex: none; }
 .orch-count { margin-left: auto; color: var(--text-4); font: 400 var(--fs-xs)/var(--lh-snug) var(--mono); }
 .orch-count[data-hot="true"] { color: var(--blue); }
-.orch-sec-body { padding: 0 12px 10px 28px; font: 400 var(--fs-md)/var(--lh-base) var(--sans); color: var(--text-2); }
+/* Indented to the title: the head's padding, the caret, and the gap after it. */
+.orch-sec-body { padding: 0 var(--sp-6) var(--sp-5) calc(var(--sp-5) + 12px + var(--sp-4)); font: 400 var(--fs-md)/var(--lh-base) var(--sans); color: var(--text-2); }
 
 .orch-empty { color: var(--text-4); }
 .orch-summary { color: var(--text); }
-.orch-summary p { margin: 0 0 8px; }
+.orch-summary p { margin: 0 0 var(--sp-4); }
 .orch-summary p:last-child { margin-bottom: 0; }
 
 .orch-items, .orch-workers { list-style: none; margin: 0; padding: 0; }
-.orch-item { padding: 6px 0; }
+.orch-item { padding: var(--sp-3) 0; }
 .orch-item + .orch-item { border-top: 1px solid var(--s3); }
 .orch-item[data-status="resolved"], .orch-item[data-status="stale"] { opacity: 0.6; }
-.orch-item-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.orch-item-head { display: flex; align-items: center; gap: var(--sp-4); min-width: 0; }
 .orch-kind {
     flex: none;
-    padding: 0 6px;
-    border-radius: var(--r-xs);
+    /* 1px, not a step: at --lh-snug that makes the chip 17px, the height it had
+       and the height of the line beside it. */
+    padding: 1px var(--sp-3);
+    border-radius: var(--r-2xs);
     background: var(--s4);
     color: var(--text-2);
-    font: 500 var(--fs-xs)/17px var(--mono);
+    font: 500 var(--fs-xs)/var(--lh-snug) var(--mono);
 }
 .orch-item[data-kind="plan"] .orch-kind,
 .orch-item[data-kind="permission"] .orch-kind,
 .orch-item[data-kind="ask"] .orch-kind,
 .orch-item[data-kind="question"] .orch-kind {
-    background: color-mix(in srgb, var(--yellow) 18%, transparent);
+    background: var(--yellow-cont);
     color: var(--yellow);
 }
 .orch-item[data-status="new"] .orch-kind { box-shadow: inset 0 0 0 1px var(--blue); }
@@ -98,16 +113,23 @@
 .orch-status { margin-left: auto; }
 .orch-x {
     flex: none;
+    display: grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
     border: 0;
+    border-radius: var(--r-2xs);
     background: none;
     color: var(--text-4);
     font-size: 15px;
-    line-height: 1;
+    line-height: var(--lh-none);
     cursor: pointer;
+    transition: background var(--dur-fast) var(--ease-standard), color var(--dur-fast) var(--ease-standard);
 }
-.orch-x:hover { color: var(--text); }
+.orch-x:hover { background: var(--s3); color: var(--text); }
 
-.orch-text { margin-top: 3px; }
+.orch-text { margin-top: var(--sp-2); }
 .orch-text summary { cursor: pointer; color: var(--text-2); list-style: none; }
 .orch-text summary::-webkit-details-marker { display: none; }
 .orch-text[open] summary { display: none; }
@@ -135,55 +157,53 @@
 }
 .orch-link:hover { text-decoration: underline; }
 
-.orch-workers li { display: flex; align-items: center; gap: 10px; padding: 3px 0; }
+.orch-workers li { display: flex; align-items: center; gap: var(--sp-5); padding: var(--sp-2) 0; }
 .orch-workers li[data-closed="true"] { opacity: 0.55; }
 .orch-state { color: var(--text-3); font: 400 var(--fs-xs)/var(--lh-snug) var(--mono); }
 .orch-state[data-state="busy"], .orch-state[data-state="starting"] { color: var(--green); }
 .orch-branch { margin-left: auto; color: var(--text-4); font: 400 var(--fs-xs)/var(--lh-snug) var(--mono); }
 
-.orch-settings { display: grid; gap: 8px; }
-.orch-settings label { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.orch-settings input[type="number"] {
-    width: 56px;
-    padding: 2px 6px;
-    border: 1px solid var(--s5);
-    border-radius: var(--r-xs);
-    background: var(--s1);
-    color: var(--text);
-    font: inherit;
-    color-scheme: dark;
-}
+.orch-settings { display: grid; gap: var(--sp-4); }
+.orch-settings label { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
+/* A step up from the dock rather than a hairline round a sunk field: the
+   app's controls are tonal everywhere else. */
+.orch-settings input[type="number"],
 .orch-settings select {
-    padding: 2px 6px;
-    border: 1px solid var(--s5);
+    padding: var(--sp-1) var(--sp-3);
+    border: 0;
     border-radius: var(--r-xs);
-    background: var(--s1);
+    background: var(--s3);
     color: var(--text);
     font: inherit;
+    transition: background var(--dur-fast) var(--ease-standard);
 }
+.orch-settings input[type="number"] { width: 56px; color-scheme: dark; }
+.orch-settings select { cursor: pointer; }
+.orch-settings select:hover { background: var(--s4); }
+.orch-settings input[type="number"]:focus-visible { outline: none; box-shadow: var(--ring-inset); }
 .orch-note { color: var(--text-4); font-size: var(--fs-sm); }
 /* "All limits": one threshold per window, indented under the line that chose it. */
-.orch-limits { display: flex; flex-wrap: wrap; gap: 6px 18px; padding-left: 24px; }
-.orch-limits label { display: flex; align-items: center; gap: 6px; }
+.orch-limits { display: flex; flex-wrap: wrap; gap: var(--sp-3) var(--sp-7); padding-left: var(--sp-9); }
+.orch-limits label { display: flex; align-items: center; gap: var(--sp-3); }
 .orch-limits .orch-note { flex-basis: 100%; }
 .orch-wake { opacity: 0.85; }
 
 .orch-worker-line {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 7px 12px;
+    gap: var(--sp-5);
+    padding: var(--sp-4) var(--sp-6);
     color: var(--text-3);
     font: 400 var(--fs-md)/var(--lh-snug) var(--sans);
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .orch-dock, .orch-sec-head .twist { transition: none; }
+    .orch-dock, .orch-sec-head .twist, .orch-paused button, .orch-x { transition: none; }
 }
 
 /* The stand-in drawn while a conversation's orchestrator payload loads — see
    holdOrchestrator. Four lines at the height of four collapsed section heads, so
    the dock opens at roughly its real size and does not jump when it lands. */
-.orch-loading { padding: 8px 14px; }
-.orch-skel-line { height: 12px; width: 38%; margin: 12px 0; }
+.orch-loading { padding: var(--sp-4) var(--sp-6); }
+.orch-skel-line { height: 12px; width: 38%; margin: var(--sp-6) 0; }
 .orch-skel-line:nth-child(2n) { width: 26%; }
