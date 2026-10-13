@@ -26,12 +26,12 @@
     gap: 16px;
     padding: 22px 28px 16px;
 }
-.tb-title { margin: 0; font: 400 21px/1.3 var(--sans); color: var(--text); }
+.tb-title { margin: 0; font: 400 var(--fs-2xl)/var(--lh-tight) var(--sans); color: var(--text); }
 .tb-sub {
     margin: 5px 0 0;
     max-width: 640px;
-    font-size: 13px;
-    line-height: 1.6;
+    font-size: var(--fs-md);
+    line-height: var(--lh-prose);
     color: var(--text-3);
 }
 
@@ -52,7 +52,7 @@
     background: var(--s2);
     border-radius: var(--pill);
     color: var(--text);
-    font: 400 13px/1 var(--sans);
+    font: 400 var(--fs-md)/1 var(--sans);
     transition: background var(--t-fast) var(--ease);
 }
 .tb-search:hover, .tb-search:focus { background: var(--s3); }
@@ -103,7 +103,7 @@
     background: var(--s2);
     border-radius: var(--r);
     color: var(--text-3);
-    font-size: 13.5px;
+    font-size: var(--fs-base);
 }
 .tb-note p { margin: 0; }
 .tb-note p + p { margin-top: 6px; }
@@ -129,12 +129,12 @@
 }
 .tb-col-head h2 {
     margin: 0;
-    font: 500 13px/1.3 var(--sans);
+    font: 500 var(--fs-md)/var(--lh-tight) var(--sans);
     color: var(--text-2);
 }
 .tb-count {
     margin-left: auto;
-    font: 400 12px/1.3 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-tight) var(--sans);
     color: var(--text-4);
     font-variant-numeric: tabular-nums;
 }
@@ -153,7 +153,7 @@
     border-radius: var(--r-sm);
     background: var(--s2);
     color: var(--text-4);
-    font: 500 11px/1 var(--sans);
+    font: 500 var(--fs-xs)/1 var(--sans);
     cursor: pointer;
     transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
@@ -171,7 +171,7 @@
 
 .tb-empty {
     margin: 6px 8px;
-    font-size: 12.5px;
+    font-size: var(--fs-md);
     color: var(--text-4);
 }
 
@@ -181,7 +181,7 @@
     align-items: baseline;
     gap: 8px;
     margin: 8px 8px 0;
-    font: 500 11px/1.3 var(--sans);
+    font: 500 var(--fs-xs)/var(--lh-tight) var(--sans);
     letter-spacing: 0.04em;
     text-transform: uppercase;
     color: var(--text-4);
@@ -244,7 +244,7 @@
     background: none;
     border: 0;
     text-align: left;
-    font: 500 13px/1.4 var(--sans);
+    font: 500 var(--fs-md)/var(--lh-snug) var(--sans);
     color: var(--text);
     cursor: pointer;
     display: -webkit-box;
@@ -272,7 +272,7 @@
     flex-wrap: wrap;
     gap: 5px;
     min-width: 0;
-    font: 400 11.5px/1.4 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-snug) var(--sans);
     color: var(--text-4);
 }
 .tb-card-meta .dot { opacity: 0.6; }
@@ -285,17 +285,17 @@
     align-items: center;
     gap: 6px;
     min-width: 0;
-    font: 400 11.5px/1.4 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-snug) var(--sans);
     color: var(--text-4);
 }
-.tb-from .linky { font-size: 11.5px; }
+.tb-from .linky { font-size: var(--fs-sm); }
 
 .tb-tag {
     flex: none;
     padding: 1px 6px;
     border-radius: var(--pill);
     background: var(--s3);
-    font: 500 10px/1.5 var(--sans);
+    font: 500 var(--fs-2xs)/var(--lh-base) var(--sans);
     color: var(--text-4);
 }
 
@@ -305,7 +305,7 @@
     padding: 7px 9px;
     border-radius: var(--r-sm);
     background: var(--yellow-cont);
-    font-size: 12px;
+    font-size: var(--fs-sm);
     line-height: 1.45;
     color: var(--yellow);
 }
@@ -323,7 +323,7 @@
     border-radius: var(--r-sm);
     background: var(--s3);
     color: var(--text-2);
-    font: 500 12px/1 var(--sans);
+    font: 500 var(--fs-sm)/1 var(--sans);
     cursor: pointer;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -352,8 +352,8 @@
 }
 .tb-more p {
     margin: 8px 2px 0;
-    font-size: 11.5px;
-    line-height: 1.5;
+    font-size: var(--fs-sm);
+    line-height: var(--lh-base);
     color: var(--text-4);
 }
 
@@ -379,7 +379,7 @@
     border-radius: var(--r-sm);
     background: var(--s2);
     color: var(--text);
-    font: 400 12.5px/1 var(--sans);
+    font: 400 var(--fs-md)/1 var(--sans);
 }
 .tb-new-box::placeholder { color: var(--text-4); }
 .tb-new-box:focus-visible { outline: none; border-color: var(--s5); background: var(--s3); }
@@ -407,12 +407,12 @@
     gap: 16px;
     padding: 22px 28px 16px;
 }
-.dr-title { margin: 0; font: 400 21px/1.3 var(--sans); color: var(--text); }
+.dr-title { margin: 0; font: 400 var(--fs-2xl)/var(--lh-tight) var(--sans); color: var(--text); }
 .dr-sub {
     margin: 5px 0 0;
     max-width: 640px;
-    font-size: 13px;
-    line-height: 1.6;
+    font-size: var(--fs-md);
+    line-height: var(--lh-prose);
     color: var(--text-3);
 }
 .dr-head .dash-btn { margin-left: auto; flex: none; }
@@ -475,8 +475,8 @@
    past. `clip()` in app.js caps the text as well; this caps the height. */
 .dr-prompt {
     margin: 1px 0 2px;
-    font-size: 13px;
-    line-height: 1.6;
+    font-size: var(--fs-md);
+    line-height: var(--lh-prose);
     color: var(--text-2);
     white-space: pre-wrap;
     overflow: hidden;
@@ -494,8 +494,8 @@
     align-items: flex-start;
     gap: 10px;
 }
-.dr-note p { margin: 0; max-width: 520px; font-size: 13.5px; line-height: 1.65; color: var(--text-2); }
-.dr-note p.dim { font-size: 13px; color: var(--text-4); }
+.dr-note p { margin: 0; max-width: 520px; font-size: var(--fs-base); line-height: 1.65; color: var(--text-2); }
+.dr-note p.dim { font-size: var(--fs-md); color: var(--text-4); }
 
 /* ── the schedule builder ────────────────────────────────────────────────
    The trigger picker in the new-session dialog, in schedule mode. Six rows, one
@@ -545,7 +545,7 @@
     flex: none;
     width: 108px;
     margin: 0;
-    font: 500 12.5px/1.5 var(--sans);
+    font: 500 var(--fs-md)/var(--lh-base) var(--sans);
     color: var(--text-2);
     cursor: pointer;
 }
@@ -559,7 +559,7 @@
     align-items: center;
     flex-wrap: wrap;
     gap: 6px;
-    font: 400 12.5px/1.5 var(--sans);
+    font: 400 var(--fs-md)/var(--lh-base) var(--sans);
     color: var(--text-3);
 }
 .when-args.grow { flex: 1; min-width: 180px; }
@@ -571,7 +571,7 @@
     border-radius: var(--r-xs);
     padding: 6px 9px;
     font-family: var(--mono);
-    font-size: 12.5px;
+    font-size: var(--fs-sm);
     /* Without this the native date and time pickers come out light-on-light.
        Scoped here rather than on :root — see the section note. */
     color-scheme: dark;
@@ -582,7 +582,7 @@
     background: var(--s2);
     border-radius: var(--pill);
     padding: 5px 10px;
-    font: 400 12px/1.2 var(--sans);
+    font: 400 var(--fs-sm)/1.2 var(--sans);
     color: var(--text-2);
     cursor: pointer;
     transition: background var(--t-fast) var(--ease);
@@ -613,7 +613,7 @@
     padding: 0 9px;
     border-radius: var(--pill);
     background: var(--s2);
-    font: 500 11.5px/1 var(--sans);
+    font: 500 var(--fs-sm)/1 var(--sans);
     color: var(--text-3);
     cursor: pointer;
     user-select: none;
@@ -656,8 +656,8 @@
    stopped happening" impossible to scroll past. */
 
 .sched-head { flex: none; display: flex; align-items: flex-start; gap: 16px; padding: 22px 28px 16px; }
-.sched-title { margin: 0; font: 400 21px/1.3 var(--sans); color: var(--text); }
-.sched-sub { margin: 5px 0 0; max-width: 640px; font-size: 13px; line-height: 1.6; color: var(--text-3); }
+.sched-title { margin: 0; font: 400 var(--fs-2xl)/var(--lh-tight) var(--sans); color: var(--text); }
+.sched-sub { margin: 5px 0 0; max-width: 640px; font-size: var(--fs-md); line-height: var(--lh-prose); color: var(--text-3); }
 .sched-head .dash-btn { margin-left: auto; flex: none; }
 
 .sched-body {
@@ -763,7 +763,7 @@
 
 .sched-last {
     margin: 2px 0 0;
-    font-size: 12.5px;
+    font-size: var(--fs-md);
     line-height: 1.55;
     color: var(--text-3);
     display: flex;

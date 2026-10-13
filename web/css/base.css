@@ -271,7 +271,7 @@ html, body { height: 100%; margin: 0; }
 body {
     background: var(--bg);
     color: var(--text);
-    font: 400 14px/1.6 var(--sans);
+    font: 400 var(--fs-base)/var(--lh-prose) var(--sans);
     overflow: hidden;
     -webkit-font-smoothing: antialiased;
 }
@@ -370,7 +370,7 @@ a:hover { text-decoration: underline; }
     white-space: nowrap;
     letter-spacing: 0.01em;
 }
-.wordmark b { color: var(--blue); font-size: 11px; }
+.wordmark b { color: var(--blue); font-size: var(--fs-xs); }
 
 /* Only present on a development instance — the everyday window has no badge. */
 .dev-badge {
@@ -379,7 +379,7 @@ a:hover { text-decoration: underline; }
     border-radius: var(--pill);
     background: var(--amber-cont);
     color: var(--yellow);
-    font: 500 11px/1 var(--mono);
+    font: 500 var(--fs-xs)/1 var(--mono);
     letter-spacing: 0.02em;
 }
 
@@ -398,7 +398,7 @@ a:hover { text-decoration: underline; }
 .bar-search:hover { background: var(--s3); }
 .bar-search:focus-within { background: var(--s3); }
 .bar-search svg { flex: none; color: var(--text-3); }
-.bar-search input { flex: 1; min-width: 0; font-size: 14px; }
+.bar-search input { flex: 1; min-width: 0; font-size: var(--fs-base); }
 .bar-search input::placeholder { color: var(--text-3); }
 
 .bar-spacer { flex: 1; }
@@ -411,7 +411,7 @@ a:hover { text-decoration: underline; }
     gap: 8px;
     height: 34px;
     padding: 0 14px;
-    font: 500 12.5px/1 var(--sans);
+    font: 500 var(--fs-md)/1 var(--sans);
     color: var(--text-2);
     background: var(--s2);
     border-radius: var(--pill);
@@ -440,7 +440,7 @@ a:hover { text-decoration: underline; }
     border-radius: var(--pill);
     background: var(--s4);
     color: var(--text-2);
-    font: 500 11px/19px var(--mono);
+    font: 500 var(--fs-xs)/19px var(--mono);
     text-align: center;
     font-variant-numeric: tabular-nums;
 }
@@ -453,7 +453,7 @@ a:hover { text-decoration: underline; }
     gap: 8px;
     height: 34px;
     padding: 0 14px;
-    font: 500 12.5px/1 var(--sans);
+    font: 500 var(--fs-md)/1 var(--sans);
     color: var(--text-2);
     background: var(--s2);
     border-radius: var(--pill);
@@ -479,7 +479,7 @@ a:hover { text-decoration: underline; }
     min-width: 17px;
     height: 17px;
     padding: 0 5px;
-    font-size: 10px;
+    font-size: var(--fs-2xs);
     line-height: 17px;
 }
 #bar-more[aria-expanded="true"] { background: var(--s3); color: var(--text); }
@@ -530,7 +530,7 @@ a:hover { text-decoration: underline; }
     gap: 9px;
     height: 34px;
     padding: 0 13px;
-    font: 500 12.5px/1 var(--sans);
+    font: 500 var(--fs-md)/1 var(--sans);
     color: var(--text-2);
     background: var(--s2);
     border-radius: var(--pill);
@@ -607,7 +607,7 @@ a:hover { text-decoration: underline; }
 
 /* One window's worth: a label, a bar, a number. */
 .q-win { display: flex; align-items: center; gap: 5px; }
-.q-win .q-label { color: var(--text-4); font-size: 11.5px; }
+.q-win .q-label { color: var(--text-4); font-size: var(--fs-sm); }
 
 .q-bar {
     position: relative;
@@ -689,7 +689,7 @@ a:hover { text-decoration: underline; }
     align-items: center;
     gap: 8px;
     margin-bottom: 10px;
-    font: 500 11px/1 var(--sans);
+    font: 500 var(--fs-xs)/1 var(--sans);
     letter-spacing: 0.04em;
     text-transform: uppercase;
     color: var(--text-4);
@@ -704,7 +704,7 @@ a:hover { text-decoration: underline; }
     border-radius: var(--r-xs);
     background: none;
     color: var(--text-4);
-    font: 400 11.5px/1.5 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
     letter-spacing: normal;
     text-transform: none;
     cursor: pointer;
@@ -727,10 +727,10 @@ a:hover { text-decoration: underline; }
     align-items: baseline;
     justify-content: space-between;
     gap: 10px;
-    font: 400 13px/1.4 var(--sans);
+    font: 400 var(--fs-md)/var(--lh-snug) var(--sans);
     color: var(--text-2);
 }
-.q-row-top .q-pct { font: 500 13px/1.4 var(--sans); color: var(--text); font-variant-numeric: tabular-nums; }
+.q-row-top .q-pct { font: 500 var(--fs-md)/var(--lh-snug) var(--sans); color: var(--text); font-variant-numeric: tabular-nums; }
 .q-row.stale .q-row-top .q-pct { color: var(--text-4); }
 
 .q-row .q-bar { width: 100%; height: 5px; margin: 6px 0 5px; }
@@ -742,7 +742,7 @@ a:hover { text-decoration: underline; }
     display: flex;
     justify-content: space-between;
     gap: 10px;
-    font: 400 11.5px/1.5 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
     color: var(--text-4);
     font-variant-numeric: tabular-nums;
 }
@@ -751,12 +751,12 @@ a:hover { text-decoration: underline; }
 
 .quota-events {
     margin-top: 10px;
-    font: 400 11.5px/1.6 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-prose) var(--sans);
     color: var(--text-4);
 }
 .quota-events:empty { display: none; }
 .quota-events .q-ev-head {
-    font: 500 11px/1 var(--sans);
+    font: 500 var(--fs-xs)/1 var(--sans);
     letter-spacing: 0.04em;
     text-transform: uppercase;
     color: var(--text-4);
@@ -766,14 +766,14 @@ a:hover { text-decoration: underline; }
 
 .quota-note {
     margin-top: 10px;
-    font: 400 11.5px/1.55 var(--sans);
+    font: 400 var(--fs-sm)/1.55 var(--sans);
     color: var(--text-4);
 }
 .quota-note:empty { display: none; }
 .quota-note div + div { margin-top: 7px; }
 .quota-note .warn { color: var(--yellow); }
 .quota-note code {
-    font: 400 11px/1.5 var(--mono);
+    font: 400 var(--fs-xs)/var(--lh-base) var(--mono);
     color: var(--text-3);
     word-break: break-all;
 }
@@ -811,10 +811,10 @@ a:hover { text-decoration: underline; }
 .quota-restart svg { flex: none; margin-top: 2px; }
 
 .qr-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.qr-label { font: 400 12.5px/1.3 var(--sans); }
+.qr-label { font: 400 var(--fs-md)/var(--lh-tight) var(--sans); }
 /* A worktree checkout is a long path with no spaces in it, and this popover is
    306px wide — without this it runs off the edge rather than wrapping. */
-.qr-sub { font: 400 11px/1.4 var(--sans); color: var(--text-4); overflow-wrap: anywhere; }
+.qr-sub { font: 400 var(--fs-xs)/var(--lh-snug) var(--sans); color: var(--text-4); overflow-wrap: anywhere; }
 .qr-sub:empty { display: none; }
 
 @media (prefers-reduced-motion: reduce) { .quota-menu { animation: none; } }
@@ -826,19 +826,19 @@ a:hover { text-decoration: underline; }
 .cv-pill { color: var(--yellow); white-space: nowrap; }
 .cv-pill:hover, .cv-pill[aria-expanded="true"] { color: var(--yellow); }
 .cv-row { display: flex; justify-content: space-between; gap: 12px;
-    font: 400 12.5px/1.4 var(--sans); color: var(--text-3); }
-.cv-row b { font: 500 12.5px/1.4 var(--mono); color: var(--text); }
-.cv-stale-head { font: 400 12.5px/1.4 var(--sans); color: var(--text-3); margin-bottom: 4px; }
+    font: 400 var(--fs-md)/var(--lh-snug) var(--sans); color: var(--text-3); }
+.cv-row b { font: 500 var(--fs-sm)/var(--lh-snug) var(--mono); color: var(--text); }
+.cv-stale-head { font: 400 var(--fs-md)/var(--lh-snug) var(--sans); color: var(--text-3); margin-bottom: 4px; }
 .cv-stale {
     display: flex; justify-content: space-between; gap: 10px;
     width: 100%; padding: 4px 6px; margin: 0 -6px;
     border: 0; border-radius: var(--r-xs);
     background: none; color: var(--text-2); text-align: left; cursor: pointer;
-    font: 400 12px/1.4 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-snug) var(--sans);
 }
 .cv-stale:hover { background: var(--s4); color: var(--text); }
 .cv-stale-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cv-stale-ver { flex: none; font: 400 11px/1.6 var(--mono); color: var(--text-4); }
+.cv-stale-ver { flex: none; font: 400 var(--fs-xs)/var(--lh-prose) var(--mono); color: var(--text-4); }
 .cv-old { color: var(--yellow); }
 
 

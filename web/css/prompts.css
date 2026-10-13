@@ -39,17 +39,17 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    font: 400 13px/1.5 var(--sans);
+    font: 400 var(--fs-md)/var(--lh-base) var(--sans);
 }
 .perm-tool {
-    font: 500 12.5px/1.5 var(--mono);
+    font: 500 var(--fs-md)/var(--lh-base) var(--mono);
     color: var(--yellow);
 }
 .perm-title { color: var(--text-3); }
 
 .perm-arg {
     margin-top: 7px;
-    font: 400 12px/1.6 var(--mono);
+    font: 400 var(--fs-sm)/var(--lh-prose) var(--mono);
     color: var(--text-2);
     /* A command worth approving is worth reading in full, so it wraps rather
        than being clipped the way a settled tool row is. */
@@ -61,7 +61,7 @@
 
 .perm-why {
     margin-top: 6px;
-    font: 400 11.5px/1.5 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
     color: var(--text-4);
 }
 
@@ -76,7 +76,7 @@
     border-radius: var(--pill);
     background: var(--s3);
     color: var(--text-2);
-    font: 500 12px/1 var(--sans);
+    font: 500 var(--fs-sm)/1 var(--sans);
     display: inline-flex;
     align-items: center;
     gap: 7px;
@@ -90,7 +90,7 @@
 .perm-btn.deny:hover:not(:disabled) { background: var(--red-cont); }
 
 .perm-btn kbd {
-    font: 500 10px/1 var(--mono);
+    font: 500 var(--fs-2xs)/1 var(--mono);
     padding: 3px 5px;
     border-radius: var(--r-xs);
     background: var(--recess);
@@ -134,10 +134,10 @@
     gap: 10px;
     padding: 14px 28px 13px max(28px, calc((100% - 860px) / 2 + 28px));
     border-bottom: 1px solid var(--outline-soft);
-    font: 400 13px/1.5 var(--sans);
+    font: 400 var(--fs-md)/var(--lh-base) var(--sans);
 }
 .plan-head .spacer { flex: 1; }
-.plan-agent { font: 400 11.5px/1.5 var(--sans); color: var(--text-4); }
+.plan-agent { font: 400 var(--fs-sm)/var(--lh-base) var(--sans); color: var(--text-4); }
 
 .plan-aside {
     display: inline-flex;
@@ -148,7 +148,7 @@
     border-radius: var(--pill);
     background: var(--s3);
     color: var(--text-3);
-    font: 500 12px/1 var(--sans);
+    font: 500 var(--fs-sm)/1 var(--sans);
     cursor: pointer;
     transition: background var(--t-fast) var(--ease);
 }
@@ -193,7 +193,7 @@
     gap: 9px;
     max-width: 860px;
     padding: 3px 0;
-    font: 400 12px/1.6 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-prose) var(--sans);
     color: var(--text-3);
 }
 .plan-elsewhere-mark { flex: none; color: var(--yellow); }
@@ -223,7 +223,7 @@
     background: var(--yellow-cont);
     border-bottom: 1px solid var(--outline-soft);
     color: var(--text-2);
-    font: 400 12.5px/1.5 var(--sans);
+    font: 400 var(--fs-md)/var(--lh-base) var(--sans);
     text-align: left;
     cursor: pointer;
     transition: background var(--t-fast) var(--ease);
@@ -251,7 +251,7 @@
     border: 1px solid var(--outline);
     border-radius: var(--r-sm);
     color: var(--text);
-    font: 400 12.5px/1.6 var(--sans);
+    font: 400 var(--fs-md)/var(--lh-prose) var(--sans);
     resize: vertical;
 }
 .perm-fb:focus { outline: none; border-color: var(--blue); }
@@ -293,7 +293,7 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    font: 400 13px/1.5 var(--sans);
+    font: 400 var(--fs-md)/var(--lh-base) var(--sans);
 }
 .ask-dock-head .spacer { flex: 1; }
 
@@ -302,7 +302,7 @@
    disabled button, which is nowhere. */
 .ask-nav { display: flex; align-items: center; gap: 8px; }
 .ask-nav-count {
-    font: 400 11.5px/1 var(--sans);
+    font: 400 var(--fs-sm)/1 var(--sans);
     color: var(--text-4);
     font-variant-numeric: tabular-nums;
 }
@@ -331,7 +331,7 @@
     border-radius: 50%;
     background: var(--s3);
     color: var(--text-2);
-    font: 400 14px/1 var(--sans);
+    font: 400 var(--fs-base)/1 var(--sans);
     transition: background var(--t-fast) var(--ease);
 }
 .ask-step:hover:not(:disabled) { background: var(--s4); }
@@ -347,7 +347,7 @@
 
 .ask-remain {
     align-self: center;
-    font: 400 11.5px/1.5 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
     color: var(--text-4);
 }
 
@@ -366,7 +366,7 @@
     align-items: baseline;
     gap: 8px;
     margin: 8px 0 9px;
-    font: 400 13px/1.5 var(--sans);
+    font: 400 var(--fs-md)/var(--lh-base) var(--sans);
     color: var(--text);
 }
 .perm-q-chip {
@@ -375,7 +375,7 @@
     border-radius: var(--pill);
     background: var(--s4);
     color: var(--text-3);
-    font: 500 10.5px/1.5 var(--sans);
+    font: 500 var(--fs-xs)/var(--lh-base) var(--sans);
     text-transform: lowercase;
 }
 .perm-q-text { min-width: 0; }
@@ -400,13 +400,13 @@
 .perm-opt-body { display: block; min-width: 0; flex: 1; }
 .perm-opt-label {
     display: block;
-    font: 500 12.5px/1.5 var(--sans);
+    font: 500 var(--fs-md)/var(--lh-base) var(--sans);
     color: var(--text);
 }
 .perm-opt-desc {
     display: block;
     margin-top: 2px;
-    font: 400 11.5px/1.55 var(--sans);
+    font: 400 var(--fs-sm)/1.55 var(--sans);
     color: var(--text-3);
 }
 
@@ -422,7 +422,7 @@
     overflow: auto;
     background: var(--s1);
     border-radius: var(--r-xs);
-    font: 400 11.5px/1.6 var(--mono);
+    font: 400 var(--fs-xs)/var(--lh-prose) var(--mono);
     color: var(--text-2);
     white-space: pre-wrap;
     word-break: break-word;
@@ -441,13 +441,13 @@
     border: 1px solid var(--outline-soft);
     border-radius: var(--r-xs);
     color: var(--text);
-    font: 400 12px/1.5 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
 }
 .perm-other:focus { outline: none; border-color: var(--blue); }
 .perm-other::placeholder { color: var(--text-4); }
 
 /* Questions as they read back in the transcript, once the card is long gone. */
-.qview { font: 400 12px/1.7 var(--sans); }
+.qview { font: 400 var(--fs-sm)/1.7 var(--sans); }
 .qview-q {
     display: flex;
     gap: 8px;
@@ -490,9 +490,9 @@
    .modal-head is built for, so it sets its own type and spacing. `.spacer` is
    scoped per container throughout this file — there is no global one — so the
    push to the right has to be declared here too. */
-.review-modal .modal-head { gap: 10px; font: 400 14px/1.5 var(--sans); }
+.review-modal .modal-head { gap: 10px; font: 400 var(--fs-base)/var(--lh-base) var(--sans); }
 .review-modal .modal-head .spacer { flex: 1; }
-.review-when { flex: none; font: 400 12px/1.5 var(--sans); color: var(--text-4); }
+.review-when { flex: none; font: 400 var(--fs-sm)/var(--lh-base) var(--sans); color: var(--text-4); }
 
 /* The dialog takes focus on open so the keyboard is inside the scrim rather
    than out in the rail behind it. It is a tabindex="-1" holder and never a
@@ -519,11 +519,11 @@
 .review-said-head {
     display: block;
     margin-bottom: 4px;
-    font: 500 10.5px/1.5 var(--sans);
+    font: 500 var(--fs-xs)/var(--lh-base) var(--sans);
     color: var(--text-4);
     text-transform: lowercase;
 }
-.review-said { font: 400 12.5px/1.6 var(--sans); color: var(--text-2); }
+.review-said { font: 400 var(--fs-md)/var(--lh-prose) var(--sans); color: var(--text-2); }
 
 /* The same measure as .plan-doc, because prose is read at about this width —
    but with its own padding rather than that rule's centring, which .plan-foot
@@ -574,7 +574,7 @@
 /* The dock marks its chosen option with `:has(input:checked)`; there are no
    inputs here, so the same look hangs off the attribute instead. */
 .qrev .perm-opt[data-chosen] { border-color: var(--blue); background: var(--blue-tint); }
-.qrev-mark { flex: none; margin-top: 1px; color: var(--text-4); font-size: 12px; }
+.qrev-mark { flex: none; margin-top: 1px; color: var(--text-4); font-size: var(--fs-sm); }
 .qrev .perm-opt[data-chosen] .qrev-mark { color: var(--blue); }
 
 /* A preview is a drawn thing as often as it is text — a mocked-up row, a table.
@@ -594,19 +594,19 @@
     padding: 8px 11px;
     background: var(--blue-tint);
     border-radius: var(--r-sm);
-    font: 400 12.5px/1.6 var(--sans);
+    font: 400 var(--fs-md)/var(--lh-prose) var(--sans);
     color: var(--text);
 }
 .qrev-said-head {
     display: block;
     margin-bottom: 3px;
-    font: 500 10.5px/1.5 var(--sans);
+    font: 500 var(--fs-xs)/var(--lh-base) var(--sans);
     color: var(--text-4);
     text-transform: lowercase;
 }
 .qrev-none {
     margin-top: 8px;
-    font: 400 12px/1.6 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-prose) var(--sans);
     color: var(--text-4);
     font-style: italic;
 }
@@ -615,7 +615,7 @@
    record; this is only so the card does not vanish without a word. */
 .perm-done {
     margin: 4px 0 4px calc(var(--gutter) + 16px);
-    font: 400 11.5px/1.6 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-prose) var(--sans);
     color: var(--text-4);
 }
 

@@ -33,7 +33,7 @@
     padding: 0 12px;
     background: var(--s2);
     color: var(--text-3);
-    font: 500 12px/1 var(--sans);
+    font: 500 var(--fs-sm)/1 var(--sans);
     border-radius: var(--pill);
     white-space: nowrap;
     transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
@@ -93,7 +93,7 @@
     padding: 0 18px;
     background: var(--s3);
     color: var(--text);
-    font: 500 14px/1 var(--sans);
+    font: 500 var(--fs-base)/1 var(--sans);
     border-radius: var(--r-lg) 0 0 var(--r-lg);
     transition: background var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
 }
@@ -156,7 +156,7 @@
 .new-menu .sep { height: 1px; margin: 5px 8px; background: var(--outline-soft); }
 .new-menu .menu-note {
     padding: 9px 10px;
-    font: 400 12px/1.5 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
     color: var(--text-4);
 }
 
@@ -182,7 +182,7 @@
     width: 100%;
     padding: 10px 12px;
     border-radius: var(--r);
-    font: 500 11.5px/1.4 var(--sans);
+    font: 500 var(--fs-sm)/var(--lh-snug) var(--sans);
     letter-spacing: 0.04em;
     color: var(--text-3);
     transition: background var(--t-fast) var(--ease);
@@ -220,7 +220,7 @@
     background: var(--s2);
     margin: 2px 2px 4px;
 }
-.rail-group.nested > .group-head { padding: 7px 10px; font-size: 11px; }
+.rail-group.nested > .group-head { padding: 7px 10px; font-size: var(--fs-xs); }
 .rail-group.nested > .group-head:hover { background: var(--s3); }
 /* --row-bg is what .strip-actions fades its overlay into. Left at --s1 the
    buttons would sit on a visible seam over a card that is no longer --s1. */
@@ -323,8 +323,8 @@
     margin: -2px 0 0 -5px;
     padding: 1px 4px;
     font: inherit;
-    font-size: 13.5px;
-    line-height: 1.4;
+    font-size: var(--fs-base);
+    line-height: var(--lh-snug);
     color: var(--text);
     background: var(--bg);
     border: 1px solid var(--blue);
@@ -429,7 +429,7 @@
     border-radius: var(--r-xs);
     background: var(--s4);
     color: var(--text-3);
-    font: 500 10px/16px var(--mono);
+    font: 500 var(--fs-2xs)/16px var(--mono);
     letter-spacing: 0.06em;
     text-transform: uppercase;
 }
@@ -442,7 +442,7 @@
     border-radius: var(--r-xs);
     background: color-mix(in srgb, var(--blue) 22%, transparent);
     color: var(--blue);
-    font: 500 10px/16px var(--mono);
+    font: 500 var(--fs-2xs)/16px var(--mono);
     letter-spacing: 0.04em;
 }
 .tag-orch.paused {
@@ -453,8 +453,8 @@
 /* State reads as a small dot before the title, not a slab edge. */
 .strip-title {
     display: block;
-    font-size: 13.5px;
-    line-height: 1.4;
+    font-size: var(--fs-base);
+    line-height: var(--lh-snug);
     color: var(--text-2);
     overflow: hidden;
     display: -webkit-box;
@@ -468,7 +468,7 @@
 .strip-standing {
     display: block;
     margin-top: 2px;
-    font: 400 12px/1.45 var(--sans);
+    font: 400 var(--fs-sm)/1.45 var(--sans);
     color: var(--text-3);
     white-space: nowrap;
     overflow: hidden;
@@ -482,7 +482,7 @@
     align-items: center;
     gap: 6px;
     margin-top: 3px;
-    font: 400 11.5px/1.5 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
     color: var(--text-4);
     white-space: nowrap;
     overflow: hidden;
@@ -491,7 +491,7 @@
 .strip-meta .wt {
     color: var(--text-3);
     font-family: var(--mono);
-    font-size: 11px;
+    font-size: var(--fs-xs);
     /* Gave up none of its width before, so on a pinned or labelled row it took
        what the activity line needed. It is the longest thing on the line and the
        least urgent, so it is the one that abbreviates. */
@@ -519,7 +519,7 @@
     border-radius: var(--pill);
     background: var(--blue-tint);
     color: var(--blue);
-    font-size: 10.5px;
+    font-size: var(--fs-xs);
 }
 
 /* Messages waiting on a clock rather than on a turn. The same badge in the amber
@@ -531,7 +531,7 @@
     border-radius: var(--pill);
     background: var(--yellow-cont-hover);
     color: var(--yellow);
-    font-size: 10.5px;
+    font-size: var(--fs-xs);
 }
 
 /* Whether a session is doing anything, at the head of the line.
@@ -573,7 +573,7 @@
     border-radius: var(--r-xs);
     background: var(--s3);
     color: var(--text-4);
-    font: 500 10px/16px var(--mono);
+    font: 500 var(--fs-2xs)/16px var(--mono);
     letter-spacing: 0.06em;
     text-transform: uppercase;
 }
@@ -581,9 +581,9 @@
 .rail-empty {
     padding: 34px 20px;
     color: var(--text-3);
-    font-size: 13.5px;
+    font-size: var(--fs-base);
     text-align: center;
-    line-height: 1.6;
+    line-height: var(--lh-prose);
 }
 
 
@@ -598,7 +598,7 @@
     border-radius: var(--pill);
     background: var(--red-cont);
     color: var(--red);
-    font-size: 10.5px;
+    font-size: var(--fs-xs);
 }
 .strip[data-stalled="true"] .strip-meta::before {
     background: var(--red);
@@ -618,7 +618,7 @@
     width: auto;
     padding: 0 10px;
     border-radius: var(--pill);
-    font-size: 11px;
+    font-size: var(--fs-xs);
     color: var(--red);
     background: var(--red-cont);
 }

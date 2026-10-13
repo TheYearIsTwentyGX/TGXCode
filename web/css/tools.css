@@ -30,7 +30,7 @@
     padding: 8px 15px;
     cursor: pointer;
     list-style: none;
-    font: 400 13px/1.5 var(--sans);
+    font: 400 var(--fs-md)/var(--lh-base) var(--sans);
     color: var(--text-3);
     border-radius: var(--r);
     transition: background var(--t-fast) var(--ease);
@@ -55,7 +55,7 @@
 
 :is(.tool, .trow) .tname {
     font-family: var(--mono);
-    font-size: 12.5px;
+    font-size: var(--fs-md);
     font-weight: 500;
     color: var(--text-2);
     flex: none;
@@ -69,13 +69,13 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     font-family: var(--mono);
-    font-size: 12px;
+    font-size: var(--fs-sm);
     color: var(--text-4);
 }
 
 :is(.tool, .trow) .tmeta {
     flex: none;
-    font-size: 11.5px;
+    font-size: var(--fs-sm);
     color: var(--text-4);
     font-variant-numeric: tabular-nums;
 }
@@ -113,7 +113,7 @@
 .tool-section { margin-top: 12px; }
 .tool-section > h4 {
     margin: 0 0 6px;
-    font: 500 11.5px/1 var(--sans);
+    font: 500 var(--fs-sm)/1 var(--sans);
     color: var(--text-4);
     letter-spacing: 0.02em;
 }
@@ -123,7 +123,7 @@
     padding: 12px 14px;
     background: var(--bg);
     border-radius: var(--r-sm);
-    font: 400 12.5px/1.6 var(--mono);
+    font: 400 var(--fs-md)/var(--lh-prose) var(--mono);
     white-space: pre-wrap;
     word-break: break-word;
     overflow-x: auto;
@@ -137,7 +137,7 @@
     display: grid;
     grid-template-columns: max-content 1fr;
     gap: 4px 16px;
-    font: 400 12.5px/1.6 var(--mono);
+    font: 400 var(--fs-md)/var(--lh-prose) var(--mono);
     padding: 12px 14px;
     background: var(--bg);
     border-radius: var(--r-sm);
@@ -149,7 +149,7 @@
     margin-top: 10px;
     height: 32px;
     padding: 0 16px;
-    font: 500 12.5px/1 var(--sans);
+    font: 500 var(--fs-md)/1 var(--sans);
     color: var(--blue);
     background: transparent;
     border-radius: var(--pill);
@@ -162,14 +162,14 @@
 .diff {
     background: var(--bg);
     border-radius: var(--r-sm);
-    font: 400 12.5px/1.6 var(--mono);
+    font: 400 var(--fs-md)/var(--lh-prose) var(--mono);
     overflow-x: auto;
     padding: 6px 0;
 }
 .diff .hunk {
     padding: 4px 14px;
     color: var(--text-4);
-    font-size: 11.5px;
+    font-size: var(--fs-sm);
 }
 .diff .dl { padding: 0 14px; white-space: pre; }
 /* Kept low-saturation: a long diff should not become a wall of colour. */
@@ -186,7 +186,7 @@
 .subagent-log .ev { grid-template-columns: 44px 1fr; column-gap: 12px; }
 
 .subagent-meta {
-    font: 400 11.5px/1.6 var(--mono);
+    font: 400 var(--fs-xs)/var(--lh-prose) var(--mono);
     color: var(--text-3);
 }
 .subagent[data-status="running"] .subagent-meta { color: var(--yellow); }
@@ -203,7 +203,7 @@
 
 /* ── prose ───────────────────────────────────────────────────────────── */
 
-.prose { font-size: 14px; line-height: 1.72; color: var(--text-2); }
+.prose { font-size: var(--fs-base); line-height: 1.72; color: var(--text-2); }
 .prose > *:first-child { margin-top: 0; }
 .prose > *:last-child { margin-bottom: 0; }
 .prose p { margin: 0 0 0.8em; }
@@ -260,7 +260,7 @@
 }
 
 .table-wrap { overflow-x: auto; margin: 0 0 1em; border-radius: var(--r-sm); }
-.prose table { border-collapse: collapse; font-size: 13px; min-width: 100%; }
+.prose table { border-collapse: collapse; font-size: var(--fs-md); min-width: 100%; }
 .prose th, .prose td { padding: 8px 14px; text-align: left; }
 .prose th {
     background: var(--s3);
@@ -286,7 +286,7 @@
     min-height: 34px;
 }
 .code-lang {
-    font: 400 11.5px/1 var(--sans);
+    font: 400 var(--fs-sm)/1 var(--sans);
     color: var(--text-4);
     letter-spacing: 0.02em;
 }
@@ -295,7 +295,7 @@
     height: 26px;
     padding: 0 12px;
     border-radius: var(--pill);
-    font: 500 11.5px/1 var(--sans);
+    font: 500 var(--fs-sm)/1 var(--sans);
     color: var(--text-3);
     transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
@@ -304,7 +304,7 @@
 
 .code-block pre { margin: 0; padding: 4px 16px 16px; overflow-x: auto; max-height: 520px; }
 .code-block code {
-    font: 400 12.5px/1.65 var(--mono);
+    font: 400 var(--fs-md)/1.65 var(--mono);
     background: none;
     padding: 0;
     color: var(--text-2);
@@ -373,7 +373,7 @@
 .term-dir {
     flex: 0 1 auto;
     min-width: 0;
-    font: 400 11.5px/1.5 var(--mono);
+    font: 400 var(--fs-xs)/var(--lh-base) var(--mono);
     color: var(--text-4);
     white-space: nowrap;
     overflow: hidden;
@@ -384,7 +384,7 @@
 .term-moved {
     flex: 0 1 auto;
     min-width: 0;
-    font: 400 11.5px/1.5 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
     color: var(--yellow);
     white-space: nowrap;
     overflow: hidden;
@@ -397,7 +397,7 @@
     flex: none;
     padding: 3px 10px;
     border-radius: var(--pill);
-    font: 400 12px/1.4 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-snug) var(--sans);
     color: var(--text-3);
     transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
@@ -428,7 +428,7 @@
     gap: 5px;
     padding: 3px 9px;
     border-radius: var(--pill);
-    font: 400 11.5px/1.5 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
     color: var(--text-4);
     white-space: nowrap;
     transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);

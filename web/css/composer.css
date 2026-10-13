@@ -37,7 +37,7 @@
     height: 22px;
     margin-bottom: 8px;
     padding-left: 4px;
-    font: 400 12.5px/1 var(--sans);
+    font: 400 var(--fs-md)/1 var(--sans);
     color: var(--text-3);
 }
 .status-line .led { width: 7px; height: 7px; border-radius: 50%; background: var(--text-4); flex: none; }
@@ -72,7 +72,7 @@
     margin-left: auto;
     height: 28px;
     padding: 0 14px;
-    font: 500 12px/1 var(--sans);
+    font: 500 var(--fs-sm)/1 var(--sans);
     color: var(--red);
     border-radius: var(--pill);
     transition: background var(--t-fast) var(--ease);
@@ -96,7 +96,7 @@
     align-items: center;
     gap: 10px;
     padding: 0 6px 7px 8px;
-    font: 400 11.5px/1 var(--sans);
+    font: 400 var(--fs-sm)/1 var(--sans);
     color: var(--text-4);
 }
 .queue-count { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -112,7 +112,7 @@
 }
 .queue-keys b {
     margin-left: 7px;
-    font: 500 10.5px/1 var(--mono);
+    font: 500 var(--fs-xs)/1 var(--mono);
     color: var(--text-3);
 }
 .queue-keys b:first-child { margin-left: 0; }
@@ -121,7 +121,7 @@
     flex: none;
     padding: 3px 9px;
     border-radius: var(--pill);
-    font: 400 11.5px/1 var(--sans);
+    font: 400 var(--fs-sm)/1 var(--sans);
     color: var(--text-3);
     transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
@@ -167,7 +167,7 @@
     flex: none;
     width: 14px;
     color: var(--text-4);
-    font-size: 12px;
+    font-size: var(--fs-sm);
     text-align: center;
     cursor: grab;
 }
@@ -183,7 +183,7 @@
     border-radius: 50%;
     background: var(--s4);
     color: var(--text-3);
-    font: 500 10.5px/17px var(--mono);
+    font: 500 var(--fs-xs)/17px var(--mono);
     text-align: center;
 }
 
@@ -191,7 +191,7 @@
    the same kind of fact about the chip: not its content, but what happens to it. */
 .queue-files {
     flex: none;
-    font: 400 10.5px/17px var(--sans);
+    font: 400 var(--fs-xs)/17px var(--sans);
     color: var(--text-3);
     cursor: default;
 }
@@ -201,7 +201,7 @@
     min-width: 0;
     padding: 0;
     text-align: left;
-    font: 400 12.5px/1.5 var(--sans);
+    font: 400 var(--fs-md)/var(--lh-base) var(--sans);
     color: var(--text-2);
     white-space: nowrap;
     overflow: hidden;
@@ -220,12 +220,12 @@
 .queue-act {
     padding: 3px 8px;
     border-radius: var(--pill);
-    font: 400 11.5px/1.3 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-tight) var(--sans);
     color: var(--text-4);
     transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
 .queue-act:hover { background: var(--s4); color: var(--text-2); }
-.queue-act.danger { font-size: 14px; line-height: 1; padding: 3px 8px 4px; }
+.queue-act.danger { font-size: var(--fs-base); line-height: 1; padding: 3px 8px 4px; }
 .queue-act.danger:hover { background: var(--red-cont); color: var(--red); }
 
 /* Files staged for the next message.
@@ -286,7 +286,7 @@
 .attach-name {
     flex: 1;
     min-width: 0;
-    font: 400 12px/1.4 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-snug) var(--sans);
     color: var(--text-2);
     white-space: nowrap;
     overflow: hidden;
@@ -295,7 +295,7 @@
 
 .attach-size {
     flex: none;
-    font: 400 10.5px/1.4 var(--mono);
+    font: 400 var(--fs-xs)/var(--lh-snug) var(--mono);
     color: var(--text-4);
 }
 
@@ -303,12 +303,12 @@
     flex: none;
     padding: 2px 7px;
     border-radius: var(--pill);
-    font: 400 11px/1.3 var(--sans);
+    font: 400 var(--fs-xs)/var(--lh-tight) var(--sans);
     color: var(--text-4);
     transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
 .attach-act:hover { background: var(--s4); color: var(--text-2); }
-.attach-act.danger { font-size: 14px; line-height: 1; padding: 3px 7px 4px; }
+.attach-act.danger { font-size: var(--fs-base); line-height: 1; padding: 3px 7px 4px; }
 .attach-act.danger:hover { background: var(--red-cont); color: var(--red); }
 
 /* Drag a file anywhere over the composer and the whole thing is the target, not a
@@ -397,13 +397,13 @@
     padding: 6px 9px;
     border-radius: var(--r);
     text-align: left;
-    font: 400 12.5px/1.4 var(--sans);
+    font: 400 var(--fs-md)/var(--lh-snug) var(--sans);
     color: var(--text-2);
 }
 .later-row:hover, .later-row.on { background: var(--s4); color: var(--text); }
 /* The absolute time, beside the relative one that names the row. Muted and in the
    mono face, because it is the thing you check rather than the thing you read. */
-.later-row .at { margin-left: auto; font: 400 11px/1.4 var(--mono); color: var(--text-4); }
+.later-row .at { margin-left: auto; font: 400 var(--fs-xs)/var(--lh-snug) var(--mono); color: var(--text-4); }
 .later-row:hover .at, .later-row.on .at { color: var(--text-3); }
 
 .later-sep { height: 1px; margin: 5px 4px; background: var(--outline-soft); }
@@ -416,7 +416,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    font: 400 11.5px/1.4 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-snug) var(--sans);
     color: var(--text-3);
 }
 .later-fields input, .later-fields select {
@@ -427,7 +427,7 @@
     color: var(--text);
     border: 1px solid var(--outline-soft);
     border-radius: var(--r);
-    font: 400 11.5px/1.4 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-snug) var(--sans);
 }
 .later-fields .go {
     align-self: flex-end;
@@ -435,7 +435,7 @@
     border-radius: var(--pill);
     background: var(--blue-cont);
     color: var(--on-blue-cont);
-    font: 500 11.5px/1.4 var(--sans);
+    font: 500 var(--fs-sm)/var(--lh-snug) var(--sans);
 }
 .later-fields .go:hover { background: var(--blue); color: var(--on-blue); }
 
@@ -467,7 +467,7 @@
 
 .later-when {
     flex: none;
-    font: 400 11px/17px var(--mono);
+    font: 400 var(--fs-xs)/17px var(--mono);
     color: var(--yellow);
     white-space: nowrap;
 }
@@ -482,7 +482,7 @@
     padding: 1px 7px 2px;
     border-radius: var(--pill);
     background: var(--s4);
-    font: 400 10.5px/1.4 var(--mono);
+    font: 400 var(--fs-xs)/var(--lh-snug) var(--mono);
     color: var(--text-3);
     cursor: default;
 }
@@ -494,7 +494,7 @@
     min-width: 0;
     padding: 0;
     text-align: left;
-    font: 400 12.5px/1.5 var(--sans);
+    font: 400 var(--fs-md)/var(--lh-base) var(--sans);
     color: var(--text-2);
     white-space: nowrap;
     overflow: hidden;
@@ -571,7 +571,7 @@
 .ev-file-name {
     flex: 1;
     min-width: 0;
-    font: 400 12.5px/1.4 var(--sans);
+    font: 400 var(--fs-md)/var(--lh-snug) var(--sans);
     color: var(--text-2);
     white-space: nowrap;
     overflow: hidden;
@@ -580,7 +580,7 @@
 
 .ev-file-size {
     flex: none;
-    font: 400 10.5px/1.4 var(--mono);
+    font: 400 var(--fs-xs)/var(--lh-snug) var(--mono);
     color: var(--text-4);
 }
 
@@ -601,7 +601,7 @@
     background: var(--s1);
     border-radius: var(--r-lg);
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--yellow) 26%, transparent);
-    font: 400 12.5px/1.4 var(--sans);
+    font: 400 var(--fs-md)/var(--lh-snug) var(--sans);
     color: var(--text-2);
 }
 .lock-text { flex: 1; min-width: 0; }
@@ -620,7 +620,7 @@
     border-radius: var(--pill);
     background: var(--s4);
     color: var(--text-2);
-    font: 500 12.5px/1 var(--sans);
+    font: 500 var(--fs-md)/1 var(--sans);
     cursor: pointer;
     transition: background var(--t-fast) var(--ease);
 }
@@ -666,13 +666,13 @@
    for "where the input points", which is a different question from "which row
    would Enter take". Both can be on screen at once. */
 .slash-menu .picker-row[aria-selected="true"] { background: var(--blue-cont); color: var(--blue); }
-.slash-menu .picker-row .name { font-family: var(--mono); font-size: 12.5px; flex: none; }
+.slash-menu .picker-row .name { font-family: var(--mono); font-size: var(--fs-sm); flex: none; }
 .slash-menu .picker-row .desc {
     min-width: 0;
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
-    font-size: 12px;
+    font-size: var(--fs-sm);
     color: var(--text-4);
 }
 .slash-menu .picker-row .hint {
@@ -680,12 +680,12 @@
     flex: none;
     padding-left: 8px;
     font-family: var(--mono);
-    font-size: 11.5px;
+    font-size: var(--fs-xs);
     color: var(--text-4);
 }
 .slash-menu .menu-note {
     padding: 9px 10px;
-    font: 400 12px/1.5 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
     color: var(--text-4);
 }
 
@@ -693,7 +693,7 @@
    counts those, so a heading that were one would be a row you could land on. */
 .slash-menu .menu-group {
     padding: 8px 10px 4px;
-    font: 500 10.5px/1.4 var(--sans);
+    font: 500 var(--fs-xs)/var(--lh-snug) var(--sans);
     letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--text-4);
@@ -709,7 +709,7 @@
    the kind of difference nobody reports and everybody notices. */
 .slash-menu.mention .picker-row .name {
     font-family: var(--sans);
-    font-size: 13px;
+    font-size: var(--fs-md);
     flex: 0 1 auto;
     min-width: 0;
     overflow: hidden;
@@ -718,7 +718,7 @@
 }
 .slash-menu.mention .picker-row .desc {
     font-family: var(--mono);
-    font-size: 11.5px;
+    font-size: var(--fs-xs);
     flex: none;
 }
 
@@ -791,7 +791,7 @@
     min-height: 38px;
     max-height: 220px;
     resize: none;
-    font-size: 14px;
+    font-size: var(--fs-base);
     line-height: 22px;
     padding: 8px 0;
     overflow-y: auto;
@@ -819,7 +819,7 @@
     color: var(--snip-accent);
     background: transparent;
     border: 1px solid color-mix(in srgb, var(--snip-accent) 32%, transparent);
-    font: 500 12.5px/1 var(--sans);
+    font: 500 var(--fs-md)/1 var(--sans);
     letter-spacing: 0.04em;
     border-radius: var(--pill);
     white-space: nowrap;
@@ -911,7 +911,7 @@
 
 .snip-card-name {
     margin: 2px 4px 6px;
-    font: 600 13.5px/1.2 var(--sans);
+    font: 600 var(--fs-base)/1.2 var(--sans);
     letter-spacing: 0.01em;
     color: color-mix(in srgb, var(--snip-accent) 70%, var(--text));
 }
@@ -952,7 +952,7 @@
     box-shadow: var(--ring-inset);
 }
 .snip-row-title {
-    font: 400 13px/1.35 var(--sans);
+    font: 400 var(--fs-md)/1.35 var(--sans);
     color: var(--text);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -962,7 +962,7 @@
    script so a long single-line snippet never reaches the DOM, and clipped here so
    the ellipsis lands at the real width. */
 .snip-row-preview {
-    font: 400 11.5px/1.4 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-snug) var(--sans);
     color: var(--text-3);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -971,7 +971,7 @@
 
 .snip-empty {
     padding: 10px 8px;
-    font: 400 12.5px/1.5 var(--sans);
+    font: 400 var(--fs-md)/var(--lh-base) var(--sans);
     color: var(--text-3);
     max-width: 320px;
 }
@@ -982,7 +982,7 @@
     padding: 0 22px;
     background: var(--blue);
     color: var(--on-blue);
-    font: 500 13.5px/1 var(--sans);
+    font: 500 var(--fs-md)/1 var(--sans);
     border-radius: var(--pill);
     transition: filter var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
 }
@@ -995,14 +995,14 @@
     gap: 8px;
     margin-top: 10px;
     padding-left: 4px;
-    font: 400 12px/1 var(--sans);
+    font: 400 var(--fs-sm)/1 var(--sans);
     color: var(--text-4);
 }
 .opts select {
     background: var(--s2);
     border-radius: var(--pill);
     padding: 6px 11px;
-    font: 400 12px/1.2 var(--sans);
+    font: 400 var(--fs-sm)/1.2 var(--sans);
     color: var(--text-3);
     cursor: pointer;
     transition: background var(--t-fast) var(--ease);

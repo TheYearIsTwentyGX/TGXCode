@@ -53,7 +53,7 @@
     align-items: center;
     gap: 7px;
     min-width: 0;
-    font: 500 11.5px/1.4 var(--sans);
+    font: 500 var(--fs-xs)/var(--lh-snug) var(--sans);
     letter-spacing: 0.04em;
     text-transform: uppercase;
     color: var(--text-3);
@@ -227,10 +227,10 @@
 /* --- the colour picker ------------------------------------------------ */
 
 .modal.pcolor { width: min(480px, 100%); }
-.pcolor-name { font: 500 15px/1.4 var(--sans); color: var(--text); }
+.pcolor-name { font: 500 15px/var(--lh-snug) var(--sans); color: var(--text); }
 .pcolor-path {
     margin-top: 2px;
-    font: 400 11.5px/1.5 var(--mono);
+    font: 400 var(--fs-xs)/var(--lh-base) var(--mono);
     color: var(--text-4);
     overflow-wrap: anywhere;
 }
@@ -265,7 +265,7 @@
 .pcolor-swatch.none.on { box-shadow: inset 0 0 0 1.5px var(--outline), 0 0 0 2px var(--s2), 0 0 0 4px var(--text-3); }
 
 .pcolor-custom { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
-.pcolor-custom label { font: 400 12.5px/1.4 var(--sans); color: var(--text-3); }
+.pcolor-custom label { font: 400 var(--fs-md)/var(--lh-snug) var(--sans); color: var(--text-3); }
 .pcolor-custom input[type="color"] {
     flex: none;
     width: 46px;
@@ -292,9 +292,9 @@
     box-shadow: inset 2px 0 0 var(--proj-accent);
 }
 .pcolor-row-text { min-width: 0; flex: 1; }
-.pcolor-row-name { font: 500 13px/1.4 var(--sans); color: var(--text-2); }
+.pcolor-row-name { font: 500 var(--fs-md)/var(--lh-snug) var(--sans); color: var(--text-2); }
 .pcolor-row-path {
-    font: 400 11px/1.5 var(--mono);
+    font: 400 var(--fs-xs)/var(--lh-base) var(--mono);
     color: var(--text-4);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -328,7 +328,7 @@
 .btn-wispr-small { display: inline-grid; place-items: center; }
 
 /* A row's chord, in the slot send-later puts its time. */
-.wispr-menu kbd.at { font: 400 11px/1.4 var(--mono); }
+.wispr-menu kbd.at { font: 400 var(--fs-xs)/var(--lh-snug) var(--mono); }
 
 /* One transform in Settings: title, shortcut, delete. */
 .wispr-set-row {
@@ -347,13 +347,13 @@
     border-radius: var(--r-sm);
     padding: 6px 8px;
     color: var(--text);
-    font: 400 12.5px/1.2 var(--sans);
+    font: 400 var(--fs-md)/1.2 var(--sans);
     min-width: 0;
 }
 .wispr-set-row .wispr-set-combo { font-family: var(--mono); }
 .wispr-set-error {
     grid-column: 1 / -1;
-    font: 400 11.5px/1.4 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-snug) var(--sans);
     color: var(--red);
 }
 
