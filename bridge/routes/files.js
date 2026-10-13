@@ -50,14 +50,15 @@ function init(deps) {
  *
  * Returns true when it has already answered.
  */
-function attachmentRefused(req, res, name) {
+function attachmentRefused(req, res, name, who) {
     const bad = attachments.attachmentNameProblem(name);
     if (bad) {
         send(res, 400, { error: bad });
         return true;
     }
-    if (declaredOverMax(req, attachments.MAX_ATTACHMENT_BYTES)) {
-        refuseUpload(req, res, 413, overMax(attachments.MAX_ATTACHMENT_BYTES));
+    const max = attachments.maxAttachmentBytes(who);
+    if (declaredOverMax(req, max)) {
+        refuseUpload(req, res, 413, overMax(max));
         return true;
     }
     return false;
@@ -76,7 +77,7 @@ function attachmentRefused(req, res, name) {
  * `cwd` is already resolved by the caller — from a session for one of them, from
  * a validated `?cwd=` for the other.
  */
-async function receiveAttachment(req, res, cwd, name) {
+async function receiveAttachment(req, res, cwd, name, who) {
     const { dir, root } = attachments.attachmentsDirFor(cwd);
     if (!cfg.withinRoots(dir)) {
         return send(res, 403, {
@@ -87,7 +88,7 @@ async function receiveAttachment(req, res, cwd, name) {
 
     let buffer;
     try {
-        buffer = await readBinary(req, attachments.MAX_ATTACHMENT_BYTES);
+        buffer = await readBinary(req, attachments.maxAttachmentBytes(who));
     } catch (err) {
         if (err.oversized) return refuseUpload(req, res, err.status, err.message);
         return send(res, err.status || 400, { error: err.message });
@@ -312,11 +313,11 @@ async function handle(req, res, url, pathname, seg, who) {
     //
     // Beside /api/fs/mkdir rather than beside its own sibling, because these two
     // are the pair that matters: both take a client-supplied path and write into
-    // the checkout it names, and remoteRefusal treats them the same way for the
-    // same reason.
+    // the checkout it names. They differ for a remote caller — mkdir is refused,
+    // this is capped smaller — because a phone has nowhere else to put a photo.
     if (pathname === '/api/attachments' && req.method === 'POST') {
         const name = url.searchParams.get('name');
-        if (attachmentRefused(req, res, name)) return;
+        if (attachmentRefused(req, res, name, who)) return;
 
         const given = cfg.expandHome(url.searchParams.get('cwd') || '');
         if (!given) return send(res, 400, { error: 'cwd is required' });
@@ -344,7 +345,7 @@ async function handle(req, res, url, pathname, seg, who) {
             return send(res, 400, { error: err.message });
         }
 
-        return receiveAttachment(req, res, cwd, name);
+        return receiveAttachment(req, res, cwd, name, who);
     }
 
     // Somewhere to put a project that does not exist yet. The picker can navigate,

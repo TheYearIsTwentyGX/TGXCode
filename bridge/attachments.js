@@ -42,6 +42,19 @@ const DIR_NAME = 'attached_assets';
 // number can be about the file instead of about a third more than the file.
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 
+// 10 MiB, for a caller off this machine — the Android app. A phone has nowhere else
+// to put a photo, so it is not refused; but a token that has leaked off a phone is the
+// case where the cap is the only thing between a stranger and a checkout, and it
+// should be the smaller of the two. The app scales
+// photos down before sending, so a real one lands far under this. A PDF that does
+// not is a file to attach from the desktop.
+const MAX_REMOTE_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+
+/** The upload cap for this caller: smaller for one that is not on this machine. */
+function maxAttachmentBytes(who) {
+    return who && who.remote ? MAX_REMOTE_ATTACHMENT_BYTES : MAX_ATTACHMENT_BYTES;
+}
+
 // Per message, not per session. Five chips is already a wide strip, and a message
 // carrying more than that is a directory — which is a path the model can be given.
 const MAX_PER_MESSAGE = 5;
@@ -284,7 +297,8 @@ function formatBytes(n) {
 }
 
 module.exports = {
-    DIR_NAME, MAX_ATTACHMENT_BYTES, MAX_PER_MESSAGE, IMAGE_TYPES,
+    DIR_NAME, MAX_ATTACHMENT_BYTES, MAX_REMOTE_ATTACHMENT_BYTES, MAX_PER_MESSAGE, IMAGE_TYPES,
+    maxAttachmentBytes,
     attachmentsDirFor, nearestCheckout, attachmentNameProblem, writeAttachment,
     relativeTo, ensureExcluded, sniffType, isImageType, formatBytes,
     // Re-exported so the runner, which writes the note, takes the heading and the

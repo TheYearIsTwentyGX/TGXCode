@@ -470,19 +470,14 @@ function remoteRefusal(pathname, method) {
     if (/^\/api\/sessions\/[^/]+\/handoff$/.test(pathname) && method === 'POST') {
         return 'a session can only be handed work from the machine it runs on';
     }
-    // Attaching a file writes it into a checkout, which is the mkdir clause above.
-    //
-    // This is the weakest of the refusals on this list and it is worth saying so:
-    // a phone taking a photo has nowhere *else* to put it, so "write it on the
-    // machine you are sitting at" is advice a phone cannot take. It was refused in
-    // v1 because the phone surface of the day had no attach affordance to refuse
-    // anything for, and it stays refused because nothing has replaced that reason
-    // yet — not because the argument is strong. If the Android app grows an attach
-    // button, the answer is a smaller cap for a remote caller, not deleting this
-    // line and letting a leaked token write 25MB files into a repo.
-    if (/^\/api\/sessions\/[^/]+\/attachments(\/open)?$/.test(pathname)
-        || pathname === '/api/attachments') {
-        return 'files can only be attached on the machine they are saved to';
+    // Opening an attachment launches whatever Windows opens that kind of file with,
+    // on a desktop the caller is not sitting at. Uploading one is *not* refused here,
+    // though it writes into a checkout like mkdir does: a phone taking a photo has
+    // nowhere else to put it. What a remote caller gets instead is a smaller cap —
+    // MAX_REMOTE_ATTACHMENT_BYTES in bridge/attachments.js, applied by the upload
+    // routes, which are the ones that know who is asking.
+    if (/^\/api\/sessions\/[^/]+\/attachments\/open$/.test(pathname)) {
+        return 'attachments can only be opened on the machine they are saved to';
     }
     return null;
 }

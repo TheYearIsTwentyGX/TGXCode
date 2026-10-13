@@ -532,12 +532,12 @@ async function handle(req, res, url, pathname, seg, who) {
         // two share everything from the cwd onward.
         if (tail === 'attachments' && !seg[4] && req.method === 'POST') {
             const name = url.searchParams.get('name');
-            if (attachmentRefused(req, res, name)) return;
+            if (attachmentRefused(req, res, name, who)) return;
 
             const summary = index.summary(sessionId);
             if (!summary) return send(res, 404, { error: 'session not found' });
 
-            return receiveAttachment(req, res, sessionCwd(summary), name);
+            return receiveAttachment(req, res, sessionCwd(summary), name, who);
         }
 
         // Open a staged or sent attachment in whatever Windows opens that kind of

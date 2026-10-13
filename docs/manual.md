@@ -1525,10 +1525,11 @@ which mirrored networking makes the same socket. Either way the bridge stays
 where it is. That matters on any network you do not control.
 
 **What a phone will not let you do.** It can watch, send, answer permissions, plans
-and questions, and start an ordinary session. It cannot open a terminal, shut the
-bridge down, stop a dev server, attach a file, or start anything in
-`bypassPermissions` — the bridge refuses those with a 403 rather than the UI merely
-omitting a button, so the rule holds for any client that holds a valid token. The
+and questions, attach a file of up to 10MB, and start an ordinary session. It cannot
+open a terminal, shut the bridge down, stop a dev server, open an attachment on the
+desktop, or start anything in `bypassPermissions` — the bridge refuses those with a
+403 rather than the UI merely omitting a button, so the rule holds for any client that
+holds a valid token. The
 reasoning is in `plans/14-bridge-security.md` §C and the table in
 `remote.md`.
 
