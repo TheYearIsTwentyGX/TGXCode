@@ -113,6 +113,7 @@ import {
 } from './new-session/dialog.js';
 import { showNewMenu, wireNewMenu } from './new-session/recent.js';
 import { openPublish, wirePublish } from './github/publish.js';
+import { openWorktrees, wireWorktrees } from './worktrees.js';
 import {
     drSave, drToSchedule, paintGateFields, schedSave, startNew, whenBuild,
 } from './new-session/trigger.js';
@@ -2122,6 +2123,7 @@ export function showProjMenu(project, btn) {
         row('Set project colour', () => openPcolor(project)),
         origin,
         publish,
+        row('Worktrees…', () => openWorktrees(project)),
         ...(at < 0 ? [] : [
             el('div', { class: 'sep' }),
             row('Move to top', () => moveRailCard(project.cwd, 'top'), at === 0),
@@ -3707,6 +3709,7 @@ wireAttachments(newC);
 wireWispr();
 wireNewDialog();
 wirePublish();
+wireWorktrees();
 
 // ✕, Cancel and a whole click outside — no Escape; see modalUp().
 for (const n of dom.delScrim.querySelectorAll('[data-close-del]')) {

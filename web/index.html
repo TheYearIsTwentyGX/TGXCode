@@ -30,6 +30,7 @@
 <link rel="stylesheet" href="./css/composer.css">
 <link rel="stylesheet" href="./css/dashboard.css">
 <link rel="stylesheet" href="./css/dialogs.css">
+<link rel="stylesheet" href="./css/worktrees.css">
 <link rel="stylesheet" href="./css/boards.css">
 <link rel="stylesheet" href="./css/analytics.css">
 <link rel="stylesheet" href="./css/settings.css">
@@ -2033,6 +2034,20 @@
       <button class="btn quiet" data-close-gh type="button">Cancel</button>
       <button id="gh-go" class="btn primary" type="button">Create repository</button>
     </div>
+  </div>
+</div>
+
+<!-- The worktree janitor: one project's worktrees, and Remove on the safe ones.
+     Body and foot are drawn by web/worktrees.js; the foot changes to a
+     confirming step for "Remove all safe". -->
+<div id="wt-scrim" class="scrim" hidden>
+  <div class="modal wt" role="dialog" aria-modal="true" aria-labelledby="wt-title">
+    <div class="modal-head">
+      <span id="wt-title">Worktrees</span>
+      <button class="modal-close" data-close-wt type="button" aria-label="Close">✕</button>
+    </div>
+    <div id="wt-body" class="modal-body"></div>
+    <div id="wt-foot" class="modal-foot"></div>
   </div>
 </div>
 

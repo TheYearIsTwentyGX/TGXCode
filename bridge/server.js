@@ -371,6 +371,11 @@ function remoteRefusal(pathname, method) {
     if (pathname === '/api/commands-config' || pathname.startsWith('/api/commands-config/')) {
         return 'a project’s commands can only be edited on the machine they run on';
     }
+    // The janitor's GET only reads, so it stays open. Removal deletes a directory
+    // on this machine, which is a decision for somebody looking at it.
+    if (pathname === '/api/worktrees/remove') {
+        return 'worktrees can only be removed at the machine they live on';
+    }
     if (pathname === '/api/shutdown') {
         return 'the bridge can only be shut down from the machine it runs on';
     }
@@ -642,6 +647,7 @@ const ROUTES = [
     require('./routes/schedules'),
     require('./routes/dashboard'),
     require('./routes/github'),
+    require('./routes/worktrees'),
     require('./routes/quota'),
     require('./routes/analytics'),
     require('./routes/orchestrators'),
