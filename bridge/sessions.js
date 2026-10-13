@@ -15,6 +15,7 @@ const { PROJECTS_DIR, CACHE_DIR } = require('./config');
 const { scanMeta, parseLines, buildEvents, readSubagentIndex,
     readSubagentTranscript, lastActivity } = require('./transcript');
 const { TurnIndex } = require('./turn-index');
+const { SearchIndex } = require('./search-index');
 
 const CACHE_FILE = path.join(CACHE_DIR, 'index.json');
 // Bump whenever scanMeta's output shape or derivation changes, so a stale cache
@@ -41,6 +42,8 @@ class SessionIndex extends EventEmitter {
         this.flags = flags;
         /** Where each turn starts, so a long transcript can be opened from its end. */
         this.turnIndex = new TurnIndex();
+        /** What every transcript says, for `/api/search`. See bridge/search-index.js. */
+        this.searchIndex = new SearchIndex();
         /**
          * Which sessions are actually running, when we have it. Set from
          * server.js rather than constructed here: the index is about files on
@@ -330,6 +333,21 @@ class SessionIndex extends EventEmitter {
         // shuffling everything else beneath the cursor.
         out.sort((a, b) => sortKey(b) - sortKey(a));
         return out.slice(0, limit);
+    }
+
+    /**
+     * What `/api/search` walks: the sessions list() would show, in its order,
+     * each with the file the transcript is read from. The same filters, so a
+     * search can never surface a temporary session or, on the everyday bridge,
+     * a test one.
+     */
+    searchCandidates({ project = null, includeTest = false } = {}) {
+        return this.list({ project, includeTest, limit: Infinity })
+            .map(summary => {
+                const rec = this.sessions.get(summary.sessionId);
+                return rec ? { sessionId: summary.sessionId, file: rec.file, summary } : null;
+            })
+            .filter(Boolean);
     }
 
     /**
@@ -773,6 +791,7 @@ class SessionIndex extends EventEmitter {
 
         this.sessions.delete(sessionId);
         this.turnIndex.forget(sessionId);
+        this.searchIndex.forget(sessionId);
         // Deleting is deliberate, so it takes the reprieve with it: a session
         // removed on purpose must not be held alive by having been recent.
         this.pending.delete(sessionId);

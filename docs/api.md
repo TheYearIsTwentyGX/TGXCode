@@ -688,6 +688,73 @@ shrank — it was compacted or forked — and the client should reload from scra
 This is how a phone client resumes after a network change, and it is much cheaper
 than refetching.
 
+### `GET /api/search?q=&kinds=&project=&limit=&perSession=`
+
+Full text across every session's transcript: what you said, what Claude said, and,
+when asked, tool calls and their output. Not the same question as
+`GET /api/sessions?q=`, which matches a session's *title*, prompts and directory;
+this matches the words inside it.
+
+| Parameter | Meaning |
+|---|---|
+| `q` | **required**, at most 200 characters. Words, all of which must be in the **same message** (not merely the same session), case-insensitive. A `"quoted phrase"` is kept whole. No other syntax: `key:value` is two literal words. Missing or blank is `400 {"error":"q is required"}`; too long is `400` too |
+| `kinds` | comma-separated, any of `user`, `assistant`, `tool`. Default `user,assistant`. Unknown names are dropped; if none are left the default applies. Thinking is never searched |
+| `project` | a `projectCwd` to restrict to, as on `GET /api/sessions` |
+| `limit` | sessions returned, default 30, clamped to 1–100 |
+| `perSession` | hits returned per session, default 5, clamped to 1–20 |
+
+Response:
+
+```
+{ query: string, terms: [string], kinds: [string],
+  sessions: [{ sessionId: string, title: string|null, projectName: string|null,
+               cwd: string|null, projectCwd: string|null, mtimeMs: number|null,
+               test: boolean, turns: number,
+               hitCount: number, more: number,
+               hits: [{ turnId: string|null, turnOffset: number, turnNo: number,
+                        eventId: string, kind: "user"|"assistant"|"tool",
+                        ts: string|null,
+                        segments: [{ text: string, hit: boolean }] }] }],
+  matched: number, truncated: boolean, pending: number, elapsedMs: number }
+```
+
+- **Order is the rail's order** — by when you last spoke in the session, newest
+  first — not relevance. Hits within a session are in transcript order.
+- **`matched` counts every session with a hit; `sessions` holds at most `limit` of
+  them**, and `truncated` is true when some were left out. Say so rather than
+  presenting the list as complete. Likewise `hitCount` is every matching message in
+  the session, `hits` at most `perSession` of them, and `more` the difference.
+- **`segments` is the snippet, already cut**, about 200 characters around the first
+  match, `…` segments at a cut end, whitespace collapsed. `hit: true` segments are the
+  matched words in their original case. Render each as text — put the `hit` ones in a
+  highlight element — and never as HTML: it is transcript text and can contain markup.
+- **`turnId` is a turn-index id**: the `id` of an entry in `turns[]` from
+  `GET /api/sessions/:id?turns=K`, with `kind: "turn"`. `turnOffset` is that entry's
+  `offset`, so it is a valid `from` for `/range`. To open a session at a hit: open it
+  windowed as usual, and if `turnOffset` is below the window's `start`, load
+  `/range?from=<turnOffset>&to=<start>` first, then scroll to the event `eventId`
+  (or to the turn, if the event is not on screen). `turnId` is **null** for text that
+  comes before the first message of your own — a compaction summary, a scheduled
+  run's opening — and `turnOffset` is then `0`. `turnNo` is 1-based, 0 for that case.
+- **`eventId` is an event `id`** as `/range` and the tail return them: a user turn's
+  uuid, `<uuid>:text:<n>` for an assistant message, the `tool_use` id for a tool.
+- **Eventually consistent: `pending`.** The bridge keeps an incremental index under
+  its cache directory and brings it up to date with each transcript as a query reads
+  it — but within a time budget (a little over half a second), because a query runs
+  on the bridge's one thread. Sessions it could not catch up in time are still
+  searched as far as they are indexed, and counted in `pending`. On a cold index (a
+  fresh install, or after the index format changes) that can be most of them for the
+  first minute or two while a background pass fills it in; ask again and the number
+  falls. `pending: 0` means every session was searched up to its end. Tell the user
+  when it is not 0.
+- **Which sessions:** exactly those `GET /api/sessions` would list. Sessions under a
+  temporary directory are never searched; `test` sessions only on a development
+  bridge, as with `/api/dashboard`. Subagent transcripts are not searched.
+- **What is stored is clipped**: each message to its first 16 000 characters, each
+  tool call to about 1 200 (input and output together). Words beyond those points
+  are not found. A tool result over 1 MB on one line is not indexed at all.
+- Open to remote callers, like the rest of the read routes.
+
 ### `GET /api/sessions/:id/prs`
 
 `{ prs: [...], gh: {ok, error}, checkedAt, repo }` — what has become of the pull

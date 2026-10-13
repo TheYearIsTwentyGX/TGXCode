@@ -17,6 +17,7 @@ import { paint, tickCardClocks } from './boards/parts.js';
 import { loadDash, paintDashBadge, renderDash } from './boards/dashboard.js';
 import { renderNotes } from './boards/history.js';
 import { applyDrafts, loadDrafts, renderDrafts, showDrafts } from './drafts.js';
+import { jumpToHit, openSearch, showSearch, wireSearch } from './search.js';
 import { applySched, loadSched, showSched } from './schedules.js';
 import { applySnippets, loadSnippets, wireSnippets } from './snippets/index.js';
 import { paintPinTitles } from './snippets/pins.js';
@@ -1090,7 +1091,7 @@ function showLive(on) {
     if (on && !liveKeptOver()) {
         state.dash.open = false; state.notes.open = false;
         state.taskboard.open = false; state.drafts.open = false;
-        state.sched.open = false;
+        state.sched.open = false; state.sx.open = false;
     }
     paintPanels();
     syncBoardWatch();
@@ -1233,6 +1234,9 @@ export function rememberView() {
     } else if (state.settings.open) {
         q.set('view', 'settings');
         if (state.live.open) q.set('live', '1');
+    } else if (state.sx.open) {
+        q.set('view', 'search');
+        if (state.live.open) q.set('live', '1');
     } else if (state.live.open) {
         q.set('view', 'live');
     }
@@ -1353,12 +1357,15 @@ const DASH_STALE_MS = 45_000;
 // assignments repeated inside five functions, which is exactly the shape that
 // goes wrong when a sixth arrives: adding Settings would have meant editing
 // five other functions, none of which would have complained about being missed.
-const PANELS = ['taskboard', 'dash', 'notes', 'drafts', 'sched', 'settings'];
+const PANELS = ['taskboard', 'dash', 'notes', 'drafts', 'sched', 'settings', 'sx'];
 
 // Which `live.*` key says whether the board stays up over each panel.
 const LIVE_OVER_KEY = {
     taskboard: 'overTasks', dash: 'overDashboard', notes: 'overHistory',
     drafts: 'overDrafts', sched: 'overSchedules', settings: 'overSettings',
+    // No setting of its own: a search is a short errand, and nothing keeps the
+    // board up over it.
+    sx: null,
 };
 
 /**
@@ -1388,7 +1395,7 @@ function liveKeptOver() {
 export function closePanels() {
     const close = {
         taskboard: showTaskboard, dash: showDash, notes: showNotes,
-        drafts: showDrafts, sched: showSched, settings: showSettings,
+        drafts: showDrafts, sched: showSched, settings: showSettings, sx: showSearch,
     };
     for (const p of PANELS) if (state[p].open) close[p](false);
 }
@@ -1744,10 +1751,22 @@ export function openFromNote(n) {
     openSession(n.sessionId);
 }
 
+/**
+ * Open a session at a search hit — web/search.js. Through the same pending jump
+ * as a history row, so it lands once the first window is drawn whichever way
+ * openSession gets there. A null hit just opens the session.
+ */
+export function openAtHit(sessionId, hit) {
+    pendingJump = hit ? { hit } : null;
+    showSearch(false);
+    openSession(sessionId);
+}
+
 export function takePendingJump() {
     const id = pendingJump;
     pendingJump = null;
     if (!id) return;
+    if (typeof id === 'object') { jumpToHit(id.hit); return; }
     const entry = state.tools.get(id);
     // Gone from the transcript, or never in it: the session is open and scrolled
     // to the end, which is the honest fallback rather than a guess.
@@ -3284,6 +3303,16 @@ dom.search.addEventListener('input', debounce(() => {
     loadSessions();
 }, 180));
 
+// Enter carries the filter's words into a search of every transcript — the
+// filter matches what a session is called, and the moment it finds nothing is
+// the moment to look at what was said instead. See web/search.js.
+dom.search.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.isComposing || !dom.search.value.trim()) return;
+    e.preventDefault();
+    openSearch(dom.search.value);
+});
+wireSearch();
+
 // The rail's other filter. `renderRail` repaints the button itself, because it is
 // the thing that knows how many sessions the answer covers.
 dom.hideDone.addEventListener('click', () => {
@@ -4085,6 +4114,7 @@ document.addEventListener('keydown', (e) => {
     // working rather than as a panel that is special.
     if (e.key === 'Escape' && state.sched.open) { showSched(false); return; }
     if (e.key === 'Escape' && state.settings.open) { showSettings(false); return; }
+    if (e.key === 'Escape' && state.sx.open) { showSearch(false); return; }
     // The preview, one step at a time: out of Maximize first, then Home. Keys
     // typed into the page itself go to the page and never reach here.
     if (e.key === 'Escape' && state.preview.open && state.preview.max) { previewPane.setMaximized(false); return; }
@@ -4162,6 +4192,7 @@ document.addEventListener('keydown', (e) => {
         return;
     }
     if (command === 'rail.filter') { e.preventDefault(); dom.search.focus(); return; }
+    if (command === 'search.open') { e.preventDefault(); openSearch(dom.search.value); return; }
     // Three states rather than two, which is what Ctrl+` means in every editor
     // that has one: show it, then focus it, then put it away. So the chord is a
     // way *into* the terminal and not only a way to see it. The toolbar button
@@ -4381,12 +4412,14 @@ function restoreView(q) {
     const dr = q.get('view') === 'drafts';
     const sc = q.get('view') === 'schedules';
     const st = q.get('view') === 'settings';
+    const sx = q.get('view') === 'search';
     if (q.get('view') === 'live' || q.get('live') === '1' || q.get('focus') === '1') showLive(true);
     if (dash) showDash(true);
     if (tb) showTaskboard(true);
     if (dr) showDrafts(true);
     if (sc) showSched(true);
     if (st) showSettings(true);
+    if (sx) showSearch(true);
     if (q.get('focus') === '1') setFocus(true);
 
     // The panels are up and the address they came from is untouched, so from

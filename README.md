@@ -364,6 +364,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/routes/snippets.js` | `/api/snippets` and `/api/snippet-groups` |
 | `bridge/routes/schedules.js` | `/api/schedules` |
 | `bridge/routes/dashboard.js` | `/api/dashboard` and `/api/prs` |
+| `bridge/routes/search.js` | `/api/search` — full text across every transcript, with the same test/temp filtering as the list |
 | `bridge/routes/github.js` | `/api/github/*`: account, templates, teams, repo state, name check, publish |
 | `bridge/routes/quota.js` | `/api/quota` and refreshing it |
 | `bridge/routes/session.js` | One session's conversation: read, delete, send, later, handoff, stop, queue, permission, flags, attachments, suggestions, tasks, subagents |
@@ -391,6 +392,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/sessions.js` | The session index — incremental, cached, watched |
 | `bridge/registry.js` | Which sessions have a process, from Claude Code's own registry |
 | `bridge/turn-index.js` | Per-session index of turns, plans and questions with byte offsets, so a long session opens from its end |
+| `bridge/search-index.js` | Per-session full-text index of what you and Claude said (and, clipped, tool calls), built incrementally like the turn index and in the background a slice at a time; the query and its snippets |
 | `bridge/transcript.js` | JSONL → render events; pairs tool calls with results; reads subagent transcripts |
 | `bridge/tasks.js` | A session's own task list — the items, and how far through them it is |
 | `bridge/attachments.js` | Files pasted into the composer — where they land, and out of git |
@@ -469,6 +471,7 @@ Two rules worth knowing before you send a patch:
 | `web/boards/dashboard.js` | Work in flight — fetching it, the badge, and the projects, workspaces and session chips |
 | `web/boards/history.js` | The notification history list. Its read state stays in app.js, which openSession and the stream reach into |
 | `web/boards/taskboard.js` | The task board — the held order (`tbRememberOrder`/`tbHold`), the four columns, the focused view and acting on a card |
+| `web/search.js` | Search transcripts — the full-text panel (Ctrl+Shift+F, or Enter in the bar's filter), results grouped by session, and the jump that opens a session at a hit's turn |
 | `web/drafts.js` | The drafts panel — sessions set up but not started — in Preact: opening it, the badge, a column per project once there are two, and Start, Edit and Delete on a card |
 | `web/schedules.js` | The schedules panel — sessions that start on a clock — in Preact: opening it, the badge, Active/Paused/Done bands in a column per project, and Run now, Pause, Edit and Delete on a card |
 | `web/snippets/` | Canned messages and the buttons that send them, one module per surface, in Preact on web/rail.js's pattern. Same top-level rule as `composer/`; load-time listeners are in `wireSnippets()` |
@@ -548,6 +551,7 @@ Two rules worth knowing before you send a patch:
 | `web/css/viewers.css` | The right-click menu and the diff viewer's re-theming of `vendor/diff2html.css`, which is linked before every file here so no `!important` is needed |
 | `web/css/colours.css` | Project colours across the surfaces above, and Wispr Flow transforms. Late because it overrides them |
 | `web/css/preview.css` | The browser preview pane |
+| `web/css/search.css` | The Search transcripts panel. Last in the cascade and self-contained, reading only the shared tokens |
 | `web/vendor/` | The libraries worth not writing — xterm; diff2html for the diff viewer; and `preact.js`, htm's standalone build (Preact 10 + hooks + htm in one ESM file) for components written without JSX. Checked-in prebuilt bundles, not a `node_modules` |
 | `app/main.js` | The Electron shell, and the rules for what a preview `<webview>` may load |
 | `app/preload.js` | The page's only doors into the shell: raise the window, and the preview's two clipboard writes |
