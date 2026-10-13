@@ -58,7 +58,7 @@ import { renderEvent, warmPeers } from './rows.js';
 import { leaveAgent, loadAgents, renderAgents } from './subagents.js';
 import { closeTaskDialog, loadTasks, loadTasksSoon, renderTasks } from './suggestions.js';
 import { fillTool } from './tools.js';
-import { hideTurnPop, renderTurns, REVIEWABLE } from './turn-rail.js';
+import { clearRail, hideTurnPop, renderTurns, REVIEWABLE, WORK } from './turn-rail.js';
 import { mountEarlier, OPEN_TURNS } from './earlier.js';
 import { resetWindow, scheduleSeal } from './window.js';
 
@@ -189,7 +189,6 @@ function beginOpen(summary, { keepPanels = false } = {}) {
     state.run.length = 0;
     state.prefs = null;     // the next session's project may answer differently
     state.turns = [];
-    state.turnTicks = [];
     state.activeTurn = -1;
     state.turnIndex = [];
     state.windowStart = 0;
@@ -269,7 +268,7 @@ function beginOpen(summary, { keepPanels = false } = {}) {
     // Only if there is a rail to hold, so a conversation that never had one does
     // not gain a reserved strip.
     if (paneUp(dom.turns)) dom.turns.classList.add('holding');
-    dom.turns.replaceChildren();
+    clearRail();
     // Instantly, on purpose: everything else in the window moves, but the
     // conversation you left is gone the moment you leave it. A skeleton that
     // faded in over it would show the old transcript under the new header.
@@ -636,8 +635,10 @@ export function appendEvents(events, view = SESSION_VIEW, { live = false } = {})
         if (ev.kind === 'tool') {
             view.tools.set(ev.id, { ev, node });
             if (view.plans && ev.name === 'ExitPlanMode') view.plans.add(ev.id);
-            // A plan or a question is a rail marker as much as a message is.
-            if (REVIEWABLE[ev.name]) newMark = true;
+            // A plan, a question, an edit and a subagent are marks on the
+            // minimap as much as a message is — and so is a call that arrived
+            // already failed.
+            if (REVIEWABLE[ev.name] || WORK[ev.name] || ev.status === 'error') newMark = true;
             if (ev.name === 'Task' || ev.name === 'Agent') sawAgent = true;
         }
         if (ev.kind === 'user') {
@@ -747,6 +748,11 @@ export function patchTool(patch, view = SESSION_VIEW) {
         renderTurns();
         // And if that ask is the one on screen, it is now out of date too.
         if (state.review.evId === entry.ev.id) paintReview();
+    } else if (!view.isAgent && !view.prepend && patch.status === 'error') {
+        // A failure is a mark of its own, and the minimap should show it while
+        // the turn that hit it is still going. Failures are rare enough that
+        // rebuilding the rail for each costs nothing a busy turn would notice.
+        renderTurns();
     }
     markFindDirty();
 }

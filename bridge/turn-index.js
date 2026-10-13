@@ -1,8 +1,9 @@
 'use strict';
 
-// A small index of the moments in a transcript the turn rail marks — every
-// message you sent, every plan and every question — with the byte offset each
-// one starts at.
+// A small index of the moments in a transcript the minimap marks — every
+// message you sent, every plan and every question, and since version 2 every
+// file edit, subagent, failed tool call and pull request — with the byte offset
+// each one starts at.
 //
 // It exists so a long conversation can be opened from its end. The rail wants
 // the whole conversation (a tick per turn, and "Turn 3 of 40" means 40), and
@@ -28,11 +29,18 @@
 //   Only lines that could be one reach JSON.parse, and those go through
 //   `buildEvents` itself so a turn's text, command and a plan's outcome come out
 //   exactly as the full read derives them — never a second interpretation of
-//   the same entry.
+//   the same entry. The one exception is a pull request: `buildEvents` has no
+//   event for a `pr-link` line (scanMeta reads them for the header), so its
+//   mark is read straight off the entry, deduped by url the way scanMeta does.
 //
-// - **A plan or question's offset is the turn it belongs to,** not its own line,
-//   so every offset in the index is a place a window can begin without starting
-//   halfway through a turn.
+// - **A failure only costs a parse when it failed.** A tool result is the big
+//   kind of line, and almost all of them succeeded. `"is_error":true` is the
+//   substring test, so a successful 2MB Bash output is still never parsed.
+//
+// - **A mark's offset is the turn it belongs to,** not its own line, so every
+//   offset in the index is a place a window can begin without starting halfway
+//   through a turn. Its own line is `at`, which is only for placing it on the
+//   minimap — never for reading from.
 
 const crypto = require('crypto');
 const fs = require('fs');
@@ -44,9 +52,18 @@ const { buildEvents } = require('./transcript');
 const INDEX_DIR = path.join(CACHE_DIR, 'turns');
 // Bump when a mark's shape or derivation changes, so an old file is rebuilt
 // rather than served.
-const INDEX_VERSION = 1;
+const INDEX_VERSION = 2;
 
 const REVIEWABLE = { ExitPlanMode: 'plan', AskUserQuestion: 'question' };
+// Calls the minimap marks for what they did rather than for waiting on you.
+const MARKED = {
+    Edit: 'edit', MultiEdit: 'edit', Write: 'edit', NotebookEdit: 'edit',
+    Task: 'subagent', Agent: 'subagent',
+};
+const MARKED_RE = new RegExp(`"name":"(${Object.keys(MARKED).join('|')})"`);
+// An is_error result that is somebody saying no rather than something breaking.
+// Marking those red would put an error on every permission you declined.
+const DECLINED_RE = /^(The user doesn't want to proceed|Stopped from TGXCode|\[Request interrupted|User rejected)/;
 // What the rail's popover shows of a message; more would be bytes on every open.
 const TEXT_MAX = 460;
 const HEAD_BYTES = 4096;
@@ -95,14 +112,19 @@ function wanted(pendingIds) {
     const want = (s) => {
         if (s.includes('"ExitPlanMode"') || s.includes('"AskUserQuestion"')) return true;
         if (s.includes('"type":"attachment"')) return s.includes('queued_command');
-        if (!s.includes('"type":"user"')) return false;
-        // A tool result is never a turn; it matters only if it answers a plan or
-        // a question we are still waiting on. These are the big lines, so this
-        // is most of the saving.
+        if (s.includes('"type":"pr-link"')) return true;
+        // A tool result is never a turn; it matters only if it failed, or
+        // answers a plan or a question we are still waiting on. These are the big
+        // lines, so this is most of the saving. Asked before the assistant test
+        // below, because a subagent's result carries its own transcript's
+        // entries unescaped — `"type":"assistant"` and an Edit call included.
         if (s.includes('"tool_result"')) {
+            if (s.includes('"is_error":true')) return true;
             for (const id of pending) if (s.includes(id)) return true;
             return false;
         }
+        if (s.includes('"type":"assistant"')) return MARKED_RE.test(s);
+        if (!s.includes('"type":"user"')) return false;
         return true;
     };
     want.saw = (entry) => {
@@ -115,10 +137,10 @@ function wanted(pendingIds) {
     return want;
 }
 
-function toolMark(ev, offset) {
+function toolMark(ev, offset, at) {
     const input = ev.input || {};
     return {
-        kind: REVIEWABLE[ev.name], id: ev.id, offset, ts: ev.ts || null, name: ev.name,
+        kind: REVIEWABLE[ev.name], id: ev.id, offset, at, ts: ev.ts || null, name: ev.name,
         status: ev.status || 'pending',
         // Just what the rail says about it: toolSummary reads these two.
         input: ev.name === 'ExitPlanMode'
@@ -134,6 +156,20 @@ function resultStub(r) {
     return { text: clip(r.text, 200), planWasEdited: Boolean(r.planWasEdited) };
 }
 
+/** An edit's or a subagent's mark: what the minimap's tooltip says about it. */
+function workMark(ev, offset, at) {
+    const input = ev.input || {};
+    const kind = MARKED[ev.name];
+    const m = { kind, id: ev.id, offset, at, ts: ev.ts || null, name: ev.name };
+    if (kind === 'edit') m.path = clip(input.file_path || input.notebook_path || '', 200);
+    else m.text = clip(input.description || input.prompt || '', 200);
+    return m;
+}
+
+function errorText(result) {
+    return String((result && result.text) || '').trim();
+}
+
 /**
  * Add the marks found in `lines` to `idx`. `lines` are in file order.
  */
@@ -141,33 +177,99 @@ function absorb(idx, lines) {
     if (!lines.length) return false;
     const offsetOf = new Map();
     for (const { entry, offset } of lines) if (entry.uuid) offsetOf.set(entry.uuid, offset);
+    // A tool call's own line, by tool id: a call has no uuid of its own, so it is
+    // found through the assistant entry that carried it.
+    const callAt = new Map();
+    for (const { entry, offset } of lines) {
+        const content = entry.type === 'assistant' && entry.message && entry.message.content;
+        if (!Array.isArray(content)) continue;
+        for (const b of content) if (b.type === 'tool_use' && b.id) callAt.set(b.id, offset);
+    }
+    // And a result's line, for an error mark: at the failure, not at the call.
+    const resultAt = new Map();
+    for (const { entry, offset } of lines) {
+        const content = entry.type === 'user' && entry.message && entry.message.content;
+        if (!Array.isArray(content)) continue;
+        for (const b of content) {
+            if (b.type === 'tool_result' && b.tool_use_id) resultAt.set(b.tool_use_id, offset);
+        }
+    }
     const { events } = buildEvents(lines.map(l => l.entry));
     let changed = false;
     let turnAt = idx.marks.length
         ? idx.marks[idx.marks.length - 1].offset : 0;
+    // Looked up per event, and a rebuild of a long session has thousands of
+    // marks: a Map rather than a scan of the list each time.
+    const byId = new Map(idx.marks.map(m => [m.id, m]));
+    const has = (id) => byId.has(id);
+    const push = (m) => { idx.marks.push(m); byId.set(m.id, m); changed = true; };
+    const failed = (toolId, name, result, ts) => {
+        const text = errorText(result);
+        if (DECLINED_RE.test(text) || has(`${toolId}:error`)) return;
+        push({
+            kind: 'error', id: `${toolId}:error`, toolId, offset: turnAt,
+            at: resultAt.has(toolId) ? resultAt.get(toolId) : turnAt,
+            ts: ts || null, name: name || null, text: clip(text.split('\n')[0], 200),
+        });
+    };
+
+    // pr-link entries are not events; fold them in by position as the walk goes.
+    const prs = lines.filter(l => l.entry.type === 'pr-link' && l.entry.prUrl);
+    let pi = 0;
+    const prsBefore = (limit) => {
+        while (pi < prs.length && prs[pi].offset < limit) {
+            const { entry: e, offset } = prs[pi++];
+            if (has(`pr:${e.prUrl}`)) continue;
+            push({
+                kind: 'pr', id: `pr:${e.prUrl}`, offset: turnAt, at: offset,
+                ts: e.timestamp || null, url: e.prUrl,
+                number: e.prNumber == null ? null : e.prNumber,
+                repo: e.prRepository || null,
+            });
+        }
+    };
+
     for (const ev of events) {
         if (ev.kind === 'user') {
             const offset = offsetOf.get(ev.id);
             if (offset === undefined) continue;
+            prsBefore(offset);
             turnAt = offset;
-            idx.marks.push({
-                kind: 'turn', id: ev.id, offset, ts: ev.ts || null,
+            push({
+                kind: 'turn', id: ev.id, offset, at: offset, ts: ev.ts || null,
                 text: clip(ev.text, TEXT_MAX), command: ev.command || null,
                 images: (ev.images || []).length,
             });
-            changed = true;
         } else if (ev.kind === 'tool' && REVIEWABLE[ev.name]) {
-            if (idx.marks.some(m => m.id === ev.id)) continue;
-            idx.marks.push(toolMark(ev, turnAt));
+            if (has(ev.id)) continue;
+            prsBefore(callAt.get(ev.id) ?? Infinity);
+            push(toolMark(ev, turnAt, callAt.get(ev.id) ?? turnAt));
             if (!ev.result) idx.pending.push(ev.id);
-            changed = true;
+        } else if (ev.kind === 'tool' && MARKED[ev.name]) {
+            if (has(ev.id)) continue;
+            prsBefore(callAt.get(ev.id) ?? Infinity);
+            push(workMark(ev, turnAt, callAt.get(ev.id) ?? turnAt));
+            // Its result was in the same read, and it failed.
+            if (ev.status === 'error') failed(ev.id, ev.name, ev.result, ev.resultTs || ev.ts);
+        } else if (ev.kind === 'tool' && ev.status === 'error') {
+            // A call this filter did not keep, whose failed result it did — only
+            // possible when both landed in one read and the call was a REVIEWABLE
+            // or MARKED one, so this is the rare path. Kept for completeness.
+            failed(ev.id, ev.name, ev.result, ev.resultTs || ev.ts);
         } else if (ev.kind === 'tool-result' && idx.pending.includes(ev.toolId)) {
-            const m = idx.marks.find(x => x.id === ev.toolId);
+            const m = byId.get(ev.toolId);
             if (m) { m.status = ev.status || m.status; m.result = resultStub(ev.result); }
             idx.pending = idx.pending.filter(id => id !== ev.toolId);
             changed = true;
+        } else if (ev.kind === 'tool-result' && ev.status === 'error') {
+            // A plan sent back or a question dismissed is an outcome, not a
+            // failure, and was settled by the branch above.
+            const call = byId.get(ev.toolId);
+            if (call && REVIEWABLE[call.name]) continue;
+            failed(ev.toolId, call ? call.name : null, ev.result, ev.ts);
         }
     }
+    prsBefore(Infinity);
     return changed;
 }
 
