@@ -292,7 +292,7 @@ function harness(name) {
     const flagRows = new Map();
     const store = new Orchestrators({ file: fileOf(name) });
     let windows = [];
-    orchestration.init({
+    const deps = {
         store, pool,
         index: { summary: (id) => ({ sessionId: id, cwd: home, title: id, permissionMode: 'auto' }),
             get: () => null, note: () => {} },
@@ -304,8 +304,9 @@ function harness(name) {
         tooManyCreates: () => false,
         // Wake the moment a window resets, so the cases need not wait a minute.
         resumeGraceMs: 0,
-    });
-    return { pool, runners, created, store, flagRows, setWindows: (w) => { windows = w; } };
+    };
+    orchestration.init(deps);
+    return { pool, runners, created, store, flagRows, deps, setWindows: (w) => { windows = w; } };
 }
 
 (async () => {
@@ -607,6 +608,63 @@ function harness(name) {
         assert.strictEqual(h.created.length, 1, 'the queued one starts once the failed one lets go');
         assert.strictEqual(h.created[0].prompt, 'next');
         ok('a start that fails gives its slot to the next queued worker');
+    }
+
+    {
+        // The workers view reads a worker's state off the `orchestrator` event,
+        // so a worker changing state has to send one — and a status tick that
+        // changed nothing it shows must not, or every busy worker rebroadcasts
+        // the whole payload on each of its ticks.
+        const h = harness('worker-status');
+        const events = require('../bridge/events');
+        const seen = [];
+        events.clients.set('probe', { res: { write: (chunk) => {
+            const m = /^event: (\S+)\ndata: (.*)\n\n$/s.exec(chunk);
+            if (m && m[1] === 'orchestrator') seen.push(JSON.parse(m[2]));
+        } } });
+        orchestration.enable('O2', null);
+        h.store.addWorker('O2', { id: 'W2', title: 'worker' });
+        const w = h.pool.ensure('W2');
+        await sleep(400);
+        seen.length = 0;
+
+        w.state = 'busy';
+        orchestration.onStatus(w.status());
+        await sleep(400);
+        assert.strictEqual(seen.length, 1, 'a worker going busy broadcasts its orchestrator');
+        assert.strictEqual(seen[0].workers[0].state, 'busy');
+
+        orchestration.onStatus(w.status());
+        await sleep(400);
+        assert.strictEqual(seen.length, 1, 'the same state again broadcasts nothing');
+
+        w.pendingPermission = { id: 'r1', kind: 'tool' };
+        orchestration.onStatus(w.status());
+        await sleep(400);
+        assert.strictEqual(seen.length, 2, 'starting to wait on an ask is a change');
+        assert.strictEqual(seen[1].workers[0].pending, 'tool');
+        events.clients.delete('probe');
+        ok('a worker\'s state change reaches its orchestrator\'s payload, once per change');
+    }
+
+    {
+        // `workers[].pr`: the newest PR the transcript linked, with no status
+        // the store has not got — never a call out to GitHub.
+        const h = harness('worker-pr');
+        orchestration.enable('O3', null);
+        h.store.addWorker('O3', { id: 'W3', title: 'worker' });
+        h.store.addWorker('O3', { id: 'W4', title: 'no pr' });
+        const summary = (id) => ({ sessionId: id, cwd: home, title: id,
+            prs: id === 'W3' ? [{ number: 7, url: 'https://github.com/o/r/pull/7', repo: 'o/r' },
+                { number: 9, url: 'https://github.com/o/r/pull/9', repo: 'o/r' }] : [] });
+        orchestration.init({ ...h.deps, index: { ...h.deps.index, summary } });
+        const p = orchestration.payload('O3');
+        const pr = p.workers.find(x => x.id === 'W3').pr;
+        assert.strictEqual(pr.number, 9, 'the newest one');
+        assert.strictEqual(pr.url, 'https://github.com/o/r/pull/9');
+        assert.strictEqual(pr.status, 'unknown');
+        assert.strictEqual(p.workers.find(x => x.id === 'W4').pr, null);
+        ok('a worker row carries its newest PR, from memory');
     }
 })().then(() => {
     fs.rmSync(home, { recursive: true, force: true });

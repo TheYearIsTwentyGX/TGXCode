@@ -657,6 +657,12 @@
             </div>
           </aside>
           <nav id="turns" class="turns" aria-label="Your messages, plans and questions in this session"></nav>
+
+          <!-- An orchestrator's workers, as a board laid over everything in this
+               box — web/orchestrator-view.js. Inside `.conv-body` so it covers
+               the transcript and its side columns and stops above the dock and
+               the composer, which stay usable under it. -->
+          <div id="orch-view" class="orch-view" hidden tabindex="-1" aria-label="This orchestrator's workers"></div>
         </div>
 
         <!-- A question is answered here rather than in the transcript: the turn

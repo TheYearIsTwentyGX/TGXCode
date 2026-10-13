@@ -49,6 +49,25 @@
 .orch-paused button:hover { background: var(--yellow-cont-strong); }
 
 .orch-sec + .orch-sec { border-top: 1px solid var(--s3); }
+/* The head and, beside it, a control of its own (the workers view toggle). */
+.orch-sec-row { display: flex; align-items: center; gap: var(--sp-3); }
+.orch-sec-row .orch-sec-head { flex: 1; min-width: 0; }
+.orch-view-btn {
+    flex: none;
+    margin-right: var(--sp-4);
+    height: 24px;
+    padding: 0 var(--sp-5);
+    border: 0;
+    border-radius: var(--pill);
+    background: var(--s3);
+    color: var(--text-2);
+    font: 500 var(--fs-sm)/var(--lh-none) var(--sans);
+    cursor: pointer;
+    transition: background var(--dur-fast) var(--ease-standard), color var(--dur-fast) var(--ease-standard);
+}
+.orch-view-btn:hover { background: var(--s4); color: var(--text); }
+.orch-view-btn[aria-pressed="true"] { background: var(--blue-cont); color: var(--blue); }
+.orch-view-btn[aria-pressed="true"]:hover { background: var(--blue-cont-hover); color: var(--on-blue-cont); }
 .orch-sec-head {
     display: flex;
     align-items: center;
@@ -198,7 +217,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .orch-dock, .orch-sec-head .twist, .orch-paused button, .orch-x { transition: none; }
+    .orch-dock, .orch-sec-head .twist, .orch-paused button, .orch-x, .orch-view-btn { transition: none; }
 }
 
 /* The stand-in drawn while a conversation's orchestrator payload loads — see
@@ -207,3 +226,191 @@
 .orch-loading { padding: var(--sp-4) var(--sp-6); }
 .orch-skel-line { height: 12px; width: 38%; margin: var(--sp-6) 0; }
 .orch-skel-line:nth-child(2n) { width: 26%; }
+
+/* ── The workers view — web/orchestrator-view.js ─────────────────────────────
+   A board of an orchestrator's workers, laid over `.conv-body` (transcript and
+   side columns) and stopping above the dock and composer. `.conv-body` is
+   positioned only while the view is in it: it is transcript.css's box, and the
+   absolute things already inside `.conv-main` are placed against that, not it.
+   z 3 keeps it under find (4) and the plan pane (5) — a plan arriving for the
+   orchestrator itself still takes the whole conversation over. */
+
+.conv-body:has(> .orch-view) { position: relative; }
+.orch-view {
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    overflow-y: auto;
+    background: var(--bg);
+    outline: none;
+    color-scheme: dark;
+    container-type: inline-size;
+}
+.orch-view[hidden] { display: none; }
+
+.ow { max-width: 1400px; margin: 0 auto; padding: var(--sp-7) var(--pane-x, 28px) var(--sp-9); }
+
+.ow-top { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--sp-3) var(--sp-6); margin-bottom: var(--sp-7); }
+.ow-title { margin: 0; color: var(--text); font: var(--fw-strong) var(--fs-lg)/var(--lh-tight) var(--sans); }
+.ow-counts { color: var(--text-3); font: 400 var(--fs-xs)/var(--lh-snug) var(--mono); font-variant-numeric: tabular-nums; }
+.ow-cutoff {
+    margin-left: auto;
+    padding: var(--sp-1) var(--sp-4);
+    border-radius: var(--pill);
+    background: var(--s2);
+    color: var(--text-3);
+    font: 400 var(--fs-sm)/var(--lh-snug) var(--sans);
+    font-variant-numeric: tabular-nums;
+}
+.ow-cutoff[data-tone="near"] { background: var(--yellow-cont); color: var(--yellow); }
+.ow-cutoff[data-tone="off"] { background: none; color: var(--text-4); }
+.ow-top .lbtn { align-self: center; }
+.ow-cutoff + .lbtn, .ow-counts + .lbtn { margin-left: var(--sp-2); }
+.ow-paused { margin: 0 0 var(--sp-7); }
+
+.ow-body { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: var(--sp-7); align-items: start; }
+
+.ow-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: var(--sp-6); align-content: start; }
+.ow-none { grid-column: 1 / -1; padding: var(--sp-6) 0; }
+
+.ow-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-4);
+    min-width: 0;
+    padding: var(--sp-6) var(--sp-7);
+    border-radius: var(--r);
+    background: var(--s1);
+    box-shadow: inset var(--edge-w) 0 0 var(--s5);
+    cursor: pointer;
+    transition: background var(--dur-fast) var(--ease-standard);
+}
+.ow-card:hover { background: var(--s2); }
+.ow-card[data-state="running"] { box-shadow: inset var(--edge-w) 0 0 var(--green-edge); }
+.ow-card[data-state="error"] { box-shadow: inset var(--edge-w) 0 0 var(--red); }
+.ow-card[data-blocked="true"] { background: var(--yellow-tint); box-shadow: inset var(--edge-w) 0 0 var(--yellow); }
+.ow-card[data-state="closed"] { opacity: 0.6; }
+.ow-queued { cursor: default; background: none; box-shadow: inset 0 0 0 1px var(--s4); }
+.ow-queued:hover { background: none; }
+
+.ow-head { display: flex; align-items: center; gap: var(--sp-4); min-width: 0; }
+.ow-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text);
+    font: var(--fw-medium) var(--fs-base)/var(--lh-tight) var(--sans);
+}
+.ow-name.orch-link { color: var(--text); }
+.ow-name.orch-link:hover { color: var(--blue); text-decoration: none; }
+.ow-state {
+    flex: none;
+    padding: 1px var(--sp-3); /* 1px, as .orch-kind: a 17px chip beside a 14px title */
+    border-radius: var(--pill);
+    background: var(--s3);
+    color: var(--text-3);
+    font: 500 var(--fs-xs)/var(--lh-snug) var(--mono);
+}
+.ow-state[data-state="running"] { background: none; color: var(--green); box-shadow: inset 0 0 0 1px var(--green-edge); }
+.ow-state[data-state="error"] { background: var(--red-cont); color: var(--red); }
+.ow-state[data-state="queued"] { background: none; color: var(--text-4); box-shadow: inset 0 0 0 1px var(--s5); }
+
+.ow-facts { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2) var(--sp-5); min-width: 0; }
+.ow-branch, .ow-age { color: var(--text-4); font: 400 var(--fs-xs)/var(--lh-snug) var(--mono); }
+.ow-branch { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-3); }
+.ow-facts .ow-age { margin-left: auto; }
+.ow-pr {
+    --pr-tint: var(--text-3);
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-3);
+    padding: 1px var(--sp-3); /* 1px: the same chip height as .ow-state */
+    border-radius: var(--pill);
+    background: color-mix(in srgb, var(--pr-tint) 14%, var(--s2));
+    color: var(--pr-tint);
+    font: 500 var(--fs-xs)/var(--lh-snug) var(--mono);
+    text-decoration: none;
+}
+.ow-pr i { font: 400 var(--fs-sm)/var(--lh-snug) var(--sans); font-style: normal; color: var(--text-3); }
+.ow-pr:hover { background: color-mix(in srgb, var(--pr-tint) 22%, var(--s2)); }
+.ow-pr[data-status="open"] { --pr-tint: var(--blue); }
+.ow-pr[data-status="approved"] { --pr-tint: var(--green); }
+.ow-pr[data-status="changes"], .ow-pr[data-status="checks-failed"] { --pr-tint: var(--red); }
+.ow-pr[data-status="conflicting"], .ow-pr[data-status="checks-pending"] { --pr-tint: var(--yellow); }
+.ow-pr[data-status="merged"] { --pr-tint: var(--purple); }
+
+.ow-ask { display: grid; gap: var(--sp-4); padding: var(--sp-5) var(--sp-6); border-radius: var(--r-sm); background: var(--s2); cursor: default; }
+.ow-ask[data-pending="true"] { opacity: 0.55; }
+.ow-ask-what { display: flex; gap: var(--sp-4); min-width: 0; color: var(--text-2); font: 400 var(--fs-md)/var(--lh-snug) var(--sans); }
+.ow-ask-what b { flex: none; color: var(--yellow); font-weight: var(--fw-medium); }
+.ow-ask-what span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ow-acts { display: flex; flex-wrap: wrap; gap: var(--sp-3); }
+.ow-plan summary { cursor: pointer; color: var(--blue); font: 400 var(--fs-md)/var(--lh-snug) var(--sans); list-style: none; }
+.ow-plan summary::-webkit-details-marker { display: none; }
+.ow-plan[open] summary { margin-bottom: var(--sp-4); }
+.ow-plan-doc {
+    max-height: 320px;
+    overflow: auto;
+    margin-bottom: var(--sp-5);
+    padding: var(--sp-4) var(--sp-6);
+    border-radius: var(--r-xs);
+    background: var(--s1);
+    color: var(--text);
+    font: 400 var(--fs-md)/var(--lh-base) var(--sans);
+}
+
+.ow-report { display: flex; align-items: baseline; gap: var(--sp-4); min-width: 0; }
+.ow-report-kind { flex: none; color: var(--text-3); font: 500 var(--fs-xs)/var(--lh-snug) var(--mono); }
+.ow-report-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); font: 400 var(--fs-md)/var(--lh-snug) var(--sans); }
+.ow-report .ow-age { flex: none; }
+
+/* The road from spawned to PR: five dots on a rule, the rule drawn between
+   each dot and the next by the dot's own ::before. */
+.ow-line { display: flex; margin: var(--sp-2) 0 0; padding: 0; list-style: none; }
+.ow-line li { position: relative; flex: 1; display: grid; justify-items: center; gap: var(--sp-2); min-width: 0; }
+.ow-line li + li::before {
+    content: '';
+    position: absolute;
+    top: 4px; /* through the middle of the 9px dot */
+    right: calc(50% + 7px);
+    left: calc(-50% + 7px);
+    height: 1px;
+    background: var(--s5);
+}
+.ow-line li[data-state="done"] + li::before { background: var(--text-4); }
+.ow-dot { width: 9px; height: 9px; border-radius: 50%; box-shadow: inset 0 0 0 1px var(--s6); }
+.ow-step { color: var(--text-4); font: 400 var(--fs-2xs)/var(--lh-snug) var(--sans); white-space: nowrap; }
+.ow-line li[data-state="done"] .ow-dot { background: var(--text-3); box-shadow: none; }
+.ow-line li[data-state="done"] .ow-step { color: var(--text-3); }
+.ow-line li[data-state="now"] .ow-dot { background: var(--blue); box-shadow: 0 0 0 3px var(--blue-tint); }
+.ow-line li[data-state="now"] .ow-step { color: var(--text); }
+.ow-card[data-blocked="true"] .ow-line li[data-state="now"] .ow-dot { background: var(--yellow); box-shadow: 0 0 0 3px var(--yellow-cont); }
+.ow-line li[data-state="skipped"] .ow-dot { box-shadow: inset 0 0 0 1px var(--s5); transform: scale(0.6); }
+.ow-line li[data-state="skipped"] .ow-step { text-decoration: line-through; }
+.ow-line li[data-state="unknown"] .ow-dot { box-shadow: inset 0 0 0 1px var(--text-4); background: none; }
+.ow-card[data-state="closed"] .ow-line li[data-state="now"] .ow-dot { background: var(--text-4); box-shadow: none; }
+
+.ow-inbox { position: sticky; top: 0; padding: var(--sp-5) var(--sp-6); border-radius: var(--r); background: var(--s1); font: 400 var(--fs-md)/var(--lh-base) var(--sans); color: var(--text-2); }
+.ow-inbox-head { display: flex; align-items: baseline; gap: var(--sp-4); margin-bottom: var(--sp-3); }
+.ow-sub { color: var(--text); font: var(--fw-medium) var(--fs-base)/var(--lh-tight) var(--sans); }
+/* The dock's inbox rows, in a column a third the width: the status keeps to
+   one line and the worker's name gives way to it. */
+.ow-inbox .orch-status { white-space: nowrap; }
+.ow-inbox .orch-item-head .orch-link { flex: 1; }
+
+/* Narrower than a card column and the inbox side by side: the inbox goes under
+   the workers. A container query, because the box this lives in narrows with
+   the rail and the side columns, not with the window. */
+@container (max-width: 760px) {
+    .ow-body { grid-template-columns: minmax(0, 1fr); }
+    .ow-inbox { position: static; }
+    .ow-cutoff { margin-left: 0; }
+    .ow-top .lbtn { margin-left: auto; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .ow-card { transition: none; }
+}

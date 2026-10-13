@@ -47,6 +47,8 @@ const {
     shouldNudge, usageTrips, resumeAtFor, describeCounts, cleanSettings, DEFAULT_SETTINGS,
 } = require('./orchestrators');
 const workerRead = require('./worker-read');
+const pulls = require('./pulls');
+const prStore = require('./pr-store');
 const {
     orchestratorInboxEnvelope, orchestratorMessageEnvelope, isOrchestratorMessage, parseOrchestratorMessage,
 } = require('./transcript');
@@ -185,6 +187,26 @@ function workerRow(w) {
         closedAt: w.closedAt,
         state: st ? st.state : 'stopped',
         pending: st && st.pendingPermission ? st.pendingPermission.kind : null,
+        pr: workerPr(s),
+    };
+}
+
+/**
+ * The newest pull request a worker's transcript links, with its status where
+ * pr-store already has one. Memory only, as pr-owners is: the payload is built
+ * on every filing, and a `gh` call there would put GitHub between a worker
+ * reporting and the window hearing about it. A PR the store has not seen yet
+ * comes back `status: "unknown"` with its number and url, which is still
+ * something to link to.
+ */
+function workerPr(s) {
+    const list = (s && s.prs) || [];
+    const last = list[list.length - 1];
+    if (!last || last.number == null) return null;
+    const [r] = pulls.resolveBatch([last], prStore.lookup);
+    return {
+        number: last.number, url: last.url || null, repo: r.repo || null,
+        title: r.title || null, status: r.status, label: r.label || null,
     };
 }
 
@@ -364,6 +386,22 @@ function onTurnComplete(res) {
 function onStatus(s) {
     if (!s || !s.sessionId) return;
     if (store.get(s.sessionId) && s.state === 'idle') scheduleNudge(s.sessionId);
+    else noteWorkerStatus(s);
+}
+
+// What each worker last looked like in a payload, so a status tick that changed
+// neither its state nor what it waits on — most of them: `status` also moves on
+// every busySince and mode — does not rebroadcast the whole orchestrator.
+const workerSeen = new Map();
+
+/** A worker's state moving is a change to its orchestrator's payload; say so. */
+function noteWorkerStatus(s) {
+    const o = store.orchestratorOf(s.sessionId);
+    if (!o) return;
+    const sig = `${s.state}|${s.pendingPermission ? s.pendingPermission.kind : ''}`;
+    if (workerSeen.get(s.sessionId) === sig) return;
+    workerSeen.set(s.sessionId, sig);
+    emit(o.id);
 }
 
 // ---------------------------------------------------------------------------
