@@ -381,12 +381,12 @@
    colours above still do the work of saying which band it is in. */
 .lcard[data-compact="1"] { gap: 7px; padding: 12px 15px 11px; }
 
-.lcard[data-reason="ask"]   { box-shadow: inset 3px 0 0 var(--yellow); background: #232017; }
+.lcard[data-reason="ask"]   { box-shadow: inset 3px 0 0 var(--yellow); background: var(--yellow-tint); }
 .lcard[data-reason="error"] { box-shadow: inset 3px 0 0 var(--red); }
 .lcard[data-reason="here"]  { box-shadow: inset 3px 0 0 var(--green); }
 /* Running, but not ours to stop — dimmer than the green of a turn this window
    is driving, and still clearly not the grey of an idle card. */
-.lcard[data-reason="elsewhere"] { box-shadow: inset 3px 0 0 #3f6b4c; }
+.lcard[data-reason="elsewhere"] { box-shadow: inset 3px 0 0 var(--green-edge); }
 
 .lcard-head { display: flex; align-items: center; gap: 8px; }
 
@@ -631,11 +631,11 @@
 }
 .lbtn:hover { background: var(--s4); color: var(--text); }
 .lbtn.ok { background: var(--blue-cont); color: var(--blue); }
-.lbtn.no:hover { background: #3a2422; color: var(--red); }
+.lbtn.no:hover { background: var(--red-cont); color: var(--red); }
 .lbtn:disabled { opacity: 0.45; cursor: default; }
 
 /* An urgent badge is a count of people waiting, not of things happening. */
-.bar-badge.urgent { background: var(--yellow); color: #241f07; }
+.bar-badge.urgent { background: var(--yellow); color: var(--on-yellow); }
 
 /* The board's own header controls: the Focus toggle sits here, beside the count. */
 .live-btn {
@@ -725,8 +725,8 @@
     font-size: 13.5px;
 }
 .dash-note p { margin: 0; }
-.dash-note.warn { color: var(--yellow); background: #2e2717; }
-.dash-note.error { color: var(--red); background: #2f2120; }
+.dash-note.warn { color: var(--yellow); background: var(--yellow-cont); }
+.dash-note.error { color: var(--red); background: var(--red-cont); }
 
 /* One card per project, the same idea as a rail group: where one project ends
    is a change of surface, not a hairline. */
@@ -812,10 +812,10 @@
     background: var(--s4);
     color: var(--text-2);
 }
-.sig.dirty { background: #3a3320; color: var(--yellow); }
-.sig.dirty:hover, .sig.dirty.on { background: #4a4128; }
+.sig.dirty { background: var(--yellow-cont-hover); color: var(--yellow); }
+.sig.dirty:hover, .sig.dirty.on { background: var(--yellow-cont-strong); }
 .sig.quiet { background: var(--s3); color: var(--text-3); }
-.sig.bad { background: #3a2422; color: var(--red); }
+.sig.bad { background: var(--red-cont); color: var(--red); }
 
 /* The hue is the shared one; the ground is mixed from it so a chip stays a pill
    rather than becoming plain coloured text like the other two surfaces. The

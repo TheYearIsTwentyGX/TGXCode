@@ -208,8 +208,8 @@
 }
 .tb-card:hover { background: var(--s3); }
 
-.tb-card[data-col="needs"]   { box-shadow: inset 3px 0 0 var(--yellow); background: #232017; }
-.tb-card[data-col="needs"]:hover { background: #2b2719; }
+.tb-card[data-col="needs"]   { box-shadow: inset 3px 0 0 var(--yellow); background: var(--yellow-tint); }
+.tb-card[data-col="needs"]:hover { background: var(--yellow-cont); }
 .tb-card[data-col="working"] { box-shadow: inset 3px 0 0 var(--green); }
 .tb-task                     { box-shadow: inset 3px 0 0 var(--blue); }
 /* A task whose conversation has been filed away. Still offered — dismissing is
@@ -304,7 +304,7 @@
     margin: 0;
     padding: 7px 9px;
     border-radius: var(--r-sm);
-    background: #2b2719;
+    background: var(--yellow-cont);
     font-size: 12px;
     line-height: 1.45;
     color: var(--yellow);
@@ -332,7 +332,7 @@
 }
 .tb-btn:hover { background: var(--s4); color: var(--text); }
 .tb-btn.primary { background: var(--blue-cont); color: var(--blue); }
-.tb-btn.primary:hover { background: #27446f; color: #cfe0ff; }
+.tb-btn.primary:hover { background: var(--blue-cont-hover); color: var(--on-blue-cont); }
 .tb-btn.quiet { flex: none; background: none; color: var(--text-4); }
 .tb-btn.quiet:hover { background: var(--s3); color: var(--text-2); }
 .tb-btn:disabled { opacity: 0.45; cursor: default; }
@@ -789,7 +789,7 @@
     text-decoration: underline;
     text-underline-offset: 2px;
 }
-.sched-open:hover { color: #cfe0ff; }
+.sched-open:hover { color: var(--on-blue-cont); }
 
 /* The expression in English, with the raw text on the title attribute. Slightly
    brighter than the rest of the meta line because it is the field the card is

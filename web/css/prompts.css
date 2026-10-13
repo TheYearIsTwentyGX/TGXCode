@@ -85,9 +85,9 @@
 .perm-btn:hover:not(:disabled) { background: var(--s4); }
 .perm-btn:disabled { opacity: 0.5; }
 .perm-btn.allow { background: var(--blue-cont); color: var(--blue); }
-.perm-btn.allow:hover:not(:disabled) { background: #26426f; }
+.perm-btn.allow:hover:not(:disabled) { background: var(--blue-cont-hover); }
 .perm-btn.deny { color: var(--red); }
-.perm-btn.deny:hover:not(:disabled) { background: #33201f; }
+.perm-btn.deny:hover:not(:disabled) { background: var(--red-cont); }
 
 .perm-btn kbd {
     font: 500 10px/1 var(--mono);
@@ -220,7 +220,7 @@
     gap: 10px;
     width: 100%;
     padding: 9px 28px;
-    background: #2a2617;
+    background: var(--yellow-cont);
     border-bottom: 1px solid var(--outline-soft);
     color: var(--text-2);
     font: 400 12.5px/1.5 var(--sans);
@@ -228,7 +228,7 @@
     cursor: pointer;
     transition: background var(--t-fast) var(--ease);
 }
-.plan-bar:hover:not(:disabled) { background: #35301c; }
+.plan-bar:hover:not(:disabled) { background: var(--yellow-cont-hover); }
 .plan-bar-led {
     flex: none;
     width: 7px;
@@ -623,6 +623,6 @@
     background: var(--yellow);
     animation: breathe 1.6s var(--ease) infinite;
 }
-.btn-stop.force { color: var(--red); background: #33201f; }
-.btn-stop.force:hover { background: #452a28; }
+.btn-stop.force { color: var(--red); background: var(--red-cont); }
+.btn-stop.force:hover { background: var(--red-cont-hover); }
 

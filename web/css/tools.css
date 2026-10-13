@@ -46,7 +46,7 @@
     border-radius: 50%;
     background: var(--text-4);
 }
-:is(.tool[data-status="ok"] > summary, .trow[data-status="ok"])::before { background: #4d5052; }
+:is(.tool[data-status="ok"] > summary, .trow[data-status="ok"])::before { background: var(--s6); }
 :is(.tool[data-status="error"] > summary, .trow[data-status="error"])::before { background: var(--red); }
 .tool[data-status="pending"] > summary::before {
     background: var(--yellow);
@@ -131,7 +131,7 @@
     overflow-y: auto;
     color: var(--text-2);
 }
-.io.err { color: #f4a9a3; }
+.io.err { color: var(--red-soft); }
 
 .kv {
     display: grid;
@@ -173,8 +173,8 @@
 }
 .diff .dl { padding: 0 14px; white-space: pre; }
 /* Kept low-saturation: a long diff should not become a wall of colour. */
-.diff .dl.add { background: #14211a; color: #9ad8b2; }
-.diff .dl.del { background: #241819; color: #e8a9a4; }
+.diff .dl.add { background: var(--diff-add-bg); color: var(--diff-add-fg); }
+.diff .dl.del { background: var(--diff-del-bg); color: var(--diff-del-fg); }
 .diff .dl.ctx { color: var(--text-4); }
 
 /* subagent */
@@ -194,7 +194,7 @@
 
 .subagent-btns { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .more-btn.primary { background: var(--blue-tint); }
-.more-btn.primary:hover { background: var(--blue-deep); color: #fff; }
+.more-btn.primary:hover { background: var(--blue-deep); color: var(--on-blue-deep); }
 
 /* A subagent has nothing to send to, so the composer reads as unavailable
    rather than merely inert. */
@@ -312,28 +312,28 @@
 }
 
 /* tokens — muted, close in value, so code reads as text not confetti */
-.tok-comment   { color: #6f7579; font-style: italic; }
-.tok-string    { color: #95d3a5; }
-.tok-regex     { color: #86cfc4; }
-.tok-number    { color: #f0b96b; }
-.tok-keyword   { color: #c9a6f5; }
-.tok-builtin   { color: #a8c7fa; }
-.tok-fn        { color: #8fc0f0; }
-.tok-type      { color: #7fd0c4; }
-.tok-var       { color: #f2b48a; }
-.tok-flag      { color: #c1adf0; }
-.tok-decorator { color: #f0b96b; }
-.tok-key       { color: #8fc0f0; }
-.tok-prop      { color: #8fc0f0; }
-.tok-selector  { color: #c9a6f5; }
-.tok-at        { color: #c9a6f5; }
-.tok-tag       { color: #c9a6f5; }
-.tok-attr      { color: #f0b96b; }
-.tok-doctype   { color: #6f7579; }
-.tok-punct     { color: #8b9094; }
-.tok-diff-meta { color: #a8c7fa; }
-.tok-diff-add  { color: #a7e6bd; }
-.tok-diff-del  { color: #f4b4ae; }
+.tok-comment   { color: var(--syn-comment); font-style: italic; }
+.tok-string    { color: var(--syn-string); }
+.tok-regex     { color: var(--syn-regex); }
+.tok-number    { color: var(--syn-number); }
+.tok-keyword   { color: var(--syn-keyword); }
+.tok-builtin   { color: var(--syn-builtin); }
+.tok-fn        { color: var(--syn-fn); }
+.tok-type      { color: var(--syn-type); }
+.tok-var       { color: var(--syn-var); }
+.tok-flag      { color: var(--syn-flag); }
+.tok-decorator { color: var(--syn-number); }
+.tok-key       { color: var(--syn-fn); }
+.tok-prop      { color: var(--syn-fn); }
+.tok-selector  { color: var(--syn-keyword); }
+.tok-at        { color: var(--syn-keyword); }
+.tok-tag       { color: var(--syn-keyword); }
+.tok-attr      { color: var(--syn-number); }
+.tok-doctype   { color: var(--syn-comment); }
+.tok-punct     { color: var(--syn-punct); }
+.tok-diff-meta { color: var(--syn-builtin); }
+.tok-diff-add  { color: var(--syn-add); }
+.tok-diff-del  { color: var(--syn-del); }
 
 /* ── terminal ────────────────────────────────────────────────────────── */
 

@@ -120,14 +120,14 @@
        low-saturation for that block's reason: a long diff should not become a
        wall of colour. The word-level highlights are one step up from them,
        which is the only place a stronger tint is doing work. */
-    --d2h-dark-ins-bg-color: #14211a;
-    --d2h-dark-del-bg-color: #241819;
-    --d2h-dark-ins-highlight-bg-color: #24523a;
-    --d2h-dark-del-highlight-bg-color: #5a2f2c;
-    --d2h-dark-ins-border-color: #1f3a2a;
-    --d2h-dark-del-border-color: #3d2626;
-    --d2h-dark-change-ins-color: #14211a;
-    --d2h-dark-change-del-color: #2a2413;
+    --d2h-dark-ins-bg-color: var(--diff-add-bg);
+    --d2h-dark-del-bg-color: var(--diff-del-bg);
+    --d2h-dark-ins-highlight-bg-color: var(--diff-add-hl);
+    --d2h-dark-del-highlight-bg-color: var(--diff-del-hl);
+    --d2h-dark-ins-border-color: var(--diff-add-edge);
+    --d2h-dark-del-border-color: var(--diff-del-edge);
+    --d2h-dark-change-ins-color: var(--diff-add-bg);
+    --d2h-dark-change-del-color: var(--diff-change-bg);
 
     --d2h-dark-bg-color: var(--bg);
     --d2h-dark-color: var(--text-2);

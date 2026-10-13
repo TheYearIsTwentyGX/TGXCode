@@ -105,7 +105,7 @@
 .icon-btn:hover { background: var(--s3); color: var(--text); }
 .icon-btn.on { color: var(--blue); }
 .icon-btn:disabled { opacity: 0.4; cursor: default; background: none; }
-.icon-btn.danger:hover { background: #3a2422; color: var(--red); }
+.icon-btn.danger:hover { background: var(--red-cont); color: var(--red); }
 
 /* What the project declares in .tgxcode/ — a button each, words rather than an
    icon, because "Dev server" is not a thing anybody draws. */
@@ -262,8 +262,8 @@
     background: transparent;
     transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
-.agent-chip:hover .go { background: var(--blue-deep); color: #fff; }
-.agent-chip[aria-current="true"] .go { color: #fff; }
+.agent-chip:hover .go { background: var(--blue-deep); color: var(--on-blue-deep); }
+.agent-chip[aria-current="true"] .go { color: var(--on-blue-deep); }
 
 /* The subagent's own status, where the session's project/branch line usually is. */
 .conv-sub .agent-state {
@@ -368,7 +368,7 @@
 }
 /* Lit by hovering the switch itself, not the chip: reaching for the stop button
    should not first promise to open a tab. */
-.chan-open:hover .go { background: var(--blue-deep); color: #fff; }
+.chan-open:hover .go { background: var(--blue-deep); color: var(--on-blue-deep); }
 .channel[data-live="false"] .chan-open:hover .go { background: var(--s5); color: var(--text-2); }
 /* Shown on this session's own word rather than the kernel's: nothing on the
    Linux side holds the port, which here means a server on the Windows side of
@@ -406,13 +406,13 @@
     color: var(--text-4);
     transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
-.chan-stop:hover { background: #3a2422; color: var(--red); }
+.chan-stop:hover { background: var(--red-cont); color: var(--red); }
 
 /* Armed: one more click ends it. The chip says so where it said "Open", so the
    confirmation is on the thing being confirmed and not in a dialog. */
-.channel[data-arm="true"] .chan-stop { background: #3a2422; color: var(--red); }
+.channel[data-arm="true"] .chan-stop { background: var(--red-cont); color: var(--red); }
 .channel[data-arm="true"] .go,
-.channel[data-arm="true"] .chan-open:hover .go { background: #3a2422; color: var(--red); }
+.channel[data-arm="true"] .chan-open:hover .go { background: var(--red-cont); color: var(--red); }
 
 /* ── transcript ──────────────────────────────────────────────────────── */
 
@@ -878,7 +878,7 @@
     text-underline-offset: 2px;
     cursor: pointer;
 }
-.linky:hover { color: #dbe6fb; }
+.linky:hover { color: var(--on-blue-cont); }
 
 /* The same task, at a width you can actually read a briefing at. */
 .task-dlg-why {
@@ -959,7 +959,7 @@
     margin: 8px 0;
     font-size: 13.5px;
 }
-.ev-system[data-error="true"] .ev-body { background: #331f1e; }
+.ev-system[data-error="true"] .ev-body { background: var(--red-cont); }
 .ev-system .ev-label { color: var(--yellow); }
 .ev-system[data-error="true"] .ev-label { color: var(--red); }
 
@@ -1501,7 +1501,7 @@ select.flash { animation: flash-select 1.3s var(--ease); }
 .find-subs[hidden] { display: none; }
 .find-subs:hover { color: var(--text); }
 .find-subs input { accent-color: var(--blue-deep); cursor: pointer; }
-.find-subs:has(input:checked) { background: var(--blue-cont); color: #e6edff; }
+.find-subs:has(input:checked) { background: var(--blue-cont); color: var(--on-blue-cont); }
 
 /* How many matches are hiding inside something you have not opened. Without it
    the count in the field and the marks on screen would not add up, and the gap
@@ -1511,7 +1511,7 @@ select.flash { animation: flash-select 1.3s var(--ease); }
     padding: 0 6px;
     border-radius: var(--pill);
     background: var(--yellow);
-    color: #131314;
+    color: var(--on-yellow);
     font: 500 10.5px/16px var(--mono);
     font-variant-numeric: tabular-nums;
 }
@@ -1526,12 +1526,12 @@ select.flash { animation: flash-select 1.3s var(--ease); }
    the blue of `::selection`: a find mark that reads as a selection is a bug
    report waiting to happen. */
 ::highlight(cs-find) {
-    background-color: #4d3f10;
-    color: #f6e3ab;
+    background-color: var(--mark-bg);
+    color: var(--mark-fg);
 }
 ::highlight(cs-find-at) {
     background-color: var(--yellow);
-    color: #131314;
+    color: var(--on-yellow);
 }
 
 

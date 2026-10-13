@@ -41,7 +41,7 @@
 .rail-filter:hover { background: var(--s3); color: var(--text); }
 .rail-filter svg { flex: none; color: var(--text-4); }
 .rail-filter-label { overflow: hidden; text-overflow: ellipsis; }
-.rail-filter[aria-pressed="true"] { background: var(--blue-cont); color: #dbe6fb; }
+.rail-filter[aria-pressed="true"] { background: var(--blue-cont); color: var(--on-blue-cont); }
 .rail-filter[aria-pressed="true"] svg { color: var(--blue); }
 
 /* How many sessions the button is talking about — the same number whether it is
@@ -51,7 +51,7 @@
     color: var(--text-4);
     font-variant-numeric: tabular-nums;
 }
-.rail-filter[aria-pressed="true"] .rail-filter-count { color: #b9cdf0; }
+.rail-filter[aria-pressed="true"] .rail-filter-count { color: var(--on-blue-cont-2); }
 .rail-filter-count[hidden] { display: none; }
 
 /* Hide finished and the order button share a row: the filter takes the width,
@@ -245,7 +245,7 @@
 }
 .strip:hover { background: var(--s2); --row-bg: var(--s2); }
 .strip[aria-current="true"] { background: var(--blue-cont); --row-bg: var(--blue-cont); }
-.strip[aria-current="true"]:hover { background: #26406c; --row-bg: #26406c; }
+.strip[aria-current="true"]:hover { background: var(--blue-cont-hover); --row-bg: var(--blue-cont-hover); }
 
 .strip-main {
     flex: 1;
@@ -307,7 +307,7 @@
 .strip-menu-btn:hover { background: var(--s4); color: var(--text); }
 .strip-menu-btn[aria-expanded="true"] { background: var(--s4); color: var(--text); }
 .strip[aria-current="true"] > .strip-menu-btn:hover,
-.strip[aria-current="true"] > .strip-menu-btn[aria-expanded="true"] { background: #30507f; }
+.strip[aria-current="true"] > .strip-menu-btn[aria-expanded="true"] { background: var(--blue-cont-active); }
 .strip:has(> .strip-menu-btn) .strip-title { padding-right: 22px; }
 .strip[data-renaming="true"] > .strip-menu-btn { display: none; }
 /* Nothing left in the overlay but a stalled row's Stop, so without one it would
@@ -338,7 +338,7 @@
     flex: none;
     color: var(--blue);
 }
-.strip[aria-current="true"] .strip-meta .tag-pin { color: #cfe0ff; }
+.strip[aria-current="true"] .strip-meta .tag-pin { color: var(--on-blue-cont); }
 
 /* ── one PR vocabulary ──────────────────────────────────────────────────────
    Three surfaces show what has become of a pull request — the rail glyph below,
@@ -403,7 +403,7 @@
    are left exactly as they are. */
 .strip[aria-current="true"] .strip-meta .tag-pr[data-status="draft"],
 .strip[aria-current="true"] .strip-meta .tag-pr[data-status="unknown"],
-.strip[aria-current="true"] .strip-meta .tag-pr[data-status="closed"] { color: #b3c7ea; }
+.strip[aria-current="true"] .strip-meta .tag-pr[data-status="closed"] { color: var(--on-blue-cont-2); }
 
 .mini {
     display: grid;
@@ -415,11 +415,11 @@
 }
 .mini:hover { background: var(--s4); color: var(--text); }
 .mini.on { color: var(--blue); }
-.strip[aria-current="true"] .mini:hover { background: #30507f; }
+.strip[aria-current="true"] .mini:hover { background: var(--blue-cont-active); }
 /* Destructive controls stay the same weight as their neighbours until reached
    for — colouring one red at rest would make every row look like a warning. */
-.mini.danger:hover { background: #3a2422; color: var(--red); }
-.strip[aria-current="true"] .mini.danger:hover { background: #4a2b28; }
+.mini.danger:hover { background: var(--red-cont); color: var(--red); }
+.strip[aria-current="true"] .mini.danger:hover { background: var(--red-cont-hover); }
 
 /* Only a development bridge lists these at all; the tag says why a row is here
    in a window where it might otherwise look like real work. */
@@ -461,7 +461,7 @@
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
 }
-.strip[aria-current="true"] .strip-title { color: #d7e3ff; font-weight: 500; }
+.strip[aria-current="true"] .strip-title { color: var(--on-blue-cont); font-weight: 500; }
 
 /* Where the last turn left things — bridge/standing.js. One line, cut rather
    than wrapped: the rail is narrow and the full line is in the tooltip. */
@@ -475,7 +475,7 @@
     text-overflow: ellipsis;
 }
 .strip-standing[data-source="extract"] { font-style: italic; }
-.strip[aria-current="true"] .strip-standing { color: #b3c7ea; }
+.strip[aria-current="true"] .strip-standing { color: var(--on-blue-cont-2); }
 
 .strip-meta {
     display: flex;
@@ -487,7 +487,7 @@
     white-space: nowrap;
     overflow: hidden;
 }
-.strip[aria-current="true"] .strip-meta { color: #9db3d8; }
+.strip[aria-current="true"] .strip-meta { color: var(--on-blue-cont-3); }
 .strip-meta .wt {
     color: var(--text-3);
     font-family: var(--mono);
@@ -499,7 +499,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
 }
-.strip[aria-current="true"] .strip-meta .wt { color: #b3c7ea; }
+.strip[aria-current="true"] .strip-meta .wt { color: var(--on-blue-cont-2); }
 .strip-meta .dot { color: var(--text-4); opacity: 0.6; }
 
 .strip-meta .pulse {
@@ -529,7 +529,7 @@
     flex: none;
     padding: 1px 7px;
     border-radius: var(--pill);
-    background: #3a2f16;
+    background: var(--yellow-cont-hover);
     color: var(--yellow);
     font-size: 10.5px;
 }
@@ -596,7 +596,7 @@
     flex: none;
     padding: 1px 7px;
     border-radius: var(--pill);
-    background: #3a2422;
+    background: var(--red-cont);
     color: var(--red);
     font-size: 10.5px;
 }
@@ -620,7 +620,7 @@
     border-radius: var(--pill);
     font-size: 11px;
     color: var(--red);
-    background: #3a2422;
+    background: var(--red-cont);
 }
-.mini.stop:hover { background: #4a2b28; color: var(--red); }
+.mini.stop:hover { background: var(--red-cont-hover); color: var(--red); }
 .mini.stop:disabled { opacity: .6; cursor: default; }

@@ -79,9 +79,9 @@
    anti-aliased clip let it bleed through as two odd-coloured fringes — so the
    only thing it ever drew was a flaw, and it went. */
 #new-scrim[data-tinted] {
-    background: color-mix(in srgb, var(--proj-accent) var(--backdrop-tint, 13%), #000000c2);
+    background: color-mix(in srgb, var(--proj-accent) var(--backdrop-tint, 13%), var(--scrim-strong));
 }
-:root[data-plain-backdrop] #new-scrim[data-tinted] { background: #00000099; }
+:root[data-plain-backdrop] #new-scrim[data-tinted] { background: var(--scrim); }
 #new-scrim[data-tinted] .modal-head {
     background: color-mix(in srgb, var(--proj-accent) 13%, var(--s2));
     padding-bottom: 12px;

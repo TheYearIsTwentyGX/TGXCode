@@ -12,7 +12,7 @@
 .scrim {
     position: fixed;
     inset: 0;
-    background: #00000099;
+    background: var(--scrim);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -176,7 +176,7 @@
 /* Where the input currently points — so the folder you just climbed out of is
    findable in the list you land back in. */
 .picker-row[aria-current="true"] { background: var(--blue-cont); color: var(--blue); }
-.picker-row[aria-current="true"]:hover { background: #26406c; }
+.picker-row[aria-current="true"]:hover { background: var(--blue-cont-hover); }
 .picker-row .tag.dim { color: var(--text-4); }
 .picker-row.up { color: var(--text-3); }
 
@@ -240,7 +240,7 @@
     transition: background var(--t-fast) var(--ease);
 }
 .btn:hover { background: var(--blue-tint); }
-.btn.primary { background: var(--blue); color: #062e6f; }
+.btn.primary { background: var(--blue); color: var(--on-blue); }
 .btn.primary:hover { background: var(--blue); filter: brightness(1.08); }
 .btn:disabled { opacity: 0.45; cursor: default; }
 
@@ -258,7 +258,7 @@
 
 /* The one button in the app that destroys something. Filled, in the error
    colour, so it can never be mistaken for the confirm it sits next to. */
-.btn.destructive { background: var(--red); color: #4a0d09; }
+.btn.destructive { background: var(--red); color: var(--on-red); }
 .btn.destructive:hover { background: var(--red); filter: brightness(1.08); }
 
 /* ── notification history ────────────────────────────────────────────────
@@ -532,17 +532,17 @@
     align-items: center;
     gap: 6px;
     padding: 11px 12px 11px 20px;
-    background: #e3e3e3;
-    color: #1f1f1f;
+    background: var(--inverse-bg);
+    color: var(--inverse-fg);
     border-radius: var(--r-sm);
     font-size: 13.5px;
     line-height: 1.5;
     box-shadow: 0 4px 14px #0008;
     animation: rise var(--t-med) var(--ease);
 }
-.toast[data-kind="error"] { background: #f9dedc; color: #410e0b; }
-.toast[data-kind="ok"] { background: #c4eed0; color: #0a2e18; }
-.toast[data-kind="warn"] { background: #fde9c4; color: #3a2503; }
+.toast[data-kind="error"] { background: var(--inverse-err-bg); color: var(--inverse-err-fg); }
+.toast[data-kind="ok"] { background: var(--inverse-ok-bg); color: var(--inverse-ok-fg); }
+.toast[data-kind="warn"] { background: var(--inverse-warn-bg); color: var(--inverse-warn-fg); }
 
 .toast-text { flex: 1; min-width: 0; }
 
@@ -556,7 +556,7 @@
     white-space: nowrap;
     transition: background var(--t-fast) var(--ease);
 }
-.toast-action:hover { background: #0b57d01f; }
+.toast-action:hover { background: color-mix(in srgb, var(--blue-deep) 12%, transparent); }
 
 .toast-close {
     flex: none;
@@ -568,7 +568,7 @@
     opacity: 0.55;
     transition: opacity var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
 }
-.toast-close:hover { opacity: 1; background: #0000001a; }
+.toast-close:hover { opacity: 1; background: color-mix(in srgb, var(--inverse-fg) 10%, transparent); }
 
 @keyframes rise {
     from { opacity: 0; transform: translateY(8px); }
