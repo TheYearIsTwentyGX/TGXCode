@@ -365,6 +365,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/routes/schedules.js` | `/api/schedules` |
 | `bridge/routes/dashboard.js` | `/api/dashboard` and `/api/prs` |
 | `bridge/routes/github.js` | `/api/github/*`: account, templates, teams, repo state, name check, publish |
+| `bridge/routes/pr-reviews.js` | `/api/pr-review` (the nightly review's findings) and `/api/pr-review/fix` (a session on the PR's branch to fix them) |
 | `bridge/routes/quota.js` | `/api/quota` and refreshing it |
 | `bridge/routes/session.js` | One session's conversation: read, delete, send, later, handoff, stop, queue, permission, flags, attachments, suggestions, tasks, subagents |
 | `bridge/routes/session-workspace.js` | One session's directory: dev servers, changes, diff, pull requests, reveal, open-file, its terminal |
@@ -377,7 +378,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/config.js` | Paths, ports, allowed roots — every constant with a reason attached, and the two containment checks that decide whether a path is one a caller may name |
 | `bridge/dashboard.js` | Uncommitted changes and open PRs, per project |
 | `bridge/git.js` | Every question the bridge asks git about a directory, cached once for all of them |
-| `bridge/worktree.js` | Making `.claude/worktrees/<name>` on `worktree-<name>` for a session about to start in it — under the main checkout, never nested, never reused, never removed |
+| `bridge/worktree.js` | Making `.claude/worktrees/<name>` on `worktree-<name>` for a session about to start in it — under the main checkout, never nested, never reused, never removed — and finding or checking out a worktree on an existing branch, for fixing a PR |
 | `bridge/restart.js` | Pulling this checkout and handing over to `scripts/restart-bridge.sh` — the one mutating git call |
 | `bridge/changes.js` | What a session changed, out of its transcript and its subagents' |
 | `bridge/scratchpad.js` | A session's scratchpad directories under `/tmp/claude-<uid>/` (one per worktree it entered), listed and read with containment |
@@ -385,6 +386,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/github.js` | Publishing a directory to GitHub: who gh is logged in as, `git init`, starter files, a first commit, `gh repo create --source --push` and `gh repo edit` |
 | `bridge/pr-store.js` | When to ask, and last time's answer kept on disk — so no route ever waits on GitHub |
 | `bridge/pr-refresh.js` | The clock that fills it: one pass over the repositories in play, and `prs-changed` when the answer moved |
+| `bridge/pr-reviews.js` | The nightly review read back: from the gate session's transcript, else the PR comment off the refresher's clock, parsed into findings |
 | `bridge/pr-owners.js` | The way back: which conversation raised each PR, keyed `owner/name#N` — `GET /api/pr-owners` |
 | `bridge/overview.js` | The live board: what every session is doing right now |
 | `bridge/taskboard.js` | The task board: everything outstanding, in a column per state |
@@ -524,6 +526,7 @@ Two rules worth knowing before you send a patch:
 | `web/term-pane.js` | The app's side of the terminal pane: the one `TerminalPane`, open per session, its height and head, and the shell/run tabs |
 | `web/markdown.js` | The transcript's markdown renderer |
 | `web/pr-refs.js` | A `#151` in a message: whose PR it is (hover card) and the chat that raised it (click) |
+| `web/pr-review.js` | The nightly review's verdict chip beside a PR, its findings, and the Fix this / Fix all buttons — on the board and under the conversation header |
 | `web/highlight.js` | The syntax highlighter behind it |
 | `web/sw.js` | A service worker for one thing only: buttons on a notification. No `fetch` handler |
 | `web/preview.js` | The browser preview — a dev server's page in the window, with DevBrowser's toolbar |

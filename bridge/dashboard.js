@@ -40,6 +40,7 @@ const { mapLimit } = require('./memo');
 const git = require('./git');
 const pulls = require('./pulls');
 const prStore = require('./pr-store');
+const prReviews = require('./pr-reviews');
 
 // Enough to see who has been in here without the row becoming a list.
 const SESSIONS_PER_WORKSPACE = 6;
@@ -177,7 +178,8 @@ async function build(index, { includeTest = false, refresh = false } = {}) {
      */
     const record = (pr, matched) => {
         const { status, label } = pulls.resolveStatus(pr);
-        return { ...pr, matched, status, label };
+        const review = prReviews.summaryFor(pr.repo, pr.number, pr.headSha);
+        return { ...pr, matched, status, label, review };
     };
 
     // -- match pull requests to what is on disk ------------------------------

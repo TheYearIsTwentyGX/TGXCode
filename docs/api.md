@@ -705,8 +705,21 @@ successfully listed. Null means nothing has been listed yet — a bridge that ha
 only just started, on a machine with no cache file.
 
 Each carries `number`, `url`, `repo`, `title`, `branch`, `updatedAt`, a resolved
-`status`, a `label` naming that status in words, and `detail`: extra lines the one
-status had to leave out, for a tooltip.
+`status`, a `label` naming that status in words, `detail`: extra lines the one
+status had to leave out, for a tooltip — and `review`.
+
+`review` is the nightly review's verdict on that PR — an object or `null`:
+`{verdict, count, counts: {critical, warning, note}, sha, at, sessionId, source, stale}`.
+`verdict` is `"BLOCK"`, `"CONCERNS"`, `"CLEAN"` or `null` (the review had no VERDICT
+line); `count` is how many findings parsed out of it (all three severities); `sha`
+the commit it reviewed (a full SHA from the bridge's own record, a 12-character prefix
+from a PR comment) or null; `at` epoch ms or null; `sessionId` the session that wrote
+it when this bridge ran it, else null; `source` `"session"` or `"github"` (read from
+the PR comment — see `GET /api/pr-review`); `stale` true when the PR's head is known
+and is not the reviewed commit. `null` means no review is known — **or not read yet**:
+the first ask after a restart starts reading the review session's transcript and
+answers `null`, and `pr-reviews-changed` follows when it lands. The findings
+themselves are `GET /api/pr-review`.
 
 `status` is one of `open`, `draft`, `approved`, `changes`, `checks-failed`,
 `checks-pending`, `conflicting`, `merged`, `closed`, or `unknown`. A PR is
@@ -835,6 +848,53 @@ round of `gh` calls and loses nothing.
 
 `?refresh=1` on `GET /api/dashboard` is the only way to make the refresher run out
 of turn. There is no per-route refresh here.
+
+### `GET /api/pr-review?repo=owner/name&number=N`
+
+The latest nightly review of one pull request, parsed into findings. `400` without a
+well-formed `repo` and a positive integer `number`.
+
+```
+{ repo, number, pending: boolean,
+  review: null | {
+    verdict, title, scope, summary, raw,
+    findings: [{ severity, title, file, line, endLine, body }],
+    counts: { critical, warning, note }, stale,
+    sha, at, sessionId, source, running } }
+```
+
+- `verdict` — `"BLOCK"` / `"CONCERNS"` / `"CLEAN"` / `null`, read the same tolerant way
+  the gate reads it (`verdictOf` in `bridge/schedule.js`).
+- `title` and `scope` — the `## Adversarial Review: …` heading and the `**Scope:**`
+  line, or null; `summary` — the `### Summary` section's markdown, or null.
+- `findings[]` — in the order the review lists them. `severity` is `"critical"`,
+  `"warning"` or `"note"`, from the `### Critical Findings` / `### Warnings` /
+  `### Notes` section the item sits in. `title` is a one-line plain-text title;
+  `body` the item's whole markdown, sub-bullets included. `file` is the first path the
+  item names (`src/a.ts:12-30` → `"src/a.ts"`), or null; `line` and `endLine` numbers
+  or null.
+- `raw` — the review's whole text, always. **Parsing is best-effort**: the review is
+  prose a model wrote to a template, and a review that does not follow it has
+  `findings: []`. Show `raw` then, rather than "no findings".
+- `source` — `"session"` when this bridge ran the review: its record is the
+  `reviewed` entry on the `open-prs` schedule (see *The pull-request gate*) and the
+  text is that session's final message. `"github"` when it did not — the PR wears a
+  `review-*` label but this bridge has no finished review of it (another machine ran
+  it, or its entry was pruned) — and the text is the gate's PR comment, the one
+  beginning `> Automated review of`, with that line taken off. `sessionId` is null
+  then.
+- `running` — a newer review of this PR has started and not finished; what is shown
+  is the previous one.
+- `counts` and `stale` as on the `review` summary of `GET /api/sessions/:id/prs`.
+
+`review: null, pending: true` means the review's transcript is being read; ask again
+after `pr-reviews-changed`. `review: null, pending: false` means none is known.
+
+**This route never waits on GitHub.** The `"github"` reviews are read by the PR
+refresher in the background — a few `gh pr view` calls per pass, only for labelled
+PRs, again only when the PR's `updatedAt` or its verdict label moves — and kept in
+`$XDG_CACHE_HOME/tgxcode/pr-reviews.json`. A labelled PR the refresher has not
+reached yet answers `null` until it does. Nothing here writes to GitHub.
 
 ### `GET /api/pr-owners`
 
@@ -2348,6 +2408,13 @@ is delivery, so re-running a whole session to retry a comment would spend minute
 of quota re-deriving text that already exists. It raises a loud notification
 instead.
 
+**Reading the findings back.** The bridge keeps no copy of the review: the `reviewed`
+entry's `sessionId` is the record, and the text is that session's final message.
+`GET /api/pr-review` parses it, the `review` field on `GET /api/sessions/:id/prs` and
+`GET /api/dashboard` summarises it, and `POST /api/pr-review/fix` starts a session on
+the PR's branch to act on it. A PR this bridge did not review falls back to the PR
+comment, read in the background.
+
 ### `GET /api/schedules/describe?cron=<expr>&once=1`
 
 What an expression means, without saving anything. This is where a "runs Tue–Sat at
@@ -2403,7 +2470,7 @@ not a whole `git status`.
 `prs[]` are the whole `pulls.js` record, plus `matched` — `"branch"` (the workspace
 has that branch checked out) or `"session"` (only a transcript connects them) — plus
 the resolved `status` and `label` that `GET /api/sessions/:id/prs` documents, from
-the same `resolveStatus`. Those two are the ones to draw from: this route used to
+the same `resolveStatus`, plus the same `review` summary (object or null). Those two are the ones to draw from: this route used to
 carry the raw record alone, so a client had to invent its own reading of `draft` and
 `reviewDecision`, and `web/app.js` did — with the result that a merged PR, one
 conflicting with its base and one with a failing build all rendered identically
@@ -2961,6 +3028,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `schedules-changed` | `{at, schedules[], counts}` — the whole `GET /api/schedules` payload. Ungated, exactly as `drafts-changed` is. Unlike that one it fires **without anybody having done anything**: a schedule firing, skipping a slot, or having its outcome recorded when the turn ends all push it. So a client that assumed the payload only moves in response to a user action will be wrong here, and pleasantly so — this is how a card starts saying "ran 2h ago — BLOCK" while nobody is looking at it |
 | `sessions-changed` | `{at}` — a nudge to refetch the list |
 | `prs-changed` | **the whole `GET /api/prs` payload** — `{sessions, gh, checkedAt}` — so a rail has nothing to refetch. Ungated, exactly as `drafts-changed` is, and like `schedules-changed` it fires **without anybody having done anything**: it is a background refresher noticing that a review landed, a build finished, or somebody merged. Fires only when the answer actually moved, so a pass that re-lists a quiet repository and finds it unchanged pushes nothing — this is not a heartbeat and must not be treated as one. It is the *only* signal that PR status changed; there was none before, and clients polled. A client wanting per-PR detail for one session should refetch `GET /api/sessions/:id/prs` on this event, which is cheap and does not shell out |
+| `pr-reviews-changed` | `{keys: string[]}` — a nightly review was read or replaced. `keys` are `owner/name#N` and **may be empty** (a gate session just finished and the bridge has not worked out which PR is affected before saying so). A nudge, not a payload: refetch `GET /api/sessions/:id/prs` or `GET /api/dashboard` for the `review` summaries and `GET /api/pr-review` for any findings on screen. Ungated, and it fires without anybody having done anything — a gate session finishing, a transcript read landing after a restart, the refresher reading a PR comment |
 | `peer-message` | `{at, sessionId, from, count}` — another session messaged this one. The message itself is in the transcript, so a client tailing it has already drawn it; this is for everything that is not the open pane |
 | `handoff` | `{at, sessionId, from, count}` — another session handed this one work, and it was resumed to deal with it. Same shape and same reasoning as above; watched in the transcript rather than reported by the route, so it fires when the message *arrived* rather than when it was queued |
 | `suggestion-changed` | `{at, sessionId, toolUseId}` — a suggested follow-up was started, completed, dismissed, or undone, possibly in another window |
@@ -3166,6 +3234,61 @@ against pruning for five minutes for the same reason (`note()` in
 the roots, or a `worktree` git would not make; `403` for a refused `permissionMode`,
 or any `worktree`, from a remote caller; `409` for a `worktree` that already exists;
 `429` past 8 creates a minute.
+
+### `POST /api/pr-review/fix`
+
+Start a session to fix findings from a pull request's nightly review — **Fix this**
+and **Fix all**.
+
+```
+{ repo: "owner/name", number, finding?: number, cwd?: string, permissionMode?, test? }
+```
+
+- `finding` is an index into `GET /api/pr-review`'s `findings`. Leave it out for
+  "fix all", which is every critical and warning finding — or every note, when notes
+  are all the review has, or the whole `raw` text when nothing parsed. **The prompt is
+  built by the bridge from its own copy of the review**; nothing the client sends
+  becomes prompt text but the index.
+- `cwd` is a *hint* at a checkout of `repo`. Optional, and used only if it is one: the
+  bridge otherwise tries the review schedule's directory and then every project it
+  knows, by `origin` remote. A hint outside the roots is `403`.
+- `permissionMode` defaults to the app's default, as on `POST /api/sessions`, and the
+  same remote refusal applies to it. The session has to run tests, commit and push.
+
+**Where it runs: on the PR's own branch**, because it is told to push there. A worktree
+that already has the branch checked out is reused — `.claude/worktrees/<anything>`.
+Otherwise the bridge fetches the branch from `origin` and checks it out at
+`<repo>/.claude/worktrees/pr-<N>` (then `pr-<N>-2`, …), on the branch's own name —
+never a `worktree-` branch of its own.
+
+`200`: `{sessionId, status, test, findings, worktree: {path, branch, created}}` —
+`findings` the number the prompt covers, `created` whether a worktree was made. The
+session is named `Fix #N: <finding title>` (or `Fix #N: 3 review findings`) through the
+same flag a rename uses, and carries `test` when asked. The same eventual consistency
+as `POST /api/sessions`: the id may 404 on `GET /api/sessions/:id` for a few seconds.
+
+Refusals, in the order they are checked:
+
+- `400` — a malformed `repo`/`number`, or a `finding` that is not an index.
+- `404` — no review of that PR is known (or it is still being read).
+- `409 {error: 'pr-unknown' | 'pr-closed', message}` — the PR is not in the store yet,
+  or is no longer open.
+- `409 {error: 'no-checkout', message}` — no checkout of `repo` on this machine.
+- `403 {error, remote: true}` — a refused `permissionMode` from a remote caller.
+- `409 {error: 'branch-in-main-checkout', message, path, branch}` — the branch is
+  checked out in the main checkout, which is never used.
+- `409 {error: 'worktree-in-use', message, path, branch, sessionId}` — a live session
+  is working in that worktree: one of this bridge's, or any running `claude` Claude
+  Code's own registry knows of (the everyday bridge's, a terminal's). `sessionId` is
+  that session, so a client can offer to open it instead.
+- `409 {error: 'worktree-dirty', message, path, branch}` — the worktree has
+  uncommitted changes, untracked files included.
+- `403 {error, remote: true}` — a worktree would have to be **created** and the caller
+  is remote: the same rule as `worktree` on `POST /api/sessions`. Reusing one is open
+  to a remote caller.
+- `429` — past the create limit `POST /api/sessions` shares.
+- `409 {error: 'fetch-failed', message}` — the branch is not on `origin` (a fork's PR,
+  usually); `400 {error: <code>, message}` for any other git failure.
 
 ### `POST /api/sessions/:id/send`
 

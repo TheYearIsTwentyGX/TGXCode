@@ -44,6 +44,7 @@ const { RunPool } = require('./runs');
 const events = require('./events');
 const scheduler = require('./scheduler');
 const prRefresh = require('./pr-refresh');
+const prReviews = require('./pr-reviews');
 const prOwners = require('./pr-owners');
 const laterDelivery = require('./later-delivery');
 const { Orchestrators } = require('./orchestrators');
@@ -558,6 +559,7 @@ const {
 } = scheduler;
 
 prRefresh.init({ index, pool });
+prReviews.init({ schedules, pool, index });
 prOwners.init({ index });
 const { tickPrs } = prRefresh;
 
@@ -631,6 +633,7 @@ const ROUTES = [
     require('./routes/schedules'),
     require('./routes/dashboard'),
     require('./routes/github'),
+    require('./routes/pr-reviews'),
     require('./routes/quota'),
     require('./routes/orchestrators'),
     require('./routes/session'),
@@ -1009,6 +1012,7 @@ pool.on('turn-complete', (r) => {
     standing.noteTurn(r);
     filed(notifications.turn(r));
     noteScheduledOutcome(r);
+    prReviews.noteTurn(r);
     orchestration.onTurnComplete(r);
 });
 pool.on('failed', (f) => { broadcast('send-failed', f); filed(notifications.sendFailed(f)); });

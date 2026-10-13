@@ -15,6 +15,7 @@
 const cfg = require('./config');
 const pulls = require('./pulls');
 const prStore = require('./pr-store');
+const prReviews = require('./pr-reviews');
 const { mapLimit } = require('./memo');
 const { broadcast } = require('./events');
 
@@ -93,6 +94,12 @@ async function runPrPass(force) {
     // it unchanged tells nobody — otherwise this would be a heartbeat with a
     // payload, waking every open window every thirty seconds.
     if (result.changed) broadcast('prs-changed', await prsPayload(sessions));
+
+    // The nightly review's comment, for a labelled PR this bridge did not review
+    // itself — read here, on the clock, so the route that shows it never has to.
+    // Its own broadcast; a failure is a missing review, not a failed pass.
+    await prReviews.refreshRemote().catch(err => console.error(
+        `[tgxcode] PR review read failed: ${err.message}`));
     return result;
 }
 
