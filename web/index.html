@@ -42,6 +42,7 @@
 <link rel="stylesheet" href="./css/search.css">
 <link rel="stylesheet" href="./css/digest.css">
 <link rel="stylesheet" href="./css/templates.css">
+<link rel="stylesheet" href="./css/pr-review.css">
 </head>
 <body>
 
@@ -483,6 +484,9 @@
           </div>
         </div>
         <div id="conv-sub" class="conv-sub"></div>
+        <!-- The nightly review of one of this session's PRs, opened from its
+             chip in #conv-sub. Drawn by web/pr-review.js. -->
+        <div id="pr-review-pop" class="prr-pop" hidden></div>
         <div id="agents" class="agents" aria-label="Subagents"></div>
         <div id="channels" class="channels"></div>
       </div>

@@ -47,6 +47,7 @@ const { RunPool } = require('./runs');
 const events = require('./events');
 const scheduler = require('./scheduler');
 const prRefresh = require('./pr-refresh');
+const prReviews = require('./pr-reviews');
 const prOwners = require('./pr-owners');
 const laterDelivery = require('./later-delivery');
 const { Orchestrators } = require('./orchestrators');
@@ -579,6 +580,7 @@ const {
 } = scheduler;
 
 prRefresh.init({ index, pool });
+prReviews.init({ schedules, pool, index });
 prOwners.init({ index });
 const { tickPrs } = prRefresh;
 
@@ -656,6 +658,7 @@ const ROUTES = [
     require('./routes/search'),
     require('./routes/github'),
     require('./routes/worktrees'),
+    require('./routes/pr-reviews'),
     require('./routes/quota'),
     require('./routes/analytics'),
     require('./routes/orchestrators'),
@@ -1041,6 +1044,7 @@ pool.on('turn-complete', (r) => {
     standing.noteTurn(r);
     filed(notifications.turn(r));
     noteScheduledOutcome(r);
+    prReviews.noteTurn(r);
     orchestration.onTurnComplete(r);
     // The header's running total. The turn's own `costUsd` covers this turn
     // alone, so the session's transcript is re-read for the whole of it.

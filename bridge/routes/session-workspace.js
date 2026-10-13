@@ -28,6 +28,7 @@ const { isLaunchable, openFile, openInExplorer } = require('../explorer');
 const git = require('../git');
 const { NEXT, readJson, send } = require('../http');
 const prStore = require('../pr-store');
+const prReviews = require('../pr-reviews');
 const pulls = require('../pulls');
 const scratchpad = require('../scratchpad');
 
@@ -325,7 +326,14 @@ async function handle(req, res, url, pathname, seg, who) {
             const list = summary.prs || [];
             const repo = summary.cwd ? await pulls.repoOf(summary.cwd) : null;
 
-            return send(res, 200, { ...prStore.forSession(list, repo), repo: repo || null });
+            // Each PR also carries the nightly review's verdict and count, or null —
+            // bridge/pr-reviews.js, which answers from memory like the store does.
+            const out = prStore.forSession(list, repo);
+            for (const pr of out.prs || []) {
+                const open = pr.repo ? prStore.lookup(pr.repo, pr.number, pr.url) : null;
+                pr.review = prReviews.summaryFor(pr.repo, pr.number, open && open.headSha);
+            }
+            return send(res, 200, { ...out, repo: repo || null });
         }
 
         // Show the session's working directory in Windows File Explorer.
