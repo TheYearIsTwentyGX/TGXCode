@@ -1789,8 +1789,10 @@
              the clock. It reopens this same dialog in schedule mode with what is
              in front of you carried across — see drToSchedule() in app.js — so it
              is a conversion rather than a fourth form. Hidden in schedule mode,
-             where you are already there. -->
-        <button id="new-sched" class="btn tonal" type="button">Schedule</button>
+             where you are already there. A text button for the same reason:
+             it changes what the dialog is for and commits nothing, so it should
+             not weigh what Save as draft and Start weigh. -->
+        <button id="new-sched" class="btn quiet" type="button">Schedule</button>
         <button id="new-go" class="btn primary" type="button">Start</button>
         <!-- Schedule mode replaces Start rather than joining it: "save this" and
              "run this now" are the same button's job here, since a schedule you

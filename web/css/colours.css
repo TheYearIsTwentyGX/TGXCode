@@ -45,13 +45,13 @@
 .modal-head-text {
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: var(--sp-1);
     min-width: 0;
 }
 .new-project {
     display: flex;
     align-items: center;
-    gap: 7px;
+    gap: var(--sp-3);
     min-width: 0;
     font: 500 var(--fs-xs)/var(--lh-snug) var(--sans);
     letter-spacing: 0.04em;
@@ -84,7 +84,7 @@
 :root[data-plain-backdrop] #new-scrim[data-tinted] { background: var(--scrim); }
 #new-scrim[data-tinted] .modal-head {
     background: color-mix(in srgb, var(--proj-accent) 13%, var(--s2));
-    padding-bottom: 12px;
+    padding-bottom: var(--sp-6);
 }
 
 /* The selection states inside this dialog, which are all hard-coded blue. Kept
@@ -227,15 +227,15 @@
 /* --- the colour picker ------------------------------------------------ */
 
 .modal.pcolor { width: min(480px, 100%); }
-.pcolor-name { font: 500 15px/var(--lh-snug) var(--sans); color: var(--text); }
+.pcolor-name { font: 500 var(--fs-base)/var(--lh-snug) var(--sans); color: var(--text); }
 .pcolor-path {
-    margin-top: 2px;
+    margin-top: var(--sp-1);
     font: 400 var(--fs-xs)/var(--lh-base) var(--mono);
     color: var(--text-4);
     overflow-wrap: anywhere;
 }
 
-.pcolor-swatches { display: flex; flex-wrap: wrap; gap: 8px; }
+.pcolor-swatches { display: flex; flex-wrap: wrap; gap: var(--sp-4); }
 
 /* One swatch: a filled disc of the colour, ticked when it is the one in force.
    The tick is drawn over the fill rather than beside it, so the row's height is
@@ -264,7 +264,7 @@
 }
 .pcolor-swatch.none.on { box-shadow: inset 0 0 0 1.5px var(--outline), 0 0 0 2px var(--s2), 0 0 0 4px var(--text-3); }
 
-.pcolor-custom { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.pcolor-custom { display: flex; align-items: center; gap: var(--sp-5); margin-top: var(--sp-6); }
 .pcolor-custom label { font: 400 var(--fs-md)/var(--lh-snug) var(--sans); color: var(--text-3); }
 .pcolor-custom input[type="color"] {
     flex: none;
@@ -281,15 +281,15 @@
 .pcolor-row {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 9px 12px;
+    gap: var(--sp-6);
+    padding: var(--sp-4) var(--sp-6);
     border-radius: var(--r);
     background: var(--s2);
-    margin-bottom: 6px;
+    margin-bottom: var(--sp-3);
 }
 .pcolor-row[data-tinted] {
     background: color-mix(in srgb, var(--proj-accent) 9%, var(--s2));
-    box-shadow: inset 2px 0 0 var(--proj-accent);
+    box-shadow: inset var(--edge-w) 0 0 var(--proj-accent);
 }
 .pcolor-row-text { min-width: 0; flex: 1; }
 .pcolor-row-name { font: 500 var(--fs-md)/var(--lh-snug) var(--sans); color: var(--text-2); }
@@ -307,8 +307,10 @@
 
 /* --- Wispr Flow transforms ---------------------------------------------- */
 
-/* The button beside each message box. The live composer's is the snippets
-   button's shape; the dialog's is a small labelled-row button with only the mark
+/* The button beside each message box. The live composer's is the input row's
+   icon button (composer.css, .btn-attach) — repeated here rather than listed
+   there because this file loads later and owns Wispr; keep the two in step. The
+   dialog's is a small labelled-row button with only the mark
    in it. Both wraps are hidden until the bridge says a chord can land, and an
    author `display` would override the attribute. */
 .wispr-wrap { position: relative; flex: none; }
@@ -335,19 +337,19 @@
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 150px) auto;
     align-items: center;
-    gap: 8px;
-    padding: 8px 10px;
+    gap: var(--sp-4);
+    padding: var(--sp-4) var(--sp-5);
     border-radius: var(--r);
     background: var(--s2);
-    margin-bottom: 6px;
+    margin-bottom: var(--sp-3);
 }
 .wispr-set-row input[type="text"] {
     background: var(--s1);
     border: 1px solid var(--outline-soft);
     border-radius: var(--r-sm);
-    padding: 6px 8px;
+    padding: var(--sp-3) var(--sp-4);
     color: var(--text);
-    font: 400 var(--fs-md)/1.2 var(--sans);
+    font: 400 var(--fs-md)/var(--lh-tight) var(--sans);
     min-width: 0;
 }
 .wispr-set-row .wispr-set-combo { font-family: var(--mono); }
