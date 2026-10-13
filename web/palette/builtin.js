@@ -54,6 +54,7 @@ export function registerBuiltins() {
         ['view.drafts', 'Drafts', ''],
         ['view.schedules', 'Schedules', 'cron timer'],
         ['view.settings', 'Settings', 'preferences options'],
+        ['view.analytics', 'Analytics', 'cost tokens spend usage'],
     ];
     for (const [command, title, keywords] of views) {
         registerAction({ id: command, group: 'Views', title, keywords, command, run: () => showView(command) });
