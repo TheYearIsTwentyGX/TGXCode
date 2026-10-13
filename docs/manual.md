@@ -35,7 +35,9 @@ it, and how the pieces fit together. Start there if you have not already.
 Shortcuts: `Enter` send (or `Ctrl+Enter`, and *Settings → Keyboard* swaps the
 two), `Ctrl+1`–`Ctrl+9` the nine things the main pane can show, `Ctrl+F` find
 in the conversation with `F3`/`Shift+F3` for the next and previous match,
-`Ctrl+K` filter, `Ctrl+N` new session, ``Ctrl+` `` the terminal, `Ctrl+/`
+`Ctrl+K` the command palette (sessions, views and every header button in one
+searchable list; press it again with words typed to hand them to the rail's
+filter), `Ctrl+Shift+K` the rail filter, `Ctrl+N` new session, ``Ctrl+` `` the terminal, `Ctrl+/`
 snippets, `Ctrl+P` / `Ctrl+M` cycle the composer's permission mode and model
 (`Shift` for backwards), `Esc` leave a subagent or close whatever is on top,
 `Ctrl+R` reload, `Ctrl+±` zoom, `F12` devtools.

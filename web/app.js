@@ -11,6 +11,8 @@ import { loadPrOwners, wirePrRefs } from './pr-refs.js';
 import { startupQuery } from './startup.js';
 import * as keys from './keys.js';
 import { drawRail } from './rail.js';
+import { togglePalette, wirePalette } from './palette.js';
+import { registerBuiltins } from './palette/builtin.js';
 import { liveStrip, renderLive } from './boards/live.js';
 import { html } from './vendor/preact.js';
 import { paint, tickCardClocks } from './boards/parts.js';
@@ -1126,7 +1128,7 @@ function showLive(on) {
  * a column: fewer of them fit across, but many more fit down, which is the
  * arrangement for an afternoon spent watching rather than reading.
  */
-function setDockSide(side) {
+export function setDockSide(side) {
     state.live.dock = side ? 'side' : 'bottom';
     localStorage.setItem('liveDock', state.live.dock);
     paintDockButton();
@@ -1170,7 +1172,7 @@ function paintDockButton() {
  * would get by opening the address the button leaves behind, and that address
  * can be copied into a browser on the other screen.
  */
-function setFocus(on) {
+export function setFocus(on) {
     state.focus = on;
     if (on) dom.app.dataset.focus = '1';
     else delete dom.app.dataset.focus;
@@ -2487,6 +2489,9 @@ paintRailSort();
 // (Notifications had a third; its controls carry their own handlers now.)
 wireToolbar();
 wireShortcuts();
+// The command palette: its own entries, then the Escape and click-outside it answers.
+registerBuiltins();
+wirePalette();
 
 // ── streaming ────────────────────────────────────────────────────────────
 
@@ -4142,6 +4147,41 @@ dom.lockAnyway.addEventListener('click', () => {
     dom.input.focus();
 });
 
+// The eight things `main` can show, ordered by how wide a question each one
+// answers: the conversation in front of you, then everything outstanding,
+// then what is running this second, then what is unfinished in the working
+// trees, then what already reached you, then what has not begun, then what
+// starts on a clock, and last the settings — which are about the app rather
+// than about any work at all. The task board arriving is what made that an
+// ordering rather than the sequence they happened to be built in: Live and
+// Dashboard each moved along by one, which is a real cost and worth paying
+// once, not again. Settings going on the end rather than anywhere tidier is
+// the same reasoning still holding. (Analytics came after them all, and is
+// appended for the same reason.)
+//
+// Exported for the command palette, which offers the same eight. Says whether
+// `command` was one of them, so the keydown ladder knows the key was used.
+const VIEWS = {
+    'view.tasks': (on) => showTaskboard(on),
+    'view.live': (on) => showLive(on),
+    'view.dashboard': (on) => showDash(on),
+    'view.history': (on) => showNotes(on),
+    'view.drafts': (on) => showDrafts(on),
+    'view.schedules': (on) => showSched(on),
+    'view.settings': (on) => showSettings(on),
+    'view.analytics': (on) => showAnalytics(on),
+};
+
+export function showView(command) {
+    if (command === 'view.conversation') {
+        for (const show of Object.values(VIEWS)) show(false);
+        return true;
+    }
+    if (!VIEWS[command]) return false;
+    VIEWS[command](true);
+    return true;
+}
+
 document.addEventListener('keydown', (e) => {
     // The right-click menu is above even those: it is anchored to the pointer, so
     // it can be opened over any of them.
@@ -4220,33 +4260,9 @@ document.addEventListener('keydown', (e) => {
     if (!command) return;
     const inTerm = dom.termBody && dom.termBody.contains(e.target);
 
-    // The eight things `main` can show, ordered by how wide a question each one
-    // answers: the conversation in front of you, then everything outstanding,
-    // then what is running this second, then what is unfinished in the working
-    // trees, then what already reached you, then what has not begun, then what
-    // starts on a clock, and last the settings — which are about the app rather
-    // than about any work at all. The task board arriving is what made that an
-    // ordering rather than the sequence they happened to be built in: Live and
-    // Dashboard each moved along by one, which is a real cost and worth paying
-    // once, not again. Settings going on the end rather than anywhere tidier is
-    // the same reasoning still holding.
-    const views = {
-        'view.tasks': showTaskboard,
-        'view.live': showLive,
-        'view.dashboard': showDash,
-        'view.history': showNotes,
-        'view.drafts': showDrafts,
-        'view.schedules': showSched,
-        'view.settings': showSettings,
-        'view.analytics': showAnalytics,
-    };
-
-    if (command === 'view.conversation') {
-        e.preventDefault();
-        for (const show of Object.values(views)) show(false);
-        return;
-    }
-    if (views[command]) { e.preventDefault(); views[command](true); return; }
+    if (showView(command)) { e.preventDefault(); return; }
+    // Not gated on `inTerm`, as the filter chord it took over from never was.
+    if (command === 'palette.open') { e.preventDefault(); togglePalette(); return; }
 
     if (command === 'find.open' && state.current && !inTerm) {
         e.preventDefault();

@@ -175,6 +175,7 @@ export const state = {
     railRename: null,       // {id, draft} while a rail row's name is being edited
     railDrag: null,         // {cwd, order} while a project card is dragged, in `custom`
     sortMenu: false,        // the rail head's order menu is open
+    palette: { open: false, q: '', sel: 0 },   // the Ctrl+K palette; see web/palette.js
     unsent: new Map(),      // sessionId -> text written to a process but not yet in a transcript
     // The one message drawn in the log before the transcript has it:
     // {sessionId, node, timer}. Kept out of state.nodes on purpose — renderTurns
