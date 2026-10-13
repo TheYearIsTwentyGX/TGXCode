@@ -330,6 +330,12 @@ const HOME = os.homedir();
         headers: PHONE, body: { cwd: HOME, prompt: 'x', worktree: { name: 'never' } },
     });
     check('starting in a new worktree remotely', wtRemote.status, 403);
+    // The janitor's removal deletes a directory. The listing beside it only reads.
+    const wtRemove = await call('POST', '/api/worktrees/remove', {
+        headers: PHONE, body: { cwd: HOME, paths: [HOME] },
+    });
+    check('removing a worktree remotely', wtRemove.status, 403);
+    check('…and it says it is a remote refusal', !!(wtRemove.body && wtRemove.body.remote), true);
     check('dontAsk remotely', (await call('POST', '/api/sessions', {
         headers: PHONE, body: { cwd: HOME, prompt: 'x', permissionMode: 'dontAsk' },
     })).status, 403);

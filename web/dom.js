@@ -81,6 +81,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'new-start-row', 'new-orch-row', 'new-orch', 'new-orch-note',
     'new-wt-row', 'new-wt', 'new-wt-fields', 'new-wt-name', 'new-wt-base', 'new-wt-note',
     'gh-scrim', 'gh-body', 'gh-go', 'gh-foot-note',
+    'wt-scrim', 'wt-title', 'wt-body', 'wt-foot',
     'del-scrim', 'del-what', 'del-meta', 'del-go',
     'diff-scrim', 'diff-title', 'diff-stat', 'diff-unified', 'diff-split',
     'diff-words', 'diff-wrap', 'diff-source', 'diff-note', 'diff-jump',
@@ -189,7 +190,10 @@ export function modalUp() {
         || isUp(dom.reviewScrim)
         // Publish to GitHub holds a filled-in form, and can be up over
         // Start-a-session, which is the snippet dialog's case.
-        || isUp(dom.ghScrim);
+        || isUp(dom.ghScrim)
+        // The worktree janitor holds no work, which is the diff viewer's case:
+        // it is here so that no dialog is the one that answers Escape.
+        || isUp(dom.wtScrim);
 }
 
 /**

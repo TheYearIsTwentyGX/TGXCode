@@ -365,6 +365,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/routes/schedules.js` | `/api/schedules` |
 | `bridge/routes/dashboard.js` | `/api/dashboard` and `/api/prs` |
 | `bridge/routes/github.js` | `/api/github/*`: account, templates, teams, repo state, name check, publish |
+| `bridge/routes/worktrees.js` | `/api/worktrees*`: the worktree janitor's listing, and the removal refused to remote callers |
 | `bridge/routes/quota.js` | `/api/quota` and refreshing it |
 | `bridge/routes/session.js` | One session's conversation: read, delete, send, later, handoff, stop, queue, permission, flags, attachments, suggestions, tasks, subagents |
 | `bridge/routes/session-workspace.js` | One session's directory: dev servers, changes, diff, pull requests, reveal, open-file, its terminal |
@@ -377,7 +378,8 @@ Two rules worth knowing before you send a patch:
 | `bridge/config.js` | Paths, ports, allowed roots — every constant with a reason attached, and the two containment checks that decide whether a path is one a caller may name |
 | `bridge/dashboard.js` | Uncommitted changes and open PRs, per project |
 | `bridge/git.js` | Every question the bridge asks git about a directory, cached once for all of them |
-| `bridge/worktree.js` | Making `.claude/worktrees/<name>` on `worktree-<name>` for a session about to start in it — under the main checkout, never nested, never reused, never removed |
+| `bridge/worktree.js` | Making `.claude/worktrees/<name>` on `worktree-<name>` for a session about to start in it — under the main checkout, never nested, never reused, never removed here (the janitor, below, is the exception) |
+| `bridge/worktrees.js` | The worktree janitor: every worktree of a project with its PR, status and sessions, and the user-initiated removal of the ones that are clean, pushed, merged or closed, and unused, judged again at the moment of removal |
 | `bridge/restart.js` | Pulling this checkout and handing over to `scripts/restart-bridge.sh` — the one mutating git call |
 | `bridge/changes.js` | What a session changed, out of its transcript and its subagents' |
 | `bridge/scratchpad.js` | A session's scratchpad directories under `/tmp/claude-<uid>/` (one per worktree it entered), listed and read with containment |
@@ -518,6 +520,7 @@ Two rules worth knowing before you send a patch:
 | `web/new-session/dialog.js` | Opening and closing it, the working-directory box, the values Start and Save send, and its first-message box (`newC`) |
 | `web/new-session/picker.js` | The Recent and Browse tabs over one directory, and the New-folder row |
 | `web/github/publish.js` | The Publish to GitHub dialog, opened from the project ⋮ menu and from Start-a-session |
+| `web/worktrees.js` | The worktree janitor dialog, opened from the project ⋮ menu and a dashboard project heading. Removing one safe row takes one click; Remove all safe asks first, in the dialog |
 | `web/new-session/recent.js` | The recent-directories menu on the New button's split half |
 | `web/new-session/trigger.js` | The schedule picker that composes cron, the gate fields, and the Start, Save-draft and Schedule buttons |
 | `web/commands.js` | The header's project-command buttons — `.tgxcode/commands.json` for the session's directory — and the runs they start |
@@ -542,6 +545,7 @@ Two rules worth knowing before you send a patch:
 | `web/css/composer.css` | The message box, the send queue, slash completion, the unclippable popover, snippets |
 | `web/css/dashboard.css` | The empty state, the dashboard, and the live board wherever it docks |
 | `web/css/dialogs.css` | Scrims, modals and the fields, pickers and buttons in them; notification history, the delete and restart confirmations, toasts |
+| `web/css/worktrees.css` | The worktree janitor dialog. Linked after `dialogs.css` |
 | `web/css/boards.css` | The task board, drafts, the schedule builder and the schedules panel |
 | `web/css/settings.css` | Settings — its groups, the shortcut table, Claude Code's settings and memory files, project commands, the snippet editor and dialogs |
 | `web/css/narrow.css` | The narrow-desktop-window `@media` block, which reaches into several areas and so comes after the transcript, composer, dialogs, boards and Settings it overrides — but before `viewers.css`, `colours.css` and `preview.css`, so a narrow override for those loses to them at equal specificity. Not phone CSS |

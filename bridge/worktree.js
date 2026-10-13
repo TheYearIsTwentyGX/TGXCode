@@ -24,9 +24,15 @@
 //     `worktree-exists`, with the path, and nothing is touched: re-using one would
 //     silently start a second session in somebody's work in progress, and the
 //     caller is in a better position to offer "open the one that is there".
-//   * **No removal.** Deleting a worktree throws away whatever is uncommitted in
-//     it, and that is a decision for a person looking at it, not a side effect of
-//     anything this module is asked to do.
+//   * **No removal here.** Deleting a worktree throws away whatever is
+//     uncommitted in it, and that is a decision for a person looking at it, not a
+//     side effect of anything this module is asked to do. The one exception lives
+//     in bridge/worktrees.js, the worktree janitor. There a person asks for a
+//     particular worktree to go, from the panel, and the bridge removes it only
+//     when it is clean, its tip is on a remote, its PR is merged or closed, and
+//     no session is in it. All of that is checked again at the moment of
+//     removal. The local branch is deleted only when its PR merged at exactly
+//     that tip. Nothing in the app removes a worktree on its own initiative.
 //
 // Every git call goes through `run()` from bridge/git.js — execFile, never a
 // shell, always with a cwd and a timeout — and the name and base are validated
@@ -145,4 +151,4 @@ async function createWorktree(repoCwd, name, base, { allow = null } = {}) {
     return { path: plan.path, branch: plan.branch };
 }
 
-module.exports = { createWorktree, planWorktree, nameProblem, NAME_RE };
+module.exports = { createWorktree, planWorktree, nameProblem, mainTop, NAME_RE };

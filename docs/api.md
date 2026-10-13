@@ -192,6 +192,7 @@ of `/api/terminals/*`; all of `/api/runs/*`; `POST /api/commands/run`; all of
 `/api/shutdown`; `/api/restart` (both methods); `POST /api/claude-version/update`; `/api/devservers/stop`; `/api/devbrowser/*`;
 `POST /api/sessions/:id/reveal`; `POST /api/sessions/:id/open-file`;
 `POST /api/sessions/:id/handoff`; `POST /api/fs/mkdir`; `POST /api/github/publish`;
+`POST /api/worktrees/remove`;
 the orchestrator tools — `POST /api/sessions/:id/orchestrator/{spawn,next,send,answer,read,stop,close,summary}`
 and a worker's `POST /api/sessions/:id/report` (reading an orchestrator, changing its
 settings, dismissing an item and Resume stay open);
@@ -4830,6 +4831,105 @@ Otherwise **200**, whatever happened:
   gets 120 seconds.
 - Afterwards `/api/origin` and the pull-request refresher see the new origin
   straight away.
+
+## The worktree janitor
+
+Every git worktree of one project, what is in each, and removal of the ones nothing
+would be lost from. The desktop opens it from the project ⋮ menu and from a
+project's heading on the dashboard. The rules are in `bridge/worktrees.js`'s
+header. In brief, a worktree is **safe** when all of these hold:
+- it is not the main checkout, and not the checkout the bridge serves
+- it is not locked
+- it is clean, untracked files included
+- its tip is on some remote-tracking ref, or is the head of its PR
+- its PR is merged or closed
+- no session is in it
+
+### `GET /api/worktrees?cwd=<dir>[&refresh=1]`
+
+`cwd` can be any directory in the repository, including a worktree. The answer is
+always about the **main** checkout's worktrees.
+
+```json
+{ "top": "/home/me/proj", "repo": "owner/name", "prError": null,
+  "worktrees": [ {
+    "path": "/home/me/proj/.claude/worktrees/x", "name": "x",
+    "branch": "worktree-x", "head": "<sha>",
+    "main": false, "self": false, "locked": false, "missing": false,
+    "lastCommit": "2026-10-12T09:14:00-05:00",
+    "dirty": false, "files": 0, "unreadable": false, "pushed": true,
+    "pr": { "number": 184, "state": "merged", "url": "…", "title": "…", "head": "<sha>" },
+    "prState": "merged",
+    "sessions": { "live": false, "count": 2,
+                  "recent": [ { "id": "…", "title": "…", "lastTs": "…", "live": false } ] },
+    "safe": true, "reasons": [] } ] }
+```
+
+- **Worktrees:** `worktrees` is every entry in `git worktree list`, the main checkout
+  first, in git's order. Sorting is the client's job.
+- **`repo`:** `owner/name` of a GitHub `origin`, or `null`.
+- **`prError`:** a string when PRs could not be listed (no GitHub origin, gh missing
+  or failing), otherwise `null`. While it is set, every `prState` is `unknown` and
+  nothing is safe.
+- **`branch`:** a string, or `null` for a detached HEAD.
+- **`missing`:** the directory is gone; git calls the entry prunable.
+- **`lastCommit`:** the ISO committer date of `head`, or `null`.
+- **`files`:** how many paths `git status` lists.
+- **`unreadable`:** status could not be read, which counts as not clean.
+- **`pr`:** `{number, state, url, title, head}` or `null`. It is the newest PR whose
+  head branch is `branch`, in any state. `state` is `open`, `merged` or `closed`, and
+  `head` is that PR's head commit.
+- **`prState`:** one of `open`, `merged`, `closed`, `none`, `unknown`. It is `none`
+  when the PR list was read and no PR has this branch. It is `unknown` when the list
+  could not be read.
+- **`sessions`:**
+  - `live` is true when any of these is in the directory or under it: a running
+    registry entry, a pool runner that has not stopped, or a transcript written in
+    the last two minutes.
+  - A session in a nested worktree does not count against the main checkout.
+  - `count` is every session with that cwd or worktree path.
+  - `recent` is up to five of them, newest first.
+- **`reasons`:** an array of strings, empty exactly when `safe`. Possible values:
+  `main`, `self`, `locked`, `dirty`, `unreadable`, `unpushed`, `pr-open`, `pr-none`,
+  `pr-unknown`, `live-session`.
+- **Caching:** the PR list is one `gh pr list --state all --limit 200` per repository,
+  memoised for 60 seconds. `refresh=1` forgets it first.
+- **Bad `cwd`:** `400 {error}` when `cwd` is missing, does not exist, or is outside
+  the allowed roots. `400 {error, code: "not-a-repo"}` when it is not in a git
+  repository.
+- **Remote callers** may use this route.
+
+### `POST /api/worktrees/remove`
+
+Body `{cwd: string, paths: string[]}`. Both a single removal and "remove all safe" go
+through this route. `paths` holds 1–100 worktree paths of the repository `cwd`
+belongs to.
+
+**Each path is judged again when the request arrives,** against a fresh survey. A
+row that was safe when the GET answered can be refused here, and that refusal
+applies to that path alone. The paths are handled one at a time, in order. A
+worktree that passes is then:
+- removed with `git worktree remove` without `--force`, or with `git worktree prune`
+  if its directory is already gone
+- left with its local branch deleted (`git branch -D`) **only** if its PR is `merged`
+  and that PR's head is still the branch tip. Otherwise the branch is kept.
+
+`200 { results: [ {path, removed: bool, branch?: string|null, branchDeleted: bool,
+branchKept: bool, error?: string, code?: string, reasons?: string[]} ] }`, with one
+result per path, in order. A path that was not removed has a `code`:
+
+| `code` | Meaning |
+|---|---|
+| `not-safe` | The path is not safe. `reasons` lists why, in the same values the GET uses. |
+| `not-a-worktree` | The path is not a worktree of this repository. |
+| `outside-roots` | The path is outside the allowed roots. |
+| `git-failed` | git refused. `error` is git's line. |
+
+Other answers:
+- `400 {error}` when `cwd` is bad, or `paths` is empty, over 100, or not all
+  non-empty strings.
+- **Refused to remote callers:** `403 {"error": "worktrees can only be removed at
+  the machine they live on", "remote": true}`.
 
 ## Project commands
 

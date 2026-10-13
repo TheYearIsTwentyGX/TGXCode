@@ -27,6 +27,7 @@ import { ago, clip } from '../format.js';
 import { PR_ICON } from '../icons.js';
 import { projectColor, prWords, showDash } from '../app.js';
 import { openSession } from '../transcript/conversation.js';
+import { openWorktrees } from '../worktrees.js';
 import { icon, paint } from './parts.js';
 
 export async function loadDash({ refresh = false } = {}) {
@@ -125,6 +126,8 @@ function dashProject(p) {
                 <span class="dproj-name">${p.name}</span>
                 ${p.repo ? html`<span class="dproj-repo">${p.repo}</span>` : null}
                 <span class="dproj-counts">${counts.join(' · ')}</span>
+                ${p.cwd ? html`<button type="button" class="dproj-wt" title="List this project’s worktrees and remove the finished ones"
+                    onClick=${() => openWorktrees({ cwd: p.cwd, name: p.name })}>Worktrees</button>` : null}
             </header>
             <div class="dproj-body">${p.workspaces.map(w => dashRow(p, w))}</div>
         </section>`;
