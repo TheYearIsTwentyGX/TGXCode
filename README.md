@@ -360,7 +360,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/routes/sessions.js` | Sessions as a collection: listing, `addressable`, starting one, `/api/slash-commands`. Asked before `session.js`, which is load-bearing |
 | `bridge/routes/suggestions.js` | Suggested follow-ups across every session, and taking one up |
 | `bridge/routes/drafts.js` | `/api/drafts`, and the validation a draft shares with a create |
-| `bridge/routes/orchestrators.js` | `/api/sessions/:id/orchestrator…` — an orchestrator's payload, role, settings, inbox and Resume, and the routes its MCP tools call — plus a worker's `/api/sessions/:id/report` |
+| `bridge/routes/orchestrators.js` | `/api/sessions/:id/orchestrator…` — an orchestrator's payload, role, settings, inbox, Resume and the answers to its brief's decisions, and the routes its MCP tools call — plus a worker's `/api/sessions/:id/report` |
 | `bridge/routes/later.js` | `/api/later`, and the wire shape and validation `POST /api/sessions/:id/later` shares |
 | `bridge/routes/snippets.js` | `/api/snippets` and `/api/snippet-groups` |
 | `bridge/routes/templates.js` | `/api/templates`, validated through drafts' `draftFields`, and `resolve`, which fills a template's placeholders |
@@ -435,9 +435,9 @@ Two rules worth knowing before you send a patch:
 | `bridge/drafts.js` | Sessions set up but not started — a create call, held back |
 | `bridge/later.js` | Messages delivered to a session at a time you picked — a send, held back |
 | `bridge/standing.js` | The one-line "where this session stands" on a rail card: written after a turn ends, by a short haiku call or from the last reply, cached per reply in `standing.json` |
-| `bridge/orchestrators.js` | Which sessions are orchestrators, their workers, and the inbox between them — the store, and the pure rules for inbox order, nudging and the usage cutoff |
-| `bridge/orchestration.js` | Orchestrators in motion: roles and briefs at spawn, filing what workers produce, nudging an idle orchestrator, the cap on running workers, and the usage cutoff |
-| `bridge/worker-read.js` | A worker's transcript for its orchestrator to read: a digest, the last few turns, or the whole thing a page at a time |
+| `bridge/orchestrators.js` | Which sessions are orchestrators, their workers, the inbox between them and the brief each keeps for the user (goal, open decisions, merge order) — the store, and the pure rules for inbox order, nudging and the usage cutoff |
+| `bridge/orchestration.js` | Orchestrators in motion: roles and briefs at spawn, filing what workers produce, nudging an idle orchestrator, the cap on running workers, the usage cutoff, and re-broadcasting one when a worker's PR moves |
+| `bridge/worker-read.js` | A worker's transcript for its orchestrator to read: a digest (as text, and as fields for the orchestrator page's drawer), the last few turns, or the whole thing a page at a time |
 | `bridge/later-delivery.js` | Delivering one: the tick, the path it shares with `POST /api/later/:id/send`, and owning up to an interrupted delivery |
 | `bridge/snippets.js` | Canned messages and the groups they sit in |
 | `bridge/templates.js` | Session templates: a create call kept for reuse, with `{{placeholders}}`, global or scoped to a project |
@@ -552,11 +552,11 @@ Two rules worth knowing before you send a patch:
 | `web/startup.js` | What a new window opens to — turns Settings › On startup into the address a launch restores, and stays out of the way on a refresh. Pure, so a test can import it |
 | `web/preview-picker.js` | The preview's element picker, copied from DevBrowser; runs inside the previewed page |
 | `web/keys.js` | Which chord means which command, and the one function that decides it |
-| `web/orchestrator.js` | An orchestrator's dock above the composer — inbox, workers, settings and its pinned summary — and a worker's line back to it; the header's orchestrator toggle |
+| `web/orchestrator.js` | An orchestrator's plumbing: loading its payload, the header's role toggle, the one line above the composer (the plain conversation's strip back to the page, or a worker's line up to its orchestrator), and the inbox list and settings form the page reuses |
 | `web/palette.js` | The command palette (Ctrl+K), in Preact on web/rail.js's pattern: sessions, views and actions in one fuzzy-matched list, keyboard first. Answers Escape itself, from a capture listener, so the panel behind it stays up |
 | `web/palette/` | The palette's parts: `score.js` the fuzzy scorer (pure, tested by `palette-score`), `registry.js` the list any module can add an action to with `registerAction()`, `builtin.js` the entries that ship — each calls the function, or presses the button, that already does the thing |
-| `web/orchestrator-view.js` | The workers view: a board of an orchestrator's workers laid over the transcript — state, the ask each is stopped on (answerable there), branch, PR, last report and a spawned → PR timeline — beside the inbox and the usage cutoff |
-| `web/orchestrator-model.js` | What the workers view says about each worker, worked out from the payload: pure, and tested by `test/orchestrator-view.test.js` |
+| `web/orchestrator-page.js` | The orchestrator page, what an orchestrator opens onto: goal, progress and usage; what needs you (its open decisions, answerable there); a stage matrix of the workers; the merge order; a drawer per worker with its ask, steps and progress; and a resizable split with the real conversation beside it |
+| `web/orchestrator-model.js` | What the page says, worked out from the payload — each worker's stage and what it is doing, the progress strip, Needs you, the merge order, the usage meters: pure, and tested by `test/orchestrator-view.test.js` and `test/orchestrator-page.test.js` |
 | `web/rail.js` | The sessions rail, drawn with Preact — keyed by session and by group, so an update keeps the rows it did not change. The first surface moved off `app.js`'s rebuild-everything rendering, and the pattern for the next |
 | `web/css/` | The stylesheets, by area — once one `styles.css`, split along its section headers so a surface can be worked on without loading the rest. `index.html` links them in the order below, which *is* the cascade: in that order they concatenate back to the old file section for section, so moving a rule between files moves it in the cascade too |
 | `web/css/base.css` | The `:root` tokens (palette, radii, fonts, timings), the resets, the top bar and its menus, and the quota pill. First, because every other file reads its variables |

@@ -216,6 +216,7 @@ Call with `as`: `present(node, show, { as: 'menu' })`.
 | `dock` | `grow()`, `morph()` and `fill()`: docked panes and header strips changing height | height, base + standard | same | instant |
 | `reorder` | `flip()` and `flipAll()` | translate, base + standard | — | instant |
 | `crossfade` | `swap()` | from opacity .25, fast + standard | — | fade |
+| `drawer` | A panel sliding in over a column from that column's right edge (the orchestrator page's worker drawer) | from `translateX(16px)`, base + out | fast + in | fade |
 
 **When not to animate.** Keyboard-driven actions (switching sessions with a
 shortcut, moving through a list) and anything that happens many times a minute

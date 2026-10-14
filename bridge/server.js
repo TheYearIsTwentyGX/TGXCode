@@ -482,9 +482,11 @@ function remoteRefusal(pathname, method) {
     // An orchestrator's own tools, and a worker's report: they start sessions in
     // fresh worktrees, answer those sessions' permission prompts and send them
     // work — the handoff clause below, several times over. Reading the payload,
-    // changing its settings, dismissing an item and pressing Resume stay open: a
-    // phone is a reasonable place to watch an orchestrator and to restart one the
-    // usage cutoff stopped.
+    // changing its settings, dismissing an item, recording the answer to one of
+    // the brief's decisions and pressing Resume stay open: a phone is a reasonable
+    // place to watch an orchestrator, answer what it asked you, and restart one the
+    // usage cutoff stopped. (The answer itself travels by `/send`, which a paired
+    // phone may already use.)
     if (/^\/api\/sessions\/[^/]+\/orchestrator\/(spawn|next|send|answer|read|stop|close|summary)$/
         .test(pathname) || /^\/api\/sessions\/[^/]+\/report$/.test(pathname)) {
         return 'an orchestrator\u2019s tools only work on the machine its sessions run on';
@@ -579,7 +581,7 @@ const {
     tickSchedules, recoverInterruptedReviews, noteScheduledOutcome,
 } = scheduler;
 
-prRefresh.init({ index, pool });
+prRefresh.init({ index, pool, onChanged: () => orchestration.onPrsChanged() });
 prReviews.init({ schedules, pool, index });
 prOwners.init({ index });
 const { tickPrs } = prRefresh;

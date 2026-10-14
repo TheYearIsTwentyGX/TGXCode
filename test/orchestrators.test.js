@@ -36,7 +36,7 @@ const { execFileSync } = require('child_process');
 
 const {
     Orchestrators, sortInbox, shouldNudge, usageTrip, usageTrips, resumeAtFor, cleanSettings, describeCounts,
-    DEFAULT_SETTINGS,
+    DEFAULT_SETTINGS, decisionId, cleanMergeOrder, MAX_DECISIONS,
 } = require('../bridge/orchestrators');
 const orchestration = require('../bridge/orchestration');
 
@@ -307,6 +307,88 @@ function harness(name) {
     };
     orchestration.init(deps);
     return { pool, runners, created, store, flagRows, deps, setWindows: (w) => { windows = w; } };
+}
+
+// --- the brief's structured half -------------------------------------------
+//
+// The orchestrator rewrites its whole brief on every set_summary, so what this
+// guards is what survives a rewrite: a question it keeps asking keeps its id,
+// its age and the user's answer; a field it leaves out keeps its value; and
+// only an explicit null or empty clears one. Get the first wrong and an answered
+// question comes back unanswered on the next brief; get the second wrong and a
+// merge order disappears because the model mentioned only the goal.
+
+{
+    const s = new Orchestrators({ file: fileOf('brief') });
+    s.enable('O');
+    s.setSummary('O', 'first', {
+        goal: '  Ship the autumn wave  ',
+        decisions: ['Keep the hover card?', { text: 'Attach screenshots?', options: ['Yes', 'No', ''], worker: 'W1' }],
+        mergeOrder: [212, '#213', '214', 'x', 212, -1],
+    });
+    let b = s.get('O').summary;
+    assert.strictEqual(b.goal, 'Ship the autumn wave');
+    assert.deepStrictEqual(b.mergeOrder, [212, 213, 214], 'numbers, # and strings read; junk and repeats dropped');
+    assert.strictEqual(b.decisions.length, 2);
+    assert.strictEqual(b.decisions[0].id, decisionId('Keep the hover card?'));
+    assert.deepStrictEqual(b.decisions[1].options, ['Yes', 'No'], 'an empty option is no option');
+    assert.strictEqual(b.decisions[1].workerId, 'W1');
+    const firstAt = b.decisions[0].at;
+    assert.ok(firstAt > 0);
+
+    const answered = s.answerDecision('O', b.decisions[0].id, 'Keep it');
+    assert.strictEqual(answered.answer, 'Keep it');
+    assert.ok(answered.answeredAt >= firstAt);
+    assert.strictEqual(s.answerDecision('O', 'nope', 'x'), null, 'an unknown decision is null');
+
+    // A rewrite that only changes the prose keeps every structured field.
+    s.setSummary('O', 'second');
+    b = s.get('O').summary;
+    assert.strictEqual(b.text, 'second');
+    assert.strictEqual(b.goal, 'Ship the autumn wave');
+    assert.deepStrictEqual(b.mergeOrder, [212, 213, 214]);
+    assert.strictEqual(b.decisions[0].answer, 'Keep it');
+
+    // Re-listing the same question (case aside) keeps its id, age and answer; a
+    // question left out is gone; a new one is asked now.
+    s.setSummary('O', 'third', { decisions: ['keep the hover card?', 'Merge now?'] });
+    b = s.get('O').summary;
+    assert.deepStrictEqual(b.decisions.map(d => d.text), ['keep the hover card?', 'Merge now?']);
+    assert.strictEqual(b.decisions[0].at, firstAt);
+    assert.strictEqual(b.decisions[0].answer, 'Keep it');
+    assert.strictEqual(b.decisions[1].answer, null);
+
+    // null and [] clear; the cap holds.
+    s.setSummary('O', 'fourth', { goal: null, mergeOrder: [],
+        decisions: Array.from({ length: 9 }, (_, i) => `Question ${i}?`) });
+    b = s.get('O').summary;
+    assert.strictEqual(b.goal, null);
+    assert.deepStrictEqual(b.mergeOrder, []);
+    assert.strictEqual(b.decisions.length, MAX_DECISIONS);
+    assert.deepStrictEqual(cleanMergeOrder(Array.from({ length: 40 }, (_, i) => i + 1)).length, 30);
+
+    // It all survives the file.
+    s.flush();
+    const again = new Orchestrators({ file: fileOf('brief') });
+    assert.strictEqual(again.get('O').summary.decisions.length, MAX_DECISIONS);
+
+    // Empty prose still clears the lot.
+    s.setSummary('O', '   ', { goal: 'ignored' });
+    assert.strictEqual(s.get('O').summary, null);
+    ok('the brief\'s goal, decisions and merge order survive rewrites, and clear only when told');
+}
+
+{
+    const s = new Orchestrators({ file: fileOf('settled') });
+    s.enable('O');
+    const row = s.push('O', { workerId: 'W', kind: 'plan', text: 'p', requestId: 'r' });
+    assert.strictEqual(row.settledAt, null, 'open items have no settle time');
+    const before = Date.now();
+    s.settle('O', row.id, { outcome: 'allow', by: 'orchestrator' });
+    assert.ok(s.item('O', row.id).settledAt >= before);
+    s.flush();
+    assert.ok(new Orchestrators({ file: fileOf('settled') }).item('O', row.id).settledAt >= before);
+    ok('a settled inbox item records when');
 }
 
 (async () => {
@@ -665,6 +747,64 @@ function harness(name) {
         assert.strictEqual(pr.status, 'unknown');
         assert.strictEqual(p.workers.find(x => x.id === 'W4').pr, null);
         ok('a worker row carries its newest PR, from memory');
+    }
+
+    {
+        // Answering a decision is recorded and broadcast; an unknown one is a 404
+        // with a sentence, not a silent success the page would draw as answered.
+        const h = harness('decisions');
+        const events = require('../bridge/events');
+        orchestration.enable('OD', null);
+        orchestration.setSummary('OD', 'brief', { decisions: ['Ship it?'] });
+        const seen = [];
+        events.clients.set('probe-d', { res: { write: (chunk) => {
+            const m = /^event: (\S+)\ndata: (.*)\n\n$/s.exec(chunk);
+            if (m && m[1] === 'orchestrator') seen.push(JSON.parse(m[2]));
+        } } });
+        await sleep(400);
+        seen.length = 0;
+        const id = h.store.get('OD').summary.decisions[0].id;
+        const d = orchestration.answerDecision('OD', id, 'Yes');
+        assert.strictEqual(d.answer, 'Yes');
+        await sleep(400);
+        assert.strictEqual(seen.length, 1);
+        assert.strictEqual(seen[0].summary.decisions[0].answer, 'Yes');
+        assert.throws(() => orchestration.answerDecision('OD', 'gone', 'x'), (e) => e.status === 404);
+        assert.throws(() => orchestration.answerDecision('OD', id, '  '), (e) => e.status === 400);
+        events.clients.delete('probe-d');
+        ok('answering a decision records it and tells every window');
+    }
+
+    {
+        // A PR pass re-broadcasts an orchestrator only when one of its workers'
+        // PRs reads differently — the first look just learns what is there.
+        const h = harness('pr-moves');
+        const events = require('../bridge/events');
+        orchestration.enable('OP', null);
+        h.store.addWorker('OP', { id: 'WP', title: 'worker' });
+        let prs = [];
+        const summary = (id) => ({ sessionId: id, cwd: home, title: id, prs: id === 'WP' ? prs : [] });
+        orchestration.init({ ...h.deps, index: { ...h.deps.index, summary } });
+        const seen = [];
+        events.clients.set('probe-p', { res: { write: (chunk) => {
+            const m = /^event: (\S+)\ndata: (.*)\n\n$/s.exec(chunk);
+            if (m && m[1] === 'orchestrator' && m[2].includes('"OP"')) seen.push(JSON.parse(m[2]));
+        } } });
+        await sleep(400);
+        seen.length = 0;
+        orchestration.onPrsChanged();
+        await sleep(400);
+        assert.strictEqual(seen.length, 0, 'the first look only primes');
+        orchestration.onPrsChanged();
+        await sleep(400);
+        assert.strictEqual(seen.length, 0, 'nothing moved, nothing sent');
+        prs = [{ number: 41, url: 'https://github.com/o/r/pull/41', repo: 'o/r' }];
+        orchestration.onPrsChanged();
+        await sleep(400);
+        assert.strictEqual(seen.length, 1, 'a new PR on a worker is a change');
+        assert.strictEqual(seen[0].workers[0].pr.number, 41);
+        events.clients.delete('probe-p');
+        ok('a PR moving re-broadcasts its orchestrator, once');
     }
 })().then(() => {
     fs.rmSync(home, { recursive: true, force: true });

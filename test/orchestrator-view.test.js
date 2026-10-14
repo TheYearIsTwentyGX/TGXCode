@@ -1,6 +1,6 @@
 'use strict';
 
-// The orchestrator workers view's model — web/orchestrator-model.js — over
+// The per-worker half of the orchestrator page's model — web/orchestrator-model.js — over
 // payloads shaped like the bridge's. No bridge, no DOM.
 //
 // What it guards is a card that says something false: a timeline that shows a
@@ -30,7 +30,7 @@ const states = (steps) => Object.fromEntries(steps.map(s => [s.key, s.state]));
 
 (async () => {
     const {
-        workerStateWord, blockedOn, lastReport, workerTimeline, inboxCounts, workerOrder, cutoffLine,
+        workerStateWord, blockedOn, lastReport, workerTimeline,
     } = await import('../web/orchestrator-model.js');
 
     {
@@ -147,54 +147,6 @@ const states = (steps) => Object.fromEntries(steps.map(s => [s.key, s.state]));
         assert.strictEqual(states(steps).done, 'done');
         assert.strictEqual(steps.find(x => x.key === 'done').at, T0 + 5000);
         ok('a closed worker is done when it was closed');
-    }
-
-    {
-        const p = { inbox: [
-            item({ status: 'new' }),
-            item({ kind: 'plan', requestId: 'p', status: 'read' }),
-            item({ kind: 'permission', requestId: 'q', status: 'new' }),
-            item({ kind: 'permission', requestId: 'z', status: 'stale' }),
-            item({ kind: 'done', status: 'resolved' }),
-        ] };
-        assert.deepStrictEqual(inboxCounts(p), { unread: 2, waiting: 2 });
-        assert.deepStrictEqual(inboxCounts(null), { unread: 0, waiting: 0 });
-        ok('the inbox head counts unread items and open asks separately');
-    }
-
-    {
-        const ws = [
-            worker({ id: 'closed', closedAt: T0, spawnedAt: T0 + 9 }),
-            worker({ id: 'idle-old', spawnedAt: T0 }),
-            worker({ id: 'running', state: 'busy', spawnedAt: T0 + 1 }),
-            worker({ id: 'blocked', state: 'busy', pending: 'tool', spawnedAt: T0 + 2 }),
-            worker({ id: 'idle-new', spawnedAt: T0 + 3 }),
-        ];
-        assert.deepStrictEqual(workerOrder(ws).map(w => w.id),
-            ['blocked', 'running', 'idle-new', 'idle-old', 'closed']);
-        assert.strictEqual(ws[0].id, 'closed', 'sorting a copy, not the payload');
-        ok('workers are laid out blocked, running, the rest, closed — newest first in each');
-    }
-
-    {
-        assert.strictEqual(cutoffLine({ enabled: false }, []).tone, 'off');
-        const one = cutoffLine({ enabled: true, window: 'five_hour', percent: 80, limits: {} },
-            [{ type: 'five_hour', usedPercent: 41.6 }]);
-        assert.strictEqual(one.tone, 'ok');
-        assert.match(one.text, /five-hour 42% of 80%/);
-        const near = cutoffLine({ enabled: true, window: 'five_hour', percent: 80, limits: {} },
-            [{ type: 'five_hour', usedPercent: 75 }]);
-        assert.strictEqual(near.tone, 'near');
-        const unread = cutoffLine({ enabled: true, window: 'seven_day', percent: 90, limits: {} }, null);
-        assert.match(unread.text, /weekly — of 90%/, 'no reading yet says so rather than 0%');
-        const all = cutoffLine({ enabled: true, window: 'all', percent: 80,
-            limits: { five_hour: 90, seven_day: null, seven_day_opus: 50, seven_day_sonnet: null } },
-        [{ type: 'five_hour', usedPercent: 10 }, { type: 'seven_day_opus', usedPercent: 45 }]);
-        assert.match(all.text, /five-hour 10% of 90%.*weekly Opus 45% of 50%/);
-        assert.strictEqual(all.tone, 'near');
-        assert.strictEqual(cutoffLine({ enabled: true, window: 'all', limits: { five_hour: null } }, []).tone, 'off',
-            '"all limits" with every one empty is no cutoff at all');
-        ok('the cutoff line reads each window against its own threshold');
     }
 
     console.log(`\n${pass} orchestrator view checks passed`);

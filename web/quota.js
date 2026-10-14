@@ -592,7 +592,20 @@ export function applyQuotaSnapshot(next) {
     quota.at = Date.now();
     renderQuota();
     quotaFlash(before, next);
+    for (const fn of quotaListeners) {
+        try { fn(); } catch (err) { console.error(err); }
+    }
 }
+
+// Whoever else draws from the same reading — the orchestrator page's meters —
+// told when it moves, so nothing outside this file polls for usage.
+const quotaListeners = new Set();
+
+/** The usage windows from the latest reading, or none before the first. */
+export const quotaWindows = () => (quota.snap && quota.snap.windows) || [];
+
+/** Be called whenever a new reading lands. */
+export function onQuotaChange(fn) { quotaListeners.add(fn); }
 
 /**
  * A window's status got worse — say so on the pill.
