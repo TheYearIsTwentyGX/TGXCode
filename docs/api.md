@@ -587,9 +587,23 @@ messages on disk but are **not counted as turns**: they do not move `userMessage
 is not a missing key.
 
 **`tool.result`** is `{text, stdout, stderr, patch, filePath, interrupted,
-backgroundTaskId, answers, plan, planWasEdited}`. `text` is the tool output flattened
+backgroundTaskId, answers, plan, planWasEdited, images}`. `text` is the tool output flattened
 to a string and is the one to show; `stdout`/`stderr`/`filePath` are strings or null;
 `interrupted` is a bool.
+
+**`tool.result.images` describes images, it does not carry them** — an array of
+`{mediaType: string, width: number|null, height: number|null}`, one per image the
+result held, in order, and `[]` (never absent) when there were none. A `Read` of a PNG
+and a browser screenshot are the usual sources. Image blocks are left out of `text`, so
+a `Read` of a picture has `text: ""` — show the images instead of an empty result.
+`width`/`height` are the size Claude Code recorded for a single-image `Read` and null
+otherwise; use them to reserve space. **`mediaType` is the type of the bytes, which is
+not always what the path says**: Claude Code re-encodes a large PNG as a JPEG before
+sending it, so a `Read` of `shot.png` can have `mediaType: "image/jpeg"`. Name a saved
+copy by `mediaType`. Fetch the bytes with
+`GET /api/sessions/:id/tool-image` (below) when the user actually opens the call: each one is
+hundreds of kilobytes, which is why they are not inline the way a user turn's `images`
+are.
 
 **`tool.result.patch` is a structured diff, not a string** — the `structuredPatch`
 Claude Code records for an edit, an array of hunks:
@@ -682,6 +696,25 @@ same read**, and on a live tail they usually do not:
 live turn** and looks perfectly fine on a finished session, because a full read never
 produces one — which is why it is easy to ship without noticing. `web/app.js` handles
 it.
+
+### `GET /api/sessions/:id/tool-image?toolUseId=<id>&n=<i>`
+
+**Raw image bytes, not JSON**: `200` with `Content-Type` set to the image's type and
+`Cache-Control: private, max-age=86400` (the bytes behind an id never change). `n`
+indexes `tool.result.images`, default `0`. `toolUseId` is the `tool` event's `id`.
+
+Read out of the transcript, not from the file the `Read` named, so it shows what
+Claude saw even if that file has since changed or been deleted. The session's own
+transcript is searched first, then its subagents', so a `tool` event from
+`GET /api/sessions/:id/subagent` is fetched with the *parent* session's id and the
+same parameters.
+
+`404 {error: "image not available"}` for an unknown session, id or index, and for any
+type other than `image/png`, `image/jpeg`, `image/gif` or `image/webp`. SVG is never
+served: it is a document that can run script, from the app's own origin. Open to
+remote callers, like the transcript it is part of. It needs the token like any other
+route. A browser `<img>` on loopback gets it from the cookie; a phone has to send the
+header, so it cannot pass the URL to a plain image loader that does not let it add one.
 
 ### `GET /api/sessions/:id/since?offset=N`
 

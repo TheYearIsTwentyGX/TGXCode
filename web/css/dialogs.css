@@ -689,3 +689,40 @@
 .wt-from { font-size: 12px; color: var(--text-4); }
 #new-wt-note { margin-left: 26px; overflow-wrap: anywhere; }
 #new-wt-note.warn { color: var(--yellow); }
+
+/* The image preview. The dialog is the picture and nothing else, sized to it
+   and capped at the window, so everything around it is scrim and closes it.
+   The bar floats over the top right, on the scrim rather than in a header,
+   because a header would take height the picture wants. */
+.img-scrim { background: #000000d9; padding: 56px 24px 24px; }
+.img-modal {
+    width: auto;
+    max-width: 100%;
+    max-height: 100%;
+    background: none;
+    border-radius: var(--r-sm);
+}
+.img-view {
+    display: block;
+    max-width: calc(100vw - 48px);
+    max-height: calc(100vh - 80px);
+    object-fit: contain;
+}
+.img-bar {
+    position: absolute;
+    top: 10px; left: 24px; right: 14px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.img-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font: 400 13px/1 var(--mono);
+    color: var(--text-3);
+}
+.img-bar .icon-btn { color: var(--text-2); font-size: 15px; }
+.img-bar .icon-btn.done { color: var(--green); }
