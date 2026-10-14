@@ -52,6 +52,7 @@ import { paintBranch } from '../composer/branch.js';
 import { autoGrow, clearPendingSend } from '../composer/send.js';
 import { closeMenus, live } from '../composer/slash.js';
 import { loadChangesIfStale, renderChanges, resetChanges } from './changes.js';
+import { loadReviewsIfStale, renderReviews, resetReviews } from './reviews.js';
 import { renderChecklist, resetChecklist } from './checklist.js';
 import { findKey, markFindDirty, resetFind } from './find.js';
 import { paneUp } from './layout.js';
@@ -161,6 +162,7 @@ export async function openSession(id, { quiet = false, keepPanels = false } = {}
         // Only when the drawer is up. It shells out to git, and a window that
         // never opens it should not pay for it on every session it visits.
         loadChangesIfStale();
+        loadReviewsIfStale();
         return true;
     } catch (err) {
         if (seq !== state.openSeq) return true;
@@ -234,6 +236,8 @@ function beginOpen(summary, { keepPanels = false } = {}) {
     paintBranch();
     resetChanges();             // and the files listed were the old session's
     renderChanges();            // which leaves the drawer saying it is looking
+    resetReviews();             // the reviews too, and the dialog over them
+    renderReviews();
     resetChecklist();           // as was the task list — the push will refill it
     renderChecklist();
     // The whole list is already here, so this only has to be re-filtered — but it
@@ -573,6 +577,10 @@ export function renderHeaderActions() {
     dom.btnChanges.setAttribute('aria-pressed', String(state.changes.on));
     dom.btnChanges.title = state.changes.on
         ? 'Hide what this session changed' : 'What this session changed';
+    dom.btnReviews.classList.toggle('on', state.reviews.on);
+    dom.btnReviews.setAttribute('aria-pressed', String(state.reviews.on));
+    dom.btnReviews.title = state.reviews.on
+        ? 'Hide this session’s code reviews' : 'The code reviews this session ran';
     dom.btnFolder.title = `Show ${s.cwd} in File Explorer`;
     dom.btnTerm.title = keys.hint(
         !isUp(dom.termPane) ? `Open a terminal in ${s.cwd}` : 'Hide the terminal',

@@ -37,6 +37,8 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'find-subs', 'find-subs-row', 'find-close',
     'changes', 'changes-strip', 'changes-strip-count', 'changes-open', 'changes-count',
     'changes-refresh', 'changes-collapse', 'changes-body',
+    'btn-reviews', 'reviews', 'reviews-strip', 'reviews-strip-count', 'reviews-open', 'reviews-count',
+    'reviews-run', 'reviews-collapse', 'reviews-body',
     'checklist', 'checklist-strip', 'checklist-strip-count', 'checklist-open',
     'checklist-count', 'checklist-collapse', 'checklist-body', 'btn-checklist',
     'conv-main', 'conv-body',
@@ -94,6 +96,8 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'bar-more-wrap', 'bar-more', 'bar-more-badge', 'bar-more-menu',
     'review-scrim', 'review-modal', 'review-kind', 'review-title', 'review-when',
     'review-outcome', 'review-body', 'review-jump',
+    'creview-scrim', 'creview-modal', 'creview-kind', 'creview-title', 'creview-when',
+    'creview-body', 'creview-jump', 'creview-fixall',
     'pair-url', 'pair-host', 'pair-hosts', 'pair-note', 'pair-copy',
     'restart-scrim', 'restart-lede', 'restart-problems',
     'restart-fix', 'restart-go', 'preview']) {
@@ -194,6 +198,8 @@ export function modalUp() {
         // read-only replay holding no work, so the paragraph above is not what
         // puts it here either. The sentence after it is.
         || isUp(dom.reviewScrim)
+        // A code review's findings: the same read-only case as the line above.
+        || isUp(dom.creviewScrim)
         // Publish to GitHub holds a filled-in form, and can be up over
         // Start-a-session, which is the snippet dialog's case.
         || isUp(dom.ghScrim)

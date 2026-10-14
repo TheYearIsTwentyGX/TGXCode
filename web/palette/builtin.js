@@ -92,6 +92,8 @@ export function registerBuiltins() {
     viaButton('turn.stop', dom.btnStop, 'Stop the current turn', { keywords: 'cancel interrupt halt' });
     viaButton('session.terminal', dom.btnTerm, 'Terminal', { command: 'terminal.toggle', keywords: 'shell pty' });
     viaButton('session.changes', dom.btnChanges, 'Changes', { keywords: 'diff git files' });
+    viaButton('session.reviews', dom.btnReviews,
+        () => (state.reviews.on ? 'Hide reviews' : 'Show reviews'), { keywords: 'code review findings adversarial' });
     viaButton('session.checklist', dom.btnChecklist, 'Checklist', { keywords: 'todo tasks' });
     viaButton('session.orchestrator', dom.btnOrch, 'Orchestrator', { keywords: 'workers dock' });
     viaButton('session.reveal', dom.btnFolder, 'Reveal in file explorer', { keywords: 'folder open finder' });

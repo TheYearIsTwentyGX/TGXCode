@@ -85,6 +85,10 @@ import {
 } from './transcript/find.js';
 import { watchPaneInsets } from './transcript/layout.js';
 import { closeReview } from './transcript/review.js';
+import {
+    closeCodeReview, collapseReviews, fixAllInChat, jumpFromCodeReview, openRunMenu,
+    refreshReviews, renderReviews, resetReviews, showReviews,
+} from './transcript/reviews.js';
 import { warmPeers } from './transcript/rows.js';
 import {
     agentRows, closeAgent, leaveAgent, loadAgents, openAgent,
@@ -816,6 +820,8 @@ function clearCurrent() {
     state.busyTimer = null;
     resetChanges();
     renderChanges();        // hides the drawer: there is no session to be about
+    resetReviews();
+    renderReviews();
     resetChecklist();
     renderChecklist();      // and the same for the task list on the other side
     resetWindow();
@@ -2575,6 +2581,9 @@ function connect() {
         state.offset = d.offset;
         const stick = state.pinned;
         appendEvents(d.events, SESSION_VIEW, { live: true });
+        // A session this bridge is not running (a terminal, another window) has
+        // no turn end to hear, so its reviews are noticed as its file grows.
+        refreshReviews({ tail: true });
         // A plan belonging to a session running elsewhere is read out of these
         // events, so it arrives — and goes away once answered over there — with
         // the transcript rather than with a status tick.
@@ -3084,6 +3093,8 @@ export function applyRunner(s) {
     // a turn rather than on a timer, because between turns nothing changes and a
     // drawer left open all afternoon should not shell out to git all afternoon.
     if (wasBusy && !busy && state.changes.on && !state.changes.shut) loadChanges();
+    // And the end of a turn is when a review it ran has its result written.
+    if (wasBusy && !busy) refreshReviews();
 
     // The status carries the pending ask too, so a window opening onto a session
     // that is already blocked draws the card without having seen the event.
@@ -3527,6 +3538,13 @@ dom.btnChanges.addEventListener('click', () => {
     if (state.current) showChanges(!state.changes.on);
 });
 
+dom.btnReviews.addEventListener('click', () => {
+    if (state.current) showReviews(!state.reviews.on);
+});
+dom.reviewsCollapse.addEventListener('click', () => collapseReviews(true));
+dom.reviewsStrip.addEventListener('click', () => collapseReviews(false));
+dom.reviewsRun.addEventListener('click', (e) => openRunMenu(e));
+
 dom.btnChecklist.addEventListener('click', () => {
     if (state.current) showChecklist(!state.checklist.on);
 });
@@ -3788,6 +3806,15 @@ dom.reviewJump.addEventListener('click', () => {
     // collapsed run always has.
     if (entry) revealNode(entry.node);
 });
+
+// ── a code review's findings ─────────────────────────────────────────────
+
+for (const n of dom.creviewScrim.querySelectorAll('[data-close-creview]')) {
+    n.addEventListener('click', closeCodeReview);
+}
+closeOnClickOutside(dom.creviewScrim, closeCodeReview);
+dom.creviewJump.addEventListener('click', jumpFromCodeReview);
+dom.creviewFixall.addEventListener('click', fixAllInChat);
 
 // ── the diff viewer ──────────────────────────────────────────────────────
 

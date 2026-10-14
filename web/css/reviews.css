@@ -1,0 +1,342 @@
+/* The code reviews a session ran — web/transcript/reviews.js.
+
+   The Reviews pane (a `.tasks` box beside the transcript, as the Changed drawer
+   is) and the dialog with one review's findings (the plan/question review's
+   shell). Tokens only. A review type wears the hue it was given in Settings,
+   `--crv-hue`; a verdict and a severity reuse pr-review.css's mapping — BLOCK
+   and critical red, CONCERNS and warning yellow, CLEAN green, a note grey — so a
+   finding looks the same here as under a pull request. The finding rows
+   themselves are pr-review.css's `.prr-finding`. */
+
+.crv-type { --crv-hue: var(--text-3); }
+.crv-type[data-colour="blue"] { --crv-hue: var(--blue); }
+.crv-type[data-colour="red"] { --crv-hue: var(--red); }
+.crv-type[data-colour="yellow"] { --crv-hue: var(--yellow); }
+.crv-type[data-colour="green"] { --crv-hue: var(--green); }
+.crv-type[data-colour="purple"] { --crv-hue: var(--purple); }
+.crv-type[data-colour="peach"] { --crv-hue: var(--peach); }
+
+.crv-verdict { --crv-verdict: var(--text-3); }
+.crv-verdict[data-verdict="BLOCK"] { --crv-verdict: var(--red); }
+.crv-verdict[data-verdict="CONCERNS"] { --crv-verdict: var(--yellow); }
+.crv-verdict[data-verdict="CLEAN"] { --crv-verdict: var(--green); }
+
+/* ── the pane ─────────────────────────────────────────────────────────────── */
+
+.reviews-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 var(--sp-3) var(--sp-4);
+}
+
+.crv-empty {
+    margin: var(--sp-5) var(--sp-3);
+    color: var(--text-3);
+    font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
+}
+.crv-empty p { margin: 0 0 var(--sp-3); }
+.crv-empty-sub { color: var(--text-4); }
+.crv-link {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--blue);
+    font: inherit;
+    cursor: pointer;
+}
+.crv-link:hover { text-decoration: underline; }
+
+.crv-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+.crv-row {
+    position: relative;
+    display: flex;
+    align-items: stretch;
+    border-radius: var(--r-sm);
+    transition: background var(--dur-fast) var(--ease-standard);
+}
+.crv-row:hover { background: var(--s2); }
+.crv-row + .crv-row { margin-top: var(--sp-1); }
+
+.crv-open {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+    padding: var(--sp-3) var(--sp-3);
+    border: 0;
+    border-radius: inherit;
+    background: none;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.crv-open:focus-visible { outline-offset: -2px; }
+
+.crv-line {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    min-width: 0;
+}
+.crv-meta { flex-wrap: wrap; row-gap: var(--sp-1); }
+
+.crv-type {
+    flex: none;
+    max-width: 14ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: var(--sp-1) var(--sp-3);
+    border-radius: var(--pill);
+    background: color-mix(in srgb, var(--crv-hue) 16%, transparent);
+    color: var(--crv-hue);
+    font: 500 var(--fs-xs)/var(--lh-tight) var(--sans);
+}
+.crv-type:empty { display: none; }
+
+.crv-target {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text);
+    font: 400 var(--fs-sm)/var(--lh-tight) var(--mono);
+}
+
+.crv-verdict,
+.crv-status {
+    flex: none;
+    font: 600 var(--fs-2xs)/var(--lh-none) var(--sans);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+.crv-verdict { color: var(--crv-verdict); }
+.crv-status { color: var(--text-3); }
+.crv-row[data-status="running"] .crv-status { color: var(--blue); }
+.crv-row[data-status="running"] .crv-status::before {
+    content: '';
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-right: var(--sp-2);
+    border-radius: 50%;
+    background: currentColor;
+    vertical-align: 1px;
+    animation: crv-pulse var(--dur-loop) var(--ease-standard) infinite;
+}
+@keyframes crv-pulse { 50% { opacity: 0.3; } }
+
+.crv-count {
+    --sev: var(--text-3);
+    flex: none;
+    min-width: 18px;
+    padding: var(--sp-1) var(--sp-2);
+    border-radius: var(--pill);
+    background: color-mix(in srgb, var(--sev) 16%, transparent);
+    color: var(--sev);
+    font: 600 var(--fs-2xs)/var(--lh-none) var(--sans);
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+}
+.crv-count[data-severity="critical"] { --sev: var(--red); }
+.crv-count[data-severity="warning"] { --sev: var(--yellow); }
+
+.crv-plain { color: var(--text-4); font: 400 var(--fs-xs)/var(--lh-none) var(--sans); }
+.crv-when {
+    margin-left: auto;
+    color: var(--text-4);
+    font: 400 var(--fs-xs)/var(--lh-none) var(--sans);
+    white-space: nowrap;
+}
+
+.crv-jump {
+    flex: none;
+    width: 26px;
+    border: 0;
+    border-radius: var(--r-xs);
+    background: none;
+    color: var(--text-4);
+    font: 400 var(--fs-md)/var(--lh-none) var(--sans);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity var(--dur-fast) var(--ease-standard), color var(--dur-fast) var(--ease-standard);
+}
+.crv-row:hover .crv-jump,
+.crv-jump:focus-visible { opacity: 1; }
+.crv-jump:hover { color: var(--text); }
+
+/* ── the dialog ───────────────────────────────────────────────────────────── */
+
+.modal.review-modal.creview { width: min(880px, 100%); }
+#creview-modal:focus { outline: none; }
+#creview-body:focus-visible { outline-offset: -3px; }
+.creview .modal-head .crv-type { max-width: 20ch; font-size: var(--fs-sm); }
+.creview .modal-foot .spacer { flex: 1; }
+.creview #creview-fixall[hidden] { display: none; }
+
+.crv-detail { font: 400 var(--fs-md)/var(--lh-base) var(--sans); color: var(--text-2); }
+
+.crv-summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--sp-2) var(--sp-5);
+    margin-bottom: var(--sp-5);
+}
+.crv-summary .crv-verdict { font-size: var(--fs-xs); }
+.crv-of { color: var(--text-3); font-size: var(--fs-sm); }
+
+.crv-note {
+    margin: 0 0 var(--sp-5);
+    color: var(--text-3);
+    font-size: var(--fs-sm);
+}
+
+.crv-group + .crv-group { margin-top: var(--sp-6); }
+.crv-group-head {
+    --sev: var(--text-3);
+    display: flex;
+    align-items: baseline;
+    gap: var(--sp-3);
+    margin: 0;
+    color: var(--sev);
+    font: 600 var(--fs-xs)/var(--lh-tight) var(--sans);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+.crv-group[data-severity="critical"] .crv-group-head { --sev: var(--red); }
+.crv-group[data-severity="warning"] .crv-group-head { --sev: var(--yellow); }
+.crv-group-count { color: var(--text-4); font-weight: 500; }
+
+.crv-findings { margin-top: var(--sp-3); }
+.crv-finding .prr-sev { min-width: 0; display: none; }   /* the group says it */
+.crv-finding .crv-body { margin-left: 0; }
+.crv-tags {
+    flex: none;
+    color: var(--text-4);
+    font: 400 var(--fs-xs)/var(--lh-none) var(--sans);
+}
+
+.crv-where {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    margin: var(--sp-3) 0 0;
+}
+.crv-file,
+.crv-copy {
+    border: 0;
+    background: none;
+    cursor: pointer;
+}
+.crv-file {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 0;
+    color: var(--blue);
+    font: 400 var(--fs-sm)/var(--lh-tight) var(--mono);
+}
+.crv-file:hover { text-decoration: underline; }
+.crv-copy {
+    flex: none;
+    padding: var(--sp-1) var(--sp-2);
+    border-radius: var(--r-xs);
+    color: var(--text-4);
+    font: 500 var(--fs-xs)/var(--lh-none) var(--sans);
+}
+.crv-copy:hover { background: var(--s3); color: var(--text-2); }
+
+.crv-raw {
+    margin-top: var(--sp-7);
+    border-top: 1px solid var(--outline-soft);
+    padding-top: var(--sp-4);
+}
+.crv-raw > summary {
+    color: var(--text-3);
+    font: 500 var(--fs-sm)/var(--lh-tight) var(--sans);
+    cursor: pointer;
+}
+.crv-raw > summary:hover { color: var(--text); }
+.crv-raw .prr-raw { margin-top: var(--sp-4); max-height: none; }
+
+@media (prefers-reduced-motion: reduce) {
+    .crv-row, .crv-jump { transition: none; }
+    .crv-row[data-status="running"] .crv-status::before { animation: none; }
+}
+
+/* ── Settings › Code reviews ──────────────────────────────────────────────── */
+
+.crt-list {
+    list-style: none;
+    margin: var(--sp-4) 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-4);
+}
+.crt-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) 120px auto;
+    align-items: end;
+    gap: var(--sp-4);
+}
+.crt-field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+    min-width: 0;
+}
+.crt-field .settings-text,
+.crt-field .settings-select { width: 100%; }
+.crt-label { font-family: var(--sans); }
+.crt-skill[aria-invalid="true"] { border-color: var(--red); }
+.crt-colour { color: var(--crv-hue); }
+.crt-colour[data-colour="blue"] { --crv-hue: var(--blue); }
+.crt-colour[data-colour="red"] { --crv-hue: var(--red); }
+.crt-colour[data-colour="yellow"] { --crv-hue: var(--yellow); }
+.crt-colour[data-colour="green"] { --crv-hue: var(--green); }
+.crt-colour[data-colour="purple"] { --crv-hue: var(--purple); }
+.crt-colour[data-colour="peach"] { --crv-hue: var(--peach); }
+.crt-colour option { color: var(--text); }
+.crt-del {
+    height: 30px;
+    width: 30px;
+    border: 0;
+    border-radius: var(--r-xs);
+    background: none;
+    color: var(--text-4);
+    cursor: pointer;
+}
+.crt-del:hover:not(:disabled) { background: var(--s3); color: var(--red); }
+
+.crt-foot {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-4);
+    margin-top: var(--sp-5);
+}
+.crt-spacer { flex: 1; }
+.crt-bad { color: var(--red-soft); font: 400 var(--fs-sm)/var(--lh-tight) var(--sans); }
+
+.crv-finding .prr-ftitle code { font: 400 var(--fs-sm)/var(--lh-tight) var(--mono); color: var(--text-2); }
+/* The column names once, over the first row; the rest keep theirs for a
+   screen reader only. */
+.crt-row + .crt-row .cmd-field-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+.crt-list { gap: var(--sp-3); }

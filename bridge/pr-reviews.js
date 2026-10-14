@@ -59,6 +59,11 @@ const SECTION = [
     [/^critical/i, 'critical'],
     [/^warning/i, 'warning'],
     [/^notes?\b/i, 'note'],
+    // Other reviewers' words for the same three, so a review that is not the
+    // adversarial template still lands in the right group (bridge/code-reviews.js).
+    [/^(?:high|blocking|blockers?|major|severe|p[01])\b/i, 'critical'],
+    [/^(?:medium|moderate|should[- ]fix|p2)\b/i, 'warning'],
+    [/^(?:low|minor|nits?|nitpicks?|suggestions?|p3)\b/i, 'note'],
 ];
 
 // A line that opens a finding, in the styles the reviewer actually writes. The
@@ -70,6 +75,8 @@ const STRONG_START = [
     /^#{4,6}[ \t]+\S/,                                    // #### Title
 ];
 const BULLET_START = /^[-*][ \t]+\S/;
+// `src/a.ts:12 — summary`, a whole finding on one line, unbulleted.
+const LINE_ITEM = /^`?[A-Za-z0-9_@$./-]*[A-Za-z0-9_$-]\.[A-Za-z0-9]{1,8}:\d+(?:[-–]\d+)?`?[ \t]+[—–-][ \t]+\S/;
 
 // `src/a/b.ts:12`, `b.ts:12-34`, `b.ts:12–34`, inside backticks or not.
 const LOC_RE = /([A-Za-z0-9_@$./-]*[A-Za-z0-9_$-]\.[A-Za-z0-9]{1,8}):(\d+)(?:[-–](\d+))?/;
@@ -90,6 +97,9 @@ function titleOf(first) {
     // Asterisks inside a code span (`.design-sync/**`) are not bold markers, so
     // they are set aside while the bold lead is found and put back after.
     const line = first.replace(/^#{4,6}[ \t]+/, '').replace(/^[-*][ \t]+/, '').replace(/^\d+[.)][ \t]+/, '')
+        // `- \`src/a.ts:12\` — the title`: the location leads, and is the
+        // finding's `file`, not its title.
+        .replace(/^`?[^`\s]*\.[A-Za-z0-9]{1,8}:\d+(?:[-–]\d+)?`?[ \t]*(?:[—–:-][ \t]*)?/, '')
         .replace(/`[^`]*`/g, s => s.replace(/\*/g, '\u0001'));
     // A bold lead is the title; bold somewhere mid-sentence is emphasis, and the
     // title is then the first sentence.
@@ -103,13 +113,13 @@ function titleOf(first) {
 }
 
 /** Split one section's lines into findings. */
-function splitItems(lines, severity) {
+function splitItems(lines, severity, mode = null) {
     // "None." — with or without a list of what was checked after it — is a
     // section with nothing in it, which is the commonest Critical section there is.
     const firstText = lines.find(l => l.trim());
     if (!firstText || /^\s*(?:\*\*)?_?none\b/i.test(firstText)) return [];
 
-    const strong = lines.some(l => STRONG_START.some(re => re.test(l)));
+    const strong = mode ? mode === 'strong' : lines.some(l => STRONG_START.some(re => re.test(l)));
     const starts = (l) => (strong ? STRONG_START.some(re => re.test(l)) : BULLET_START.test(l));
 
     const items = [];
@@ -151,7 +161,8 @@ function parseReview(text) {
     for (const line of lines) {
         const h = /^#{2,3}[ \t]+(.+?)[ \t]*#*$/.exec(line);
         if (h) {
-            const name = h[1].replace(/[*_]/g, '').trim();
+            // `### 🔴 Critical` — a marker before the word is decoration.
+            const name = h[1].replace(/[*_]/g, '').trim().replace(/^[^\p{L}\p{N}]+/u, '');
             const known = SECTION.find(([re]) => re.test(name));
             if (known) section = { kind: known[1], lines: [] };
             else if (/^summary\b/i.test(name)) section = { kind: 'summary', lines: [] };
@@ -171,6 +182,25 @@ function parseReview(text) {
         } else {
             out.findings.push(...splitItems(s.lines, s.kind));
         }
+    }
+    // No severity headings at all — `code-review` writes a flat list:
+    // "- `src/a.ts:12` — summary" or "1. **Title** (`src/a.ts:12`)". Split the
+    // whole text, and keep only the items that name a file, so a numbered list
+    // of what the reviewer *did* does not come back as findings. Unrated, so
+    // they are warnings: the review thought each worth raising.
+    // Numbered items first; if none of those names a file (a numbered list of
+    // steps beside a bulleted list of findings), the bullets.
+    // Last, `code-review`'s own restatement: one line per finding, starting
+    // with its location — "src/a.ts:12 — summary".
+    if (!sections.some(sec => sec.kind !== 'summary')) {
+        const located = (mode) => splitItems(lines, 'warning', mode).filter(f => f.file);
+        let found = located('strong');
+        if (!found.length) found = located('bullet');
+        if (!found.length) {
+            found = lines.filter(l => LINE_ITEM.test(l))
+                .map(l => ({ severity: 'warning', title: titleOf(l), ...locationOf(l), body: l.trim() }));
+        }
+        out.findings.push(...found);
     }
     return out;
 }

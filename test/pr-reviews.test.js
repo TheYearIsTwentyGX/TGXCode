@@ -218,6 +218,54 @@ VERDICT: CONCERNS`);
     ok('CRLF line endings parse the same');
 }
 
+// --- other reviewers' shapes (bridge/code-reviews.js) -------------------------
+
+{
+    const r = parseReview([
+        '## Review',
+        '',
+        '### 🔴 High',
+        '- **Token leaks into logs** — `bridge/auth.js:40`',
+        '',
+        '### Medium',
+        '- **Retry never backs off** (`bridge/pulls.js:12`)',
+        '',
+        '### Nits',
+        '- **Typo in comment** `web/app.js:3`',
+    ].join('\n'));
+    assert.deepStrictEqual(r.findings.map(f => [f.severity, f.title, f.file]), [
+        ['critical', 'Token leaks into logs', 'bridge/auth.js'],
+        ['warning', 'Retry never backs off', 'bridge/pulls.js'],
+        ['note', 'Typo in comment', 'web/app.js'],
+    ]);
+    ok('High / Medium / Nits headings, with a marker before the word, map to the three severities');
+
+    // `code-review`'s flat list: no headings at all.
+    const flat = parseReview([
+        'Reviewed PR #134. I ran the tests and read every hunk.',
+        '',
+        '**Findings (2):**',
+        '',
+        '- `src/a.ts:207` — `xl/calcChain.xml` is left stale after a save',
+        '- `src/b.ts:12-14` — the lock is released before the write lands',
+        '',
+        '1. Read the diff',
+        '2. Ran the tests',
+    ].join('\n'));
+    assert.deepStrictEqual(flat.findings.map(f => [f.severity, f.file, f.line, f.endLine, f.title]), [
+        ['warning', 'src/a.ts', 207, null, 'xl/calcChain.xml is left stale after a save'],
+        ['warning', 'src/b.ts', 12, 14, 'the lock is released before the write lands'],
+    ]);
+    ok('with no severity headings, located items in a flat list are findings and unlocated ones are not');
+
+    const lines = parseReview('Two problems.\n\nsrc/a.ts:12 — the cache is never invalidated\n`src/b.ts:40` - retries forever\nsee the notes above');
+    assert.deepStrictEqual(lines.findings.map(f => [f.file, f.line, f.title]), [
+        ['src/a.ts', 12, 'the cache is never invalidated'],
+        ['src/b.ts', 40, 'retries forever'],
+    ]);
+    ok('one finding per line, `file:line — summary`, as code-review restates them');
+}
+
 // --- the comment GitHub has --------------------------------------------------
 
 {

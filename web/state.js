@@ -315,6 +315,15 @@ export const state = {
     // No `at`, `loading` or `error`, which `changes` needs: there is nothing to
     // fetch and nothing to go stale. The bridge pushes this on the same follow
     // the transcript arrives on.
+    // The Reviews pane (web/transcript/reviews.js): GET /api/sessions/:id/reviews
+    // as it last answered, and the one review its dialog has open.
+    reviews: {
+        on: localStorage.getItem('reviewsOn') === '1',
+        shut: localStorage.getItem('reviewsShut') === '1',
+        sessionId: null, data: null, at: 0, loading: false, error: null,
+        // The dialog: which run, and its full answer once it lands.
+        openId: null, detail: null, detailError: null,
+    },
     checklist: {
         on: localStorage.getItem('checklistOn') !== '0',
         shut: localStorage.getItem('checklistShut') === '1',

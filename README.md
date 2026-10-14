@@ -373,7 +373,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/routes/pr-reviews.js` | `/api/pr-review` (the nightly review's findings) and `/api/pr-review/fix` (a session on the PR's branch to fix them) |
 | `bridge/routes/quota.js` | `/api/quota` and refreshing it |
 | `bridge/routes/session.js` | One session's conversation: read, delete, send, later, handoff, stop, queue, permission, flags, attachments, suggestions, tasks, subagents |
-| `bridge/routes/session-workspace.js` | One session's directory: dev servers, changes, diff, pull requests, reveal, open-file, its terminal |
+| `bridge/routes/session-workspace.js` | One session's directory: dev servers, changes, diff, pull requests, reveal, open-file, its terminal, and the code reviews it ran |
 | `bridge/routes/commands.js` | A project's commands, their runs, and the editor's view of the files that declare them |
 | `bridge/routes/terminals.js` | A terminal pane's stream, input, size and close — all refused remotely |
 | `bridge/routes/machine.js` | Dev servers, DevBrowser and Wispr Flow — the machine outside the app |
@@ -394,12 +394,14 @@ Two rules worth knowing before you send a patch:
 | `bridge/pr-store.js` | When to ask, and last time's answer kept on disk — so no route ever waits on GitHub |
 | `bridge/pr-refresh.js` | The clock that fills it: one pass over the repositories in play, and `prs-changed` when the answer moved |
 | `bridge/pr-reviews.js` | The nightly review read back: from the gate session's transcript, else the PR comment off the refresher's clock, parsed into findings |
+| `bridge/code-reviews.js` | The code reviews a session ran: the skill runs whose skill is a configured review type, with target, verdict and findings (a fork's ReportFindings, a JSON block, or the review's text) |
 | `bridge/pr-owners.js` | The way back: which conversation raised each PR, keyed `owner/name#N` — `GET /api/pr-owners` |
 | `bridge/overview.js` | The live board: what every session is doing right now |
 | `bridge/taskboard.js` | The task board: everything outstanding, in a column per state |
 | `bridge/sessions.js` | The session index — incremental, cached, watched |
 | `bridge/registry.js` | Which sessions have a process, from Claude Code's own registry |
 | `bridge/turn-index.js` | Per-session index of turns, plans and questions with byte offsets, so a long session opens from its end |
+| `bridge/skill-runs.js` | Per-session index of every skill, slash command and subagent run — start, end, result text — that the Reviews pane is filtered from |
 | `bridge/spend-index.js` | Tokens and API-equivalent cost per session, project and day, read incrementally from `message.usage` and cached |
 | `bridge/pricing.js` | API list prices per model, and the cost of one message's usage |
 | `bridge/search-index.js` | Per-session full-text index of what you and Claude said (and, clipped, tool calls), built incrementally like the turn index and in the background a slice at a time; the query and its snippets |
@@ -501,6 +503,7 @@ Two rules worth knowing before you send a patch:
 | `web/settings/hooks.js` | The hooks editor inside the Claude Code group |
 | `web/settings/memory.js` | The Memory group — the CLAUDE.md files — and the full-height dialog on the same file |
 | `web/settings/project-commands.js` | The Commands group — a project's `.tgxcode/commands.json`, as a form and as JSON |
+| `web/settings/review-types.js` | The Code reviews group — which skills count as reviews, edited as a list and saved whole |
 | `web/settings/toolbar.js` | The top bar's layout and More menu, and the Toolbar group that edits them (a component that holds a drag's order until its save is over). `fitBar()` fits the bar to the window: labels go first, then buttons move into More from the end, and back when there is room |
 | `web/settings/shortcuts.js` | The Shortcuts group, and the key hints in every title that names a binding |
 | `web/settings/notifications.js` | The Notifications group — this browser's switches for `web/notifications.js`, as a component (no longer markup in index.html) |
@@ -514,6 +517,7 @@ Two rules worth knowing before you send a patch:
 | `web/transcript/subagents.js` | The subagent list and the pane that opens one's transcript |
 | `web/transcript/suggestions.js` | Suggested follow-ups — the panel, the dialog that shows one at a readable width, and starting or dismissing one |
 | `web/transcript/changes.js` | What this session changed, its scratchpad, and the diff viewer (diff2html, read as `window.Diff2Html`, never imported), which also shows a scratchpad file |
+| `web/transcript/reviews.js` | The Reviews pane beside the transcript, the dialog with one review's findings (Fix in chat, open the file), and the Run menu |
 | `web/transcript/checklist.js` | The session's own task list, the column left of the transcript |
 | `web/transcript/layout.js` | The width the log lays itself out at, the composer's insets, and sliding a side column in and out |
 | `web/transcript/context-menu.js` | The right-click menu, and the file menu on a changed file |
@@ -578,6 +582,7 @@ Two rules worth knowing before you send a patch:
 | `web/css/search.css` | The Search transcripts panel. Last in the cascade and self-contained, reading only the shared tokens |
 | `web/css/digest.css` | The while-you-were-away card (web/digest.js), from existing tokens only |
 | `web/css/templates.css` | The template rows in the Start-a-session dialog. Layout only, pending the dialog restyle |
+| `web/css/reviews.css` | The Reviews pane, the code-review findings dialog and Settings › Code reviews, from existing tokens only. After pr-review.css, whose finding rows it reuses |
 | `web/css/palette.css` | The command palette |
 | `web/vendor/` | The libraries worth not writing — xterm; diff2html for the diff viewer; and `preact.js`, htm's standalone build (Preact 10 + hooks + htm in one ESM file) for components written without JSX. Checked-in prebuilt bundles, not a `node_modules` |
 | `app/main.js` | The Electron shell, and the rules for what a preview `<webview>` may load |
