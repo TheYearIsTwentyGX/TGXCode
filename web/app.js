@@ -100,6 +100,7 @@ import {
 } from './transcript/turn-rail.js';
 import { applyRunChange, cmdDir, loadCommands, renderCommands } from './commands.js';
 import { onOrchestratorEvent, toggleOrchestrator } from './orchestrator.js';
+import { orchPageTick } from './orchestrator-page.js';
 import { digestOnResolved, digestOnRunner, wireDigest } from './digest.js';
 import { adoptAttachments, dragHasFiles, wireAttachments } from './composer/attachments.js';
 import { applyLater, closeLater, loadLater, wireLater } from './composer/later.js';
@@ -2661,6 +2662,7 @@ function connect() {
     // panel does not need to be right.
     es.addEventListener('prs-changed', (e) => {
         applyRailPrs(JSON.parse(e.data));
+        orchPageTick();
         if (state.current) loadPrStatus();
         // A PR raised elsewhere is the likeliest thing to have moved, and it is
         // what turns a plain `#N` in this conversation into a link.
@@ -2817,6 +2819,9 @@ function connect() {
                 detail: s.detail, queued: s.queued, stalled: s.stalled };
             renderRail();
         }
+        // The orchestrator page says what each worker is doing, and what the
+        // orchestrator itself is waiting on — both from this.
+        orchPageTick(s.sessionId);
     });
 
     // A busy turn gone quiet, or back. The badge is the runner-status above,

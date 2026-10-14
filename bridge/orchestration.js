@@ -134,11 +134,18 @@ function orchestratorBrief(id) {
         '  note listing the workers that were cut off — tell those to carry on.',
         '- close_worker when a worker is finished with, so it stops counting.',
         '',
-        'Keep a summary for the user with set_summary: one or two short paragraphs on',
+        'Keep a brief for the user with set_summary: one or two short paragraphs on',
         'what has been done, what is in flight, and anything waiting on them. Rewrite it',
         'after each batch of inbox items you handle and whenever you spawn or close a',
-        'worker. It is shown pinned beneath your conversation, and it is what the user',
-        'reads to catch up — keep it current rather than complete.',
+        'worker. It is what the user reads to catch up — keep it current rather than',
+        'complete. Its structured fields are drawn on the orchestrator page, so fill them:',
+        '- goal: the overall task in one line.',
+        '- decisions: every question you need the user to answer, as a list — not asked',
+        '  in prose, where it scrolls away unanswered. Give options when there are a few',
+        '  obvious answers, and worker when it is about one worker. The user\'s answer',
+        '  arrives as a message starting "Re: <question>"; act on it, then leave that',
+        '  question out of the next set_summary.',
+        '- mergeOrder: the PR numbers in the order they should land, once there are any.',
         ...(add ? ['', '## From the user', '', add] : []),
     ].join('\n');
 }
@@ -955,14 +962,47 @@ function forget(sessionId) {
     if (o && store.removeWorker(o.id, sessionId)) emit(o.id);
 }
 
-function setSummary(orchId, text) {
-    if (!store.setSummary(orchId, text)) throw refuse(404, 'that session is not an orchestrator');
+function setSummary(orchId, text, fields) {
+    if (!store.setSummary(orchId, text, fields)) throw refuse(404, 'that session is not an orchestrator');
     emit(orchId);
     return store.get(orchId).summary;
 }
 
+/** The user answered one of the brief's decisions — recorded, not delivered. */
+function answerDecision(orchId, decisionId, text) {
+    if (!store.get(orchId)) throw refuse(404, 'that session is not an orchestrator');
+    if (!String(text || '').trim()) throw refuse(400, 'text is required');
+    const d = store.answerDecision(orchId, decisionId, text);
+    if (!d) throw refuse(404, 'no such decision — the orchestrator may have dropped it');
+    emit(orchId);
+    return d;
+}
+
+// What each orchestrator's workers' pull requests looked like at the last
+// look, so a PR pass that moved somebody else's PR does not rebroadcast this one.
+const prSeen = new Map();
+
+/**
+ * A PR pass moved something. Nothing about a worker changed, so nothing else
+ * would tell its orchestrator's page that the PR it shows went from open to
+ * approved — re-broadcast every orchestrator whose workers' PRs read differently.
+ */
+function onPrsChanged() {
+    for (const id of store.ids()) {
+        const o = store.get(id);
+        const sig = o.workers.map(w => {
+            const pr = workerPr(index.summary(w.id));
+            return pr ? `${pr.number}:${pr.status}` : '';
+        }).join('|');
+        if (prSeen.get(id) === sig) continue;
+        const first = !prSeen.has(id);
+        prSeen.set(id, sig);
+        if (!first) emit(id);
+    }
+}
+
 module.exports = {
     init, payload, roleOf, enable, disable, spawn, sendTo, read, answer, stopWorker, closeWorker,
-    report, resume, usageFor, setSummary, checkUsage, checkWakes, rearmPause, armWake, forget, nudge, scheduleNudge, emit, defaultSettings,
+    report, resume, usageFor, setSummary, answerDecision, onPrsChanged, checkUsage, checkWakes, rearmPause, armWake, forget, nudge, scheduleNudge, emit, defaultSettings,
     onPermissionRequest, onPermissionResolved, onTurnComplete, onStatus,
 };

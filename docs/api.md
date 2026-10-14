@@ -202,7 +202,8 @@ of `/api/terminals/*`; all of `/api/runs/*`; `POST /api/commands/run`; all of
 `POST /api/worktrees/remove`;
 the orchestrator tools — `POST /api/sessions/:id/orchestrator/{spawn,next,send,answer,read,stop,close,summary}`
 and a worker's `POST /api/sessions/:id/report` (reading an orchestrator, changing its
-settings, dismissing an item and Resume stay open);
+settings, dismissing an item, recording the answer to a decision —
+`POST …/orchestrator/decisions/:decisionId/answered` — and Resume stay open);
 `POST /api/fs/open`;
 `POST /api/wispr/press`;
 `PUT /api/prefs`;
@@ -3384,7 +3385,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `notice` | `{sessionId: string, level: 'warn', kind: string, text: string}` — something worth telling the user that is not a permission ask. Every notice the bridge sends is `level: 'warn'` except `settings_deferred`, which is `level: 'info'`; treat any level other than `warn` as informational. `kind` is one of `settings_deferred` (a model/effort change held while background work runs — see the send route), `no_permission_prompt`, `permission_uninteractive`, `mode_change_failed`, `permission_auto_denied`, `permission_denied`, `api_retry`, `turn_failed`, `rate_limit` — and an unrecognised kind is a plain warning, not an error. **`rate_limit` is not one per limit: it repeats on every turn for as long as the limit holds**, because the CLI sends an identical `rate_limit_event` each time and this one is not deduplicated the way the `quota` event below is. A client that toasts it unconditionally therefore stacks the same warning over and over for an afternoon. `web/app.js` drops this kind entirely and flashes the header quota pill off the `quota` event instead; a client with nowhere to put a persistent indicator should throttle the toast itself. Everything the notice says is also in `GET /api/quota` — `windows[].status` for the current state and `events` for the history |
 | `claude-version` | **the whole `GET /api/claude-version` payload**, so there is nothing to refetch. Ungated, no `sessionId`. Sent when the summary moved: the hourly registry check found a newer version, an update finished, or a process started or ended on a version that changes `staleSessions`. Debounced by about a second |
 | `quota` | **the whole `GET /api/quota` payload**, so there is nothing to refetch. Ungated, like `drafts-changed`. Fires only when a reading actually moved — the CLI sends an identical `rate_limit_event` on every turn and those are dropped rather than pushed. Note it carries **no `sessionId`**: quota is account-wide, and which session happened to observe it says nothing. A window that has been near a limit for an hour will therefore push nothing at all, which is why `usedPercentAt` matters more than the arrival time of this event |
-| `orchestrator` | **the whole `GET /api/sessions/:id/orchestrator` payload** for one orchestrator (see §*Orchestrators*), so there is nothing to refetch. Sent on any change to it — an item filed, read or settled, a worker started, closed or queued, a worker's `state` or `pending` changing, settings, the summary, a pause or a resume — **debounced by about 250 ms**, so a burst is one event carrying the end state. Followed by one `sessions-changed` for the whole burst, which is where the rail counts come from. `enabled: false` means the role was just turned off |
+| `orchestrator` | **the whole `GET /api/sessions/:id/orchestrator` payload** for one orchestrator (see §*Orchestrators*), so there is nothing to refetch. Sent on any change to it — an item filed, read or settled, a worker started, closed or queued, a worker's `state` or `pending` changing, a worker's PR changing status in the bridge's PR cache, settings, the summary or a decision answered, a pause or a resume — **debounced by about 250 ms**, so a burst is one event carrying the end state. Followed by one `sessions-changed` for the whole burst, which is where the rail counts come from. `enabled: false` means the role was just turned off |
 | `standing-changed` | `{sessionId, standing}` — `standing` is `{text, source, at}` exactly as on the session summary (`text` a string, `source` `"model"` or `"extract"`, `at` epoch ms), or null. Patch that row's `standing`; there is nothing to refetch. Fires about fifteen seconds after a `turn-complete`, and only when the line was actually rewritten — a turn whose reply was already summarised sends nothing |
 | `turn-complete` | `{sessionId, isError, detail, retries, costUsd, durationMs, numTurns, stopReason}` — the runner's `lastResult` with the session id on it. `detail` is null unless `isError` |
 | `session-spend` | `{sessionId, totals}` — `totals` is the `Totals` object of `GET /api/analytics/sessions/:id`: that session's all-time API-equivalent spend. Sent to every client shortly after a `turn-complete`, once the transcript has been re-read. Replace the header figure with it. Only for turns this bridge ran: a session in a terminal sends nothing, so re-fetch on open |
@@ -5053,7 +5054,12 @@ event:
                            autoResume: boolean } },
   paused: null | { reason: string, at: number, resumeAt: number|null, by: number|null,
                    interrupted: [string] },
-  summary: null | { text: string (markdown, ≤1500 chars), at: number },
+  summary: null | { text: string (markdown, ≤1500 chars), at: number,
+                    goal: string|null,
+                    decisions: [{ id: string, text: string, options: [string],
+                                  workerId: string|null, at: number,
+                                  answer: string|null, answeredAt: number|null }],
+                    mergeOrder: [number] },
   workers: [{ id, title: string|null, cwd, worktree: null | {path, branch},
               spawnedAt: number, closedAt: number|null,
               state: "idle"|"busy"|"starting"|"stopped"|"error",
@@ -5073,7 +5079,31 @@ the session summary's `prs`), or null. `status` and `label` are what the bridge'
 PR cache already holds — the same words as the rail's PR badge (`open`, `approved`,
 `changes`, `checks-failed`, `checks-pending`, `conflicting`, `draft`, `merged`,
 `closed`) — and `"unknown"` with `title: null` until the cache has seen it. Building
-the payload never asks GitHub, so a status can trail the PR by one refresh.
+the payload never asks GitHub, so a status can trail the PR by one refresh. When a
+refresh moves the status of any worker's PR, the `orchestrator` event fires again
+for that orchestrator, so a client drawing `pr.status` from the event alone stays
+current; nothing else about the worker has to change.
+
+**The summary is the orchestrator's brief for the user**, written with its
+`set_summary` tool. `text` is the prose. The rest is structure a client draws
+rather than parses out of the prose, and any of it may be empty — an orchestrator
+that has not filled a field leaves it `null` or `[]`:
+
+- **`goal`** — the overall task in one line (≤200 chars).
+- **`decisions`** — the questions it needs the *user* to answer (at most 6).
+  `options` are short answers it offered (at most 4, may be empty); `workerId` the
+  worker a question is about, or null. **`id` is a hash of the question's text**,
+  so it stays the same across rewrites of the brief as long as the question does —
+  and with it `at` (when it was first asked) and any recorded answer. A question the
+  orchestrator leaves out of its next brief is gone: answered, or no longer worth
+  asking. `answer`/`answeredAt` are set by the route below and are the only part a
+  client writes.
+- **`mergeOrder`** — PR numbers in the order the orchestrator wants them landed. A
+  number may belong to no worker in the payload (it was opened elsewhere); draw it by
+  number.
+
+The orchestrator is told to put its questions here rather than ask them in prose,
+and that an answer reaches it as an ordinary message starting `Re: <question>`.
 
 The **inbox** in the payload is the newest 100 items, and the store drops settled
 items first once it is full. A client reconstructing a worker's history from it —
@@ -5084,8 +5114,13 @@ unknown, not as never having happened. An **inbox item** is:
 { id, workerId: string|null, kind, text: string, at: number, seq: number,
   status: "new"|"read"|"resolved"|"stale",
   requestId: string|null, ask: null | {kind, tool, displayName, input},
-  outcome: string|null, by: null | "orchestrator"|"user" }
+  outcome: string|null, by: null | "orchestrator"|"user",
+  settledAt: number|null }
 ```
+
+`settledAt` is when it became `resolved` or `stale` — answered, dismissed or gone —
+and null while it is open. Items settled before the field existed have it null too,
+so a client cannot treat null as "still open"; `status` says that.
 
 `kind` is `question`, `update` or `done` (a worker's own report), `turn` (the final
 message of a turn a worker finished — filed automatically, unless the worker said
@@ -5170,6 +5205,24 @@ even once read. A worker that is closed or deleted has its unanswered asks marke
 `{}` → `{ok, item}`. Marks it `resolved`, `outcome: "dismissed"`, `by: "user"`. It
 does not answer a worker's ask; that is the permission route on the worker.
 
+#### `POST /api/sessions/:id/orchestrator/decisions/:decisionId/answered`
+
+`{text: string}` → `{decision}` (the decision as it now stands, `answer` and
+`answeredAt` set). Records that the user answered one of the brief's `decisions`,
+so every window can draw it as answered until the orchestrator rewrites its brief
+without it. Fires the `orchestrator` event.
+
+**It does not deliver the answer.** The orchestrator only learns it from a message:
+send `Re: <the question's text>` followed by the answer with
+`POST /api/sessions/:orchestratorId/send` — the desktop sends first and records
+second, so nothing is drawn as answered unless it is on its way. A client that calls
+only this route has told every window it answered and told the orchestrator nothing.
+
+`400` with no `text`; `404` when the session is not an orchestrator, or when there is
+no decision with that id — usually because the orchestrator has already dropped it,
+which a client should treat as done. **Open to a paired remote device**, as `/send`
+is.
+
 #### `POST /api/sessions/:id/orchestrator/resume`
 
 `{}` → the payload. Clears `paused`, starts queued spawns up to `maxRunning`, and
@@ -5189,11 +5242,29 @@ All `POST`, all refused remotely, all with the orchestrator's id in the path:
 `spawn` `{prompt, title?, cwd?, worktree?: boolean|string, permissionMode?, model?,
 effort?}` → `{queued: false, sessionId, title, cwd, worktree}` or `{queued: true, id,
 position, running, maxRunning}`; `next` `{max?}` → `{items, left}` (marks them
-read); `send` `{worker, text}`; `answer` `{itemId, decision:
-"allow"|"allow-always"|"deny", feedback?, answers?, mode?}`; `read` `{worker, mode:
-"digest"|"tail"|"full"|"ask", turns?, offset?}` → `{text, …}`; `stop` `{worker,
-hard?}`; `close` `{worker, archive?}`; `summary` `{text}`. A worker's own is
-`POST /api/sessions/:id/report` `{kind: "question"|"update"|"done", text}`.
+read); `send` `{worker, text}` → `{ok, queued, state}`; `answer` `{itemId, decision:
+"allow"|"allow-always"|"deny", feedback?, answers?, mode?}` → `{ok}`; `read` `{worker,
+mode: "digest"|"tail"|"full"|"ask", turns?, offset?}`; `stop` `{worker, hard?}` →
+`{ok, how}`; `close` `{worker, archive?}` → `{ok, worktree}`; `summary` `{text,
+goal?, decisions?, mergeOrder?}` → `{summary}`. A worker's own is
+`POST /api/sessions/:id/report` `{kind: "question"|"update"|"done", text}` →
+`{ok, id}`.
+
+`summary`'s structured fields are each optional: **left out, a field keeps what the
+brief had; `null` or empty clears it.** Empty `text` clears the whole summary,
+structured fields with it. A decision arrives as a question string or `{text,
+options?, worker?}`. `mergeOrder` accepts numbers or strings like `"#212"`.
+
+`read` answers by mode. `digest` is `{text, headline: string|null, fields}` —
+`text` is what the orchestrator's model reads, and **`fields` is the same reading
+laid out for a page**: `{state: string|null (null: no process), pending:
+"tool"|"plan"|"question"|null, turns: number, todo: null | {done, total, now:
+string|null}, tools: [{name, n}] (most used first), files: [string] (paths edited),
+diffStat: string|null (the output of git diff --stat HEAD), lastMessage: string|null
+(at most 3000 chars)}`. `tail` is `{text, turns}`, `full` is `{text, offset, next:
+number|null, total}`, and **`ask` is not a read**: it sends the worker a message
+asking it to summarise itself, and the answer arrives later as a `turn` item. Every
+mode but `ask` only reads.
 
 ### Other writes
 

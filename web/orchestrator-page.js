@@ -1,0 +1,817 @@
+// The orchestrator page: what an orchestrator session opens onto, instead of a
+// conversation with a dock under it.
+//
+// **Who it is for.** Somebody who handed an orchestrator a task list an hour ago
+// and has come back. The real sessions this was designed from go quiet for hours
+// while the orchestrator approves plans and closes workers on its own; what the
+// person returning wants is "where are we, and what needs me?", and the answer
+// used to be scattered through a long transcript — three questions put to the
+// user in prose were never answered because they had scrolled away. So the page
+// is the overview and the conversation is a column beside it, not the other way
+// round:
+//
+//   - the **head**: the goal, a strip with one segment per task, how many are
+//     running against the cap, and the usage meters with the cutoff marked.
+//   - **Needs you**: what is waiting on the user rather than on the orchestrator
+//     — its open decisions (the brief's `decisions`, answerable here), a pause, its
+//     own pending ask, a worker nobody is answering, a worker that failed.
+//   - **Workers**: a stage matrix. One row per worker in the order it started —
+//     never re-sorted by state, so a status tick does not move rows under the
+//     pointer — with a track as far as it has got and, at the stage it is on,
+//     what it is doing in words.
+//   - **Merge order**: the PRs, numbered, as the brief orders them.
+//   - **Activity**: the raw inbox, folded, so nothing the old dock showed is gone.
+//
+// A row opens a **drawer** over the conversation column with the worker's ask
+// (answerable as the user, through answerAskFor — the orchestrator is told the
+// user got there first), its steps with times, and its progress digest from
+// `…/orchestrator/read` in `digest` mode, which only reads.
+//
+// **Layout.** In page mode `#conv-main` becomes a grid — this page, a splitter,
+// and the conversation column — with the transcript, the ask dock and the
+// composer all in the third column (web/css/orchestrator.css). They are the real
+// ones, so the composer, the queue and the approval cards work exactly as they
+// do anywhere else. The splitter's width is the user's, kept per window in
+// localStorage. `Conversation` in the header puts the plain conversation back,
+// with a one-line strip in `#orch-dock` for the way back.
+//
+// Drawn with Preact from `state.orch` (the `orchestrator` event), the rail's copy
+// of each worker's runner status, `state.railPrs` and the quota reading. What a
+// row says is worked out in web/orchestrator-model.js, which is pure and tested.
+
+import { html, render } from './vendor/preact.js';
+import { state } from './state.js';
+import { dom, toast } from './dom.js';
+import { post } from './api.js';
+import { ago, clip, clockOf } from './format.js';
+import { renderMarkdown } from './markdown.js';
+import { ICON } from './icons.js';
+import { enter, isUp, present } from './motion.js';
+import { answerAskFor } from './transcript/approvals.js';
+import { toolSummary } from './transcript/tools.js';
+import { sendMessage } from './composer/send.js';
+import { onQuotaChange, quotaWindows } from './quota.js';
+import { clockAt, goTo, inboxList, paintOrchestrator, resume, settings } from './orchestrator.js';
+import {
+    STAGES, blockedOn, lastReport, mergeOrder, needsYou, openDecisionFor, progress, shortAge,
+    stageLine, usageMeters, workerStage,
+} from './orchestrator-model.js';
+
+// ── per-window state ───────────────────────────────────────────────────────
+
+const ui = {
+    // orchestrator id → 'overview' | 'conversation'. Overview unless changed.
+    mode: new Map(),
+    peek: null,                // the worker id in the drawer
+    finished: false,           // the Finished fold
+    activity: false,           // the Activity fold
+    brief: false,              // the brief's prose, all of it
+    settings: false,           // the settings popover
+    answering: new Set(),      // request ids in flight from the drawer
+    note: null,                // {requestId, how: 'approve'|'reject'} — a note being written
+    reply: null,               // the decision id whose reply field is open
+    sending: new Set(),        // decision ids whose answer is on its way
+    digest: new Map(),         // worker id → {at, state, fields, error}
+};
+
+const STAGE_WORD = {
+    plan: 'Plan', approved: 'Approved', building: 'Building', done: 'Done', pr: 'PR', merged: 'Merged',
+};
+const ASK_WORD = { plan: 'a plan approval', tool: 'a permission', question: 'an answer' };
+const node = (id) => document.getElementById(id);
+/** "12m ago", or "just now" — shortAge says `now` for the first minute. */
+const agoWords = (ms) => { const a = shortAge(ms); return a === 'now' ? 'just now' : `${a} ago`; };
+
+/** Which view an orchestrator is in: its page unless the user chose otherwise. */
+export function orchPageMode(orchId) {
+    return ui.mode.get(orchId) || 'overview';
+}
+
+/** Switch between the page and the plain conversation. */
+export function setOrchPageMode(orchId, mode) {
+    ui.mode.set(orchId, mode);
+    if (mode !== 'overview') ui.peek = null;
+    paintOrchestrator();
+}
+
+/** Is the session on screen an orchestrator shown as its page? */
+export function orchPageUp() {
+    const s = state.current;
+    return !!s && !!s.orchestrator && orchPageMode(s.sessionId) === 'overview';
+}
+
+// ── painting ───────────────────────────────────────────────────────────────
+
+let tick = 0;          // the ages on the page move on their own: a repaint a minute
+let queued = 0;        // a coalesced repaint from status ticks
+let quotaWired = false;
+
+/**
+ * Draw the page, or take it down — called from paintOrchestrator, so it moves
+ * with everything else about the orchestrator: a session opening, a payload, the
+ * role turned off, the view switched.
+ *
+ * The mode is decided from the session summary (`s.orchestrator`), which the
+ * rail already has, rather than from the payload, which is still on the wire
+ * when a session opens: otherwise every orchestrator would open as a
+ * conversation and jump to its page a moment later.
+ */
+export function paintOrchPage() {
+    const main = dom.convMain;
+    const page = node('orch-page');
+    if (!main || !page) return;
+    const s = state.current;
+    const on = orchPageUp();
+    paintSeg(s);
+
+    const was = main.hasAttribute('data-orch-page');
+    main.toggleAttribute('data-orch-page', on);
+    page.hidden = !on;
+    node('orch-split').hidden = !on;
+    if (!on) {
+        render(null, page);
+        closePeek({ quiet: true });
+        clearInterval(tick);
+        tick = 0;
+        return;
+    }
+    if (!was) {
+        applyConvoWidth();
+        enter(page, { as: 'reveal' });
+    }
+    // Subscribed on first use rather than at load: quota.js and this file are
+    // both in the app's import cycle, and its listener set may not exist yet
+    // while this module is still being evaluated.
+    if (!quotaWired) { quotaWired = true; onQuotaChange(() => orchPageTick()); }
+    if (!tick) tick = setInterval(() => { if (orchPageUp()) paintOrchPage(); }, 60_000);
+
+    const p = state.orch && state.orch.orchestratorId === s.sessionId ? state.orch : null;
+    render(p ? pageTree(p) : loadingTree(), page);
+    paintPeek(p);
+}
+
+/**
+ * A worker's runner, a PR or the usage reading moved. Repaint once on the next
+ * frame if the page is up and it is about this orchestrator — many of these
+ * arrive together, and each one alone changes a word.
+ */
+export function orchPageTick(sessionId = null) {
+    if (!orchPageUp() || queued) return;
+    const p = state.orch;
+    if (sessionId && p && sessionId !== p.orchestratorId && !p.workers.some(w => w.id === sessionId)) return;
+    queued = requestAnimationFrame(() => { queued = 0; paintOrchPage(); });
+}
+
+/** The Overview | Conversation switch in the conversation header. */
+function paintSeg(s) {
+    const slot = node('orch-seg');
+    if (!slot) return;
+    if (!s || !s.orchestrator) { slot.hidden = true; render(null, slot); return; }
+    slot.hidden = false;
+    const mode = orchPageMode(s.sessionId);
+    const pick = (m) => () => setOrchPageMode(s.sessionId, m);
+    render(html`<span class="op-seg" role="group" aria-label="Show">
+        <button type="button" aria-pressed=${String(mode === 'overview')} onClick=${pick('overview')}
+            title="The orchestrator's overview, with the conversation beside it">Overview</button>
+        <button type="button" aria-pressed=${String(mode !== 'overview')} onClick=${pick('conversation')}
+            title="Just the conversation, full width">Conversation</button>
+    </span>`, slot);
+}
+
+function loadingTree() {
+    return html`<div class="op op-loading" role="status" aria-label="Loading the orchestrator">
+        <div class="skel op-skel" style="width: 46%"></div>
+        <div class="skel op-skel" style="width: 72%"></div>
+        ${[0, 1, 2, 3, 4].map(i => html`<div key=${i} class="skel op-skel op-skel-row"></div>`)}
+    </div>`;
+}
+
+// What the rest of the app knows about each worker.
+const rowOf = (id) => state.sessions.find(x => x.sessionId === id) || null;
+const freshPr = (id) => { const r = state.railPrs.get(id); return r ? r.status : null; };
+
+function pageTree(p) {
+    const now = Date.now();
+    const needs = needsYou(p, { orchRunner: state.runner, now });
+    return html`<div class="op">
+        ${head(p)}
+        <div class="op-body">
+            ${needs.length ? html`<section class="op-sec" aria-label="Needs you">
+                <h2 class="op-h">Needs you <span>${needs.filter(n => !(n.decision && n.decision.answeredAt)).length}</span></h2>
+                <div class="op-needs">${needs.map(n => needCard(p, n, now))}</div>
+            </section>` : null}
+            ${brief(p)}
+            ${matrix(p, now)}
+            ${order(p)}
+            ${activity(p)}
+        </div>
+    </div>`;
+}
+
+// ── head ───────────────────────────────────────────────────────────────────
+
+function head(p) {
+    const g = progress(p, { prStatusOf: freshPr });
+    const goal = p.summary && p.summary.goal;
+    const meters = usageMeters(p.settings.usageStop, quotaWindows());
+    return html`<header class="op-head">
+        <div class="op-goal-row">
+            <p class="op-goal" data-empty=${String(!goal)}>${goal
+                || 'No goal in the brief yet. The orchestrator writes one with set_summary.'}</p>
+            <span class="op-settings-wrap">
+                <button class="icon-btn op-settings-btn" type="button" aria-expanded=${String(ui.settings)}
+                    aria-haspopup="dialog" title="This orchestrator's settings"
+                    onClick=${() => { ui.settings = !ui.settings; paintOrchPage(); }}>
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <path d="M4 7h10M18 7h2M4 17h4M12 17h8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                        <circle cx="16" cy="7" r="2" stroke="currentColor" stroke-width="1.8"/>
+                        <circle cx="10" cy="17" r="2" stroke="currentColor" stroke-width="1.8"/>
+                    </svg></button>
+                ${ui.settings ? html`<div class="op-pop" role="dialog" aria-label="Orchestrator settings"
+                    onKeyDown=${(e) => { if (e.key === 'Escape') { e.stopPropagation(); closeSettings(); } }}>
+                    ${settings(p)}</div>` : null}
+            </span>
+        </div>
+        <div class="op-readings">
+            <div class="op-progress">
+                <span class="op-strip" role="img" aria-label=${`${g.finished} of ${g.total} finished`}>
+                    ${g.segments.map(x => html`<i key=${x.id} data-s=${x.s} title=${`${x.title} — ${SEG_WORD[x.s]}`}></i>`)}
+                </span>
+                <span class="op-count"><b>${g.finished}</b> of ${g.total} finished
+                    <span>·</span> ${g.running} of ${g.max} running${g.queued ? html` <span>·</span> ${g.queued} queued` : null}</span>
+            </div>
+            <div class="op-meters">${meters.map(m => html`<span key=${m.type} class="op-meter" data-tone=${m.tone}
+                title=${m.cutoff == null ? `${m.label}: no cutoff on this window` : `${m.label}: everything stops at ${m.cutoff}%`}>
+                ${m.label}
+                <span class="op-bar"><i style=${`width:${Math.min(100, m.used || 0)}%`}></i>${m.cutoff != null
+                    ? html`<u style=${`left:${m.cutoff}%`}></u>` : null}</span>
+                <span><b>${m.used == null ? '—' : `${m.used}%`}</b>${m.cutoff != null ? ` of ${m.cutoff}` : ''}</span>
+            </span>`)}</div>
+        </div>
+    </header>`;
+}
+
+const SEG_WORD = {
+    merged: 'merged', pr: 'PR open', fail: 'needs a fix', done: 'closed', run: 'working',
+    wait: 'waiting for an answer', idle: 'idle', queued: 'queued',
+};
+
+function closeSettings() {
+    ui.settings = false;
+    paintOrchPage();
+    const b = document.querySelector('.op-settings-btn');
+    if (b) b.focus({ preventScroll: true });
+}
+
+// A click anywhere outside the popover closes it. Capture, so it runs before
+// the click does whatever else it does.
+document.addEventListener('pointerdown', (e) => {
+    if (!ui.settings || e.target.closest('.op-settings-wrap')) return;
+    ui.settings = false;
+    paintOrchPage();
+}, true);
+
+// ── needs you ──────────────────────────────────────────────────────────────
+
+function needCard(p, n, now) {
+    switch (n.kind) {
+        case 'paused': return html`<div key=${n.key} class="op-need">
+            <div class="op-need-q">${`Paused — ${n.reason}.`}</div>
+            <div class="op-need-from">${n.resumeAt ? `Carries on by itself at ${clockAt(n.resumeAt)}.`
+                : 'Nothing runs until you resume it.'}</div>
+            <div class="op-need-act"><button class="lbtn ok" type="button" onClick=${resume}>Resume</button></div>
+        </div>`;
+        case 'ask': return html`<div key=${n.key} class="op-need">
+            <div class="op-need-q">${n.ask.kind === 'plan' ? 'The orchestrator has a plan for you to approve.'
+                : n.ask.kind === 'question' ? 'The orchestrator is asking you something.'
+                : `The orchestrator wants permission: ${n.ask.displayName || n.ask.tool || 'a tool'}.`}</div>
+            <div class="op-need-from">Answer it in the conversation, beside this.</div>
+        </div>`;
+        case 'decision': return decisionCard(p, n.decision, now);
+        case 'stuck': return html`<div key=${n.key} class="op-need">
+            <div class="op-need-q">${`${n.worker.title || 'A worker'} has waited ${shortAge(now - n.item.at)} for ${
+                ASK_WORD[blockedOn(n.worker, p.inbox)?.kind] || 'an answer'}, and the orchestrator is ${
+                p.paused ? 'paused' : 'not working on it'}.`}</div>
+            <div class="op-need-act"><button class="lbtn ok" type="button" onClick=${() => openPeek(n.worker.id)}>Look at it</button></div>
+        </div>`;
+        case 'error': return html`<div key=${n.key} class="op-need" data-tone="error">
+            <div class="op-need-q">${`${n.worker.title || 'A worker'} stopped with an error.`}</div>
+            <div class="op-need-act"><button class="lbtn" type="button" onClick=${() => openPeek(n.worker.id)}>Look at it</button></div>
+        </div>`;
+        default: return null;
+    }
+}
+
+function decisionCard(p, d, now) {
+    const w = d.workerId && p.workers.find(x => x.id === d.workerId);
+    const busy = ui.sending.has(d.id);
+    const from = [w ? `From ${w.title || 'a worker'}` : 'From the orchestrator', `asked ${agoWords(now - d.at)}`];
+    if (d.answeredAt) {
+        return html`<div key=${`d:${d.id}`} class="op-need" data-answered="true">
+            <div class="op-need-q">${d.text}</div>
+            <div class="op-need-from">${`You answered “${clip(d.answer || '', 80)}” ${agoWords(now - d.answeredAt)} — waiting for the orchestrator to pick it up.`}</div>
+        </div>`;
+    }
+    const open = ui.reply === d.id;
+    return html`<div key=${`d:${d.id}`} class="op-need" data-busy=${String(busy)}>
+        <div class="op-need-q">${d.text}</div>
+        <div class="op-need-from">${from.join(' · ')}</div>
+        <div class="op-need-act">
+            ${d.options.map(o => html`<button key=${o} class="lbtn" type="button" disabled=${busy}
+                onClick=${() => answerDecision(p, d, o)}>${o}</button>`)}
+            ${open ? null : html`<button class="lbtn op-text-btn" type="button" disabled=${busy}
+                onClick=${() => { ui.reply = d.id; paintOrchPage(); focusSoon(`#op-reply-${d.id}`); }}>Reply…</button>`}
+        </div>
+        ${open ? html`<form class="op-reply" onSubmit=${(e) => {
+            e.preventDefault();
+            const v = e.target.elements.reply.value.trim();
+            if (v) answerDecision(p, d, v);
+        }}>
+            <input id=${`op-reply-${d.id}`} name="reply" type="text" autocomplete="off" disabled=${busy}
+                aria-label=${`Your answer to: ${d.text}`} placeholder="Your answer — Enter sends it to the orchestrator"
+                onKeyDown=${(e) => { if (e.key === 'Escape') { e.stopPropagation(); ui.reply = null; paintOrchPage(); } }} />
+            <button class="lbtn ok" type="submit" disabled=${busy}>Send</button>
+        </form>` : null}
+    </div>`;
+}
+
+function focusSoon(sel) {
+    requestAnimationFrame(() => { const n = document.querySelector(sel); if (n) n.focus(); });
+}
+
+/**
+ * Answer one of the brief's decisions: as an ordinary message to the
+ * orchestrator, which it reads like anything else you type — and then, once
+ * that is on its way, recorded on the brief so every window shows it answered
+ * until the orchestrator rewrites the brief without it.
+ */
+async function answerDecision(p, d, text) {
+    if (ui.sending.has(d.id)) return;
+    ui.sending.add(d.id);
+    paintOrchPage();
+    try {
+        const sent = await sendMessage({ text: `Re: ${d.text}\n\n${text}`, canned: true });
+        if (sent) {
+            ui.reply = null;
+            await post(`/api/sessions/${p.orchestratorId}/orchestrator/decisions/${d.id}/answered`, { text });
+        }
+    } catch (err) {
+        toast(`Sent, but could not mark it answered: ${err.message}`, 'error');
+    } finally {
+        ui.sending.delete(d.id);
+        paintOrchPage();
+    }
+}
+
+// ── the brief's prose ──────────────────────────────────────────────────────
+
+function brief(p) {
+    const b = p.summary;
+    if (!b || !b.text) return null;
+    return html`<section class="op-sec op-brief" data-open=${String(ui.brief)} aria-label="Brief">
+        <h2 class="op-h">Brief <span>${`updated ${ago(b.at) === 'now' ? 'just now' : `${ago(b.at)} ago`}`}</span></h2>
+        <div class="op-brief-text md" dangerouslySetInnerHTML=${{ __html: renderMarkdown(b.text) }}></div>
+        ${b.text.length > 280 ? html`<button class="op-more" type="button" aria-expanded=${String(ui.brief)}
+            onClick=${() => { ui.brief = !ui.brief; paintOrchPage(); }}>${ui.brief ? 'Show less' : 'Show all'}</button>` : null}
+    </section>`;
+}
+
+// ── the stage matrix ───────────────────────────────────────────────────────
+
+function matrix(p, now) {
+    const ordered = p.workers.slice().sort((a, b) => (a.spawnedAt || 0) - (b.spawnedAt || 0));
+    const live = ordered.filter(w => !w.closedAt);
+    const done = ordered.filter(w => w.closedAt);
+    const counts = [`${live.length} open`, p.pendingSpawns.length ? `${p.pendingSpawns.length} queued` : null,
+        done.length ? `${done.length} finished` : null].filter(Boolean).join(' · ');
+    return html`<section class="op-sec" aria-label="Workers">
+        <h2 class="op-h">Workers <span>${counts}</span></h2>
+        ${!p.workers.length && !p.pendingSpawns.length ? html`<div class="op-empty">
+            No workers yet. The orchestrator starts them with spawn_worker once you have agreed what to build.</div>`
+        : html`<div class="op-matrix">
+            <div class="op-cols" aria-hidden="true"><span></span>
+                <span class="op-col-names">${STAGES.map(k => html`<span key=${k}>${STAGE_WORD[k]}</span>`)}</span></div>
+            ${live.map(w => row(p, w, now))}
+            ${p.pendingSpawns.map((q, i) => html`<div key=${q.id} class="op-row op-queued">
+                <span class="op-who"><span class="op-dot" data-s="queued"></span>
+                    <span class="op-name">${q.title || 'untitled'}</span></span>
+                <span class="op-track"><span class="op-say">${i === 0 ? 'Queued — starts when a slot frees'
+                    : `Queued, ${ordinal(i + 1)} in line`}</span></span>
+            </div>`)}
+            ${done.length ? html`<button key="fold" class="op-fold" type="button" aria-expanded=${String(ui.finished)}
+                onClick=${() => { ui.finished = !ui.finished; paintOrchPage(); }}>
+                <span class="twist" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none"
+                    dangerouslySetInnerHTML=${{ __html: ICON.caret }}></svg></span>
+                Finished <b>${done.length}</b>
+                ${ui.finished ? null : html`<span class="op-fold-names">${done.map(w => w.title || 'untitled').join(', ')}</span>`}
+            </button>` : null}
+            ${ui.finished ? done.map(w => row(p, w, now)) : null}
+        </div>`}
+    </section>`;
+}
+
+const ordinal = (n) => (n === 2 ? 'second' : n === 3 ? 'third' : `${n}th`);
+
+function row(p, w, now) {
+    const decision = openDecisionFor(p, w.id);
+    const r = rowOf(w.id);
+    const stage = workerStage(w, p.inbox, { prStatus: freshPr(w.id), mode: r && r.permissionMode, decision });
+    const line = stageLine(w, stage, p.inbox, { runner: r && r.runner, now, decision });
+    const chip = w.pr && stage.at >= 5 ? html`<span class="op-pr" data-status=${stage.prStatus}>${`#${w.pr.number}`}<em>${
+        PR_WORD[stage.prStatus] || stage.prStatus}</em></span>` : null;
+    const where = `${STAGE_WORD[STAGES[stage.at - 1]]}: ${[line.lead, line.detail].filter(Boolean).join(', ')
+        || (chip ? `#${w.pr.number} ${PR_WORD[stage.prStatus] || ''}` : '')}`;
+    return html`<button key=${w.id} type="button" class="op-row" data-tone=${stage.tone}
+        data-closed=${String(!!w.closedAt)} data-id=${w.id} data-at=${stage.at} aria-pressed=${String(ui.peek === w.id)}
+        style=${`--at:${stage.at}`} onClick=${() => (ui.peek === w.id ? closePeek() : openPeek(w.id))}>
+        <span class="op-who">
+            <span class="op-dot" data-s=${DOT[stage.tone] || 'idle'}></span>
+            <span class="op-who-text">
+                <span class="op-name">${w.title || 'untitled worker'}</span>
+                ${w.worktree && w.worktree.branch && !w.closedAt ? html`<span class="op-branch">${w.worktree.branch}</span>` : null}
+            </span>
+        </span>
+        <span class="op-track" aria-hidden="true">
+            ${stage.steps.map((st, i) => html`<i key=${i} data-s=${st}></i>`)}
+            <span class="op-say">${chip}${line.lead ? html`<b>${line.lead}</b>` : null}${line.detail
+                ? html`<span class="op-say-detail">${line.detail}</span>` : null}</span>
+        </span>
+        <span class="sr-only">${where}</span>
+    </button>`;
+}
+
+const DOT = { wait: 'wait', you: 'wait', error: 'fail', run: 'run', pr: 'done', fail: 'fail', merged: 'done', done: 'done', idle: 'idle', stopped: 'idle' };
+const PR_WORD = {
+    open: 'open', approved: 'approved', changes: 'changes asked', 'checks-failed': 'checks failed',
+    'checks-pending': 'checks running', conflicting: 'conflicts', draft: 'draft', merged: 'merged',
+    closed: 'closed', unknown: '',
+};
+
+// ── merge order ────────────────────────────────────────────────────────────
+
+function order(p) {
+    const m = mergeOrder(p, { prStatusOf: freshPr });
+    if (!m.rows.length) return null;
+    return html`<section class="op-sec" aria-label="Merge order">
+        <h2 class="op-h">Merge order <span>${m.fromBrief ? 'from the brief' : 'in the order the workers started — the brief has none yet'}</span></h2>
+        <ol class="op-order">${m.rows.map(r => html`<li key=${r.number} data-merged=${String(r.status === 'merged')}>
+            <span class="op-num">${r.n}</span>
+            ${r.url ? html`<a class="op-pr" data-status=${r.status} href=${r.url} target="_blank" rel="noreferrer"
+                title=${`Open #${r.number} on GitHub`}>${`#${r.number}`}<em>${PR_WORD[r.status] || ''}</em></a>`
+                : html`<span class="op-pr" data-status=${r.status}>${`#${r.number}`}</span>`}
+            ${r.workerId ? html`<button class="op-order-t" type="button" onClick=${() => openPeek(r.workerId)}>${r.title}</button>`
+                : html`<span class="op-order-t op-quiet">not opened by one of these workers</span>`}
+        </li>`)}</ol>
+        ${m.rest.length ? html`<div class="op-order-rest">${`Then ${m.rest.map(x => x.title).join(', ')}, as they open PRs.`}</div>` : null}
+    </section>`;
+}
+
+// ── activity ───────────────────────────────────────────────────────────────
+
+function activity(p) {
+    return html`<section class="op-sec op-activity" aria-label="Activity">
+        <button class="op-fold" type="button" aria-expanded=${String(ui.activity)}
+            onClick=${() => { ui.activity = !ui.activity; paintOrchPage(); }}>
+            <span class="twist" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none"
+                dangerouslySetInnerHTML=${{ __html: ICON.caret }}></svg></span>
+            Activity <b>${p.unread ? `${p.unread} unread by the orchestrator` : `${p.inbox.length} items`}</b>
+        </button>
+        ${ui.activity ? html`<div class="op-activity-body">${inboxList(p)}</div>` : null}
+    </section>`;
+}
+
+// ── the drawer ─────────────────────────────────────────────────────────────
+
+export function openPeek(workerId) {
+    ui.peek = workerId;
+    ui.note = null;
+    paintOrchPage();
+    loadDigest(workerId);
+    const d = node('orch-peek');
+    requestAnimationFrame(() => { const h = d && d.querySelector('.op-peek-title'); if (h) h.focus({ preventScroll: true }); });
+}
+
+export function closePeek({ quiet = false } = {}) {
+    const was = ui.peek;
+    if (!was) return;
+    ui.peek = null;
+    ui.note = null;
+    const d = node('orch-peek');
+    if (d && isUp(d)) present(d, false, { as: 'drawer', onGone: () => { if (!ui.peek) render(null, d); } });
+    if (quiet) return;
+    paintOrchPage();
+    // Back to the row it was opened from.
+    const r = document.querySelector(`.op-row[data-id="${was}"]`);
+    if (r) r.focus({ preventScroll: true });
+}
+
+function paintPeek(p) {
+    const d = node('orch-peek');
+    if (!d) return;
+    const w = p && ui.peek && p.workers.find(x => x.id === ui.peek);
+    if (!w) {
+        if (ui.peek && p) ui.peek = null;   // gone from the payload — deleted
+        if (isUp(d)) present(d, false, { as: 'drawer', onGone: () => { if (!ui.peek) render(null, d); } });
+        return;
+    }
+    render(peekTree(p, w), d);
+    if (!isUp(d)) present(d, true, { as: 'drawer' });
+    // A worker that moved since its digest was read is worth reading again.
+    const dg = ui.digest.get(w.id);
+    if (dg && !dg.loading && dg.state !== w.state && Date.now() - dg.at > 5000) loadDigest(w.id);
+}
+
+async function loadDigest(workerId) {
+    const p = state.orch;
+    if (!p) return;
+    const w = p.workers.find(x => x.id === workerId);
+    const had = ui.digest.get(workerId);
+    ui.digest.set(workerId, { ...(had || {}), loading: true, at: Date.now(), state: w && w.state });
+    try {
+        const r = await post(`/api/sessions/${p.orchestratorId}/orchestrator/read`, { worker: workerId, mode: 'digest' });
+        ui.digest.set(workerId, { loading: false, at: Date.now(), state: w && w.state, fields: r.fields || null, error: null });
+    } catch (err) {
+        ui.digest.set(workerId, { loading: false, at: Date.now(), state: w && w.state, fields: null, error: err.message });
+    }
+    if (ui.peek === workerId) paintOrchPage();
+}
+
+const hm = (ts) => (ts ? clockOf(ts).replace(/:\d\d(\s?[AP]M)?$/, '$1') : '');
+
+function peekTree(p, w) {
+    const b = blockedOn(w, p.inbox);
+    const dg = ui.digest.get(w.id);
+    const f = dg && dg.fields;
+    const reports = p.inbox.filter(i => i.workerId === w.id && ['update', 'done', 'turn', 'question'].includes(i.kind)).slice(0, 3);
+    return html`<div class="op-peek" onKeyDown=${(e) => {
+        if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); e.stopPropagation(); closePeek(); }
+    }}>
+        <header class="op-peek-head">
+            <div class="op-peek-top">
+                <h2 class="op-peek-title" tabindex="-1">${w.title || 'untitled worker'}</h2>
+                <button class="lbtn" type="button" onClick=${() => goTo(w.id)}>Open session</button>
+                <button class="icon-btn" type="button" title="Close — Esc" aria-label="Close" onClick=${() => closePeek()}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+            </div>
+            <div class="op-peek-facts">
+                ${w.worktree && w.worktree.branch ? html`<span class="op-branch" title=${w.worktree.path || ''}>${w.worktree.branch}</span>` : null}
+                <span>${`started ${hm(w.spawnedAt)}`}</span>
+                ${w.pr ? html`<a class="op-pr" data-status=${freshPr(w.id) || w.pr.status} href=${w.pr.url || undefined}
+                    target="_blank" rel="noreferrer">${`#${w.pr.number}`}<em>${PR_WORD[freshPr(w.id) || w.pr.status] || ''}</em></a>` : null}
+            </div>
+        </header>
+        <div class="op-peek-body">
+            ${b ? askBlock(p, w, b) : null}
+            ${steps(p, w)}
+            <section class="op-peek-sec" aria-label="Progress">
+                <h3 class="op-h">So far ${dg && dg.loading ? html`<span>reading…</span>` : null}</h3>
+                ${dg && dg.error ? html`<p class="op-quiet">${`Could not read its progress: ${dg.error}`}</p>` : null}
+                ${f ? html`<dl class="op-facts">
+                    <dt>Turns</dt><dd>${f.turns}</dd>
+                    ${f.todo ? html`<dt>Todos</dt><dd>${`${f.todo.done} of ${f.todo.total} done`}${f.todo.now
+                        ? html`<span class="op-quiet">${` — now ${f.todo.now}`}</span>` : null}</dd>` : null}
+                    ${f.tools.length ? html`<dt>Tools</dt><dd>${f.tools.slice(0, 5).map(t => `${t.name} ×${t.n}`).join(', ')}</dd>` : null}
+                    <dt>Files</dt><dd>${f.files.length ? html`<ul class="op-files">${f.files.slice(0, 10).map(x => html`<li key=${x}>${shortPath(x, w)}</li>`)}</ul>${
+                        f.files.length > 10 ? html`<span class="op-quiet">${`and ${f.files.length - 10} more`}</span>` : null}` : 'none edited yet'}</dd>
+                </dl>` : null}
+                ${f && f.diffStat ? html`<pre class="op-stat">${f.diffStat}</pre>` : null}
+                ${f && f.lastMessage ? html`<div class="op-last">
+                    <h4 class="op-h">Last said</h4>
+                    <div class="op-last-text md" dangerouslySetInnerHTML=${{ __html: renderMarkdown(f.lastMessage) }}></div>
+                </div>` : null}
+            </section>
+            ${reports.length ? html`<section class="op-peek-sec" aria-label="Its reports">
+                <h3 class="op-h">Its reports</h3>
+                <ul class="op-reports">${reports.map(i => html`<li key=${i.id}>
+                    <span class="op-quiet">${`${REPORT_WORD[i.kind] || i.kind} · ${agoWords(Date.now() - i.at)}`}</span>
+                    <span>${clip(firstLine(i.text), 220)}</span></li>`)}</ul>
+            </section>` : null}
+        </div>
+    </div>`;
+}
+
+const REPORT_WORD = { update: 'Update', done: 'Done', turn: 'End of a turn', question: 'Question' };
+const firstLine = (t) => String(t || '').split('\n').map(s => s.trim()).find(Boolean) || '';
+
+/** A path inside the worker's own checkout, without the checkout. */
+function shortPath(x, w) {
+    const root = (w.worktree && w.worktree.path) || w.cwd || '';
+    return root && x.startsWith(`${root}/`) ? x.slice(root.length + 1) : x;
+}
+
+/** Where it has been, with times — the timeline the payload can still prove. */
+function steps(p, w) {
+    const mine = p.inbox.filter(i => i.workerId === w.id);
+    const plans = mine.filter(i => i.kind === 'plan');
+    const plan = plans[plans.length - 1] || null;
+    const latest = plans[0] || null;
+    const ok = plans.find(i => i.settledAt && /^(allow|plan-approved)/.test(i.outcome || '')) || null;
+    const doneItem = mine.find(i => i.kind === 'done') || null;
+    const st = freshPr(w.id) || (w.pr && w.pr.status);
+    const list = [
+        { k: 'Started', at: w.spawnedAt, s: 'done' },
+        plan ? { k: 'Plan filed', at: plan.at, s: 'done' } : null,
+        ok ? { k: `Approved by ${ok.by === 'user' ? 'you' : 'the orchestrator'}${ok.outcome === 'plan-approved-note' ? ', with a note' : ''}`,
+            at: ok.settledAt, s: 'done' }
+            : latest && !latest.settledAt && latest.requestId ? { k: 'Waiting for approval', at: null, s: 'now' } : null,
+        doneItem || w.closedAt ? { k: doneItem ? 'Said it was done' : 'Closed', at: doneItem ? doneItem.at : w.closedAt, s: 'done' }
+            : { k: 'Done', at: null, s: 'todo' },
+        w.pr ? { k: `PR #${w.pr.number}`, at: null, s: st === 'merged' ? 'done' : 'now' } : { k: 'Pull request', at: null, s: 'todo' },
+    ].filter(Boolean);
+    return html`<section class="op-peek-sec" aria-label="Where it is">
+        <h3 class="op-h">Where it is</h3>
+        <ol class="op-steps">${list.map(x => html`<li key=${x.k} data-s=${x.s}><i></i><span>${x.k}</span>
+            <span class="op-steps-at">${x.at ? hm(x.at) : ''}</span></li>`)}</ol>
+    </section>`;
+}
+
+function askBlock(p, w, b) {
+    const item = b.item;
+    if (!item) {
+        return html`<div class="op-ask"><p><b>${`Waiting for ${ASK_WORD[b.kind] || 'an answer'}.`}</b>
+            The request is no longer in the inbox; answer it on its own page.</p>
+            <div class="op-ask-btns"><button class="lbtn ok" type="button" onClick=${() => goTo(w.id)}>Open session</button></div></div>`;
+    }
+    const busy = ui.answering.has(item.requestId);
+    const send = (payload) => answerFrom(w, item, payload);
+    const reader = item.status === 'new' ? 'The orchestrator has not read it yet.' : 'The orchestrator has it.';
+    const waited = shortAge(Date.now() - item.at).replace(/^now$/, '<1m');
+    const note = ui.note && ui.note.requestId === item.requestId ? ui.note : null;
+    const lead = html`<p><b>${b.kind === 'plan' ? `Plan waiting ${waited}.` : b.kind === 'tool'
+        ? `Permission waiting ${waited}.` : `Question waiting ${waited}.`}</b> ${reader} You can answer first; it will be told.</p>`;
+
+    if (b.kind === 'plan') {
+        return html`<div class="op-ask" data-busy=${String(busy)}>
+            ${lead}
+            ${note ? noteForm(item, note, send) : html`<div class="op-ask-btns">
+                <button class="lbtn ok" type="button" disabled=${busy}
+                    title="Approve, and let it work in auto mode — what the orchestrator does"
+                    onClick=${() => send({ decision: 'allow', mode: 'auto' })}>Approve</button>
+                <button class="lbtn" type="button" disabled=${busy}
+                    onClick=${() => { ui.note = { requestId: item.requestId, how: 'approve' }; paintOrchPage(); focusSoon('.op-note textarea'); }}>
+                    Approve with a note</button>
+                <button class="lbtn op-text-btn" type="button" disabled=${busy}
+                    onClick=${() => { ui.note = { requestId: item.requestId, how: 'reject' }; paintOrchPage(); focusSoon('.op-note textarea'); }}>
+                    Send it back</button>
+            </div>`}
+            <div class="op-plan md" dangerouslySetInnerHTML=${{ __html: renderMarkdown(item.text) }}></div>
+        </div>`;
+    }
+    if (b.kind === 'tool') {
+        const what = item.ask ? toolSummary({ name: item.ask.tool, input: item.ask.input }) || item.text : item.text;
+        return html`<div class="op-ask" data-busy=${String(busy)}>
+            ${lead}
+            <pre class="op-ask-what"><b>${(item.ask && (item.ask.displayName || item.ask.tool)) || 'Tool'}</b> ${clip(what, 400)}</pre>
+            <div class="op-ask-btns">
+                <button class="lbtn ok" type="button" disabled=${busy} onClick=${() => send({ decision: 'allow' })}>Allow</button>
+                <button class="lbtn" type="button" disabled=${busy} title="Allow it for the rest of that session"
+                    onClick=${() => send({ decision: 'allow-always' })}>Always</button>
+                <button class="lbtn no" type="button" disabled=${busy} onClick=${() => send({ decision: 'deny' })}>Deny</button>
+            </div>
+        </div>`;
+    }
+    // A question. One single-choice question is answered here with a click; any
+    // other shape is a form, and the worker's own page already has that form.
+    const qs = (item.ask && item.ask.input && item.ask.input.questions) || [];
+    const one = qs.length === 1 && !qs[0].multiSelect ? qs[0] : null;
+    return html`<div class="op-ask" data-busy=${String(busy)}>
+        ${lead}
+        ${one ? html`<p class="op-ask-q">${one.question}</p>
+            <div class="op-ask-btns">${(one.options || []).map(o => html`<button key=${o.label} class="lbtn" type="button"
+                disabled=${busy} title=${o.description || ''}
+                onClick=${() => send({ decision: 'allow', answers: { [one.question]: o.label } })}>${o.label}</button>`)}</div>`
+            : html`<p class="op-quiet">${clip(firstLine(item.text), 200)}</p>`}
+        <div class="op-ask-btns"><button class="lbtn op-text-btn" type="button" onClick=${() => goTo(w.id)}>
+            ${one ? 'Answer something else on its page' : 'Answer it on its page'}</button></div>
+    </div>`;
+}
+
+function noteForm(item, note, send) {
+    const approving = note.how === 'approve';
+    const go = (e) => {
+        e.preventDefault();
+        const text = e.target.closest('form').elements.note.value.trim();
+        if (!approving && !text) return;
+        send(approving ? { decision: 'allow', mode: 'auto', feedback: text } : { decision: 'deny', feedback: text });
+    };
+    return html`<form class="op-note" onSubmit=${go}>
+        <textarea name="note" rows="3" aria-label=${approving ? 'What should it bear in mind?' : 'What should change about this plan?'}
+            placeholder=${approving ? 'Anything to bear in mind? Enter approves, Esc goes back.'
+                : 'What should change? Enter sends it back, Esc goes back.'}
+            onKeyDown=${(e) => {
+                if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); ui.note = null; paintOrchPage(); }
+                else if (e.key === 'Enter' && !e.shiftKey) go(e);
+            }}></textarea>
+        <div class="op-ask-btns">
+            <button class="lbtn ${approving ? 'ok' : 'no'}" type="submit">${approving ? 'Approve with this note' : 'Send it back'}</button>
+            <button class="lbtn" type="button" onClick=${() => { ui.note = null; paintOrchPage(); }}>Cancel</button>
+        </div>
+    </form>`;
+}
+
+async function answerFrom(w, item, payload) {
+    if (!item || ui.answering.has(item.requestId)) return;
+    ui.answering.add(item.requestId);
+    paintOrchPage();
+    try {
+        await answerAskFor(w.id, item.requestId, payload);
+        ui.note = null;
+    } catch (err) {
+        // 409: answered somewhere else first. The event that follows redraws
+        // the drawer without the ask, so the message is all that is needed.
+        toast(`Could not answer: ${err.message}`, 'error');
+    } finally {
+        ui.answering.delete(item.requestId);
+        paintOrchPage();
+    }
+}
+
+// ── the splitter ───────────────────────────────────────────────────────────
+//
+// Between the page and the conversation column: drag it, or focus it and use
+// the arrow keys; double-click or Enter puts it back. The value is the width of
+// the conversation, which is the thing being chosen, kept per window. The
+// composer and the log keep up without anything here — the pane observer in
+// web/transcript/layout.js watches the conversation's column and is built for
+// exactly a drag (it quantizes the log's width until the drag stops).
+
+const CONVO_KEY = 'tgx.orchConvoWidth';
+const CONVO_DEFAULT = 420;
+const CONVO_MIN = 320;
+const PAGE_MIN = 440;
+const SPLIT_W = 12;
+
+function storedWidth() {
+    try {
+        const v = Number(localStorage.getItem(CONVO_KEY));
+        return Number.isFinite(v) && v > 0 ? v : CONVO_DEFAULT;
+    } catch { return CONVO_DEFAULT; }
+}
+
+let convoW = storedWidth();
+
+/** The widest the conversation may be in this window: the page keeps its minimum. */
+function maxConvo() {
+    const w = dom.convMain ? dom.convMain.clientWidth : 0;
+    return Math.max(CONVO_MIN, w - PAGE_MIN - SPLIT_W);
+}
+
+function applyConvoWidth() {
+    const main = dom.convMain;
+    const split = node('orch-split');
+    if (!main) return;
+    const w = Math.round(Math.min(Math.max(convoW, CONVO_MIN), maxConvo()));
+    main.style.setProperty('--orch-convo-w', `${w}px`);
+    if (split) {
+        split.setAttribute('aria-valuenow', String(w));
+        split.setAttribute('aria-valuemin', String(CONVO_MIN));
+        split.setAttribute('aria-valuemax', String(Math.round(maxConvo())));
+        split.setAttribute('aria-valuetext', `Conversation ${w} pixels wide`);
+    }
+}
+
+function setConvoWidth(w, { save = true } = {}) {
+    convoW = Math.min(Math.max(w, CONVO_MIN), maxConvo());
+    applyConvoWidth();
+    if (!save) return;
+    try { localStorage.setItem(CONVO_KEY, String(Math.round(convoW))); } catch { /* private window */ }
+}
+
+function wireSplit() {
+    const split = node('orch-split');
+    if (!split || split.dataset.wired) return;
+    split.dataset.wired = '1';
+
+    split.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        split.setPointerCapture(e.pointerId);
+        split.dataset.dragging = '1';
+        const right = dom.convMain.getBoundingClientRect().right;
+        const move = (ev) => setConvoWidth(right - ev.clientX - SPLIT_W / 2, { save: false });
+        const up = () => {
+            split.removeEventListener('pointermove', move);
+            split.removeEventListener('pointerup', up);
+            split.removeEventListener('pointercancel', up);
+            delete split.dataset.dragging;
+            setConvoWidth(convoW);
+        };
+        split.addEventListener('pointermove', move);
+        split.addEventListener('pointerup', up);
+        split.addEventListener('pointercancel', up);
+    });
+    split.addEventListener('dblclick', () => setConvoWidth(CONVO_DEFAULT));
+    split.addEventListener('keydown', (e) => {
+        const step = e.shiftKey ? 64 : 16;
+        // The separator moves with the arrow: left widens the conversation.
+        const to = { ArrowLeft: convoW + step, ArrowRight: convoW - step, Home: CONVO_MIN,
+            End: maxConvo(), Enter: CONVO_DEFAULT }[e.key];
+        if (to == null) return;
+        e.preventDefault();
+        setConvoWidth(to);
+    });
+    // A window resized narrower must not leave the page under its minimum.
+    window.addEventListener('resize', () => { if (orchPageUp()) applyConvoWidth(); });
+}
+wireSplit();

@@ -6,7 +6,8 @@
 // the second.
 //
 // Two audiences. The UI reads the payload, turns the role on and off, changes
-// the settings, dismisses an item and presses Resume. The orchestrator's own MCP
+// the settings, dismisses an item, records the answer to one of the brief's
+// decisions and presses Resume. The orchestrator's own MCP
 // tools (bridge/mcp.js) call the rest — spawn, next, send, answer, read, stop,
 // close, summary — with the orchestrator's id in the path, and a worker calls
 // `report` with its own. Those are refused to a remote caller in server.js:
@@ -90,6 +91,15 @@ async function handle(req, res, url, pathname, seg) {
         return send(res, 200, { items: o.inbox.slice().reverse(), unread: store.unread(id).length });
     }
 
+    // Recorded, not delivered: the client sends the answer to the orchestrator
+    // as an ordinary message (`/send`), and this marks the question answered so
+    // every window stops asking it before the orchestrator gets round to
+    // rewriting its brief.
+    if (sub === 'decisions' && seg[5] && seg[6] === 'answered' && !seg[7] && req.method === 'POST') {
+        const body = await readJson(req);
+        return guarded(res, () => ({ decision: orchestration.answerDecision(id, seg[5], strOr(body.text)) }));
+    }
+
     if (sub === 'inbox' && seg[5] && seg[6] === 'dismiss' && req.method === 'POST') {
         const row = store.settle(id, seg[5], { status: 'resolved', outcome: 'dismissed', by: 'user' });
         if (!row) return send(res, 404, { error: 'no inbox item with that id' });
@@ -156,7 +166,15 @@ async function handle(req, res, url, pathname, seg) {
         return guarded(res, () => orchestration.closeWorker(id, String(body.worker || ''),
             { archive: body.archive !== false }));
     }
-    if (sub === 'summary') return guarded(res, () => ({ summary: orchestration.setSummary(id, body.text) }));
+    if (sub === 'summary') {
+        // The structured fields are passed only when present: absent keeps what
+        // the brief had, null clears it — see Orchestrators#setSummary.
+        const fields = {};
+        for (const k of ['goal', 'decisions', 'mergeOrder']) {
+            if (Object.prototype.hasOwnProperty.call(body, k)) fields[k] = body[k];
+        }
+        return guarded(res, () => ({ summary: orchestration.setSummary(id, body.text, fields) }));
+    }
 
     return NEXT;
 }

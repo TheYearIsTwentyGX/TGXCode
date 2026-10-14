@@ -152,6 +152,10 @@ const KINDS = {
  *   dock      a docked pane or strip growing and shrinking by its height
  *   reorder   a list's items moving to their new places (FLIP)
  *   crossfade new content swapped in on the same node
+ *   drawer    a panel sliding in over a column from that column's right edge —
+ *             the orchestrator page's worker drawer. A short travel, not the
+ *             panel's whole width: it says where it came from without making
+ *             the eye follow it across the screen
  */
 export const PRESETS = {
     menu:      { from: KINDS.pop,  in: ['base', 'out'], out: ['fast', 'in'], reduced: 'fade' },
@@ -166,6 +170,8 @@ export const PRESETS = {
     dock:      { from: {},         in: ['base', 'standard'], out: ['base', 'standard'], reduced: 'instant' },
     reorder:   { from: {},         in: ['base', 'standard'], reduced: 'instant' },
     crossfade: { from: { opacity: 0.25 }, in: ['fast', 'standard'], reduced: 'fade' },
+    drawer:    { from: { opacity: 0, transform: 'translateX(16px)' },
+                 in: ['base', 'out'], out: ['fast', 'in'], reduced: 'fade' },
 };
 
 /**

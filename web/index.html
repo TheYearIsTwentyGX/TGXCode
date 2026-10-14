@@ -396,6 +396,9 @@
         <div class="conv-title-row">
           <h1 id="conv-title" class="conv-title"></h1>
           <div class="conv-actions">
+            <!-- An orchestrator's Overview | Conversation switch — web/orchestrator-page.js.
+                 First, because it changes what the whole pane below is. -->
+            <span id="orch-seg" class="orch-seg" hidden></span>
             <!-- What this project declares in .tgxcode/, filled by renderCommands.
                  Before the icons because these are the buttons with words on
                  them: a row of labels reads as a toolbar, and putting them after
@@ -562,6 +565,17 @@
                   title="Close — Esc" aria-label="Close find">&#10005;</button>
         </div>
 
+        <!-- An orchestrator's page, and the splitter between it and the
+             conversation — web/orchestrator-page.js. In page mode this box is a
+             grid of three columns: the page, the splitter, and the conversation
+             (#conv-body, the ask dock and the composer below it), so the
+             conversation keeps the real composer and approvals. Hidden, and out
+             of the grid, everywhere else. -->
+        <div id="orch-page" class="orch-page" hidden aria-label="Orchestrator overview"></div>
+        <div id="orch-split" class="orch-split" hidden role="separator" tabindex="0"
+             aria-orientation="vertical" aria-controls="conv-body"
+             aria-label="Width of the conversation — drag, or use the arrow keys; Enter resets it"></div>
+
         <div id="conv-body" class="conv-body">
           <!-- The agent's own task list, and how much of it is done. Leftmost,
                between the sessions rail and the transcript, because it is
@@ -657,12 +671,6 @@
             </div>
           </aside>
           <nav id="turns" class="turns" aria-label="Your messages, plans and questions in this session"></nav>
-
-          <!-- An orchestrator's workers, as a board laid over everything in this
-               box — web/orchestrator-view.js. Inside `.conv-body` so it covers
-               the transcript and its side columns and stops above the dock and
-               the composer, which stay usable under it. -->
-          <div id="orch-view" class="orch-view" hidden tabindex="-1" aria-label="This orchestrator's workers"></div>
         </div>
 
         <!-- A question is answered here rather than in the transcript: the turn
@@ -670,8 +678,9 @@
              be typing in, not somewhere you can scroll away from. -->
         <div id="ask-dock" class="ask-dock" hidden></div>
 
-        <!-- An orchestrator's inbox, workers, settings and pinned summary, or a
-             worker's line back to its orchestrator. Drawn by web/orchestrator.js. -->
+        <!-- One line: in an orchestrator's plain conversation, how its workers
+             stand and the way back to its page; on a worker, the way up to its
+             orchestrator. Drawn by web/orchestrator.js. -->
         <div id="orch-dock" class="orch-dock" hidden></div>
 
         <div class="composer" id="composer">
@@ -889,6 +898,9 @@
           </div>
         </div>
 
+        <!-- A worker, opened from a row of the orchestrator's page: laid over the
+             conversation column, so the page stays readable beside it. -->
+        <aside id="orch-peek" class="orch-peek" hidden aria-label="Worker"></aside>
       </div>
 
       <!-- A shell in the session's working directory, and the output of any

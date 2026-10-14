@@ -25,6 +25,32 @@ import { openAgent, STATUS_WORD, statusOfCall } from './subagents.js';
 // ── tools ────────────────────────────────────────────────────────────────
 
 /** One-line summary of what a tool call is doing, shown on the collapsed row. */
+/** A worker's title from the orchestrator payload on screen, or its id clipped. */
+function workerName(id) {
+    const w = state.orch && state.orch.workers.find(x => x.id === id);
+    return w ? (w.title || 'a worker') : (id ? `worker ${String(id).slice(0, 8)}` : 'a worker');
+}
+
+function orchestratorToolSummary(tool, i) {
+    switch (tool) {
+        case 'spawn_worker': return i.title || clip(i.prompt || '', 80);
+        case 'send_to_worker': return `to ${workerName(i.worker)}: ${clip(i.text || '', 60)}`;
+        case 'read_worker': return `${workerName(i.worker)} · ${i.mode || 'digest'}`;
+        case 'stop_worker':
+        case 'close_worker': return workerName(i.worker);
+        case 'set_summary': return clip(String(i.goal || i.text || '').split('\n')[0], 80);
+        case 'answer_worker': {
+            const item = state.orch && state.orch.inbox.find(x => x.id === i.itemId);
+            const who = item ? workerName(item.workerId) : 'a worker';
+            const plan = item && item.kind === 'plan';
+            const verb = i.decision === 'deny' ? (plan ? 'sent back the plan from' : 'denied')
+                : plan ? 'approved the plan from' : 'allowed';
+            return `${verb} ${who}${i.feedback ? ' · with a note' : ''}`;
+        }
+        default: return '';
+    }
+}
+
 export function toolSummary(ev) {
     const i = ev.input || {};
 
@@ -42,6 +68,12 @@ export function toolSummary(ev) {
         const said = typeof i.text === 'string' ? i.text : '';
         return said ? `to ${who}: ${clip(said, 60)}` : `to ${who}`;
     }
+
+    // An orchestrator's own tools, which name workers by id. The page is where an
+    // orchestrator is read now, and its conversation is a column beside it —
+    // a row of uuids there says nothing, a worker's title says what happened.
+    const orch = ev.name && /__(spawn_worker|send_to_worker|answer_worker|read_worker|stop_worker|close_worker|set_summary)$/.exec(ev.name);
+    if (orch) return orchestratorToolSummary(orch[1], i);
 
     switch (ev.name) {
         case 'Bash': return i.command || i.description || '';

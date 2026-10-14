@@ -1,10 +1,13 @@
-// What the orchestrator's workers view draws, worked out from the bridge's
-// `orchestrator` payload — web/orchestrator-view.js draws it.
+// What the orchestrator page draws, worked out from the bridge's `orchestrator`
+// payload — web/orchestrator-page.js draws it.
 //
-// Pure, and with no imports, so test/orchestrator-view.test.js can load it in
-// node the way test/pr-owners.test.js loads web/pr-resolve.js.
+// Pure, and with no imports, so test/orchestrator-view.test.js and
+// test/orchestrator-page.test.js can load it in node the way
+// test/pr-owners.test.js loads web/pr-resolve.js. The first half is the
+// per-worker reading (state, what it is blocked on, its timeline); the second,
+// from `STAGES` down, is what the page lays out from it.
 //
-// Everything a worker's card says beyond its own row is read out of the inbox:
+// Everything the page says about a worker beyond its own row is read out of the inbox:
 // the plan it filed, whether that was approved, the last thing it reported. The
 // inbox is a lossy record of that — the payload carries the newest 100 items,
 // and the store drops settled ones first once it is full — so a step this
@@ -40,7 +43,7 @@ export function workerStateWord(w) {
  * What the worker is waiting on, if anything.
  *
  * The inbox item when there is one — it carries the `requestId` an answer needs
- * and the plan text — and otherwise just the kind the runner reports, so a card
+ * and the plan text — and otherwise just the kind the runner reports, so the page
  * can still say "waiting on a plan" and offer to open the session. Only an item
  * that matches what the runner is waiting on now counts: an older plan the
  * orchestrator never settled is not what the worker is stuck on.
@@ -130,61 +133,275 @@ function isTrimmed(inbox, w) {
     return !!oldest && (oldest.at || 0) > (w.spawnedAt || 0);
 }
 
+// ---------------------------------------------------------------------------
+// The orchestrator page — web/orchestrator-page.js draws these.
+//
+// The page answers "where are we, and what needs me?" for somebody coming back
+// after an hour away, so every function here turns the payload into something
+// that can be read at a glance: where each worker is on one track, what it is
+// doing there in a few words, what is waiting on the user rather than on the
+// orchestrator, and the PRs in the order they should land. What the bridge does
+// not know (a worker's live activity, a PR's freshest status, the orchestrator's
+// own state) is passed in from what the rest of the app already holds.
+// ---------------------------------------------------------------------------
+
+/** The page's track, left to right. */
+export const STAGES = ['plan', 'approved', 'building', 'done', 'pr', 'merged'];
+
+/** PR statuses that mean somebody has to do something before it can land. */
+const PR_TROUBLE = new Set(['checks-failed', 'changes', 'conflicting']);
+
+/** "12m", "3h", "2d" — the age of something, short enough for a row. */
+export function shortAge(ms) {
+    const m = Math.max(0, Math.floor((Number(ms) || 0) / 60_000));
+    if (m < 1) return 'now';
+    if (m < 60) return `${m}m`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h`;
+    return `${Math.floor(h / 24)}d`;
+}
+
+/** The brief's open decisions, or none. */
+const decisionsOf = (p) => ((p && p.summary && p.summary.decisions) || []);
+
+/** An unanswered decision the orchestrator filed about this worker, or null. */
+export function openDecisionFor(p, workerId) {
+    return decisionsOf(p).find(d => d.workerId === workerId && !d.answeredAt) || null;
+}
+
+/** A PR's status: the app's fresher reading when it has one, else the payload's. */
+const prStatusOf = (w, fresh) => (fresh || (w.pr && w.pr.status) || 'unknown');
+
 /**
- * The inbox counts the view heads with: `unread` the orchestrator has not pulled,
- * and `waiting` — asks still open, read or not, which are the ones a worker is
- * stopped on.
+ * Where a worker is on the page's track.
+ *
+ * `at` is the stage it is on, 1–6 (`STAGES`). `steps` says, per stage, `done`,
+ * `skip` (went past without it — no plan in auto mode), `unknown` (it must have
+ * happened, but the inbox no longer says), `now`, or `todo`. `tone` is the one
+ * word the row is coloured by:
+ *
+ *   wait     stopped on an ask (a plan, a prompt, a question) — the
+ *            orchestrator's to answer, and the user's if they get there first
+ *   you      idle on a decision the orchestrator has put to the user
+ *   error    the turn ended in an error
+ *   run      working
+ *   pr | fail | merged   finished, with a PR in that state
+ *   done     closed without a PR
+ *   idle | stopped       between turns, or with no process
+ *
+ * @param {object} w payload worker row
+ * @param {object[]} inbox payload inbox, newest first
+ * @param {{prStatus?: string, mode?: string, decision?: object|null}} [o]
+ *   `prStatus` is the app's freshest word for its PR, `mode` its permission mode
+ *   (a plan-mode worker with no plan filed yet is still planning), `decision`
+ *   an open decision about it.
  */
-export function inboxCounts(p) {
-    const items = (p && p.inbox) || [];
-    let unread = 0;
-    let waiting = 0;
-    for (const i of items) {
-        if (i.status === 'new') unread += 1;
-        if (ASK_KINDS[i.kind] && i.requestId && !settled(i)) waiting += 1;
+export function workerStage(w, inbox, { prStatus = null, mode = null, decision = null } = {}) {
+    const tl = Object.fromEntries(workerTimeline(w, inbox).map(s => [s.key, s.state]));
+    const status = w.pr ? prStatusOf(w, prStatus) : null;
+    const word = workerStateWord(w);
+    const planFiled = tl.plan === 'done' || tl.plan === 'unknown';
+
+    let at;
+    if (w.pr && status === 'merged') at = 6;
+    else if (w.pr) at = 5;
+    else if (tl.done === 'done') at = 4;
+    else if (tl.approved === 'now') at = 2;
+    else if (tl.plan === 'now' || (mode === 'plan' && !planFiled && !w.closedAt)) at = 1;
+    else at = 3;
+
+    const passed = {
+        plan: tl.plan === 'skipped' ? 'skip' : tl.plan === 'unknown' ? 'unknown' : 'done',
+        approved: tl.approved === 'skipped' ? 'skip' : tl.approved === 'unknown' ? 'unknown' : 'done',
+        building: 'done',
+        done: tl.done === 'unknown' || tl.done === 'todo' ? 'unknown' : 'done',
+        pr: 'done',
+        merged: 'done',
+    };
+    const steps = STAGES.map((k, i) => (i + 1 < at ? passed[k] : i + 1 === at ? 'now' : 'todo'));
+
+    let tone;
+    if (w.pending && !w.closedAt) tone = 'wait';
+    else if (decision && !w.closedAt && word !== 'running') tone = 'you';
+    else if (word === 'error') tone = 'error';
+    else if (word === 'running') tone = 'run';
+    else if (w.pr) tone = status === 'merged' ? 'merged' : PR_TROUBLE.has(status) ? 'fail' : 'pr';
+    else if (w.closedAt) tone = 'done';
+    else tone = word === 'idle' ? 'idle' : 'stopped';
+
+    return { at, tone, steps, prStatus: status };
+}
+
+/**
+ * What a worker's row says beside the stage it is on: `lead`, the part to read,
+ * and `detail`, the quieter rest. Both may be null — a PR row's chip says it.
+ *
+ * @param {{runner?: {activity?, detail?}|null, now?: number, decision?: object|null}} [o]
+ *   `runner` is the rail's copy of the worker's runner status.
+ */
+export function stageLine(w, stage, inbox, { runner = null, now = Date.now(), decision = null } = {}) {
+    const b = blockedOn(w, inbox);
+    // "now" reads as a time of day after "waiting"; under a minute is "<1m".
+    const since = (at) => (at ? ` ${shortAge(now - at).replace(/^now$/, '<1m')}` : '');
+    switch (stage.tone) {
+        case 'wait': {
+            const item = b && b.item;
+            const what = b && b.kind === 'plan' ? 'Plan' : b && b.kind === 'tool' ? 'Permission' : 'Question';
+            const reader = !item ? null : item.status === 'new' ? 'the orchestrator has not read it yet'
+                : 'the orchestrator is on it';
+            const tool = b && b.kind === 'tool' && item && item.ask ? item.ask.displayName || item.ask.tool : null;
+            return { lead: `${what} waiting${since(item && item.at)}`, detail: [tool, reader].filter(Boolean).join(' · ') || null };
+        }
+        case 'you':
+            return { lead: 'Waiting on you', detail: decision ? `${clipText(decision.text, 60)}${since(decision.at)}` : null };
+        case 'error':
+            return { lead: 'Stopped with an error', detail: null };
+        case 'run': {
+            const doing = runner && (runner.detail || runner.activity);
+            return { lead: doing ? clipText(String(doing).replace(/…$/, ''), 70) : 'Working', detail: null };
+        }
+        case 'idle': {
+            const r = lastReport(w, inbox);
+            return { lead: 'Idle', detail: r ? clipText(firstLineOf(r.text), 70) : null };
+        }
+        case 'done':
+            return { lead: 'Closed', detail: null };
+        case 'stopped':
+            return { lead: 'Not running', detail: null };
+        default:
+            return { lead: null, detail: null };
     }
-    return { unread, waiting };
+}
+
+const firstLineOf = (t) => String(t || '').split('\n').map(s => s.trim()).find(Boolean) || '';
+const clipText = (t, n) => (t.length > n ? `${t.slice(0, n - 1).trimEnd()}…` : t);
+
+/**
+ * The progress strip and the counts beside it: one segment per task — every
+ * worker in the order it was started, then the queued spawns — and how many are
+ * finished, running against the cap, and queued.
+ *
+ * A worker is finished once it is closed, has a PR, or has said it is done and
+ * is not working again; past that the orchestrator has nothing left to ask of it.
+ */
+export function progress(p, { prStatusOf: fresh = () => null } = {}) {
+    const workers = ((p && p.workers) || []).slice().sort((a, b) => (a.spawnedAt || 0) - (b.spawnedAt || 0));
+    const said = new Set(((p && p.inbox) || []).filter(i => i.kind === 'done').map(i => i.workerId));
+    const finished = (w) => !!(w.closedAt || w.pr || (said.has(w.id) && workerStateWord(w) !== 'running' && !w.pending));
+    const segments = workers.map((w) => {
+        const st = w.pr ? prStatusOf(w, fresh(w.id)) : null;
+        let s;
+        if (w.pr && st === 'merged') s = 'merged';
+        else if (w.pr && PR_TROUBLE.has(st)) s = 'fail';
+        else if (w.pending && !w.closedAt) s = 'wait';
+        else if (workerStateWord(w) === 'running') s = 'run';
+        else if (w.pr) s = 'pr';
+        else if (finished(w)) s = 'done';
+        else if (workerStateWord(w) === 'error') s = 'fail';
+        else s = 'idle';
+        return { id: w.id, title: w.title || 'worker', s };
+    });
+    for (const q of (p && p.pendingSpawns) || []) segments.push({ id: q.id, title: q.title || 'queued', s: 'queued' });
+    return {
+        segments,
+        total: segments.length,
+        finished: workers.filter(finished).length,
+        running: workers.filter(w => !w.closedAt && (w.state === 'busy' || w.state === 'starting')).length,
+        max: (p && p.settings && p.settings.maxRunning) || null,
+        queued: ((p && p.pendingSpawns) || []).length,
+    };
 }
 
 /**
- * The workers in the order the view lays them out: blocked first (they want
- * somebody), then running, then the rest, closed last; newest spawn first within
- * each. A stable order matters more than a clever one — cards are keyed, and a
- * grid reshuffling on every status tick is unreadable.
+ * Everything that is waiting on the user rather than on the orchestrator, most
+ * pressing first. Each is `{kind, key, …}`:
+ *
+ *   paused    the usage cutoff stopped everything — `{reason, resumeAt}`
+ *   ask       the orchestrator itself is waiting on an answer in its conversation
+ *   decision  a question from the brief — `{decision}`; answered ones come last,
+ *             drawn as answered until the orchestrator drops them
+ *   stuck     a worker has waited on an ask for longer than `stuckMs` while the
+ *             orchestrator is not working, so nobody is going to answer it —
+ *             `{worker, item}`
+ *   error     a worker's turn ended in an error — `{worker}`
+ *
+ * @param {{orchRunner?: {state?, pendingPermission?}|null, now?: number, stuckMs?: number}} [o]
  */
-export function workerOrder(workers) {
-    const rank = (w) => (w.closedAt ? 4 : w.pending ? 0 : workerStateWord(w) === 'running' ? 1
-        : workerStateWord(w) === 'error' ? 2 : 3);
-    return (workers || []).slice().sort((a, b) => rank(a) - rank(b) || (b.spawnedAt || 0) - (a.spawnedAt || 0));
+export function needsYou(p, { orchRunner = null, now = Date.now(), stuckMs = 180_000 } = {}) {
+    if (!p) return [];
+    const out = [];
+    if (p.paused) out.push({ kind: 'paused', key: 'paused', reason: p.paused.reason, resumeAt: p.paused.resumeAt });
+    if (orchRunner && orchRunner.pendingPermission) {
+        out.push({ kind: 'ask', key: 'ask', ask: orchRunner.pendingPermission });
+    }
+    const ds = decisionsOf(p).slice().sort((a, b) => (!!a.answeredAt - !!b.answeredAt) || (a.at || 0) - (b.at || 0));
+    for (const d of ds) out.push({ kind: 'decision', key: `d:${d.id}`, decision: d });
+    const orchWorking = orchRunner && (orchRunner.state === 'busy' || orchRunner.state === 'starting')
+        && !orchRunner.pendingPermission;
+    for (const w of (p.workers || [])) {
+        if (w.closedAt) continue;
+        const b = blockedOn(w, p.inbox);
+        if (b && b.item && (p.paused || !orchWorking) && now - (b.item.at || now) >= stuckMs) {
+            out.push({ kind: 'stuck', key: `s:${w.id}`, worker: w, item: b.item });
+        }
+        if (workerStateWord(w) === 'error') out.push({ kind: 'error', key: `e:${w.id}`, worker: w });
+    }
+    return out;
 }
 
 /**
- * The usage cutoff in one line, from the payload's `settings.usageStop` and the
- * windows `GET …/orchestrator/usage` reports. `{tone, text}`: `off`, `ok`, or
- * `near` once the reading is within ten points of the cutoff. A pause is drawn
- * from `paused` itself, not from here.
+ * The PRs in the order they should land: the brief's `mergeOrder` when the
+ * orchestrator wrote one, otherwise every worker's PR in the order the workers
+ * were started. `rest` is the open workers with no PR yet, which will join the
+ * end as they open one.
+ *
+ * Each row is `{n, number, title, workerId, url, status}`; a number the brief
+ * names that no worker owns is still listed, with a null title and workerId.
  */
-export function cutoffLine(stop, windows) {
-    if (!stop || !stop.enabled) return { tone: 'off', text: 'No usage cutoff' };
-    const ws = windows || [];
+export function mergeOrder(p, { prStatusOf: fresh = () => null } = {}) {
+    const workers = ((p && p.workers) || []).slice().sort((a, b) => (a.spawnedAt || 0) - (b.spawnedAt || 0));
+    const byNumber = new Map(workers.filter(w => w.pr).map(w => [w.pr.number, w]));
+    const listed = (p && p.summary && p.summary.mergeOrder) || [];
+    const numbers = listed.length ? listed : workers.filter(w => w.pr).map(w => w.pr.number);
+    const rows = numbers.map((number, i) => {
+        const w = byNumber.get(number) || null;
+        return {
+            n: i + 1, number, workerId: w ? w.id : null,
+            // A number the brief names that no worker here opened: kept, with no
+            // title to give it rather than its own number twice.
+            title: w ? w.pr.title || w.title || `#${number}` : null,
+            url: w ? w.pr.url : null,
+            status: w ? prStatusOf(w, fresh(w.id)) : 'unknown',
+        };
+    });
+    const rest = workers.filter(w => !w.closedAt && !w.pr).map(w => ({ id: w.id, title: w.title || 'worker' }));
+    return { rows, rest, fromBrief: listed.length > 0 };
+}
+
+const METER_LABEL = { five_hour: '5h', seven_day: 'Week', seven_day_opus: 'Week Opus', seven_day_sonnet: 'Week Sonnet' };
+
+/**
+ * The usage meters in the page's head: the five-hour and weekly windows always,
+ * and Opus and Sonnet when the cutoff watches them. Each is
+ * `{type, label, used, cutoff, tone}`, `used` and `cutoff` whole percents or null,
+ * and `tone` `ok`, `near` (within ten points of the cutoff) or `over`.
+ */
+export function usageMeters(stop, windows) {
     const read = (type) => {
-        const w = ws.find(x => x.type === type);
+        const w = (windows || []).find(x => x && x.type === type);
         return w && Number.isFinite(w.usedPercent) ? Math.round(w.usedPercent) : null;
     };
-    const pairs = stop.window === 'all'
-        ? Object.entries(stop.limits || {}).filter(([, v]) => Number.isFinite(v))
-        : [[stop.window, stop.percent]];
-    if (!pairs.length) return { tone: 'off', text: 'No usage cutoff' };
-    let tone = 'ok';
-    const parts = pairs.map(([type, pct]) => {
-        const now = read(type);
-        if (now != null && now >= pct - 10) tone = 'near';
-        return `${WINDOW_WORD[type] || type} ${now == null ? '—' : `${now}%`} of ${pct}%`;
+    const cutoffFor = (type) => {
+        if (!stop || !stop.enabled) return null;
+        if (stop.window === 'all') return Number.isFinite(stop.limits && stop.limits[type]) ? stop.limits[type] : null;
+        return stop.window === type ? stop.percent : null;
+    };
+    const types = ['five_hour', 'seven_day', 'seven_day_opus', 'seven_day_sonnet']
+        .filter(t => t === 'five_hour' || t === 'seven_day' || cutoffFor(t) != null);
+    return types.map((type) => {
+        const used = read(type);
+        const cutoff = cutoffFor(type);
+        const tone = used == null || cutoff == null ? 'ok' : used >= cutoff ? 'over' : used >= cutoff - 10 ? 'near' : 'ok';
+        return { type, label: METER_LABEL[type], used, cutoff, tone };
     });
-    return { tone, text: `Stops at the cutoff · ${parts.join(' · ')}` };
 }
-
-const WINDOW_WORD = {
-    five_hour: 'five-hour', seven_day: 'weekly',
-    seven_day_opus: 'weekly Opus', seven_day_sonnet: 'weekly Sonnet',
-};
