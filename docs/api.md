@@ -287,6 +287,10 @@ the same argument. They are outside the roots, because the scratchpad is under
 scratchpad directories of that one session id, re-derived on every read, with
 symlinks refused.
 
+`GET /api/sessions/:id/reviews` and `…/reviews/:runId` are readable remotely, like the
+transcript they are read from: they read only that session's transcript and the
+subagent transcripts filed under its id.
+
 `GET /api/slash-commands` is readable remotely for the same reason, and is a
 different route from `GET /api/commands` despite the name — one is what the CLI
 will accept in the composer, the other is what the repository declares in
@@ -1264,6 +1268,116 @@ is deliberate: it is a read, its bytes already reach a phone inside the tool res
 it renders, and it is scoped to the session's own repository so a leaked token cannot
 walk it to `~/.ssh`.
 
+### `GET /api/sessions/:id/reviews`
+
+The code reviews this session ran: every run of a skill, slash command or subagent
+whose name is one of the session's project's `reviews.types` (see the `reviews`
+section of `GET /api/prefs`). Oldest first.
+
+```
+{ sessionId,
+  types: [{ id, label, skill, colour }],      // what counted, for this session's project
+  reviews: [{
+    id, type: { id, label, colour }, skill, via, forked, status,
+    startedAt, endedAt,
+    anchor: { kind, id, offset },
+    target: { pr, range, files: [string], effort, text },
+    verdict, counts: { critical, warning, note },
+    findingSource, title }] }
+```
+
+- **`id`** is the run's id: the Skill or Agent `tool_use` id, or the uuid of the user
+  entry that typed the command. It is what `/reviews/:runId` takes.
+- **`via`** — `"skill"` (Claude ran the Skill tool), `"command"` (you, or a client,
+  sent `/name`), or `"agent"` (an Agent/Task call whose `subagent_type` is the
+  type's `skill`, or whose prompt names it as `/name` or "the `name` skill").
+  Matching is by exact name, case-insensitive: `code-review` is not
+  `code-review:code-review`.
+- **`forked`** — the skill ran in a fork of its own (`code-review` does). Its findings
+  then come from the fork's transcript; nothing changes for a client.
+- **`status`** — one of:
+  - `"running"`: not finished, and the session is mid-turn here or its transcript was written in the last 90 seconds;
+  - `"done"`;
+  - `"rejected"`: the call was declined at the permission prompt;
+  - `"error"`: the call failed, or the command was unknown;
+  - `"incomplete"`: a forked skill or agent whose result never arrived, in a session that has gone quiet.
+
+  A run with no end marker (an inline skill, a slash command) is `"done"` once its
+  session goes quiet.
+- **`startedAt` / `endedAt`** — ISO strings. `endedAt` is null while running. For an
+  inline run it is the last assistant entry before your next prompt.
+- **`anchor`** — where the run starts in the transcript. `kind: "tool"` means `id`
+  is a tool event's id; `kind: "turn"` means it is a user event's id. **`offset`
+  is a byte offset but not a window boundary**, so do not pass it to `/range`.
+  To reach a row that is not loaded, load from the last `turns[]` mark whose
+  `offset` is at or before it.
+- **`target`** — what was reviewed, as far as the arguments and result say. Every
+  field may be null or empty:
+  - `pr`: a PR number, from `134 high`, `PR 117`, `#45`, `--target 162`, a
+    `/pull/N` URL, or a result that opens "Reviewed PR #N".
+  - `range`: `a..b` or `a...b`.
+  - `files`: path-like arguments.
+  - `effort`: `low` … `max`, or the effort ReportFindings reported.
+  - `text`: the trimmed arguments, at most 200 characters.
+
+  All null and empty means the current diff.
+- **`verdict`** — `"BLOCK"`, `"CONCERNS"`, `"CLEAN"` or `null`.
+  - From a `VERDICT:` line, read as `GET /api/pr-review` reads it, plus
+    `VERDICT: clean` / `issues`, which are mapped to `CLEAN` / `CONCERNS`.
+  - A review that reported through the ReportFindings tool and reported nothing
+    is `"CLEAN"`.
+  - `code-review` otherwise gives no verdict. Show the counts.
+- **`findingSource`** — where the findings came from, most structured first:
+  - `"tool"`: the fork's ReportFindings call, or its retry when the call was refused.
+  - `"json"`: a ```` ```json ```` array in the result.
+  - `"text"`: parsed from the review's markdown, the way `GET /api/pr-review` does it,
+    with more heading words and a flat `file:line — summary` list understood.
+  - `"none"`: nothing parsed. Show `raw` from `/reviews/:runId`, not "no findings".
+- **`title`** — from an `## Adversarial Review: …`, `## Code Review: …` or `## Review: …`
+  heading, else null.
+
+**This is read lazily and incrementally.** Nothing is indexed until a client asks.
+After that, a transcript that has not grown since the last request costs one
+`stat`. There is **no live event for it**. Ask again when a turn ends
+(`turn-complete`, or `runner-status` going idle), or, for a session this bridge is
+not running, when `tail` brings new events (the desktop waits 1.5 s after the last
+one). `404` means the session id is unknown.
+
+### `GET /api/sessions/:id/reviews/:runId`
+
+One review in full: everything in its row above, plus `summary`, `findings` and `raw`.
+`404 {"error": "no such review"}` when the run is unknown, or when its skill is
+not one of the types (a run stops being a review when its type is removed).
+
+```
+{ sessionId,
+  review: { …the row above…,
+    summary: string | null,
+    findings: [{ severity, title, file, line, endLine, body, category, confidence }],
+    raw } }
+```
+
+- **`findings[]`** — critical first, then warning, then note. Within a severity,
+  the review's own order.
+  - `severity` is `"critical"`, `"warning"` or `"note"`: `GET /api/pr-review`'s three.
+  - **Severity from the ReportFindings tool**: `high` → critical, `medium` →
+    warning, `low` → note. That tool rarely gives one, and then `confidence`
+    decides: `CONFIRMED` → warning, `PLAUSIBLE` → note. Nothing is critical
+    unless the reviewer said so.
+  - `title` is the tool's `short_summary`, else the first sentence of its
+    `summary`, else the text item's bold lead or first sentence. **It may hold
+    markdown code spans**, so render it as inline markdown.
+  - `file` (string or null), `line` and `endLine` (numbers or null): `file` is
+    relative to the repository the review ran in.
+  - `body` is markdown. For a ReportFindings finding it is the `summary`, then
+    `**How it fails:**` and the `failure_scenario`.
+  - `category` (string or null): ReportFindings' own, e.g. `"correctness"`.
+  - `confidence`: `"CONFIRMED"`, `"PLAUSIBLE"` or null.
+- **`raw`** — the review's whole text, at most 200 KB: a forked skill's result, the
+  last review-looking assistant text of an inline run, or an agent's handback.
+  Always present, even when `findings` is full.
+- **`summary`** — a `### Summary` section's text, when the review has one.
+
 ### `GET /api/sessions/:id/scratchpad`
 
 This lists the files in the session's scratchpad, where the agent keeps its probe
@@ -1717,6 +1831,23 @@ it, so a phone is free to use its own rule or ignore the section:
 |---|---|---|
 | `enabled` | **boolean**, default `true` | Whether coming back to the window shows the card at all. |
 | `awayMinutes` | **integer 1–480**, default `20` | How long a window has to go hidden or untouched before the next sign of life counts as a return. |
+
+`reviews` is which skills count as code reviews — what `GET /api/sessions/:id/reviews`
+picks out of a transcript. **A project may set it** (a repository that ships its own
+reviewer in `.claude/skills` is where it would be declared), and **applied by the
+bridge**: the reviews route reads the session's own project's value, so a client
+never filters.
+
+| Key | Type | |
+|---|---|---|
+| `types` | **array of `{id, label, skill, colour}`**, at most 20, default the two below | `id` matches `^[a-z0-9][a-z0-9_-]{0,39}$` and is unique; `label` a string of 1–40; `skill` the skill, command or subagent type it matches, `^[A-Za-z0-9][A-Za-z0-9:_.-]{0,79}$` (a leading `/` is dropped on save); `colour` one of `"blue"`, `"red"`, `"yellow"`, `"green"`, `"purple"`, `"peach"` — a name, not a hex value, so each client maps it to its own palette. |
+
+The default is `[{id: "code-review", label: "Code review", skill: "code-review", colour: "blue"},
+{id: "adversarial", label: "Adversarial", skill: "adversarial-reviewer", colour: "red"}]`.
+Like every list here it is **replaced whole**: a project's `types` is the whole list for
+that project, not an addition to yours. A save is checked entry by entry — a bad entry is
+dropped and reported in `problems`, a missing `id` is made from `skill`, a missing `label`
+is the skill, an unknown `colour` becomes `"blue"`.
 
 ### `GET /api/wispr`
 

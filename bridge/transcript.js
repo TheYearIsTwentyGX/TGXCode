@@ -1950,7 +1950,7 @@ function todoProgress(file) {
 module.exports = {
     parseLines, scanMeta, buildEvents, branchPoint, readSubagentIndex, readSubagentTranscript,
     lastActivity, recentActivity, todoProgress, describeTool, stripEnvelope, firstLine,
-    stripCommandTags,
+    stripCommandTags, parseCommand,
     commandText,
     // The three parts of the TodoWrite format: what shape it arrived in
     // (`todoInput`), the list itself (`todoList`) and the count over it

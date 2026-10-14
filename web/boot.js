@@ -46,6 +46,10 @@ export const PREFS_FALLBACK = {
     startup: { view: 'conversation', live: false },
     agentBrowser: { mode: 'visible' },
     digest: { enabled: true, awayMinutes: 20 },
+    reviews: { types: [
+        { id: 'code-review', label: 'Code review', skill: 'code-review', colour: 'blue' },
+        { id: 'adversarial', label: 'Adversarial', skill: 'adversarial-reviewer', colour: 'red' },
+    ] },
 };
 
 

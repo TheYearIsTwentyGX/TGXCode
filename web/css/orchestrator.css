@@ -237,7 +237,7 @@
 
 /* The side columns are the conversation's tools, and the page is where the
    orchestrator's are; in a column this narrow they would only crowd it. */
-.conv-main[data-orch-page] :is(#checklist, #tasks, #changes, #turns) { display: none; }
+.conv-main[data-orch-page] :is(#checklist, #tasks, #changes, #reviews, #turns) { display: none; }
 .conv-main[data-orch-page] .ev { grid-template-columns: 1fr; column-gap: 0; }
 .conv-main[data-orch-page] .ev-time { display: none; }
 .conv-main[data-orch-page] .log { padding: var(--sp-6) var(--sp-7) var(--sp-10); }
