@@ -185,6 +185,15 @@ function toolBody(ev) {
         out.push(note('Still running.'));
     }
 
+    // --- images --------------------------------------------------------------
+    // A Read of a picture, a browser screenshot. The event only describes them;
+    // the bytes come from the bridge now that the dropdown is open.
+    const images = Array.isArray(r.images) ? r.images : [];
+    if (images.length) {
+        out.push(section(images.length > 1 ? 'Images' : 'Image',
+            el('div', { class: 'tool-images' }, ...images.map((img, n) => toolImage(ev, img, n)))));
+    }
+
     if (r.interrupted) out.push(note('Interrupted before it finished.'));
     if (r.backgroundTaskId) out.push(note(`Background task ${r.backgroundTaskId}.`));
 
@@ -253,6 +262,25 @@ function toolBody(ev) {
     }
 
     return out;
+}
+
+function toolImage(ev, img, n) {
+    const src = `/api/sessions/${encodeURIComponent(state.current.sessionId)}/tool-image`
+        + `?toolUseId=${encodeURIComponent(ev.id)}&n=${n}`;
+    const node = el('img', {
+        // Not `loading: 'lazy'`: the body is only built once the row is opened,
+        // which is already the lazy part, and Chromium never started a lazy
+        // image inside the transcript's scroller at all.
+        class: 'tool-image', src, alt: ev.input && ev.input.file_path || 'tool result image',
+        decoding: 'async',
+        // Reserves the space before the bytes arrive, so the transcript under
+        // an opened row does not jump. CSS caps it to the column.
+        width: img.width || null, height: img.height || null,
+        title: 'Click to toggle full size',
+        onclick: () => node.classList.toggle('full'),
+        onerror: () => node.replaceWith(note('Image no longer available.')),
+    });
+    return node;
 }
 
 function section(title, node) {
