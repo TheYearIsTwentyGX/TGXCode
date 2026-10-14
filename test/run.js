@@ -18,7 +18,7 @@ const UNIT = ['auth.test.js', 'temp.test.js', 'recent.test.js', 'pulls.test.js',
     'pr-store.test.js', 'pr-owners.test.js',
     'taskboard.test.js', 'ports.test.js', 'spinner.test.js', 'changes.test.js',
     'restart.test.js', 'handoff.test.js', 'drafts.test.js', 'later.test.js',
-    'snippets.test.js',
+    'snippets.test.js', 'templates.test.js',
     'notifications.test.js',
     'schedule.test.js', 'usage.test.js', 'harvester.test.js', 'runner.test.js',
     'host.test.js',
@@ -31,7 +31,12 @@ const UNIT = ['auth.test.js', 'temp.test.js', 'recent.test.js', 'pulls.test.js',
     'claude-version.test.js', 'wispr.test.js', 'legacy.test.js',
     'suggestions.test.js', 'mcp.test.js', 'flags.test.js', 'worktree.test.js',
     'scratchpad.test.js', 'turn-index.test.js', 'github.test.js', 'standing.test.js',
-    'worktree-create.test.js', 'orchestrators.test.js', 'setup.test.js', 'tool-image.test.js'];
+    'worktree-create.test.js', 'orchestrators.test.js', 'setup.test.js',
+    'viewers.test.js', 'spend.test.js', 'worktrees.test.js', 'search-index.test.js',
+    'digest.test.js', 'pr-reviews.test.js', 'worktree-branch.test.js',
+    'palette-score.test.js', 'bar-fit.test.js', 'orchestrator-view.test.js',
+    'orchestrator-page.test.js', 'worker-read.test.js', 'code-reviews.test.js',
+    'tool-image.test.js'];
 const LIVE = ['gate.test.js', 'browser.test.js', 'refusals.test.js', 'unpaired.test.js'];
 
 const given = Number(process.argv[2]);

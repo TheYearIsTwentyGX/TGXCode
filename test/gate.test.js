@@ -126,6 +126,24 @@ const PHONE = {
         console.log('  --   no sessions indexed; skipped');
     }
 
+    console.log('\n--- a polling client can hold a viewer lease ---');
+    // The fallback docs/api.md prescribes drops the stream, and a client that has
+    // dropped it is not in `clients` — so without this every ask was auto-denied.
+    {
+        const health = async () => JSON.parse((await call('/api/health')).body);
+        const before = (await health()).pollingViewers;
+        check('health reports polling viewers', typeof before, 'number');
+        await call('/api/overview', { headers: BEARER });
+        check('a poll without the header takes no lease', (await health()).pollingViewers, before);
+        await call('/api/overview', { headers: { 'x-tgxcode-viewer': 'gate-noauth' } });
+        check('nor does one without the token', (await health()).pollingViewers, before);
+        await call('/api/overview', { headers: { ...BEARER, 'x-tgxcode-viewer': 'gate-probe' } });
+        check('a poll carrying it does', (await health()).pollingViewers, before + 1);
+        await call('/api/overview', { headers: { ...BEARER, 'x-tgxcode-viewer': 'gate-probe' } });
+        check('and polling again renews it rather than adding one',
+            (await health()).pollingViewers, before + 1);
+    }
+
     console.log('\n--- token injection into the page ---');
     const page = await call('/');
     check('/ serves HTML', page.status, 200);

@@ -155,7 +155,7 @@ export function renderAsk() {
     const old = liveCard();
     if (old) {
         if (kind === 'tool') old.remove();
-        else exit(old, { kind: 'fade', speed: 'med', collapse: true });
+        else exit(old, { as: 'reveal', collapse: true });
     }
     delete dom.askDock.dataset.pending;
     delete dom.planPane.dataset.pending;
@@ -173,7 +173,7 @@ export function renderAsk() {
             if (!dom.askDock.dataset.request) dom.askDock.replaceChildren();
         } });
     }
-    if (kind !== 'plan') present(dom.planPane, false, { kind: 'rise', speed: 'med' });
+    if (kind !== 'plan') present(dom.planPane, false, { as: 'arrive' });
 
     if (!kind) return;
     if (kind === 'plan') renderPlanPane(ask);
@@ -273,7 +273,7 @@ function renderPlanPane(ask) {
         : [planButtons(), el('div', { class: 'perm-why' },
             'Approving leaves plan mode and sets the permission mode under the composer.')]));
 
-    present(dom.planPane, true, { kind: 'rise', speed: 'med' });
+    present(dom.planPane, true, { as: 'arrive' });
     closeFind();
     setPlanAside(state.planAside);
     if (!state.planAside) dom.planBody.scrollTop = 0;

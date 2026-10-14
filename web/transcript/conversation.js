@@ -34,10 +34,12 @@ import * as keys from '../keys.js';
 import { cvStaleFor } from '../quota.js';
 import { state } from '../state.js';
 import { notePrRepo } from '../pr-refs.js';
+import { renderHeaderReview, reviewChip, reviewKey, toggleHeaderReview } from '../pr-review.js';
 import { loadCommands } from '../commands.js';
 import { holdOrchestrator, loadOrchestrator, paintOrchestratorButton } from '../orchestrator.js';
 import { dur as motionMs, enter, exit, fill, isUp, settle } from '../motion.js';
 import { showTerm, termOpen } from '../term-pane.js';
+import { loadSessionSpend, spendBit } from '../boards/analytics.js';
 import {
     applyRunner, closePanels, grouping, loadAttach, loadDraft, loadSessions, markSessionNotesRead,
     paintPanels, prUnknownWhy, rememberView, renderRail, saveDraft, scrollToEnd,
@@ -50,6 +52,7 @@ import { paintBranch } from '../composer/branch.js';
 import { autoGrow, clearPendingSend } from '../composer/send.js';
 import { closeMenus, live } from '../composer/slash.js';
 import { loadChangesIfStale, renderChanges, resetChanges } from './changes.js';
+import { loadReviewsIfStale, renderReviews, resetReviews } from './reviews.js';
 import { renderChecklist, resetChecklist } from './checklist.js';
 import { findKey, markFindDirty, resetFind } from './find.js';
 import { paneUp } from './layout.js';
@@ -127,6 +130,9 @@ export async function openSession(id, { quiet = false, keepPanels = false } = {}
         state.runner = data.runner || null;
 
         renderHeader();
+        // Fetched alongside rather than carried on the summary: it reads the
+        // transcript's usage, which the rest of the open does not need to wait on.
+        loadSessionSpend(id);
         // Drops the skeleton — and with it a row drawn at Send while this fetch was
         // still in flight, which is reachable because the composer is live over a
         // skeleton. Forget it rather than re-append it: the transcript that is about
@@ -144,7 +150,7 @@ export async function openSession(id, { quiet = false, keepPanels = false } = {}
         applyRunner(data.runner);
         scrollToEnd(true);
         // The transcript fades in under the skeleton fading out — see liftSkeleton.
-        if (veil) enter(dom.log, { kind: 'fade', speed: 'med' });
+        if (veil) enter(dom.log, { as: 'reveal' });
         // After the scroll, not before: it would be undone by it.
         takePendingJump();
 
@@ -156,6 +162,7 @@ export async function openSession(id, { quiet = false, keepPanels = false } = {}
         // Only when the drawer is up. It shells out to git, and a window that
         // never opens it should not pay for it on every session it visits.
         loadChangesIfStale();
+        loadReviewsIfStale();
         return true;
     } catch (err) {
         if (seq !== state.openSeq) return true;
@@ -206,6 +213,7 @@ function beginOpen(summary, { keepPanels = false } = {}) {
     fill(dom.channels, []);
     resetFind();
     state.prStatus = null;      // nor are its pull requests
+    state.prReviewOpen = null;  // nor the review panel one of them had open
     state.ask = null;   // approvals belong to the session that is blocked on them
     state.suggestions.clear();  // what was acted on belongs to the session it was raised in
     state.tasks.clear();        // and so do the offers themselves
@@ -228,6 +236,8 @@ function beginOpen(summary, { keepPanels = false } = {}) {
     paintBranch();
     resetChanges();             // and the files listed were the old session's
     renderChanges();            // which leaves the drawer saying it is looking
+    resetReviews();             // the reviews too, and the dialog over them
+    renderReviews();
     resetChecklist();           // as was the task list — the push will refill it
     renderChecklist();
     // The whole list is already here, so this only has to be re-filtered — but it
@@ -347,7 +357,7 @@ function liftSkeleton() {
     // lie over the dock.
     const ro = new ResizeObserver(() => { v.style.height = `${dom.scroll.clientHeight}px`; });
     ro.observe(dom.scroll);
-    exit(v, { kind: 'fade', speed: 'med', onGone: () => { ro.disconnect(); if (veil === v) veil = null; } });
+    exit(v, { as: 'reveal', onGone: () => { ro.disconnect(); if (veil === v) veil = null; } });
 }
 
 function showOpenFailed(id, err) {
@@ -440,10 +450,26 @@ export function renderHeader() {
             >${`Claude ${oldClaude.version} (older)`}</span>`);
     }
     bits.push(sep('turns'), html`<span key="turns">${`${s.userMessages} turns`}</span>`);
-    for (const pr of headerPrs()) bits.push(sep(pr.url), prLink(pr));
+    const spend = spendBit(sep);
+    if (spend) bits.push(...spend);
+    const prs = headerPrs();
+    for (const pr of prs) {
+        bits.push(sep(pr.url), prLink(pr));
+        // The nightly review's verdict, beside the PR it reviewed; opening it
+        // draws the findings in #pr-review-pop under the header.
+        const live = state.prStatus && state.prStatus.get(pr.url);
+        if (live && live.review && live.repo) {
+            const key = reviewKey(live.repo, live.number);
+            bits.push(reviewChip(live.review, {
+                key: `${pr.url}-review`, open: state.prReviewOpen === key,
+                onToggle: () => toggleHeaderReview(key, renderHeader),
+            }));
+        }
+    }
     bits.push(sep('cwd'), html`<span key="cwd" class="cwd" title=${s.cwd}>${clip(s.cwd, 42)}</span>`);
 
     render(bits, dom.convSub);
+    renderHeaderReview(state.prStatus ? [...state.prStatus.values()] : [], s.cwd, renderHeader);
     renderHeaderActions();
 }
 
@@ -551,6 +577,10 @@ export function renderHeaderActions() {
     dom.btnChanges.setAttribute('aria-pressed', String(state.changes.on));
     dom.btnChanges.title = state.changes.on
         ? 'Hide what this session changed' : 'What this session changed';
+    dom.btnReviews.classList.toggle('on', state.reviews.on);
+    dom.btnReviews.setAttribute('aria-pressed', String(state.reviews.on));
+    dom.btnReviews.title = state.reviews.on
+        ? 'Hide this session’s code reviews' : 'The code reviews this session ran';
     dom.btnFolder.title = `Show ${s.cwd} in File Explorer`;
     dom.btnTerm.title = keys.hint(
         !isUp(dom.termPane) ? `Open a terminal in ${s.cwd}` : 'Hide the terminal',
@@ -665,7 +695,7 @@ export function appendEvents(events, view = SESSION_VIEW, { live = false } = {})
         if (arrived) arrived.push(node);
     }
     flush();
-    if (arrived) for (const n of arrived) enter(n, { kind: 'rise', speed: 'med' });
+    if (arrived) for (const n of arrived) enter(n, { as: 'arrive' });
     // A transcript that ends in tool calls has no message coming to close the
     // last run — openSession replays a finished conversation in one call, and
     // that run would otherwise stay unfolded forever. Only when nothing is
@@ -880,7 +910,6 @@ function paintRunSummary(det) {
             ),
             el('div', { class: 'ev-body' },
                 el('div', { class: 'trow', 'data-status': status },
-                    el('span', { class: 'caret' }, '\u25b6'),
                     el('span', { class: 'tname' },
                         `${tools.length} tool call${tools.length === 1 ? '' : 's'}`),
                     el('span', { class: 'targ' }, parts.join(' \u00b7 ')),

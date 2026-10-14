@@ -38,6 +38,7 @@ import { foldLabelV, isOpen, LONG } from './fold.js';
 import { renderClaudeDocs } from './memory.js';
 import { notifyCard } from './notifications.js';
 import { renderCmdConfig } from './project-commands.js';
+import { reviewTypesCard } from './review-types.js';
 import { renderKeymap } from './shortcuts.js';
 import { renderToolbarSettings } from './toolbar.js';
 
@@ -142,6 +143,20 @@ export const SETTINGS = [
                 label: 'A thinking block is part of the run',
                 note: 'Off breaks the run there instead, which fragments a turn that '
                     + 'thinks between every call.' },
+        ],
+    },
+    {
+        title: 'While you were away', section: 'digest', category: 'workspace', userOnly: true,
+        note: 'A card in the corner when you come back, with what finished, failed or '
+            + 'is waiting on you since you left.',
+        rows: [
+            { key: 'enabled', type: 'bool',
+                label: 'Show what happened while you were away' },
+            { key: 'awayMinutes', type: 'int', min: 1, max: 480,
+                when: (p) => p.digest && p.digest.enabled === true,
+                label: 'Count as away after, in minutes',
+                note: 'How long the window has to be hidden, or go untouched, before '
+                    + 'coming back to it shows the card.' },
         ],
     },
     {
@@ -420,6 +435,13 @@ export const SETTINGS = [
     {
         title: 'Claude Code · Memory', section: 'memory', category: 'claude', tocTitle: 'Memory',
         card: () => renderClaudeDocs(),
+    },
+    // Which skills count as code reviews — the Reviews pane's list. A `card`
+    // because it is a list of rows edited as a draft and saved whole; see
+    // web/settings/review-types.js.
+    {
+        title: 'Code reviews', section: 'reviews', category: 'claude', tocTitle: 'Code reviews',
+        card: () => reviewTypesCard(),
     },
     {
         title: 'Projects', section: 'projects', category: 'projects', node: 'setGProjects',

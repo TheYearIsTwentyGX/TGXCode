@@ -478,7 +478,7 @@ function SchedCard({ s }) {
                     title=${s.enabled ? 'Stop it firing, without deleting it' : 'Arm it again'}
                     onClick=${() => schedToggle(s)}>${s.enabled ? 'Pause' : 'Resume'}</button>
                 <button class="tb-btn" type="button" onClick=${() => schedEdit(s)}>Edit</button>
-                <button class="tb-btn quiet" type="button" title="Delete this schedule"
+                <button class="tb-btn quiet danger" type="button" title="Delete this schedule"
                     onClick=${() => schedDelete(s)}>Delete</button>
             </div>
         </article>`;

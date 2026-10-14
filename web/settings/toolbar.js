@@ -15,6 +15,7 @@ import { devBrowserShown } from '../app.js';
 import { showNewMenu } from '../new-session/recent.js';
 import { saveSetting } from './index.js';
 import { isUp, present } from '../motion.js';
+import { planBar } from '../bar-fit.js';
 
 // ── the top bar's layout ─────────────────────────────────────────────────
 //
@@ -37,6 +38,7 @@ const TOOLBAR = [
     { id: 'tasks', node: 'btnTaskboard', name: 'Tasks', icon: true },
     { id: 'live', node: 'btnLive', name: 'Live', icon: true },
     { id: 'dashboard', node: 'btnDash', name: 'Dashboard', icon: true },
+    { id: 'analytics', node: 'btnAnalytics', name: 'Analytics', icon: true },
     { id: 'history', node: 'btnNotes', name: 'History', icon: true },
     { id: 'drafts', node: 'btnDrafts', name: 'Drafts', icon: true },
     { id: 'schedules', node: 'btnSched', name: 'Schedules', icon: true },
@@ -91,17 +93,42 @@ function toolbarLayout() {
 const toolbarItems = (layout) => layout.map(o => ({ id: o.def.id, place: o.place, label: o.label }));
 
 export function paintToolbar() {
+    fit.prev = null;
+    place([]);
+    fitBar();
+}
+
+/**
+ * Put every button where the layout says, with `spill` (ids) moved into the
+ * More menu ahead of whatever Settings put there.
+ *
+ * Moves a node only when it is not already where it belongs, so a refit that
+ * lands on the same answer touches nothing — no focus lost, no mutation for
+ * paintBarMore()'s observer, no box changing size for fitBar()'s.
+ */
+function place(spill) {
     const bar = dom.barMoreWrap.parentElement;
+    const onBar = [];
+    const inMenu = [];
+    const spilled = [];
     for (const { def, place: placed, label } of toolbarLayout()) {
         const node = dom[def.node];
         // Settings → DevBrowser → Show, which outranks where the pill was put:
         // off means no DevBrowser anywhere, the More menu included.
-        const place = def.id === 'devbrowser' && !devBrowserShown() ? 'hidden' : placed;
-        if (place === 'more') dom.barMoreMenu.append(node);
-        else bar.insertBefore(node, dom.barMoreWrap);
+        const where = def.id === 'devbrowser' && !devBrowserShown() ? 'hidden' : placed;
+        const out = where === 'bar' && spill.includes(def.id);
+        if (out) spilled.push(node);
+        else if (where === 'more') inMenu.push(node);
+        else onBar.push(node);
+        // The version badge is not in the catalogue: it is an indicator that is
+        // absent unless something is behind, not a button anybody places. It
+        // rides beside the quota pill, which is always on the bar, rather than
+        // being left wherever the moves above happened to strand it.
+        if (def.id === 'quota') onBar.splice(onBar.length - 1, 0, dom.cvWrap);
         // An attribute of our own rather than `hidden`, which the quota pill
         // already uses to mean "no data yet" and must keep meaning.
-        node.toggleAttribute('data-bar-hidden', place === 'hidden');
+        node.toggleAttribute('data-bar-hidden', where === 'hidden');
+        node.toggleAttribute('data-bar-spill', out);
         if (def.icon) {
             node.classList.toggle('icon-only', !label);
             // With the text gone the title is all that is left of a name, and a
@@ -110,12 +137,123 @@ export function paintToolbar() {
             else node.setAttribute('aria-label', def.name);
         }
     }
-    // The version badge is not in the catalogue: it is an indicator that is
-    // absent unless something is behind, not a button anybody places. It rides
-    // beside the quota pill, which is always on the bar, rather than being left
-    // wherever the moves above happened to strand it.
-    bar.insertBefore(dom.cvWrap, dom.quotaWrap);
+    arrange(bar, onBar, dom.barMoreWrap);
+    arrange(dom.barMoreMenu, [...spilled, ...inMenu], null);
     paintBarMore();
+}
+
+/** `nodes`, in order, directly before `before` (null: at the end). */
+function arrange(parent, nodes, before) {
+    let ref = before;
+    for (let i = nodes.length - 1; i >= 0; i--) {
+        const n = nodes[i];
+        if (n.parentNode !== parent || n.nextElementSibling !== ref) parent.insertBefore(n, ref);
+        ref = n;
+    }
+}
+
+// ── fitting the bar to the window ────────────────────────────────────────
+//
+// The bar's buttons do not shrink (`flex: none` in base.css): a pill squeezed
+// below its content is a clipped capsule, which is what the Settings button
+// was at 1440px. What gives instead is decided by planBar() in web/bar-fit.js
+// — the words go first, then buttons go into More from the end — and done
+// here. It is layout, not an event, so nothing animates and nothing is saved:
+// Settings still says where each button lives, and a wider window puts it back.
+//
+// Measured with everything on the bar and full width, so a window of a given
+// size always measures the same and a refit cannot feed on its own result.
+// The ResizeObserver watches the bar (the window) and each item (a badge that
+// grows), and runs at most once a frame.
+//
+// Not while More is open. A spilled button there is one somebody may be
+// reaching for, and pulling it back to the bar under the pointer — because the
+// menu's opening resized it — would be the worst time to tidy up. The menu
+// closing asks for the fit it skipped.
+
+const SLACK = 24;
+const fit = { prev: null, prevAvail: undefined, frame: 0, pending: false };
+
+// The window-state pills: what the machine is doing, not a place to go. They
+// keep a ground of their own and stand a little apart from the view buttons.
+const isState = (n) => n === dom.quotaWrap || n === dom.cvWrap || n === dom.dbStatus;
+
+function fitBar() {
+    // `hidden`, not isUp(): a menu playing its exit is still on screen.
+    if (!dom.barMoreMenu.hidden) { fit.pending = true; return; }
+    fit.pending = false;
+    const bar = dom.barMoreWrap.parentElement;
+    const focused = document.activeElement;
+
+    place([]);
+    bar.classList.remove('compact');
+    markGroups(bar);
+    const full = measure(bar);
+    bar.classList.add('compact');
+    const compact = measure(bar);
+
+    const next = planBar({
+        avail: full.avail,
+        fixed: full.fixed,
+        items: full.items.map(i => ({ ...i, compact: compact.items.find(c => c.id === i.id).full })),
+        more: full.more,
+        moreShown: !dom.barMoreWrap.hidden,
+        prev: fit.prev,
+        prevAvail: fit.prevAvail,
+        slack: SLACK,
+    });
+    bar.classList.toggle('compact', next.compact);
+    place(next.spill);
+    markGroups(bar);
+    fit.prev = next;
+    fit.prevAvail = full.avail;
+    if (focused && focused !== document.activeElement && focused.isConnected) focused.focus();
+}
+
+function scheduleFit() {
+    if (fit.frame) return;
+    fit.frame = requestAnimationFrame(() => { fit.frame = 0; fitBar(); });
+}
+
+/** Widths of everything on the bar, as planBar() wants them. */
+function measure(bar) {
+    const cs = getComputedStyle(bar);
+    const gap = parseFloat(cs.columnGap) || 0;
+    const avail = bar.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    const byNode = new Map(TOOLBAR.map(d => [dom[d.node], d]));
+    const items = [];
+    let fixed = 0;
+    let more = 0;
+    let shown = 0;
+    for (const n of bar.children) {
+        if (!n.getClientRects().length) continue;
+        const st = getComputedStyle(n);
+        // Out of flow (the sr-only live region) takes no room and no gap.
+        if (st.position === 'absolute' || st.position === 'fixed') continue;
+        shown++;
+        // The search box grows into whatever is left, so it costs only what it
+        // will not shrink below.
+        const w = (n.classList.contains('bar-search') ? parseFloat(st.minWidth) || 0 : n.getBoundingClientRect().width)
+            + parseFloat(st.marginLeft) + parseFloat(st.marginRight) + gap;
+        const def = byNode.get(n);
+        if (n === dom.barMoreWrap) more = w;
+        else if (def) items.push({ id: def.id, full: w, spillable: !def.places || def.places.includes('more') });
+        else fixed += w;
+    }
+    // The More button is measured only while it shows; otherwise a square.
+    if (!more) more = 34 + gap;
+    return { avail: avail + (shown ? gap : 0), fixed, items, more };
+}
+
+/** Mark the first of each run of view buttons or state pills. */
+function markGroups(bar) {
+    let last = null;
+    for (const n of bar.querySelectorAll(':scope > :is(.bar-btn, .quota-wrap, .db-status, .bar-more-wrap)')) {
+        if (!n.getClientRects().length) { n.removeAttribute('data-group-start'); continue; }
+        const kind = isState(n) ? 'state' : 'view';
+        n.toggleAttribute('data-group-start', last !== null && kind !== last);
+        last = kind;
+    }
 }
 
 /**
@@ -151,9 +289,18 @@ function paintBarMore() {
 
 export function showBarMore(on) {
     if (on && dom.barMoreWrap.hidden) return;
-    present(dom.barMoreMenu, on, { kind: 'pop' });
+    present(dom.barMoreMenu, on, { as: 'menu' });
     dom.barMore.setAttribute('aria-expanded', String(on));
     if (on) { showQuota(false); showNewMenu(false); showCv(false); }
+    // The menu keeps `hidden` off until its exit has played, so this waits a
+    // frame at a time for it to go.
+    else if (fit.pending) waitForClose();
+}
+
+function waitForClose() {
+    if (isUp(dom.barMoreMenu)) return;   // opened again: its next close asks
+    if (!dom.barMoreMenu.hidden) { requestAnimationFrame(waitForClose); return; }
+    scheduleFit();
 }
 
 function barMoreRows() {
@@ -207,6 +354,11 @@ export function wireToolbar() {
     });
 
     paintToolbar();
+
+    const ro = new ResizeObserver(scheduleFit);
+    ro.observe(dom.barMoreWrap.parentElement);
+    for (const def of TOOLBAR) ro.observe(dom[def.node]);
+    ro.observe(dom.cvWrap);
 }
 
 // ── the Toolbar settings group ───────────────────────────────────────────

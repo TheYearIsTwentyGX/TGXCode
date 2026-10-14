@@ -15,6 +15,8 @@ const { PROJECTS_DIR, CACHE_DIR } = require('./config');
 const { scanMeta, parseLines, buildEvents, readSubagentIndex,
     readSubagentTranscript, lastActivity, toolResultImage } = require('./transcript');
 const { TurnIndex } = require('./turn-index');
+const { SkillRunIndex } = require('./skill-runs');
+const { SearchIndex } = require('./search-index');
 
 const CACHE_FILE = path.join(CACHE_DIR, 'index.json');
 // Bump whenever scanMeta's output shape or derivation changes, so a stale cache
@@ -41,6 +43,9 @@ class SessionIndex extends EventEmitter {
         this.flags = flags;
         /** Where each turn starts, so a long transcript can be opened from its end. */
         this.turnIndex = new TurnIndex();
+        this.skillRunIndex = new SkillRunIndex();
+        /** What every transcript says, for `/api/search`. See bridge/search-index.js. */
+        this.searchIndex = new SearchIndex();
         /**
          * Which sessions are actually running, when we have it. Set from
          * server.js rather than constructed here: the index is about files on
@@ -333,6 +338,21 @@ class SessionIndex extends EventEmitter {
     }
 
     /**
+     * What `/api/search` walks: the sessions list() would show, in its order,
+     * each with the file the transcript is read from. The same filters, so a
+     * search can never surface a temporary session or, on the everyday bridge,
+     * a test one.
+     */
+    searchCandidates({ project = null, includeTest = false } = {}) {
+        return this.list({ project, includeTest, limit: Infinity })
+            .map(summary => {
+                const rec = this.sessions.get(summary.sessionId);
+                return rec ? { sessionId: summary.sessionId, file: rec.file, summary } : null;
+            })
+            .filter(Boolean);
+    }
+
+    /**
      * Every suggested follow-up on this machine, newest first.
      *
      * The offers come off `meta.suggestions`, which scanMeta collected on the
@@ -564,6 +584,17 @@ class SessionIndex extends EventEmitter {
     }
 
     /**
+     * Every skill, slash command and subagent the session ran, brought up to
+     * date with its file: `{idx, mtimeMs}`. See bridge/skill-runs.js. Null for
+     * a session we do not know.
+     */
+    skillRuns(sessionId) {
+        const rec = this.sessions.get(sessionId);
+        if (!rec) return null;
+        return this.skillRunIndex.update(sessionId, rec.file);
+    }
+
+    /**
      * The events in bytes [from, to) of the transcript — `to` defaulting to the
      * end. Both must be line starts, which is what the turn index's offsets are.
      * Returns {summary, events, offset} like read(), `offset` being where this
@@ -791,6 +822,8 @@ class SessionIndex extends EventEmitter {
 
         this.sessions.delete(sessionId);
         this.turnIndex.forget(sessionId);
+        this.skillRunIndex.forget(sessionId);
+        this.searchIndex.forget(sessionId);
         // Deleting is deliberate, so it takes the reprieve with it: a session
         // removed on purpose must not be held alive by having been recent.
         this.pending.delete(sessionId);

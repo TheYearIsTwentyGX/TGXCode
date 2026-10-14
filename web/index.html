@@ -30,13 +30,21 @@
 <link rel="stylesheet" href="./css/composer.css">
 <link rel="stylesheet" href="./css/dashboard.css">
 <link rel="stylesheet" href="./css/dialogs.css">
+<link rel="stylesheet" href="./css/worktrees.css">
 <link rel="stylesheet" href="./css/boards.css">
+<link rel="stylesheet" href="./css/analytics.css">
 <link rel="stylesheet" href="./css/settings.css">
 <link rel="stylesheet" href="./css/narrow.css">
 <link rel="stylesheet" href="./css/viewers.css">
 <link rel="stylesheet" href="./css/colours.css">
 <link rel="stylesheet" href="./css/preview.css">
 <link rel="stylesheet" href="./css/orchestrator.css">
+<link rel="stylesheet" href="./css/search.css">
+<link rel="stylesheet" href="./css/digest.css">
+<link rel="stylesheet" href="./css/templates.css">
+<link rel="stylesheet" href="./css/pr-review.css">
+<link rel="stylesheet" href="./css/reviews.css">
+<link rel="stylesheet" href="./css/palette.css">
 </head>
 <body>
 
@@ -51,7 +59,8 @@
         <path d="M10.5 10.5 14 14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
       </svg>
       <input id="search" type="search" placeholder="Filter sessions" autocomplete="off"
-             aria-label="Filter sessions">
+             aria-label="Filter sessions"
+             title="Filter the rail by title — press Enter to search inside every transcript">
     </label>
 
     <span class="bar-spacer"></span>
@@ -111,6 +120,19 @@
       </svg>
       <span>Dashboard</span>
       <span id="dash-badge" class="bar-badge" hidden></span>
+    </button>
+
+    <!-- Tokens, and what they would have cost on the API, by day and project.
+         API-equivalent: on a subscription nobody is billed this figure. -->
+    <button id="btn-analytics" class="bar-btn" type="button" aria-pressed="false"
+            title="Tokens and API-equivalent cost, by day and project">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M4 20h16" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+        <rect x="5.5" y="11" width="3" height="6" rx="1" stroke="currentColor" stroke-width="1.6"/>
+        <rect x="10.5" y="6" width="3" height="11" rx="1" stroke="currentColor" stroke-width="1.6"/>
+        <rect x="15.5" y="9" width="3" height="8" rx="1" stroke="currentColor" stroke-width="1.6"/>
+      </svg>
+      <span>Analytics</span>
     </button>
 
     <!-- What already reached you, after the fact. A toast is gone the moment
@@ -375,95 +397,120 @@
         <div class="conv-title-row">
           <h1 id="conv-title" class="conv-title"></h1>
           <div class="conv-actions">
+            <!-- An orchestrator's Overview | Conversation switch — web/orchestrator-page.js.
+                 First, because it changes what the whole pane below is. -->
+            <span id="orch-seg" class="orch-seg" hidden></span>
             <!-- What this project declares in .tgxcode/, filled by renderCommands.
                  Before the icons because these are the buttons with words on
                  them: a row of labels reads as a toolbar, and putting them after
                  the icons would read as an afterthought. -->
             <div id="cmds" class="cmds"></div>
-            <!-- Marks this session as an orchestrator of worker sessions —
-                 web/orchestrator.js. Hidden on a worker, which cannot be one. -->
-            <button id="btn-orch" class="icon-btn" type="button" aria-pressed="false"
-                    title="Make this session an orchestrator of worker sessions">
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <circle cx="12" cy="5.5" r="2.5" stroke="currentColor" stroke-width="1.7"/>
-                <circle cx="5.5" cy="18" r="2.2" stroke="currentColor" stroke-width="1.7"/>
-                <circle cx="12" cy="18" r="2.2" stroke="currentColor" stroke-width="1.7"/>
-                <circle cx="18.5" cy="18" r="2.2" stroke="currentColor" stroke-width="1.7"/>
-                <path d="M12 8v7.8M12 11.5H6.5a1 1 0 0 0-1 1v3.3M12 11.5h5.5a1 1 0 0 1 1 1v3.3"
-                      stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-              </svg>
-            </button>
-            <button id="btn-pin" class="icon-btn" type="button" title="Pin this session">
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="M9 3h6l-.7 5.2 3 2.6V13H6.7v-2.2l3-2.6L9 3Z"
-                      stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
-                <path d="M12 13v8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
-              </svg>
-            </button>
-            <!-- Before the Changed button, so the toolbar reads in the same
-                 order the columns sit in: task list left, changes right. -->
-            <button id="btn-checklist" class="icon-btn" type="button"
-                    title="This session's own task list" aria-pressed="false">
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="M4 7.5l2 2 3.5-4" stroke="currentColor" stroke-width="1.7"
-                      stroke-linecap="round" stroke-linejoin="round"/>
-                <path d="M13 7.5h7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
-                <path d="M4 16.5l2 2 3.5-4" stroke="currentColor" stroke-width="1.7"
-                      stroke-linecap="round" stroke-linejoin="round"/>
-                <path d="M13 16.5h7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
-              </svg>
-            </button>
-            <button id="btn-changes" class="icon-btn" type="button"
-                    title="What this session changed" aria-pressed="false">
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="M6 4h7l4.5 4.5V20H6V4Z" stroke="currentColor" stroke-width="1.7"
-                      stroke-linejoin="round"/>
-                <path d="M9 12.6h4M11 10.6v4" stroke="currentColor" stroke-width="1.5"
-                      stroke-linecap="round"/>
-                <path d="M9 17h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-              </svg>
-            </button>
-            <button id="btn-folder" class="icon-btn" type="button"
-                    title="Show the working directory in File Explorer">
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4L10 7h9.5A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5v-11Z"
-                      stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
-              </svg>
-            </button>
-            <button id="btn-term" class="icon-btn" type="button"
-                    title="Open a terminal in the working directory" aria-pressed="false">
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <rect x="3" y="4.5" width="18" height="15" rx="2.5"
-                      stroke="currentColor" stroke-width="1.7"/>
-                <path d="m7.5 9.5 2.8 2.5-2.8 2.5" stroke="currentColor" stroke-width="1.7"
-                      stroke-linecap="round" stroke-linejoin="round"/>
-                <path d="M13.2 15h3.3" stroke="currentColor" stroke-width="1.7"
-                      stroke-linecap="round"/>
-              </svg>
-            </button>
-            <button id="btn-archive" class="icon-btn" type="button" title="Archive this session">
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="M3.5 6.2h17V9h-17V6.2Z" stroke="currentColor" stroke-width="1.7"
-                      stroke-linejoin="round"/>
-                <path d="M5 9v9.3h14V9" stroke="currentColor" stroke-width="1.7"
-                      stroke-linejoin="round"/>
-                <path d="M10 12.5h4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
-              </svg>
-            </button>
-            <button id="btn-delete" class="icon-btn danger" type="button"
-                    title="Delete this session permanently">
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="M4.5 6.8h15" stroke="currentColor" stroke-width="1.7"
-                      stroke-linecap="round"/>
-                <path d="M6.6 6.8 7.7 19a1.5 1.5 0 0 0 1.5 1.4h5.6A1.5 1.5 0 0 0 16.3 19l1.1-12.2"
-                      stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
-                <path d="M9.6 6.8V4.6a1 1 0 0 1 1-1h2.8a1 1 0 0 1 1 1v2.2"
-                      stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
-              </svg>
-            </button>
+            <!-- Three groups, set apart by a rule: what this session is, what
+                 is open beside it, and getting rid of it — so the two buttons
+                 that lose something are not one slip from the pin. The buttons
+                 are reached by id everywhere, never by position. -->
+            <span class="conv-act-group" role="group" aria-label="Session">
+              <!-- Marks this session as an orchestrator of worker sessions —
+                   web/orchestrator.js. Hidden on a worker, which cannot be one. -->
+              <button id="btn-orch" class="icon-btn" type="button" aria-pressed="false"
+                      title="Make this session an orchestrator of worker sessions">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <circle cx="12" cy="5.5" r="2.5" stroke="currentColor" stroke-width="1.7"/>
+                  <circle cx="5.5" cy="18" r="2.2" stroke="currentColor" stroke-width="1.7"/>
+                  <circle cx="12" cy="18" r="2.2" stroke="currentColor" stroke-width="1.7"/>
+                  <circle cx="18.5" cy="18" r="2.2" stroke="currentColor" stroke-width="1.7"/>
+                  <path d="M12 8v7.8M12 11.5H6.5a1 1 0 0 0-1 1v3.3M12 11.5h5.5a1 1 0 0 1 1 1v3.3"
+                        stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+              </button>
+              <button id="btn-pin" class="icon-btn" type="button" title="Pin this session">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M9 3h6l-.7 5.2 3 2.6V13H6.7v-2.2l3-2.6L9 3Z"
+                        stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+                  <path d="M12 13v8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                </svg>
+              </button>
+            </span>
+            <span class="conv-act-group" role="group" aria-label="Panes">
+              <!-- Before the Changed button, so the toolbar reads in the same
+                   order the columns sit in: task list left, changes right. -->
+              <button id="btn-checklist" class="icon-btn" type="button"
+                      title="This session's own task list" aria-pressed="false">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M4 7.5l2 2 3.5-4" stroke="currentColor" stroke-width="1.7"
+                        stroke-linecap="round" stroke-linejoin="round"/>
+                  <path d="M13 7.5h7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                  <path d="M4 16.5l2 2 3.5-4" stroke="currentColor" stroke-width="1.7"
+                        stroke-linecap="round" stroke-linejoin="round"/>
+                  <path d="M13 16.5h7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                </svg>
+              </button>
+              <button id="btn-changes" class="icon-btn" type="button"
+                      title="What this session changed" aria-pressed="false">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M6 4h7l4.5 4.5V20H6V4Z" stroke="currentColor" stroke-width="1.7"
+                        stroke-linejoin="round"/>
+                  <path d="M9 12.6h4M11 10.6v4" stroke="currentColor" stroke-width="1.5"
+                        stroke-linecap="round"/>
+                  <path d="M9 17h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+              </button>
+              <button id="btn-reviews" class="icon-btn" type="button"
+                      title="The code reviews this session ran" aria-pressed="false">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M12 3.5 5 6v5.5c0 4.2 2.9 7.6 7 9 4.1-1.4 7-4.8 7-9V6l-7-2.5Z"
+                        stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+                  <path d="m9 12 2.2 2.2L15.5 10" stroke="currentColor" stroke-width="1.7"
+                        stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
+              <button id="btn-folder" class="icon-btn" type="button"
+                      title="Show the working directory in File Explorer">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4L10 7h9.5A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5v-11Z"
+                        stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+                </svg>
+              </button>
+              <button id="btn-term" class="icon-btn" type="button"
+                      title="Open a terminal in the working directory" aria-pressed="false">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <rect x="3" y="4.5" width="18" height="15" rx="2.5"
+                        stroke="currentColor" stroke-width="1.7"/>
+                  <path d="m7.5 9.5 2.8 2.5-2.8 2.5" stroke="currentColor" stroke-width="1.7"
+                        stroke-linecap="round" stroke-linejoin="round"/>
+                  <path d="M13.2 15h3.3" stroke="currentColor" stroke-width="1.7"
+                        stroke-linecap="round"/>
+                </svg>
+              </button>
+            </span>
+            <span class="conv-act-group" role="group" aria-label="Remove">
+              <button id="btn-archive" class="icon-btn" type="button" title="Archive this session">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M3.5 6.2h17V9h-17V6.2Z" stroke="currentColor" stroke-width="1.7"
+                        stroke-linejoin="round"/>
+                  <path d="M5 9v9.3h14V9" stroke="currentColor" stroke-width="1.7"
+                        stroke-linejoin="round"/>
+                  <path d="M10 12.5h4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                </svg>
+              </button>
+              <button id="btn-delete" class="icon-btn danger" type="button"
+                      title="Delete this session permanently">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M4.5 6.8h15" stroke="currentColor" stroke-width="1.7"
+                        stroke-linecap="round"/>
+                  <path d="M6.6 6.8 7.7 19a1.5 1.5 0 0 0 1.5 1.4h5.6A1.5 1.5 0 0 0 16.3 19l1.1-12.2"
+                        stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+                  <path d="M9.6 6.8V4.6a1 1 0 0 1 1-1h2.8a1 1 0 0 1 1 1v2.2"
+                        stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+                </svg>
+              </button>
+            </span>
           </div>
         </div>
         <div id="conv-sub" class="conv-sub"></div>
+        <!-- The nightly review of one of this session's PRs, opened from its
+             chip in #conv-sub. Drawn by web/pr-review.js. -->
+        <div id="pr-review-pop" class="prr-pop" hidden></div>
         <div id="agents" class="agents" aria-label="Subagents"></div>
         <div id="channels" class="channels"></div>
       </div>
@@ -527,6 +574,17 @@
           <button id="find-close" class="find-btn" type="button"
                   title="Close — Esc" aria-label="Close find">&#10005;</button>
         </div>
+
+        <!-- An orchestrator's page, and the splitter between it and the
+             conversation — web/orchestrator-page.js. In page mode this box is a
+             grid of three columns: the page, the splitter, and the conversation
+             (#conv-body, the ask dock and the composer below it), so the
+             conversation keeps the real composer and approvals. Hidden, and out
+             of the grid, everywhere else. -->
+        <div id="orch-page" class="orch-page" hidden aria-label="Orchestrator overview"></div>
+        <div id="orch-split" class="orch-split" hidden role="separator" tabindex="0"
+             aria-orientation="vertical" aria-controls="conv-body"
+             aria-label="Width of the conversation — drag, or use the arrow keys; Enter resets it"></div>
 
         <div id="conv-body" class="conv-body">
           <!-- The agent's own task list, and how much of it is done. Leftmost,
@@ -622,6 +680,26 @@
       <div id="changes-body" class="changes-body" tabindex="-1"></div>
             </div>
           </aside>
+          <!-- The code reviews this session ran — web/transcript/reviews.js. The
+               same box, strip and narrow-window behaviour as the drawer above. -->
+          <aside id="reviews" class="tasks reviews" hidden
+                 aria-label="Code reviews this session ran">
+            <button id="reviews-strip" class="tasks-strip" type="button" hidden>
+              <span class="tasks-strip-label">Reviews</span>
+              <span id="reviews-strip-count" class="tasks-count"></span>
+            </button>
+            <div id="reviews-open" class="tasks-open">
+              <div class="tasks-head">
+                <span class="tasks-title">Reviews</span>
+                <span id="reviews-count" class="tasks-count"></span>
+                <button id="reviews-run" class="tasks-collapse" type="button"
+                        title="Run one of your review types in this chat" aria-haspopup="menu">Run</button>
+                <button id="reviews-collapse" class="tasks-collapse" type="button"
+                        title="Put this to one side">Hide</button>
+              </div>
+              <div id="reviews-body" class="reviews-body" tabindex="-1"></div>
+            </div>
+          </aside>
           <nav id="turns" class="turns" aria-label="Your messages, plans and questions in this session"></nav>
         </div>
 
@@ -630,8 +708,9 @@
              be typing in, not somewhere you can scroll away from. -->
         <div id="ask-dock" class="ask-dock" hidden></div>
 
-        <!-- An orchestrator's inbox, workers, settings and pinned summary, or a
-             worker's line back to its orchestrator. Drawn by web/orchestrator.js. -->
+        <!-- One line: in an orchestrator's plain conversation, how its workers
+             stand and the way back to its page; on a worker, the way up to its
+             orchestrator. Drawn by web/orchestrator.js. -->
         <div id="orch-dock" class="orch-dock" hidden></div>
 
         <div class="composer" id="composer">
@@ -849,6 +928,9 @@
           </div>
         </div>
 
+        <!-- A worker, opened from a row of the orchestrator's page: laid over the
+             conversation column, so the page stays readable beside it. -->
+        <aside id="orch-peek" class="orch-peek" hidden aria-label="Worker"></aside>
       </div>
 
       <!-- A shell in the session's working directory, and the output of any
@@ -973,6 +1055,19 @@
       <div id="dash-body" class="dash-body"></div>
     </section>
 
+    <!-- Tokens and API-equivalent cost. Drawn by web/boards/analytics.js. -->
+    <section id="analytics" class="dash an" hidden aria-label="Analytics">
+      <header class="dash-head">
+        <div>
+          <h1 class="dash-title">Analytics</h1>
+          <p id="an-sub" class="dash-sub">Tokens, and what they would have cost at
+            API list prices.</p>
+        </div>
+        <div id="an-range" class="an-range" role="group" aria-label="Range"></div>
+      </header>
+      <div id="an-body" class="dash-body an-body"></div>
+    </section>
+
     <!-- One card per running session, needs-you first. Fed by a single SSE
          `overview` event carrying state rather than transcript content, which is
          what lets a screenful of sessions cost one payload and one timer. -->
@@ -1076,6 +1171,33 @@
         <button id="dr-new" class="dash-btn" type="button">New draft</button>
       </header>
       <div id="dr-body" class="dr-body"></div>
+    </section>
+
+    <!-- Full-text search across every transcript (web/search.js). A whole panel
+         rather than a dropdown under the bar's filter, because a result is a
+         line of somebody's conversation and needs the room to be read. The
+         filter in the bar answers "which session is called that"; this answers
+         "where did somebody say that". -->
+    <section id="sx" class="sx" hidden aria-label="Search transcripts">
+      <header class="sx-head">
+        <div class="sx-head-text">
+          <h1 class="sx-title">Search transcripts</h1>
+          <p id="sx-sub" class="sx-sub">Everything you and Claude said, in every session.</p>
+        </div>
+      </header>
+      <div class="sx-bar">
+        <label class="sx-field">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.6"/>
+            <path d="M10.5 10.5 14 14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+          </svg>
+          <input id="sx-input" type="search" autocomplete="off" spellcheck="false"
+                 placeholder='Words, or a "quoted phrase"' aria-label="Search transcripts">
+        </label>
+        <button id="sx-tools" class="sx-toggle" type="button" aria-pressed="false"
+                title="Also search tool calls and their output">Include tools</button>
+      </div>
+      <div id="sx-body" class="sx-body" aria-live="polite"></div>
     </section>
 
     <!-- Sessions that start on a clock. Beside Drafts rather than inside it: a
@@ -1298,6 +1420,9 @@
 </div>
 
 <!-- New session -->
+<!-- The command palette (Ctrl+K). Its contents are drawn by web/palette.js. -->
+<div id="palette-scrim" class="scrim pal-scrim" hidden></div>
+
 <div id="new-scrim" class="scrim" hidden>
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="new-title">
     <!-- The head says which project before it says what you are doing with it.
@@ -1314,6 +1439,23 @@
       <button class="modal-close" data-close type="button" aria-label="Close">✕</button>
     </div>
     <div class="modal-body">
+      <!-- Session templates — web/new-session/templates.js. Plain Start only:
+           picking one fills the fields below, and Start is still the button that
+           runs it. `#new-tpl-fill` holds one box per placeholder the template
+           asks about, drawn when one is picked. -->
+      <div class="field" id="new-tpl-row" hidden>
+        <label for="new-tpl">Template</label>
+        <div class="tpl-line">
+          <select id="new-tpl"></select>
+          <button id="new-tpl-edit" class="btn small" type="button" disabled>Edit</button>
+          <button id="new-tpl-del" class="btn small" type="button" disabled>Delete</button>
+          <!-- Keep what is on screen for next time. Here rather than in the
+               footer, which has no room for a fifth button. It opens
+               #new-tpl-save-row, because a template needs a name and a scope. -->
+          <button id="new-tpl-save" class="btn small" type="button">Save as…</button>
+        </div>
+        <div id="new-tpl-fill" class="tpl-fill" hidden></div>
+      </div>
       <div class="field">
         <label for="new-cwd">Working directory</label>
         <input id="new-cwd" type="text" spellcheck="false">
@@ -1613,6 +1755,24 @@
           <code>review-concerns</code> / <code>review-blocked</code> label when
           the session finishes. A test schedule never posts.</div>
       </div>
+      <!-- Saving the dialog as a template: opened by Save as template… in the
+           footer, and always open while a template is being edited, where it is
+           also how you rename one. The scope list is drawn per open from the
+           directory in the box. -->
+      <div class="field" id="new-tpl-save-row" hidden>
+        <label for="new-tpl-name">Template name</label>
+        <div class="tpl-line">
+          <input id="new-tpl-name" type="text" spellcheck="false" autocomplete="off"
+                 placeholder="What the picker lists it as">
+          <select id="new-tpl-scope" aria-label="Where the template is offered"></select>
+          <button id="new-tpl-save-go" class="btn small primary" type="button">Save template</button>
+          <button id="new-tpl-save-cancel" class="btn small quiet" type="button">Cancel</button>
+        </div>
+        <div class="note">Write <code>{{task}}</code> (any name) in the first message or the
+          worktree name to be asked for it when the template is used.
+          <code>{{branch}}</code>, <code>{{date}}</code> and <code>{{project}}</code>
+          are filled in for you.</div>
+      </div>
       <!-- Only shown by a development bridge; see markInstance(). -->
       <div class="field" id="new-test-row" hidden>
         <label class="check">
@@ -1691,8 +1851,10 @@
              the clock. It reopens this same dialog in schedule mode with what is
              in front of you carried across — see drToSchedule() in app.js — so it
              is a conversion rather than a fourth form. Hidden in schedule mode,
-             where you are already there. -->
-        <button id="new-sched" class="btn tonal" type="button">Schedule</button>
+             where you are already there. A text button for the same reason:
+             it changes what the dialog is for and commits nothing, so it should
+             not weigh what Save as draft and Start weigh. -->
+        <button id="new-sched" class="btn quiet" type="button">Schedule</button>
         <button id="new-go" class="btn primary" type="button">Start</button>
         <!-- Schedule mode replaces Start rather than joining it: "save this" and
              "run this now" are the same button's job here, since a schedule you
@@ -1907,6 +2069,30 @@
   </div>
 </div>
 
+<!-- One code review's findings — web/transcript/reviews.js. The plan/question
+     review's shell, so it opens, closes and sizes the same way; the body is
+     Preact's. -->
+<div id="creview-scrim" class="scrim" hidden>
+  <div id="creview-modal" class="modal review-modal creview" role="dialog" aria-modal="true"
+       aria-labelledby="creview-title" tabindex="-1">
+    <div class="modal-head">
+      <span id="creview-kind" class="crv-type"></span>
+      <span id="creview-title" class="perm-title"></span>
+      <span class="spacer"></span>
+      <span id="creview-when" class="review-when"></span>
+      <button class="modal-close" data-close-creview type="button" aria-label="Close">✕</button>
+    </div>
+    <div id="creview-body" class="modal-body" tabindex="0"></div>
+    <div class="modal-foot">
+      <button id="creview-fixall" class="btn small" type="button"
+              title="Ask this chat to fix every finding, in one message">Fix all in chat</button>
+      <span class="spacer"></span>
+      <button id="creview-jump" class="btn small" type="button">Show it in the transcript</button>
+      <button class="btn" data-close-creview type="button">Close</button>
+    </div>
+  </div>
+</div>
+
 <!-- Why a restart did not happen.
 
      This dialog is a terminal prompt that had nowhere to live. restart-bridge.sh
@@ -2026,7 +2212,24 @@
   </div>
 </div>
 
+<!-- The worktree janitor: one project's worktrees, and Remove on the safe ones.
+     Body and foot are drawn by web/worktrees.js; the foot changes to a
+     confirming step for "Remove all safe". -->
+<div id="wt-scrim" class="scrim" hidden>
+  <div class="modal wt" role="dialog" aria-modal="true" aria-labelledby="wt-title">
+    <div class="modal-head">
+      <span id="wt-title">Worktrees</span>
+      <button class="modal-close" data-close-wt type="button" aria-label="Close">✕</button>
+    </div>
+    <div id="wt-body" class="modal-body"></div>
+    <div id="wt-foot" class="modal-foot"></div>
+  </div>
+</div>
+
 <div id="toasts" class="toasts" aria-live="polite"></div>
+
+<!-- "While you were away" — web/digest.js draws into this. -->
+<div id="digest" class="digest"></div>
 
 <!-- A classic script, not the side-effect `import` vendor/xterm.js gets, and the
      difference is not stylistic. xterm.js is the ESM build renamed; this is a UMD

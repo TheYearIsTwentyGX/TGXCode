@@ -1,0 +1,135 @@
+/* The command palette (Ctrl+K) — web/palette.js.
+   A dialog box on the shared scrim, set high rather than centred so the input
+   stays put while the list under it grows and shrinks with what you type.
+   Opening and closing are motion.js's `scrim` + `dialog` presets; nothing here
+   animates. Tokens only (docs/plans/22-ui-overhaul.md). */
+
+.pal-scrim {
+    align-items: flex-start;
+    padding-top: 12vh;
+}
+
+.palette {
+    width: min(640px, 100%);
+    max-height: min(560px, 76vh);
+    display: flex;
+    flex-direction: column;
+    background: var(--s2);
+    border-radius: var(--r-lg);
+    box-shadow: var(--shadow-dialog);
+    overflow: hidden;
+}
+
+/* The field has the focus for as long as the palette is open, so a full ring
+   would sit round it permanently. The focus state is an edge along its foot
+   instead: the same width and colour as the ring, on the side that divides it
+   from the list. */
+.pal-input {
+    flex: none;
+    width: 100%;
+    border: 0;
+    background: var(--s3);
+    color: var(--text);
+    font: var(--fw-regular) var(--fs-base)/var(--lh-snug) var(--sans);
+    padding: var(--sp-7) var(--sp-8);
+}
+.pal-input::placeholder { color: var(--text-4); }
+.pal-input:focus-visible {
+    outline: none;
+    box-shadow: inset 0 calc(-1 * var(--focus-w)) 0 var(--focus-colour);
+}
+
+.pal-list {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: var(--sp-3) var(--sp-4) var(--sp-4);
+    overscroll-behavior: contain;
+}
+
+.pal-group + .pal-group { margin-top: var(--sp-3); }
+
+.pal-head {
+    font: var(--fw-medium) var(--fs-sm)/var(--lh-snug) var(--sans);
+    color: var(--text-3);
+    padding: var(--sp-4) var(--sp-5) var(--sp-2);
+}
+
+.pal-row {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-6);
+    padding: var(--sp-4) var(--sp-5);
+    border-radius: var(--r-sm);
+    cursor: pointer;
+    color: var(--text);
+}
+.pal-row[aria-selected="true"] {
+    background: var(--blue-cont);
+    color: var(--on-blue-cont);
+}
+
+.pal-main {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-1);
+}
+
+.pal-title {
+    font: var(--fw-regular) var(--fs-md)/var(--lh-snug) var(--sans);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.pal-hit {
+    font-weight: var(--fw-strong);
+    color: var(--blue);
+}
+.pal-row[aria-selected="true"] .pal-hit { color: inherit; }
+
+.pal-meta {
+    font: var(--fw-regular) var(--fs-sm)/var(--lh-snug) var(--sans);
+    color: var(--text-3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.pal-row[aria-selected="true"] .pal-meta { color: var(--on-blue-cont-3); }
+/* Mono one step under the sans beside it. */
+.pal-mono { font: var(--fs-xs)/var(--lh-snug) var(--mono); }
+.pal-standing { color: var(--text-4); }
+.pal-row[aria-selected="true"] .pal-standing { color: inherit; }
+
+.palette kbd {
+    font: var(--fw-medium) var(--fs-2xs)/var(--lh-none) var(--mono);
+    padding: var(--sp-1) var(--sp-2);
+    border-radius: var(--r-xs);
+    background: var(--recess);
+    color: var(--text-3);
+}
+.pal-kbd { flex: none; }
+.pal-row[aria-selected="true"] .pal-kbd { color: var(--on-blue-cont-2); }
+
+.pal-empty {
+    padding: var(--sp-7) var(--sp-5);
+    color: var(--text-3);
+    font-size: var(--fs-md);
+}
+
+.pal-foot {
+    flex: none;
+    display: flex;
+    gap: var(--sp-7);
+    padding: var(--sp-4) var(--sp-8);
+    background: var(--s1);
+    color: var(--text-4);
+    font-size: var(--fs-sm);
+}
+.pal-foot span { display: inline-flex; align-items: center; gap: var(--sp-2); }
+
+@media (max-width: 720px) {
+    .pal-scrim { padding-top: var(--sp-9); }
+    .pal-foot { display: none; }
+}

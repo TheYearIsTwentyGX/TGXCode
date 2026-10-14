@@ -7,7 +7,7 @@
 // something in passing; modalUp() and closeOnClickOutside() the rules every
 // modal dialog shares.
 
-import { animate, exit, isUp, present } from './motion.js';
+import { enter, exit, isUp, pose, present } from './motion.js';
 
 const $ = (id) => document.getElementById(id);
 export const dom = {};
@@ -26,7 +26,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'set-g-wispr', 'wispr-list', 'wispr-add',
     'model', 'effort', 'perm', 'btn-new', 'btn-new-menu', 'new-menu', 'hide-done', 'hide-done-count',
     'rail-sort', 'sort-menu',
-    'db-status', 'db-label', 'toasts',
+    'db-status', 'db-label', 'toasts', 'digest',
     'quota-wrap', 'quota-pill', 'quota-pill-body', 'quota-menu', 'quota-windows',
     'quota-events', 'quota-note', 'quota-refresh', 'quota-live',
     'quota-restart', 'quota-restart-label', 'quota-restart-sub',
@@ -37,6 +37,8 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'find-subs', 'find-subs-row', 'find-close',
     'changes', 'changes-strip', 'changes-strip-count', 'changes-open', 'changes-count',
     'changes-refresh', 'changes-collapse', 'changes-body',
+    'btn-reviews', 'reviews', 'reviews-strip', 'reviews-strip-count', 'reviews-open', 'reviews-count',
+    'reviews-run', 'reviews-collapse', 'reviews-body',
     'checklist', 'checklist-strip', 'checklist-strip-count', 'checklist-open',
     'checklist-count', 'checklist-collapse', 'checklist-body', 'btn-checklist',
     'conv-main', 'conv-body',
@@ -50,10 +52,12 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'ask-dock', 'plan-pane', 'plan-bar', 'plan-aside', 'plan-agent', 'plan-title',
     'plan-body', 'plan-doc', 'plan-foot',
     'btn-dash', 'dash-badge', 'dash', 'dash-sub', 'dash-body', 'dash-refresh',
+    'btn-analytics', 'analytics', 'an-sub', 'an-range', 'an-body',
     'btn-notes', 'notes-badge', 'notes', 'notes-sub', 'notes-body',
     'btn-taskboard', 'tb-badge', 'taskboard', 'tb-sub', 'tb-body', 'tb-refresh',
     'tb-search', 'tb-unfocus',
     'btn-drafts', 'dr-badge', 'drafts', 'dr-sub', 'dr-body', 'dr-new',
+    'sx', 'sx-input', 'sx-tools', 'sx-sub', 'sx-body',
     'btn-sched', 'sched-badge', 'sched', 'sched-sub', 'sched-body', 'sched-new',
     'btn-settings', 'settings', 'set-scope', 'set-project', 'set-project-wrap', 'set-notes',
     'set-file', 'set-problems', 'set-body', 'set-shell', 'set-toc', 'set-top', 'composer-hint',
@@ -73,6 +77,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'branch', 'branch-text', 'branch-cancel',
     'btn-live', 'live-badge', 'live', 'live-sub', 'live-body', 'live-focus', 'focus-exit',
     'live-side', 'live-side-label', 'live-side-a', 'live-side-b',
+    'palette-scrim',
     'new-scrim', 'new-cwd', 'new-picker', 'new-prompt', 'new-model', 'new-effort', 'new-perm',
     'new-test', 'new-test-row', 'new-go', 'new-save', 'new-title', 'new-name',
     'new-tab-recent', 'new-tab-browse', 'new-recent', 'new-recent-filter', 'new-browse', 'new-roots', 'new-crumbs',
@@ -80,7 +85,10 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'new-mkdir-gh', 'new-mkdir-gh-row', 'new-gh',
     'new-start-row', 'new-orch-row', 'new-orch', 'new-orch-note',
     'new-wt-row', 'new-wt', 'new-wt-fields', 'new-wt-name', 'new-wt-base', 'new-wt-note',
+    'new-tpl-row', 'new-tpl', 'new-tpl-edit', 'new-tpl-del', 'new-tpl-fill', 'new-tpl-save',
+    'new-tpl-save-row', 'new-tpl-name', 'new-tpl-scope', 'new-tpl-save-go', 'new-tpl-save-cancel',
     'gh-scrim', 'gh-body', 'gh-go', 'gh-foot-note',
+    'wt-scrim', 'wt-title', 'wt-body', 'wt-foot',
     'del-scrim', 'del-what', 'del-meta', 'del-go',
     'diff-scrim', 'diff-title', 'diff-stat', 'diff-unified', 'diff-split',
     'diff-words', 'diff-wrap', 'diff-source', 'diff-note', 'diff-jump',
@@ -88,6 +96,8 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'bar-more-wrap', 'bar-more', 'bar-more-badge', 'bar-more-menu',
     'review-scrim', 'review-modal', 'review-kind', 'review-title', 'review-when',
     'review-outcome', 'review-body', 'review-jump',
+    'creview-scrim', 'creview-modal', 'creview-kind', 'creview-title', 'creview-when',
+    'creview-body', 'creview-jump', 'creview-fixall',
     'img-scrim', 'img-title', 'img-copy', 'img-save', 'img-view',
     'pair-url', 'pair-host', 'pair-hosts', 'pair-note', 'pair-copy',
     'restart-scrim', 'restart-lede', 'restart-problems',
@@ -129,7 +139,7 @@ export function toast(text, kind = 'info', opts = {}) {
     const t = el('div', { class: 'toast', 'data-kind': kind },
         el('span', { class: 'toast-text' }, text));
     // Fades and closes its gap, so the toasts under it slide up rather than jump.
-    const gone = () => exit(t, { kind: 'rise', speed: 'med', collapse: true });
+    const gone = () => exit(t, { as: 'toast', collapse: true });
 
     if (action) {
         t.append(el('button', {
@@ -143,6 +153,7 @@ export function toast(text, kind = 'info', opts = {}) {
     }, '✕'));
 
     dom.toasts.append(t);
+    enter(t, { as: 'toast' });
     if (!action) setTimeout(gone, ms);
     return t;
 }
@@ -188,11 +199,16 @@ export function modalUp() {
         // read-only replay holding no work, so the paragraph above is not what
         // puts it here either. The sentence after it is.
         || isUp(dom.reviewScrim)
+        // A code review's findings: the same read-only case as the line above.
+        || isUp(dom.creviewScrim)
         // The image preview: read-only again, and here for the same reason.
         || isUp(dom.imgScrim)
         // Publish to GitHub holds a filled-in form, and can be up over
         // Start-a-session, which is the snippet dialog's case.
-        || isUp(dom.ghScrim);
+        || isUp(dom.ghScrim)
+        // The worktree janitor holds no work, which is the diff viewer's case:
+        // it is here so that no dialog is the one that answers Escape.
+        || isUp(dom.wtScrim);
 }
 
 /**
@@ -201,9 +217,39 @@ export function modalUp() {
  * all move alike.
  */
 export function openModal(scrim) {
-    present(scrim, true, { kind: 'fade' });
+    present(scrim, true, { as: 'scrim' });
     const box = scrim.querySelector(':scope > .modal');
-    if (box) animate(box, [{ opacity: 0, transform: 'translateY(8px) scale(0.98)', offset: 0 }], { speed: 'med' });
+    if (!box) return;
+    pose(box, 'in', { as: 'dialog' });
+    watchScroll(box);
+}
+
+/**
+ * `data-scrolled` on a `.modal` while its body is scrolled off the top, which is
+ * what draws the line under the head (dialogs.css). Without it a field cut off at
+ * the top edge reads as a clipped label rather than as "more above".
+ *
+ * One capturing listener on the box rather than one on the body: the snippet
+ * editor's body is Preact's and is built afresh on every open, so a listener on
+ * the body would be on a node that is gone by the next one. The box is markup in
+ * every dialog, so the attribute on it is nobody else's to undo.
+ */
+const scrollWatched = new WeakSet();
+function watchScroll(box) {
+    const mark = () => {
+        const body = box.querySelector('.modal-body');
+        box.toggleAttribute('data-scrolled', Boolean(body && body.scrollTop > 0));
+    };
+    if (!scrollWatched.has(box)) {
+        scrollWatched.add(box);
+        box.addEventListener('scroll', (e) => {
+            if (e.target.classList && e.target.classList.contains('modal-body')) mark();
+        }, { capture: true, passive: true });
+    }
+    // Whatever the last open left behind, and again once the opener has filled
+    // the dialog and moved the focus, which can scroll the body by itself.
+    mark();
+    requestAnimationFrame(mark);
 }
 
 /**
@@ -214,8 +260,8 @@ export function openModal(scrim) {
 export function closeModal(scrim, onGone) {
     if (!isUp(scrim)) { if (scrim.hidden && onGone) onGone(); return; }
     const box = scrim.querySelector(':scope > .modal');
-    if (box) animate(box, [{ transform: 'none' }, { transform: 'translateY(6px) scale(0.98)' }]);
-    present(scrim, false, { kind: 'fade', onGone });
+    if (box) pose(box, 'out', { as: 'dialog' });
+    present(scrim, false, { as: 'scrim', onGone });
 }
 
 /**

@@ -16,10 +16,10 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
-    padding: 0 8px 8px;
+    padding: 0 var(--sp-4) var(--sp-4);
 }
 
-.rail-head { display: flex; flex-direction: column; gap: 6px; padding: 0 4px 10px; }
+.rail-head { display: flex; flex-direction: column; gap: var(--sp-3); padding: 0 var(--sp-2) var(--sp-5); }
 
 /* Secondary to the button above it and drawn that way: the rail's ground rather
    than a raised surface, and a light that says on without competing with New
@@ -27,13 +27,13 @@
 .rail-filter {
     display: flex;
     align-items: center;
-    gap: 9px;
+    gap: var(--sp-4);
     width: 100%;
     height: 30px;
-    padding: 0 12px;
+    padding: 0 var(--sp-6);
     background: var(--s2);
     color: var(--text-3);
-    font: 500 12px/1 var(--sans);
+    font: 500 var(--fs-sm)/var(--lh-none) var(--sans);
     border-radius: var(--pill);
     white-space: nowrap;
     transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
@@ -41,7 +41,7 @@
 .rail-filter:hover { background: var(--s3); color: var(--text); }
 .rail-filter svg { flex: none; color: var(--text-4); }
 .rail-filter-label { overflow: hidden; text-overflow: ellipsis; }
-.rail-filter[aria-pressed="true"] { background: var(--blue-cont); color: #dbe6fb; }
+.rail-filter[aria-pressed="true"] { background: var(--blue-cont); color: var(--on-blue-cont); }
 .rail-filter[aria-pressed="true"] svg { color: var(--blue); }
 
 /* How many sessions the button is talking about — the same number whether it is
@@ -51,12 +51,12 @@
     color: var(--text-4);
     font-variant-numeric: tabular-nums;
 }
-.rail-filter[aria-pressed="true"] .rail-filter-count { color: #b9cdf0; }
+.rail-filter[aria-pressed="true"] .rail-filter-count { color: var(--on-blue-cont-2); }
 .rail-filter-count[hidden] { display: none; }
 
 /* Hide finished and the order button share a row: the filter takes the width,
    the order button is a round pill of the same height at its end. */
-.rail-filters { display: flex; gap: 6px; }
+.rail-filters { display: flex; gap: var(--sp-3); }
 .rail-filters .rail-filter { flex: 1; min-width: 0; }
 .rail-sort {
     flex: none;
@@ -73,31 +73,32 @@
 .rail-sort[aria-expanded="true"] { background: var(--s3); color: var(--text); }
 /* Anything but the default order is a choice somebody made, and says so. */
 .rail-sort.on { color: var(--blue); }
-.sort-row { gap: 8px; }
-.sort-tick { display: inline-grid; place-items: center; width: 13px; flex: none; color: var(--blue); }
+.sort-row { gap: var(--sp-4); }
+.sort-tick { display: inline-grid; place-items: center; width: 12px; flex: none; color: var(--blue); }
 
 /* Two buttons that read as one control: one height, one outer radius, and a
    hairline of the rail showing between them. Each half lights on its own, so the
    thing about to be hit is the thing that highlights. The pair fills the rail —
    at ~200px a content-width split button leaves dead space beside it and forces
-   its own menu wider than the thing it came out of. */
+   its own menu wider than the thing it came out of. The 1px gap is that
+   hairline, not a step on the spacing scale. */
 .new-wrap { position: relative; display: flex; gap: 1px; }
 
 .btn-new {
     display: flex;
     align-items: center;
-    gap: 11px;
+    gap: var(--sp-5);
     flex: 1;
     min-width: 0;
-    height: 46px;
-    padding: 0 18px;
+    height: 44px;
+    padding: 0 var(--sp-7);
     background: var(--s3);
     color: var(--text);
-    font: 500 14px/1 var(--sans);
+    font: 500 var(--fs-base)/var(--lh-none) var(--sans);
     border-radius: var(--r-lg) 0 0 var(--r-lg);
     transition: background var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
 }
-.btn-new:hover { background: var(--s4); box-shadow: 0 1px 3px #0006; }
+.btn-new:hover { background: var(--s4); box-shadow: var(--shadow-1); }
 .btn-new:active { background: var(--s5); }
 .btn-new svg { color: var(--blue); flex: none; }
 
@@ -106,7 +107,7 @@
     place-items: center;
     flex: none;
     width: 40px;
-    height: 46px;
+    height: 44px;
     background: var(--s3);
     color: var(--text-3);
     border-radius: 0 var(--r-lg) var(--r-lg) 0;
@@ -124,19 +125,18 @@
    thing here that clips, so absolute positioning is all this needs. */
 .new-menu {
     position: absolute;
-    top: calc(100% + 8px);
+    top: calc(100% + var(--sp-4));
     left: 0;
     right: 0;
-    z-index: 60;
+    z-index: var(--z-pop);
     /* Six rows, a rule and the escape hatch, so nothing that matters sits below
        a fold. It still scrolls on a window too short to hold that. */
     max-height: 420px;
     overflow-y: auto;
-    padding: 6px;
+    padding: var(--sp-3);
     background: var(--s3);
     border-radius: var(--r);
-    box-shadow: 0 10px 30px #000a;
-    animation: menu-in var(--t-fast) var(--ease);
+    box-shadow: var(--shadow-pop);
     transform-origin: top left;
 }
 .new-menu[hidden] { display: none; }
@@ -144,7 +144,7 @@
 /* The dialog's row folded onto two lines: the rail cannot hold a name, a count
    and a path side by side, and the path is the half that tells two projects of
    the same name apart. */
-.new-menu .picker-row { flex-wrap: wrap; gap: 8px; padding: 7px 10px; }
+.new-menu .picker-row { flex-wrap: wrap; gap: var(--sp-1) var(--sp-4); padding: var(--sp-3) var(--sp-5); }
 .new-menu .picker-row:hover { background: var(--s4); }
 .new-menu .picker-row .path {
     flex-basis: 100%;
@@ -153,16 +153,15 @@
     white-space: nowrap;
     text-overflow: ellipsis;
 }
-.new-menu .sep { height: 1px; margin: 5px 8px; background: var(--outline-soft); }
+.new-menu .sep { height: 1px; margin: var(--sp-2) var(--sp-4); background: var(--outline-soft); }
 .new-menu .menu-note {
-    padding: 9px 10px;
-    font: 400 12px/1.5 var(--sans);
+    padding: var(--sp-4) var(--sp-5);
+    font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
     color: var(--text-4);
 }
 
-@media (prefers-reduced-motion: reduce) { .new-menu { animation: none; } }
 
-.rail-scroll { flex: 1; overflow-y: auto; min-height: 0; padding-bottom: 12px; }
+.rail-scroll { flex: 1; overflow-y: auto; min-height: 0; padding-bottom: var(--sp-6); }
 
 /* Each group is a card, so where one project ends and the next begins is a
    change of surface rather than something the eye has to infer from spacing.
@@ -170,19 +169,23 @@
 .rail-group {
     background: var(--s1);
     border-radius: var(--r-lg);
-    padding: 4px;
-    margin-bottom: 8px;
+    padding: var(--sp-2);
+    margin-bottom: var(--sp-4);
 }
 
-/* The heading is the disclosure — clicking it shuts the group. */
+/* The heading is the disclosure — clicking it shuts the group.
+   Its text starts where the rows' titles do (--sp-6 in from the card's inner
+   edge, like .strip-main), whatever kind of card it heads. A project card's
+   tinted head adds the accent edge's width to that in colours.css. */
 .group-head {
     display: flex;
     align-items: center;
-    gap: 9px;
+    gap: var(--sp-4);
     width: 100%;
-    padding: 10px 12px;
+    min-height: 36px;
+    padding: var(--sp-4) var(--sp-6);
     border-radius: var(--r);
-    font: 500 11.5px/1.4 var(--sans);
+    font: 500 var(--fs-sm)/var(--lh-snug) var(--sans);
     letter-spacing: 0.04em;
     color: var(--text-3);
     transition: background var(--t-fast) var(--ease);
@@ -218,9 +221,11 @@
    has to move up to --s3 or a hovered row would be invisible. */
 .rail-group.nested {
     background: var(--s2);
-    margin: 2px 2px 4px;
+    margin: var(--sp-1) 0 var(--sp-2);
 }
-.rail-group.nested > .group-head { padding: 7px 10px; font-size: 11px; }
+/* Same padding as every other head, so its label lines up with the titles; a
+   step smaller in type and height, because it is inside one. */
+.rail-group.nested > .group-head { min-height: 32px; padding: var(--sp-3) var(--sp-6); font-size: var(--fs-xs); }
 .rail-group.nested > .group-head:hover { background: var(--s3); }
 /* --row-bg is what .strip-actions fades its overlay into. Left at --s1 the
    buttons would sit on a visible seam over a card that is no longer --s1. */
@@ -245,13 +250,13 @@
 }
 .strip:hover { background: var(--s2); --row-bg: var(--s2); }
 .strip[aria-current="true"] { background: var(--blue-cont); --row-bg: var(--blue-cont); }
-.strip[aria-current="true"]:hover { background: #26406c; --row-bg: #26406c; }
+.strip[aria-current="true"]:hover { background: var(--blue-cont-hover); --row-bg: var(--blue-cont-hover); }
 
 .strip-main {
     flex: 1;
     min-width: 0;
     text-align: left;
-    padding: 9px 14px 10px;
+    padding: var(--sp-4) var(--sp-6);
     border-radius: var(--r);
 }
 
@@ -264,13 +269,13 @@
    allowed to be cut short anyway. */
 .strip-actions {
     position: absolute;
-    right: 6px;
-    bottom: 3px;
+    right: var(--sp-3);
+    bottom: var(--sp-2);
     display: flex;
     align-items: center;
-    gap: 1px;
-    padding-left: 26px;
-    background: linear-gradient(90deg, transparent, var(--row-bg) 24px);
+    gap: var(--sp-1);
+    padding-left: var(--sp-9);
+    background: linear-gradient(90deg, transparent, var(--row-bg) var(--sp-9));
     border-radius: var(--r);
     opacity: 0;
     transition: opacity var(--t-fast) var(--ease);
@@ -290,8 +295,8 @@
    of it; the meta line runs underneath, which is the line that may be cut. */
 .strip-menu-btn {
     position: absolute;
-    top: 5px;
-    right: 6px;
+    top: var(--sp-3);
+    right: var(--sp-3);
     display: grid;
     place-items: center;
     width: 24px;
@@ -307,8 +312,8 @@
 .strip-menu-btn:hover { background: var(--s4); color: var(--text); }
 .strip-menu-btn[aria-expanded="true"] { background: var(--s4); color: var(--text); }
 .strip[aria-current="true"] > .strip-menu-btn:hover,
-.strip[aria-current="true"] > .strip-menu-btn[aria-expanded="true"] { background: #30507f; }
-.strip:has(> .strip-menu-btn) .strip-title { padding-right: 22px; }
+.strip[aria-current="true"] > .strip-menu-btn[aria-expanded="true"] { background: var(--blue-cont-active); }
+.strip:has(> .strip-menu-btn) .strip-title { padding-right: var(--sp-8); }
 .strip[data-renaming="true"] > .strip-menu-btn { display: none; }
 /* Nothing left in the overlay but a stalled row's Stop, so without one it would
    be an empty gradient patch fading in over the meta line. */
@@ -320,11 +325,13 @@
     display: block;
     width: 100%;
     box-sizing: border-box;
-    margin: -2px 0 0 -5px;
-    padding: 1px 4px;
+    /* Out by its own border and padding, so the text inside sits where the
+       title's did; the 1px is the border. */
+    margin: calc(-1 * var(--sp-1)) 0 0 calc(-1 * (var(--sp-2) + 1px));
+    padding: 1px var(--sp-2);
     font: inherit;
-    font-size: 13.5px;
-    line-height: 1.4;
+    font-size: var(--fs-base);
+    line-height: var(--lh-snug);
     color: var(--text);
     background: var(--bg);
     border: 1px solid var(--blue);
@@ -332,13 +339,16 @@
     outline: none;
 }
 
+/* Not blue: on this rail blue means the row you are in. A pin is a fact about
+   the row, and the glyph alone says it. */
 .strip-meta .tag-pin {
     display: grid;
     place-items: center;
     flex: none;
-    color: var(--blue);
+    align-self: center;
+    color: var(--text-3);
 }
-.strip[aria-current="true"] .strip-meta .tag-pin { color: #cfe0ff; }
+.strip[aria-current="true"] .strip-meta .tag-pin { color: var(--on-blue-cont); }
 
 /* ── one PR vocabulary ──────────────────────────────────────────────────────
    Three surfaces show what has become of a pull request — the rail glyph below,
@@ -381,7 +391,7 @@
 :is(.strip-meta .tag-pr, .lcard-head .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="unknown"] { --pr-tint: var(--text-4); }
 /* Still moving, so it breathes — the same light every in-flight thing here uses. */
 :is(.strip-meta .tag-pr, .lcard-head .tag-pr, .conv-sub .pr, .sig.pr, .pr-pop .pr)[data-status="checks-pending"] svg {
-    animation: breathe 1.6s var(--ease) infinite;
+    animation: breathe var(--dur-loop) var(--ease) infinite;
 }
 
 /* What the session left on GitHub, at its worst.
@@ -394,6 +404,7 @@
     display: grid;
     place-items: center;
     flex: none;
+    align-self: center;
     color: var(--pr-tint);
     opacity: var(--pr-fade);
 }
@@ -403,95 +414,107 @@
    are left exactly as they are. */
 .strip[aria-current="true"] .strip-meta .tag-pr[data-status="draft"],
 .strip[aria-current="true"] .strip-meta .tag-pr[data-status="unknown"],
-.strip[aria-current="true"] .strip-meta .tag-pr[data-status="closed"] { color: #b3c7ea; }
+.strip[aria-current="true"] .strip-meta .tag-pr[data-status="closed"] { color: var(--on-blue-cont-2); }
 
 .mini {
     display: grid;
     place-items: center;
-    width: 27px; height: 27px;
+    width: 28px; height: 28px;
     border-radius: 50%;
     color: var(--text-4);
     transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
 .mini:hover { background: var(--s4); color: var(--text); }
 .mini.on { color: var(--blue); }
-.strip[aria-current="true"] .mini:hover { background: #30507f; }
+.strip[aria-current="true"] .mini:hover { background: var(--blue-cont-active); }
 /* Destructive controls stay the same weight as their neighbours until reached
    for — colouring one red at rest would make every row look like a warning. */
-.mini.danger:hover { background: #3a2422; color: var(--red); }
-.strip[aria-current="true"] .mini.danger:hover { background: #4a2b28; }
+.mini.danger:hover { background: var(--red-cont); color: var(--red); }
+.strip[aria-current="true"] .mini.danger:hover { background: var(--red-cont-hover); }
 
 /* Only a development bridge lists these at all; the tag says why a row is here
    in a window where it might otherwise look like real work. */
-.tag-test {
+/* The three small labels a row can carry — test, orch, bg — share one shape:
+   16px tall, mono 10, centred on the meta line rather than sat on its baseline
+   (a chip on the baseline floats above the words beside it). */
+:is(.tag-test, .tag-orch, .tag-bg) {
     flex: none;
-    padding: 0 6px;
+    display: inline-flex;
+    align-items: center;
+    align-self: center;
+    height: 16px;
+    padding: 0 var(--sp-3);
     border-radius: var(--r-xs);
+    font: 500 var(--fs-2xs)/var(--lh-none) var(--mono);
+    letter-spacing: 0.06em;
+}
+.tag-test {
     background: var(--s4);
     color: var(--text-3);
-    font: 500 10px/16px var(--mono);
-    letter-spacing: 0.06em;
     text-transform: uppercase;
 }
 
-/* An orchestrator, with its unread inbox count. Blue rather than the test tag's
-   grey because it is real work; amber when the usage cutoff has paused it. */
+/* An orchestrator, with its unread inbox count — and, in the orchestrator
+   dock, the "worker" chip on a session one started. Blue rather than the test
+   tag's grey because it is real work, on the faint blue ground the palette
+   keeps for exactly this; amber when the usage cutoff has paused it. */
 .tag-orch {
-    flex: none;
-    padding: 0 6px;
-    border-radius: var(--r-xs);
-    background: color-mix(in srgb, var(--blue) 22%, transparent);
+    background: var(--blue-tint);
     color: var(--blue);
-    font: 500 10px/16px var(--mono);
     letter-spacing: 0.04em;
 }
 .tag-orch.paused {
-    background: color-mix(in srgb, var(--yellow) 22%, transparent);
+    background: var(--yellow-cont);
     color: var(--yellow);
 }
 
-/* State reads as a small dot before the title, not a slab edge. */
+/* One line. Every row is then the same three lines — title, where it stands,
+   meta — so the rail scans as a list rather than a column of blocks of
+   whatever height their titles happened to wrap to. The whole title is in the
+   tooltip (rail.js) and at the top of the conversation it opens. */
 .strip-title {
     display: block;
-    font-size: 13.5px;
-    line-height: 1.4;
+    font-size: var(--fs-base);
+    line-height: var(--lh-snug);
     color: var(--text-2);
     overflow: hidden;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
+    white-space: nowrap;
+    text-overflow: ellipsis;
 }
-.strip[aria-current="true"] .strip-title { color: #d7e3ff; font-weight: 500; }
+.strip[aria-current="true"] .strip-title { color: var(--on-blue-cont); font-weight: 500; }
 
 /* Where the last turn left things — bridge/standing.js. One line, cut rather
    than wrapped: the rail is narrow and the full line is in the tooltip. */
 .strip-standing {
     display: block;
-    margin-top: 2px;
-    font: 400 12px/1.45 var(--sans);
+    margin-top: var(--sp-1);
+    font: 400 var(--fs-sm)/var(--lh-snug) var(--sans);
     color: var(--text-3);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 .strip-standing[data-source="extract"] { font-style: italic; }
-.strip[aria-current="true"] .strip-standing { color: #b3c7ea; }
+.strip[aria-current="true"] .strip-standing { color: var(--on-blue-cont-2); }
 
+/* Mono 11 for the worktree name, sans 12 for the rest, on one baseline — the
+   two sizes centred on each other read as a line that wobbles. What has no
+   text of its own (the status dot, the glyphs, the chips) centres instead. */
 .strip-meta {
     display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-top: 3px;
-    font: 400 11.5px/1.5 var(--sans);
+    align-items: baseline;
+    gap: var(--sp-3);
+    margin-top: var(--sp-1);
+    font: 400 var(--fs-sm)/var(--lh-base) var(--sans);
     color: var(--text-4);
     white-space: nowrap;
     overflow: hidden;
 }
-.strip[aria-current="true"] .strip-meta { color: #9db3d8; }
+.strip[aria-current="true"] .strip-meta { color: var(--on-blue-cont-3); }
 .strip-meta .wt {
     color: var(--text-3);
     font-family: var(--mono);
-    font-size: 11px;
+    font-size: var(--fs-xs);
     /* Gave up none of its width before, so on a pinned or labelled row it took
        what the activity line needed. It is the longest thing on the line and the
        least urgent, so it is the one that abbreviates. */
@@ -499,8 +522,8 @@
     overflow: hidden;
     text-overflow: ellipsis;
 }
-.strip[aria-current="true"] .strip-meta .wt { color: #b3c7ea; }
-.strip-meta .dot { color: var(--text-4); opacity: 0.6; }
+.strip[aria-current="true"] .strip-meta .wt { color: var(--on-blue-cont-2); }
+.strip-meta .dot { flex: none; color: var(--text-4); opacity: 0.6; }
 
 .strip-meta .pulse {
     display: inline-flex;
@@ -508,18 +531,21 @@
     /* Squeezed to nothing on a narrow rail, and that is allowed: the dot at the
        head of the line is what says the session is working. */
     min-width: 0;
+    align-self: center;
     color: var(--yellow);
 }
 .strip-meta .pulse-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 /* Messages you queued and then walked away from. Ahead of the activity, which is
-   what gives way when the row runs out of room. */
+   what gives way when the row runs out of room. The 1px above and below (here,
+   on .due and on .tag-stalled) is optical: a pill of 11px text wants a hair of
+   ground over its letters, and the scale's smallest step is a fat one there. */
 .strip-meta .wait {
     flex: none;
-    padding: 1px 7px;
+    padding: 1px var(--sp-3);
     border-radius: var(--pill);
     background: var(--blue-tint);
     color: var(--blue);
-    font-size: 10.5px;
+    font-size: var(--fs-xs);
 }
 
 /* Messages waiting on a clock rather than on a turn. The same badge in the amber
@@ -527,11 +553,11 @@
    a queued message goes as soon as the turn ends, and this one goes at 2am. */
 .strip-meta .due {
     flex: none;
-    padding: 1px 7px;
+    padding: 1px var(--sp-3);
     border-radius: var(--pill);
-    background: #3a2f16;
+    background: var(--yellow-cont-hover);
     color: var(--yellow);
-    font-size: 10.5px;
+    font-size: var(--fs-xs);
 }
 
 /* Whether a session is doing anything, at the head of the line.
@@ -547,10 +573,11 @@
     border-radius: 50%;
     background: var(--green);
     flex: none;
+    align-self: center;
 }
 .strip[data-state="running"] .strip-meta::before {
     background: var(--yellow);
-    animation: breathe 1.6s var(--ease) infinite;
+    animation: breathe var(--dur-loop) var(--ease) infinite;
 }
 /* Running, but not by us — a terminal, VS Code, a background agent. Hollow to
    the filled dot of a session this window is driving, because the difference
@@ -562,28 +589,24 @@
     background: transparent;
     box-shadow: inset 0 0 0 1.5px var(--yellow);
     flex: none;
+    align-self: center;
 }
 
 /* A background agent: nobody is sitting in front of this one. Shaped like the
    test label beside it, in the quieter colour — it is a fact about the session,
    not a warning. */
 .tag-bg {
-    flex: none;
-    padding: 0 6px;
-    border-radius: var(--r-xs);
     background: var(--s3);
     color: var(--text-4);
-    font: 500 10px/16px var(--mono);
-    letter-spacing: 0.06em;
     text-transform: uppercase;
 }
 
 .rail-empty {
-    padding: 34px 20px;
+    padding: var(--sp-10) var(--sp-8);
     color: var(--text-3);
-    font-size: 13.5px;
+    font-size: var(--fs-base);
     text-align: center;
-    line-height: 1.6;
+    line-height: var(--lh-prose);
 }
 
 
@@ -594,11 +617,11 @@
    is web/boards/parts.js's, so the boards' cards wear it too. */
 .tag-stalled {
     flex: none;
-    padding: 1px 7px;
+    padding: 1px var(--sp-3);
     border-radius: var(--pill);
-    background: #3a2422;
+    background: var(--red-cont);
     color: var(--red);
-    font-size: 10.5px;
+    font-size: var(--fs-xs);
 }
 .strip[data-stalled="true"] .strip-meta::before {
     background: var(--red);
@@ -616,11 +639,11 @@
 .strip-stop { display: contents; }
 .mini.stop {
     width: auto;
-    padding: 0 10px;
+    padding: 0 var(--sp-5);
     border-radius: var(--pill);
-    font-size: 11px;
+    font-size: var(--fs-xs);
     color: var(--red);
-    background: #3a2422;
+    background: var(--red-cont);
 }
-.mini.stop:hover { background: #4a2b28; color: var(--red); }
+.mini.stop:hover { background: var(--red-cont-hover); color: var(--red); }
 .mini.stop:disabled { opacity: .6; cursor: default; }

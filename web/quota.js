@@ -592,7 +592,20 @@ export function applyQuotaSnapshot(next) {
     quota.at = Date.now();
     renderQuota();
     quotaFlash(before, next);
+    for (const fn of quotaListeners) {
+        try { fn(); } catch (err) { console.error(err); }
+    }
 }
+
+// Whoever else draws from the same reading — the orchestrator page's meters —
+// told when it moves, so nothing outside this file polls for usage.
+const quotaListeners = new Set();
+
+/** The usage windows from the latest reading, or none before the first. */
+export const quotaWindows = () => (quota.snap && quota.snap.windows) || [];
+
+/** Be called whenever a new reading lands. */
+export function onQuotaChange(fn) { quotaListeners.add(fn); }
 
 /**
  * A window's status got worse — say so on the pill.
@@ -697,7 +710,7 @@ async function refreshQuotaNow() {
 }
 
 export function showQuota(on) {
-    present(dom.quotaMenu, on, { kind: 'pop' });
+    present(dom.quotaMenu, on, { as: 'menu' });
     dom.quotaPill.setAttribute('aria-expanded', String(on));
     // The two popovers must not sit open together, and each one's outside-click
     // listener is stopped by the other's trigger. There were three of these
@@ -848,7 +861,7 @@ function renderCvPanel() {
 
 export function showCv(on) {
     if (on === isUp(dom.cvMenu)) return;
-    present(dom.cvMenu, on, { kind: 'pop' });
+    present(dom.cvMenu, on, { as: 'menu' });
     dom.cvPill.setAttribute('aria-expanded', String(on));
     if (on) { renderCvPanel(); showQuota(false); showNewMenu(false); showBarMore(false); }
 }

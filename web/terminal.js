@@ -65,7 +65,7 @@ function theme() {
         foreground: cssVar('--text', '#e3e3e3'),
         cursor: cssVar('--blue', '#a8c7fa'),
         cursorAccent: cssVar('--s2', '#202124'),
-        selectionBackground: '#2e4a75',
+        selectionBackground: cssVar('--selection', '#2e4a75'),
         // Not #000: a program painting a black background should sink into the
         // pane's surface rather than punch a hole through it.
         black: cssVar('--s1', '#1b1c1d'),

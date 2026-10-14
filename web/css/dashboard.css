@@ -18,13 +18,13 @@
     align-items: center;
     justify-content: center;
     height: 100%;
-    gap: 12px;
+    gap: var(--sp-6);
     color: var(--text-3);
     text-align: center;
-    padding: 32px;
+    padding: var(--sp-10);
 }
-.empty h2 { margin: 0; font: 400 19px/1.3 var(--sans); color: var(--text-2); }
-.empty p { margin: 0; max-width: 400px; font-size: 14px; line-height: 1.65; }
+.empty h2 { margin: 0; font: 400 var(--fs-xl)/var(--lh-tight) var(--sans); color: var(--text-2); }
+.empty p { margin: 0; max-width: 400px; font-size: var(--fs-base); line-height: var(--lh-prose); }
 
 /* ── dashboard ───────────────────────────────────────────────────────── */
 /* Work that outlived its conversation. Laid out as a board rather than as more
@@ -51,14 +51,14 @@
     flex: none;
     display: flex;
     align-items: flex-start;
-    gap: 16px;
-    padding: 22px 28px 16px;
+    gap: var(--sp-7);
+    padding: var(--sp-8) var(--pane-x, 28px) var(--sp-7);
 }
-.live-title { margin: 0; font: 400 21px/1.3 var(--sans); color: var(--text); }
+.live-title { margin: 0; font: 400 var(--fs-2xl)/var(--lh-tight) var(--sans); color: var(--text); }
 .live-sub {
-    margin: 5px 0 0;
-    font-size: 13px;
-    line-height: 1.6;
+    margin: var(--sp-2) 0 0;
+    font-size: var(--fs-md);
+    line-height: var(--lh-prose);
     color: var(--text-3);
 }
 
@@ -66,10 +66,10 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 0 28px 32px;
+    padding: 0 var(--pane-x, 28px) var(--sp-10);
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
-    gap: 14px;
+    gap: var(--sp-6);
     align-content: start;
 }
 
@@ -90,17 +90,17 @@
 }
 
 .live[data-mode="dock"] .live-head {
-    padding: 9px 28px 7px;
+    padding: var(--sp-4) var(--pane-x, 28px) var(--sp-4);
     align-items: baseline;
-    gap: 10px;
+    gap: var(--sp-5);
 }
 .live[data-mode="dock"] .live-head > div {
     display: flex;
     align-items: baseline;
-    gap: 10px;
+    gap: var(--sp-5);
 }
-.live[data-mode="dock"] .live-title { font-size: 12.5px; color: var(--text-3); }
-.live[data-mode="dock"] .live-sub { margin: 0; font-size: 11.5px; }
+.live[data-mode="dock"] .live-title { font-size: var(--fs-md); color: var(--text-3); }
+.live[data-mode="dock"] .live-sub { margin: 0; font-size: var(--fs-sm); }
 
 /* A count in the subtitle that scrolls its group into view. Deliberately not a
    button to look at — it sits inside a sentence of plain facts, and only the
@@ -112,14 +112,14 @@
     border: 0;
     background: none;
     cursor: pointer;
-    border-radius: 3px;
+    border-radius: var(--r-2xs);
 }
 .live-jump:hover { color: var(--text); text-decoration: underline; }
-.live-jump:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.live-jump:focus-visible { outline: var(--focus-w) solid var(--focus-colour); outline-offset: var(--focus-offset); }
 .live-sep { white-space: pre; }
 
 .live[data-mode="dock"] .live-body {
-    padding: 0 28px 14px;
+    padding: 0 var(--pane-x, 28px) var(--sp-6);
     /* One row: columns are laid out along the inline axis and the row scrolls,
        instead of wrapping into however many rows it takes. */
     grid-template-columns: none;
@@ -148,31 +148,33 @@
 .live-group {
     display: flex;
     flex-direction: column;
-    gap: 7px;
+    gap: var(--sp-4);
 }
 
 .lgroup-head {
     flex: none;
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--sp-4);
     margin: 0;
-    /* The rail's group headings, quieter: these label a segment rather than
-       offering to collapse it, so no hover state and no caret. */
-    font: 500 11px/1.4 var(--sans);
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: var(--text-4);
+    /* The task board's column head, so the two boards label a run of cards
+       the same way: sentence case, the label at --text-2 and the count quiet
+       beside it. These label a segment rather than offering to collapse it,
+       so no hover state and no caret. */
+    font: 500 var(--fs-md)/var(--lh-tight) var(--sans);
+    color: var(--text-2);
 }
-.lgroup-count { font-variant-numeric: tabular-nums; }
-.lgroup-more { color: var(--text-4); font-weight: 400; text-transform: none; }
-.live-group[data-group="live"] .lgroup-label { color: var(--text-3); }
+.lgroup-count, .lgroup-more {
+    font: 400 var(--fs-sm)/var(--lh-tight) var(--sans);
+    color: var(--text-4);
+    font-variant-numeric: tabular-nums;
+}
 
 /* What .live-body was before the groups arrived, one level down. Which way it
    flows is the arrangement's business. */
 .lgroup-body {
     display: grid;
-    gap: 14px;
+    gap: var(--sp-6);
     min-height: 0;
 }
 
@@ -198,8 +200,8 @@
 /* A rule between segments rather than a box around each: the strip is short and
    three nested panels in 38vh is mostly border. */
 .live[data-mode="dock"][data-dock="bottom"] .live-group + .live-group {
-    margin-left: 16px;
-    padding-left: 16px;
+    margin-left: var(--sp-7);
+    padding-left: var(--sp-7);
     border-left: 1px solid var(--s4);
 }
 .live[data-mode="dock"][data-dock="bottom"] .lgroup-head {
@@ -223,8 +225,8 @@
    own run of cards. */
 
 .live[data-mode="dock"][data-dock="side"] .live-group + .live-group {
-    margin-top: 16px;
-    padding-top: 14px;
+    margin-top: var(--sp-7);
+    padding-top: var(--sp-6);
     border-top: 1px solid var(--s4);
 }
 .live[data-mode="dock"][data-dock="side"] .lgroup-head {
@@ -237,7 +239,7 @@
     top: 0;
     z-index: 2;
     align-self: stretch;
-    padding: 6px 0 5px;
+    padding: var(--sp-3) 0 var(--sp-2);
     background: var(--bg);
 }
 .live[data-mode="dock"][data-dock="side"] .lgroup-body {
@@ -269,8 +271,8 @@
     /* Vertical only, deliberately: any horizontal padding or border here would
        narrow the group against the body and cost the cards a column at some
        widths, which is the one thing this change is not allowed to do. */
-    margin-top: 18px;
-    padding-top: 14px;
+    margin-top: var(--sp-7);
+    padding-top: var(--sp-6);
     border-top: 1px solid var(--s4);
 }
 .live[data-mode="full"] .lgroup-head {
@@ -283,7 +285,7 @@
     top: 0;
     z-index: 2;
     align-self: stretch;
-    padding: 8px 0 6px;
+    padding: var(--sp-4) 0 var(--sp-3);
     background: var(--s1);
 }
 .live[data-mode="full"] .lgroup-body {
@@ -324,12 +326,12 @@
 }
 
 .live[data-mode="dock"][data-dock="side"] .live-head {
-    padding: 14px 18px 8px;
+    padding: var(--sp-6) var(--sp-7) var(--sp-4);
     flex-wrap: wrap;
 }
 
 .live[data-mode="dock"][data-dock="side"] .live-body {
-    padding: 0 18px 18px;
+    padding: 0 var(--sp-7) var(--sp-7);
     /* Back to an ordinary single column that scrolls downwards.
        `minmax(0, 1fr)` rather than `1fr`, which is `minmax(auto, 1fr)` — that
        `auto` floor refuses to go below the content's min-content width, and a
@@ -347,25 +349,25 @@
 
 .live-note {
     grid-column: 1 / -1;
-    padding: 18px 20px;
+    padding: var(--sp-7) var(--sp-8);
     background: var(--s2);
     border-radius: var(--r);
     color: var(--text-3);
-    font-size: 13.5px;
+    font-size: var(--fs-base);
 }
 .live-note p { margin: 0; }
 
 .lcard {
     display: flex;
     flex-direction: column;
-    gap: 9px;
-    padding: 14px 15px 12px;
+    gap: var(--sp-4);
+    padding: var(--sp-6) var(--sp-7);
     background: var(--s2);
     border-radius: var(--r-lg);
     /* The whole card opens the session — see cardClickOpens for what is carved
        out of that. Anything with its own behaviour keeps its own cursor. */
     cursor: pointer;
-    transition: background var(--t-fast) var(--ease);
+    transition: background var(--dur-fast) var(--ease-standard);
     /* Everything on a card that would rather not wrap — a title, a headline, a
        worktree name — has to be allowed to give way instead, or its full width
        becomes the card's minimum and the card stops fitting its column. The
@@ -373,22 +375,22 @@
     min-width: 0;
     /* The band a card is sorted into, said again in colour along its edge, so
        that "who is blocked on me" survives a screen too full to read. */
-    box-shadow: inset 3px 0 0 var(--s4);
+    box-shadow: inset var(--edge-w) 0 0 var(--s4);
 }
 /* Stopped at the facts line by `live.compact`. Four short rows in a row-gap
    chosen for a card that also held a preview and a message box reads as a
    half-filled card, so the whole thing draws in a little. Spacing only — the
    colours above still do the work of saying which band it is in. */
-.lcard[data-compact="1"] { gap: 7px; padding: 12px 15px 11px; }
+.lcard[data-compact="1"] { gap: var(--sp-3); }
 
-.lcard[data-reason="ask"]   { box-shadow: inset 3px 0 0 var(--yellow); background: #232017; }
-.lcard[data-reason="error"] { box-shadow: inset 3px 0 0 var(--red); }
-.lcard[data-reason="here"]  { box-shadow: inset 3px 0 0 var(--green); }
+.lcard[data-reason="ask"]   { box-shadow: inset var(--edge-w) 0 0 var(--yellow); background: var(--yellow-tint); }
+.lcard[data-reason="error"] { box-shadow: inset var(--edge-w) 0 0 var(--red); }
+.lcard[data-reason="here"]  { box-shadow: inset var(--edge-w) 0 0 var(--green); }
 /* Running, but not ours to stop — dimmer than the green of a turn this window
    is driving, and still clearly not the grey of an idle card. */
-.lcard[data-reason="elsewhere"] { box-shadow: inset 3px 0 0 #3f6b4c; }
+.lcard[data-reason="elsewhere"] { box-shadow: inset var(--edge-w) 0 0 var(--green-edge); }
 
-.lcard-head { display: flex; align-items: center; gap: 8px; }
+.lcard-head { display: flex; align-items: center; gap: var(--sp-4); }
 
 .lcard-dot {
     flex: none;
@@ -398,7 +400,7 @@
 }
 .lcard[data-reason="here"] .lcard-dot {
     background: var(--yellow);
-    animation: breathe 1.6s var(--ease) infinite;
+    animation: breathe var(--dur-loop) var(--ease-standard) infinite;
 }
 .lcard[data-reason="ask"] .lcard-dot { background: var(--yellow); }
 /* Running and saying nothing — web/css/rail.css's `.strip` rule, for the same
@@ -418,7 +420,7 @@
     background: none;
     border: 0;
     text-align: left;
-    font: 500 13.5px/1.35 var(--sans);
+    font: 500 var(--fs-base)/var(--lh-snug) var(--sans);
     color: var(--text);
     cursor: pointer;
     overflow: hidden;
@@ -450,18 +452,18 @@
     flex: 0 1 auto;
     min-width: 0;
     max-width: 40%;
-    font: 400 11px/1 var(--mono);
+    font: 400 var(--fs-xs)/var(--lh-none) var(--mono);
     color: var(--text-4);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
-.lcard-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.lcard-line { display: flex; align-items: baseline; gap: var(--sp-4); min-width: 0; }
 .lstate {
     flex: 1;
     min-width: 0;
-    font-size: 12.5px;
+    font-size: var(--fs-md);
     color: var(--text-2);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -471,14 +473,14 @@
 .lstate.warn  { color: var(--yellow); }
 .lstate.err   { color: var(--red); }
 .lstate.ask   { color: var(--yellow); font-weight: 500; }
-.lcard-clock { flex: none; font: 400 11.5px/1 var(--mono); color: var(--text-4); }
+.lcard-clock { flex: none; font: 400 var(--fs-xs)/var(--lh-none) var(--mono); color: var(--text-4); }
 
 /* Where the last turn left things — bridge/standing.js. One line, cut rather
    than wrapped, and kept on a compact card. */
 .lcard-standing {
     min-width: 0;
-    font-size: 12px;
-    line-height: 1.45;
+    font-size: var(--fs-sm);
+    line-height: var(--lh-base);
     color: var(--text-3);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -497,7 +499,7 @@
     display: block;
     height: 100%;
     background: var(--blue);
-    transition: width var(--t-med) var(--ease);
+    transition: width var(--dur-base) var(--ease-standard);
 }
 
 .lcard-facts {
@@ -505,23 +507,26 @@
     align-items: center;
     flex-wrap: wrap;
     min-width: 0;
-    gap: 4px 8px;
-    font-size: 11.5px;
+    gap: var(--sp-2) var(--sp-4);
+    font-size: var(--fs-sm);
     color: var(--text-4);
 }
-.lcard-facts .wait { font-size: 10.5px; }
+.lcard-facts .wait { font-size: var(--fs-xs); }
 .lcard-ago { margin-left: auto; }
 
 .lchip {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
-    padding: 1px 8px;
+    gap: var(--sp-2);
+    /* 1px, not a step: with --lh-snug it keeps the chip at the 17-18px it was,
+       the height of the sans facts it sits among. */
+    padding: 1px var(--sp-4);
     border: 0;
     border-radius: var(--pill);
     background: var(--blue-tint);
     color: var(--blue);
-    font: 500 10.5px/17px var(--mono);
+    font: 500 var(--fs-xs)/var(--lh-snug) var(--mono);
+    transition: background var(--dur-fast) var(--ease-standard);
     cursor: pointer;
 }
 /* A DevBrowser tab name can be long, and a chip does not wrap — so the name
@@ -543,27 +548,27 @@
 .lask {
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    padding: 9px 10px;
+    gap: var(--sp-4);
+    padding: var(--sp-4) var(--sp-5);
     background: var(--s1);
     border-radius: var(--r);
 }
-.lask-what { font-size: 12px; line-height: 1.45; color: var(--text-3); }
+.lask-what { font-size: var(--fs-sm); line-height: var(--lh-base); color: var(--text-3); }
 .lask-what b {
     display: block;
-    font: 500 12px/1.4 var(--mono);
+    font: 500 var(--fs-sm)/var(--lh-snug) var(--mono);
     color: var(--text-2);
 }
-.lask-acts { display: flex; gap: 6px; }
+.lask-acts { display: flex; gap: var(--sp-3); }
 
 .lcard-log {
     margin: 0;
     min-width: 0;
-    padding: 8px 10px;
+    padding: var(--sp-4) var(--sp-5);
     list-style: none;
     background: var(--s1);
     border-radius: var(--r);
-    font: 400 11.5px/1.7 var(--mono);
+    font: 400 var(--fs-xs)/var(--lh-prose) var(--mono);
     color: var(--text-4);
 }
 .lcard-log li {
@@ -578,13 +583,13 @@
 .lsend {
     display: flex;
     align-items: flex-end;
-    gap: 6px;
+    gap: var(--sp-3);
     min-width: 0;
     margin-top: auto;
-    padding: 5px 5px 5px 11px;
+    padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-6);
     background: var(--s3);
     border-radius: var(--r);
-    transition: background var(--t-fast) var(--ease);
+    transition: background var(--dur-fast) var(--ease-standard);
 }
 .lsend:focus-within { background: var(--s4); }
 
@@ -593,49 +598,69 @@
     min-width: 0;
     min-height: 30px;
     max-height: 84px;
+    /* 7px, not a step: it centres the 16px line in the 30px the send button
+       beside it is tall. */
     padding: 7px 0;
     border: 0;
     background: none;
     resize: none;
     color: var(--text);
-    font: 400 12.5px/16px var(--sans);
+    font: 400 var(--fs-md)/16px var(--sans);
     overflow-y: auto;
 }
 .lsend-box::placeholder { color: var(--text-4); }
 .lsend-box:disabled { opacity: 0.5; }
-.lsend-go { height: 30px; padding: 0 11px; font-size: 11.5px; }
+.lsend-go { height: 30px; padding: 0 var(--sp-6); font-size: var(--fs-sm); }
 
 /* The one case that gets no box: a session with a process that is not ours. */
 .lsend.locked {
     display: block;
-    padding: 7px 11px;
+    padding: var(--sp-4) var(--sp-6);
     background: var(--s1);
     color: var(--text-4);
-    font-size: 11.5px;
-    line-height: 1.5;
+    font-size: var(--fs-sm);
+    line-height: var(--lh-base);
 }
 
-.lcard-acts { display: flex; gap: 6px; padding-top: 2px; }
+/* Pinned to the card's foot, so a row of cards in the grid ends in one line of
+   actions. The negative margin backs out a quiet button's side padding, so
+   "Open" lines up with the text above it — the same as .tb-acts. */
+.lcard-acts {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    margin-top: auto;
+    margin-left: calc(-1 * var(--sp-5));
+}
+/* Under the reply box, which already takes the slack: two auto margins split
+   it and left a gap between the box and the buttons that belong to it. */
+.lsend + .lcard-acts { margin-top: 0; }
 
+/* The task board's button, in the live board's names: `.ok` is the one filled
+   action, anything without it is a word that takes a ground under the pointer,
+   and `.no` reddens only when it is about to be pressed. */
 .lbtn {
     flex: none;
-    height: 27px;
-    padding: 0 12px;
+    height: 28px;
+    padding: 0 var(--sp-5);
     border: 0;
     border-radius: var(--pill);
-    background: var(--s3);
-    color: var(--text-2);
-    font: 500 12px/1 var(--sans);
+    background: none;
+    color: var(--text-3);
+    font: 500 var(--fs-sm)/var(--lh-none) var(--sans);
     cursor: pointer;
-    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+    transition: background var(--dur-fast) var(--ease-standard), color var(--dur-fast) var(--ease-standard);
 }
 .lbtn:hover { background: var(--s4); color: var(--text); }
-.lbtn.ok { background: var(--blue-cont); color: var(--blue); }
-.lbtn.no:hover { background: #3a2422; color: var(--red); }
+.lbtn.ok { padding: 0 var(--sp-6); background: var(--blue-cont); color: var(--blue); }
+.lbtn.ok:hover { background: var(--blue-cont-hover); color: var(--on-blue-cont); }
+.lbtn.no:hover { background: var(--red-cont); color: var(--red); }
 .lbtn:disabled { opacity: 0.45; cursor: default; }
+.lbtn:disabled:hover { background: none; color: var(--text-3); }
+.lbtn.ok:disabled:hover { background: var(--blue-cont); color: var(--blue); }
 
 /* An urgent badge is a count of people waiting, not of things happening. */
-.bar-badge.urgent { background: var(--yellow); color: #241f07; }
+.bar-badge.urgent { background: var(--yellow); color: var(--on-yellow); }
 
 /* The board's own header controls: the Focus toggle sits here, beside the count. */
 .live-btn {
@@ -643,20 +668,24 @@
     flex: none;
     display: inline-flex;
     align-items: center;
-    gap: 7px;
+    gap: var(--sp-4);
     height: 30px;
-    padding: 0 13px;
+    padding: 0 var(--sp-6);
     border: 0;
     border-radius: var(--pill);
     background: var(--s3);
     color: var(--text-3);
-    font: 500 12px/1 var(--sans);
+    font: 500 var(--fs-sm)/var(--lh-none) var(--sans);
     cursor: pointer;
-    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+    transition: background var(--dur-fast) var(--ease-standard), color var(--dur-fast) var(--ease-standard);
 }
 .live-btn:hover { background: var(--s4); color: var(--text); }
+/* Both header buttons carried `margin-left: auto`, which split the free space
+   between them and left Stacked floating in the middle of the header. The
+   first one pushes; the second sits beside it. */
+.live-btn + .live-btn { margin-left: 0; }
 .live-btn.on { background: var(--blue-cont); color: var(--blue); }
-.live[data-mode="dock"] .live-btn { height: 24px; padding: 0 10px; font-size: 11.5px; }
+.live[data-mode="dock"] .live-btn { height: 24px; padding: 0 var(--sp-5); font-size: var(--fs-sm); }
 
 /* Focus mode: the board with the window to itself, for a second monitor.
    Everything that is about driving one conversation goes, because there is no
@@ -670,7 +699,7 @@
 .app[data-focus="1"] #btn-dash,
 .app[data-focus="1"] #btn-taskboard,
 .app[data-focus="1"] .live-head { display: none; }
-.app[data-focus="1"] .live-body { padding-top: 18px; }
+.app[data-focus="1"] .live-body { padding-top: var(--sp-7); }
 
 /* The way out, and the only piece of chrome focus mode adds rather than takes
    away — the button that turned it on is inside the header it hides. */
@@ -681,17 +710,17 @@
     flex: none;
     display: flex;
     align-items: flex-start;
-    gap: 16px;
-    padding: 22px 28px 16px;
+    gap: var(--sp-7);
+    padding: var(--sp-8) var(--pane-x, 28px) var(--sp-7);
 }
 
-.dash-title { margin: 0; font: 400 21px/1.3 var(--sans); color: var(--text); }
+.dash-title { margin: 0; font: 400 var(--fs-2xl)/var(--lh-tight) var(--sans); color: var(--text); }
 
 .dash-sub {
-    margin: 5px 0 0;
+    margin: var(--sp-2) 0 0;
     max-width: 640px;
-    font-size: 13px;
-    line-height: 1.6;
+    font-size: var(--fs-md);
+    line-height: var(--lh-prose);
     color: var(--text-3);
 }
 
@@ -699,12 +728,12 @@
     margin-left: auto;
     flex: none;
     height: 34px;
-    padding: 0 16px;
+    padding: 0 var(--sp-7);
     border-radius: var(--pill);
     background: var(--s3);
     color: var(--text-2);
-    font: 500 12.5px/1 var(--sans);
-    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+    font: 500 var(--fs-md)/var(--lh-none) var(--sans);
+    transition: background var(--dur-fast) var(--ease-standard), color var(--dur-fast) var(--ease-standard);
 }
 .dash-btn:hover { background: var(--s4); color: var(--text); }
 .dash-btn:disabled { color: var(--text-4); background: var(--s2); cursor: default; }
@@ -713,61 +742,61 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 0 28px 32px;
+    padding: 0 var(--pane-x, 28px) var(--sp-10);
 }
 
 .dash-note {
-    padding: 18px 20px;
-    margin-bottom: 12px;
+    padding: var(--sp-7) var(--sp-8);
+    margin-bottom: var(--sp-6);
     background: var(--s2);
     border-radius: var(--r);
     color: var(--text-3);
-    font-size: 13.5px;
+    font-size: var(--fs-base);
 }
 .dash-note p { margin: 0; }
-.dash-note.warn { color: var(--yellow); background: #2e2717; }
-.dash-note.error { color: var(--red); background: #2f2120; }
+.dash-note.warn { color: var(--yellow); background: var(--yellow-cont); }
+.dash-note.error { color: var(--red); background: var(--red-cont); }
 
 /* One card per project, the same idea as a rail group: where one project ends
    is a change of surface, not a hairline. */
 .dproj {
     background: var(--s2);
     border-radius: var(--r-lg);
-    padding: 4px 4px 8px;
-    margin-bottom: 12px;
+    padding: var(--sp-2) var(--sp-2) var(--sp-4);
+    margin-bottom: var(--sp-6);
 }
 
 .dproj-head {
     display: flex;
     align-items: baseline;
-    gap: 10px;
-    padding: 12px 16px 8px;
+    gap: var(--sp-5);
+    padding: var(--sp-6) var(--sp-7) var(--sp-4);
 }
-.dproj-name { font: 500 14px/1.3 var(--sans); color: var(--text); }
-.dproj-repo { font: 400 11.5px/1.3 var(--mono); color: var(--text-4); }
+.dproj-name { font: 500 var(--fs-base)/var(--lh-tight) var(--sans); color: var(--text); }
+.dproj-repo { font: 400 var(--fs-xs)/var(--lh-tight) var(--mono); color: var(--text-4); }
 .dproj-counts {
     margin-left: auto;
-    font: 400 11.5px/1.3 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-tight) var(--sans);
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
 }
 
 .wsrow {
-    padding: 10px 14px 11px;
+    padding: var(--sp-5) var(--sp-6) var(--sp-6);
     border-radius: var(--r);
-    transition: background var(--t-fast) var(--ease);
+    transition: background var(--dur-fast) var(--ease-standard);
 }
 .wsrow:hover { background: var(--s3); }
 
 .wsrow-head {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--sp-5);
     min-width: 0;
 }
 
 .ws-name {
-    font: 500 13.5px/1.4 var(--sans);
+    font: 500 var(--fs-base)/var(--lh-snug) var(--sans);
     color: var(--text);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -779,14 +808,14 @@
 
 .ws-branch {
     flex: none;
-    font: 400 11.5px/1.4 var(--mono);
+    font: 400 var(--fs-xs)/var(--lh-snug) var(--mono);
     color: var(--text-4);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     max-width: 34ch;
 }
-.ws-note { font: 400 11.5px/1.4 var(--sans); color: var(--text-4); font-style: italic; }
+.ws-note { font: 400 var(--fs-sm)/var(--lh-snug) var(--sans); color: var(--text-4); font-style: italic; }
 
 /* Signals sit on the right of every row at the same tab stops, so a column of
    them can be read down rather than hunted for. */
@@ -794,7 +823,7 @@
     margin-left: auto;
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--sp-4);
     flex: none;
     flex-wrap: wrap;
     justify-content: flex-end;
@@ -803,19 +832,19 @@
 .sig {
     display: inline-flex;
     align-items: center;
-    gap: 7px;
+    gap: var(--sp-4);
     height: 26px;
-    padding: 0 11px;
+    padding: 0 var(--sp-6);
     border-radius: var(--pill);
-    font: 500 11.5px/1 var(--sans);
+    font: 500 var(--fs-sm)/var(--lh-none) var(--sans);
     white-space: nowrap;
     background: var(--s4);
     color: var(--text-2);
 }
-.sig.dirty { background: #3a3320; color: var(--yellow); }
-.sig.dirty:hover, .sig.dirty.on { background: #4a4128; }
+.sig.dirty { background: var(--yellow-cont-hover); color: var(--yellow); }
+.sig.dirty:hover, .sig.dirty.on { background: var(--yellow-cont-strong); }
 .sig.quiet { background: var(--s3); color: var(--text-3); }
-.sig.bad { background: #3a2422; color: var(--red); }
+.sig.bad { background: var(--red-cont); color: var(--red); }
 
 /* The hue is the shared one; the ground is mixed from it so a chip stays a pill
    rather than becoming plain coloured text like the other two surfaces. The
@@ -846,13 +875,13 @@
    `git status` you did not ask for. */
 .ws-files {
     list-style: none;
-    margin: 8px 0 2px;
-    padding: 10px 12px;
+    margin: var(--sp-4) 0 var(--sp-1);
+    padding: var(--sp-5) var(--sp-6);
     background: var(--bg);
     border-radius: var(--r-sm);
-    font: 400 12px/1.9 var(--mono);
+    font: 400 var(--fs-sm)/var(--lh-prose) var(--mono);
 }
-.ws-files li { display: flex; gap: 12px; }
+.ws-files li { display: flex; gap: var(--sp-6); }
 .ws-files .fstat { flex: none; width: 9ch; color: var(--text-4); }
 .ws-files .fstat[data-s="??"] { color: var(--green); }
 .ws-files .fstat[data-s="UU"] { color: var(--red); }
@@ -862,9 +891,9 @@
 .ws-sessions {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--sp-3);
     flex-wrap: wrap;
-    margin-top: 8px;
+    margin-top: var(--sp-4);
 }
 
 /* The way back to the conversation. Deliberately quieter than the signals: the
@@ -872,15 +901,16 @@
 .schip {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
-    height: 28px;
-    padding: 0 12px;
+    gap: var(--sp-4);
+    /* The signal chips' height, so the two kinds of pill on a row line up. */
+    height: 26px;
+    padding: 0 var(--sp-6);
     border-radius: var(--pill);
     background: var(--s3);
     color: var(--text-2);
-    font: 400 12px/1 var(--sans);
+    font: 400 var(--fs-sm)/var(--lh-none) var(--sans);
     max-width: 100%;
-    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+    transition: background var(--dur-fast) var(--ease-standard), color var(--dur-fast) var(--ease-standard);
 }
 .wsrow:hover .schip { background: var(--s4); }
 .schip:hover { background: var(--s5) !important; color: var(--text); }
@@ -894,12 +924,13 @@
 .schip[data-state="active"] .schip-dot { background: var(--blue); }
 .schip[data-state="running"] .schip-dot {
     background: var(--green);
-    animation: schip-breathe 1.8s ease-in-out infinite;
+    /* The shared loop (composer.css), not a private copy of it: the two had
+       drifted to 0.3 and 0.35 at the trough for no reason anyone could name. */
+    animation: breathe var(--dur-loop) var(--ease-standard) infinite;
 }
-@keyframes schip-breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
 .schip-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.schip-ago { flex: none; color: var(--text-4); font-size: 11px; }
+.schip-ago { flex: none; color: var(--text-4); font-size: var(--fs-xs); }
 
-.ws-more { font: 400 11.5px/1 var(--sans); color: var(--text-4); padding: 0 4px; }
+.ws-more { font: 400 var(--fs-sm)/var(--lh-none) var(--sans); color: var(--text-4); padding: 0 var(--sp-2); }
 

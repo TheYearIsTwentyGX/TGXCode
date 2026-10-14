@@ -434,7 +434,7 @@ function strip(s) {
             ${renaming
                 ? html`<div class="strip-main">${renameInput(s)}${meta}</div>`
                 : html`<button class="strip-main" type="button" onClick=${() => openSession(s.sessionId)}>
-                    <span class="strip-title">${s.title}</span>${standingLine(s, running)}${meta}</button>`}
+                    <span class="strip-title" title=${s.title}>${s.title}</span>${standingLine(s, running)}${meta}</button>`}
             ${compact ? stripMenuButton(s) : null}
             <div class="strip-actions">
                 ${stalled ? html`<span class="strip-stop" onClick=${(e) => e.stopPropagation()}>

@@ -95,6 +95,13 @@ comes up.
 
 Sending it on a GET is harmless and simplest.
 
+### `X-TGXCode-Viewer: <id>` on a poll, if you show asks
+
+Optional, and only for a client that **polls instead of holding `/api/events` open**
+and can put an ask in front of a person. It keeps that client counted as a viewer, so
+the bridge holds asks open for it rather than auto-denying them. The full rule is under
+*The live channel*, §*Polling counts as watching only if you say so*.
+
 ### One more refusal that is not about the token
 
 A **remote** request addressed to a host the bridge does not recognise is
@@ -192,9 +199,11 @@ of `/api/terminals/*`; all of `/api/runs/*`; `POST /api/commands/run`; all of
 `/api/shutdown`; `/api/restart` (both methods); `POST /api/claude-version/update`; `/api/devservers/stop`; `/api/devbrowser/*`;
 `POST /api/sessions/:id/reveal`; `POST /api/sessions/:id/open-file`;
 `POST /api/sessions/:id/handoff`; `POST /api/fs/mkdir`; `POST /api/github/publish`;
+`POST /api/worktrees/remove`;
 the orchestrator tools — `POST /api/sessions/:id/orchestrator/{spawn,next,send,answer,read,stop,close,summary}`
 and a worker's `POST /api/sessions/:id/report` (reading an orchestrator, changing its
-settings, dismissing an item and Resume stay open);
+settings, dismissing an item, recording the answer to a decision —
+`POST …/orchestrator/decisions/:decisionId/answered` — and Resume stay open);
 `POST /api/fs/open`;
 `POST /api/wispr/press`;
 `PUT /api/prefs`;
@@ -220,6 +229,12 @@ might be in someone else's hand" the refusal exists for. So a phone may write, e
 reorder and delete snippets freely, and may not save one naming either of the two
 modes. It is refused twice over: here, so the snippet cannot be stashed, and again by
 `POST /api/sessions/:id/send` when it is used.
+
+The template routes are open on the drafts' terms, with one more exception: a
+template with a non-null `worktree` cannot be written remotely (`403`), because
+`POST /api/sessions` refuses a worktree from a remote caller and a template saved that
+way could never be used there. `resolve` is open, since it only reads, and git runs
+only in a directory inside the allowed roots.
 
 Note that `PUT /api/prefs` above is local-only and the snippet routes are not, which
 looks inconsistent and is not. That route is refused because it writes a file in the
@@ -275,6 +290,10 @@ the same argument. They are outside the roots, because the scratchpad is under
 scratchpad directories of that one session id, re-derived on every read, with
 symlinks refused.
 
+`GET /api/sessions/:id/reviews` and `…/reviews/:runId` are readable remotely, like the
+transcript they are read from: they read only that session's transcript and the
+subagent transcripts filed under its id.
+
 `GET /api/slash-commands` is readable remotely for the same reason, and is a
 different route from `GET /api/commands` despite the name — one is what the CLI
 will accept in the composer, the other is what the repository declares in
@@ -299,7 +318,7 @@ The only unauthenticated route. Counts, a pid, and:
 { "ok": true, "app": "tgxcode", "version": "1.0.0", "port": 45888, "dev": false,
   "remote": false, "authRequired": true,
   "permissionModes": ["auto","acceptEdits","plan","manual","dontAsk","bypassPermissions"],
-  "sessions": 120, "clients": 1, "live": 4, "busy": 3, "atRisk": 0,
+  "sessions": 120, "clients": 1, "pollingViewers": 0, "live": 4, "busy": 3, "atRisk": 0,
   "sessionHost": { "pid": 5031, "protocol": 1, "startedAt": 1790098455020, "attached": 3 } }
 ```
 
@@ -310,6 +329,11 @@ the turns a restart of this bridge would **end**. A turn running in the session 
 port, so it counts in `busy` and not in `atRisk`. Anything deciding whether a restart
 is safe should read `atRisk`, and fall back to `busy` when the field is absent, since
 that is an older bridge with no host.
+
+`clients` is a number: open `/api/events` streams. `pollingViewers` is a number: polling
+clients currently holding a viewer lease (see §*Polling counts as watching only if you say
+so* under *The live channel*). Between them they decide whether an ask is held open or
+auto-denied. Absent on a bridge from before the lease existed.
 
 `sessionHost` is **an object or null**: `{pid, protocol, startedAt, attached}`, where
 `pid` and `startedAt` (epoch ms) belong to the host process, `protocol` is a number and
@@ -505,9 +529,32 @@ same fields, and it does not depend on how much of the transcript was asked for.
 it is what resumes the live tail.
 
 `?tail=N` returns only the last N events and adds
-`truncated: { dropped, total }`. Mobile clients should use it — a 60-turn session is
+`truncated: { dropped, total }` (both numbers: events withheld, events in the whole
+transcript). Mobile clients should use it — a 60-turn session is
 ~1,800 events and half a megabyte of JSON, and none of the first 1,500 is why
-someone opened their phone.
+someone opened their phone. `N` is an integer ≥ 0. `truncated` is present **only when
+something was withheld**: a `tail` at least as long as the transcript returns every
+event and no `truncated`, exactly as if `tail` had not been sent. A negative or
+non-numeric `N` is ignored the same way.
+
+**`?tail=0` means "none of them", not "no limit".** It is the liveness read for a
+client that polls instead of streaming (see *The live channel*), and returns:
+
+- `events: []`;
+- `offset` — **the same byte position a full read returns**, so `/since?offset=`
+  from it gives what is new and nothing twice;
+- `runner` — the **whole** runner status, `pendingPermission` included (the only
+  cheap way to see one session's ask without the stream);
+- `summary`, `suggestions` and `prefs`, as on a full read;
+- `truncated: {dropped: total, total}` whenever the transcript has any events at all.
+
+That last field is literally true and useless here. **Read only `runner`, `offset`
+and `summary` off a liveness read**; never merge its `events` or its `truncated` into
+a conversation you already hold, or you will draw "1,800 earlier events — load all"
+over a transcript that is all there. The field is kept rather than dropped for
+`tail=0` because dropping it would make its absence mean two different things —
+"nothing was withheld" and "everything was" — and both existing clients already read
+the shape as it is. A few hundred bytes against half a megabyte for the full read.
 
 `?tail=N` still parses the whole file on the bridge and only sends less. **`?turns=K`**
 reads less as well: it returns the events from the start of the Kth-last turn to the
@@ -564,7 +611,7 @@ strings by a client that then rendered `[object Object]`:
 
 | kind | Carries |
 |---|---|
-| `user` | `text` string · `images[]` `{mediaType, dataUri}` · `files[]` `{relPath, name, size}` · **`command` object or null** — `{name, args}` · **`parent` string or null** — the `parentUuid` of the turn's entry, i.e. the chain entry it follows; `null` on the first turn of a conversation, which is the one turn `fromUuid` cannot branch from (see `POST /api/sessions/:id/send`). Absent from a bridge older than branching, so treat absent as unknown rather than as `null` · `origin` string or absent — Claude Code's own `origin.kind`, passed through: `"human"`, `"peer"`, or an agent type. Not a closed set the bridge controls, so treat anything other than `"human"` as "not the person" rather than switching on it. A message **folded into a running turn** is a `user` event too, even though on disk it is a `queued_command` attachment with no `user` entry. It sits between the tool calls where the turn read it, its `ts` is when it was *sent* (so it can be earlier than the tool block before it), and its `origin` is `"human"` or absent |
+| `user` | `text` string — the message with its bookkeeping tags removed, **including a slash command's `<command-*>` tags**: a turn that is only a command has `text: ""` and is drawn from `command` (before October 2026 the tags were left in `text`, so an older bridge sends them; strip `<command-[a-z-]+>…</…>` yourself if you must support one) · `images[]` `{mediaType, dataUri}` · `files[]` `{relPath, name, size}` · **`command` object or null** — `{name, args}` · **`parent` string or null** — the `parentUuid` of the turn's entry, i.e. the chain entry it follows; `null` on the first turn of a conversation, which is the one turn `fromUuid` cannot branch from (see `POST /api/sessions/:id/send`). Absent from a bridge older than branching, so treat absent as unknown rather than as `null` · `origin` string or absent — Claude Code's own `origin.kind`, passed through: `"human"`, `"peer"`, or an agent type. Not a closed set the bridge controls, so treat anything other than `"human"` as "not the person" rather than switching on it. A message **folded into a running turn** is a `user` event too, even though on disk it is a `queued_command` attachment with no `user` entry. It sits between the tool calls where the turn read it, its `ts` is when it was *sent* (so it can be earlier than the tool block before it), and its `origin` is `"human"` or absent |
 | `assistant` | `text` string (markdown) · `model` string or null |
 | `thinking` | `text` string |
 | `tool` | `name` string · `input` object · `status` — see below · `result` object or null · **`agent` object or null** · `persistedPath` string or null · `durationMs` number or null · `resultTs` ISO string once resolved |
@@ -724,6 +771,73 @@ shrank — it was compacted or forked — and the client should reload from scra
 This is how a phone client resumes after a network change, and it is much cheaper
 than refetching.
 
+### `GET /api/search?q=&kinds=&project=&limit=&perSession=`
+
+Full text across every session's transcript: what you said, what Claude said, and,
+when asked, tool calls and their output. Not the same question as
+`GET /api/sessions?q=`, which matches a session's *title*, prompts and directory;
+this matches the words inside it.
+
+| Parameter | Meaning |
+|---|---|
+| `q` | **required**, at most 200 characters. Words, all of which must be in the **same message** (not merely the same session), case-insensitive. A `"quoted phrase"` is kept whole. No other syntax: `key:value` is two literal words. Missing or blank is `400 {"error":"q is required"}`; too long is `400` too |
+| `kinds` | comma-separated, any of `user`, `assistant`, `tool`. Default `user,assistant`. Unknown names are dropped; if none are left the default applies. Thinking is never searched |
+| `project` | a `projectCwd` to restrict to, as on `GET /api/sessions` |
+| `limit` | sessions returned, default 30, clamped to 1–100 |
+| `perSession` | hits returned per session, default 5, clamped to 1–20 |
+
+Response:
+
+```
+{ query: string, terms: [string], kinds: [string],
+  sessions: [{ sessionId: string, title: string|null, projectName: string|null,
+               cwd: string|null, projectCwd: string|null, mtimeMs: number|null,
+               test: boolean, turns: number,
+               hitCount: number, more: number,
+               hits: [{ turnId: string|null, turnOffset: number, turnNo: number,
+                        eventId: string, kind: "user"|"assistant"|"tool",
+                        ts: string|null,
+                        segments: [{ text: string, hit: boolean }] }] }],
+  matched: number, truncated: boolean, pending: number, elapsedMs: number }
+```
+
+- **Order is the rail's order** — by when you last spoke in the session, newest
+  first — not relevance. Hits within a session are in transcript order.
+- **`matched` counts every session with a hit; `sessions` holds at most `limit` of
+  them**, and `truncated` is true when some were left out. Say so rather than
+  presenting the list as complete. Likewise `hitCount` is every matching message in
+  the session, `hits` at most `perSession` of them, and `more` the difference.
+- **`segments` is the snippet, already cut**, about 200 characters around the first
+  match, `…` segments at a cut end, whitespace collapsed. `hit: true` segments are the
+  matched words in their original case. Render each as text — put the `hit` ones in a
+  highlight element — and never as HTML: it is transcript text and can contain markup.
+- **`turnId` is a turn-index id**: the `id` of an entry in `turns[]` from
+  `GET /api/sessions/:id?turns=K`, with `kind: "turn"`. `turnOffset` is that entry's
+  `offset`, so it is a valid `from` for `/range`. To open a session at a hit: open it
+  windowed as usual, and if `turnOffset` is below the window's `start`, load
+  `/range?from=<turnOffset>&to=<start>` first, then scroll to the event `eventId`
+  (or to the turn, if the event is not on screen). `turnId` is **null** for text that
+  comes before the first message of your own — a compaction summary, a scheduled
+  run's opening — and `turnOffset` is then `0`. `turnNo` is 1-based, 0 for that case.
+- **`eventId` is an event `id`** as `/range` and the tail return them: a user turn's
+  uuid, `<uuid>:text:<n>` for an assistant message, the `tool_use` id for a tool.
+- **Eventually consistent: `pending`.** The bridge keeps an incremental index under
+  its cache directory and brings it up to date with each transcript as a query reads
+  it — but within a time budget (a little over half a second), because a query runs
+  on the bridge's one thread. Sessions it could not catch up in time are still
+  searched as far as they are indexed, and counted in `pending`. On a cold index (a
+  fresh install, or after the index format changes) that can be most of them for the
+  first minute or two while a background pass fills it in; ask again and the number
+  falls. `pending: 0` means every session was searched up to its end. Tell the user
+  when it is not 0.
+- **Which sessions:** exactly those `GET /api/sessions` would list. Sessions under a
+  temporary directory are never searched; `test` sessions only on a development
+  bridge, as with `/api/dashboard`. Subagent transcripts are not searched.
+- **What is stored is clipped**: each message to its first 16 000 characters, each
+  tool call to about 1 200 (input and output together). Words beyond those points
+  are not found. A tool result over 1 MB on one line is not indexed at all.
+- Open to remote callers, like the rest of the read routes.
+
 ### `GET /api/sessions/:id/prs`
 
 `{ prs: [...], gh: {ok, error}, checkedAt, repo }` — what has become of the pull
@@ -741,8 +855,21 @@ successfully listed. Null means nothing has been listed yet — a bridge that ha
 only just started, on a machine with no cache file.
 
 Each carries `number`, `url`, `repo`, `title`, `branch`, `updatedAt`, a resolved
-`status`, a `label` naming that status in words, and `detail`: extra lines the one
-status had to leave out, for a tooltip.
+`status`, a `label` naming that status in words, `detail`: extra lines the one
+status had to leave out, for a tooltip — and `review`.
+
+`review` is the nightly review's verdict on that PR — an object or `null`:
+`{verdict, count, counts: {critical, warning, note}, sha, at, sessionId, source, stale}`.
+`verdict` is `"BLOCK"`, `"CONCERNS"`, `"CLEAN"` or `null` (the review had no VERDICT
+line); `count` is how many findings parsed out of it (all three severities); `sha`
+the commit it reviewed (a full SHA from the bridge's own record, a 12-character prefix
+from a PR comment) or null; `at` epoch ms or null; `sessionId` the session that wrote
+it when this bridge ran it, else null; `source` `"session"` or `"github"` (read from
+the PR comment — see `GET /api/pr-review`); `stale` true when the PR's head is known
+and is not the reviewed commit. `null` means no review is known — **or not read yet**:
+the first ask after a restart starts reading the review session's transcript and
+answers `null`, and `pr-reviews-changed` follows when it lands. The findings
+themselves are `GET /api/pr-review`.
 
 `status` is one of `open`, `draft`, `approved`, `changes`, `checks-failed`,
 `checks-pending`, `conflicting`, `merged`, `closed`, or `unknown`. A PR is
@@ -871,6 +998,53 @@ round of `gh` calls and loses nothing.
 
 `?refresh=1` on `GET /api/dashboard` is the only way to make the refresher run out
 of turn. There is no per-route refresh here.
+
+### `GET /api/pr-review?repo=owner/name&number=N`
+
+The latest nightly review of one pull request, parsed into findings. `400` without a
+well-formed `repo` and a positive integer `number`.
+
+```
+{ repo, number, pending: boolean,
+  review: null | {
+    verdict, title, scope, summary, raw,
+    findings: [{ severity, title, file, line, endLine, body }],
+    counts: { critical, warning, note }, stale,
+    sha, at, sessionId, source, running } }
+```
+
+- `verdict` — `"BLOCK"` / `"CONCERNS"` / `"CLEAN"` / `null`, read the same tolerant way
+  the gate reads it (`verdictOf` in `bridge/schedule.js`).
+- `title` and `scope` — the `## Adversarial Review: …` heading and the `**Scope:**`
+  line, or null; `summary` — the `### Summary` section's markdown, or null.
+- `findings[]` — in the order the review lists them. `severity` is `"critical"`,
+  `"warning"` or `"note"`, from the `### Critical Findings` / `### Warnings` /
+  `### Notes` section the item sits in. `title` is a one-line plain-text title;
+  `body` the item's whole markdown, sub-bullets included. `file` is the first path the
+  item names (`src/a.ts:12-30` → `"src/a.ts"`), or null; `line` and `endLine` numbers
+  or null.
+- `raw` — the review's whole text, always. **Parsing is best-effort**: the review is
+  prose a model wrote to a template, and a review that does not follow it has
+  `findings: []`. Show `raw` then, rather than "no findings".
+- `source` — `"session"` when this bridge ran the review: its record is the
+  `reviewed` entry on the `open-prs` schedule (see *The pull-request gate*) and the
+  text is that session's final message. `"github"` when it did not — the PR wears a
+  `review-*` label but this bridge has no finished review of it (another machine ran
+  it, or its entry was pruned) — and the text is the gate's PR comment, the one
+  beginning `> Automated review of`, with that line taken off. `sessionId` is null
+  then.
+- `running` — a newer review of this PR has started and not finished; what is shown
+  is the previous one.
+- `counts` and `stale` as on the `review` summary of `GET /api/sessions/:id/prs`.
+
+`review: null, pending: true` means the review's transcript is being read; ask again
+after `pr-reviews-changed`. `review: null, pending: false` means none is known.
+
+**This route never waits on GitHub.** The `"github"` reviews are read by the PR
+refresher in the background — a few `gh pr view` calls per pass, only for labelled
+PRs, again only when the PR's `updatedAt` or its verdict label moves — and kept in
+`$XDG_CACHE_HOME/tgxcode/pr-reviews.json`. A labelled PR the refresher has not
+reached yet answers `null` until it does. Nothing here writes to GitHub.
 
 ### `GET /api/pr-owners`
 
@@ -1130,6 +1304,116 @@ is deliberate: it is a read, its bytes already reach a phone inside the tool res
 it renders, and it is scoped to the session's own repository so a leaked token cannot
 walk it to `~/.ssh`.
 
+### `GET /api/sessions/:id/reviews`
+
+The code reviews this session ran: every run of a skill, slash command or subagent
+whose name is one of the session's project's `reviews.types` (see the `reviews`
+section of `GET /api/prefs`). Oldest first.
+
+```
+{ sessionId,
+  types: [{ id, label, skill, colour }],      // what counted, for this session's project
+  reviews: [{
+    id, type: { id, label, colour }, skill, via, forked, status,
+    startedAt, endedAt,
+    anchor: { kind, id, offset },
+    target: { pr, range, files: [string], effort, text },
+    verdict, counts: { critical, warning, note },
+    findingSource, title }] }
+```
+
+- **`id`** is the run's id: the Skill or Agent `tool_use` id, or the uuid of the user
+  entry that typed the command. It is what `/reviews/:runId` takes.
+- **`via`** — `"skill"` (Claude ran the Skill tool), `"command"` (you, or a client,
+  sent `/name`), or `"agent"` (an Agent/Task call whose `subagent_type` is the
+  type's `skill`, or whose prompt names it as `/name` or "the `name` skill").
+  Matching is by exact name, case-insensitive: `code-review` is not
+  `code-review:code-review`.
+- **`forked`** — the skill ran in a fork of its own (`code-review` does). Its findings
+  then come from the fork's transcript; nothing changes for a client.
+- **`status`** — one of:
+  - `"running"`: not finished, and the session is mid-turn here or its transcript was written in the last 90 seconds;
+  - `"done"`;
+  - `"rejected"`: the call was declined at the permission prompt;
+  - `"error"`: the call failed, or the command was unknown;
+  - `"incomplete"`: a forked skill or agent whose result never arrived, in a session that has gone quiet.
+
+  A run with no end marker (an inline skill, a slash command) is `"done"` once its
+  session goes quiet.
+- **`startedAt` / `endedAt`** — ISO strings. `endedAt` is null while running. For an
+  inline run it is the last assistant entry before your next prompt.
+- **`anchor`** — where the run starts in the transcript. `kind: "tool"` means `id`
+  is a tool event's id; `kind: "turn"` means it is a user event's id. **`offset`
+  is a byte offset but not a window boundary**, so do not pass it to `/range`.
+  To reach a row that is not loaded, load from the last `turns[]` mark whose
+  `offset` is at or before it.
+- **`target`** — what was reviewed, as far as the arguments and result say. Every
+  field may be null or empty:
+  - `pr`: a PR number, from `134 high`, `PR 117`, `#45`, `--target 162`, a
+    `/pull/N` URL, or a result that opens "Reviewed PR #N".
+  - `range`: `a..b` or `a...b`.
+  - `files`: path-like arguments.
+  - `effort`: `low` … `max`, or the effort ReportFindings reported.
+  - `text`: the trimmed arguments, at most 200 characters.
+
+  All null and empty means the current diff.
+- **`verdict`** — `"BLOCK"`, `"CONCERNS"`, `"CLEAN"` or `null`.
+  - From a `VERDICT:` line, read as `GET /api/pr-review` reads it, plus
+    `VERDICT: clean` / `issues`, which are mapped to `CLEAN` / `CONCERNS`.
+  - A review that reported through the ReportFindings tool and reported nothing
+    is `"CLEAN"`.
+  - `code-review` otherwise gives no verdict. Show the counts.
+- **`findingSource`** — where the findings came from, most structured first:
+  - `"tool"`: the fork's ReportFindings call, or its retry when the call was refused.
+  - `"json"`: a ```` ```json ```` array in the result.
+  - `"text"`: parsed from the review's markdown, the way `GET /api/pr-review` does it,
+    with more heading words and a flat `file:line — summary` list understood.
+  - `"none"`: nothing parsed. Show `raw` from `/reviews/:runId`, not "no findings".
+- **`title`** — from an `## Adversarial Review: …`, `## Code Review: …` or `## Review: …`
+  heading, else null.
+
+**This is read lazily and incrementally.** Nothing is indexed until a client asks.
+After that, a transcript that has not grown since the last request costs one
+`stat`. There is **no live event for it**. Ask again when a turn ends
+(`turn-complete`, or `runner-status` going idle), or, for a session this bridge is
+not running, when `tail` brings new events (the desktop waits 1.5 s after the last
+one). `404` means the session id is unknown.
+
+### `GET /api/sessions/:id/reviews/:runId`
+
+One review in full: everything in its row above, plus `summary`, `findings` and `raw`.
+`404 {"error": "no such review"}` when the run is unknown, or when its skill is
+not one of the types (a run stops being a review when its type is removed).
+
+```
+{ sessionId,
+  review: { …the row above…,
+    summary: string | null,
+    findings: [{ severity, title, file, line, endLine, body, category, confidence }],
+    raw } }
+```
+
+- **`findings[]`** — critical first, then warning, then note. Within a severity,
+  the review's own order.
+  - `severity` is `"critical"`, `"warning"` or `"note"`: `GET /api/pr-review`'s three.
+  - **Severity from the ReportFindings tool**: `high` → critical, `medium` →
+    warning, `low` → note. That tool rarely gives one, and then `confidence`
+    decides: `CONFIRMED` → warning, `PLAUSIBLE` → note. Nothing is critical
+    unless the reviewer said so.
+  - `title` is the tool's `short_summary`, else the first sentence of its
+    `summary`, else the text item's bold lead or first sentence. **It may hold
+    markdown code spans**, so render it as inline markdown.
+  - `file` (string or null), `line` and `endLine` (numbers or null): `file` is
+    relative to the repository the review ran in.
+  - `body` is markdown. For a ReportFindings finding it is the `summary`, then
+    `**How it fails:**` and the `failure_scenario`.
+  - `category` (string or null): ReportFindings' own, e.g. `"correctness"`.
+  - `confidence`: `"CONFIRMED"`, `"PLAUSIBLE"` or null.
+- **`raw`** — the review's whole text, at most 200 KB: a forked skill's result, the
+  last review-looking assistant text of an inline run, or an agent's handback.
+  Always present, even when `findings` is full.
+- **`summary`** — a `### Summary` section's text, when the review has one.
+
 ### `GET /api/sessions/:id/scratchpad`
 
 This lists the files in the session's scratchpad, where the agent keeps its probe
@@ -1252,7 +1536,7 @@ it opens is on this machine's desktop, which a phone cannot look at.
 ### `GET /api/prefs?cwd=<path>&files=1`
 
 `{ version, transcript: {…}, live: {…}, projects: {…}, quota: {…}, spinner: {…},
-keyboard: {…}, toolbar: {…}, wispr: {…}, sources: [string], problems: [{file, message}] }` — how the person using the app
+keyboard: {…}, toolbar: {…}, wispr: {…}, …, digest: {…}, sources: [string], problems: [{file, message}] }` — how the person using the app
 wants it to behave. `sources` is file paths, weakest first; each `problems` entry
 is an **object**, `{file, message}`, naming the file that carried a value the key
 does not allow and what was wrong with it.
@@ -1295,8 +1579,9 @@ rather than taken at face value; the default stands. Without `?cwd=` you get the
 user-level answer, which is also what every page is served in a `tgx-prefs`
 `<meta>` tag (minus `sources` and `problems`).
 
-**Ten sections may only be set in the user's own file**: `quota`, `keyboard`,
-`projects`, `toolbar`, `wispr`, `preview`, `devbrowser`, `standing`, `startup` and `agentBrowser`. A project file that carries one is ignored and says so in
+**Twelve sections may only be set in the user's own file**: `quota`, `keyboard`,
+`projects`, `toolbar`, `wispr`, `preview`, `devbrowser`, `standing`, `startup`, `agentBrowser`,
+`orchestrator` and `digest`. A project file that carries one is ignored and says so in
 `problems`. What directory this app starts `claude` in, and which keys your
 hands use, are not a repository's business — and a repository that could rebind
 your keys could make the window unusable with hand-editing the file as the only
@@ -1312,7 +1597,9 @@ pressed on your machine is not a preference. `preview` and `devbrowser` decide
 which browser on this machine you look at pages in and whether a click launches
 one, which is the same class of thing. `startup` is the `toolbar` argument again:
 what your window opens to is not a repository's to arrange. `agentBrowser` is the same: whether a window
-opens on your desktop is yours.
+opens on your desktop is yours. `orchestrator` caps how much of the account an
+orchestrator may spend, which is not a checked-in file's to raise. `digest` is when
+you count as having walked away, which is about you.
 
 `transcript` today: `groupToolCalls` (fold a run of tool calls into one row once
 a message closes it), `groupMinCalls` (how long a run has to be — at least 2),
@@ -1488,7 +1775,7 @@ an **array of objects** `[{id, place, label}]` in the order the bar draws them:
 
 | Field | Type | |
 |---|---|---|
-| `id` | string | one of `tasks`, `live`, `dashboard`, `history`, `drafts`, `schedules`, `settings`, `quota`, `devbrowser` |
+| `id` | string | one of `tasks`, `live`, `dashboard`, `analytics`, `history`, `drafts`, `schedules`, `settings`, `quota`, `devbrowser` |
 | `place` | `"bar"`, `"more"` or `"hidden"` | on the bar, in its More menu, or not drawn. Missing means `"bar"` |
 | `label` | bool | whether the name shows beside the icon. Missing means `true`. Only the seven views have an icon, so it means nothing on `quota` or `devbrowser` |
 
@@ -1571,6 +1858,32 @@ file only**, and **applied by the bridge when it spawns `claude`**, not by a cli
 | Key | Type | |
 |---|---|---|
 | `mode` | **`"visible"` or `"headless"`**, default `"visible"` | `"headless"` sets `PLAYWRIGHT_MCP_HEADLESS=true` in the environment of each session the bridge starts, so the Playwright MCP server launches its browser without a window. `"visible"` sets nothing and leaves the bridge's own environment in charge. Read at spawn: a session already running keeps the browser it has until its `claude` is restarted. Sessions started outside this bridge (a terminal, VS Code) are unaffected. |
+
+`digest` is the desktop's "while you were away" card. **User file only**, and
+**applied by the client** — the bridge stores it and `GET /api/digest` does not read
+it, so a phone is free to use its own rule or ignore the section:
+
+| Key | Type | |
+|---|---|---|
+| `enabled` | **boolean**, default `true` | Whether coming back to the window shows the card at all. |
+| `awayMinutes` | **integer 1–480**, default `20` | How long a window has to go hidden or untouched before the next sign of life counts as a return. |
+
+`reviews` is which skills count as code reviews — what `GET /api/sessions/:id/reviews`
+picks out of a transcript. **A project may set it** (a repository that ships its own
+reviewer in `.claude/skills` is where it would be declared), and **applied by the
+bridge**: the reviews route reads the session's own project's value, so a client
+never filters.
+
+| Key | Type | |
+|---|---|---|
+| `types` | **array of `{id, label, skill, colour}`**, at most 20, default the two below | `id` matches `^[a-z0-9][a-z0-9_-]{0,39}$` and is unique; `label` a string of 1–40; `skill` the skill, command or subagent type it matches, `^[A-Za-z0-9][A-Za-z0-9:_.-]{0,79}$` (a leading `/` is dropped on save); `colour` one of `"blue"`, `"red"`, `"yellow"`, `"green"`, `"purple"`, `"peach"` — a name, not a hex value, so each client maps it to its own palette. |
+
+The default is `[{id: "code-review", label: "Code review", skill: "code-review", colour: "blue"},
+{id: "adversarial", label: "Adversarial", skill: "adversarial-reviewer", colour: "red"}]`.
+Like every list here it is **replaced whole**: a project's `types` is the whole list for
+that project, not an addition to yours. A save is checked entry by entry — a bad entry is
+dropped and reported in `problems`, a missing `id` is made from `skill`, a missing `label`
+is the skill, an unknown `colour` becomes `"blue"`.
 
 ### `GET /api/wispr`
 
@@ -1983,6 +2296,63 @@ had ticked would mean losing it. The flag only decides what the session becomes.
 Also pushed as the `drafts-changed` SSE event, which is how the UI reads it. That event
 carries this same payload, so a client never has to come back here after the first load.
 
+### `GET /api/templates[?cwd=<path>]`
+
+Session templates: a create call kept for starting from again, with placeholders in
+the first message and the worktree name. A template is **not** consumed by use, and
+using one starts nothing by itself. See `POST /api/templates/:id/resolve` below.
+
+```json
+{
+  "at": 1791908859400,
+  "templates": [
+    { "id": "b617115f-69dd-44c3-8dd7-8637dc2a22b5",
+      "name": "Feature work",
+      "project": "/home/dylan_hays/Other/claude-sessions",
+      "projectName": "claude-sessions",
+      "cwd": null,
+      "prompt": "Implement {{task}} on {{branch}}",
+      "model": null, "effort": null, "permissionMode": "auto",
+      "worktree": { "name": "{{task}}", "base": null },
+      "orchestrator": true, "test": false,
+      "builtins": ["branch"], "asks": ["task"],
+      "createdAt": 1791908859273, "updatedAt": 1791908859273 }
+  ],
+  "counts": { "total": 1 }
+}
+```
+
+| Field | Type |
+|---|---|
+| `id` | string, a UUID |
+| `name` | string, non-empty, at most 100 characters. What the picker lists it as |
+| **`project`** | **string or null.** `null` is a global template, offered everywhere. A string is an absolute directory with no trailing `/`: the template applies there, anywhere under it, and in that project's worktrees (`<project>/.claude/worktrees/<name>`, which are siblings rather than children). It does not have to exist on this machine |
+| `projectName` | string or null. Derived from `project`, not stored |
+| **`cwd`** | **string or null.** Where a session from this template starts. `null` means it uses whatever the client's directory box holds, or `project`. Expanded and checked against the allowed roots when it was saved, like a draft's |
+| `prompt` | string, possibly `""`. A *skeleton* holding `{{name}}` placeholders, not something to send as it is |
+| `model`, `effort` | string or null, exactly as on a draft |
+| `permissionMode` | string, one of the six |
+| **`worktree`** | **`{name: string, base: string \| null}` or null.** `name` is a *pattern* that may hold placeholders, so it is not yet a valid worktree name. `resolve` fills it and turns it into one |
+| `orchestrator` | boolean. The `orchestrator` field of `POST /api/sessions` |
+| `test` | boolean, the flag the started session gets |
+| **`builtins`** | **string[]**, derived. The placeholders the bridge fills itself that this template uses, a subset of `branch`, `date`, `project` |
+| **`asks`** | **string[]**, derived. Every other placeholder name in `prompt` or `worktree.name`, once each, in order of first appearance. These are the questions a client asks before `resolve` |
+| `createdAt`, `updatedAt` | numbers, epoch ms |
+
+Ordered newest `updatedAt` first. `?cwd=` narrows the list to the global templates and
+the ones whose `project` applies to that directory. Without it, every template is
+returned, which is what the desktop picker uses, grouped by project.
+
+**Placeholders** are `{{name}}` with `name` a run of word characters (spaces inside
+the braces are allowed). It is the same syntax snippets and schedule prompts use.
+There is no escaping, no default value and no filter: anything that does not match is
+plain text.
+
+Stored in `templates.json` in the state directory, shared by every bridge on the
+machine and merged on write, like drafts. Not in a project's `.tgxcode/`.
+
+Also pushed as `templates-changed`, carrying this same payload, unfiltered.
+
 ### `GET /api/later`
 
 Messages written now and delivered to a session that **already exists**, at a time you
@@ -2384,6 +2754,13 @@ is delivery, so re-running a whole session to retry a comment would spend minute
 of quota re-deriving text that already exists. It raises a loud notification
 instead.
 
+**Reading the findings back.** The bridge keeps no copy of the review: the `reviewed`
+entry's `sessionId` is the record, and the text is that session's final message.
+`GET /api/pr-review` parses it, the `review` field on `GET /api/sessions/:id/prs` and
+`GET /api/dashboard` summarises it, and `POST /api/pr-review/fix` starts a session on
+the PR's branch to act on it. A PR this bridge did not review falls back to the PR
+comment, read in the background.
+
 ### `GET /api/schedules/describe?cron=<expr>&once=1`
 
 What an expression means, without saving anything. This is where a "runs Tue–Sat at
@@ -2439,7 +2816,7 @@ not a whole `git status`.
 `prs[]` are the whole `pulls.js` record, plus `matched` — `"branch"` (the workspace
 has that branch checked out) or `"session"` (only a transcript connects them) — plus
 the resolved `status` and `label` that `GET /api/sessions/:id/prs` documents, from
-the same `resolveStatus`. Those two are the ones to draw from: this route used to
+the same `resolveStatus`, plus the same `review` summary (object or null). Those two are the ones to draw from: this route used to
 carry the raw record alone, so a client had to invent its own reading of `draft` and
 `reviewDecision`, and `web/app.js` did — with the result that a merged PR, one
 conflicting with its base and one with a failing build all rendered identically
@@ -2601,6 +2978,46 @@ it in `notification-reads.json`, which is rewritten whole — safe there, where 
 not be for the log, because the file is merged in before it is replaced and the later
 of two timestamps always wins. Watermarks older than the log's own 14 days are dropped
 on load; every surviving row is newer than one of those, so it could not have applied.
+
+### `GET /api/digest?since=<ms>`
+
+What happened since a moment **the caller** names — the desktop's "while you were
+away" card, and the same question a phone asks when it comes back to the
+foreground. The bridge keeps nothing per client: `since` is when *you* stopped
+looking, which only the client knows. Every input is a store the bridge persists
+(the notification log, schedules, orchestrator inboxes, the PR cache, transcripts),
+so the answer is the same before and after a bridge restart.
+
+**`since`** is required: an integer, epoch **milliseconds**. `400` if it is missing
+or not an integer, if it is in the future, or if it is older than the notification
+log keeps (14 days) — that response also carries `oldest` (epoch ms), the earliest
+`since` that would be accepted. Refused rather than clamped, so a client bug does not
+quietly turn into "the last fortnight". Open to a remote caller, like
+`GET /api/notifications`. Test sessions are included only on a dev bridge, by the
+same rule.
+
+```
+{ since: number, now: number, total: number,
+  counts: { waiting, failed, finished, prs, schedules, suggestions, reports },   // numbers
+  waiting: […], failed: […], finished: […], prs: […],
+  schedules: […], suggestions: […], reports: […] }
+```
+
+Each list is **newest first and capped at 50**; `counts` are the totals *before* the
+cap, so `counts.finished - finished.length` is how many were left out. `total` is the
+sum of `counts`. All times are epoch ms unless the field says ISO.
+
+| Group | Item shape | |
+|---|---|---|
+| `waiting` | `{sessionId, title: string\|null, project: string\|null, kind: "tool"\|"plan"\|"question", tool: string\|null, requestId: string\|null, askedAt: number\|null}` | **Live, not "since"**: every ask pending *now*, whenever it was raised. An ask raised and answered while you were away is not here; one raised before you left still is. Answer it with `POST /api/sessions/:id/permission`; watch `permission-resolved` and `runner-status` to drop a row the moment it is answered elsewhere |
+| `failed` | `{id, sessionId: string\|null, title, project: string\|null, type, summary: string\|null, at, anchorId: string\|null}` | Notification rows of type `failed`, `stalled`, `schedule-failed`, `schedule-missed`, `later-failed`, `later-missed`. `id` and `anchorId` are the notification row's, so a client can open it exactly as it opens a History row. **`sessionId` may be null** (a schedule that never produced a session) |
+| `finished` | `{sessionId, title, project: string\|null, turns: number, lastAt: number, standing: {text, source: "model"\|"extract", at}\|null}` | `finished` notification rows grouped **one entry per session**; `turns` is how many, `lastAt` the newest. `standing` is the session's current standing line, as on `/api/sessions` rows. A finish re-emitted by a bridge adopting a turn after a restart (two within 5 s) is counted once |
+| `prs` | `{repo, number, url, title: string\|null, change: "opened"\|"merged"\|"closed", at: number, approx: boolean}` | From the PR cache, so only repositories some session has touched. `opened` is GitHub's `createdAt`. For `merged`/`closed`, `at` is GitHub's `mergedAt`/`closedAt` when the cache has it; otherwise it is **when this bridge noticed** the PR had settled, and `approx` is `true` — draw that as approximate, it can be well after the fact |
+| `schedules` | `{id, title, lastFiredAt: number, lastSessionId: string\|null, lastOutcome: string\|null, lastError: string\|null, runs: number, findings: string\|null}` | Schedules whose **last** run fired since `since`; a schedule that fired twice appears once. `findings` is the summary of a `schedule-findings` row for that run, when a review found something |
+| `suggestions` | `{sessionId, id, title: string\|null, ts: string (ISO), status: "open"\|"started"\|"dismissed"\|"completed", from: string\|null}` | Follow-ups filed with `suggest_session` since `since`. `id` is the tool-use id, as in `GET /api/suggestions`; `from` the title of the session that filed it |
+| `reports` | `{orchestratorId, orchestratorTitle: string\|null, workerId, workerTitle: string\|null, kind: "question"\|"update"\|"done", text, at}` | Worker `report_to_orchestrator` items from every orchestrator's inbox. Turn-end, ask and note items are left out — those are in the other groups |
+
+A client that wants a card only when there is something to say checks `total`.
 
 ### `GET /api/suggestions?session=&project=&status=&q=&limit=`
 
@@ -2877,6 +3294,78 @@ repository declares, and this runs one fixed operation, in a directory the user
 named and trusted, that the bridge already performs unattended on a timer. Only
 one can be in flight at a time, so it cannot be turned into a fan of processes.
 
+### `GET /api/analytics?days=N`
+
+Tokens, and what they would have cost at Anthropic's API list prices, per day, per
+project, per session and per model. **Every dollar figure is API-equivalent, not a
+bill.** On a subscription nobody is charged it; it is the price of the same tokens
+bought one request at a time. `basis` is always `"api-equivalent"`, and a client that
+shows a figure should say so.
+
+Read out of the transcripts' `message.usage`, so it covers every session on the
+machine, including ones started in a terminal and history from before this app. It
+does not come from `turn-complete`'s `costUsd`, which exists only for turns this bridge
+ran. Each request first brings the index up to date (a stat per transcript when
+nothing changed, which takes a few hundred ms warm). So a terminal session is current
+as of the request, with no event announcing it. After a bridge starts, the first full
+pass over a cold cache takes several seconds, and a request that arrives during it
+waits for it.
+
+`days` is 1–365, default 30. Anything else falls back to 30.
+
+```
+{ basis: "api-equivalent",
+  pricingAsOf: string,            // "YYYY-MM-DD" — the price table's date
+  generatedAt: number,            // epoch ms
+  days: number,
+  totals: Totals,                 // the range
+  allTime: Totals,                // every day on record, ignoring `days`
+  daily: [ { date: "YYYY-MM-DD", ...Totals } ],   // exactly `days` rows, oldest first,
+                                                  // ending today; a quiet day is all zeros
+  projects: [ { cwd: string|null, name: string, sessions: number, ...Totals } ],
+  sessions: [ { sessionId, title: string|null, projectCwd: string|null,
+                projectName: string, lastDay: "YYYY-MM-DD", ...Totals } ],
+  models: [ { model: string, ...Totals } ],
+  unpricedTokens: number }        // = totals.unpricedTokens
+
+Totals = { input, output, cacheRead, cacheWrite, tokens, messages, costUsd, unpricedTokens }
+```
+
+- **Dates are the bridge's local calendar days.** A message lands on the local date of
+  its transcript timestamp.
+- **`projects`, `sessions` and `models` cover the range only,** and are sorted by
+  `costUsd` descending. `sessions` holds the top 50. A project is keyed by its
+  `projectCwd`, and two different directories can share a `name`, so tell them apart
+  by `cwd`.
+- **`tokens`** is `input + output + cacheRead + cacheWrite`. `input` is the *uncached*
+  input only, so on a long session it is tiny next to `cacheRead`.
+- **`messages`** counts API responses, not transcript lines. Claude Code writes each
+  content block of a response as its own line with the same `message.id`, and those
+  lines are counted once.
+- **A session's subagents are included in it,** and so is every copy of a session
+  whose transcript was split by entering a worktree.
+- **`unpricedTokens`** are tokens on a model the price table does not know. They are
+  in `tokens` but contribute nothing to `costUsd`, so a non-zero value means the cost
+  is an undercount.
+- `model` is the id without its snapshot date or context marker
+  (`claude-haiku-4-5-20251001` → `claude-haiku-4-5`).
+- Sessions under `/tmp` are left out, as are test sessions except on a development
+  bridge. This matches `/api/sessions`.
+
+### `GET /api/analytics/sessions/:id`
+
+One session's all-time spend, for a conversation header. It re-reads that session's
+transcripts before answering.
+
+```
+{ basis: "api-equivalent", pricingAsOf: string, sessionId: string,
+  totals: Totals, firstDay: "YYYY-MM-DD"|null, lastDay: "YYYY-MM-DD"|null,
+  models: [ { model: string, ...Totals } ] }
+```
+
+Returns `404 {error}` for a session the index does not hold. A session created a moment
+ago (see `POST /api/sessions`) 404s here until its transcript appears.
+
 ### `GET /api/claude-version[?refresh=1]`
 
 Whether Claude Code is current, in both senses that matter: is the installed binary
@@ -2953,7 +3442,10 @@ A client that must work everywhere should detect this and fall back:
   this by watching for silence later: a comment line (`: ping`) is invisible to
   `EventSource`, so an idle-but-healthy stream is indistinguishable from a dead one.
 - **Fall back** to polling `GET /api/overview`, `GET /api/sessions/:id?tail=0` for
-  liveness, and `GET /api/sessions/:id/since?offset=` for new events. Measured
+  liveness (see `?tail=N` under `GET /api/sessions/:id` for exactly what it returns,
+  and which of it to read), and `GET /api/sessions/:id/since?offset=` for new events.
+  **Send `X-TGXCode-Viewer` on those polls**, or you lose every ask — the next
+  section. Measured
   through the same tunnel: ~60ms per call, 7KB for the board, **42 bytes** for an
   empty delta. 2.5s for the transcript and half that rate for the board is a
   measured-comfortable cadence. `GET /api/sessions/:id/tasks` is the poll that
@@ -2962,6 +3454,49 @@ A client that must work everywhere should detect this and fall back:
 
 Liveness becomes a couple of seconds granular rather than instant, which for "has
 it finished, does it need me" is a distinction without a difference.
+
+**That cadence assumes a client in the foreground.** A client that has to stay
+answerable while backgrounded — a phone service that raises a notification for an ask —
+has no visibility gate to stop it, and the cost is standing: the board alone at 7KB
+every 5s is ~84KB a minute, **~5MB an hour, indefinitely**, before any transcript
+polling. In the background, drop the transcript polls (nothing is on screen to update)
+and keep only the board — `GET /api/overview` carries every session's ask in `card.ask`
+— at the slowest rate you can live with, **but faster than once every 30s** if you are
+relying on the viewer lease below. Twenty seconds is ~1.3MB an hour.
+
+### Polling counts as watching only if you say so
+
+An ask — a tool approval, a plan, a question — is only held open while somebody is in
+a position to answer it. With nobody, the bridge **denies it at once**
+(`permission_auto_denied` notice) so the turn is not left hanging for a window that is
+not coming. "Somebody" is any open `/api/events` stream, on any session — **or** a
+polling client holding a viewer lease.
+
+Dropping the stream for polling therefore drops you from the count, and every ask raised
+afterwards is auto-denied while your client looks perfectly healthy. To stay counted,
+send
+
+```
+X-TGXCode-Viewer: <id>
+```
+
+on your polls. `id` is any non-empty string up to 128 characters that is stable for the
+client — an install id, not a per-request one (the bridge keys the lease on it, so a
+fresh id per poll is a fresh lease per poll). The rules:
+
+- **Any authenticated `/api/` request carrying it renews the lease**, GET or not. A
+  request refused for its token, or refused to a remote caller, renews nothing.
+- **A lease lasts 30 seconds** from the last request that carried it. Poll more often
+  than that. Stop polling and, within 30 seconds, asks go back to being auto-denied —
+  which is correct for a client that is gone.
+- **Only send it if you will show the ask.** That is the whole reason it is opt-in: a
+  script, a CLI or a test that sent it would keep asks waiting for an answer nobody is
+  going to give.
+- `GET /api/health` reports how many are held as `pollingViewers`.
+- A bridge from before the lease ignores the header; there, the only way to be counted
+  is an open stream. Holding a buffered `/api/events` socket that never delivers
+  anything works, because the bridge counts a stream from the moment it opens, and it
+  is no longer needed once `pollingViewers` appears in `/api/health`.
 
 `GET /api/events` — SSE, `text/event-stream`. Then tell it what to follow:
 
@@ -2992,16 +3527,18 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `overview` | the board; sent only when it has actually changed |
 | `taskboard` | the task board; every ~3s while watched, and only when it has actually changed. Never carries `?idle=all` |
 | `drafts-changed` | `{at, drafts[], counts}` — the whole `GET /api/drafts` payload, so there is nothing to refetch. **Not gated by a `POST /api/subscribe` flag**, unlike `overview` and `taskboard`: a draft only changes because somebody changed it, so there is no tick to switch on and every window gets every change. Fires on create, edit, delete, and on anything that consumes one — `POST /api/drafts/:id/start`, and a `fromDraft` on `POST /api/sessions` or `POST /api/schedules` |
+| `templates-changed` | `{at, templates[], counts}` — the whole unfiltered `GET /api/templates` payload. Ungated, exactly as `drafts-changed` is, and it only fires when somebody creates, edits or deletes a template. A client that fetched with `?cwd=` must filter this itself |
 | `later-changed` | `{at, messages[], counts}` — the whole `GET /api/later` payload, so there is nothing to refetch. Ungated, exactly as `drafts-changed` is. Like `schedules-changed` and unlike `drafts-changed` it also fires **without anybody having done anything**: a delivery, a message going past its window, and a failed wake all move it. That is how a chip starts saying "sent 02:00" while nobody is looking at it, and it is the only signal a client gets that a scheduled message has left — the session list is not pushed for it |
 | `snippets-changed` | `{at, snippets[], groups[], counts}` — the whole `GET /api/snippets` payload, so there is nothing to refetch. Ungated, exactly as `drafts-changed` is, and like it, it never fires without somebody having done something: a snippet or group created, edited or deleted, and a reorder **that actually moved a row** — a drag that lands where it started pushes nothing. Both arrays every time, because deleting a group re-homes its snippets and sending half the answer would leave a client drawing a card that no longer exists. **Always unfiltered by `cwd`**, so a client that fetched with `?cwd=` must apply the filter itself here or watch its list silently widen |
 | `schedules-changed` | `{at, schedules[], counts}` — the whole `GET /api/schedules` payload. Ungated, exactly as `drafts-changed` is. Unlike that one it fires **without anybody having done anything**: a schedule firing, skipping a slot, or having its outcome recorded when the turn ends all push it. So a client that assumed the payload only moves in response to a user action will be wrong here, and pleasantly so — this is how a card starts saying "ran 2h ago — BLOCK" while nobody is looking at it |
 | `sessions-changed` | `{at}` — a nudge to refetch the list |
 | `prs-changed` | **the whole `GET /api/prs` payload** — `{sessions, gh, checkedAt}` — so a rail has nothing to refetch. Ungated, exactly as `drafts-changed` is, and like `schedules-changed` it fires **without anybody having done anything**: it is a background refresher noticing that a review landed, a build finished, or somebody merged. Fires only when the answer actually moved, so a pass that re-lists a quiet repository and finds it unchanged pushes nothing — this is not a heartbeat and must not be treated as one. It is the *only* signal that PR status changed; there was none before, and clients polled. A client wanting per-PR detail for one session should refetch `GET /api/sessions/:id/prs` on this event, which is cheap and does not shell out |
+| `pr-reviews-changed` | `{keys: string[]}` — a nightly review was read or replaced. `keys` are `owner/name#N` and **may be empty** (a gate session just finished and the bridge has not worked out which PR is affected before saying so). A nudge, not a payload: refetch `GET /api/sessions/:id/prs` or `GET /api/dashboard` for the `review` summaries and `GET /api/pr-review` for any findings on screen. Ungated, and it fires without anybody having done anything — a gate session finishing, a transcript read landing after a restart, the refresher reading a PR comment |
 | `peer-message` | `{at, sessionId, from, count}` — another session messaged this one. The message itself is in the transcript, so a client tailing it has already drawn it; this is for everything that is not the open pane |
 | `handoff` | `{at, sessionId, from, count}` — another session handed this one work, and it was resumed to deal with it. Same shape and same reasoning as above; watched in the transcript rather than reported by the route, so it fires when the message *arrived* rather than when it was queued |
 | `suggestion-changed` | `{at, sessionId, toolUseId}` — a suggested follow-up was started, completed, dismissed, or undone, possibly in another window |
 | `session-deleted` | `{sessionId, title}` |
-| `prefs` | the **user-level** settings, in the same shape as the `tgx-prefs` `<meta>` tag: `{version, transcript, live, projects, quota, spinner, keyboard, toolbar, wispr, preview, devbrowser, standing, startup, agentBrowser}`, with no `sources` or `problems`. Fired on every `PUT /api/prefs` including your own, so a second window does not sit on a stale copy — two are routinely open here. A project's answer is deliberately not sent: it is the open session's business and arrives with `GET /api/sessions/:id` |
+| `prefs` | the **user-level** settings, in the same shape as the `tgx-prefs` `<meta>` tag: `{version, transcript, live, projects, quota, orchestrator, spinner, keyboard, toolbar, wispr, preview, devbrowser, standing, startup, agentBrowser, digest}`, with no `sources` or `problems`. Fired on every `PUT /api/prefs` including your own, so a second window does not sit on a stale copy — two are routinely open here. A project's answer is deliberately not sent: it is the open session's business and arrives with `GET /api/sessions/:id` |
 | `claude-config` | `{at: number, scope: 'user'\|'project'\|'project-local'\|'managed', file: string}` — the *fact* that one of Claude Code's settings files changed, and deliberately **not** its content. Unlike `prefs` there is no `<meta>` copy for a page to keep in sync and nothing in this app behaves differently because of those files, so the event is a nudge to re-read; pushing the contents of a file whose route is local-only down every open channel would be a poor trade for saving a fetch. Fired on every successful `PUT /api/claude-config`, including your own — **and on a change this bridge did not make**: `claude` writes these files itself, so `theme` or `editorMode` from `/config`, `enabledPlugins` from a plugin toggle, and a rule appended to `settings.local.json` when somebody approves a permission mid-turn all arrive here too. `scope` may then be `managed`, which no `PUT` can produce. **Two caveats a client has to hold.** It is best-effort: the bridge watches directories with `fs.watch`, which throws on some filesystems and silently does nothing on others, so a change can go unannounced — keep treating `409 {code:'stale'}` from `PUT /api/claude-config` as the guarantee, and this only as the convenience that usually saves you from meeting it. And a project's two files are watched only once `GET /api/claude-config?cwd=<dir>` has been called for that directory, only for a small number of directories at a time (least-recently-read dropped first), and not after ten minutes without another read of it; the user file and the managed file are watched throughout. So poll or re-`GET` if you need certainty about a directory you have not asked about |
 | `claude-docs` | `{at, scope, file}` — the same trade for a `CLAUDE.md`: the fact one was written, never its contents. `scope` is `"user"` or `"project"`. Fired on every successful `PUT /api/claude-docs`, including your own. **A client holding an unsaved draft must not reload on this** — show a conflict and keep what the person typed; the whole draft here is somebody's prose rather than one key |
 | `notification` | a whole notification row, just filed — the same shape `GET /api/notifications` returns, `read` included — plus `unread`, the badge count after this row. So an open history view need not refetch, and need not guess whether the new row counts |
@@ -3015,9 +3552,10 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `notice` | `{sessionId: string, level: 'warn', kind: string, text: string}` — something worth telling the user that is not a permission ask. Every notice the bridge sends is `level: 'warn'` except `settings_deferred`, which is `level: 'info'`; treat any level other than `warn` as informational. `kind` is one of `settings_deferred` (a model/effort change held while background work runs — see the send route), `no_permission_prompt`, `permission_uninteractive`, `mode_change_failed`, `permission_auto_denied`, `permission_denied`, `api_retry`, `turn_failed`, `rate_limit` — and an unrecognised kind is a plain warning, not an error. **`rate_limit` is not one per limit: it repeats on every turn for as long as the limit holds**, because the CLI sends an identical `rate_limit_event` each time and this one is not deduplicated the way the `quota` event below is. A client that toasts it unconditionally therefore stacks the same warning over and over for an afternoon. `web/app.js` drops this kind entirely and flashes the header quota pill off the `quota` event instead; a client with nowhere to put a persistent indicator should throttle the toast itself. Everything the notice says is also in `GET /api/quota` — `windows[].status` for the current state and `events` for the history |
 | `claude-version` | **the whole `GET /api/claude-version` payload**, so there is nothing to refetch. Ungated, no `sessionId`. Sent when the summary moved: the hourly registry check found a newer version, an update finished, or a process started or ended on a version that changes `staleSessions`. Debounced by about a second |
 | `quota` | **the whole `GET /api/quota` payload**, so there is nothing to refetch. Ungated, like `drafts-changed`. Fires only when a reading actually moved — the CLI sends an identical `rate_limit_event` on every turn and those are dropped rather than pushed. Note it carries **no `sessionId`**: quota is account-wide, and which session happened to observe it says nothing. A window that has been near a limit for an hour will therefore push nothing at all, which is why `usedPercentAt` matters more than the arrival time of this event |
-| `orchestrator` | **the whole `GET /api/sessions/:id/orchestrator` payload** for one orchestrator (see §*Orchestrators*), so there is nothing to refetch. Sent on any change to it — an item filed, read or settled, a worker started, closed or queued, settings, the summary, a pause or a resume — **debounced by about 250 ms**, so a burst is one event carrying the end state. Followed by one `sessions-changed` for the whole burst, which is where the rail counts come from. `enabled: false` means the role was just turned off |
+| `orchestrator` | **the whole `GET /api/sessions/:id/orchestrator` payload** for one orchestrator (see §*Orchestrators*), so there is nothing to refetch. Sent on any change to it — an item filed, read or settled, a worker started, closed or queued, a worker's `state` or `pending` changing, a worker's PR changing status in the bridge's PR cache, settings, the summary or a decision answered, a pause or a resume — **debounced by about 250 ms**, so a burst is one event carrying the end state. Followed by one `sessions-changed` for the whole burst, which is where the rail counts come from. `enabled: false` means the role was just turned off |
 | `standing-changed` | `{sessionId, standing}` — `standing` is `{text, source, at}` exactly as on the session summary (`text` a string, `source` `"model"` or `"extract"`, `at` epoch ms), or null. Patch that row's `standing`; there is nothing to refetch. Fires about fifteen seconds after a `turn-complete`, and only when the line was actually rewritten — a turn whose reply was already summarised sends nothing |
 | `turn-complete` | `{sessionId, isError, detail, retries, costUsd, durationMs, numTurns, stopReason}` — the runner's `lastResult` with the session id on it. `detail` is null unless `isError` |
+| `session-spend` | `{sessionId, totals}` — `totals` is the `Totals` object of `GET /api/analytics/sessions/:id`: that session's all-time API-equivalent spend. Sent to every client shortly after a `turn-complete`, once the transcript has been re-read. Replace the header figure with it. Only for turns this bridge ran: a session in a terminal sends nothing, so re-fetch on open |
 | `send-failed` | `{sessionId, kind, message, unsent: [text]}` — a send that never became a turn; hand the text back to the user. `unsent` is an array of **strings**, in send order, and may be empty — the event still means the send failed, and `message` is then the whole of it. `kind` is one of `busy-elsewhere` (the session is running somewhere else; offer to branch), `branch-refused` (Claude Code would not make the cut a `fromUuid` send asked for — see `POST /api/sessions/:id/send`), `no-claude`, `missing`, `unknown`, `exited` (the process ended without answering) or `retired` (the bridge shut the process down with messages still queued). Treat an unrecognised kind as `unknown`. Attachments are **not** carried: a message that had files comes back as its text alone |
 | `session-forked` | `{from, to}` — follow the new id |
 | `slash-commands` | `{cwd, at}` — that directory's slash commands changed; drop what you cached |
@@ -3203,6 +3741,61 @@ the roots, or a `worktree` git would not make; `403` for a refused `permissionMo
 or any `worktree`, from a remote caller; `409` for a `worktree` that already exists;
 `429` past 8 creates a minute.
 
+### `POST /api/pr-review/fix`
+
+Start a session to fix findings from a pull request's nightly review — **Fix this**
+and **Fix all**.
+
+```
+{ repo: "owner/name", number, finding?: number, cwd?: string, permissionMode?, test? }
+```
+
+- `finding` is an index into `GET /api/pr-review`'s `findings`. Leave it out for
+  "fix all", which is every critical and warning finding — or every note, when notes
+  are all the review has, or the whole `raw` text when nothing parsed. **The prompt is
+  built by the bridge from its own copy of the review**; nothing the client sends
+  becomes prompt text but the index.
+- `cwd` is a *hint* at a checkout of `repo`. Optional, and used only if it is one: the
+  bridge otherwise tries the review schedule's directory and then every project it
+  knows, by `origin` remote. A hint outside the roots is `403`.
+- `permissionMode` defaults to the app's default, as on `POST /api/sessions`, and the
+  same remote refusal applies to it. The session has to run tests, commit and push.
+
+**Where it runs: on the PR's own branch**, because it is told to push there. A worktree
+that already has the branch checked out is reused — `.claude/worktrees/<anything>`.
+Otherwise the bridge fetches the branch from `origin` and checks it out at
+`<repo>/.claude/worktrees/pr-<N>` (then `pr-<N>-2`, …), on the branch's own name —
+never a `worktree-` branch of its own.
+
+`200`: `{sessionId, status, test, findings, worktree: {path, branch, created}}` —
+`findings` the number the prompt covers, `created` whether a worktree was made. The
+session is named `Fix #N: <finding title>` (or `Fix #N: 3 review findings`) through the
+same flag a rename uses, and carries `test` when asked. The same eventual consistency
+as `POST /api/sessions`: the id may 404 on `GET /api/sessions/:id` for a few seconds.
+
+Refusals, in the order they are checked:
+
+- `400` — a malformed `repo`/`number`, or a `finding` that is not an index.
+- `404` — no review of that PR is known (or it is still being read).
+- `409 {error: 'pr-unknown' | 'pr-closed', message}` — the PR is not in the store yet,
+  or is no longer open.
+- `409 {error: 'no-checkout', message}` — no checkout of `repo` on this machine.
+- `403 {error, remote: true}` — a refused `permissionMode` from a remote caller.
+- `409 {error: 'branch-in-main-checkout', message, path, branch}` — the branch is
+  checked out in the main checkout, which is never used.
+- `409 {error: 'worktree-in-use', message, path, branch, sessionId}` — a live session
+  is working in that worktree: one of this bridge's, or any running `claude` Claude
+  Code's own registry knows of (the everyday bridge's, a terminal's). `sessionId` is
+  that session, so a client can offer to open it instead.
+- `409 {error: 'worktree-dirty', message, path, branch}` — the worktree has
+  uncommitted changes, untracked files included.
+- `403 {error, remote: true}` — a worktree would have to be **created** and the caller
+  is remote: the same rule as `worktree` on `POST /api/sessions`. Reusing one is open
+  to a remote caller.
+- `429` — past the create limit `POST /api/sessions` shares.
+- `409 {error: 'fetch-failed', message}` — the branch is not on `origin` (a fork's PR,
+  usually); `400 {error: <code>, message}` for any other git failure.
+
 ### `POST /api/sessions/:id/send`
 
 `{text, attachments?, model?, effort?, permissionMode?, fork?, fromUuid?}` →
@@ -3372,6 +3965,86 @@ that loaded a draft into its own form and then started or scheduled the edited v
 rather than saving it. Use this route when nothing was edited: it needs no body, and the
 arguments it spawns with are the ones on the file rather than ones the caller has to
 send back.
+
+### `POST /api/templates`
+
+Body: `{name, project?, cwd?, prompt?, model?, effort?, permissionMode?, worktree?,
+orchestrator?, test?}` → `{template}`, in the shape `GET /api/templates` lists.
+
+Checked the way `POST /api/drafts` checks a draft (the same `draftFields`), except
+that `cwd` and `prompt` may be left out:
+
+- **`name`** is required, a non-empty string of at most 100 characters → `400`.
+- **`cwd`**, if given, must resolve inside the allowed roots → `400`. `~` is expanded.
+- **`project`** must be a string or null → `400`. It is *not* checked for existence:
+  it is a filter, not where a process starts.
+- **`worktree`** must be null or `{name: non-empty string, base?: string}` → `400`.
+  From a **remote** caller a non-null `worktree` is `403 {error, remote: true}`,
+  because `POST /api/sessions` refuses a worktree remotely and a template that can
+  never be started remotely should not be saved from there.
+- **`permissionMode`** is normalised, and a mode a remote caller may not start is
+  `403 {error, remote: true}`, as for drafts.
+- `orchestrator` is true only for the JSON value `true`. Any key not listed here is
+  dropped, including a draft's `title`.
+
+`409` at 200 templates. Pushes `templates-changed`.
+
+### `PATCH /api/templates/:id`
+
+A real patch: any subset of the `POST` fields; a key left out is left alone, and `null`
+clears (`worktree: null` turns the worktree off). → `{template}`. The same checks as
+`POST`, run **before** the id is looked up, so a refused mode or remote worktree is a
+`403` whether or not the id exists. `404` for an unknown id. Renaming is a PATCH of
+`name`. Pushes `templates-changed`.
+
+### `DELETE /api/templates/:id`
+
+→ `{ok: true, id}`; `404` if there is no such template. Pushes `templates-changed`.
+
+### `POST /api/templates/:id/resolve`
+
+Body: `{cwd?: string, values?: {[name]: string}}` →
+
+```json
+{
+  "fields": {
+    "cwd": "/home/dylan_hays/Other/claude-sessions",
+    "prompt": "Implement login redirect on main",
+    "model": null, "effort": null, "permissionMode": "auto",
+    "worktree": { "name": "login-redirect", "base": null },
+    "orchestrator": true, "test": false
+  },
+  "missing": []
+}
+```
+
+Fills a template's placeholders and returns the fields. **It starts nothing and
+changes nothing.** `fields` is meant to be shown to the user and then sent, perhaps
+edited, as the body of `POST /api/sessions` (add `attachments` if you have any). Every
+refusal on that route still applies, so a template is never a way round one.
+
+- **`cwd`** is the body's `cwd`, else the template's `cwd`, else its `project`, else
+  `null`.
+- **Built-ins** are filled by the bridge. `{{date}}` is the bridge's local date as
+  `YYYY-MM-DD`. `{{project}}` is the last path component of `cwd`, with a
+  `/.claude/worktrees/<name>` suffix removed first, so a worktree reports its project.
+  `{{branch}}` is the current branch of `cwd`, read with git. It is only filled when
+  `cwd` resolves inside the allowed roots and is a repository not on a detached HEAD.
+- **`values`** answers the template's `asks`. A non-empty string here also overrides
+  a built-in. Values are trimmed, and empty or non-string values are ignored.
+- **A placeholder with no value is left in the text exactly as written,** never
+  replaced with `""`. Every name still unfilled is listed in `missing` (built-ins
+  first), so a client can say so rather than send a prompt with `{{task}}` in it.
+- **`worktree.name`** is the filled pattern turned into a valid worktree name:
+  lowercased, every run of characters outside `[a-z0-9._-]` made one `-`, leading `.`
+  and `-` stripped, cut to 60 characters, and trailing `.`, `-` and `.lock` removed.
+  It is **`null`** when the pattern still holds a placeholder or nothing usable is
+  left. That is distinct from `worktree: null`, which means the template has no
+  worktree. A client must ask for a name before sending it to `POST /api/sessions`,
+  which would refuse `{name: null}`.
+
+`404` for an unknown id. Allowed remotely: it only reads. A remote client still gets a
+`403` from `POST /api/sessions` if it then sends a non-null `worktree`.
 
 ### `POST /api/sessions/:id/later`
 
@@ -4551,25 +5224,73 @@ event:
                            autoResume: boolean } },
   paused: null | { reason: string, at: number, resumeAt: number|null, by: number|null,
                    interrupted: [string] },
-  summary: null | { text: string (markdown, ≤1500 chars), at: number },
+  summary: null | { text: string (markdown, ≤1500 chars), at: number,
+                    goal: string|null,
+                    decisions: [{ id: string, text: string, options: [string],
+                                  workerId: string|null, at: number,
+                                  answer: string|null, answeredAt: number|null }],
+                    mergeOrder: [number] },
   workers: [{ id, title: string|null, cwd, worktree: null | {path, branch},
               spawnedAt: number, closedAt: number|null,
               state: "idle"|"busy"|"starting"|"stopped"|"error",
-              pending: null | "tool"|"plan"|"question" }],
+              pending: null | "tool"|"plan"|"question",
+              pr: null | { number: number, url: string|null, repo: string|null,
+                           title: string|null, status: string, label: string|null } }],
   pendingSpawns: [{ id, title: string|null, at: number }],
   unread: number,
   inbox: [item, …]   // newest first, at most 100 }
 ```
 
 or `{orchestratorId, enabled: false}` for a session that is not one. Times are epoch
-ms. An **inbox item** is:
+ms.
+
+A worker's **`pr`** is the newest pull request its transcript links (the last of
+the session summary's `prs`), or null. `status` and `label` are what the bridge's
+PR cache already holds — the same words as the rail's PR badge (`open`, `approved`,
+`changes`, `checks-failed`, `checks-pending`, `conflicting`, `draft`, `merged`,
+`closed`) — and `"unknown"` with `title: null` until the cache has seen it. Building
+the payload never asks GitHub, so a status can trail the PR by one refresh. When a
+refresh moves the status of any worker's PR, the `orchestrator` event fires again
+for that orchestrator, so a client drawing `pr.status` from the event alone stays
+current; nothing else about the worker has to change.
+
+**The summary is the orchestrator's brief for the user**, written with its
+`set_summary` tool. `text` is the prose. The rest is structure a client draws
+rather than parses out of the prose, and any of it may be empty — an orchestrator
+that has not filled a field leaves it `null` or `[]`:
+
+- **`goal`** — the overall task in one line (≤200 chars).
+- **`decisions`** — the questions it needs the *user* to answer (at most 6).
+  `options` are short answers it offered (at most 4, may be empty); `workerId` the
+  worker a question is about, or null. **`id` is a hash of the question's text**,
+  so it stays the same across rewrites of the brief as long as the question does —
+  and with it `at` (when it was first asked) and any recorded answer. A question the
+  orchestrator leaves out of its next brief is gone: answered, or no longer worth
+  asking. `answer`/`answeredAt` are set by the route below and are the only part a
+  client writes.
+- **`mergeOrder`** — PR numbers in the order the orchestrator wants them landed. A
+  number may belong to no worker in the payload (it was opened elsewhere); draw it by
+  number.
+
+The orchestrator is told to put its questions here rather than ask them in prose,
+and that an answer reaches it as an ordinary message starting `Re: <question>`.
+
+The **inbox** in the payload is the newest 100 items, and the store drops settled
+items first once it is full. A client reconstructing a worker's history from it —
+when its plan was filed, whether that was approved — must treat a missing item as
+unknown, not as never having happened. An **inbox item** is:
 
 ```
 { id, workerId: string|null, kind, text: string, at: number, seq: number,
   status: "new"|"read"|"resolved"|"stale",
   requestId: string|null, ask: null | {kind, tool, displayName, input},
-  outcome: string|null, by: null | "orchestrator"|"user" }
+  outcome: string|null, by: null | "orchestrator"|"user",
+  settledAt: number|null }
 ```
+
+`settledAt` is when it became `resolved` or `stale` — answered, dismissed or gone —
+and null while it is open. Items settled before the field existed have it null too,
+so a client cannot treat null as "still open"; `status` says that.
 
 `kind` is `question`, `update` or `done` (a worker's own report), `turn` (the final
 message of a turn a worker finished — filed automatically, unless the worker said
@@ -4654,6 +5375,24 @@ even once read. A worker that is closed or deleted has its unanswered asks marke
 `{}` → `{ok, item}`. Marks it `resolved`, `outcome: "dismissed"`, `by: "user"`. It
 does not answer a worker's ask; that is the permission route on the worker.
 
+#### `POST /api/sessions/:id/orchestrator/decisions/:decisionId/answered`
+
+`{text: string}` → `{decision}` (the decision as it now stands, `answer` and
+`answeredAt` set). Records that the user answered one of the brief's `decisions`,
+so every window can draw it as answered until the orchestrator rewrites its brief
+without it. Fires the `orchestrator` event.
+
+**It does not deliver the answer.** The orchestrator only learns it from a message:
+send `Re: <the question's text>` followed by the answer with
+`POST /api/sessions/:orchestratorId/send` — the desktop sends first and records
+second, so nothing is drawn as answered unless it is on its way. A client that calls
+only this route has told every window it answered and told the orchestrator nothing.
+
+`400` with no `text`; `404` when the session is not an orchestrator, or when there is
+no decision with that id — usually because the orchestrator has already dropped it,
+which a client should treat as done. **Open to a paired remote device**, as `/send`
+is.
+
 #### `POST /api/sessions/:id/orchestrator/resume`
 
 `{}` → the payload. Clears `paused`, starts queued spawns up to `maxRunning`, and
@@ -4673,11 +5412,29 @@ All `POST`, all refused remotely, all with the orchestrator's id in the path:
 `spawn` `{prompt, title?, cwd?, worktree?: boolean|string, permissionMode?, model?,
 effort?}` → `{queued: false, sessionId, title, cwd, worktree}` or `{queued: true, id,
 position, running, maxRunning}`; `next` `{max?}` → `{items, left}` (marks them
-read); `send` `{worker, text}`; `answer` `{itemId, decision:
-"allow"|"allow-always"|"deny", feedback?, answers?, mode?}`; `read` `{worker, mode:
-"digest"|"tail"|"full"|"ask", turns?, offset?}` → `{text, …}`; `stop` `{worker,
-hard?}`; `close` `{worker, archive?}`; `summary` `{text}`. A worker's own is
-`POST /api/sessions/:id/report` `{kind: "question"|"update"|"done", text}`.
+read); `send` `{worker, text}` → `{ok, queued, state}`; `answer` `{itemId, decision:
+"allow"|"allow-always"|"deny", feedback?, answers?, mode?}` → `{ok}`; `read` `{worker,
+mode: "digest"|"tail"|"full"|"ask", turns?, offset?}`; `stop` `{worker, hard?}` →
+`{ok, how}`; `close` `{worker, archive?}` → `{ok, worktree}`; `summary` `{text,
+goal?, decisions?, mergeOrder?}` → `{summary}`. A worker's own is
+`POST /api/sessions/:id/report` `{kind: "question"|"update"|"done", text}` →
+`{ok, id}`.
+
+`summary`'s structured fields are each optional: **left out, a field keeps what the
+brief had; `null` or empty clears it.** Empty `text` clears the whole summary,
+structured fields with it. A decision arrives as a question string or `{text,
+options?, worker?}`. `mergeOrder` accepts numbers or strings like `"#212"`.
+
+`read` answers by mode. `digest` is `{text, headline: string|null, fields}` —
+`text` is what the orchestrator's model reads, and **`fields` is the same reading
+laid out for a page**: `{state: string|null (null: no process), pending:
+"tool"|"plan"|"question"|null, turns: number, todo: null | {done, total, now:
+string|null}, tools: [{name, n}] (most used first), files: [string] (paths edited),
+diffStat: string|null (the output of git diff --stat HEAD), lastMessage: string|null
+(at most 3000 chars)}`. `tail` is `{text, turns}`, `full` is `{text, offset, next:
+number|null, total}`, and **`ask` is not a read**: it sends the worker a message
+asking it to summarise itself, and the answer arrives later as a `turn` item. Every
+mode but `ask` only reads.
 
 ### Other writes
 
@@ -4869,6 +5626,105 @@ Otherwise **200**, whatever happened:
   gets 120 seconds.
 - Afterwards `/api/origin` and the pull-request refresher see the new origin
   straight away.
+
+## The worktree janitor
+
+Every git worktree of one project, what is in each, and removal of the ones nothing
+would be lost from. The desktop opens it from the project ⋮ menu and from a
+project's heading on the dashboard. The rules are in `bridge/worktrees.js`'s
+header. In brief, a worktree is **safe** when all of these hold:
+- it is not the main checkout, and not the checkout the bridge serves
+- it is not locked
+- it is clean, untracked files included
+- its tip is on some remote-tracking ref, or is the head of its PR
+- its PR is merged or closed
+- no session is in it
+
+### `GET /api/worktrees?cwd=<dir>[&refresh=1]`
+
+`cwd` can be any directory in the repository, including a worktree. The answer is
+always about the **main** checkout's worktrees.
+
+```json
+{ "top": "/home/me/proj", "repo": "owner/name", "prError": null,
+  "worktrees": [ {
+    "path": "/home/me/proj/.claude/worktrees/x", "name": "x",
+    "branch": "worktree-x", "head": "<sha>",
+    "main": false, "self": false, "locked": false, "missing": false,
+    "lastCommit": "2026-10-12T09:14:00-05:00",
+    "dirty": false, "files": 0, "unreadable": false, "pushed": true,
+    "pr": { "number": 184, "state": "merged", "url": "…", "title": "…", "head": "<sha>" },
+    "prState": "merged",
+    "sessions": { "live": false, "count": 2,
+                  "recent": [ { "id": "…", "title": "…", "lastTs": "…", "live": false } ] },
+    "safe": true, "reasons": [] } ] }
+```
+
+- **Worktrees:** `worktrees` is every entry in `git worktree list`, the main checkout
+  first, in git's order. Sorting is the client's job.
+- **`repo`:** `owner/name` of a GitHub `origin`, or `null`.
+- **`prError`:** a string when PRs could not be listed (no GitHub origin, gh missing
+  or failing), otherwise `null`. While it is set, every `prState` is `unknown` and
+  nothing is safe.
+- **`branch`:** a string, or `null` for a detached HEAD.
+- **`missing`:** the directory is gone; git calls the entry prunable.
+- **`lastCommit`:** the ISO committer date of `head`, or `null`.
+- **`files`:** how many paths `git status` lists.
+- **`unreadable`:** status could not be read, which counts as not clean.
+- **`pr`:** `{number, state, url, title, head}` or `null`. It is the newest PR whose
+  head branch is `branch`, in any state. `state` is `open`, `merged` or `closed`, and
+  `head` is that PR's head commit.
+- **`prState`:** one of `open`, `merged`, `closed`, `none`, `unknown`. It is `none`
+  when the PR list was read and no PR has this branch. It is `unknown` when the list
+  could not be read.
+- **`sessions`:**
+  - `live` is true when any of these is in the directory or under it: a running
+    registry entry, a pool runner that has not stopped, or a transcript written in
+    the last two minutes.
+  - A session in a nested worktree does not count against the main checkout.
+  - `count` is every session with that cwd or worktree path.
+  - `recent` is up to five of them, newest first.
+- **`reasons`:** an array of strings, empty exactly when `safe`. Possible values:
+  `main`, `self`, `locked`, `dirty`, `unreadable`, `unpushed`, `pr-open`, `pr-none`,
+  `pr-unknown`, `live-session`.
+- **Caching:** the PR list is one `gh pr list --state all --limit 200` per repository,
+  memoised for 60 seconds. `refresh=1` forgets it first.
+- **Bad `cwd`:** `400 {error}` when `cwd` is missing, does not exist, or is outside
+  the allowed roots. `400 {error, code: "not-a-repo"}` when it is not in a git
+  repository.
+- **Remote callers** may use this route.
+
+### `POST /api/worktrees/remove`
+
+Body `{cwd: string, paths: string[]}`. Both a single removal and "remove all safe" go
+through this route. `paths` holds 1–100 worktree paths of the repository `cwd`
+belongs to.
+
+**Each path is judged again when the request arrives,** against a fresh survey. A
+row that was safe when the GET answered can be refused here, and that refusal
+applies to that path alone. The paths are handled one at a time, in order. A
+worktree that passes is then:
+- removed with `git worktree remove` without `--force`, or with `git worktree prune`
+  if its directory is already gone
+- left with its local branch deleted (`git branch -D`) **only** if its PR is `merged`
+  and that PR's head is still the branch tip. Otherwise the branch is kept.
+
+`200 { results: [ {path, removed: bool, branch?: string|null, branchDeleted: bool,
+branchKept: bool, error?: string, code?: string, reasons?: string[]} ] }`, with one
+result per path, in order. A path that was not removed has a `code`:
+
+| `code` | Meaning |
+|---|---|
+| `not-safe` | The path is not safe. `reasons` lists why, in the same values the GET uses. |
+| `not-a-worktree` | The path is not a worktree of this repository. |
+| `outside-roots` | The path is outside the allowed roots. |
+| `git-failed` | git refused. `error` is git's line. |
+
+Other answers:
+- `400 {error}` when `cwd` is bad, or `paths` is empty, over 100, or not all
+  non-empty strings.
+- **Refused to remote callers:** `403 {"error": "worktrees can only be removed at
+  the machine they live on", "remote": true}`.
 
 ## Project commands
 

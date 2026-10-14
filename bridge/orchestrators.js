@@ -38,7 +38,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { randomUUID } = require('crypto');
+const { randomUUID, createHash } = require('crypto');
 
 const { STATE_DIR } = require('./config');
 
@@ -62,6 +62,18 @@ const MAX_INBOX = 300;
 const MAX_TEXT = 8000;
 const MAX_SUMMARY = 1500;
 const MAX_WORKERS = 50;
+
+// The brief's structured half — what the orchestrator page draws from rather
+// than parsing prose. Small on purpose: a goal is a line, a decision is a
+// question somebody can answer in one breath, and six of them waiting is
+// already more than anybody is going to answer.
+const MAX_GOAL = 200;
+const MAX_DECISIONS = 6;
+const MAX_DECISION_TEXT = 400;
+const MAX_OPTIONS = 4;
+const MAX_OPTION = 80;
+const MAX_ANSWER = 2000;
+const MAX_MERGE = 30;
 
 const WINDOWS = ['five_hour', 'seven_day', 'seven_day_opus', 'seven_day_sonnet'];
 // What `usageStop.window` may be: one window, measured against `percent`, or
@@ -244,7 +256,80 @@ function cleanItem(i) {
         ask: i.ask && typeof i.ask === 'object' ? i.ask : null,
         outcome: str(i.outcome, 60),
         by: str(i.by, 40),
+        // When it was answered, dismissed or went stale. Null while open, and on
+        // every item settled before this was recorded.
+        settledAt: Number.isFinite(i.settledAt) ? i.settledAt : null,
     };
+}
+
+/**
+ * A decision's id: a hash of its question, so the orchestrator can rewrite the
+ * whole list on every `set_summary` and a question it keeps keeps its id — and
+ * with it when it was first asked and any answer already recorded against it.
+ */
+function decisionId(text) {
+    return createHash('sha1').update(String(text).trim().toLowerCase()).digest('hex').slice(0, 12);
+}
+
+function cleanDecision(d) {
+    if (!d || typeof d.text !== 'string' || !d.text.trim()) return null;
+    const text = d.text.trim().slice(0, MAX_DECISION_TEXT);
+    return {
+        id: typeof d.id === 'string' && d.id ? d.id.slice(0, 40) : decisionId(text),
+        text,
+        options: (Array.isArray(d.options) ? d.options : [])
+            .filter(o => typeof o === 'string' && o.trim())
+            .map(o => o.trim().slice(0, MAX_OPTION)).slice(0, MAX_OPTIONS),
+        workerId: str(d.workerId, 100),
+        at: Number.isFinite(d.at) ? d.at : 0,
+        answer: str(d.answer, MAX_ANSWER),
+        answeredAt: Number.isFinite(d.answeredAt) ? d.answeredAt : null,
+    };
+}
+
+/** PR numbers, in the order to merge them. `#212` and `"212"` are read as 212. */
+function cleanMergeOrder(list) {
+    const out = [];
+    for (const v of Array.isArray(list) ? list : []) {
+        const n = typeof v === 'number' ? v : Number.parseInt(String(v).replace(/^#/, ''), 10);
+        if (Number.isInteger(n) && n > 0 && !out.includes(n)) out.push(n);
+        if (out.length >= MAX_MERGE) break;
+    }
+    return out;
+}
+
+function cleanSummary(s) {
+    if (!s || typeof s.text !== 'string') return null;
+    return {
+        text: s.text.slice(0, MAX_SUMMARY),
+        at: Number(s.at) || 0,
+        goal: str(s.goal, MAX_GOAL),
+        decisions: (Array.isArray(s.decisions) ? s.decisions : [])
+            .map(cleanDecision).filter(Boolean).slice(0, MAX_DECISIONS),
+        mergeOrder: cleanMergeOrder(s.mergeOrder),
+    };
+}
+
+/**
+ * The decisions a `set_summary` asked for, merged with the ones already held.
+ * Each arrives as a question string or `{text, options?, worker?}`. A question
+ * the list already had keeps its `at` and its answer; one that is new is asked
+ * now; one left out is gone — answered, or no longer worth asking.
+ */
+function mergeDecisions(prev, incoming, now) {
+    const held = new Map((prev || []).map(d => [d.id, d]));
+    const out = [];
+    for (const raw of Array.isArray(incoming) ? incoming : []) {
+        const d = typeof raw === 'string' ? { text: raw } : raw && typeof raw === 'object'
+            ? { text: raw.text, options: raw.options, workerId: raw.worker || raw.workerId } : null;
+        const c = cleanDecision(d && { ...d, id: null });
+        if (!c || out.some(x => x.id === c.id)) continue;
+        const old = held.get(c.id);
+        out.push({ ...c, at: old ? old.at : now,
+            answer: old ? old.answer : null, answeredAt: old ? old.answeredAt : null });
+        if (out.length >= MAX_DECISIONS) break;
+    }
+    return out;
 }
 
 function cleanWorker(w) {
@@ -303,9 +388,7 @@ function cleanOrch(id, o) {
         paused: o.paused && typeof o.paused === 'object'
             ? cleanPaused(o.paused, Number(o.paused.at) || 0)
             : null,
-        summary: o.summary && typeof o.summary.text === 'string'
-            ? { text: o.summary.text.slice(0, MAX_SUMMARY), at: Number(o.summary.at) || 0 }
-            : null,
+        summary: cleanSummary(o.summary),
         workers: (Array.isArray(o.workers) ? o.workers : []).map(cleanWorker).filter(Boolean),
         pendingSpawns: (Array.isArray(o.pendingSpawns) ? o.pendingSpawns : [])
             .map(cleanSpawn).filter(Boolean),
@@ -430,6 +513,8 @@ class Orchestrators {
 
     get(id) { return this.byId.get(id) || null; }
 
+    ids() { return [...this.byId.keys()]; }
+
     orchestratorOf(workerId) {
         const id = this.workerOf.get(workerId);
         return id ? this.byId.get(id) || null : null;
@@ -487,12 +572,50 @@ class Orchestrators {
         return this._touch(o);
     }
 
-    setSummary(sessionId, text) {
+    /**
+     * The brief. `text` is the prose and is required: empty clears the whole
+     * summary, structured fields with it. `fields` is the structured half —
+     * `goal`, `decisions`, `mergeOrder` — and each is optional: left out, it
+     * keeps what it was; null or empty, it is cleared.
+     */
+    setSummary(sessionId, text, fields = {}) {
         const o = this.byId.get(sessionId);
         if (!o) return null;
         const t = String(text || '').trim().slice(0, MAX_SUMMARY);
-        o.summary = t ? { text: t, at: Date.now() } : null;
+        if (!t) {
+            o.summary = null;
+            return this._touch(o);
+        }
+        const prev = o.summary || { goal: null, decisions: [], mergeOrder: [] };
+        const f = fields && typeof fields === 'object' ? fields : {};
+        const now = Date.now();
+        const has = (k) => Object.prototype.hasOwnProperty.call(f, k) && f[k] !== undefined;
+        o.summary = {
+            text: t,
+            at: now,
+            goal: has('goal') ? (str(typeof f.goal === 'string' ? f.goal.trim() : null, MAX_GOAL) || null)
+                : prev.goal,
+            decisions: has('decisions') ? mergeDecisions(prev.decisions, f.decisions, now) : prev.decisions,
+            mergeOrder: has('mergeOrder') ? cleanMergeOrder(f.mergeOrder) : prev.mergeOrder,
+        };
         return this._touch(o);
+    }
+
+    /**
+     * Record that the user answered one of the brief's decisions. Delivery is not
+     * this: the answer reaches the orchestrator as an ordinary message, and this
+     * is what lets every window show the question as answered until the
+     * orchestrator rewrites its brief without it. Null when there is no such
+     * decision any more.
+     */
+    answerDecision(sessionId, decisionIdArg, text) {
+        const o = this.byId.get(sessionId);
+        const d = o && o.summary && o.summary.decisions.find(x => x.id === decisionIdArg);
+        if (!d) return null;
+        d.answer = String(text || '').trim().slice(0, MAX_ANSWER) || null;
+        d.answeredAt = d.answer ? Date.now() : null;
+        this._touch(o);
+        return d;
     }
 
     setPaused(sessionId, paused) {
@@ -638,6 +761,7 @@ class Orchestrators {
         i.status = status;
         if (outcome) i.outcome = outcome;
         if (by) i.by = by;
+        i.settledAt = Date.now();
         this._touch(this.byId.get(orchId));
         return i;
     }
@@ -692,6 +816,6 @@ function refusal(message) {
 
 module.exports = {
     Orchestrators, cleanSettings, sortInbox, shouldNudge, usageTrip, describeCounts,
-    usageTrips, resumeAtFor,
-    DEFAULT_SETTINGS, REPORT_KINDS, KINDS, WINDOWS, STOP_WINDOWS, MAX_SUMMARY,
+    usageTrips, resumeAtFor, decisionId, cleanMergeOrder,
+    DEFAULT_SETTINGS, REPORT_KINDS, KINDS, WINDOWS, STOP_WINDOWS, MAX_SUMMARY, MAX_DECISIONS,
 };

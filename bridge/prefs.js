@@ -65,6 +65,19 @@
 // whoever is typing elsewhere, which is the reason it exists. **User-only**: what
 // pops up on your desktop is not a repository's to decide.
 //
+// `reviews` is which skills count as code reviews: each a label, the skill or
+// command name, and a colour. The Reviews pane lists the runs of these in a
+// session (bridge/code-reviews.js). It is **not** user-only: most reviewers are
+// personal skills, so the list normally lives in the user file, but a repository
+// that ships its own reviewer in `.claude/skills` is the right place to declare
+// it for everyone who opens it. A project's list replaces the user's whole, as
+// every list here does.
+//
+// `digest` is the "while you were away" card: whether it appears at all, and how
+// long the window has to go unwatched — hidden, or untouched — before coming
+// back counts as having been away. See web/digest.js. **User-only**: when you
+// count as away is about you, not about whichever checkout is open.
+//
 // **Where the file lives is the deliberate part.** `~/.tgxcode/settings.json`,
 // not STATE_DIR. Everything under STATE_DIR is state the app owns and nobody is
 // expected to open — a token, a set of archived ids. This is a file a person
@@ -137,7 +150,7 @@ const MAX_LINK_PATTERNS = 200;
 //    hand-editing the file as the only way home.
 //  - `quota` stays on the bar. Its popover is anchored to the pill and holds
 //    Restart bridge, and neither works from inside another popover.
-const TOOLBAR_IDS = ['tasks', 'live', 'dashboard', 'history', 'drafts', 'schedules',
+const TOOLBAR_IDS = ['tasks', 'live', 'dashboard', 'analytics', 'history', 'drafts', 'schedules',
     'settings', 'quota', 'devbrowser'];
 const TOOLBAR_PLACES = new Set(['bar', 'more', 'hidden']);
 const TOOLBAR_PINNED = { settings: new Set(['bar', 'more']), quota: new Set(['bar']) };
@@ -425,6 +438,25 @@ const DEFAULTS = {
         // drawn. Read at spawn — see sessionEnv() in bridge/runner.js.
         mode: 'visible',
     },
+    digest: {
+        // Whether coming back to the window shows what happened while you were
+        // gone. See bridge/digest.js and web/digest.js.
+        enabled: true,
+        // How long the window has to be hidden or untouched before coming back
+        // counts. Short enough to catch a lunch break, long enough that reading
+        // something in another window does not raise a card on every return.
+        awayMinutes: 20,
+    },
+    reviews: {
+        // {id, label, skill, colour}. `skill` is matched against a Skill tool
+        // call, a slash command and an Agent call's subagent_type; see
+        // bridge/code-reviews.js. These two are the reviewers that actually run
+        // on the machine this was built on: `code-review` is Claude Code's own.
+        types: [
+            { id: 'code-review', label: 'Code review', skill: 'code-review', colour: 'blue' },
+            { id: 'adversarial', label: 'Adversarial', skill: 'adversarial-reviewer', colour: 'red' },
+        ],
+    },
 };
 
 // Sections a project may not set, however the precedence would otherwise fall.
@@ -461,8 +493,11 @@ const DEFAULTS = {
 // it is stopped, are not a checked-in repository's to raise — and its addenda
 // are text appended to a system prompt, which a repository already has CLAUDE.md
 // for.
+//
+// `digest` is when you count as having walked away, which is about you.
 const USER_ONLY = new Set(['quota', 'keyboard', 'projects', 'toolbar', 'wispr',
-    'preview', 'devbrowser', 'standing', 'startup', 'agentBrowser', 'orchestrator']);
+    'preview', 'devbrowser', 'standing', 'startup', 'agentBrowser', 'orchestrator',
+    'digest']);
 
 // What each key is allowed to be. A file is a thing people edit, so a bad value
 // is dropped and the default kept rather than taken at face value — a
@@ -608,6 +643,17 @@ const SHAPE = {
     },
     agentBrowser: {
         mode: (v) => v === 'visible' || v === 'headless',
+    },
+    digest: {
+        enabled: (v) => typeof v === 'boolean',
+        // Eight hours is a working day; past that the card is about yesterday.
+        awayMinutes: (v) => Number.isInteger(v) && v >= 1 && v <= 480,
+    },
+    reviews: {
+        // The last gate again: cleanReviewTypes() has dropped the bad entries.
+        types: (v) => Array.isArray(v) && v.length <= REVIEW_TYPES_MAX
+            && new Set(v.map(t => t && t.id)).size === v.length
+            && v.every(validReviewType),
     },
 };
 
@@ -847,8 +893,65 @@ function cleanLinkList(value, note) {
     return out;
 }
 
+// `reviews.types`. Colours are names rather than hex so that a type wears the
+// palette's own hue in both themes — web/css/reviews.css maps each to a token.
+const REVIEW_TYPES_MAX = 20;
+const REVIEW_COLOURS = ['blue', 'red', 'yellow', 'green', 'purple', 'peach'];
+const REVIEW_ID_RE = /^[a-z0-9][a-z0-9_-]{0,39}$/;
+// What a Skill call, a slash command or a subagent type can be called:
+// `code-review`, `code-review:code-review`, `feature-dev:code-reviewer`.
+const REVIEW_SKILL_RE = /^[A-Za-z0-9][A-Za-z0-9:_.-]{0,79}$/;
+
+function validReviewType(t) {
+    return Boolean(t) && typeof t === 'object' && REVIEW_ID_RE.test(t.id)
+        && typeof t.label === 'string' && t.label.length > 0 && t.label.length <= 40
+        && typeof t.skill === 'string' && REVIEW_SKILL_RE.test(t.skill)
+        && REVIEW_COLOURS.includes(t.colour);
+}
+
+/**
+ * `reviews.types`, entry by entry, cleanToolbar()'s argument: one bad row must
+ * not throw the rest away. A missing id is made from the skill, a missing label
+ * is the skill, a missing or unknown colour is blue, and a leading `/` on the
+ * skill is dropped — `/code-review` is what people type.
+ *
+ * @returns {Array|undefined} the cleaned list, or undefined to leave the
+ *   default alone — which is what a value that is not a list at all gets.
+ */
+function cleanReviewTypes(value, note) {
+    if (!Array.isArray(value)) return undefined;
+    const out = [];
+    const seen = new Set();
+    for (const raw of value) {
+        if (!raw || typeof raw !== 'object') { note(`${JSON.stringify(raw)} is not a review type`); continue; }
+        const skill = typeof raw.skill === 'string' ? raw.skill.trim().replace(/^\/+/, '') : '';
+        if (!REVIEW_SKILL_RE.test(skill)) {
+            note(`${JSON.stringify(raw.skill)} is not a skill or command name`);
+            continue;
+        }
+        const id = typeof raw.id === 'string' && raw.id
+            ? raw.id
+            : skill.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+/, '').slice(0, 40);
+        if (!REVIEW_ID_RE.test(id)) { note(`${JSON.stringify(raw.id)} is not a review type id`); continue; }
+        if (seen.has(id)) { note(`${JSON.stringify(id)} is listed twice — the first stands`); continue; }
+        const label = (typeof raw.label === 'string' && raw.label.trim() ? raw.label.trim() : skill).slice(0, 40);
+        let colour = raw.colour === undefined ? 'blue' : raw.colour;
+        if (!REVIEW_COLOURS.includes(colour)) {
+            note(`${JSON.stringify(colour)} is not a colour for ${id} — ${REVIEW_COLOURS.join(', ')}`);
+            colour = 'blue';
+        }
+        if (out.length >= REVIEW_TYPES_MAX) {
+            note(`more than ${REVIEW_TYPES_MAX} review types — the rest dropped`);
+            break;
+        }
+        seen.add(id);
+        out.push({ id, label, skill, colour });
+    }
+    return out;
+}
+
 // Section keys whose value is a map or list and so gets the treatment above, before
-// SHAPE sees it. Seven entries; the table exists so the next one does not have
+// SHAPE sees it. Eight entries; the table exists so the next one does not have
 // to special-case merge().
 const SANITIZE = {
     keyboard: { bindings: cleanBindings },
@@ -857,6 +960,7 @@ const SANITIZE = {
     toolbar: { items: cleanToolbar },
     wispr: { transforms: wispr.cleanTransforms },
     preview: { list: cleanLinkList },
+    reviews: { types: cleanReviewTypes },
 };
 
 /**
@@ -1044,6 +1148,8 @@ class Prefs {
             standing: { ...DEFAULTS.standing },
             startup: { ...DEFAULTS.startup },
             agentBrowser: { ...DEFAULTS.agentBrowser },
+            digest: { ...DEFAULTS.digest },
+            reviews: { types: DEFAULTS.reviews.types.map(t => ({ ...t })) },
             sources: [],
             problems: [],
         };
@@ -1239,4 +1345,5 @@ class Prefs {
     }
 }
 
-module.exports = { Prefs, DEFAULTS, SHAPE, SANITIZE, USER_ONLY, VERSION, TOOLBAR_IDS };
+module.exports = { Prefs, DEFAULTS, SHAPE, SANITIZE, USER_ONLY, VERSION, TOOLBAR_IDS,
+    REVIEW_COLOURS };

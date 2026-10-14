@@ -86,7 +86,7 @@ function showWispr(w, on) {
     if (w.c === live) closeLater();
     for (const other of WISPR) if (other !== w) closeWispr(other);
 
-    present(w.node, true, { kind: 'pop' });
+    present(w.node, true, { as: 'menu' });
     w.btn.setAttribute('aria-expanded', 'true');
     drawWispr(w);
     positionWispr(w);
@@ -95,7 +95,7 @@ function showWispr(w, on) {
 
 export function closeWispr(w, { focus = false } = {}) {
     if (!isUp(w.node)) return;
-    present(w.node, false, { kind: 'pop', onGone: () => w.node.replaceChildren() });
+    present(w.node, false, { as: 'menu', onGone: () => w.node.replaceChildren() });
     w.btn.setAttribute('aria-expanded', 'false');
     if (focus) w.btn.focus();
 }
