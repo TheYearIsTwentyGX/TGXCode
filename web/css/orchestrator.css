@@ -216,12 +216,14 @@
        window lays one out (narrow.css): no time gutter. */
     --gutter: 0px;
 }
+/* Square, not rounded. A radius is a card's (plans/22: --s1 on --bg), and this
+   is the other way round — the window's ground showing through the pane — so a
+   curve here only uncovers a wedge of the pane's --s1 behind the corner. */
 .conv-main[data-orch-page]::before {
     content: "";
     grid-column: 3;
     grid-row: 1 / -1;
     background: var(--bg);
-    border-radius: var(--r-lg) 0 0 0;
 }
 .conv-main[data-orch-page] > .orch-page  { grid-column: 1; grid-row: 1 / -1; }
 .conv-main[data-orch-page] > .orch-split { grid-column: 2; grid-row: 1 / -1; }
