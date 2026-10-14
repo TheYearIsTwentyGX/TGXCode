@@ -203,7 +203,8 @@ export function inboxList(p) {
         <li key=${i.id} class="orch-item" data-status=${i.status} data-kind=${i.kind}>
             <div class="orch-item-head">
                 <span class="orch-kind">${KIND_LABEL[i.kind] || i.kind}</span>
-                ${i.workerId ? html`<button class="orch-link" type="button" onClick=${() => goTo(i.workerId)}>
+                ${i.workerId ? html`<button class="orch-link" type="button" title=${workerTitle(p, i.workerId) || 'worker'}
+                    onClick=${() => goTo(i.workerId)}>
                     ${clip(workerTitle(p, i.workerId) || 'worker', 40)}</button>` : null}
                 <span class="orch-when">${ago(i.at)}</span>
                 <span class="orch-status">${statusWord(i)}</span>

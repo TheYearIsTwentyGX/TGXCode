@@ -313,7 +313,7 @@ function decisionCard(p, d, now) {
         </div>`;
     }
     const open = ui.reply === d.id;
-    return html`<div key=${`d:${d.id}`} class="op-need" data-busy=${String(busy)}>
+    return html`<div key=${`d:${d.id}`} class="op-need" data-busy=${String(busy)} data-stack=${String(d.options.length > 0)}>
         <div class="op-need-q">${d.text}</div>
         <div class="op-need-from">${from.join(' · ')}</div>
         <div class="op-need-act">
@@ -393,12 +393,12 @@ function matrix(p, now) {
                 <span class="op-col-names">${STAGES.map(k => html`<span key=${k}>${STAGE_WORD[k]}</span>`)}</span></div>
             ${live.map(w => row(p, w, now))}
             ${p.pendingSpawns.map((q, i) => html`<div key=${q.id} class="op-row op-queued">
-                <span class="op-who"><span class="op-dot" data-s="queued"></span>
+                <span class="op-who" title=${q.title || ''}><span class="op-dot" data-s="queued"></span>
                     <span class="op-name">${q.title || 'untitled'}</span></span>
-                <span class="op-track"><span class="op-say">${i === 0 ? 'Queued — starts when a slot frees'
-                    : `Queued, ${ordinal(i + 1)} in line`}</span></span>
+                <span class="op-track"><span class="op-say" title=${queuedSay(i)}><b>${queuedSay(i)}</b></span></span>
             </div>`)}
             ${done.length ? html`<button key="fold" class="op-fold" type="button" aria-expanded=${String(ui.finished)}
+                title=${ui.finished ? null : done.map(w => w.title || 'untitled').join('\n')}
                 onClick=${() => { ui.finished = !ui.finished; paintOrchPage(); }}>
                 <span class="twist" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none"
                     dangerouslySetInnerHTML=${{ __html: ICON.caret }}></svg></span>
@@ -411,6 +411,7 @@ function matrix(p, now) {
 }
 
 const ordinal = (n) => (n === 2 ? 'second' : n === 3 ? 'third' : `${n}th`);
+const queuedSay = (i) => (i === 0 ? 'Queued — starts when a slot frees' : `Queued, ${ordinal(i + 1)} in line`);
 
 function row(p, w, now) {
     const decision = openDecisionFor(p, w.id);
@@ -424,7 +425,7 @@ function row(p, w, now) {
     return html`<button key=${w.id} type="button" class="op-row" data-tone=${stage.tone}
         data-closed=${String(!!w.closedAt)} data-id=${w.id} data-at=${stage.at} aria-pressed=${String(ui.peek === w.id)}
         style=${`--at:${stage.at}`} onClick=${() => (ui.peek === w.id ? closePeek() : openPeek(w.id))}>
-        <span class="op-who">
+        <span class="op-who" title=${[w.title, !w.closedAt && w.worktree && w.worktree.branch].filter(Boolean).join('\n')}>
             <span class="op-dot" data-s=${DOT[stage.tone] || 'idle'}></span>
             <span class="op-who-text">
                 <span class="op-name">${w.title || 'untitled worker'}</span>
@@ -433,7 +434,7 @@ function row(p, w, now) {
         </span>
         <span class="op-track" aria-hidden="true">
             ${stage.steps.map((st, i) => html`<i key=${i} data-s=${st}></i>`)}
-            <span class="op-say">${chip}${line.lead ? html`<b>${line.lead}</b>` : null}${line.detail
+            <span class="op-say" title=${where}>${chip}${line.lead ? html`<b>${line.lead}</b>` : null}${line.detail
                 ? html`<span class="op-say-detail">${line.detail}</span>` : null}</span>
         </span>
         <span class="sr-only">${where}</span>
@@ -459,8 +460,8 @@ function order(p) {
             ${r.url ? html`<a class="op-pr" data-status=${r.status} href=${r.url} target="_blank" rel="noreferrer"
                 title=${`Open #${r.number} on GitHub`}>${`#${r.number}`}<em>${PR_WORD[r.status] || ''}</em></a>`
                 : html`<span class="op-pr" data-status=${r.status}>${`#${r.number}`}</span>`}
-            ${r.workerId ? html`<button class="op-order-t" type="button" onClick=${() => openPeek(r.workerId)}>${r.title}</button>`
-                : html`<span class="op-order-t op-quiet">not opened by one of these workers</span>`}
+            ${r.workerId ? html`<button class="op-order-t" type="button" title=${r.title} onClick=${() => openPeek(r.workerId)}>${r.title}</button>`
+                : html`<span class="op-order-t op-quiet" title="Not opened by one of these workers">not opened by one of these workers</span>`}
         </li>`)}</ol>
         ${m.rest.length ? html`<div class="op-order-rest">${`Then ${m.rest.map(x => x.title).join(', ')}, as they open PRs.`}</div>` : null}
     </section>`;

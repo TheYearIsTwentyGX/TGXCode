@@ -295,26 +295,57 @@
     container: orchpage / inline-size;
 }
 .op { display: flex; flex-direction: column; min-height: 100%; }
-.op-body { display: grid; gap: var(--sp-8); align-content: start; padding: var(--sp-4) var(--sp-8) var(--sp-10) var(--pane-x); }
+.op-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-8); align-content: start; padding: var(--sp-4) var(--sp-8) var(--sp-10) var(--pane-x); }
+
+/* Never wider than its column. Whatever the overview holds — a goal, a question,
+   a worker's title, a path in a plan — can be longer than the column is wide,
+   and the column can be as narrow as the splitter allows (or narrower: in a
+   window too small for both floors the conversation keeps its own). So every
+   long token breaks rather than pushing the page sideways — `overflow-wrap` is
+   inherited, so this one line covers text that has no rule of its own — and
+   the few things that read better on one line (a worker's name, its branch on
+   the row, a PR's title in the merge order) truncate with the whole text in a
+   title. Grid tracks are `minmax(0, …)` and flex children `min-width: 0` for
+   the same reason: an `auto` minimum is the content's, which is what overflows. */
+.op, .op-peek { overflow-wrap: anywhere; }
+/* Buttons whose label is somebody else's words — a decision's options, a
+   question's answers — wrap inside themselves rather than running out of the
+   card. Short labels are unchanged: one line, 28px. */
+.op .lbtn, .op-peek .lbtn {
+    flex: 0 1 auto;
+    max-width: 100%;
+    height: auto;
+    min-height: 28px;
+    padding-block: var(--sp-2);
+    line-height: var(--lh-snug);
+    text-align: start;
+}
+/* Markdown in the brief, a plan and a worker's last message: code and tables
+   wrap too, rather than being boxes that scroll sideways. */
+:is(.op, .op-peek) .md :is(pre, code) { white-space: pre-wrap; overflow-wrap: anywhere; }
+:is(.op, .op-peek) .md pre { overflow-x: hidden; }
+:is(.op, .op-peek) .md .table-wrap { overflow-x: hidden; }
+:is(.op, .op-peek) .md table { width: 100%; table-layout: fixed; }
 
 .op-h {
     display: flex;
+    flex-wrap: wrap;
     align-items: baseline;
-    gap: var(--sp-4);
+    gap: 0 var(--sp-4);
     margin: 0;
     font: 500 var(--fs-md)/var(--lh-snug) var(--sans);
     color: var(--text-2);
 }
 .op-h span { color: var(--text-4); font-weight: var(--fw-regular); font-variant-numeric: tabular-nums; }
-.op-sec { display: grid; gap: var(--sp-4); min-width: 0; }
+.op-sec { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-4); min-width: 0; }
 .op-empty { color: var(--text-4); font-size: var(--fs-md); }
 .op-quiet { color: var(--text-4); }
 .op-text-btn { color: var(--blue); }
 
 /* The head: the goal, then the readings — a strip with one segment per task,
    the counts, and the usage meters with the cutoff marked. */
-.op-head { flex: none; display: grid; gap: var(--sp-4); padding: var(--sp-2) var(--sp-8) var(--sp-4) var(--pane-x); }
-.op-goal-row { display: flex; align-items: flex-start; gap: var(--sp-6); }
+.op-head { flex: none; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-4); padding: var(--sp-2) var(--sp-8) var(--sp-4) var(--pane-x); }
+.op-goal-row { display: flex; align-items: flex-start; gap: var(--sp-6); min-width: 0; }
 .op-goal {
     flex: 1;
     min-width: 0;
@@ -332,7 +363,8 @@
     top: calc(100% + var(--sp-2));
     right: 0;
     z-index: var(--z-pop);
-    width: min(440px, 80vw);
+    width: min(440px, 80vw, calc(100cqi - var(--sp-8)));
+    max-width: calc(100cqi - var(--sp-8));
     padding: var(--sp-6) var(--sp-7);
     border-radius: var(--r);
     background: var(--s3);
@@ -342,9 +374,9 @@
 }
 .op-pop .orch-settings input[type="number"], .op-pop .orch-settings select { background: var(--s4); }
 
-.op-readings { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-4) var(--sp-9); }
-.op-progress { display: flex; align-items: center; gap: var(--sp-6); min-width: 0; }
-.op-strip { display: flex; flex-wrap: wrap; gap: var(--sp-1); max-width: 360px; }
+.op-readings { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-4) var(--sp-9); min-width: 0; }
+.op-progress { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-3) var(--sp-6); min-width: 0; }
+.op-strip { display: flex; flex-wrap: wrap; gap: var(--sp-1); min-width: 0; max-width: 360px; }
 .op-strip i {
     width: 20px;
     height: 8px;
@@ -360,11 +392,11 @@
 .op-strip i[data-s="fail"]   { background: var(--red); }
 .op-strip i[data-s="idle"]   { background: var(--s6); }
 .op-strip i[data-s="queued"] { background: transparent; box-shadow: inset 0 0 0 1px var(--s6); }
-.op-count { color: var(--text-3); font-size: var(--fs-md); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.op-count { min-width: 0; color: var(--text-3); font-size: var(--fs-md); font-variant-numeric: tabular-nums; }
 .op-count b { color: var(--text); font-weight: var(--fw-medium); }
 .op-count span { color: var(--text-4); }
 
-.op-meters { display: flex; flex-wrap: wrap; gap: var(--sp-3) var(--sp-8); margin-left: auto; }
+.op-meters { display: flex; flex-wrap: wrap; gap: var(--sp-3) var(--sp-8); min-width: 0; margin-left: auto; }
 .op-meter {
     display: grid;
     grid-template-columns: auto 88px auto;
@@ -408,11 +440,12 @@
     background: color-mix(in srgb, var(--pr) 14%, var(--s2));
     color: var(--pr);
     font: 500 var(--fs-xs)/var(--lh-none) var(--mono);
+    max-width: 100%;
     white-space: nowrap;
     text-decoration: none;
 }
 a.op-pr:hover { text-decoration: none; background: color-mix(in srgb, var(--pr) 24%, var(--s2)); }
-.op-pr em { font: 400 var(--fs-xs)/var(--lh-none) var(--sans); font-style: normal; color: var(--text-3); }
+.op-pr em { min-width: 0; overflow: hidden; font: 400 var(--fs-xs)/var(--lh-none) var(--sans); font-style: normal; color: var(--text-3); text-overflow: ellipsis; }
 .op-pr em:empty { display: none; }
 .op-pr[data-status="open"]           { --pr: var(--blue); }
 .op-pr[data-status="approved"]       { --pr: var(--green); }
@@ -423,10 +456,16 @@ a.op-pr:hover { text-decoration: none; background: color-mix(in srgb, var(--pr) 
 
 /* ── needs you ────────────────────────────────────────────────────────── */
 
-.op-needs { display: grid; gap: var(--sp-3); }
+.op-needs { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-3); }
+/* Text on the left, its one or two buttons on the right — but the buttons'
+   column is capped, so a long label wraps inside it rather than taking the
+   card's width from the question. A decision with options stacks instead
+   (`data-stack`): its options are answers to read after the question, not
+   buttons beside it, and four of them side by side squeezed the question to a
+   word per line. */
 .op-need {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) fit-content(40%);
     align-items: center;
     gap: var(--sp-1) var(--sp-7);
     padding: var(--sp-5) var(--sp-5) var(--sp-5) var(--sp-7);
@@ -440,13 +479,16 @@ a.op-pr:hover { text-decoration: none; background: color-mix(in srgb, var(--pr) 
 .op-need[data-busy="true"] { opacity: 0.7; }
 .op-need-q { grid-column: 1; color: var(--text); font: 400 var(--fs-base)/var(--lh-snug) var(--sans); text-wrap: pretty; }
 .op-need-from { grid-column: 1; color: var(--text-3); font-size: var(--fs-sm); }
-.op-need-act { grid-column: 2; grid-row: 1 / span 2; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--sp-2); }
+.op-need-act { grid-column: 2; grid-row: 1 / span 2; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--sp-2); min-width: 0; }
+.op-need[data-stack="true"] { grid-template-columns: minmax(0, 1fr); }
+.op-need[data-stack="true"] .op-need-act { grid-column: 1; grid-row: auto; justify-content: flex-start; margin-top: var(--sp-3); }
 .op-need .lbtn:not(.ok) { background: var(--yellow-cont); color: var(--text-2); }
 .op-need .lbtn:not(.ok):hover { background: var(--yellow-cont-hover); color: var(--text); }
 .op-need .lbtn.op-text-btn { background: none; color: var(--blue); }
-.op-reply { grid-column: 1 / -1; display: flex; gap: var(--sp-3); margin-top: var(--sp-3); }
+.op-reply { grid-column: 1 / -1; display: flex; gap: var(--sp-3); min-width: 0; margin-top: var(--sp-3); }
 .op-reply input {
     flex: 1;
+    text-overflow: ellipsis;
     min-width: 0;
     height: 32px;
     padding: 0 var(--sp-6);
@@ -455,6 +497,7 @@ a.op-pr:hover { text-decoration: none; background: color-mix(in srgb, var(--pr) 
     color: var(--text);
     font: 400 var(--fs-md)/var(--lh-none) var(--sans);
 }
+.op-reply .lbtn { flex: none; }
 .op-reply input:focus-visible { outline: none; box-shadow: var(--ring-inset); }
 
 /* ── the brief's prose ────────────────────────────────────────────────── */
@@ -480,10 +523,11 @@ a.op-pr:hover { text-decoration: none; background: color-mix(in srgb, var(--pr) 
    the worker has come; the stages ahead are empty, and that is where the line
    saying what it is doing goes. `--at` is the stage it is on, 1–6. */
 
-.op-matrix { --who: 240px; display: grid; }
+.op-matrix { --who: minmax(0, 240px); display: grid; grid-template-columns: minmax(0, 1fr); }
 .op-cols, .op-row { display: grid; grid-template-columns: var(--who) minmax(0, 1fr); column-gap: var(--sp-6); align-items: center; }
 .op-cols { padding: 0 var(--sp-6) var(--sp-2); }
-.op-col-names { display: grid; grid-template-columns: repeat(6, 1fr); color: var(--text-4); font-size: var(--fs-sm); text-align: center; }
+.op-col-names > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.op-col-names { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); color: var(--text-4); font-size: var(--fs-sm); text-align: center; }
 
 .op-row {
     --row: var(--s1);
@@ -506,7 +550,7 @@ button.op-row:hover { --row: var(--s2); }
 .op-name { overflow: hidden; color: var(--text); font: 400 var(--fs-base)/var(--lh-tight) var(--sans); white-space: nowrap; text-overflow: ellipsis; }
 .op-branch { overflow: hidden; color: var(--text-4); font: 400 var(--fs-xs)/var(--lh-snug) var(--mono); white-space: nowrap; text-overflow: ellipsis; }
 
-.op-track { position: relative; display: grid; grid-template-columns: repeat(6, 1fr); align-items: center; min-height: inherit; }
+.op-track { position: relative; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); min-width: 0; align-items: center; min-height: inherit; }
 .op-track::after {
     content: "";
     position: absolute;
@@ -545,7 +589,9 @@ button.op-row:hover { --row: var(--s2); }
     font: 400 var(--fs-md)/var(--lh-snug) var(--sans);
     white-space: nowrap;
 }
-.op-say b { flex: 0 1 auto; min-width: 3ch; overflow: hidden; font-weight: var(--fw-regular); text-overflow: ellipsis; }
+.op-say b { flex: 0 1 auto; min-width: 0; overflow: hidden; font-weight: var(--fw-regular); text-overflow: ellipsis; }
+/* The chip gives way after the words have: its status word first, then the chip. */
+.op-say .op-pr { flex: 0 1 auto; min-width: 0; overflow: hidden; }
 .op-row:is([data-tone="wait"], [data-tone="you"]) .op-say b { color: var(--yellow); font-weight: var(--fw-medium); }
 .op-row[data-tone="error"] .op-say b { color: var(--red-soft); }
 /* The detail gives way first: the lead says what it is doing, the detail only
@@ -577,14 +623,14 @@ button.op-row:hover { --row: var(--s2); }
 .op-fold b { color: var(--text-4); font-weight: var(--fw-regular); }
 .op-fold .twist { display: grid; place-items: center; width: 12px; height: 12px; color: var(--text-4); transition: transform var(--dur-fast) var(--ease-standard); }
 .op-fold[aria-expanded="true"] .twist { transform: rotate(90deg); }
-.op-fold-names { overflow: hidden; color: var(--text-4); text-overflow: ellipsis; }
+.op-fold-names { min-width: 0; overflow: hidden; color: var(--text-4); text-overflow: ellipsis; }
 
 /* ── merge order: a real sequence, so numbered ───────────────────────── */
 
 .op-order { display: grid; margin: 0; padding: 0; list-style: none; }
 .op-order li {
     display: grid;
-    grid-template-columns: 22px auto minmax(0, 1fr);
+    grid-template-columns: 22px minmax(0, auto) minmax(0, 1fr);
     align-items: center;
     gap: var(--sp-6);
     min-height: 36px;
@@ -604,12 +650,14 @@ button.op-row:hover { --row: var(--s2); }
     font-variant-numeric: tabular-nums;
 }
 .op-order li[data-merged="true"] .op-num { background: color-mix(in srgb, var(--purple) 22%, var(--s2)); color: var(--purple); }
-.op-order-t { overflow: hidden; padding: 0; color: var(--text); font: 400 var(--fs-md)/var(--lh-snug) var(--sans); text-align: left; white-space: nowrap; text-overflow: ellipsis; }
+.op-order-t { min-width: 0; overflow: hidden; padding: 0; color: var(--text); font: 400 var(--fs-md)/var(--lh-snug) var(--sans); text-align: left; white-space: nowrap; text-overflow: ellipsis; }
 button.op-order-t:hover { color: var(--blue); }
 .op-order-t.op-quiet { color: var(--text-4); font-size: var(--fs-sm); }
 .op-order li[data-merged="true"] .op-order-t { color: var(--text-3); }
 .op-order-rest { padding: var(--sp-2) var(--sp-6) 0 calc(var(--sp-6) + 22px + var(--sp-6)); color: var(--text-4); font-size: var(--fs-sm); }
 
+.op-activity-body .orch-item-head { flex-wrap: wrap; row-gap: var(--sp-1); }
+.op-activity-body .orch-item-head > * { min-width: 0; }
 .op-activity-body { padding: 0 var(--sp-6); font: 400 var(--fs-md)/var(--lh-base) var(--sans); color: var(--text-2); }
 
 /* The page's stand-in while its payload is on the wire. */
@@ -633,20 +681,26 @@ button.op-order-t:hover { color: var(--blue); }
     background: var(--s2);
     box-shadow: var(--shadow-pop);
 }
-.op-peek { display: flex; flex-direction: column; min-height: 0; flex: 1; }
-.op-peek-head { flex: none; display: grid; gap: var(--sp-3); padding: var(--sp-7) var(--sp-6) var(--sp-4) var(--sp-8); }
-.op-peek-top { display: flex; align-items: flex-start; gap: var(--sp-3); }
+.op-peek { display: flex; flex-direction: column; min-width: 0; min-height: 0; flex: 1; }
+.op-peek-head { flex: none; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-3); padding: var(--sp-7) var(--sp-6) var(--sp-4) var(--sp-8); }
+.op-peek-top { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--sp-3); }
+.op-peek-top .op-peek-title { flex-basis: 12ch; }
+.op-peek-top > :not(.op-peek-title) { flex: none; }
 .op-peek-title { flex: 1; min-width: 0; margin: 0; padding-top: var(--sp-2); color: var(--text); font: 400 var(--fs-xl)/var(--lh-tight) var(--sans); text-wrap: balance; }
 .op-peek-title:focus-visible { outline: none; }
 .op-peek-top .lbtn { margin-top: var(--sp-2); background: var(--s3); color: var(--text-2); }
 .op-peek-top .lbtn:hover { background: var(--s4); color: var(--text); }
 .op-peek-top .icon-btn:hover { background: var(--s3); }
+.op-peek-facts > * { min-width: 0; }
+/* In the drawer the branch has room for all of it, so it wraps rather than truncating. */
+.op-peek-facts .op-branch { overflow: visible; white-space: normal; }
 .op-peek-facts { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-6); color: var(--text-3); font-size: var(--fs-sm); }
-.op-peek-body { flex: 1; min-height: 0; overflow-y: auto; display: grid; align-content: start; gap: var(--sp-8); padding: var(--sp-2) var(--sp-8) var(--sp-10); }
-.op-peek-sec { display: grid; gap: var(--sp-4); }
+.op-peek-body { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: var(--sp-8); padding: var(--sp-2) var(--sp-8) var(--sp-10); }
+.op-peek-sec { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-4); min-width: 0; }
 
 .op-ask {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--sp-5);
     padding: var(--sp-6) var(--sp-7);
     border-radius: var(--r);
@@ -657,13 +711,14 @@ button.op-order-t:hover { color: var(--blue); }
 .op-ask p { margin: 0; color: var(--text-2); font: 400 var(--fs-md)/var(--lh-snug) var(--sans); }
 .op-ask p b { color: var(--yellow); font-weight: var(--fw-medium); }
 .op-ask p.op-ask-q { color: var(--text); }
-.op-ask-btns { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.op-ask-btns { display: flex; flex-wrap: wrap; gap: var(--sp-2); min-width: 0; }
 .op-ask .lbtn:not(.ok):not(.op-text-btn) { background: var(--yellow-cont); color: var(--text-2); }
 .op-ask .lbtn:not(.ok):not(.op-text-btn):hover { background: var(--yellow-cont-hover); color: var(--text); }
 .op-ask-what {
     margin: 0;
     max-height: 200px;
-    overflow: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
     color: var(--text);
     font: 400 var(--fs-sm)/var(--lh-base) var(--mono);
     white-space: pre-wrap;
@@ -672,6 +727,7 @@ button.op-order-t:hover { color: var(--blue); }
 .op-ask-what b { color: var(--yellow); font-weight: var(--fw-medium); }
 .op-plan {
     max-height: 46vh;
+    overflow-x: hidden;
     overflow-y: auto;
     padding: var(--sp-6) var(--sp-7);
     border-radius: var(--r-sm);
@@ -679,7 +735,7 @@ button.op-order-t:hover { color: var(--blue); }
     color: var(--text-2);
     font: 400 var(--fs-md)/var(--lh-base) var(--sans);
 }
-.op-note { display: grid; gap: var(--sp-3); }
+.op-note { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-3); }
 .op-note textarea {
     width: 100%;
     padding: var(--sp-4) var(--sp-6);
@@ -703,11 +759,14 @@ button.op-order-t:hover { color: var(--blue); }
 .op-facts dt { color: var(--text-4); }
 .op-facts dd { margin: 0; color: var(--text-2); font-variant-numeric: tabular-nums; }
 .op-files { display: grid; gap: var(--sp-1); margin: 0; padding: 0; list-style: none; }
-.op-files li { overflow: hidden; color: var(--text-2); font: 400 var(--fs-xs)/var(--lh-snug) var(--mono); white-space: nowrap; text-overflow: ellipsis; }
+/* Wrapped, not truncated: a path cut at the end loses the file's own name. */
+.op-files li { color: var(--text-2); font: 400 var(--fs-xs)/var(--lh-snug) var(--mono); }
 .op-stat {
     margin: 0;
     max-height: 160px;
-    overflow: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
+    white-space: pre-wrap;
     padding: var(--sp-4) var(--sp-5);
     border-radius: var(--r-sm);
     background: var(--s1);
@@ -715,9 +774,9 @@ button.op-order-t:hover { color: var(--blue); }
     font: 400 var(--fs-xs)/var(--lh-base) var(--mono);
 }
 .op-last { display: grid; gap: var(--sp-2); }
-.op-last-text { max-height: 260px; overflow-y: auto; color: var(--text-2); font: 400 var(--fs-md)/var(--lh-base) var(--sans); }
+.op-last-text { max-height: 260px; overflow-x: hidden; overflow-y: auto; color: var(--text-2); font: 400 var(--fs-md)/var(--lh-base) var(--sans); }
 .op-reports { display: grid; gap: var(--sp-4); margin: 0; padding: 0; list-style: none; }
-.op-reports li { display: grid; gap: var(--sp-1); color: var(--text-2); font-size: var(--fs-sm); line-height: var(--lh-base); }
+.op-reports li { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-1); color: var(--text-2); font-size: var(--fs-sm); line-height: var(--lh-base); }
 
 /* ── a narrow page ────────────────────────────────────────────────────── */
 /* Keyed to the page's own width — the splitter, the rail and the window all
