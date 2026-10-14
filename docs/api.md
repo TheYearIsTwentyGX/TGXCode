@@ -597,7 +597,10 @@ result held, in order, and `[]` (never absent) when there were none. A `Read` of
 and a browser screenshot are the usual sources. Image blocks are left out of `text`, so
 a `Read` of a picture has `text: ""` — show the images instead of an empty result.
 `width`/`height` are the size Claude Code recorded for a single-image `Read` and null
-otherwise; use them to reserve space. Fetch the bytes with
+otherwise; use them to reserve space. **`mediaType` is the type of the bytes, which is
+not always what the path says**: Claude Code re-encodes a large PNG as a JPEG before
+sending it, so a `Read` of `shot.png` can have `mediaType: "image/jpeg"`. Name a saved
+copy by `mediaType`. Fetch the bytes with
 `GET /api/sessions/:id/tool-image` (below) when the user actually opens the call: each one is
 hundreds of kilobytes, which is why they are not inline the way a user turn's `images`
 are.

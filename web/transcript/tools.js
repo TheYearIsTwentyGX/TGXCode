@@ -18,6 +18,7 @@ import { peerByName } from '../composer/mentions.js';
 import { statusMark } from './checklist.js';
 import { openSession } from './conversation.js';
 import { markFindDirty } from './find.js';
+import { openImage } from './image-viewer.js';
 import { kvView } from './review.js';
 import { renderEvent, row } from './rows.js';
 import { openAgent, STATUS_WORD, statusOfCall } from './subagents.js';
@@ -264,9 +265,33 @@ function toolBody(ev) {
     return out;
 }
 
+const IMAGE_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
+
+/**
+ * What Save offers: the file's own name for a Read, a made-up one otherwise.
+ *
+ * The extension follows the bytes, not the path. Claude Code re-encodes a large
+ * PNG as a JPEG before sending it, and the transcript keeps what was sent, so a
+ * Read of `conversation.png` can hold a JPEG — saved under its own name it
+ * would be a file whose extension lies about it.
+ */
+function imageName(ev, img, n) {
+    const ext = IMAGE_EXT[img.mediaType] || 'png';
+    const p = ev.input && typeof ev.input.file_path === 'string' ? ev.input.file_path : '';
+    const base = p.split(/[\\/]/).pop();
+    if (base) {
+        const m = /^(.+)\.([A-Za-z0-9]+)$/.exec(base);
+        const had = m ? m[2].toLowerCase() : '';
+        if (had === ext || (ext === 'jpg' && had === 'jpeg')) return base;
+        return `${m ? m[1] : base}.${ext}`;
+    }
+    return `${(ev.name || 'tool').replace(/\W+/g, '-')}-${String(ev.id).slice(-8)}${n ? `-${n + 1}` : ''}.${ext}`;
+}
+
 function toolImage(ev, img, n) {
     const src = `/api/sessions/${encodeURIComponent(state.current.sessionId)}/tool-image`
         + `?toolUseId=${encodeURIComponent(ev.id)}&n=${n}`;
+    const name = imageName(ev, img, n);
     const node = el('img', {
         // Not `loading: 'lazy'`: the body is only built once the row is opened,
         // which is already the lazy part, and Chromium never started a lazy
@@ -276,8 +301,8 @@ function toolImage(ev, img, n) {
         // Reserves the space before the bytes arrive, so the transcript under
         // an opened row does not jump. CSS caps it to the column.
         width: img.width || null, height: img.height || null,
-        title: 'Click to toggle full size',
-        onclick: () => node.classList.toggle('full'),
+        title: 'Click to enlarge',
+        onclick: () => openImage({ src, name }),
         onerror: () => node.replaceWith(note('Image no longer available.')),
     });
     return node;

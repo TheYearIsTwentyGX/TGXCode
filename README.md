@@ -492,6 +492,7 @@ Two rules worth knowing before you send a patch:
 | `web/transcript/conversation.js` | Opening a session, its header, and appending events to the log through a view — `SESSION_VIEW` or `AGENT_VIEW` — so the main log and the subagent pane share one renderer; folding runs of tool calls |
 | `web/transcript/rows.js` | One row per event — the row shell and its copy button, user, assistant and thinking rows, peer messages, handoffs and system lines |
 | `web/transcript/tools.js` | Tool calls: the one-line summary, the block, and the body built on first expand (`fillTool`) |
+| `web/transcript/image-viewer.js` | The full-size preview behind a tool result's image, with Copy and Save |
 | `web/transcript/approvals.js` | A blocked turn — the permission card, the plan pane and the question dock — and answering it |
 | `web/transcript/review.js` | Reviewing a plan or a question after the fact |
 | `web/transcript/subagents.js` | The subagent list and the pane that opens one's transcript |

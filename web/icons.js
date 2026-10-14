@@ -97,6 +97,11 @@ export const ICON = {
     // The tick that says a copy landed. A glyph rather than the character, for the
     // reason .ev-copy gives: text in a row is text the find walker indexes and a
     // drag-selection of the message picks up.
+    // An arrow into a tray: save a file to disk.
+    download: '<path d="M12 4v10.5m0 0-4.2-4.2M12 14.5l4.2-4.2" stroke="currentColor" '
+        + 'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>'
+        + '<path d="M4.5 15.5v2.2a2.3 2.3 0 0 0 2.3 2.3h10.4a2.3 2.3 0 0 0 2.3-2.3v-2.2" '
+        + 'stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
     tick: '<path d="m5 12.8 4.4 4.4L19 6.6" stroke="currentColor" stroke-width="2" '
         + 'stroke-linecap="round" stroke-linejoin="round"/>',
     // A card with two lines written on it, which is what a snippet is and what a

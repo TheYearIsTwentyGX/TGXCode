@@ -119,8 +119,8 @@
 }
 
 /* An image a tool result carried (a Read of a PNG, a screenshot). Fitted to
-   the column; a click shows it at its own size, scrolled inside the section. */
-.tool-images { display: flex; flex-direction: column; gap: 8px; overflow-x: auto; }
+   the column; a click opens it in #img-scrim (see dialogs.css). */
+.tool-images { display: flex; flex-direction: column; gap: 8px; }
 .tool-image {
     display: block;
     max-width: 100%;
@@ -130,7 +130,6 @@
     background: var(--bg);
     cursor: zoom-in;
 }
-.tool-image.full { max-width: none; cursor: zoom-out; }
 
 .io {
     margin: 0;

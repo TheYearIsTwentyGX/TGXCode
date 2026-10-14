@@ -88,6 +88,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'bar-more-wrap', 'bar-more', 'bar-more-badge', 'bar-more-menu',
     'review-scrim', 'review-modal', 'review-kind', 'review-title', 'review-when',
     'review-outcome', 'review-body', 'review-jump',
+    'img-scrim', 'img-title', 'img-copy', 'img-save', 'img-view',
     'pair-url', 'pair-host', 'pair-hosts', 'pair-note', 'pair-copy',
     'restart-scrim', 'restart-lede', 'restart-problems',
     'restart-fix', 'restart-go', 'preview']) {
@@ -187,6 +188,8 @@ export function modalUp() {
         // read-only replay holding no work, so the paragraph above is not what
         // puts it here either. The sentence after it is.
         || isUp(dom.reviewScrim)
+        // The image preview: read-only again, and here for the same reason.
+        || isUp(dom.imgScrim)
         // Publish to GitHub holds a filled-in form, and can be up over
         // Start-a-session, which is the snippet dialog's case.
         || isUp(dom.ghScrim);
