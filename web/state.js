@@ -67,7 +67,11 @@ export const state = {
     // is replaced whenever a result lands, so a held reference goes stale.
     run: [],
     agentRun: [],
-    turns: [],              // the user messages, in order, for the minimap
+    turns: [],              // the user messages, in order, for the turn rail
+    // The tick element per user turn, parallel to `turns`. markActiveTurn used
+    // to index dom.turns.children, which stopped being the same list the moment
+    // plans and questions joined the rail.
+    turnTicks: [],
     activeTurn: -1,
     // Every mark the rail shows, from the bridge's turn index — including the
     // turns whose rows have not been loaded. See web/transcript/earlier.js.
