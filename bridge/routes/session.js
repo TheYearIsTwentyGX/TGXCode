@@ -44,6 +44,9 @@ const { archiveStoppedRuns } = require('./session-workspace');
 // `--resume-session-at=…`'s neighbour, so nothing else gets that far.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// What `/tool-image` will serve. The API accepts these four and nothing else.
+const TOOL_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+
 // Handed over by server.js — see the note above ROUTES there.
 let flags = null;
 let index = null;
@@ -273,6 +276,26 @@ async function handle(req, res, url, pathname, seg, who) {
             const data = index.persistedOutput(sessionId, p);
             if (!data) return send(res, 404, { error: 'output not available' });
             return send(res, 200, data);
+        }
+
+        // An image a tool result carried, as bytes — the event only describes it
+        // (`result.images`). Raster types only: an SVG is a document that can
+        // run script, and this is served from the app's own origin.
+        if (tail === 'tool-image' && req.method === 'GET') {
+            const n = Number(url.searchParams.get('n') || 0);
+            const img = index.toolImage(sessionId, url.searchParams.get('toolUseId'), n);
+            if (!img || !TOOL_IMAGE_TYPES.has(img.mediaType)) {
+                return send(res, 404, { error: 'image not available' });
+            }
+            res.writeHead(200, {
+                'Content-Type': img.mediaType,
+                'Content-Length': img.data.length,
+                'X-Content-Type-Options': 'nosniff',
+                // A transcript entry is never rewritten, so the bytes behind an
+                // id do not change. Private: it is behind the token.
+                'Cache-Control': 'private, max-age=86400',
+            });
+            return res.end(img.data);
         }
 
         if (tail === 'send' && req.method === 'POST') {
@@ -532,12 +555,12 @@ async function handle(req, res, url, pathname, seg, who) {
         // two share everything from the cwd onward.
         if (tail === 'attachments' && !seg[4] && req.method === 'POST') {
             const name = url.searchParams.get('name');
-            if (attachmentRefused(req, res, name)) return;
+            if (attachmentRefused(req, res, name, who)) return;
 
             const summary = index.summary(sessionId);
             if (!summary) return send(res, 404, { error: 'session not found' });
 
-            return receiveAttachment(req, res, sessionCwd(summary), name);
+            return receiveAttachment(req, res, sessionCwd(summary), name, who);
         }
 
         // Open a staged or sent attachment in whatever Windows opens that kind of

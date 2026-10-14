@@ -1548,10 +1548,11 @@ which mirrored networking makes the same socket. Either way the bridge stays
 where it is. That matters on any network you do not control.
 
 **What a phone will not let you do.** It can watch, send, answer permissions, plans
-and questions, and start an ordinary session. It cannot open a terminal, shut the
-bridge down, stop a dev server, attach a file, or start anything in
-`bypassPermissions` — the bridge refuses those with a 403 rather than the UI merely
-omitting a button, so the rule holds for any client that holds a valid token. The
+and questions, attach a file of up to 10MB, and start an ordinary session. It cannot
+open a terminal, shut the bridge down, stop a dev server, open an attachment on the
+desktop, or start anything in `bypassPermissions` — the bridge refuses those with a
+403 rather than the UI merely omitting a button, so the rule holds for any client that
+holds a valid token. The
 reasoning is in `plans/14-bridge-security.md` §C and the table in
 `remote.md`.
 
@@ -1732,7 +1733,8 @@ several agents are committing to main.
 When the work is finished, `npm run land` from the worktree merges its PR and
 fast-forwards this checkout, which is otherwise a step agents cannot take: a
 worktree-isolated session is refused `git -C` against a directory outside its own
-tree. If the merge changed `bridge/`, it then restarts the everyday bridge so the
+tree. It deletes the branch on origin once merged — never `main` or `staging`,
+and not with `--keep-branch`; the local branch stays with its worktree. If the merge changed `bridge/`, it then restarts the everyday bridge so the
 new code is what is running. Turns in the session host survive that; if any turn
 would not, the restart is refused and land says so rather than forcing it.
 `--no-restart` stops after the pull. Run from the **Land** button, the pane closes

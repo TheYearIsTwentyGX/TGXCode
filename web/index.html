@@ -2019,6 +2019,23 @@
   </div>
 </div>
 
+<!-- An image from a tool result at full size: a Read of a PNG, a screenshot.
+     The dialog is the image itself, so the dark around it is the scrim and a
+     click there closes it, the way closeOnClickOutside() closes every modal.
+     The bar sits on the scrim rather than in the dialog for the same reason.
+     No Escape, by the rule above modalUp() in dom.js. -->
+<div id="img-scrim" class="scrim img-scrim" hidden>
+  <div class="img-bar">
+    <span id="img-title" class="img-title"></span>
+    <button id="img-copy" class="icon-btn" type="button" title="Copy image" aria-label="Copy image"></button>
+    <button id="img-save" class="icon-btn" type="button" title="Save image" aria-label="Save image"></button>
+    <button class="icon-btn" data-close-img type="button" title="Close" aria-label="Close">✕</button>
+  </div>
+  <div class="modal img-modal" role="dialog" aria-modal="true" aria-labelledby="img-title">
+    <img id="img-view" class="img-view" alt="">
+  </div>
+</div>
+
 <!-- A plan or a question, replayed the way it looked when it was asked.
 
      One dialog for both, because from the rail's point of view they are the same

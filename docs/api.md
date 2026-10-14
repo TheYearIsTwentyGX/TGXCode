@@ -209,8 +209,11 @@ settings, dismissing an item, recording the answer to a decision —
 `PUT /api/prefs`;
 **every method of `/api/claude-config` and anything under it, the GET included**;
 **every method of `/api/claude-docs` likewise**;
-both attachment uploads — `POST /api/sessions/:id/attachments` and
-`POST /api/attachments`.
+`POST /api/sessions/:id/attachments/open`.
+
+The two attachment uploads are **not** refused — a phone has nowhere else to put a
+photo — but a remote caller's cap is **10MB** rather than 25MB; see
+`POST /api/sessions/:id/attachments` below.
 
 The draft routes are otherwise fully open to a remote caller, deliberately: setting
 work up at the desk and releasing it from a phone when quota frees up is the case the
@@ -631,9 +634,23 @@ messages on disk but are **not counted as turns**: they do not move `userMessage
 is not a missing key.
 
 **`tool.result`** is `{text, stdout, stderr, patch, filePath, interrupted,
-backgroundTaskId, answers, plan, planWasEdited}`. `text` is the tool output flattened
+backgroundTaskId, answers, plan, planWasEdited, images}`. `text` is the tool output flattened
 to a string and is the one to show; `stdout`/`stderr`/`filePath` are strings or null;
 `interrupted` is a bool.
+
+**`tool.result.images` describes images, it does not carry them** — an array of
+`{mediaType: string, width: number|null, height: number|null}`, one per image the
+result held, in order, and `[]` (never absent) when there were none. A `Read` of a PNG
+and a browser screenshot are the usual sources. Image blocks are left out of `text`, so
+a `Read` of a picture has `text: ""` — show the images instead of an empty result.
+`width`/`height` are the size Claude Code recorded for a single-image `Read` and null
+otherwise; use them to reserve space. **`mediaType` is the type of the bytes, which is
+not always what the path says**: Claude Code re-encodes a large PNG as a JPEG before
+sending it, so a `Read` of `shot.png` can have `mediaType: "image/jpeg"`. Name a saved
+copy by `mediaType`. Fetch the bytes with
+`GET /api/sessions/:id/tool-image` (below) when the user actually opens the call: each one is
+hundreds of kilobytes, which is why they are not inline the way a user turn's `images`
+are.
 
 **`tool.result.patch` is a structured diff, not a string** — the `structuredPatch`
 Claude Code records for an edit, an array of hunks:
@@ -726,6 +743,25 @@ same read**, and on a live tail they usually do not:
 live turn** and looks perfectly fine on a finished session, because a full read never
 produces one — which is why it is easy to ship without noticing. `web/app.js` handles
 it.
+
+### `GET /api/sessions/:id/tool-image?toolUseId=<id>&n=<i>`
+
+**Raw image bytes, not JSON**: `200` with `Content-Type` set to the image's type and
+`Cache-Control: private, max-age=86400` (the bytes behind an id never change). `n`
+indexes `tool.result.images`, default `0`. `toolUseId` is the `tool` event's `id`.
+
+Read out of the transcript, not from the file the `Read` named, so it shows what
+Claude saw even if that file has since changed or been deleted. The session's own
+transcript is searched first, then its subagents', so a `tool` event from
+`GET /api/sessions/:id/subagent` is fetched with the *parent* session's id and the
+same parameters.
+
+`404 {error: "image not available"}` for an unknown session, id or index, and for any
+type other than `image/png`, `image/jpeg`, `image/gif` or `image/webp`. SVG is never
+served: it is a document that can run script, from the app's own origin. Open to
+remote callers, like the transcript it is part of. It needs the token like any other
+route. A browser `<img>` on loopback gets it from the cookie; a phone has to send the
+header, so it cannot pass the URL to a plain image loader that does not let it add one.
 
 ### `GET /api/sessions/:id/since?offset=N`
 
@@ -4936,8 +4972,11 @@ Raw file bytes, one file per request, `Content-Type` as a hint —
 → `{ok, name, path, relPath, dir, bytes, mediaType, renamed}`.
 
 Not JSON: `readJson` caps a body at 4MB and base64 is a third larger than what it
-encodes, which would put the real limit under 3MB. The cap here is **25MB**, answered
-from `Content-Length` before the bytes travel where the client sent one.
+encodes, which would put the real limit under 3MB. The cap here is **25MB**, or
+**10MB** for a remote caller, answered from `Content-Length` before the bytes travel
+where the client sent one. The smaller remote cap is the whole of what stands between
+a leaked token and a checkout; the Android app scales photos down before sending, so
+a real one lands well under it.
 
 The file is written to `attached_assets/` at the root of the checkout the session is
 working in — the *worktree* root for a worktree session, not the checkout that owns it.
@@ -4953,7 +4992,7 @@ browses this directory. An existing name is never overwritten: `shot.png` become
 `mediaType` is sniffed from the bytes, not taken from `Content-Type`, because it is what
 decides whether the turn carries an inline image block.
 
-`413` is the cap. `403` is a directory outside the allowed roots, or a remote caller.
+`413` is the cap. `403` is a directory outside the allowed roots.
 
 ### `POST /api/attachments?cwd=…&name=…`
 
@@ -4973,7 +5012,7 @@ not on the session form: a session id names a directory the bridge chose, and a
 
 `name` is checked **before** `cwd` is looked at, so a request carrying both a bad
 name and a bad directory is refused for the name. `400` for a missing `cwd`, `413`
-for the cap, `403` for a remote caller.
+for the cap (10MB remotely, as above).
 
 **The order a client wants is upload, then create.** Stage each file here, then pass
 the returned `path` in `POST /api/sessions`'s `attachments`. There is no way to add

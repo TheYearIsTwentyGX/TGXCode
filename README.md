@@ -330,7 +330,7 @@ are easier to read than to infer.
 | `npm run bridge` | The bridge in the foreground on 45888. |
 | `npm test` | Starts a bridge on a free port, runs everything, stops it. `npm test -- 45901` uses one you already have. |
 | `npm run restart` | Restart the everyday bridge to pick up new code. Turns in the session host survive it; refuses only while a turn is running outside the host. |
-| `npm run land` | From a worktree: merge its pull request, fast-forward the main checkout, and restart the everyday bridge if the merge touched `bridge/`. `-- --status` / `-- --dry-run` to look first. |
+| `npm run land` | From a worktree: merge its pull request, delete the remote branch (not `main`/`staging`; `-- --keep-branch` to keep it), fast-forward the main checkout, and restart the everyday bridge if the merge touched `bridge/`. `-- --status` / `-- --dry-run` to look first. |
 | `npm run build` | Package the app — electron-builder on Linux, `install.ps1` from WSL. |
 
 Two rules worth knowing before you send a patch:
@@ -512,6 +512,7 @@ Two rules worth knowing before you send a patch:
 | `web/transcript/conversation.js` | Opening a session, its header, and appending events to the log through a view — `SESSION_VIEW` or `AGENT_VIEW` — so the main log and the subagent pane share one renderer; folding runs of tool calls |
 | `web/transcript/rows.js` | One row per event — the row shell and its copy button, user, assistant and thinking rows, peer messages, handoffs and system lines |
 | `web/transcript/tools.js` | Tool calls: the one-line summary, the block, and the body built on first expand (`fillTool`) |
+| `web/transcript/image-viewer.js` | The full-size preview behind a tool result's image, with Copy and Save |
 | `web/transcript/approvals.js` | A blocked turn — the permission card, the plan pane and the question dock — and answering it |
 | `web/transcript/review.js` | Reviewing a plan or a question after the fact |
 | `web/transcript/subagents.js` | The subagent list and the pane that opens one's transcript |

@@ -13,7 +13,7 @@ const { EventEmitter } = require('events');
 
 const { PROJECTS_DIR, CACHE_DIR } = require('./config');
 const { scanMeta, parseLines, buildEvents, readSubagentIndex,
-    readSubagentTranscript, lastActivity } = require('./transcript');
+    readSubagentTranscript, lastActivity, toolResultImage } = require('./transcript');
 const { TurnIndex } = require('./turn-index');
 const { SkillRunIndex } = require('./skill-runs');
 const { SearchIndex } = require('./search-index');
@@ -703,6 +703,24 @@ class SessionIndex extends EventEmitter {
             return { ...entry, file: undefined, events: [], offset: 0, reset: false };
         }
         return { ...entry, file: undefined, ...chunk };
+    }
+
+    /**
+     * An image a tool result carried, from the session's transcript or, failing
+     * that, from one of its subagents'. Searched rather than addressed, so a
+     * client rendering a subagent's Read — peeked inline or opened — asks the
+     * same question it would for the parent's.
+     */
+    toolImage(sessionId, toolUseId, n = 0) {
+        const rec = this.sessions.get(sessionId);
+        if (!rec || !rec.file) return null;
+        const found = toolResultImage(rec.file, toolUseId, n);
+        if (found) return found;
+        for (const entry of readSubagentIndex(path.join(rec.dir, sessionId)).values()) {
+            const sub = toolResultImage(entry.file, toolUseId, n);
+            if (sub) return sub;
+        }
+        return null;
     }
 
     /** Tool output that was too large to inline, read from its spill file. */

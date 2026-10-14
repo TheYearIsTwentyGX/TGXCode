@@ -98,6 +98,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'review-outcome', 'review-body', 'review-jump',
     'creview-scrim', 'creview-modal', 'creview-kind', 'creview-title', 'creview-when',
     'creview-body', 'creview-jump', 'creview-fixall',
+    'img-scrim', 'img-title', 'img-copy', 'img-save', 'img-view',
     'pair-url', 'pair-host', 'pair-hosts', 'pair-note', 'pair-copy',
     'restart-scrim', 'restart-lede', 'restart-problems',
     'restart-fix', 'restart-go', 'preview']) {
@@ -200,6 +201,8 @@ export function modalUp() {
         || isUp(dom.reviewScrim)
         // A code review's findings: the same read-only case as the line above.
         || isUp(dom.creviewScrim)
+        // The image preview: read-only again, and here for the same reason.
+        || isUp(dom.imgScrim)
         // Publish to GitHub holds a filled-in form, and can be up over
         // Start-a-session, which is the snippet dialog's case.
         || isUp(dom.ghScrim)

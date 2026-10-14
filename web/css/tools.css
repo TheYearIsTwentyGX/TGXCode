@@ -116,6 +116,19 @@
     letter-spacing: 0.02em;
 }
 
+/* An image a tool result carried (a Read of a PNG, a screenshot). Fitted to
+   the column; a click opens it in #img-scrim (see dialogs.css). */
+.tool-images { display: flex; flex-direction: column; gap: 8px; }
+.tool-image {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    border: 1px solid var(--outline-soft);
+    border-radius: var(--r-sm);
+    background: var(--bg);
+    cursor: zoom-in;
+}
+
 .io {
     margin: 0;
     padding: var(--sp-6);
