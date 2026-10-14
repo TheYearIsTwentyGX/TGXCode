@@ -6,7 +6,7 @@
 #   land                   merge the PR for this branch, then pull the main checkout
 #   land --branch NAME     land a branch other than the one you are standing on
 #   land --squash          squash instead of a merge commit (--rebase also works)
-#   land --delete-branch   delete the remote branch afterwards
+#   land --keep-branch     keep the remote branch (it is deleted by default)
 #   land --no-pull         merge only, leave the main checkout alone
 #   land --no-restart      leave the everyday bridge alone, even if bridge/ changed
 #   land --restart         restart the everyday bridge even if bridge/ did not change
@@ -38,6 +38,13 @@
 # kills its runs on the way out. Without that, the restart died halfway and the
 # everyday bridge stayed down. From the button the pane still ends with the old
 # bridge; what happened next is in ~/.cache/tgxcode/restart-45888.log.
+#
+# After the merge the remote branch is deleted, unless it is main or staging —
+# long-lived branches that other work builds on. Only the remote one: the local
+# branch is checked out in the worktree you are standing in, and that worktree
+# is yours to remove. That is also why this is a `git push --delete` and not
+# `gh pr merge --delete-branch`, which tries the local branch as well, trips
+# over the worktree, and exits non-zero after a merge that succeeded.
 
 set -uo pipefail
 
@@ -48,7 +55,7 @@ MAIN="${TGXCODE_MAIN:-${CLAUDE_SESSIONS_MAIN:-$HOME/Other/claude-sessions}}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 METHOD=--merge
-BRANCH=""; PULL=1; RESTART=auto; DRY=0; STATUS_ONLY=0; DELETE=0
+BRANCH=""; PULL=1; RESTART=auto; DRY=0; STATUS_ONLY=0; DELETE=1
 while [ $# -gt 0 ]; do
     case "$1" in
         --branch) shift; BRANCH="${1:-}" ;;
@@ -57,6 +64,7 @@ while [ $# -gt 0 ]; do
         --rebase) METHOD=--rebase ;;
         --merge) METHOD=--merge ;;
         --delete-branch) DELETE=1 ;;
+        --keep-branch) DELETE=0 ;;
         --no-pull) PULL=0 ;;
         --restart) RESTART=1 ;;
         --no-restart) RESTART=0 ;;
@@ -156,15 +164,27 @@ esac
 
 say "Landing #$PR_NUM — $PR_TITLE"
 MERGE_ARGS=("$PR_NUM" "$METHOD")
-[ "$DELETE" = 1 ] && MERGE_ARGS+=(--delete-branch)
+case "$BRANCH" in main|staging) DELETE=0 ;; esac
 
 if [ "$DRY" = 1 ]; then
     say "  would run: gh pr merge ${MERGE_ARGS[*]}"
+    [ "$DELETE" = 1 ] && say "  would run: git push origin --delete $BRANCH"
 else
     if ! gh pr merge "${MERGE_ARGS[@]}"; then
         die "gh pr merge failed. Nothing was pulled." "$PR_URL"
     fi
     say "Merged."
+    # Best-effort: the merge is what mattered. A repository with GitHub's
+    # delete-on-merge setting has already removed it, so look before deleting.
+    if [ "$DELETE" = 1 ]; then
+        if [ -z "$(git -C "$HERE" ls-remote --heads origin "refs/heads/$BRANCH" 2>/dev/null)" ]; then
+            say "Remote branch $BRANCH is already gone."
+        elif git -C "$HERE" push --quiet origin --delete "$BRANCH" 2>/dev/null; then
+            say "Deleted remote branch $BRANCH."
+        else
+            say "Heads up: could not delete remote branch $BRANCH — the merge is done."
+        fi
+    fi
     # Tell the everyday bridge, so the PRs this merge just put into conflict show
     # it now rather than on its idle floor. The board's Refresh is the one way to
     # ask GitHub out of turn; a re-list that sees this PR gone also keeps the

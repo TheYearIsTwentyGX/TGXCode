@@ -330,7 +330,7 @@ are easier to read than to infer.
 | `npm run bridge` | The bridge in the foreground on 45888. |
 | `npm test` | Starts a bridge on a free port, runs everything, stops it. `npm test -- 45901` uses one you already have. |
 | `npm run restart` | Restart the everyday bridge to pick up new code. Turns in the session host survive it; refuses only while a turn is running outside the host. |
-| `npm run land` | From a worktree: merge its pull request, fast-forward the main checkout, and restart the everyday bridge if the merge touched `bridge/`. `-- --status` / `-- --dry-run` to look first. |
+| `npm run land` | From a worktree: merge its pull request, delete the remote branch (not `main`/`staging`; `-- --keep-branch` to keep it), fast-forward the main checkout, and restart the everyday bridge if the merge touched `bridge/`. `-- --status` / `-- --dry-run` to look first. |
 | `npm run build` | Package the app — electron-builder on Linux, `install.ps1` from WSL. |
 
 Two rules worth knowing before you send a patch:

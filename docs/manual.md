@@ -1710,7 +1710,8 @@ several agents are committing to main.
 When the work is finished, `npm run land` from the worktree merges its PR and
 fast-forwards this checkout, which is otherwise a step agents cannot take: a
 worktree-isolated session is refused `git -C` against a directory outside its own
-tree. If the merge changed `bridge/`, it then restarts the everyday bridge so the
+tree. It deletes the branch on origin once merged — never `main` or `staging`,
+and not with `--keep-branch`; the local branch stays with its worktree. If the merge changed `bridge/`, it then restarts the everyday bridge so the
 new code is what is running. Turns in the session host survive that; if any turn
 would not, the restart is refused and land says so rather than forcing it.
 `--no-restart` stops after the pull. Run from the **Land** button, the pane closes
