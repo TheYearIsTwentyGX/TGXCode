@@ -172,7 +172,7 @@ function arrange(parent, nodes, before) {
 // closing asks for the fit it skipped.
 
 const SLACK = 24;
-const fit = { prev: null, frame: 0, pending: false };
+const fit = { prev: null, prevAvail: undefined, frame: 0, pending: false };
 
 // The window-state pills: what the machine is doing, not a place to go. They
 // keep a ground of their own and stand a little apart from the view buttons.
@@ -199,12 +199,14 @@ function fitBar() {
         more: full.more,
         moreShown: !dom.barMoreWrap.hidden,
         prev: fit.prev,
+        prevAvail: fit.prevAvail,
         slack: SLACK,
     });
     bar.classList.toggle('compact', next.compact);
     place(next.spill);
     markGroups(bar);
     fit.prev = next;
+    fit.prevAvail = full.avail;
     if (focused && focused !== document.activeElement && focused.isConnected) focused.focus();
 }
 
@@ -225,8 +227,10 @@ function measure(bar) {
     let shown = 0;
     for (const n of bar.children) {
         if (!n.getClientRects().length) continue;
-        shown++;
         const st = getComputedStyle(n);
+        // Out of flow (the sr-only live region) takes no room and no gap.
+        if (st.position === 'absolute' || st.position === 'fixed') continue;
+        shown++;
         // The search box grows into whatever is left, so it costs only what it
         // will not shrink below.
         const w = (n.classList.contains('bar-search') ? parseFloat(st.minWidth) || 0 : n.getBoundingClientRect().width)

@@ -69,6 +69,18 @@ process.removeAllListeners('warning');
     assert.deepStrictEqual(plan(fullW + 24, { prev: compact, slack: 24 }), { compact: false, spill: [] });
     ok('giving something back takes room to spare');
 
+    // The slack holds only while the window holds still. Compacted at 1100 and
+    // widened to 1210, the words fit with 10 to spare: less than the slack, but
+    // the window moved, so they come back — this is the window that opened small
+    // and was maximised, and sat in icons at a width with room for its labels.
+    const narrowed = plan(1100);
+    assert.deepStrictEqual(plan(fullW + 10, { prev: narrowed, prevAvail: 1100, slack: 24 }), { compact: false, spill: [] });
+    // Spilled at 799 and widened to 805: the spill comes back too.
+    assert.deepStrictEqual(plan(compactW + 5, { prev: spilled, prevAvail: compactW - 1, slack: 24 }), { compact: true, spill: [] });
+    // At the same width — a badge that shrank back — the slack still holds.
+    assert.deepStrictEqual(plan(fullW + 10, { prev: narrowed, prevAvail: fullW + 10, slack: 24 }), narrowed);
+    ok('a window that widened gets the exact answer, not the held one');
+
     // Going the other way needs no slack: narrower than it fits is narrower.
     assert.deepStrictEqual(plan(740, { prev: compact, slack: 24 }), { compact: true, spill: ['schedules', 'devbrowser'] });
     ok('giving something up never waits');
