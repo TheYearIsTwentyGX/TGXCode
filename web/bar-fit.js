@@ -18,6 +18,16 @@
 // *back* — dropping compact, or spilling fewer — needs `slack` pixels of room
 // to spare, while giving something up needs none. Across that band the bar
 // keeps whatever it last had.
+//
+// Only while the window holds still. The slack is for content that jitters at
+// a fixed width — a badge ticking, the quota pill's countdown changing digits —
+// and not for the window itself: a bar that compacted at 1500 and was then
+// widened to 1600, where the words fit with 15 to spare, stayed compact for
+// good, because 15 is not 24. That is what a window opening small and then
+// maximising does, so the everyday window sat in icons at a width with room
+// for its labels. When `avail` has moved since `prev` was decided the answer
+// is the exact one, as a media query's would be; dragging across the line
+// changes the bar once per crossing, which is all a breakpoint ever does.
 
 /**
  * @param {object} o
@@ -31,12 +41,15 @@
  *                             spills unless it is already showing.
  * @param {boolean} [o.moreShown]  More is up already (Settings put things in it).
  * @param {{compact: boolean, spill: string[]}} [o.prev]  What the bar has now.
+ * @param {number} [o.prevAvail]  The `avail` that `prev` was planned at. When
+ *                             it differs, `prev` is not held on to.
  * @param {number} [o.slack]
  * @returns {{compact: boolean, spill: string[]}}
  */
-export function planBar({ avail, fixed, items, more, moreShown = false, prev = null, slack = 0 }) {
+export function planBar({ avail, fixed, items, more, moreShown = false, prev = null, prevAvail, slack = 0 }) {
     const best = plan(avail, fixed, items, more, moreShown);
     if (!prev || rank(best) >= rank(prev)) return best;
+    if (prevAvail !== undefined && prevAvail !== avail) return best;
     // Giving something back, which takes room to spare. If there is not that
     // much, the bar stays as it is — provided what it is still describes the
     // bar: a button spilled earlier may since have been hidden or moved.
