@@ -216,18 +216,20 @@
        window lays one out (narrow.css): no time gutter. */
     --gutter: 0px;
 }
-/* Square, not rounded. A radius is a card's (plans/22: --s1 on --bg), and this
-   is the other way round — the window's ground showing through the pane — so a
-   curve here only uncovers a wedge of the pane's --s1 behind the corner. */
 .conv-main[data-orch-page]::before {
     content: "";
     grid-column: 3;
     grid-row: 1 / -1;
     background: var(--bg);
+    border-radius: var(--r-lg) 0 0 0;
 }
 .conv-main[data-orch-page] > .orch-page  { grid-column: 1; grid-row: 1 / -1; }
 .conv-main[data-orch-page] > .orch-split { grid-column: 2; grid-row: 1 / -1; }
-.conv-main[data-orch-page] > .conv-body  { grid-column: 3; grid-row: 1; min-width: 0; }
+/* The transcript is clipped to the column's corner. Its top fade (.scroll::before,
+   below) is a square strip of --bg, and unclipped it laid that over the outside
+   of the curve: the wedge there went dark at the top and the pane's --s1 below,
+   so the corner read as a smudge rather than the column's edge. */
+.conv-main[data-orch-page] > .conv-body  { grid-column: 3; grid-row: 1; min-width: 0; border-radius: var(--r-lg) 0 0 0; overflow: hidden; }
 .conv-main[data-orch-page] > .ask-dock   { grid-column: 3; grid-row: 2; margin: 0 var(--sp-6) var(--sp-3); }
 .conv-main[data-orch-page] > .orch-dock  { display: none; }
 .conv-main[data-orch-page] > .composer   { grid-column: 3; grid-row: 4; min-width: 0; padding: var(--sp-2) var(--sp-6) var(--sp-6); }
