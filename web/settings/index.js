@@ -8,7 +8,7 @@
 // the head's file line, problems and project list, the contents, the body, and
 // every group built from rows (general.js) plus Keyboard's shortcuts
 // (shortcuts.js), Toolbar (toolbar.js), Notifications (notifications.js),
-// Claude Code (claude-config.js, with its hooks editor hooks.js), its Memory
+// Claude Code (claude-config.js — its hooks editor is the Hooks page, web/hooks/), its Memory
 // (memory.js) and Project commands (project-commands.js). Still built by hand
 // with el() and hung in the tree as foreign DOM: the groups written out in
 // web/index.html (Projects' colour list, Snippets' shell, Wispr Flow, Connect a

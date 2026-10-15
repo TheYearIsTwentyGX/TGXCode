@@ -510,12 +510,22 @@ export const state = {
         // the stored value (settingsRevert()'s idea); `flash` is the set of
         // rows a reload from elsewhere changed, drawn lit for a moment.
         rev: 0, flash: null,
-        // The hooks editor's draft, which is the second one here: hooks are
-        // written whole, on Save, after a review — see claudeHooksRow().
-        // `hooksSeed` is the block the draft started from, as JSON, so a change
-        // on disk can be told apart from the page's own saves of other keys.
+    },
+    // The Hooks page (web/hooks/page.js): Claude Code's settings chain read for
+    // one project, and the one hooks draft there is. `dir` is null until the
+    // page first opens and settles on Settings' project. `event` is the rail's
+    // selection, null for all of them. The `hooks*` fields are the editor's
+    // draft — written whole, on Save, after a review; `hooksSeed` is the block
+    // it started from, as JSON, so a change on disk can be told apart from the
+    // page's own save of `disableAllHooks`. `script` is the one script open
+    // under a hook (web/hooks/script.js); `sources` the plugin, skill and agent
+    // hooks from /api/claude-config/hook-sources.
+    hooks: {
+        open: false, dir: null, scope: 'user', event: null,
+        data: null, loading: false, error: null, saving: false,
         hooksDraft: null, hooksDirty: false, hooksReview: false,
         hooksProblems: null, hooksSeed: null,
+        script: null, recipes: false, sources: null, sourcesError: null,
     },
     // And Claude Code's memory files, which are two rather than four and are
     // additive rather than a chain — see the Memory section below. All of it is

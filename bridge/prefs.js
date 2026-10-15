@@ -151,7 +151,7 @@ const MAX_LINK_PATTERNS = 200;
 //  - `quota` stays on the bar. Its popover is anchored to the pill and holds
 //    Restart bridge, and neither works from inside another popover.
 const TOOLBAR_IDS = ['tasks', 'live', 'dashboard', 'analytics', 'history', 'drafts', 'schedules',
-    'settings', 'quota', 'devbrowser'];
+    'hooks', 'settings', 'quota', 'devbrowser'];
 const TOOLBAR_PLACES = new Set(['bar', 'more', 'hidden']);
 const TOOLBAR_PINNED = { settings: new Set(['bar', 'more']), quota: new Set(['bar']) };
 

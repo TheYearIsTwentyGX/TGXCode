@@ -1,0 +1,248 @@
+/* web/css/hooks.css
+ *
+ * The Hooks page (web/hooks/page.js) and the editor on it (web/hooks/editor.js).
+ * The panel itself is `.dash`, which supplies the flex column, the `hidden`
+ * rule, the header and the scrolling body; the page is `hkp-`, and the editor
+ * keeps the `hk-` rules it had when it lived in Settings — moved here with it
+ * from settings.css. It still borrows the Settings controls it is built from
+ * (`cfg-*`, `cmd-*`, `settings-*`), which stay in settings.css.
+ */
+
+/* ── the page ─────────────────────────────────────────────────────────── */
+
+/* Project, scope and the page's actions, in one row that wraps. */
+.hkp-bar {
+    display: flex;
+    align-items: flex-end;
+    gap: var(--sp-6);
+    flex-wrap: wrap;
+    padding-bottom: var(--sp-6);
+    border-bottom: 1px solid var(--outline);
+}
+.hkp-bar .cfg-tabs { margin: 0; }
+.hkp-project select { max-width: 340px; }
+.hkp-off { flex: none; font-size: var(--fs-sm); }
+.hkp-bar .btn.on { background: var(--blue-cont); color: var(--text); }
+
+/* The rail of events beside the selected one. Sticky, so it stays beside a
+   long editor without a second scrollbar unless it has to have one. */
+.hkp-split {
+    display: grid;
+    grid-template-columns: 220px minmax(0, 1fr);
+    gap: var(--sp-8);
+    padding-top: var(--sp-6);
+    align-items: start;
+}
+.hkp-rail {
+    position: sticky;
+    top: var(--sp-4);
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    max-height: calc(100vh - 220px);
+    overflow-y: auto;
+}
+.hkp-rail-lede {
+    margin: var(--sp-6) 0 var(--sp-2) var(--sp-4);
+    font: 400 var(--fs-2xs) var(--sans);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-4);
+}
+.hkp-ev {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-4);
+    padding: var(--sp-3) var(--sp-4);
+    border-radius: var(--r-sm);
+    color: var(--text-3);
+    font: 400 var(--fs-sm) var(--mono);
+    text-align: left;
+}
+.hkp-ev:first-child { font-family: var(--sans); }
+.hkp-ev:hover { background: var(--s3); color: var(--text-2); }
+.hkp-ev.on { background: var(--blue-cont); color: var(--text); }
+.hkp-ev.unknown .hkp-ev-name { font-style: italic; }
+.hkp-ev-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hkp-ev-n {
+    flex: none;
+    min-width: 18px;
+    padding: 0 var(--sp-2);
+    border-radius: var(--pill);
+    background: var(--s3);
+    color: var(--text-3);
+    font: 500 var(--fs-2xs)/18px var(--sans);
+    text-align: center;
+}
+/* This file has hooks on it — the ones the editor beside it will show. */
+.hkp-ev.has-here .hkp-ev-n { background: var(--blue-cont); color: var(--text); }
+
+.hkp-main { min-width: 0; }
+.hkp-head { margin-bottom: var(--sp-6); }
+.hkp-h { margin: 0 0 var(--sp-2); font: 400 var(--fs-xl)/var(--lh-tight) var(--sans); color: var(--text); }
+.hkp-h code { font-family: var(--mono); }
+.hkp-blurb { margin: 0 0 var(--sp-2); font-size: var(--fs-md); line-height: var(--lh-prose); color: var(--text-2); }
+.hkp-head .cmd-field-note code { font: 400 var(--fs-xs) var(--mono); }
+
+/* ── recipes ──────────────────────────────────────────────────────────── */
+
+.hkp-recipes {
+    margin-bottom: var(--sp-8);
+    padding: var(--sp-6) var(--sp-7) var(--sp-7);
+    background: var(--s2);
+    border-radius: var(--r);
+}
+.hkp-recipes-head { display: flex; align-items: baseline; gap: var(--sp-5); flex-wrap: wrap; }
+.hkp-recipes-head strong { font-weight: 500; color: var(--text); }
+.hkp-recipe-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: var(--sp-5);
+    margin-top: var(--sp-6);
+}
+.hkp-recipe {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-3);
+    padding: var(--sp-5) var(--sp-6) var(--sp-6);
+    background: var(--s3);
+    border-radius: var(--r-sm);
+}
+.hkp-recipe-title { color: var(--text); font-size: var(--fs-md); }
+.hkp-recipe-on code { font: 400 var(--fs-xs) var(--mono); color: var(--text-2); }
+.hkp-recipe-blurb { flex: 1; margin: 0; font-size: var(--fs-sm); line-height: var(--lh-prose); color: var(--text-3); }
+.hkp-recipe .btn { align-self: flex-start; }
+
+/* ── other sources ────────────────────────────────────────────────────── */
+
+.hkp-sources { margin-top: var(--sp-8); }
+.hkp-sources .cfg-inherit + .cfg-inherit { margin-top: var(--sp-7); }
+.hk-inherit-row.is-off, .hkp-fm.is-off { opacity: 0.6; }
+.hkp-fm-note { margin: var(--sp-2) 0 var(--sp-4); }
+.hkp-fm { margin-top: var(--sp-3); font-size: var(--fs-sm); color: var(--text-3); }
+.hkp-fm > summary { display: flex; align-items: baseline; gap: var(--sp-4); flex-wrap: wrap; cursor: pointer; }
+.hkp-fm > summary strong { font-weight: 400; color: var(--text-2); }
+.hkp-fm-origin { color: var(--text-4); font-size: var(--fs-xs); }
+.hkp-fm-events { font: 400 var(--fs-xs) var(--mono); color: var(--text-3); }
+.hkp-fm-path {
+    margin: var(--sp-3) 0 0;
+    color: var(--text-4);
+    font: 400 var(--fs-xs) var(--mono);
+    overflow-wrap: anywhere;
+    text-align: left;
+}
+.hkp-fm-path:hover { color: var(--text-2); }
+.hkp-fm-yaml {
+    margin: var(--sp-3) 0 0;
+    padding: var(--sp-5) var(--sp-6);
+    background: var(--s2);
+    border-radius: var(--r-sm);
+    font: 400 var(--fs-xs)/var(--lh-prose) var(--mono);
+    color: var(--text-2);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+/* ── the editor ───────────────────────────────────────────────────────── */
+
+/* The hooks editor. An event is a card (the command editor's), a matcher group
+   an indented block inside it, and a hook a lighter card inside that — three
+   levels because the file has three, and flattening them would hide which
+   hooks share a matcher and so run together, in order. */
+.hk { width: 100%; }
+.hk-off {
+    margin-bottom: var(--sp-5);
+    padding: var(--sp-4) var(--sp-5);
+    font-size: var(--fs-sm);
+    line-height: var(--lh-prose);
+    color: var(--text-3);
+    background: var(--s3);
+    border-left: 2px solid var(--yellow);
+    border-radius: var(--r-sm);
+}
+.hk-off strong { color: var(--text-2); font-weight: 400; }
+.hk-event .cmd-card-name { flex: 0 1 auto; min-width: 0; }
+.hk-group {
+    margin-top: var(--sp-6);
+    padding: var(--sp-5) 0 0 var(--sp-6);
+    border-left: 1px solid var(--outline);
+}
+.hk-group-head { display: flex; align-items: center; gap: var(--sp-4); }
+.hk-matcher { display: flex; align-items: center; gap: var(--sp-4); flex: 1 1 260px; min-width: 0; }
+.hk-matcher .settings-text { flex: 1; min-width: 0; }
+.hk-hook {
+    margin-top: var(--sp-4);
+    padding: var(--sp-5) var(--sp-6) var(--sp-6);
+    background: var(--s3);
+    border: 1px solid transparent;
+    border-radius: var(--r-sm);
+}
+.hk-hook.bad { border-color: var(--red); }
+.hk-hook-head { display: flex; align-items: center; gap: var(--sp-4); }
+.hk-hook-head .settings-select { width: auto; flex: none; }
+.hk-hook-head .cfg-script { flex: 0 1 auto; min-width: 0; }
+.hk-hook .cmd-area, .hk-hook .settings-text { background: var(--s2); }
+.hk-field { padding-top: var(--sp-4); margin-top: var(--sp-4); border-top: 0; }
+.hk-inline { display: flex; gap: var(--sp-7); align-items: flex-start; flex-wrap: wrap; }
+.hk-inline > .hk-field { flex: 1 1 160px; min-width: 0; }
+.hk-check { display: flex; align-items: center; gap: var(--sp-4); cursor: pointer; }
+.hk-mini { font-size: var(--fs-sm); }
+.hk-mini:disabled { opacity: 0.35; cursor: default; }
+.hk-more { margin-top: var(--sp-5); }
+.hk-more > summary { font-size: var(--fs-xs); color: var(--text-4); cursor: pointer; }
+.hk-json { min-height: 40px; }
+.hk-add { margin-top: var(--sp-6); }
+.hk-inherit-scope { color: var(--text-3); }
+.hk-actions { display: flex; gap: var(--sp-4); margin-top: var(--sp-5); flex-wrap: wrap; }
+
+/* The review. It replaces the footer rather than opening a dialog, so what is
+   about to run sits under the hooks it came from. */
+.hk-foot.is-review { display: block; }
+.hk-review ul { margin: var(--sp-2) 0 var(--sp-4); padding-left: var(--sp-7); }
+.hk-review li { margin: var(--sp-1) 0; font-size: var(--fs-sm); line-height: var(--lh-prose); color: var(--text-3); }
+.hk-review code { font: 400 var(--fs-xs) var(--mono); color: var(--text-2); overflow-wrap: anywhere; }
+.hk-review-lede {
+    margin-top: var(--sp-4);
+    font: 400 var(--fs-xs) var(--sans);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-4);
+}
+
+/* The script a hook runs, opened under it. A recess in the hook card: it is
+   the hook's file, not a fourth level of the settings block. */
+.hk-script-btn { background: none; border: 0; padding: 0; text-align: left; cursor: pointer; }
+.hk-script-btn:hover { text-decoration: underline; }
+.hk-script-btn.on { color: var(--text-2); }
+.hk-sc {
+    margin-top: var(--sp-5);
+    padding: var(--sp-4) var(--sp-5) var(--sp-5);
+    background: var(--s2);
+    border-radius: var(--r-sm);
+}
+.hk-sc-head { display: flex; align-items: center; gap: var(--sp-4); }
+.hk-sc-path { font: 400 var(--fs-xs) var(--mono); color: var(--text-2); overflow-wrap: anywhere; min-width: 0; }
+.hk-sc .cfg-tab-tag.bad { color: var(--red); }
+.hk-hook .hk-sc-text {
+    width: 100%;
+    min-height: 120px;
+    margin-top: var(--sp-4);
+    background: var(--s1);
+    font: 400 var(--fs-sm)/var(--lh-prose) var(--mono);
+    tab-size: 4;
+}
+.hk-sc-foot { display: flex; align-items: center; gap: var(--sp-5); flex-wrap: wrap; margin-top: var(--sp-4); }
+
+/* The footer stays in reach on a long file: Save is the point of the page. */
+.hkp .hk-foot {
+    position: sticky;
+    bottom: 0;
+    z-index: 1;
+    background: var(--bg);
+    box-shadow: 0 -1px 0 var(--outline);
+}
+
+@media (max-width: 860px) {
+    .hkp-split { grid-template-columns: minmax(0, 1fr); }
+    .hkp-rail { position: static; max-height: 220px; }
+}
