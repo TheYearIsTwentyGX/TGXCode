@@ -560,6 +560,113 @@
     color: var(--text-2);
 }
 .lask-acts { display: flex; gap: var(--sp-3); }
+/* A worker's ask its orchestrator has not got to yet — answerable, and saying
+   whose it is first. The orchestrator page's sentence. */
+.lask-for { font-size: var(--fs-xs); line-height: var(--lh-snug); color: var(--text-4); }
+
+/* ── an orchestrator's workers, as the lower half of its card ─────────────
+   One card, not two: the section is the card's own surface taken a tonal step
+   down, divided from the head by a hairline, and bleeds to the card's edges so
+   there is no second border, shadow or radius inside it. It stops short of the
+   left edge by the accent's width, so the band colour runs the card's whole
+   height. The tint is mixed toward the page rather than a fixed step, so it
+   reads as one step down on an ask card's yellow as on a plain one. */
+.lcard-workers {
+    display: flex;
+    flex-direction: column;
+    margin: 0 calc(-1 * var(--sp-7)) calc(-1 * var(--sp-6)) calc(var(--edge-w) - var(--sp-7));
+    padding: var(--sp-2) 0;
+    border-top: 1px solid var(--outline-soft);
+    border-radius: 0 0 var(--r-lg) 0;
+    background: color-mix(in srgb, var(--bg) 35%, transparent);
+    cursor: auto;
+}
+.lw-row {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-3);
+    min-width: 0;
+    padding: var(--sp-3) var(--sp-7) var(--sp-3) calc(var(--sp-7) - var(--edge-w));
+    cursor: pointer;
+    transition: background var(--dur-fast) var(--ease-standard);
+}
+.lw-row:hover { background: color-mix(in srgb, var(--s4) 45%, transparent); }
+.lw-row[data-reason="queued"] { cursor: default; }
+.lw-row[data-reason="queued"]:hover { background: none; }
+.lw-main { display: flex; align-items: center; gap: var(--sp-4); min-width: 0; }
+
+/* The card's dot, by the row's own band — not the card's, which is the host's. */
+.lw-dot {
+    flex: none;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--text-4);
+}
+.lw-row[data-reason="here"] .lw-dot {
+    background: var(--yellow);
+    animation: breathe var(--dur-loop) var(--ease-standard) infinite;
+}
+.lw-row[data-reason="ask"] .lw-dot { background: var(--yellow); }
+.lw-row[data-reason="error"] .lw-dot,
+.lw-row[data-stalled="true"] .lw-dot { background: var(--red); animation: none; }
+.lw-row[data-reason="elsewhere"] .lw-dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--yellow); }
+.lw-row[data-reason="queued"] .lw-dot { background: transparent; box-shadow: inset 0 0 0 1px var(--text-4); }
+
+.lw-title {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 45%;
+    padding: 0;
+    border: 0;
+    background: none;
+    text-align: left;
+    font: 500 var(--fs-sm)/var(--lh-snug) var(--sans);
+    color: var(--text-2);
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+span.lw-title { cursor: default; color: var(--text-3); }
+.lw-row:hover .lw-title:is(button),
+.lw-title:is(button):hover { color: var(--blue); }
+.lw-say { display: flex; flex: 1; align-items: baseline; gap: var(--sp-3); min-width: 0; }
+.lw-say .lstate { font-size: var(--fs-sm); }
+.lw-row .tag-pr {
+    display: grid;
+    place-items: center;
+    flex: none;
+    color: var(--pr-tint);
+    opacity: var(--pr-fade);
+}
+.lbtn.lw-stop { height: 22px; padding: 0 var(--sp-4); font-size: var(--fs-xs); }
+
+/* The ask under its row: the card's block, a size down. */
+.lask.lask-row {
+    gap: var(--sp-3);
+    margin-left: calc(6px + var(--sp-4));
+    padding: var(--sp-3) var(--sp-4);
+    border-radius: var(--r-sm);
+}
+.lask-row .lbtn { height: 24px; font-size: var(--fs-xs); }
+
+.lw-tail {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-1);
+    padding: var(--sp-2) var(--sp-7) var(--sp-2) calc(var(--sp-7) - var(--edge-w));
+    font-size: var(--fs-xs);
+    color: var(--text-4);
+}
+.lw-more {
+    padding: 0;
+    border: 0;
+    background: none;
+    font: 500 var(--fs-xs)/var(--lh-snug) var(--sans);
+    color: var(--text-3);
+    cursor: pointer;
+}
+.lw-more:hover { color: var(--blue); }
 
 .lcard-log {
     margin: 0;

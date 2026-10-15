@@ -28,6 +28,12 @@
 // cost the cache was there to avoid, of thirty-odd elements per card per second
 // beside a document that also holds the whole open transcript.
 //
+// **An orchestrator carries its workers**, as it does in the rail: one card,
+// with the workers as rows in its lower half rather than cards of their own.
+// The bridge decides who carries whom (`hostWorkers` in bridge/overview.js) and
+// folds the workers' fingerprints into the orchestrator's; `nestWorkers` lifts
+// them out of the top level here, and `WorkerList` draws them.
+//
 // Markup and class names are what the imperative version built, so
 // web/styles.css did not change.
 //
@@ -35,6 +41,7 @@
 // an app.js binding at module top level, only when a function is called.
 
 import { html, Component } from '../vendor/preact.js';
+import { exit } from '../motion.js';
 import { post } from '../api.js';
 import { BOOT_PREFS } from '../boot.js';
 import { state } from '../state.js';
@@ -123,7 +130,10 @@ export function renderLive() {
     if (d.waiting) bits.push(`${d.waiting} waiting for you`);
     // Recounted rather than taken from the payload, which counted the cards
     // before any of them were hidden. Same two reasons the bridge counts.
-    bits.push(`${sessions.filter(s => s.reason === 'here' || s.reason === 'elsewhere').length} running`);
+    // An orchestrator only here for its workers is not itself running — they
+    // are, and they are counted.
+    bits.push(`${sessions.filter(s => (s.reason === 'here' || s.reason === 'elsewhere')
+        && !(s.workers && !s.workers.own)).length} running`);
     // What the other groups hold, and a way to get to them — the strip's
     // problem first. Five sessions working is 1650px of Live before Recent
     // activity even begins, so a group past the first is not so much missing as
@@ -170,7 +180,7 @@ export function renderLive() {
     const scroll = { x: dom.liveBody.scrollLeft, y: dom.liveBody.scrollTop };
 
     freshBoxes = [];
-    paint(dom.liveBody, liveGroups({ ...d, sessions }, strip));
+    paint(dom.liveBody, liveGroups({ ...d, sessions, all: d.sessions }, strip));
     dom.liveBody.scrollLeft = scroll.x;
     dom.liveBody.scrollTop = scroll.y;
 
@@ -278,12 +288,13 @@ function rememberArrival(list) {
  * is mostly headings, and the strip has no room to spare for them.
  */
 function liveGroups(d, strip) {
-    const live = d.sessions.filter(s => s.reason !== 'pinned');
+    const { top, crews } = nestWorkers(d.sessions, d.all || d.sessions);
+    const live = top.filter(s => s.reason !== 'pinned');
     if (liveByArrival()) {
         const rank = (s) => state.live.arrival.get(s.sessionId) ?? Infinity;
         live.sort((x, y) => rank(x) - rank(y));
     }
-    const pinned = d.sessions.filter(s => s.reason === 'pinned');
+    const pinned = top.filter(s => s.reason === 'pinned');
     const recent = d.recent || [];
     // A settings question rather than a layout one: how much of a card there is
     // to draw at all. Read once per pass and handed down, because a card that
@@ -300,7 +311,32 @@ function liveGroups(d, strip) {
         ['recent', 'Recent activity', recent, d.recentHidden],
         ['pinned', 'Pinned', pinned, 0],
     ].filter(([, , list]) => list.length)
-        .map(([key, label, list, hidden]) => liveGroup(key, label, list, hidden, strip, compact));
+        .map(([key, label, list, hidden]) => liveGroup(key, label, list, hidden, strip, compact, crews));
+}
+
+/**
+ * Take an orchestrator's workers out of the board's top level, to be drawn
+ * inside its card — the rail's nesting, on the board.
+ *
+ * The bridge decides which orchestrators carry which workers (`hostWorkers` in
+ * bridge/overview.js) and says so twice: `workers.ids` on the orchestrator's
+ * card and `orchestratorId` on each worker's. A worker is lifted only when its
+ * orchestrator's card is in this list, so one whose host was hidden or cut is
+ * still drawn somewhere. The worker cards come from `all`, the payload before
+ * `live.hideElsewhere` filtered it: a worker belongs to a card that is shown,
+ * and the host's `sig`, which is what decides whether that card redraws, does
+ * not know about the filter.
+ */
+function nestWorkers(list, all) {
+    const byId = new Map(all.map(s => [s.sessionId, s]));
+    const hosts = new Set(list.filter(s => s.workers).map(s => s.sessionId));
+    const crews = new Map();
+    for (const s of list) {
+        if (!s.workers) continue;
+        crews.set(s.sessionId, s.workers.ids.map(id => byId.get(id)).filter(Boolean));
+    }
+    const top = list.filter(s => !(s.orchestratorId && hosts.has(s.orchestratorId)));
+    return { top, crews };
 }
 
 /**
@@ -312,7 +348,7 @@ function liveGroups(d, strip) {
  * group: what fell off the end is reported, because a list that silently stops
  * reads as the end of the list.
  */
-function liveGroup(key, label, list, hidden, strip, compact) {
+function liveGroup(key, label, list, hidden, strip, compact, crews) {
     return html`
         <section key=${key} class="live-group" data-group=${key}>
             <h2 class="lgroup-head">
@@ -322,7 +358,7 @@ function liveGroup(key, label, list, hidden, strip, compact) {
             </h2>
             <div class="lgroup-body">
                 ${list.map(s => html`<${LiveCard} key=${s.sessionId} s=${s} strip=${strip} compact=${compact}
-                    prs=${key !== 'live'} />`)}
+                    prs=${key !== 'live'} workers=${crews.get(s.sessionId) || null} />`)}
             </div>
         </section>`;
 }
@@ -356,13 +392,20 @@ class LiveCard extends Component {
             // rebuilds `state.railPrs` from parsed JSON, so a moved answer is a
             // new object and a reference check is enough.
             || (next.prs && state.railPrs.get(next.s.sessionId) !== this.prAgg)
+            // The same for the PR chip on each worker row, which this card's
+            // `sig` does not cover either.
+            || (!!next.workers && next.workers.some((w, i) => state.railPrs.get(w.sessionId) !== this.workerPrs[i]))
             || nextState !== this.state;
     }
 
-    render({ s, strip, compact, prs }) {
+    render({ s, strip, compact, prs, workers }) {
         // Recent activity and Pinned only. A running card has enough to say, and
         // its PR is rarely the news while the turn that will change it is live.
         this.prAgg = prs ? state.railPrs.get(s.sessionId) : undefined;
+        this.workerPrs = (workers || []).map(w => state.railPrs.get(w.sessionId));
+        // On the board for its workers rather than for itself: what it is doing
+        // is waiting on them, which is what its line says instead of "Idle".
+        const forCrew = !!(s.workers && !s.workers.own);
         const r = s.runner;
         const busy = r && (r.state === 'busy' || r.state === 'starting');
         const away = s.live && s.live.running && !r;
@@ -401,8 +444,9 @@ class LiveCard extends Component {
                     ${prs ? prBadge(s) : null}
                     <span class="lcard-where">${s.worktree ? s.worktree.name : s.projectName}</span>
                 </header>
-                <div class="lcard-line">${liveStatusWords(s, busy, away, { tick: true })}</div>
-                ${busy ? null : standingLine(s)}
+                <div class="lcard-line">${forCrew ? crewWords(s.workers, workers || [])
+                    : liveStatusWords(s, busy, away, { tick: true })}</div>
+                ${(busy || forCrew) ? null : standingLine(s)}
                 ${s.tasks ? taskBar(s.tasks) : null}
                 <div class="lcard-facts">
                     ${s.tasks ? html`<span>${`${s.tasks.done} of ${s.tasks.total} tasks`}</span>` : null}
@@ -411,7 +455,7 @@ class LiveCard extends Component {
                     ${(s.devservers || []).map(d => this.devChip(d))}
                     <span class="lcard-ago">${ago(s.lastTs)}</span>
                 </div>
-                ${(compact || !s.ask) ? null : this.ask()}
+                ${(compact || !s.ask) ? null : html`<${AskBar} s=${s} />`}
                 ${(compact || !s.headlines.length) ? null : html`
                     <ol class="lcard-log">${s.headlines.slice(-lines).map((h, i) =>
                         html`<li key=${i} title=${h.text}>${clip(h.text, 74)}</li>`)}</ol>`}
@@ -421,6 +465,8 @@ class LiveCard extends Component {
                         ${strip ? null : html`<button class="lbtn" type="button" onClick=${open}>Open</button>`}
                         ${busy ? html`<${StopButton} cls="lbtn" sessionId=${s.sessionId} reset=${s.sig} hard=${stalled} />` : null}
                     </div>` : null}
+                ${s.workers ? html`<${WorkerList} crew=${s.workers} workers=${workers || []}
+                    strip=${strip} compact=${compact} />` : null}
             </article>`;
     }
 
@@ -515,57 +561,6 @@ class LiveCard extends Component {
     }
 
     /**
-     * The ask, on the card.
-     *
-     * A tool ask is answered here — that is the single best reason for this view
-     * to exist, and it is the common case by a wide margin. A plan or a set of
-     * questions is not: the answer is a choice made against text that does not
-     * fit in a tile, and offering two buttons against a plan nobody has read is
-     * worse than a button that goes and shows it. Same judgement the notification
-     * actions already make.
-     */
-    ask() {
-        const { s } = this.props;
-        const ask = s.ask;
-        const kind = ask.kind || 'tool';
-        const what = kind === 'tool'
-            ? (toolSummary({ name: ask.tool, input: ask.input }) || ask.displayName)
-            : askBody(ask, kind);
-        const off = this.state.answering !== undefined && this.state.answering === s.sig;
-
-        return html`
-            <div class=${`lask lask-${kind}`}>
-                <div class="lask-what">
-                    <b>${kind === 'tool' ? ask.displayName : ASK_HEAD[kind].name}</b>
-                    ${what ? html`<span>${clip(what, 90)}</span>` : null}
-                </div>
-                <div class="lask-acts">
-                    ${kind === 'tool' ? [
-                        html`<button key="allow" class="lbtn ok" type="button" disabled=${off}
-                            onClick=${() => this.answer({ decision: 'allow' })}>Allow</button>`,
-                        html`<button key="always" class="lbtn" type="button" disabled=${off}
-                            title=${`Allow ${ask.displayName} for the rest of this session`}
-                            onClick=${() => this.answer({ decision: 'allow-always' })}>Always</button>`,
-                        html`<button key="deny" class="lbtn no" type="button" disabled=${off}
-                            onClick=${() => this.answer({ decision: 'deny' })}>Deny</button>`,
-                    ] : html`<button class="lbtn ok" type="button"
-                        onClick=${() => openSession(s.sessionId)}>Answer →</button>`}
-                </div>
-            </div>`;
-    }
-
-    async answer(payload) {
-        const { s } = this.props;
-        this.setState({ answering: s.sig });
-        try {
-            await answerAskFor(s.sessionId, s.ask.requestId, payload);
-        } catch (err) {
-            toast(`Could not answer: ${err.message}`, 'error');
-            this.setState({ answering: undefined });
-        }
-    }
-
-    /**
      * A port this session has something answering on, as a chip that shows it —
      * in DevBrowser or in the preview, by Settings.
      *
@@ -611,6 +606,240 @@ class LiveCard extends Component {
 }
 
 /**
+ * The ask, on a card or on a worker's row in its orchestrator's card — one
+ * component for both, so the two cannot drift into answering differently.
+ *
+ * A tool ask is answered here — that is the single best reason for this view
+ * to exist, and it is the common case by a wide margin. A plan or a set of
+ * questions is not: the answer is a choice made against text that does not
+ * fit in a tile, and offering two buttons against a plan nobody has read is
+ * worse than a button that goes and shows it. Same judgement the notification
+ * actions already make.
+ *
+ * A worker's ask is filed with its orchestrator, which answers most of them;
+ * `askFor` says whether it is still the orchestrator's (bridge/overview.js,
+ * `hostWorkers`). It is answerable either way — first answer wins, and the
+ * orchestrator is told — but one still in its hands says so, in the orchestrator
+ * page's words, so that answering it is a choice rather than an assumption.
+ *
+ * `answering` is held against the `sig` it was pressed at, so an ask that
+ * arrives later gets live buttons, as it used to by the card being rebuilt.
+ */
+class AskBar extends Component {
+    render({ s, row }) {
+        const ask = s.ask;
+        const kind = ask.kind || 'tool';
+        const what = kind === 'tool'
+            ? (toolSummary({ name: ask.tool, input: ask.input }) || ask.displayName)
+            : askBody(ask, kind);
+        const off = this.state.answering !== undefined && this.state.answering === s.sig;
+        const theirs = s.askFor === 'orchestrator';
+
+        return html`
+            <div class=${`lask lask-${kind}${row ? ' lask-row' : ''}`} data-for=${theirs ? 'orchestrator' : null}>
+                ${theirs ? html`<div class="lask-for">The orchestrator has it — you can answer first.</div>` : null}
+                <div class="lask-what">
+                    <b>${kind === 'tool' ? ask.displayName : ASK_HEAD[kind].name}</b>
+                    ${what ? html`<span>${clip(what, row ? 70 : 90)}</span>` : null}
+                </div>
+                <div class="lask-acts">
+                    ${kind === 'tool' ? [
+                        html`<button key="allow" class="lbtn ok" type="button" disabled=${off}
+                            onClick=${() => this.answer({ decision: 'allow' })}>Allow</button>`,
+                        html`<button key="always" class="lbtn" type="button" disabled=${off}
+                            title=${`Allow ${ask.displayName} for the rest of this session`}
+                            onClick=${() => this.answer({ decision: 'allow-always' })}>Always</button>`,
+                        html`<button key="deny" class="lbtn no" type="button" disabled=${off}
+                            onClick=${() => this.answer({ decision: 'deny' })}>Deny</button>`,
+                    ] : html`<button class="lbtn ok" type="button"
+                        onClick=${() => openSession(s.sessionId)}>Answer →</button>`}
+                </div>
+            </div>`;
+    }
+
+    async answer(payload) {
+        const { s } = this.props;
+        this.setState({ answering: s.sig });
+        try {
+            await answerAskFor(s.sessionId, s.ask.requestId, payload);
+        } catch (err) {
+            toast(`Could not answer: ${err.message}`, 'error');
+            this.setState({ answering: undefined });
+        }
+    }
+}
+
+/**
+ * What an orchestrator that is only on the board for its workers is doing:
+ * waiting on them. `Waiting on workers · 2 running, 1 asking`. Counted from the
+ * worker cards themselves, so the line and the rows under it cannot disagree.
+ */
+function crewWords(crew, workers) {
+    const n = (f) => workers.filter(f).length;
+    const asking = n(w => w.ask);
+    const failed = n(w => !w.ask && w.runner && w.runner.state === 'error');
+    const running = workers.length - asking - failed;
+    const parts = [
+        running ? `${running} running` : null,
+        asking ? `${asking} asking` : null,
+        failed ? `${failed} failed` : null,
+        crew.queued.length ? `${crew.queued.length} queued` : null,
+    ].filter(Boolean);
+    const lead = crew.paused ? 'Paused' : 'Waiting on workers';
+    const say = parts.length ? `${lead} · ${parts.join(', ')}` : lead;
+    return [html`<span class="lstate quiet" title=${say}>${say}</span>`];
+}
+
+// How many worker rows a card shows before "+N more". Fewer in the strip,
+// which is short of height and every row there is a row of transcript.
+const ROWS_SHOWN = 5;
+const ROWS_SHOWN_STRIP = 3;
+
+/**
+ * The lower half of an orchestrator's card: its active workers, one row each.
+ *
+ * Part of the card rather than a card of its own — the same surface, divided by
+ * a hairline — because the workers are the orchestrator's work, the way the rail
+ * nests them under it. Rows are keyed by session id, so hover, focus and a click
+ * in flight survive the once-a-second push.
+ *
+ * Rows arrive through `paint`'s `reveal` (they carry `data-id`, like cards). A
+ * row that leaves is drawn once more, without its id, and played out with
+ * motion.js's `exit` before it is dropped from `gone`. `exit` removes the node
+ * itself, which is a hand edit to a node Preact owns; it is safe here because
+ * `onGone` takes the row out of state in the same tick, so the next render no
+ * longer has a vnode that could put it back, and Preact's own removal of a node
+ * with no parent is a no-op.
+ */
+class WorkerList extends Component {
+    constructor(props) {
+        super(props);
+        this.state = { more: false, gone: new Map() };
+        // The rows drawn last time, in order, with the card each was drawn from.
+        this.last = [];
+    }
+
+    render({ crew, workers, strip, compact }, { more, gone }) {
+        const rows = workers.map(w => ({ key: w.sessionId, w }));
+        for (const q of crew.queued) rows.push({ key: `spawn:${q.id}`, q });
+        const keys = new Set(rows.map(r => r.key));
+
+        const limit = strip ? ROWS_SHOWN_STRIP : ROWS_SHOWN;
+        // One over the limit is drawn rather than folded into "+1 more".
+        const folds = rows.length > limit + 1;
+        const shown = folds && !more ? rows.slice(0, limit) : rows;
+
+        // What was drawn last time and has gone from the list altogether —
+        // not merely folded away — joins whatever is already leaving, each put
+        // back at the place it held.
+        const leaving = new Map([...gone].filter(([key]) => !keys.has(key)));
+        this.last.forEach((r, at) => {
+            if (r.w && !keys.has(r.key) && !leaving.has(r.key)) leaving.set(r.key, { ...r, at });
+        });
+        const out = shown.slice();
+        for (const r of [...leaving.values()].sort((a, b) => a.at - b.at)) {
+            out.splice(Math.min(r.at, out.length), 0, { ...r, leaving: true });
+        }
+        this.last = shown;
+        this.leaving = leaving;
+
+        const tail = [
+            folds ? html`<button key="more" class="lw-more" type="button" aria-expanded=${String(!!more)}
+                onClick=${() => this.setState({ more: !more })}>${more ? 'Show fewer'
+                    : `+${rows.length - limit} more`}</button>` : null,
+            crew.idle ? html`<span key="idle">${`${crew.idle} idle`}</span>` : null,
+            crew.finished ? html`<span key="done">${`${crew.finished} finished`}</span>` : null,
+        ].filter(Boolean);
+
+        return html`
+            <div class="lcard-workers" role="list" aria-label="Workers">
+                ${out.map(r => (r.q
+                    ? html`<div key=${r.key} class="lw-row" data-reason="queued" role="listitem">
+                        <div class="lw-main">
+                            <span class="lw-dot"></span>
+                            <span class="lw-title">${clip(r.q.title || 'Queued worker', 48)}</span>
+                            <span class="lw-say"><span class="lstate quiet">Queued — starts when a slot frees</span></span>
+                        </div></div>`
+                    : html`<${WorkerRow} key=${r.key} s=${r.w} compact=${compact} leaving=${!!r.leaving}
+                        onGone=${() => this.drop(r.key)} />`))}
+                ${tail.length ? html`<div key="tail" class="lw-tail">${tail.flatMap((t, i) => (i
+                    ? [html`<span key=${`sep${i}`} class="live-sep">${' · '}</span>`, t] : [t]))}</div>` : null}
+            </div>`;
+    }
+
+    componentDidMount() { this.hold(); }
+    componentDidUpdate() { this.hold(); }
+
+    /**
+     * Keep what render found leaving in state until its exit has played: the
+     * next render no longer has it in `last`, and must still draw it. Equal sets
+     * write nothing, so this does not loop.
+     */
+    hold() {
+        const want = this.leaving || new Map();
+        const have = this.state.gone;
+        if (want.size === have.size && [...want.keys()].every(k => have.has(k))) return;
+        this.setState({ gone: new Map(want) });
+    }
+
+    drop(key) {
+        this.setState(({ gone }) => {
+            const next = new Map(gone);
+            next.delete(key);
+            return { gone: next };
+        });
+    }
+}
+
+/**
+ * One worker, as a row inside its orchestrator's card: its dot, its title, what
+ * it is doing or stopped for, its PR, and Stop while it works. The same pieces
+ * as a card — liveStatusWords, prBadge, StopButton, AskBar — at a row's size.
+ */
+class WorkerRow extends Component {
+    shouldComponentUpdate(next, nextState) {
+        return next.s.sig !== this.props.s.sig
+            || next.compact !== this.props.compact
+            || next.leaving !== this.props.leaving
+            || state.railPrs.get(next.s.sessionId) !== this.prAgg
+            || nextState !== this.state;
+    }
+
+    render({ s, compact, leaving }) {
+        this.prAgg = state.railPrs.get(s.sessionId);
+        const r = s.runner;
+        const busy = r && (r.state === 'busy' || r.state === 'starting');
+        const away = s.live && s.live.running && !r;
+        const stalled = busy && !!r.stalled;
+        const open = () => openSession(s.sessionId);
+        return html`
+            <div class="lw-row" role="listitem" data-reason=${s.reason}
+                data-id=${leaving ? null : s.sessionId}
+                data-stalled=${stalled ? 'true' : null}
+                data-leaving=${leaving ? 'true' : null}
+                ref=${leaving ? (node) => this.leave(node) : null}
+                onClick=${(e) => { if (!leaving && cardClickOpens(e)) open(); }}>
+                <div class="lw-main">
+                    <span class="lw-dot"></span>
+                    <button class="lw-title" type="button" title=${`Open ${s.title || 'this worker'}`}
+                        onClick=${open}>${clip(s.title, 48)}</button>
+                    <span class="lw-say">${liveStatusWords(s, busy, away, { tick: true })}</span>
+                    ${prBadge(s)}
+                    ${busy && !s.ask ? html`<${StopButton} cls="lbtn lw-stop" sessionId=${s.sessionId}
+                        reset=${s.sig} hard=${stalled} />` : null}
+                </div>
+                ${(compact || !s.ask || leaving) ? null : html`<${AskBar} s=${s} row=${true} />`}
+            </div>`;
+    }
+
+    leave(node) {
+        if (!node || this.played === node) return;
+        this.played = node;
+        exit(node, { as: 'reveal', collapse: true, onGone: this.props.onGone });
+    }
+}
+
+/**
  * Where the last turn left things, in one line — the rail's line, on the card.
  * See bridge/standing.js.
  *
@@ -641,6 +870,8 @@ function standingLine(s) {
  */
 function cardClickOpens(e) {
     if (e.target.closest('button, a, input, textarea, select, label, .lsend, .lask')) return false;
+    // A worker row inside an orchestrator's card opens the worker, not the card.
+    if (e.currentTarget.classList.contains('lcard') && e.target.closest('.lcard-workers')) return false;
     // Selecting text on a card ends in a click; that should leave the selection
     // alone rather than navigating away from it.
     const picked = window.getSelection();
