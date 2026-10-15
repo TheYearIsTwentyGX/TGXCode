@@ -5,7 +5,7 @@
 // bridge/orchestrators.js, and is deliberately inert; this is what moves things
 // between it and the runner pool.
 //
-// Five jobs, each small:
+// Six jobs, each small:
 //
 //   **Roles at spawn.** `roleOf` tells a starting `claude` whether it is an
 //   orchestrator or a worker, which decides the MCP tools it lists and the
@@ -32,6 +32,14 @@
 //   and an orchestrator is the one thing in this app that can spend it with
 //   nobody watching.
 //
+//   **Tasks.** A draft, or the Start dialog as it stood, handed to an
+//   orchestrator as a `task` inbox item — filed and nudged like anything else,
+//   so the orchestrator decides how it fits its plan rather than having a worker
+//   appear behind its back. `spawn_worker({task})` is what starts one, and the
+//   bridge fills in the user's settings from the item rather than trusting the
+//   model to copy them. Nothing is lost on the way: Take back, or the
+//   orchestrator going away, turns an unstarted task back into a draft.
+//
 // **Only this bridge's pool is acted on.** The store is shared with every other
 // bridge on the machine; a dev bridge's orchestrator is in the everyday
 // bridge's file too. Nothing here starts or stops a session unless the event
@@ -45,6 +53,7 @@ const { resolveWorkdir } = require('./runner');
 const { createWorktree } = require('./worktree');
 const {
     shouldNudge, usageTrips, resumeAtFor, describeCounts, cleanSettings, DEFAULT_SETTINGS,
+    spawnOptsFromTask, isOpenTask,
 } = require('./orchestrators');
 const workerRead = require('./worker-read');
 const pulls = require('./pulls');
@@ -63,6 +72,10 @@ let usage = null;
 let normalizeMode = null;
 let sessionCwd = null;
 let tooManyCreates = null;
+// The drafts store, and a function that tells the windows it changed — for a
+// task going back to being a draft. Optional so the tests can leave them out.
+let drafts = null;
+let draftsChanged = () => {};
 
 const NUDGE_DEBOUNCE_MS = 2000;
 const nudgeTimers = new Map();
@@ -76,6 +89,8 @@ let resumeGraceMs = 60_000;
 
 function init(deps) {
     ({ store, pool, index, flags, prefs, usage, normalizeMode, sessionCwd, tooManyCreates } = deps);
+    drafts = deps.drafts || null;
+    draftsChanged = deps.draftsChanged || (() => {});
     if (Number.isFinite(deps.resumeGraceMs)) resumeGraceMs = deps.resumeGraceMs;
     pool.roleOf = roleOf;
     pool.delegateFor = (id) => store.roleOf(id) === 'worker';
@@ -133,6 +148,13 @@ function orchestratorBrief(id) {
         '  settings it waits for the user, or wakes you once the window resets with a',
         '  note listing the workers that were cut off — tell those to carry on.',
         '- close_worker when a worker is finished with, so it stops counting.',
+        '- Items of kind task are work the user handed you, from a draft or the Start',
+        '  dialog: a prompt plus the settings they chose. Fit it into your plan, brief and',
+        '  merge order. Start it with spawn_worker passing task: <itemId> — its directory,',
+        '  model, effort, permission mode and test flag carry over, and you may add context',
+        '  with prompt, keeping the user\'s words. Or fold it into a running worker with',
+        '  send_to_worker passing task. If you will not do it, say why as a decision in',
+        '  set_summary; the user can take it back.',
         '',
         'Keep a brief for the user with set_summary: one or two short paragraphs on',
         'what has been done, what is in flight, and anything waiting on them. Rewrite it',
@@ -150,8 +172,12 @@ function orchestratorBrief(id) {
     ].join('\n');
 }
 
-function workerBrief(orchId) {
+function workerBrief(orchId, origin = null) {
     const add = String(userPrefs().workerAddendum || '').trim();
+    const from = origin
+        ? ['', `This work began as the user's ${origin.from === 'draft' ? 'draft' : 'request'}`
+            + `${origin.title ? ` "${origin.title}"` : ''}, handed to your orchestrator.`]
+        : [];
     return [
         '# You are a worker',
         '',
@@ -166,6 +192,7 @@ function workerBrief(orchId) {
         '  with what you did and where it is (branch, PR).',
         '- Your plans and permission prompts go to the orchestrator for approval.',
         '- Messages from it arrive wrapped in <orchestrator-message>.',
+        ...from,
         ...(add ? ['', '## From the user', '', add] : []),
     ].join('\n');
 }
@@ -173,7 +200,11 @@ function workerBrief(orchId) {
 function roleOf(sessionId) {
     const role = store.roleOf(sessionId);
     if (role === 'orchestrator') return { role, brief: orchestratorBrief(sessionId) };
-    if (role === 'worker') return { role, brief: workerBrief(store.orchestratorOf(sessionId).id) };
+    if (role === 'worker') {
+        const o = store.orchestratorOf(sessionId);
+        const w = o.workers.find(x => x.id === sessionId);
+        return { role, brief: workerBrief(o.id, w && w.origin) };
+    }
     return null;
 }
 
@@ -195,7 +226,17 @@ function workerRow(w) {
         state: st ? st.state : 'stopped',
         pending: st && st.pendingPermission ? st.pendingPermission.kind : null,
         pr: workerPr(s),
+        origin: w.origin || null,
     };
+}
+
+/**
+ * An open task as the payload carries it: the item's settings without its
+ * prompt, which can be long — `text` is the first 8000 characters of it.
+ */
+function taskRow(i) {
+    const { prompt, ...rest } = i.task || {};
+    return { id: i.id, at: i.at, status: i.status, text: i.text, ...rest };
 }
 
 /**
@@ -229,7 +270,10 @@ function payload(id) {
         paused: o.paused,
         summary: o.summary,
         workers: o.workers.map(workerRow),
-        pendingSpawns: o.pendingSpawns.map(p => ({ id: p.id, title: p.title, at: p.at })),
+        pendingSpawns: o.pendingSpawns.map(p => ({ id: p.id, title: p.title, at: p.at, origin: p.origin || null })),
+        // Separate from `inbox`, which is only the newest hundred: a task the
+        // orchestrator has ignored for a day must not fall off the page.
+        openTasks: store.openTasks(id).map(taskRow),
         unread: o.inbox.filter(i => i.status === 'new').length,
         inbox,
     };
@@ -460,14 +504,42 @@ async function spawn(orchId, opts) {
         throw refuse(409, `this orchestrator is paused (${o.paused.reason}) — nothing new starts `
             + 'until the user resumes it');
     }
+    // A task: the user's settings, filled in from the item. Claimed before the
+    // first await so two calls naming the same task cannot both start it, and
+    // given back if the start fails, so a worktree that could not be made does
+    // not lose what the user wrote.
+    const item = opts.task ? openTask(orchId, opts.task) : null;
+    if (item) opts = spawnOptsFromTask(item.task, opts);
     if (!opts.prompt || !String(opts.prompt).trim()) throw refuse(400, 'prompt is required');
+    if (item) store.settle(orchId, item.id, { status: 'resolved', outcome: 'spawned', by: 'orchestrator' });
     if (running(orchId) >= o.settings.maxRunning) {
-        const row = store.queueSpawn(orchId, { prompt: String(opts.prompt), title: opts.title || null, opts });
+        const row = store.queueSpawn(orchId, {
+            prompt: String(opts.prompt), title: opts.title || null, opts, origin: opts.origin || null,
+        });
         emit(orchId);
         return { queued: true, id: row.id, position: store.get(orchId).pendingSpawns.length,
             running: running(orchId), maxRunning: o.settings.maxRunning };
     }
-    return { queued: false, ...(await startWorker(orchId, opts)) };
+    try {
+        return { queued: false, ...(await startWorker(orchId, opts)) };
+    } catch (err) {
+        if (item) { store.reopen(orchId, item.id); emit(orchId); }
+        throw err;
+    }
+}
+
+/** A task item this orchestrator can still act on, or a refusal saying why not. */
+function openTask(orchId, itemId) {
+    const item = store.item(orchId, String(itemId));
+    if (!item || item.kind !== 'task' || !item.task) {
+        throw refuse(404, 'no task with that itemId in your inbox — see next_message');
+    }
+    if (!isOpenTask(item)) {
+        throw refuse(409, item.outcome === 'withdrawn'
+            ? 'the user took that task back — do not start it'
+            : `that task was already handled (${item.outcome || item.status})`);
+    }
+    return item;
 }
 
 /**
@@ -519,7 +591,8 @@ async function launch(orchId, opts, free) {
         const name = typeof opts.worktree === 'string' && opts.worktree.trim()
             ? opts.worktree.trim() : `${slug(title)}-${sessionId.slice(0, 6)}`;
         try {
-            const wt = await createWorktree(repo, name, undefined, { allow: (p) => cfg.withinRoots(p) });
+            const wt = await createWorktree(repo, name, opts.worktreeBase || undefined,
+                { allow: (p) => cfg.withinRoots(p) });
             worktree = { path: wt.path, branch: wt.branch };
             startIn = wt.path;
         } catch (err) {
@@ -529,7 +602,7 @@ async function launch(orchId, opts, free) {
     }
 
     // Filed before the spawn: the role is read off the store as `claude` starts.
-    store.addWorker(orchId, { id: sessionId, title, cwd: startIn, worktree });
+    store.addWorker(orchId, { id: sessionId, title, cwd: startIn, worktree, origin: opts.origin || null });
     try {
         pool.create({
             sessionId, cwd: startIn, prompt: String(opts.prompt),
@@ -543,7 +616,8 @@ async function launch(orchId, opts, free) {
     // The runner counts now; the reservation would count it twice.
     free();
     const parentFlags = flags.get(orchId);
-    flags.set(sessionId, { title, ...(parentFlags.test ? { test: true } : {}) });
+    // A test orchestrator's workers are test sessions, and so is a test draft's.
+    flags.set(sessionId, { title, ...(parentFlags.test || opts.test ? { test: true } : {}) });
     index.note(sessionId);
     emit(orchId);
     return { sessionId, title, cwd: startIn, worktree };
@@ -583,12 +657,20 @@ function envelope(orchId, text) {
     return orchestratorMessageEnvelope({ from: orchId, fromTitle: s && s.title, text });
 }
 
-function sendTo(orchId, workerId, text) {
+function sendTo(orchId, workerId, text, { task = null } = {}) {
     const w = ownWorker(orchId, workerId);
     if (w.closedAt) throw refuse(409, 'that worker is closed');
+    // Folding a task into a worker that is already on something close to it.
+    // With no text of its own, the task's prompt is what is sent.
+    const item = task ? openTask(orchId, task) : null;
+    if (item && !String(text || '').trim()) text = item.task.prompt;
     if (!String(text || '').trim()) throw refuse(400, 'text is required');
     const r = runnerFor(w);
     const entry = r.send(envelope(orchId, text));
+    if (item) {
+        store.settle(orchId, item.id, { status: 'resolved', outcome: 'sent-to-worker', by: 'orchestrator' });
+        emit(orchId);
+    }
     const st = r.status();
     return { ok: true, queued: st.queue.some(q => q.id === entry.id), state: st.state };
 }
@@ -942,6 +1024,7 @@ function releaseAsks(orchId) {
 
 function disable(sessionId) {
     releaseAsks(sessionId);
+    releaseTasks(sessionId);
     store.disable(sessionId);
     pool.recycle(sessionId);
     emit(sessionId);
@@ -955,11 +1038,129 @@ function disable(sessionId) {
 function forget(sessionId) {
     if (store.get(sessionId)) {
         releaseAsks(sessionId);
+        releaseTasks(sessionId);
         store.disable(sessionId);
         return;
     }
     const o = store.orchestratorOf(sessionId);
     if (o && store.removeWorker(o.id, sessionId)) emit(o.id);
+}
+
+// ---------------------------------------------------------------------------
+// Tasks from the user
+// ---------------------------------------------------------------------------
+
+/**
+ * Hand an orchestrator a task. `task` is already validated — the route runs it
+ * through drafts' `draftFields`. The cutoff is checked first, so an orchestrator
+ * already over it is paused before the nudge could start a turn; a paused one
+ * still takes the task, and sees it when it is resumed (`lift` nudges).
+ */
+function fileTask(orchId, task) {
+    if (!store.get(orchId)) throw refuse(404, 'that session is not an orchestrator');
+    checkUsage(orchId);
+    let row;
+    try {
+        row = store.pushTask(orchId, task);
+    } catch (err) {
+        throw refuse(err.refusal ? 409 : 400, err.message);
+    }
+    emit(orchId);
+    scheduleNudge(orchId);
+    return { item: row, paused: !!store.get(orchId).paused };
+}
+
+/** A task's fields as a draft — what Take back and a vanishing orchestrator write. */
+function draftFromTask(t) {
+    return {
+        cwd: t.cwd, prompt: t.prompt,
+        title: t.title || (t.origin && t.origin.title) || null,
+        model: t.model, effort: t.effort, permissionMode: t.permissionMode, test: t.test,
+    };
+}
+
+/**
+ * The user taking a task back before it started: it becomes a draft again, and
+ * the item goes stale. An orchestrator that has already read it is told, as it
+ * is when the user answers an ask first — it may be about to start it.
+ */
+function withdrawTask(orchId, itemId) {
+    if (!store.get(orchId)) throw refuse(404, 'that session is not an orchestrator');
+    const item = store.item(orchId, String(itemId));
+    if (!item || item.kind !== 'task' || !item.task) throw refuse(404, 'no task with that id');
+    if (!isOpenTask(item)) {
+        throw refuse(409, item.status === 'resolved'
+            ? 'the orchestrator has already started that task'
+            : 'that task is no longer waiting');
+    }
+    if (!drafts) throw refuse(500, 'no drafts store');
+    const draft = drafts.create(draftFromTask(item.task));
+    if (!draft) throw refuse(409, 'the drafts are full — delete some before taking this back');
+    const wasRead = item.status === 'read';
+    store.settle(orchId, item.id, { status: 'stale', outcome: 'withdrawn', by: 'user' });
+    if (wasRead) {
+        file(orchId, { kind: 'note', text: `The user took back the task${item.task.title
+            ? ` "${item.task.title}"` : ''} before it started. Do not start it; leave it out of your brief.` });
+    } else {
+        emit(orchId);
+    }
+    draftsChanged();
+    return { draft };
+}
+
+/**
+ * The orchestrator is going away with tasks it never started: each goes back to
+ * Drafts, which is where it came from (or the nearest thing to the dialog it
+ * came from). The inbox is discarded with the role, so this is the last chance.
+ */
+function releaseTasks(orchId) {
+    const open = store.openTasks(orchId);
+    if (!open.length || !drafts) return;
+    const lost = [];
+    for (const i of open) {
+        if (!drafts.create(draftFromTask(i.task))) lost.push(i.task.title || i.text.split('\n')[0].slice(0, 60));
+    }
+    draftsChanged();
+    if (lost.length) {
+        broadcast('notice', { sessionId: orchId, level: 'warn', kind: 'tasks_lost',
+            text: `The drafts are full, so ${lost.length} task${lost.length === 1 ? '' : 's'} this `
+                + `orchestrator had not started could not be put back: ${lost.join('; ')}` });
+    }
+}
+
+/**
+ * The orchestrators a task can be sent to, for the picker: live ones first —
+ * a runner in this pool that is not stopped — then by newest activity. Archived
+ * ones are left out, and test ones off a dev bridge, as `/api/sessions` does.
+ */
+function list({ includeTest = cfg.IS_DEV } = {}) {
+    const rows = [];
+    for (const id of store.ids()) {
+        const o = store.get(id);
+        const s = index.summary(id);
+        if (!o || !s || s.archived || (s.test && !includeTest)) continue;
+        const r = pool.get(id);
+        const st = r ? r.status() : null;
+        const state = st ? st.state : 'stopped';
+        rows.push({
+            orchestratorId: id,
+            title: s.title || null,
+            cwd: s.cwd || null,
+            projectName: s.projectName || null,
+            live: !!st && state !== 'stopped' && state !== 'error',
+            state,
+            paused: o.paused ? { reason: o.paused.reason, resumeAt: o.paused.resumeAt } : null,
+            running: running(id),
+            maxRunning: o.settings.maxRunning,
+            queued: o.pendingSpawns.length,
+            openTasks: store.openTasks(id).length,
+            workers: store.openWorkers(id).length,
+            unread: o.inbox.filter(i => i.status === 'new').length,
+            lastActivity: Math.round(Math.max(o.updatedAt || 0, Number(s.mtimeMs) || 0)),
+            test: !!s.test,
+        });
+    }
+    return rows.sort((a, b) => (b.live - a.live) || (b.lastActivity - a.lastActivity));
 }
 
 function setSummary(orchId, text, fields) {
@@ -1003,6 +1204,7 @@ function onPrsChanged() {
 
 module.exports = {
     init, payload, roleOf, enable, disable, spawn, sendTo, read, answer, stopWorker, closeWorker,
+    fileTask, withdrawTask, list,
     report, resume, usageFor, setSummary, answerDecision, onPrsChanged, checkUsage, checkWakes, rearmPause, armWake, forget, nudge, scheduleNudge, emit, defaultSettings,
     onPermissionRequest, onPermissionResolved, onTurnComplete, onStatus,
 };

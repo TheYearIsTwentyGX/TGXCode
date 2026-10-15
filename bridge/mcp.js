@@ -505,11 +505,18 @@ const SPAWN_WORKER = {
         '',
         'Write `prompt` for an agent with none of your context: what to do, which files,',
         'what done looks like, and whether to commit, push or open a pull request.',
+        '',
+        'To start a task the user handed you (an inbox item of kind task), pass its itemId',
+        'as `task`. Its directory, model, effort, permission mode and test flag are used',
+        'as the user chose them; `prompt` is then optional — pass it only to add context,',
+        'keeping the user\'s words.',
     ].join('\n'),
     inputSchema: {
         type: 'object',
         properties: {
-            prompt: { type: 'string', description: 'The worker\'s first message. Self-contained.' },
+            task: { type: 'string', description: 'The itemId of a task item from next_message.' },
+            prompt: { type: 'string', description: 'The worker\'s first message. Self-contained. '
+                + 'Required unless task is given.' },
             title: { type: 'string', description: 'A short name, shown in the rail.' },
             cwd: { type: 'string', description: 'Where to run. Defaults to your own directory.' },
             worktree: {
@@ -525,7 +532,6 @@ const SPAWN_WORKER = {
             model: { type: 'string' },
             effort: { type: 'string', enum: EFFORTS },
         },
-        required: ['prompt'],
     },
 };
 
@@ -556,11 +562,16 @@ const SEND_TO_WORKER = {
     name: 'send_to_worker',
     title: 'Message a worker',
     description: 'Send a worker instructions or an answer to its question. If it is mid-turn it '
-        + 'reads this at its next step; if idle, this starts its next turn.',
+        + 'reads this at its next step; if idle, this starts its next turn. Pass task (an itemId '
+        + 'of kind task) to fold a task the user handed you into this worker; with no text, the '
+        + 'task\'s prompt is sent.',
     inputSchema: {
         type: 'object',
-        properties: { worker: WORKER_REF, text: { type: 'string' } },
-        required: ['worker', 'text'],
+        properties: {
+            worker: WORKER_REF, text: { type: 'string' },
+            task: { type: 'string', description: 'The itemId of a task item from next_message.' },
+        },
+        required: ['worker'],
     },
 };
 
@@ -1066,6 +1077,7 @@ function ago(t) {
 
 async function callSpawnWorker(id, args) {
     const { failed, body } = await orchCall(id, 'POST', 'spawn', {
+        task: args.task,
         prompt: args.prompt, title: args.title, cwd: args.cwd, worktree: args.worktree,
         permissionMode: args.permissionMode, model: args.model, effort: args.effort,
     });
@@ -1099,10 +1111,34 @@ async function callListWorkers(id) {
 }
 
 function renderItem(i) {
+    if (i.kind === 'task' && i.task) return renderTaskItem(i);
     const lines = [`[${i.kind}] from worker ${i.workerId || '(TGXCode)'} — ${ago(i.at)}`];
     if (i.requestId) lines.push(`    itemId: ${i.id}  (answer with answer_worker)`);
     lines.push(...String(i.text || '').split('\n').map(l => `    ${l}`));
     return lines.join('\n');
+}
+
+/**
+ * A task the user handed over: where it came from, the settings that will carry
+ * over, and the whole prompt — the item's `text` is capped, `task.prompt` is not.
+ */
+function renderTaskItem(i) {
+    const t = i.task;
+    const o = t.origin || {};
+    const from = o.from === 'draft' ? `from your draft${o.title ? ` "${o.title}"` : ''}`
+        : `from the Start dialog${o.title ? ` ("${o.title}")` : ''}`;
+    const settings = [
+        `cwd ${t.cwd}`, `model ${t.model || 'inherit'}`, t.effort ? `effort ${t.effort}` : null,
+        `mode ${t.permissionMode}`,
+        t.worktree ? `worktree ${t.worktree.name}${t.worktree.base ? ` from ${t.worktree.base}` : ''}` : null,
+        t.test ? 'test session' : null,
+    ].filter(Boolean).join(', ');
+    return [
+        `[task] from the user — ${from} — ${ago(i.at)}`,
+        `    itemId: ${i.id}  (start it with spawn_worker task: ${i.id})`,
+        `    settings: ${settings}`,
+        ...String(t.prompt || i.text || '').split('\n').map(l => `    ${l}`),
+    ].join('\n');
 }
 
 async function callNextMessage(id, args) {
@@ -1119,7 +1155,9 @@ async function callNextMessage(id, args) {
 }
 
 async function callSendToWorker(id, args) {
-    const { failed, body } = await orchCall(id, 'POST', 'send', { worker: args.worker, text: args.text });
+    const { failed, body } = await orchCall(id, 'POST', 'send', {
+        worker: args.worker, text: args.text, task: args.task,
+    });
     if (failed) return failed;
     return say(id, body.queued
         ? 'Sent. The worker is mid-turn and will read it at its next step.'

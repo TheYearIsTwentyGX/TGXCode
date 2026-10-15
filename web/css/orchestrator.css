@@ -814,3 +814,67 @@ button.op-order-t:hover { color: var(--blue); }
     .op-dot[data-s="run"], .op-row[data-tone="run"] .op-track > i[data-s="now"] { animation: none; }
     .op-seg button, .orch-split::after, .op-strip i, .op-row, .op-fold, .op-fold .twist { transition: none; }
 }
+
+/* ── tasks from you ───────────────────────────────────────────────────── */
+/* A task handed over and not yet started. Borrowed from Needs you's card, on
+   the faint blue the palette keeps for orchestrator work while it is fresh;
+   past a quarter of an hour it drops the tone and takes Needs you's amber, so
+   a task the orchestrator is quietly not picking up reads as something to see
+   to. */
+.op-need[data-tone="task"] { background: var(--blue-tint); box-shadow: inset var(--edge-w) 0 0 var(--blue); }
+.op-need[data-tone="task"] .lbtn:not(.ok) { background: var(--s3); }
+.op-need[data-tone="task"] .lbtn:not(.ok):hover { background: var(--s4); }
+.op-task .op-need-q { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+
+/* "draft" on a worker or queued row that began as one of yours: the rail's
+   small-tag shape, inline before the name so the name still ellipsises. */
+.op-from {
+    display: inline-flex;
+    align-items: center;
+    height: 16px;
+    margin-right: var(--sp-3);
+    padding: 0 var(--sp-3);
+    border-radius: var(--r-xs);
+    background: var(--blue-tint);
+    color: var(--blue);
+    font: 500 var(--fs-2xs)/var(--lh-none) var(--mono);
+    letter-spacing: 0.04em;
+    vertical-align: 1px;
+}
+
+/* ── the Send-to-orchestrator picker (web/orch-picker.js) ─────────────── */
+
+.modal.orch-pick { width: min(520px, 100%); }
+.op-pick-lede { margin: 0 0 var(--sp-5); color: var(--text-2); font-size: var(--fs-md); text-wrap: pretty; }
+.op-pick-lede b { color: var(--text); font-weight: var(--fw-medium); }
+.op-pick-note { margin: 0; color: var(--text-3); }
+.op-pick-list { display: grid; gap: var(--sp-1); }
+.op-pick-skel { height: 48px; border-radius: var(--r-sm); }
+.op-pick-row {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-5);
+    width: 100%;
+    min-height: 48px;
+    padding: var(--sp-3) var(--sp-5);
+    border: 0;
+    border-radius: var(--r-sm);
+    background: none;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background var(--dur-fast) var(--ease-standard);
+}
+.op-pick-row:hover, .op-pick-row:focus-visible { background: var(--s3); }
+.op-pick-text { display: grid; flex: 1; min-width: 0; }
+.op-pick-name { overflow: hidden; color: var(--text); font: 400 var(--fs-base)/var(--lh-tight) var(--sans); white-space: nowrap; text-overflow: ellipsis; }
+.op-pick-meta { overflow: hidden; color: var(--text-3); font-size: var(--fs-sm); white-space: nowrap; text-overflow: ellipsis; }
+.op-pick-row[data-live="false"] .op-pick-name { color: var(--text-2); }
+.op-pick-paused {
+    flex: none;
+    padding: 0 var(--sp-3);
+    border-radius: var(--r-xs);
+    background: var(--yellow-cont);
+    color: var(--yellow);
+    font: 500 var(--fs-2xs)/16px var(--mono);
+}

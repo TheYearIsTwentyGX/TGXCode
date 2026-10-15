@@ -360,7 +360,7 @@ Two rules worth knowing before you send a patch:
 | `bridge/routes/sessions.js` | Sessions as a collection: listing, `addressable`, starting one, `/api/slash-commands`. Asked before `session.js`, which is load-bearing |
 | `bridge/routes/suggestions.js` | Suggested follow-ups across every session, and taking one up |
 | `bridge/routes/drafts.js` | `/api/drafts`, and the validation a draft shares with a create |
-| `bridge/routes/orchestrators.js` | `/api/sessions/:id/orchestrator…` — an orchestrator's payload, role, settings, inbox, Resume and the answers to its brief's decisions, and the routes its MCP tools call — plus a worker's `/api/sessions/:id/report` |
+| `bridge/routes/orchestrators.js` | `/api/sessions/:id/orchestrator…` — an orchestrator's payload, role, settings, inbox, Resume and the answers to its brief's decisions, handing it a task (a draft or the Start dialog's fields) and taking one back, and the routes its MCP tools call — plus a worker's `/api/sessions/:id/report` and `GET /api/orchestrators`, the picker's list |
 | `bridge/routes/later.js` | `/api/later`, and the wire shape and validation `POST /api/sessions/:id/later` shares |
 | `bridge/routes/snippets.js` | `/api/snippets` and `/api/snippet-groups` |
 | `bridge/routes/templates.js` | `/api/templates`, validated through drafts' `draftFields`, and `resolve`, which fills a template's placeholders |
@@ -437,8 +437,8 @@ Two rules worth knowing before you send a patch:
 | `bridge/drafts.js` | Sessions set up but not started — a create call, held back |
 | `bridge/later.js` | Messages delivered to a session at a time you picked — a send, held back |
 | `bridge/standing.js` | The one-line "where this session stands" on a rail card: written after a turn ends, by a short haiku call or from the last reply, cached per reply in `standing.json` |
-| `bridge/orchestrators.js` | Which sessions are orchestrators, their workers, the inbox between them and the brief each keeps for the user (goal, open decisions, merge order) — the store, and the pure rules for inbox order, nudging and the usage cutoff |
-| `bridge/orchestration.js` | Orchestrators in motion: roles and briefs at spawn, filing what workers produce, nudging an idle orchestrator, the cap on running workers, the usage cutoff, and re-broadcasting one when a worker's PR moves |
+| `bridge/orchestrators.js` | Which sessions are orchestrators, their workers, the inbox between them and the brief each keeps for the user (goal, open decisions, merge order) — the store, and the pure rules for inbox order, nudging, the usage cutoff and how a task's settings combine with a spawn's |
+| `bridge/orchestration.js` | Orchestrators in motion: roles and briefs at spawn, filing what workers produce, nudging an idle orchestrator, the cap on running workers, the usage cutoff, tasks from the user (filed, started, taken back, returned to Drafts when the orchestrator goes), and re-broadcasting one when a worker's PR moves |
 | `bridge/worker-read.js` | A worker's transcript for its orchestrator to read: a digest (as text, and as fields for the orchestrator page's drawer), the last few turns, or the whole thing a page at a time |
 | `bridge/later-delivery.js` | Delivering one: the tick, the path it shares with `POST /api/later/:id/send`, and owning up to an interrupted delivery |
 | `bridge/snippets.js` | Canned messages and the groups they sit in |
@@ -488,7 +488,7 @@ Two rules worth knowing before you send a patch:
 | `web/boards/history.js` | The notification history list. Its read state stays in app.js, which openSession and the stream reach into |
 | `web/boards/taskboard.js` | The task board — the held order (`tbRememberOrder`/`tbHold`), the four columns, the focused view and acting on a card |
 | `web/search.js` | Search transcripts — the full-text panel (Ctrl+Shift+F, or Enter in the bar's filter), results grouped by session, and the jump that opens a session at a hit's turn |
-| `web/drafts.js` | The drafts panel — sessions set up but not started — in Preact: opening it, the badge, a column per project once there are two, and Start, Edit and Delete on a card |
+| `web/drafts.js` | The drafts panel — sessions set up but not started — in Preact: opening it, the badge, a column per project once there are two, and Start, Edit, Send to orchestrator and Delete on a card |
 | `web/schedules.js` | The schedules panel — sessions that start on a clock — in Preact: opening it, the badge, Active/Paused/Done bands in a column per project, and Run now, Pause, Edit and Delete on a card |
 | `web/snippets/` | Canned messages and the buttons that send them, one module per surface, in Preact on web/rail.js's pattern. Same top-level rule as `composer/`; load-time listeners are in `wireSnippets()` |
 | `web/snippets/index.js` | The list — loading it, the `snippets-changed` push that repaints every surface — the rules they share (project scoping, filling placeholders), and `wireSnippets` |
@@ -560,7 +560,8 @@ Two rules worth knowing before you send a patch:
 | `web/orchestrator.js` | An orchestrator's plumbing: loading its payload, the header's role toggle, the one line above the composer (the plain conversation's strip back to the page, or a worker's line up to its orchestrator), and the inbox list and settings form the page reuses |
 | `web/palette.js` | The command palette (Ctrl+K), in Preact on web/rail.js's pattern: sessions, views and actions in one fuzzy-matched list, keyboard first. Answers Escape itself, from a capture listener, so the panel behind it stays up |
 | `web/palette/` | The palette's parts: `score.js` the fuzzy scorer (pure, tested by `palette-score`), `registry.js` the list any module can add an action to with `registerAction()`, `builtin.js` the entries that ship — each calls the function, or presses the button, that already does the thing |
-| `web/orchestrator-page.js` | The orchestrator page, what an orchestrator opens onto: goal, progress and usage; what needs you (its open decisions, answerable there); a stage matrix of the workers; the merge order; a drawer per worker with its ask, steps and progress; and a resizable split with the real conversation beside it |
+| `web/orch-picker.js` | Send to orchestrator: the picker over `GET /api/orchestrators` (live ones first, running and queued counts) and the call that hands a draft, or the Start dialog's fields, to one as a `task` inbox item. Used by the Drafts board, the draft editor, the Start dialog and Ctrl+K |
+| `web/orchestrator-page.js` | The orchestrator page, what an orchestrator opens onto: goal, progress and usage; what needs you (its open decisions, answerable there); tasks you handed it that it has not started, with Take back; a stage matrix of the workers; the merge order; a drawer per worker with its ask, steps and progress; and a resizable split with the real conversation beside it |
 | `web/orchestrator-model.js` | What the page says, worked out from the payload — each worker's stage and what it is doing, the progress strip, Needs you, the merge order, the usage meters: pure, and tested by `test/orchestrator-view.test.js` and `test/orchestrator-page.test.js` |
 | `web/rail.js` | The sessions rail, drawn with Preact — keyed by session and by group, so an update keeps the rows it did not change. The first surface moved off `app.js`'s rebuild-everything rendering, and the pattern for the next |
 | `web/css/` | The stylesheets, by area — once one `styles.css`, split along its section headers so a surface can be worked on without loading the rest. `index.html` links them in the order below, which *is* the cascade: in that order they concatenate back to the old file section for section, so moving a rule between files moves it in the cascade too |

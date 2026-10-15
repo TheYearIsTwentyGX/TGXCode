@@ -885,6 +885,10 @@ pool.on('notice', (n) => broadcast('notice', n));
 
 orchestration.init({
     store: orchestrators, pool, index, flags, prefs, usage, normalizeMode, sessionCwd, tooManyCreates,
+    // A task taken back, or left behind by an orchestrator that went away,
+    // becomes a draft again — and every window's board has to hear about it.
+    drafts,
+    draftsChanged: () => broadcast('drafts-changed', require('./routes/drafts').draftsPayload()),
 });
 // A worker's ask goes to its orchestrator's inbox as well as to any window; the
 // status listener is how an orchestrator going idle gets told what is waiting.

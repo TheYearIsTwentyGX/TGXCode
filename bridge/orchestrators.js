@@ -47,10 +47,12 @@ const VERSION = 1;
 
 // What a worker can say, and what the bridge files on its behalf. The first
 // group comes from `report_to_orchestrator`; `turn` from a worker's turn ending;
-// the last three from routing the worker's own asks here instead of to a window.
+// the next three from routing the worker's own asks here instead of to a window.
+// `task` is the one that comes from the user rather than a worker: a draft, or
+// the Start dialog as it stood, handed over for the orchestrator to fit in.
 const REPORT_KINDS = ['question', 'update', 'done'];
 const ASK_ITEM_KINDS = ['plan', 'permission', 'ask'];
-const KINDS = [...REPORT_KINDS, 'turn', ...ASK_ITEM_KINDS, 'note'];
+const KINDS = [...REPORT_KINDS, 'turn', ...ASK_ITEM_KINDS, 'note', 'task'];
 
 // Pulled first. Every one of these is a worker that cannot move until somebody
 // answers it, which is the whole case for having an order at all.
@@ -62,6 +64,13 @@ const MAX_INBOX = 300;
 const MAX_TEXT = 8000;
 const MAX_SUMMARY = 1500;
 const MAX_WORKERS = 50;
+
+// Tasks the user handed over that nobody has started yet. An open task is never
+// trimmed (it is the only copy of what the user wrote), so this is what bounds
+// the file instead — a client in a loop gets a 409 rather than an inbox that
+// grows for ever.
+const MAX_OPEN_TASKS = 20;
+const MAX_TASK_PROMPT = 100_000;
 
 // The brief's structured half — what the orchestrator page draws from rather
 // than parsing prose. Small on purpose: a goal is a line, a decision is a
@@ -232,6 +241,7 @@ function describeCounts(items) {
         done: ['done report', 'done reports'],
         turn: ['turn report', 'turn reports'],
         note: ['note', 'notes'],
+        task: ['task from the user', 'tasks from the user'],
     };
     return KINDS.filter(k => by.has(k))
         .map(k => `${by.get(k)} ${word[k][by.get(k) === 1 ? 0 : 1]}`)
@@ -239,6 +249,72 @@ function describeCounts(items) {
 }
 
 const str = (v, max) => (typeof v === 'string' ? v.slice(0, max) : null);
+
+/**
+ * Where a piece of work came from, when it was not the orchestrator's idea: a
+ * draft (`draftId` names it, so Take back can say which) or the Start dialog.
+ * Null for everything an orchestrator thought of itself.
+ */
+function cleanOrigin(o) {
+    if (!o || typeof o !== 'object' || !['draft', 'dialog'].includes(o.from)) return null;
+    return { from: o.from, draftId: str(o.draftId, 100), title: str(o.title, 200) };
+}
+
+/**
+ * A task's payload: exactly a draft's fields plus a worktree hint and where it
+ * came from. Spelled out, as drafts.js's `clean` is, so a body cannot smuggle a
+ * key into the store.
+ */
+function cleanTask(t) {
+    if (!t || typeof t !== 'object' || typeof t.prompt !== 'string' || !t.prompt) return null;
+    if (typeof t.cwd !== 'string' || !t.cwd) return null;
+    const wt = t.worktree && typeof t.worktree === 'object' && typeof t.worktree.name === 'string'
+        && t.worktree.name.trim()
+        ? { name: t.worktree.name.trim().slice(0, 200), base: str(t.worktree.base, 200) || null }
+        : null;
+    return {
+        prompt: t.prompt.slice(0, MAX_TASK_PROMPT),
+        cwd: t.cwd.slice(0, 4096),
+        title: str(t.title, 200) || null,
+        model: str(t.model, 100) || null,
+        effort: str(t.effort, 40) || null,
+        permissionMode: str(t.permissionMode, 40) || 'auto',
+        test: !!t.test,
+        worktree: wt,
+        origin: cleanOrigin(t.origin),
+    };
+}
+
+/** Still the orchestrator's to act on: not started, taken back or gone. */
+const isOpenTask = (i) => i.kind === 'task' && (i.status === 'new' || i.status === 'read');
+
+/**
+ * What a spawn from a task asks for: `opts` is what the orchestrator passed to
+ * spawn_worker, `task` the item's payload. Pure, so the precedence is tested.
+ *
+ * **The user's choices win where they made one** — directory, model, effort,
+ * permission mode, test. Those were picked by a person in a dialog, and the
+ * orchestrator copying them faithfully is not something to depend on; it may
+ * only fill a gap (a model left on inherit). What the orchestrator may change is
+ * what fitting the work into its plan needs: the prompt (to add context), the
+ * title, and the worktree.
+ */
+function spawnOptsFromTask(task, opts = {}) {
+    const set = (v) => v !== null && v !== undefined && v !== '';
+    const theirsTree = set(opts.worktree);
+    return {
+        prompt: typeof opts.prompt === 'string' && opts.prompt.trim() ? opts.prompt : task.prompt,
+        title: (set(opts.title) ? opts.title : task.title) || null,
+        cwd: set(task.cwd) ? task.cwd : opts.cwd || null,
+        model: set(task.model) ? task.model : opts.model || null,
+        effort: set(task.effort) ? task.effort : opts.effort || null,
+        permissionMode: set(task.permissionMode) ? task.permissionMode : opts.permissionMode || null,
+        worktree: theirsTree ? opts.worktree : task.worktree ? task.worktree.name : null,
+        worktreeBase: !theirsTree && task.worktree ? task.worktree.base || null : null,
+        test: !!task.test,
+        origin: task.origin || null,
+    };
+}
 
 function cleanItem(i) {
     if (!i || typeof i.id !== 'string' || !KINDS.includes(i.kind)) return null;
@@ -259,6 +335,8 @@ function cleanItem(i) {
         // When it was answered, dismissed or went stale. Null while open, and on
         // every item settled before this was recorded.
         settledAt: Number.isFinite(i.settledAt) ? i.settledAt : null,
+        // The work itself, on a `task` item; null on every other kind.
+        task: i.kind === 'task' ? cleanTask(i.task) : null,
     };
 }
 
@@ -346,6 +424,7 @@ function cleanWorker(w) {
         // Set by `report_to_orchestrator` with kind `done`, cleared at the end
         // of the turn it was said in, so that turn does not also file a `turn`.
         reportedDone: !!w.reportedDone,
+        origin: cleanOrigin(w.origin),
     };
 }
 
@@ -357,6 +436,7 @@ function cleanSpawn(p) {
         title: str(p.title, 200),
         opts: p.opts && typeof p.opts === 'object' ? p.opts : {},
         at: Number.isFinite(p.at) ? p.at : 0,
+        origin: cleanOrigin(p.origin),
     };
 }
 
@@ -729,8 +809,10 @@ class Orchestrators {
         // plan or prompt the orchestrator has *read* but not answered is still
         // waiting: dropping it would leave a worker blocked on an ask nobody can
         // name any more. Past the cap with nothing settled, the inbox grows.
+        // An open task is the only copy of what the user wrote, so it is held
+        // like an unanswered ask.
         const settled = (x) => x.status === 'resolved' || x.status === 'stale'
-            || (x.status === 'read' && !x.requestId);
+            || (x.status === 'read' && !x.requestId && x.kind !== 'task');
         while (o.inbox.length > MAX_INBOX) {
             const i = o.inbox.findIndex(settled);
             if (i < 0) break;
@@ -766,6 +848,21 @@ class Orchestrators {
         return i;
     }
 
+    /**
+     * Put a settled item back to `read` — a task whose spawn was accepted and
+     * then failed (a worktree that could not be made), so it is not lost.
+     */
+    reopen(orchId, itemId) {
+        const i = this.item(orchId, itemId);
+        if (!i) return null;
+        i.status = 'read';
+        i.outcome = null;
+        i.by = null;
+        i.settledAt = null;
+        this._touch(this.byId.get(orchId));
+        return i;
+    }
+
     /** The item filed for a worker's ask, by the ask's request id. */
     byRequest(workerId, requestId) {
         const o = this.orchestratorOf(workerId);
@@ -783,6 +880,28 @@ class Orchestrators {
     unread(orchId) {
         const o = this.byId.get(orchId);
         return o ? sortInbox(o.inbox.filter(i => i.status === 'new')) : [];
+    }
+
+    /** Tasks handed over and not yet started, taken back or gone; oldest first. */
+    openTasks(orchId) {
+        const o = this.byId.get(orchId);
+        return o ? o.inbox.filter(isOpenTask) : [];
+    }
+
+    /**
+     * File a task. Throws a refusal at the cap, and when the payload is not one
+     * (no prompt, no directory) — the route validates first, so that is a bug
+     * rather than a user's mistake, but a silent null would lose their words.
+     */
+    pushTask(orchId, task) {
+        if (!this.byId.has(orchId)) return null;
+        const t = cleanTask(task);
+        if (!t) throw refusal('a task needs a prompt and a directory');
+        if (this.openTasks(orchId).length >= MAX_OPEN_TASKS) {
+            throw refusal(`this orchestrator already has ${MAX_OPEN_TASKS} tasks it has not started — `
+                + 'wait for it to pick some up, or take some back');
+        }
+        return this.push(orchId, { kind: 'task', text: t.prompt.slice(0, MAX_TEXT), task: t });
     }
 
     // -- read side ----------------------------------------------------------
@@ -816,6 +935,7 @@ function refusal(message) {
 
 module.exports = {
     Orchestrators, cleanSettings, sortInbox, shouldNudge, usageTrip, describeCounts,
-    usageTrips, resumeAtFor, decisionId, cleanMergeOrder,
+    usageTrips, resumeAtFor, decisionId, cleanMergeOrder, cleanTask, spawnOptsFromTask, isOpenTask,
     DEFAULT_SETTINGS, REPORT_KINDS, KINDS, WINDOWS, STOP_WINDOWS, MAX_SUMMARY, MAX_DECISIONS,
+    MAX_OPEN_TASKS,
 };

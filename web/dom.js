@@ -89,6 +89,7 @@ for (const id of ['search', 'rail', 'conv', 'placeholder', 'conv-title', 'conv-s
     'new-tpl-save-row', 'new-tpl-name', 'new-tpl-scope', 'new-tpl-save-go', 'new-tpl-save-cancel',
     'gh-scrim', 'gh-body', 'gh-go', 'gh-foot-note',
     'wt-scrim', 'wt-title', 'wt-body', 'wt-foot',
+    'orch-pick-scrim', 'orch-pick-body', 'new-orch-send',
     'del-scrim', 'del-what', 'del-meta', 'del-go',
     'diff-scrim', 'diff-title', 'diff-stat', 'diff-unified', 'diff-split',
     'diff-words', 'diff-wrap', 'diff-source', 'diff-note', 'diff-jump',
@@ -208,7 +209,10 @@ export function modalUp() {
         || isUp(dom.ghScrim)
         // The worktree janitor holds no work, which is the diff viewer's case:
         // it is here so that no dialog is the one that answers Escape.
-        || isUp(dom.wtScrim);
+        || isUp(dom.wtScrim)
+        // Send to an orchestrator: no work in it either, and here for that
+        // same last reason. It can be up over Start-a-session.
+        || isUp(dom.orchPickScrim);
 }
 
 /**
