@@ -429,6 +429,8 @@ Two rules worth knowing before you send a patch:
 | `bridge/claude-version.js` | Installed Claude Code against the registry, and which live sessions are on an older binary |
 | `bridge/claude-schema.js` | Which of Claude Code's keys this app has a control for, and what happens to the ones it does not |
 | `bridge/claude-docs.js` | Claude Code's memory files — which `CLAUDE.md` a scope means, and reading and writing one whole |
+| `bridge/hook-scripts.js` | The scripts hooks run — which paths the Hooks page may open, and writing one whole without losing its executable bit |
+| `bridge/hook-sources.js` | Hooks from outside the settings files — enabled plugins' `hooks.json`, and skills and agents with `hooks:` frontmatter |
 | `bridge/jsonfile.js` | Reading and writing one small JSON file: the size cap, the BOM, the atomic write, the stamp |
 | `bridge/keymap.js` | The shortcuts that may be rebound, and the grammar for writing one down |
 | `bridge/spinner.js` | What a turn in progress calls itself, out of `~/.tgxcode/verbs/` |
@@ -499,8 +501,11 @@ Two rules worth knowing before you send a patch:
 | `web/settings/` | The Settings panel, one module per group. Drawn with Preact on web/rail.js's pattern, except the editor groups (Claude Code, hooks, Memory, Project commands) and the groups written out in index.html, which are still built with `el()` and hung in the tree as foreign DOM. Every module here evaluates before app.js's body, so none may read an app.js `const` at top level |
 | `web/settings/index.js` | Opening and closing the panel, loading and saving `~/.tgxcode/settings.json` a key at a time, the head and the table of contents, and `Foreign` — how a hand-built group sits in the Preact body |
 | `web/settings/general.js` | `SETTINGS`, one row per key, and the builders that turn a row into a control (Preact vnodes; typed-into boxes are uncontrolled and keyed on the stored value) |
-| `web/settings/claude-config.js` | The Claude Code group — `~/.claude/settings.json` and a project's own, as controls and as JSON |
-| `web/settings/hooks.js` | The hooks editor inside the Claude Code group |
+| `web/settings/claude-config.js` | The Claude Code group — `~/.claude/settings.json` and a project's own, as controls and as JSON; its Hooks row links to the Hooks page |
+| `web/hooks/page.js` | The Hooks page — project and scope, the rail of events, and the hooks from plugins, skills and agents |
+| `web/hooks/editor.js` | The hooks editor on that page — a draft of one file's `hooks` block, its review and the save |
+| `web/hooks/script.js` | The script under a command hook, opened, edited or created in place |
+| `web/hooks/recipes.js` | Ready-made hooks (and their scripts) that drop into the draft |
 | `web/settings/memory.js` | The Memory group — the CLAUDE.md files — and the full-height dialog on the same file |
 | `web/settings/project-commands.js` | The Commands group — a project's `.tgxcode/commands.json`, as a form and as JSON |
 | `web/settings/review-types.js` | The Code reviews group — which skills count as reviews, edited as a list and saved whole |
@@ -576,6 +581,7 @@ Two rules worth knowing before you send a patch:
 | `web/css/boards.css` | The task board, drafts, the schedule builder and the schedules panel |
 | `web/css/analytics.css` | The analytics board and the header's cost |
 | `web/css/settings.css` | Settings — its groups, the shortcut table, Claude Code's settings and memory files, project commands, the snippet editor and dialogs |
+| `web/css/hooks.css` | The Hooks page and its editor. Right after `settings.css`, whose controls the editor is built from and overrides |
 | `web/css/narrow.css` | The narrow-desktop-window `@media` block, which reaches into several areas and so comes after the transcript, composer, dialogs, boards and Settings it overrides — but before `viewers.css`, `colours.css` and `preview.css`, so a narrow override for those loses to them at equal specificity. Not phone CSS |
 | `web/css/viewers.css` | The right-click menu and the diff viewer's re-theming of `vendor/diff2html.css`, which is linked before every file here so no `!important` is needed |
 | `web/css/colours.css` | Project colours across the surfaces above, and Wispr Flow transforms. Late because it overrides them |

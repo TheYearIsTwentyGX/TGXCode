@@ -6,6 +6,12 @@
  * keeps the `hk-` rules it had when it lived in Settings — moved here with it
  * from settings.css. It still borrows the Settings controls it is built from
  * (`cfg-*`, `cmd-*`, `settings-*`), which stay in settings.css.
+ *
+ * Linked straight after settings.css, so the rules that override those
+ * controls still come after them. Two rules did not move: `.hk-field` and
+ * `.hk-json` sat above `.cmd-field` and `.cmd-area` in settings.css and lost to
+ * them, so they never applied. Moved below, they would have started to, and the
+ * editor would have changed while only moving house.
  */
 
 /* ── the page ─────────────────────────────────────────────────────────── */
@@ -182,7 +188,6 @@
 .hk-hook-head .settings-select { width: auto; flex: none; }
 .hk-hook-head .cfg-script { flex: 0 1 auto; min-width: 0; }
 .hk-hook .cmd-area, .hk-hook .settings-text { background: var(--s2); }
-.hk-field { padding-top: var(--sp-4); margin-top: var(--sp-4); border-top: 0; }
 .hk-inline { display: flex; gap: var(--sp-7); align-items: flex-start; flex-wrap: wrap; }
 .hk-inline > .hk-field { flex: 1 1 160px; min-width: 0; }
 .hk-check { display: flex; align-items: center; gap: var(--sp-4); cursor: pointer; }
@@ -190,7 +195,6 @@
 .hk-mini:disabled { opacity: 0.35; cursor: default; }
 .hk-more { margin-top: var(--sp-5); }
 .hk-more > summary { font-size: var(--fs-xs); color: var(--text-4); cursor: pointer; }
-.hk-json { min-height: 40px; }
 .hk-add { margin-top: var(--sp-6); }
 .hk-inherit-scope { color: var(--text-3); }
 .hk-actions { display: flex; gap: var(--sp-4); margin-top: var(--sp-5); flex-wrap: wrap; }
