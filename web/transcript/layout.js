@@ -298,8 +298,33 @@ function syncLogWidth({ left, right }, { paneMoving = false, live = false } = {}
 // composer: this is the one caller that can fire every frame for as long as
 // somebody keeps dragging, so it is the one that gets the quantized width and
 // the settle. Every other caller is a click, and gets the exact width at once.
+//
+// `held` is the orchestrator page's splitter, which is a drag of a different
+// kind: it moves the conversation column every frame for as long as it is held,
+// and the quantizing above still wrote `--log-w` once per LOG_STEP of it — and
+// the settle fired mid-drag whenever a frame took longer than LOG_SETTLE, which
+// on a long orchestrator is most of them. Each of those writes restyled every
+// element under `#conv-main` (it is an inherited property; ~2,500 of them) and
+// re-wrapped the log, and they were all that was left of the lag once the
+// splitter itself wrote once a frame. So it holds this for the drag and
+// `releasePaneInsets` catches up once, exactly, when it lets go. Nothing lost
+// meanwhile: the floor in the CSS keeps a stale `--log-w` inside the pane.
+let held = false;
+
 const paneObserver = typeof ResizeObserver === 'function'
-    ? new ResizeObserver(() => syncPaneInsets({ instant: true, live: true })) : null;
+    ? new ResizeObserver(() => { if (!held) syncPaneInsets({ instant: true, live: true }); }) : null;
+
+/** Stop following the row until `releasePaneInsets` — for a drag that owns it. */
+export function holdPaneInsets() {
+    held = true;
+}
+
+/** Follow the row again, and catch up on the drag in one exact write. */
+export function releasePaneInsets() {
+    if (!held) return;
+    held = false;
+    syncPaneInsets({ instant: true });
+}
 
 export function watchPaneInsets() {
     if (!paneObserver || !dom.convBody) return;
