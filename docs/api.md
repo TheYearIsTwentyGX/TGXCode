@@ -2475,6 +2475,7 @@ LGTM button on the composer.
       "title": "LGTM",
       "body": "LGTM — take it from here and land it.\n\n- If this work is not on a pull request yet…",
       "hint": "open a PR for this work if there is not one, run the checks, and merge it once they pass",
+      "trigger": "LGTM",
       "groupId": null,
       "params": [],
       "insert": "overwrite", "autoSubmit": true, "permissionMode": null,
@@ -2485,6 +2486,7 @@ LGTM button on the composer.
       "title": "Review a branch",
       "body": "Review {{branch}} against main, and cap it at {{count}} findings.",
       "hint": null,
+      "trigger": null,
       "groupId": "d4c0a1b2-77e3-4a55-8c19-0f2b6d3e91aa",
       "params": [
         { "name": "branch", "label": "Branch", "type": "text",
@@ -2513,6 +2515,7 @@ LGTM button on the composer.
 | `title` | string, non-empty, trimmed. What the row and the pinned button say |
 | `body` | string, non-empty — **and not trimmed**, unlike a draft's `prompt`. An `insert` of `append` or `cursor` makes leading and trailing whitespace part of what the snippet means |
 | `hint` | string or null — the sentence a pinned button shows on hover. Null means *use the first line of the body*, which is a guess; a hint is a decision |
+| **`trigger`** | **string or null.** A word that, typed in a composer and followed by Tab, is replaced by this snippet's body at the cursor. Trimmed, **no whitespace**, at most **32** characters, and **unique case-insensitively** across snippets — so `LGTM` and `lgtm` cannot both exist. Matching is case-insensitive too. Expanding a trigger always inserts at the cursor and **never sends**, whatever `insert` and `autoSubmit` say; a snippet with `params` asks for them first, as any other use does. Uniqueness is enforced per bridge at write time, so two bridges can in principle leave two snippets holding one word — expand the first in display order. **May be absent from a row on disk** written by a build older than this field; it reads as `null` here, but see the note on older bridges below |
 | `groupId` | string or null. Null is ungrouped, which is a place in the popover rather than a group with no name. **May name a group that is not in `groups`** — draw it ungrouped and leave the field alone; another bridge may be about to write that group, and it heals itself |
 | `params` | array of `{name, label, type, required, default}`, possibly empty — see below |
 | `insert` | `overwrite`, `append` or `cursor` — where the body lands in the compose box |
@@ -2569,14 +2572,26 @@ where a row sat in the array. Two rows genuinely can share an `order` — the fi
 hand-editable, and two bridges number independently.
 
 **On first run the store seeds itself with `LGTM`**, the button this feature replaced,
-pinned and set to send itself. Seeded **once ever**: the file records which shipped
+pinned and set to send itself, with the trigger `LGTM`. The trigger arrived after
+seeding did, and the seed rule below means it reaches **only stores seeded from then
+on**: an existing `LGTM` row is never rewritten to add one — set it in the editor. Seeded **once ever**: the file records which shipped
 snippets it has been offered, so deleting it is permanent and a later release adding a
 second shipped snippet will not bring it back. Deleting
 `~/.local/share/tgxcode/snippets.json` outright is how to get the shipped ones
 again.
 
 Global — not per-session and not per-project. `projects` is the only scoping and it
-hides rather than partitions.
+hides rather than partitions. That includes triggers: a client should expand only the
+snippets it would show for the composer's directory.
+
+**Older bridges and `trigger`.** The file is shared by every bridge on the machine, and
+a bridge from before triggers drops the field from every row the next time it writes.
+The document version was deliberately **not** bumped for it: an older bridge reads any
+other version as an empty store and its next write would replace the whole file. A
+bridge that knows about triggers always writes the key (`null` included), and when it
+merges a newer row that lacks the key it keeps the trigger it holds. So a trigger can
+read as `null` for a while after an older bridge writes, and comes back the next time
+a newer bridge that still holds it saves anything.
 
 Also pushed as the `snippets-changed` SSE event, which is how the UI reads it. That
 event carries this same payload, so a client never has to come back here after the
@@ -4128,20 +4143,24 @@ message is marked `failed` and its text is still in the row.
 
 ### `POST /api/snippets`
 
-`{title, body, hint?, groupId?, params?, insert?, autoSubmit?, permissionMode?, pinned?,
-order?, projects?}` → `{snippet}`, the row as `GET /api/snippets` describes it,
+`{title, body, hint?, trigger?, groupId?, params?, insert?, autoSubmit?, permissionMode?,
+pinned?, order?, projects?}` → `{snippet}`, the row as `GET /api/snippets` describes it,
 `undeclared` and `unused` included.
 
 `400` for a missing `title` or `body`; a `title` over **200** characters or a `body` over
 **20000**; an `insert` that is not one of the three; an `order` that is not an integer or
 null; a `groupId` naming a group that does not exist; more than **20** params or **20**
 `projects`; and a param whose `name` is not `[A-Za-z_]\w*` or repeats an earlier one — a
-param's name is its identity, so a duplicate is not a thing that can be stored.
+param's name is its identity, so a duplicate is not a thing that can be stored. Also
+`400` for a `trigger` that is not a string or null, contains whitespace once trimmed, or
+is over **32** characters. `null`, `""` and whitespace alone all mean *no trigger*.
 
 `403` for a `permissionMode` of `bypassPermissions` or `dontAsk` from a remote caller.
 
 `409` past **200 snippets** — a ceiling and not a lifetime budget, so deleting one makes
-room.
+room. **Also `409` for a `trigger` another snippet already holds**, compared
+case-insensitively: `{"error": "\"LGTM\" is already the trigger for \"LGTM\""}` — the
+message names the snippet holding it. Checked after every `400` and the `403`.
 
 **Two fields normalise rather than refuse, and two do not, and the split is deliberate.**
 An unrecognised param `type` reads as `text` and an unrecognised group `accent` reads as
@@ -4157,8 +4176,8 @@ which is a different test.
 
 ### `PATCH /api/snippets/:id`
 
-Any subset of `{title, body, hint, groupId, params, insert, autoSubmit, permissionMode,
-pinned, order, projects}` → `{snippet}`.
+Any subset of `{title, body, hint, trigger, groupId, params, insert, autoSubmit,
+permissionMode, pinned, order, projects}` → `{snippet}`.
 
 **A genuine partial**, drafts' rule: a field left out is left alone. `null` is a value and
 absence is not — `{"groupId": null}` ungroups a snippet, `{}` changes nothing but the
@@ -4171,7 +4190,8 @@ renaming a param while fixing the `{{…}}` that refers to it has to be one save
 half-fail.
 
 Every field is validated as it is on create, so the refusals are the same, plus `404` for
-an unknown id. **The body is checked before the id is looked up**, so a refused mode is a
+an unknown id. A snippet does not clash with its own trigger, so re-sending it — or
+changing only its case — is not a `409`; `{"trigger": null}` clears it. **The body is checked before the id is looked up**, so a refused mode is a
 `403` whether or not the snippet exists — the same order `PATCH /api/drafts/:id` uses and
 for the same reason.
 

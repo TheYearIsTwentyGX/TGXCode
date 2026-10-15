@@ -299,7 +299,7 @@ start and delete sessions, so pointing them at the everyday instance is exactly
 the accident the rest of this file is about.
 
 The suite is `auth`, `temp`, `recent`, `pulls`, `pr-store`, `pr-owners`, `taskboard`, `ports`,
-`spinner`, `changes`, `restart`, `handoff`, `drafts`, `later`, `snippets`,
+`spinner`, `changes`, `restart`, `handoff`, `drafts`, `later`, `snippets`, `snippet-trigger`,
 `templates`, `notifications`, `schedule`, `usage`, `harvester`, `runner`, `host`, `titles`,
 `tasks`, `prefs`, `paths`, `link-policy`, `logwidth`, `platform`, `preview`, `devservers`, `claude-config`,
 `claude-docs`, `ask-result`, `commands`, `message-date`, `folded`,

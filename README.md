@@ -492,10 +492,11 @@ Two rules worth knowing before you send a patch:
 | `web/schedules.js` | The schedules panel — sessions that start on a clock — in Preact: opening it, the badge, Active/Paused/Done bands in a column per project, and Run now, Pause, Edit and Delete on a card |
 | `web/snippets/` | Canned messages and the buttons that send them, one module per surface, in Preact on web/rail.js's pattern. Same top-level rule as `composer/`; load-time listeners are in `wireSnippets()` |
 | `web/snippets/index.js` | The list — loading it, the `snippets-changed` push that repaints every surface — the rules they share (project scoping, filling placeholders), and `wireSnippets` |
-| `web/snippets/popover.js` | The popover on each composer and its keyboard map, choosing a snippet (where the text goes, whether it sends, the right-click overrides), and the fill-in dialog |
+| `web/snippets/popover.js` | The popover on each composer and its keyboard map, choosing a snippet (where the text goes, whether it sends, the right-click overrides, a trigger then Tab), and the fill-in dialog |
 | `web/snippets/pins.js` | The pinned buttons beside the composer's snippets icon |
 | `web/snippets/settings.js` | The Snippets group in Settings — groups, rows, drag and arrow reordering held in `state.snippets.order` — and the arm-then-confirm delete button other Settings groups borrow |
 | `web/snippets/editor.js` | One snippet in the editor dialog, as a component whose state is the form |
+| `web/snippets/trigger.js` | Which snippet the word before the caret names, for Tab-to-expand — pure, no imports, so `test/snippet-trigger.test.js` loads it under node |
 | `web/settings/` | The Settings panel, one module per group. Drawn with Preact on web/rail.js's pattern, except the editor groups (Claude Code, hooks, Memory, Project commands) and the groups written out in index.html, which are still built with `el()` and hung in the tree as foreign DOM. Every module here evaluates before app.js's body, so none may read an app.js `const` at top level |
 | `web/settings/index.js` | Opening and closing the panel, loading and saving `~/.tgxcode/settings.json` a key at a time, the head and the table of contents, and `Foreign` — how a hand-built group sits in the Preact body |
 | `web/settings/general.js` | `SETTINGS`, one row per key, and the builders that turn a row into a control (Preact vnodes; typed-into boxes are uncontrolled and keyed on the stored value) |
