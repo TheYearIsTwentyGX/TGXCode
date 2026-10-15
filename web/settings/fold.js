@@ -39,7 +39,8 @@ export function setFold(key, open) {
     catch { /* storage refused — the fold still holds until the page reloads */ }
 }
 
-const flip = (key, open) => { setFold(key, !open); renderSettings(); };
+// `redraw` is whoever drew the fold: Settings, unless the Hooks page passes its own.
+const flip = (key, open, redraw = renderSettings) => { setFold(key, !open); redraw(); };
 
 /** The label as a toggle, for rows built with el(). */
 export function foldLabel(key, open, label, cls = 'set-fold') {
@@ -50,11 +51,11 @@ export function foldLabel(key, open, label, cls = 'set-fold') {
     }, el('span', { class: 'set-fold-caret' }, icon('caret', 12)), label);
 }
 
-/** The same, as a vnode. */
-export function foldLabelV(key, open, label, cls = 'set-fold') {
+/** The same, as a vnode. `redraw` is for a surface outside Settings — see flip. */
+export function foldLabelV(key, open, label, cls = 'set-fold', redraw = renderSettings) {
     return html`<button class=${cls} type="button" aria-expanded=${open ? 'true' : 'false'}
         title=${open ? 'Fold this away' : 'Show all of it'}
-        onClick=${() => flip(key, open)}><span class="set-fold-caret"><svg width="12" height="12"
+        onClick=${() => flip(key, open, redraw)}><span class="set-fold-caret"><svg width="12" height="12"
         viewBox="0 0 24 24" fill="none" aria-hidden="true"
         dangerouslySetInnerHTML=${{ __html: ICON.caret }}></svg></span>${label}</button>`;
 }

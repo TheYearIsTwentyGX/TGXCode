@@ -248,7 +248,7 @@ function hookSummary(hooks, where = {}) {
                     command: shortHome(command),
                     target: shortHome(hookTarget(h)),
                     timeout: h && Number.isInteger(h.timeout) ? h.timeout : null,
-                    script: scriptState(command || (h && h.file) || null),
+                    script: scriptState(command || (h && h.file) || null, where.projectDir),
                 });
             });
         });
@@ -278,36 +278,60 @@ function hookTarget(h) {
  * exactly the case where it mattered most, a user-level hook still firing in a
  * project that had its own.
  */
-function hooksInForce(files) {
+function hooksInForce(files, dir) {
+    // A project file's `$CLAUDE_PROJECT_DIR` is its own workspace. A user or
+    // managed file's is whichever project is asking, which is `dir` too — the
+    // answer for *this* project, which is the one the page is showing.
     return files.flatMap(f => (f.parsed
-        ? hookSummary(f.values.hooks, { scope: f.scope, file: f.file })
+        ? hookSummary(f.values.hooks, { scope: f.scope, file: f.file, projectDir: dir })
         : []));
 }
 
 /**
- * Does the file a hook command names exist?
+ * The absolute path of the script a hook command names, if it names one.
  *
  * `null` when no path could be picked out — which is the honest answer for
  * `type: "prompt"` and for a one-liner that runs no script. Only a token that
  * looks like a path is considered, so `python3` alone is not reported missing.
+ *
+ * `$CLAUDE_PROJECT_DIR` is resolved against `projectDir` when there is one —
+ * it is the directory `claude` was started in, which for a project file is the
+ * workspace the file belongs to. Without one the token is skipped rather than
+ * guessed, because a user-level hook names it on behalf of whatever project is
+ * running and there is no single answer.
  */
-function scriptState(command) {
+function scriptPath(command, projectDir) {
     if (typeof command !== 'string' || !command) return null;
     const home = os.homedir();
+    const project = projectDir ? path.resolve(cfg.expandHome(projectDir)) : null;
     // Quoted or bare, and only tokens with a separator in them: a bare word is
     // a program on PATH and not this function's business.
     const tokens = command.match(/"[^"]+"|'[^']+'|\S+/g) || [];
     for (const raw of tokens) {
         const token = raw.replace(/^["']|["']$/g, '');
         if (!token.includes('/')) continue;
+        const named = /^\$\{?CLAUDE_PROJECT_DIR\}?(?=\/|$)/;
+        if (named.test(token) && !project) continue;   // unresolvable here
         const file = token
             .replace(/^\$HOME\b/, home)
             .replace(/^~(?=\/)/, home)
-            .replace(/^\$\{?CLAUDE_PROJECT_DIR\}?\b.*/, '');   // not ours to resolve
+            .replace(named, project || '');
         if (!file || !path.isAbsolute(file)) continue;
-        return { file: shortHome(file), exists: fs.existsSync(file) };
+        return path.normalize(file);
     }
     return null;
+}
+
+/** Does the file a hook command names exist? See scriptPath(). */
+function scriptState(command, projectDir) {
+    const file = scriptPath(command, projectDir);
+    if (!file) return null;
+    let executable = null;
+    try {
+        fs.accessSync(file, fs.constants.X_OK);
+        executable = true;
+    } catch { executable = fs.existsSync(file) ? false : null; }
+    return { file: shortHome(file), path: file, exists: fs.existsSync(file), executable };
 }
 
 /**
@@ -593,7 +617,7 @@ class ClaudeConfig {
             files,
             effective: effectiveOf(files),
             unknown: unknownOf(files),
-            hooks: hooksInForce(files),
+            hooks: hooksInForce(files, dir),
             statusLine: statusLineOf(files),
             installedPlugins: installedPlugins(),
             catalogue: schema.GROUPS,
@@ -909,5 +933,5 @@ function statusLineOf(files) {
 
 module.exports = {
     ClaudeConfig, SCOPES, chainFor, leaves, setPath, getPath,
-    hookSummary, hooksInForce, ourStatusLine, effectiveOf, unknownOf, installedPlugins,
+    hookSummary, hooksInForce, scriptPath, scriptState, ourStatusLine, effectiveOf, unknownOf, installedPlugins,
 };
