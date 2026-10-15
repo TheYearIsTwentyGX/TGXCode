@@ -531,6 +531,7 @@ Two rules worth knowing before you send a patch:
 | `web/composer/` | The message boxes — the one under a conversation and the Start-a-session dialog's — and everything that sends from them. Like `transcript/`, none may read an imported binding at top level; load-time listeners are in a `wire*()` that app.js calls |
 | `web/composer/slash.js` | `makeComposer`, the live composer (`live`), the popover machinery `/` and `@` share — selection, paging, the capture-phase keyboard map — and `/` completion |
 | `web/composer/mentions.js` | `@` completion over the other running sessions, and inserting a mention |
+| `web/composer/caret.js` | Scrolling a composer to its caret after an insertion from code — a mirror measures the line, `revealTop` (pure, `test/caret.test.js`) decides the scroll |
 | `web/composer/send.js` | Sizing the box, enabling the send controls, the optimistic chip a message shows until the transcript has it, and whether Enter sends |
 | `web/composer/branch.js` | Doing an earlier turn over: Edit and resend, and Edit and branch — `state.branchFrom`, the banner above the box, and the turn-1 case that starts a new session instead |
 | `web/composer/queue.js` | The send queue's chips — messages typed while a turn runs — reordered, edited back or dropped |

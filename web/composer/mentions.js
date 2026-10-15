@@ -14,6 +14,7 @@ import { get } from '../api.js';
 import { el } from '../dom.js';
 import { state } from '../state.js';
 import { closeMenu, drawMenu, live } from './slash.js';
+import { revealCaret } from './caret.js';
 
 // ── @ mentions ───────────────────────────────────────────────────────────
 //
@@ -243,6 +244,11 @@ export function insertMention(name) {
  * whatever has focus, so it is only tried once this box demonstrably has it, and
  * the result is checked: anywhere it does not land exactly, the old assignment
  * runs instead.
+ *
+ * **Then the caret is scrolled into view**, last, once the `input` listener has
+ * sized the box. Nothing else does it for a splice, so a snippet longer than the
+ * box used to land with its end, and the caret, out of sight below — see
+ * composer/caret.js.
  */
 export function insertAt(c, from, to, text) {
     const box = c.input;
@@ -262,4 +268,5 @@ export function insertAt(c, from, to, text) {
     }
     box.setSelectionRange(caret, caret);
     box.focus();
+    revealCaret(box);
 }
