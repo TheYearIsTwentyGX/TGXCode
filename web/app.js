@@ -3915,7 +3915,8 @@ dom.creviewFixall.addEventListener('click', fixAllInChat);
 for (const n of dom.diffScrim.querySelectorAll('[data-close-diff]')) {
     n.addEventListener('click', closeDiff);
 }
-// No Escape rung — see modalUp(). The click outside is the full-click kind for
+// Escape closes it too, from the rung above modalUp's in the keydown ladder —
+// the one dialog that answers the key. The click outside is the full-click kind for
 // this dialog above all: a diff is the one thing here people drag-select, and a
 // plain scrim click would close it on a drag released past the edge.
 closeOnClickOutside(dom.diffScrim, closeDiff);
@@ -4330,6 +4331,19 @@ document.addEventListener('keydown', (e) => {
     // Escape over Start-a-session would quietly close Settings or the Taskboard
     // instead. This listener is the last of the three registered on the
     // document, so returning here really is the end of the road for the key.
+    // The one exception, and the reason it can be one: the diff viewer is a
+    // read-only view, so the work-loss argument in modalUp() never applied to it,
+    // and without the key a keyboard user on the layout toggles had to tab round
+    // to ✕. Asked of the key's target rather than of modalUp(), so it answers
+    // only from inside the viewer (or from nowhere, after a click on its text)
+    // and never for a dialog that came up over it. Above the swallow, and the
+    // return keeps the key from every rung below.
+    if (e.key === 'Escape' && state.diff.open
+        && (dom.diffScrim.contains(e.target) || e.target === document.body)) {
+        e.preventDefault();
+        closeDiff();
+        return;
+    }
     if (e.key === 'Escape' && modalUp()) return;
     // The review panel under the conversation header is a popover too, but one
     // that only exists with no whole-screen panel over it, so it sits here.

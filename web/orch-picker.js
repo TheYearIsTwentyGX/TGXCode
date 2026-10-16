@@ -14,8 +14,8 @@
 // because what makes a row worth choosing — running, queued, paused — is exactly
 // what moves while the dialog is shut.
 //
-// **It does not answer Escape**, like every other dialog here (see `modalUp` in
-// web/dom.js): Cancel, the ✕ and a click outside close it. It can be up over the
+// **It does not answer Escape**, like every dialog here but the diff viewer (see
+// `modalUp` in web/dom.js): Cancel, the ✕ and a click outside close it. It can be up over the
 // Start dialog, which is why its scrim comes later in index.html.
 
 import { html, render } from './vendor/preact.js';

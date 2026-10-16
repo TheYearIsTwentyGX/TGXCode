@@ -191,15 +191,16 @@ export function modalUp() {
         // *lost* anything — but six dialogs swallow the key and a seventh that
         // answered it would be the special case this function exists to stop.
         || isUp(dom.memoScrim)
-        // The diff viewer is the one on this list that holds no work at all — it
-        // is a read-only view and closing it loses nothing, so the paragraph
-        // above is not what puts it here. The sentence after it is: six dialogs
-        // swallow the key and a seventh that answered it would be exactly the
-        // special case this function exists to stop.
+        // The diff viewer holds no work at all — a read-only view whose closing
+        // loses nothing — and it is the one dialog that *does* close on Escape,
+        // from a rung just above this one in app.js's ladder. It stays on this
+        // list for every Escape that rung does not take: one pressed in a dialog
+        // stacked over it must still be swallowed rather than fall through.
         || isUp(dom.diffScrim)
-        // The plan/question review, which is the diff viewer's case exactly: a
-        // read-only replay holding no work, so the paragraph above is not what
-        // puts it here either. The sentence after it is.
+        // The plan/question review: a read-only replay holding no work, so the
+        // paragraph above is not what puts it here. Consistency is — one dialog
+        // answering the key is an exception; several would make Escape a guess.
+        // It could take the diff viewer's rung if that ever stops being true.
         || isUp(dom.reviewScrim)
         // A code review's findings: the same read-only case as the line above.
         || isUp(dom.creviewScrim)
@@ -208,8 +209,8 @@ export function modalUp() {
         // Publish to GitHub holds a filled-in form, and can be up over
         // Start-a-session, which is the snippet dialog's case.
         || isUp(dom.ghScrim)
-        // The worktree janitor holds no work, which is the diff viewer's case:
-        // it is here so that no dialog is the one that answers Escape.
+        // The worktree janitor holds no work either, and is here for the
+        // plan/question review's reason.
         || isUp(dom.wtScrim)
         // Send to an orchestrator: no work in it either, and here for that
         // same last reason. It can be up over Start-a-session.
