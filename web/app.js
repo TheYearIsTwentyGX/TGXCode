@@ -3843,7 +3843,10 @@ for (const log of [dom.log, dom.agentLog]) {
 // — the orchestrator's, the question dock, the terminal — and nothing scrolls to
 // say so: a pane that shrinks keeps its scrollTop, so the end of the
 // conversation slides out of view under the dock. Whoever was at the end stays
-// there, every frame of the animation.
+// there, every frame of the animation. The orchestrator page's splitter leaves
+// this running while it holds the pane observer: this is one scrollHeight read
+// after a layout that already happened, and deferring it would be the end of
+// the conversation sliding out of view for the length of the drag.
 new ResizeObserver(() => {
     if (state.pinned && !state.agent && !state.find.open) scrollToEnd(true);
 }).observe(dom.scroll);

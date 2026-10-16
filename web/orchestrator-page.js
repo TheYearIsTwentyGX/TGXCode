@@ -52,6 +52,7 @@ import { renderMarkdown } from './markdown.js';
 import { ICON } from './icons.js';
 import { enter, isUp, present, settle } from './motion.js';
 import { answerAskFor } from './transcript/approvals.js';
+import { holdPaneInsets, releasePaneInsets } from './transcript/layout.js';
 import { toolSummary } from './transcript/tools.js';
 import { sendMessage } from './composer/send.js';
 import { onQuotaChange, quotaWindows } from './quota.js';
@@ -882,10 +883,20 @@ async function answerFrom(w, item, payload) {
 //
 // Between the page and the conversation column: drag it, or focus it and use
 // the arrow keys; double-click or Enter puts it back. The value is the width of
-// the conversation, which is the thing being chosen, kept per window. The
-// composer and the log keep up without anything here — the pane observer in
-// web/transcript/layout.js watches the conversation's column and is built for
-// exactly a drag (it quantizes the log's width until the drag stops).
+// the conversation, which is the thing being chosen, kept per window.
+//
+// A drag is held to one width write a frame, and while it lasts the pane
+// observer in web/transcript/layout.js is told to stand aside
+// (`holdPaneInsets`): it would otherwise rewrite the log's width every LOG_STEP
+// of travel, and on a long orchestrator each of those writes cost more than the
+// frame. Letting go catches the log up once, exactly. The two other
+// ResizeObservers in app.js that a drag can wake were left running on purpose:
+// the one on `#scroll` keeps a reader who is at the end there, which costs a
+// scrollHeight read after a layout that has already happened and would show as
+// the end sliding away if deferred; the one on the settings head watches
+// something this does not move. Measured on a long orchestrator, a 600px drag
+// at 4x CPU throttling went from 200-450ms frames to mostly 16-33ms, with the
+// log re-wrapping in a narrowing column what remains.
 
 const CONVO_KEY = 'tgx.orchConvoWidth';
 const CONVO_DEFAULT = 420;
@@ -911,20 +922,26 @@ function maxConvo() {
 /**
  * The width the conversation is drawn at: the chosen one, held to what this
  * window allows. The choice itself is kept as it was, so a window made wider
- * again gets it back.
+ * again gets it back. Pass `max` when it has already been read.
  */
-const shownWidth = () => Math.min(Math.max(convoW, CONVO_MIN), maxConvo());
+const shownWidth = (w = convoW, max = maxConvo()) => Math.min(Math.max(w, CONVO_MIN), max);
 
+// One layout read, and before any write. `maxConvo` asks `#conv-main` how wide it
+// is, and this used to ask again for `aria-valuemax` *after* writing the width —
+// which made the browser lay out the page and the transcript there and then, on
+// every pointermove, and again for the next one. `#conv-main`'s width does not
+// depend on the split, so the one answer serves both.
 function applyConvoWidth() {
     const main = dom.convMain;
     const split = node('orch-split');
     if (!main) return;
-    const w = Math.round(shownWidth());
+    const max = maxConvo();
+    const w = Math.round(shownWidth(convoW, max));
     main.style.setProperty('--orch-convo-w', `${w}px`);
     if (split) {
         split.setAttribute('aria-valuenow', String(w));
         split.setAttribute('aria-valuemin', String(CONVO_MIN));
-        split.setAttribute('aria-valuemax', String(Math.round(maxConvo())));
+        split.setAttribute('aria-valuemax', String(Math.round(max)));
         split.setAttribute('aria-valuetext', `Conversation ${w} pixels wide`);
     }
 }
@@ -934,6 +951,31 @@ function setConvoWidth(w, { save = true } = {}) {
     applyConvoWidth();
     if (!save) return;
     try { localStorage.setItem(CONVO_KEY, String(Math.round(convoW))); } catch { /* private window */ }
+}
+
+// At most one width write a frame. A mouse reports more often than the screen
+// paints, and a held arrow key repeats faster than a long transcript re-wraps, so
+// each of those writing straight through laid the page out several times for
+// one frame anybody saw. They record where they want to be instead, and the frame
+// writes the last of it. `pending.save` is sticky so a key press coalesced with a
+// drag move still gets saved.
+const pending = { w: null, save: false, frame: 0 };
+
+function queueConvoWidth(w, { save = true } = {}) {
+    pending.w = w;
+    pending.save = pending.save || save;
+    if (!pending.frame) pending.frame = requestAnimationFrame(flushConvoWidth);
+}
+
+/** Write what is queued now, if anything — the frame's job, or release's. */
+function flushConvoWidth() {
+    cancelAnimationFrame(pending.frame);
+    pending.frame = 0;
+    if (pending.w == null) return;
+    const { w, save } = pending;
+    pending.w = null;
+    pending.save = false;
+    setConvoWidth(w, { save });
 }
 
 function wireSplit() {
@@ -946,40 +988,63 @@ function wireSplit() {
         e.preventDefault();
         split.setPointerCapture(e.pointerId);
         split.dataset.dragging = '1';
+        holdPaneInsets();
         const right = dom.convMain.getBoundingClientRect().right;
-        const move = (ev) => setConvoWidth(right - ev.clientX - SPLIT_W / 2, { save: false });
-        const up = () => {
+        const move = (ev) => queueConvoWidth(right - ev.clientX - SPLIT_W / 2, { save: false });
+        const up = (ev) => {
             split.removeEventListener('pointermove', move);
             split.removeEventListener('pointerup', up);
             split.removeEventListener('pointercancel', up);
+            split.removeEventListener('lostpointercapture', up);
             delete split.dataset.dragging;
+            // The release is where it ends, whether or not a move for that spot
+            // made it out first; a cancel or a lost capture has no position
+            // worth reading. Land it now rather than a frame later, save it, and
+            // only then let the log catch up — against the width it ended at.
+            if (ev.type === 'pointerup') move(ev);
+            flushConvoWidth();
             setConvoWidth(convoW);
+            releasePaneInsets();
         };
         split.addEventListener('pointermove', move);
         split.addEventListener('pointerup', up);
         split.addEventListener('pointercancel', up);
+        // The split going away mid-drag — the header's Conversation button, a
+        // session switch — ends it with neither of those, and the pane observer
+        // must not be left held.
+        split.addEventListener('lostpointercapture', up);
     });
-    split.addEventListener('dblclick', () => setConvoWidth(CONVO_DEFAULT));
+    split.addEventListener('dblclick', () => queueConvoWidth(CONVO_DEFAULT));
     split.addEventListener('keydown', (e) => {
         const step = e.shiftKey ? 64 : 16;
         // From the width on screen, not the one kept: a width saved in a wider
-        // window would otherwise swallow the first few presses.
-        const at = shownWidth();
+        // window would otherwise swallow the first few presses. And from where the
+        // last press asked to be, not what the screen shows yet: two presses
+        // inside one frame are two steps.
+        const at = shownWidth(pending.w ?? convoW);
         // The separator moves with the arrow: left widens the conversation.
         const to = { ArrowLeft: at + step, ArrowRight: at - step, Home: CONVO_MIN,
             End: maxConvo(), Enter: CONVO_DEFAULT }[e.key];
         if (to == null) return;
         e.preventDefault();
-        setConvoWidth(to);
+        queueConvoWidth(to);
     });
     // The column narrowing — a window resized, the rail shown, a side panel
     // opened — must not leave the page under its minimum, and the separator's
-    // range has to follow it.
+    // range has to follow it. A ResizeObserver already reports once a frame, after
+    // layout; a drag never wakes it, since `#conv-main`'s width does not depend on
+    // the split. Without one, `resize` stands in, held to once a frame for the
+    // same reason as the drag: a window being dragged reports it as fast as the
+    // mouse moves.
     const main = node('conv-main');
     if (main && typeof ResizeObserver === 'function') {
         new ResizeObserver(() => { if (orchPageUp()) applyConvoWidth(); }).observe(main);
     } else {
-        window.addEventListener('resize', () => { if (orchPageUp()) applyConvoWidth(); });
+        let resizeFrame = 0;
+        window.addEventListener('resize', () => {
+            if (resizeFrame) return;
+            resizeFrame = requestAnimationFrame(() => { resizeFrame = 0; if (orchPageUp()) applyConvoWidth(); });
+        });
     }
 }
 wireSplit();

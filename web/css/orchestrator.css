@@ -217,6 +217,14 @@
 
 .orch-seg[hidden], .orch-page[hidden], .orch-split[hidden], .orch-peek[hidden] { display: none; }
 
+/* `--orch-convo-w` is left unregistered on purpose. Registering it with
+   `@property { inherits: false }` looks like it should help: an inherited
+   custom property written on #conv-main once a frame restyles everything under
+   it. In Chromium 126, the Electron shell, it made a drag on a long orchestrator
+   slower instead. Measured on a 2,400-element transcript, the worst frame of a
+   600px drag at 4x CPU went from 167-183ms to 267-283ms (widening) and from
+   267-300ms to 333-517ms (narrowing). */
+
 .conv-main[data-orch-page] {
     --orch-split-w: 12px;
     display: grid;
