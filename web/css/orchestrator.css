@@ -368,7 +368,17 @@
     text-wrap: pretty;
 }
 .op-goal[data-empty="true"] { color: var(--text-4); font-size: var(--fs-md); }
-.op-settings-wrap { position: relative; flex: none; margin-top: calc(-1 * var(--sp-3)); }
+/* The settings button lives in the head's top-right corner — on the column's
+   right edge, where the meters end, and centred on the goal's first line —
+   whatever the goal's length. Before, it followed the goal's 78ch cap and
+   floated mid-page in a wide window, and its popover opened from wherever that
+   was. The 36px is .icon-btn's own size. */
+.op-settings-wrap {
+    position: relative;
+    flex: none;
+    margin-left: auto;
+    margin-top: calc((var(--fs-base) * var(--lh-snug) - 36px) / 2);
+}
 .op-settings-btn[aria-expanded="true"] { background: var(--s3); color: var(--text); }
 .op-pop {
     position: absolute;
