@@ -2137,7 +2137,7 @@ waiting, running }`, already ordered needs-you-first. A card is:
 | **`ask`** | **object or null** — the *whole* ask (`runner.pendingPermission`), so a tool ask is answerable from the card. Same shape as `permission-request` |
 | **`askFor`** | **`"you"`, `"orchestrator"` or null** — null exactly when `ask` is. `"orchestrator"` only on a worker card whose orchestrator is carrying it (`orchestratorId` set) and is still handling its asks; it becomes `"you"` once the ask is *stuck* — the orchestrator paused, or not working (not `busy`/`starting`, or itself waiting on an ask) and the ask's `askedAt` at least 3 minutes old. The orchestrator page's rule (`needsYou`). It moves with the clock alone, and moves `sig` when it does. Either way the ask is answerable from the card; the first answer wins and the orchestrator is told |
 | **`orchestratorId`** | **string or null** — on a worker card, the orchestrator whose card it is drawn inside (that card's `workers.ids` lists it). Null for every other card, including a worker whose orchestrator is not on the board, archived or gone — that one is an ordinary card |
-| **`workers`** | **object or null** — on an orchestrator's card when it carries workers, null otherwise: `{ids: string[], queued: [{id, title, at}], idle: number, finished: number, own: boolean, paused: boolean}`. `ids` are the session ids of its *active* open workers — a reason of `ask`, `here`, `error` or `elsewhere` — whose cards are elsewhere in `sessions`, ordered asks that are yours first, then errors, then asks the orchestrator has, then by when each was started. `queued` are spawns waiting behind the orchestrator's `maxRunning` and have no session yet (`title` a string or null, `at` epoch ms, or 0 when the spawn recorded none). `idle` counts open workers with nothing to show, `finished` closed ones. `own` is false when the orchestrator is on the board only because of its workers — it has no reason of its own, or only `pinned`, which does not count. Part of `sig`, and so are the worker cards it lists: a change on any of them moves this card's `sig` |
+| **`workers`** | **object or null** — on an orchestrator's card when it carries workers, null otherwise: `{ids: string[], queued: [{id, title, at}], idle: number, finished: number, own: boolean, paused: boolean, quiet: [{id, title, state, at, standing}]}`. Set on an orchestrator card in `sessions` that carries active workers or queued spawns, **and** on any orchestrator card — in `sessions` or in `recent` — that has quiet workers (below); the second kind has `ids: []`, `queued: []` and `own: true`. `ids` are the session ids of its *active* open workers — a reason of `ask`, `here`, `error` or `elsewhere` — whose cards are elsewhere in `sessions`, ordered asks that are yours first, then errors, then asks the orchestrator has, then by when each was started. `queued` are spawns waiting behind the orchestrator's `maxRunning` and have no session yet (`title` a string or null, `at` epoch ms, or 0 when the spawn recorded none). **`quiet`** is an array of objects, its *quiet* workers — open ones with no active reason, and closed ones — which have **no card of their own anywhere on the board**: `id` string (a session id), `title` string or null, `state` `"idle"` (open) or `"finished"` (closed), `at` epoch ms or null (the session's last activity, `lastTs` else file mtime), `standing` string or null (the session's `standing.text`). Idle first, then finished, newest first within each, **at most 20**. `idle` and `finished` are the uncapped counts of those same two kinds, so `idle + finished - quiet.length` is how many were left off the list. A *pinned* worker, or one whose session is missing (deleted, or a test session the bridge is not listing), is in neither the list nor the counts — see below. An archived one is listed: closing a worker archives its session by default, so most `finished` rows are archived sessions, which still open. `own` is false when the orchestrator is on the board only because of its workers — it has no reason of its own, or only `pinned`, which does not count. Part of `sig`, and so are the worker cards it lists: a change on any of them, or on a `quiet` row, moves this card's `sig`. (Until this release `quiet` did not exist, `idle` counted pinned workers too, and the quiet workers were also cards in `recent`.) |
 | **`headlines[]`** | **array of objects**, not strings — `{text, ts}`, oldest first, up to three |
 | `tasks` | object or null — **five fields, and no items**: `{done: number, total: number, current: string\|null, idle: boolean, ts: string\|null}`. `current` is the in-progress task's `activeForm`. `idle` is true when work is left and *nothing* is in progress — a list that has stopped, not one between steps. `ts` is ISO 8601 and non-null only when the answer came from a `TodoWrite` in the transcript rather than from `~/.claude/tasks`. **The items are not here** — `GET /api/sessions/:id/tasks` has them. (Previously documented as `{done, total, current, ts}`, which was true of only one of the two sources: the directory returned `idle` and no `ts`, the transcript the reverse.) |
 | **`devservers`** | **array of objects or null** — `{port, title, owned, http}`, listening ports only, attributed and probed exactly as on `/api/sessions/:id/devservers`. `owned` means DevBrowser's title for the port is this session's worktree or project name. It is a hint for whether opening a tab should also name it, and says nothing about whose server it is; `null` until the first probe has run |
@@ -2166,6 +2166,24 @@ them as rows inside the orchestrator's card. The 24-card ceiling counts an orche
 and the workers it carries as one, so neither is ever cut without the other, and an
 orchestrator on the board this way is never also in `recent`.
 
+**A quiet worker is drawn once, inside its orchestrator.** When an orchestrator's card is
+anywhere on the board — in `sessions` for any reason, or in `recent` — every one of its
+idle or closed workers is left out of `sessions` and out of `recent`, and is listed only in
+that card's `workers.quiet`. This is the one way a session the bridge would otherwise have
+put in `recent` is missing from it, and it is decided before `recent` is capped: an
+orchestrator that the 12-card cap cuts takes its quiet workers with it, and only the
+orchestrator is counted in `recentHidden`. Two exceptions keep a worker as a card of its own:
+
+- **its orchestrator is not on the board** — archived, deleted, not recent enough, or a
+  test session on the everyday bridge — when the worker is an ordinary card, in whichever
+  group it would have been in, as before; and
+- **it is pinned** — the user chose to keep it in view, so it stays in `sessions` with
+  `reason: "pinned"`, `orchestratorId: null`, and is not in `workers.quiet` or its counts.
+
+So a client can draw `sessions` and `recent` as they arrive and each worker appears once.
+`waiting`, `running`, `hidden` and `recentHidden` are all counted after this, over the
+cards actually sent.
+
 `sessions` is "running now, plus pinned" and is the answer to *who is blocked on me*.
 `recent` is a second list, of sessions with nothing running but touched recently, for a
 surface that also has to answer *what was I doing yesterday* — a board of nothing but
@@ -2183,8 +2201,9 @@ elsewhere" called the bridge's own idle sessions another window's.)
 "Recently" is not a rolling window, which is wrong at both ends of a day. Before noon it
 reaches back to noon yesterday — or to noon Friday on a Monday; after noon, only to
 midnight. Measured on `lastTs`, so an agent that worked until 2am counts as last night's
-work. Archived sessions are left out, and anything already in `sessions` cannot appear
-here. Capped at 12 with the remainder in `recentHidden`, as `sessions` is capped at 24 with
+work. Archived sessions are left out, anything already in `sessions` cannot appear
+here, and nor can a quiet worker of an orchestrator that is on the board (it is in that
+orchestrator's `workers.quiet` instead — see above). Capped at 12 with the remainder in `recentHidden`, as `sessions` is capped at 24 with
 `hidden`.
 
 `devservers` is not refreshed for a recent card, and that budget goes to what is running.

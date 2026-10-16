@@ -396,10 +396,13 @@ class LiveCard extends Component {
             // The same for the PR chip on each worker row, which this card's
             // `sig` does not cover either.
             || (!!next.workers && next.workers.some((w, i) => state.railPrs.get(w.sessionId) !== this.workerPrs[i]))
+            // The quiet-worker fold is held in `state`, not in `sig`.
+            || state.live.quietOpen.has(next.s.sessionId) !== this.quietOpen
             || nextState !== this.state;
     }
 
     render({ s, strip, compact, prs, workers }) {
+        this.quietOpen = state.live.quietOpen.has(s.sessionId);
         // Recent activity and Pinned only. A running card has enough to say, and
         // its PR is rarely the news while the turn that will change it is live.
         this.prAgg = prs ? state.railPrs.get(s.sessionId) : undefined;
@@ -467,7 +470,7 @@ class LiveCard extends Component {
                         ${busy ? html`<${StopButton} cls="lbtn" sessionId=${s.sessionId} reset=${s.sig} hard=${stalled} />` : null}
                     </div>` : null}
                 ${s.workers ? html`<${WorkerList} crew=${s.workers} workers=${workers || []}
-                    strip=${strip} compact=${compact} />` : null}
+                    strip=${strip} compact=${compact} orchId=${s.sessionId} />` : null}
             </article>`;
     }
 
@@ -720,7 +723,7 @@ class WorkerList extends Component {
         this.last = [];
     }
 
-    render({ crew, workers, strip, compact }, { more, gone }) {
+    render({ crew, workers, strip, compact, orchId }, { more, gone }) {
         const rows = workers.map(w => ({ key: w.sessionId, w }));
         for (const q of crew.queued) rows.push({ key: `spawn:${q.id}`, q });
         const keys = new Set(rows.map(r => r.key));
@@ -744,12 +747,14 @@ class WorkerList extends Component {
         this.last = shown;
         this.leaving = leaving;
 
+        // A bridge from before `quiet` sends the counts alone; they stay words.
+        const quiet = crew.quiet || null;
         const tail = [
             folds ? html`<button key="more" class="lw-more" type="button" aria-expanded=${String(!!more)}
                 onClick=${() => this.setState({ more: !more })}>${more ? 'Show fewer'
                     : `+${rows.length - limit} more`}</button>` : null,
-            crew.idle ? html`<span key="idle">${`${crew.idle} idle`}</span>` : null,
-            crew.finished ? html`<span key="done">${`${crew.finished} finished`}</span>` : null,
+            quiet ? null : crew.idle ? html`<span key="idle">${`${crew.idle} idle`}</span>` : null,
+            quiet ? null : crew.finished ? html`<span key="done">${`${crew.finished} finished`}</span>` : null,
         ].filter(Boolean);
 
         return html`
@@ -765,6 +770,8 @@ class WorkerList extends Component {
                         onGone=${() => this.drop(r.key)} />`))}
                 ${tail.length ? html`<div key="tail" class="lw-tail">${tail.flatMap((t, i) => (i
                     ? [html`<span key=${`sep${i}`} class="live-sep">${' · '}</span>`, t] : [t]))}</div>` : null}
+                ${quiet && (crew.idle || crew.finished) ? html`<${QuietFold} key="quiet" id=${orchId}
+                    crew=${crew} />` : null}
             </div>`;
     }
 
@@ -790,6 +797,50 @@ class WorkerList extends Component {
             return { gone: next };
         });
     }
+}
+
+/**
+ * An orchestrator's idle and finished workers, behind a fold: `6 idle · 2
+ * finished`, and opened, one compact row each — title, state, where its last
+ * turn left it, and how long ago — that opens the session.
+ *
+ * These sessions are not on the board anywhere else (`quietWorkers` in
+ * bridge/overview.js keeps them out of both groups), so this is the one place
+ * they are drawn. Folded by default: a finished worker is rarely the news. Open
+ * or shut is `state.live.quietOpen`, by orchestrator id, so it survives the
+ * once-a-second push and the card being rebuilt; flipping it re-renders the
+ * board, since it moves no `sig`.
+ */
+function QuietFold({ id, crew }) {
+    const open = state.live.quietOpen.has(id);
+    const rows = crew.quiet;
+    const older = crew.idle + crew.finished - rows.length;
+    const words = [crew.idle ? `${crew.idle} idle` : null, crew.finished ? `${crew.finished} finished` : null]
+        .filter(Boolean).join(' · ');
+    const flip = () => {
+        if (open) state.live.quietOpen.delete(id); else state.live.quietOpen.add(id);
+        renderLive();
+    };
+    return html`
+        <div class="lw-quiet">
+            <button class="lw-fold" type="button" aria-expanded=${String(open)}
+                title=${open ? 'Hide these workers' : 'Show these workers'}
+                onClick=${flip}><span class="lw-caret" aria-hidden="true">${open ? '▾' : '▸'}</span>${words}</button>
+            ${open ? html`<div class="lw-quiet-list" role="list" aria-label="Idle and finished workers">
+                ${rows.map(q => html`<div key=${q.id} class="lw-row lw-qrow" role="listitem" data-reason=${q.state}
+                    onClick=${(e) => { if (cardClickOpens(e)) openSession(q.id); }}>
+                    <div class="lw-main">
+                        <span class="lw-dot"></span>
+                        <button class="lw-title" type="button" title=${`Open ${q.title || 'this worker'}`}
+                            onClick=${() => openSession(q.id)}>${clip(q.title || 'Untitled worker', 48)}</button>
+                        <span class="lw-say"><span class="lstate quiet">${q.state === 'finished' ? 'Finished' : 'Idle'}</span>
+                            ${q.standing ? html`<span class="lw-standing" title=${q.standing}>${clip(q.standing, 60)}</span>` : null}</span>
+                        ${q.at ? html`<span class="lw-ago">${ago(q.at)}</span>` : null}
+                    </div>
+                </div>`)}
+                ${older > 0 ? html`<div key="older" class="lw-older">${`+${older} older`}</div>` : null}
+            </div>` : null}
+        </div>`;
 }
 
 /**
