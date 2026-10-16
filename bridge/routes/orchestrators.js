@@ -101,7 +101,10 @@ function taskSource(body, who) {
         draftId: draft ? draft.id : null,
         task: {
             ...fields, title, worktree,
+            // The draft's id and age travel with the task, so Take back can
+            // restore that same draft rather than make a new one.
             origin: { from: draft ? 'draft' : 'dialog', draftId: draft ? draft.id : null,
+                draftCreatedAt: draft ? draft.createdAt : null,
                 title: title || firstLine(fields.prompt) },
         },
     };

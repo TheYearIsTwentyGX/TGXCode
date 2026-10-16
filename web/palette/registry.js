@@ -27,13 +27,17 @@
 // open session's dev servers, the templates — and is asked afresh every time the
 // palette draws. It gets `{ q }`, and an entry it returns with `always: true` is
 // shown whatever was typed rather than matched against it ("Search transcripts
-// for '…'" is that).
+// for '…'" is that). A source whose list lives on the bridge can pass a
+// `refresh()` that returns a promise: the palette calls every one as it opens
+// and draws again when they have answered, so the source itself stays
+// synchronous and reads only what it was last told.
 //
 // Pure: no DOM and no app state, so it can be imported from anywhere without a
 // cycle, including by modules app.js has not loaded yet.
 
 const actions = new Map();
 const sources = new Map();
+const refreshers = new Map();
 
 export function registerAction(entry) {
     if (!entry || !entry.id || typeof entry.run !== 'function') {
@@ -46,8 +50,17 @@ export function unregisterAction(id) {
     actions.delete(id);
 }
 
-export function registerSource(id, fn) {
+export function registerSource(id, fn, { refresh = null } = {}) {
     sources.set(id, fn);
+    if (refresh) refreshers.set(id, refresh);
+    else refreshers.delete(id);
+}
+
+/** Ask every source that has one to refresh; settles when all have, failed or not. */
+export function refreshSources() {
+    return Promise.all([...refreshers.values()].map(fn => {
+        try { return Promise.resolve(fn()).catch(() => null); } catch { return null; }
+    }));
 }
 
 /** Every entry that applies right now, actions first, then each source's. */

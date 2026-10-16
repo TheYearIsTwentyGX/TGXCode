@@ -259,12 +259,26 @@ class Drafts {
      * @returns {object|null} the draft, or null when the cap is reached — which
      *   the route turns into a 409. Null rather than a throw so the one caller
      *   that has to tell the two apart does not have to read a message.
+     *
+     * `restore` is for a draft coming back — a task taken back from an
+     * orchestrator, or one it never started when it went away. Its `id` is the
+     * draft's old one, so a client that remembered the id finds it again rather
+     * than a 404, and its `createdAt` keeps the card saying how long the work has
+     * really been waiting. The id is only reused when nothing here holds it; a
+     * clash gets a fresh one rather than overwriting whatever has it now.
      */
-    create({ cwd, prompt, title, model, effort, permissionMode, test } = {}) {
+    create({ cwd, prompt, title, model, effort, permissionMode, test } = {}, restore = null) {
         if (this.rows.length >= MAX_DRAFTS) return null;
         const now = this._stamp();
+        const oldId = restore && typeof restore.id === 'string' && restore.id
+            && !this.rows.some(r => r.id === restore.id) ? restore.id : null;
+        // Removed and back inside one debounce window: the pending deletion
+        // would otherwise take the restored row out again at the next flush().
+        if (oldId) this._removed.delete(oldId);
+        const born = oldId && Number.isFinite(restore.createdAt) && restore.createdAt > 0
+            && restore.createdAt <= now ? restore.createdAt : now;
         const row = clean({
-            id: randomUUID(),
+            id: oldId || randomUUID(),
             cwd: String(cwd),
             prompt: String(prompt),
             title: orNull(title),
@@ -273,8 +287,10 @@ class Drafts {
             permissionMode: String(permissionMode || 'auto'),
             test: !!test,
             // The same stamp for both, so a draft nobody has edited reads as
-            // untouched rather than as edited the instant it was made.
-            createdAt: now,
+            // untouched rather than as edited the instant it was made. A
+            // restored one keeps when it was first written; coming back is news,
+            // so it is updated now and lands at the top.
+            createdAt: born,
             updatedAt: now,
         });
         this.rows.push(row);

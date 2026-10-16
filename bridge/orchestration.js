@@ -56,6 +56,7 @@ const {
     spawnOptsFromTask, isOpenTask,
 } = require('./orchestrators');
 const workerRead = require('./worker-read');
+const { inTemp } = require('./sessions');
 const pulls = require('./pulls');
 const prStore = require('./pr-store');
 const {
@@ -1083,6 +1084,16 @@ function draftFromTask(t) {
 }
 
 /**
+ * Which draft it was, for `Drafts#create` to restore: the id it was handed over
+ * under, and when it was first written. Null for a task from the Start dialog,
+ * which was never a draft — that one gets a new id.
+ */
+function draftRestore(t) {
+    const o = t.origin;
+    return o && o.from === 'draft' && o.draftId ? { id: o.draftId, createdAt: o.draftCreatedAt } : null;
+}
+
+/**
  * The user taking a task back before it started: it becomes a draft again, and
  * the item goes stale. An orchestrator that has already read it is told, as it
  * is when the user answers an ask first — it may be about to start it.
@@ -1097,7 +1108,7 @@ function withdrawTask(orchId, itemId) {
             : 'that task is no longer waiting');
     }
     if (!drafts) throw refuse(500, 'no drafts store');
-    const draft = drafts.create(draftFromTask(item.task));
+    const draft = drafts.create(draftFromTask(item.task), draftRestore(item.task));
     if (!draft) throw refuse(409, 'the drafts are full — delete some before taking this back');
     const wasRead = item.status === 'read';
     store.settle(orchId, item.id, { status: 'stale', outcome: 'withdrawn', by: 'user' });
@@ -1121,7 +1132,9 @@ function releaseTasks(orchId) {
     if (!open.length || !drafts) return;
     const lost = [];
     for (const i of open) {
-        if (!drafts.create(draftFromTask(i.task))) lost.push(i.task.title || i.text.split('\n')[0].slice(0, 60));
+        if (!drafts.create(draftFromTask(i.task), draftRestore(i.task))) {
+            lost.push(i.task.title || i.text.split('\n')[0].slice(0, 60));
+        }
     }
     draftsChanged();
     if (lost.length) {
@@ -1133,15 +1146,22 @@ function releaseTasks(orchId) {
 
 /**
  * The orchestrators a task can be sent to, for the picker: live ones first —
- * a runner in this pool that is not stopped — then by newest activity. Archived
- * ones are left out, and test ones off a dev bridge, as `/api/sessions` does.
+ * a runner in this pool that is not stopped — then by newest activity.
+ *
+ * Left out: archived ones, test ones off a dev bridge, and ones in /tmp — the
+ * last two exactly as `/api/sessions` leaves them out. /tmp because an
+ * orchestrator there is an agent's probe, not somebody's plan (it cannot even
+ * make a worktree), and the rail does not show it, so a task handed to it would
+ * go somewhere you cannot follow. This list is the only answer to "is there an
+ * orchestrator": the picker draws it and the Ctrl+K row asks it, so the two
+ * cannot disagree.
  */
 function list({ includeTest = cfg.IS_DEV } = {}) {
     const rows = [];
     for (const id of store.ids()) {
         const o = store.get(id);
         const s = index.summary(id);
-        if (!o || !s || s.archived || (s.test && !includeTest)) continue;
+        if (!o || !s || s.archived || (s.test && !includeTest) || inTemp(s)) continue;
         const r = pool.get(id);
         const st = r ? r.status() : null;
         const state = st ? st.state : 'stopped';

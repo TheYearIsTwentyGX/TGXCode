@@ -9,10 +9,16 @@
 // nothing that has to agree with the bridge about what a task is.
 //
 // **The list is the bridge's, in the bridge's order** (`GET /api/orchestrators`):
-// live ones first, then by newest activity, with test and archived ones already
-// left out the way the session list leaves them out. Asked afresh on every open,
-// because what makes a row worth choosing — running, queued, paused — is exactly
-// what moves while the dialog is shut.
+// live ones first, then by newest activity, with archived, test and /tmp ones
+// already left out. Asked afresh on every open, because what makes a row worth
+// choosing — running, queued, paused — is exactly what moves while the dialog
+// is shut.
+//
+// **It is also the only answer to "is there an orchestrator to send to".** The
+// Ctrl+K row asks `knownOrchestrators()`, the last answer from that same route,
+// rather than looking for one in the session list: the two lists filter
+// differently, and a row that offered a picker which then said "No
+// orchestrators yet" was what that disagreement looked like.
 //
 // **It does not answer Escape**, like every other dialog here (see `modalUp` in
 // web/dom.js): Cancel, the ✕ and a click outside close it. It can be up over the
@@ -24,6 +30,19 @@ import { dom, closeModal, closeOnClickOutside, openModal, toast } from './dom.js
 
 let cur = null;         // {subject, rows, error, resolve}
 let wired = false;
+let known = null;       // the last GET /api/orchestrators answer, or null before the first
+
+/** The orchestrators as last fetched — synchronous, for the palette. */
+export function knownOrchestrators() {
+    return known || [];
+}
+
+/** Fetch the list again. Resolves with it; a failure keeps the last answer. */
+export async function refreshOrchestrators() {
+    const data = await get('/api/orchestrators');
+    known = data.orchestrators || [];
+    return known;
+}
 
 function wire() {
     if (wired) return;
@@ -55,9 +74,9 @@ export function pickOrchestrator({ subject = '' } = {}) {
 
 async function load(mine) {
     try {
-        const data = await get('/api/orchestrators');
+        const rows = await refreshOrchestrators();
         if (cur !== mine) return;
-        mine.rows = data.orchestrators || [];
+        mine.rows = rows;
     } catch (err) {
         if (cur !== mine) return;
         mine.error = err.message;
