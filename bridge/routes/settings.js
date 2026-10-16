@@ -19,6 +19,7 @@
 
 const path = require('path');
 const { MAX_DOC_BYTES } = require('../claude-docs');
+const { MAX_SCRIPT_BYTES } = require('../hook-scripts');
 const cfg = require('../config');
 const { broadcast } = require('../events');
 const git = require('../git');
@@ -29,12 +30,14 @@ const { norm: spinnerNorm } = require('../spinner');
 // Handed over by server.js — see the note above ROUTES there.
 let claudeConfig = null;
 let claudeDocs = null;
+let hookScripts = null;
+let hookSources = null;
 let prefs = null;
 let registry = null;
 let spinner = null;
 
 function init(deps) {
-    ({ claudeConfig, claudeDocs, prefs, registry, spinner } = deps);
+    ({ claudeConfig, claudeDocs, hookScripts, hookSources, prefs, registry, spinner } = deps);
 }
 
 /**
@@ -225,6 +228,61 @@ async function handle(req, res, url, pathname, seg, who) {
             stamp: saved.stamp,
             config: await claudeConfigPayload(body.cwd || ''),
         });
+    }
+
+    // ── The Hooks page: scripts and other sources ───────────────────────────
+    //
+    // Under /api/claude-config/ so remoteRefusal()'s prefix covers them without
+    // being told: a hook script is the most capable file this bridge writes,
+    // and "refused to a remote caller" should not depend on somebody
+    // remembering to add a line.
+    //
+    // The script routes are claude-docs' contract with a client-named path —
+    // see bridge/hook-scripts.js for which paths are allowed. The status map is
+    // claude-docs' plus `path`, which is the caller asking for a file this page
+    // has no claim on: 403, like a scope it may not write.
+    if (pathname === '/api/claude-config/hook-script' && req.method === 'GET') {
+        try {
+            return send(res, 200, hookScripts.read({
+                dir: url.searchParams.get('cwd') || '',
+                path: url.searchParams.get('path') || '',
+            }));
+        } catch (err) {
+            return send(res, claudeDocsStatus(err.code), { error: err.message, code: err.code || 'read' });
+        }
+    }
+
+    if (pathname === '/api/claude-config/hook-script' && req.method === 'PUT') {
+        const body = await readJson(req);
+        let saved;
+        try {
+            saved = hookScripts.save({
+                dir: body.cwd || '',
+                path: body.path,
+                stamp: Object.prototype.hasOwnProperty.call(body, 'stamp') ? body.stamp : undefined,
+                text: body.text,
+                executable: body.executable === true,
+            });
+        } catch (err) {
+            return send(res, claudeDocsStatus(err.code), {
+                error: err.message, code: err.code || 'save', maxBytes: MAX_SCRIPT_BYTES, ...(err.detail || {}),
+            });
+        }
+        // The same event a settings save sends, with `scope: "script"`: a page
+        // showing the script tag ("present" / "missing" / "not executable")
+        // needs to re-read, and it already listens for this one.
+        broadcast('claude-config', { at: Date.now(), scope: 'script', file: saved.file });
+        return send(res, 200, saved);
+    }
+
+    // Hooks from plugins, skills and agents — read-only, see
+    // bridge/hook-sources.js. Whether a plugin is enabled is decided by the
+    // same merged `enabledPlugins` the settings read reports, so the two
+    // answers cannot disagree.
+    if (pathname === '/api/claude-config/hook-sources' && req.method === 'GET') {
+        const cwd = url.searchParams.get('cwd') || '';
+        const enabled = claudeConfig.read(cwd).effective.enabledPlugins;
+        return send(res, 200, hookSources.read(cwd, (enabled && enabled.value) || {}));
     }
 
     // ── Claude Code's memory files ─────────────────────────────────────

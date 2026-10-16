@@ -42,6 +42,10 @@ const TOOLBAR = [
     { id: 'history', node: 'btnNotes', name: 'History', icon: true },
     { id: 'drafts', node: 'btnDrafts', name: 'Drafts', icon: true },
     { id: 'schedules', node: 'btnSched', name: 'Schedules', icon: true },
+    // In the More menu until somebody moves it: configuration you visit, not a
+    // board you watch, and the bar is already full. `start` is where a layout
+    // that has never mentioned it puts it — see toolbarLayout().
+    { id: 'hooks', node: 'btnHooks', name: 'Hooks', icon: true, start: 'more' },
     // Icon-only until somebody says otherwise, which is how it has always been
     // drawn: the one view that is not about work earns a place and not a word.
     { id: 'settings', node: 'btnSettings', name: 'Settings', icon: true, label: false,
@@ -84,7 +88,7 @@ function toolbarLayout() {
             const k = out.findIndex(o => o.def === TOOLBAR[j]);
             if (k >= 0) { at = k + 1; break; }
         }
-        out.splice(at, 0, { def, place: 'bar', label: def.label !== false });
+        out.splice(at, 0, { def, place: def.start || 'bar', label: def.label !== false });
     });
     return out;
 }

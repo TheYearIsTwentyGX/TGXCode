@@ -605,7 +605,10 @@ async function read(orchId, workerId, { mode = 'digest', turns, offset } = {}) {
     }
     const rec = index.get(workerId);
     if (!rec || !rec.file) {
-        return { text: 'That worker has no transcript yet — it may still be starting. Try again in a few seconds.' };
+        const text = 'That worker has no transcript yet — it may still be starting. Try again in a few seconds.';
+        // A digest keeps its shape with nothing to read, so a page drawing
+        // `fields` gets null rather than a missing key.
+        return mode === 'digest' ? { text, headline: null, fields: null } : { text };
     }
     if (mode === 'tail') return workerRead.tail(rec.file, Number(turns) || 3);
     if (mode === 'full') return workerRead.full(rec.file, Number(offset) || 0);

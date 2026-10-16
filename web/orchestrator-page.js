@@ -46,7 +46,7 @@ import { post } from './api.js';
 import { ago, clip, clockOf } from './format.js';
 import { renderMarkdown } from './markdown.js';
 import { ICON } from './icons.js';
-import { enter, isUp, present } from './motion.js';
+import { enter, isUp, present, settle } from './motion.js';
 import { answerAskFor } from './transcript/approvals.js';
 import { holdPaneInsets, releasePaneInsets } from './transcript/layout.js';
 import { toolSummary } from './transcript/tools.js';
@@ -63,6 +63,7 @@ import {
 const ui = {
     // orchestrator id → 'overview' | 'conversation'. Overview unless changed.
     mode: new Map(),
+    orchId: null,              // the orchestrator the rest of this is about
     peek: null,                // the worker id in the drawer
     finished: false,           // the Finished fold
     activity: false,           // the Activity fold
@@ -79,6 +80,8 @@ const STAGE_WORD = {
     plan: 'Plan', approved: 'Approved', building: 'Building', done: 'Done', pr: 'PR', merged: 'Merged',
 };
 const ASK_WORD = { plan: 'a plan approval', tool: 'a permission', question: 'an answer' };
+/** A worker's title in a sentence: short enough not to become the sentence. */
+const nameIn = (w, none = 'A worker') => clip((w && w.title) || none, 48).replace(/\s+…$/, '…');
 const node = (id) => document.getElementById(id);
 /** "12m ago", or "just now" — shortAge says `now` for the first minute. */
 const agoWords = (ms) => { const a = shortAge(ms); return a === 'now' ? 'just now' : `${a} ago`; };
@@ -91,8 +94,35 @@ export function orchPageMode(orchId) {
 /** Switch between the page and the plain conversation. */
 export function setOrchPageMode(orchId, mode) {
     ui.mode.set(orchId, mode);
-    if (mode !== 'overview') ui.peek = null;
+    if (mode !== 'overview') dropPeek();
     paintOrchestrator();
+}
+
+/**
+ * The drawer gone at once, without its exit: the page it sits over is going too
+ * (the view switched, another session opened), and an exit played there would
+ * draw it as a box under the composer for its length.
+ */
+function dropPeek() {
+    ui.peek = null;
+    ui.note = null;
+    const d = node('orch-peek');
+    if (!d) return;
+    settle(d);
+    d.hidden = true;
+    render(null, d);
+}
+
+/**
+ * What is open on the page belongs to the orchestrator it was opened on: a
+ * popover, a half-written reply or an unfolded section does not follow you to
+ * the next one.
+ */
+function forOrchestrator(id) {
+    if (ui.orchId === id) return;
+    ui.orchId = id;
+    Object.assign(ui, { settings: false, reply: null, note: null, brief: false, finished: false, activity: false });
+    dropPeek();
 }
 
 /** Is the session on screen an orchestrator shown as its page? */
@@ -131,11 +161,12 @@ export function paintOrchPage() {
     node('orch-split').hidden = !on;
     if (!on) {
         render(null, page);
-        closePeek({ quiet: true });
+        dropPeek();
         clearInterval(tick);
         tick = 0;
         return;
     }
+    forOrchestrator(s.sessionId);
     if (!was) {
         applyConvoWidth();
         enter(page, { as: 'reveal' });
@@ -194,7 +225,15 @@ const freshPr = (id) => { const r = state.railPrs.get(id); return r ? r.status :
 function pageTree(p) {
     const now = Date.now();
     const needs = needsYou(p, { orchRunner: state.runner, now });
-    return html`<div class="op">
+    return html`<div class="op" onKeyDown=${(e) => {
+        // The drawer goes on Esc from the page beside it as well as from inside
+        // it — after a click on a row, focus is still on the row. Anything that
+        // has its own Esc (a reply field, the settings) stops it first.
+        if (e.key !== 'Escape' || !ui.peek || e.defaultPrevented) return;
+        e.preventDefault();
+        e.stopPropagation();
+        closePeek();
+    }}>
         ${head(p)}
         <div class="op-body">
             ${needs.length ? html`<section class="op-sec" aria-label="Needs you">
@@ -215,47 +254,60 @@ function head(p) {
     const g = progress(p, { prStatusOf: freshPr });
     const goal = p.summary && p.summary.goal;
     const meters = usageMeters(p.settings.usageStop, quotaWindows());
+    // The counts are written on one line, separators and all: htm drops
+    // whitespace that holds a newline, which is how "finished" and its "·" once
+    // ran together.
     return html`<header class="op-head">
         <div class="op-goal-row">
             <p class="op-goal" data-empty=${String(!goal)}>${goal
-                || 'No goal in the brief yet. The orchestrator writes one with set_summary.'}</p>
-            <span class="op-settings-wrap">
+                || 'No goal yet — the orchestrator sets one when it writes its brief.'}</p>
+            <span class="op-settings-wrap" onKeyDown=${(e) => {
+                // On the wrap, not the popover: opened with the mouse, focus is
+                // still on the button beside it.
+                if (e.key === 'Escape' && ui.settings) { e.preventDefault(); e.stopPropagation(); closeSettings(); }
+            }}>
                 <button class="icon-btn op-settings-btn" type="button" aria-expanded=${String(ui.settings)}
                     aria-haspopup="dialog" title="This orchestrator's settings"
-                    onClick=${() => { ui.settings = !ui.settings; paintOrchPage(); }}>
+                    onClick=${() => {
+                        ui.settings = !ui.settings;
+                        paintOrchPage();
+                        if (ui.settings) focusSoon('.op-pop input, .op-pop select');
+                    }}>
                     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                         <path d="M4 7h10M18 7h2M4 17h4M12 17h8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
                         <circle cx="16" cy="7" r="2" stroke="currentColor" stroke-width="1.8"/>
                         <circle cx="10" cy="17" r="2" stroke="currentColor" stroke-width="1.8"/>
                     </svg></button>
-                ${ui.settings ? html`<div class="op-pop" role="dialog" aria-label="Orchestrator settings"
-                    onKeyDown=${(e) => { if (e.key === 'Escape') { e.stopPropagation(); closeSettings(); } }}>
+                ${ui.settings ? html`<div class="op-pop" role="dialog" aria-label="Orchestrator settings">
                     ${settings(p)}</div>` : null}
             </span>
         </div>
         <div class="op-readings">
             <div class="op-progress">
-                <span class="op-strip" role="img" aria-label=${`${g.finished} of ${g.total} finished`}>
-                    ${g.segments.map(x => html`<i key=${x.id} data-s=${x.s} title=${`${x.title} — ${SEG_WORD[x.s]}`}></i>`)}
-                </span>
-                <span class="op-count"><b>${g.finished}</b> of ${g.total} finished
-                    <span>·</span> ${g.running} of ${g.max} running${g.queued ? html` <span>·</span> ${g.queued} queued` : null}</span>
+                ${g.total ? html`<span class="op-strip" role="img" aria-label=${`${g.finished} of ${g.total} finished`}>
+                    ${g.segments.map(x => html`<i key=${x.id} data-s=${x.s} title=${`${x.title} — ${segWord(x)}`}></i>`)}
+                </span>` : null}
+                <span class="op-count">${g.total
+                    ? html`<b>${g.finished}</b> of ${g.total} finished<span> · </span>${g.running} of ${g.max} running${g.queued ? html`<span> · </span>${g.queued} queued` : null}`
+                    : `No tasks yet · up to ${g.max} at once`}</span>
             </div>
             <div class="op-meters">${meters.map(m => html`<span key=${m.type} class="op-meter" data-tone=${m.tone}
                 title=${m.cutoff == null ? `${m.label}: no cutoff on this window` : `${m.label}: everything stops at ${m.cutoff}%`}>
                 ${m.label}
                 <span class="op-bar"><i style=${`width:${Math.min(100, m.used || 0)}%`}></i>${m.cutoff != null
                     ? html`<u style=${`left:${m.cutoff}%`}></u>` : null}</span>
-                <span><b>${m.used == null ? '—' : `${m.used}%`}</b>${m.cutoff != null ? ` of ${m.cutoff}` : ''}</span>
+                <span><b>${m.used == null ? '—' : `${m.used}%`}</b>${m.cutoff != null ? ` · stops at ${m.cutoff}%` : ''}</span>
             </span>`)}</div>
         </div>
     </header>`;
 }
 
 const SEG_WORD = {
-    merged: 'merged', pr: 'PR open', fail: 'needs a fix', done: 'closed', run: 'working',
+    merged: 'merged', fail: 'needs a fix', done: 'closed', run: 'working',
     wait: 'waiting for an answer', idle: 'idle', queued: 'queued',
 };
+/** A strip segment's word. A PR says its own status: a draft is not "open". */
+const segWord = (x) => (x.s === 'pr' ? `PR ${PR_WORD[x.status] || x.status || ''}`.trim() : SEG_WORD[x.s]);
 
 function closeSettings() {
     ui.settings = false;
@@ -290,13 +342,13 @@ function needCard(p, n, now) {
         </div>`;
         case 'decision': return decisionCard(p, n.decision, now);
         case 'stuck': return html`<div key=${n.key} class="op-need">
-            <div class="op-need-q">${`${n.worker.title || 'A worker'} has waited ${shortAge(now - n.item.at)} for ${
+            <div class="op-need-q" title=${n.worker.title || ''}>${`${nameIn(n.worker)} has waited ${shortAge(now - n.item.at)} for ${
                 ASK_WORD[blockedOn(n.worker, p.inbox)?.kind] || 'an answer'}, and the orchestrator is ${
                 p.paused ? 'paused' : 'not working on it'}.`}</div>
             <div class="op-need-act"><button class="lbtn ok" type="button" onClick=${() => openPeek(n.worker.id)}>Look at it</button></div>
         </div>`;
         case 'error': return html`<div key=${n.key} class="op-need" data-tone="error">
-            <div class="op-need-q">${`${n.worker.title || 'A worker'} stopped with an error.`}</div>
+            <div class="op-need-q" title=${n.worker.title || ''}>${`${nameIn(n.worker)} stopped with an error.`}</div>
             <div class="op-need-act"><button class="lbtn" type="button" onClick=${() => openPeek(n.worker.id)}>Look at it</button></div>
         </div>`;
         default: return null;
@@ -306,21 +358,25 @@ function needCard(p, n, now) {
 function decisionCard(p, d, now) {
     const w = d.workerId && p.workers.find(x => x.id === d.workerId);
     const busy = ui.sending.has(d.id);
-    const from = [w ? `From ${w.title || 'a worker'}` : 'From the orchestrator', `asked ${agoWords(now - d.at)}`];
+    const from = [w ? `From ${nameIn(w, 'a worker')}` : 'From the orchestrator', `asked ${agoWords(now - d.at)}`];
+    // The card is the same keyed node whether answered or not, and it can take
+    // focus: an answer sent from it disables or removes the control that sent
+    // it, and focus waits here rather than falling to the page.
     if (d.answeredAt) {
-        return html`<div key=${`d:${d.id}`} class="op-need" data-answered="true">
+        return html`<div key=${`d:${d.id}`} class="op-need" data-answered="true" data-need=${d.id} tabindex="-1">
             <div class="op-need-q">${d.text}</div>
             <div class="op-need-from">${`You answered “${clip(d.answer || '', 80)}” ${agoWords(now - d.answeredAt)} — waiting for the orchestrator to pick it up.`}</div>
         </div>`;
     }
     const open = ui.reply === d.id;
-    return html`<div key=${`d:${d.id}`} class="op-need" data-busy=${String(busy)} data-stack=${String(d.options.length > 0)}>
+    return html`<div key=${`d:${d.id}`} class="op-need" data-busy=${String(busy)} data-stack=${String(d.options.length > 0)}
+        data-need=${d.id} tabindex="-1">
         <div class="op-need-q">${d.text}</div>
-        <div class="op-need-from">${from.join(' · ')}</div>
+        <div class="op-need-from" title=${w && w.title ? `From ${w.title}` : null}>${from.join(' · ')}</div>
         <div class="op-need-act">
             ${d.options.map(o => html`<button key=${o} class="lbtn" type="button" disabled=${busy}
                 onClick=${() => answerDecision(p, d, o)}>${o}</button>`)}
-            ${open ? null : html`<button class="lbtn op-text-btn" type="button" disabled=${busy}
+            ${open ? null : html`<button class="lbtn op-text-btn" type="button" disabled=${busy} data-reply-for=${d.id}
                 onClick=${() => { ui.reply = d.id; paintOrchPage(); focusSoon(`#op-reply-${d.id}`); }}>Reply…</button>`}
         </div>
         ${open ? html`<form class="op-reply" onSubmit=${(e) => {
@@ -330,7 +386,14 @@ function decisionCard(p, d, now) {
         }}>
             <input id=${`op-reply-${d.id}`} name="reply" type="text" autocomplete="off" disabled=${busy}
                 aria-label=${`Your answer to: ${d.text}`} placeholder="Your answer — Enter sends it to the orchestrator"
-                onKeyDown=${(e) => { if (e.key === 'Escape') { e.stopPropagation(); ui.reply = null; paintOrchPage(); } }} />
+                onKeyDown=${(e) => {
+                    if (e.key !== 'Escape') return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    ui.reply = null;
+                    paintOrchPage();
+                    focusSoon(`[data-reply-for="${d.id}"]`);
+                }} />
             <button class="lbtn ok" type="submit" disabled=${busy}>Send</button>
         </form>` : null}
     </div>`;
@@ -350,6 +413,7 @@ async function answerDecision(p, d, text) {
     if (ui.sending.has(d.id)) return;
     ui.sending.add(d.id);
     paintOrchPage();
+    focusSoon(`[data-need="${d.id}"]`);
     try {
         const sent = await sendMessage({ text: `Re: ${d.text}\n\n${text}`, canned: true });
         if (sent) {
@@ -388,7 +452,7 @@ function matrix(p, now) {
     return html`<section class="op-sec" aria-label="Workers">
         <h2 class="op-h">Workers <span>${counts}</span></h2>
         ${!p.workers.length && !p.pendingSpawns.length ? html`<div class="op-empty">
-            No workers yet. The orchestrator starts them with spawn_worker once you have agreed what to build.</div>`
+            ${`No workers yet. They appear here as the orchestrator starts them, up to ${p.settings.maxRunning} at once.`}</div>`
         : html`<div class="op-matrix">
             <div class="op-cols" aria-hidden="true"><span></span>
                 <span class="op-col-names">${STAGES.map(k => html`<span key=${k}>${STAGE_WORD[k]}</span>`)}</span></div>
@@ -423,14 +487,20 @@ function row(p, w, now) {
         PR_WORD[stage.prStatus] || stage.prStatus}</em></span>` : null;
     const where = `${STAGE_WORD[STAGES[stage.at - 1]]}: ${[line.lead, line.detail].filter(Boolean).join(', ')
         || (chip ? `#${w.pr.number} ${PR_WORD[stage.prStatus] || ''}` : '')}`;
+    const branch = !w.closedAt && w.worktree && w.worktree.branch;
+    // Named as a whole: read from its content, the name and the branch ran
+    // together with nothing between them.
+    const label = `${w.title || 'untitled worker'}${branch ? `, ${branch}` : ''} — ${where}`;
+    const open = ui.peek === w.id;
     return html`<button key=${w.id} type="button" class="op-row" data-tone=${stage.tone}
-        data-closed=${String(!!w.closedAt)} data-id=${w.id} data-at=${stage.at} aria-pressed=${String(ui.peek === w.id)}
-        style=${`--at:${stage.at}`} onClick=${() => (ui.peek === w.id ? closePeek() : openPeek(w.id))}>
-        <span class="op-who" title=${[w.title, !w.closedAt && w.worktree && w.worktree.branch].filter(Boolean).join('\n')}>
+        data-closed=${String(!!w.closedAt)} data-id=${w.id} data-at=${stage.at} aria-label=${label}
+        aria-expanded=${String(open)} aria-controls=${open ? 'orch-peek' : null}
+        style=${`--at:${stage.at}`} onClick=${() => (open ? closePeek() : openPeek(w.id))}>
+        <span class="op-who" title=${[w.title, branch].filter(Boolean).join('\n')}>
             <span class="op-dot" data-s=${DOT[stage.tone] || 'idle'}></span>
             <span class="op-who-text">
                 <span class="op-name">${w.title || 'untitled worker'}</span>
-                ${w.worktree && w.worktree.branch && !w.closedAt ? html`<span class="op-branch">${w.worktree.branch}</span>` : null}
+                ${branch ? html`<span class="op-branch">${branch}</span>` : null}
             </span>
         </span>
         <span class="op-track" aria-hidden="true">
@@ -438,7 +508,6 @@ function row(p, w, now) {
             <span class="op-say" title=${where}>${chip}${line.lead ? html`<b>${line.lead}</b>` : null}${line.detail
                 ? html`<span class="op-say-detail">${line.detail}</span>` : null}</span>
         </span>
-        <span class="sr-only">${where}</span>
     </button>`;
 }
 
@@ -456,7 +525,7 @@ function order(p) {
     if (!m.rows.length) return null;
     return html`<section class="op-sec" aria-label="Merge order">
         <h2 class="op-h">Merge order <span>${m.fromBrief ? 'from the brief' : 'in the order the workers started — the brief has none yet'}</span></h2>
-        <ol class="op-order">${m.rows.map(r => html`<li key=${r.number} data-merged=${String(r.status === 'merged')}>
+        <ol class="op-order">${m.rows.map(r => html`<li key=${r.key} data-merged=${String(r.status === 'merged')}>
             <span class="op-num">${r.n}</span>
             ${r.url ? html`<a class="op-pr" data-status=${r.status} href=${r.url} target="_blank" rel="noreferrer"
                 title=${`Open #${r.number} on GitHub`}>${`#${r.number}`}<em>${PR_WORD[r.status] || ''}</em></a>`
@@ -464,7 +533,9 @@ function order(p) {
             ${r.workerId ? html`<button class="op-order-t" type="button" title=${r.title} onClick=${() => openPeek(r.workerId)}>${r.title}</button>`
                 : html`<span class="op-order-t op-quiet" title="Not opened by one of these workers">not opened by one of these workers</span>`}
         </li>`)}</ol>
-        ${m.rest.length ? html`<div class="op-order-rest">${`Then ${m.rest.map(x => x.title).join(', ')}, as they open PRs.`}</div>` : null}
+        ${m.rest.length ? html`<div class="op-order-rest" title=${m.rest.map(x => x.title).join('\n')}>${m.rest.length === 1
+            ? `Then ${m.rest[0].title}, once it opens a PR.`
+            : `Then ${m.rest.length} more as they open PRs: ${m.rest.map(x => x.title).join(', ')}.`}</div>` : null}
     </section>`;
 }
 
@@ -525,13 +596,17 @@ function paintPeek(p) {
 
 async function loadDigest(workerId) {
     const p = state.orch;
-    if (!p) return;
+    // The read is one of the orchestrator's own tools, which the bridge refuses
+    // to a remote caller (docs/remote.md): say so rather than show the refusal.
+    if (!p || state.remote) return;
     const w = p.workers.find(x => x.id === workerId);
     const had = ui.digest.get(workerId);
     ui.digest.set(workerId, { ...(had || {}), loading: true, at: Date.now(), state: w && w.state });
     try {
         const r = await post(`/api/sessions/${p.orchestratorId}/orchestrator/read`, { worker: workerId, mode: 'digest' });
-        ui.digest.set(workerId, { loading: false, at: Date.now(), state: w && w.state, fields: r.fields || null, error: null });
+        ui.digest.set(workerId, { loading: false, at: Date.now(), state: w && w.state, fields: r.fields || null,
+            // No fields means nothing to read yet, and the text says why.
+            note: r.fields ? null : r.text || null, error: null });
     } catch (err) {
         ui.digest.set(workerId, { loading: false, at: Date.now(), state: w && w.state, fields: null, error: err.message });
     }
@@ -550,7 +625,7 @@ function peekTree(p, w) {
     }}>
         <header class="op-peek-head">
             <div class="op-peek-top">
-                <h2 class="op-peek-title" tabindex="-1">${w.title || 'untitled worker'}</h2>
+                <h2 class="op-peek-title" tabindex="-1" title=${w.title || null}>${w.title || 'untitled worker'}</h2>
                 <button class="lbtn" type="button" onClick=${() => goTo(w.id)}>Open session</button>
                 <button class="icon-btn" type="button" title="Close — Esc" aria-label="Close" onClick=${() => closePeek()}>
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -568,7 +643,9 @@ function peekTree(p, w) {
             ${steps(p, w)}
             <section class="op-peek-sec" aria-label="Progress">
                 <h3 class="op-h">So far ${dg && dg.loading ? html`<span>reading…</span>` : null}</h3>
+                ${state.remote ? html`<p class="op-quiet">Its progress is only read from the machine the app runs on. Open the session to see its transcript.</p>` : null}
                 ${dg && dg.error ? html`<p class="op-quiet">${`Could not read its progress: ${dg.error}`}</p>` : null}
+                ${dg && !dg.loading && dg.note ? html`<p class="op-quiet">${dg.note}</p>` : null}
                 ${f ? html`<dl class="op-facts">
                     <dt>Turns</dt><dd>${f.turns}</dd>
                     ${f.todo ? html`<dt>Todos</dt><dd>${`${f.todo.done} of ${f.todo.total} done`}${f.todo.now
@@ -608,7 +685,9 @@ function steps(p, w) {
     const plans = mine.filter(i => i.kind === 'plan');
     const plan = plans[plans.length - 1] || null;
     const latest = plans[0] || null;
-    const ok = plans.find(i => i.settledAt && /^(allow|plan-approved)/.test(i.outcome || '')) || null;
+    // The newest plan decides, as on the row: an approval of an older one does
+    // not cover a plan filed since, nor one sent back.
+    const ok = latest && latest.settledAt && /^(allow|plan-approved)/.test(latest.outcome || '') ? latest : null;
     const doneItem = mine.find(i => i.kind === 'done') || null;
     const st = freshPr(w.id) || (w.pr && w.pr.status);
     const list = [
@@ -650,10 +729,10 @@ function askBlock(p, w, b) {
                 <button class="lbtn ok" type="button" disabled=${busy}
                     title="Approve, and let it work in auto mode — what the orchestrator does"
                     onClick=${() => send({ decision: 'allow', mode: 'auto' })}>Approve</button>
-                <button class="lbtn" type="button" disabled=${busy}
+                <button class="lbtn" type="button" disabled=${busy} data-note="approve"
                     onClick=${() => { ui.note = { requestId: item.requestId, how: 'approve' }; paintOrchPage(); focusSoon('.op-note textarea'); }}>
                     Approve with a note</button>
-                <button class="lbtn op-text-btn" type="button" disabled=${busy}
+                <button class="lbtn op-text-btn" type="button" disabled=${busy} data-note="reject"
                     onClick=${() => { ui.note = { requestId: item.requestId, how: 'reject' }; paintOrchPage(); focusSoon('.op-note textarea'); }}>
                     Send it back</button>
             </div>`}
@@ -691,6 +770,8 @@ function askBlock(p, w, b) {
 
 function noteForm(item, note, send) {
     const approving = note.how === 'approve';
+    // Back to the button that opened it, which is drawn again in its place.
+    const back = () => { ui.note = null; paintOrchPage(); focusSoon(`#orch-peek [data-note="${note.how}"]`); };
     const go = (e) => {
         e.preventDefault();
         const text = e.target.closest('form').elements.note.value.trim();
@@ -702,12 +783,12 @@ function noteForm(item, note, send) {
             placeholder=${approving ? 'Anything to bear in mind? Enter approves, Esc goes back.'
                 : 'What should change? Enter sends it back, Esc goes back.'}
             onKeyDown=${(e) => {
-                if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); ui.note = null; paintOrchPage(); }
+                if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); back(); }
                 else if (e.key === 'Enter' && !e.shiftKey) go(e);
             }}></textarea>
         <div class="op-ask-btns">
             <button class="lbtn ${approving ? 'ok' : 'no'}" type="submit">${approving ? 'Approve with this note' : 'Send it back'}</button>
-            <button class="lbtn" type="button" onClick=${() => { ui.note = null; paintOrchPage(); }}>Cancel</button>
+            <button class="lbtn" type="button" onClick=${back}>Cancel</button>
         </div>
     </form>`;
 }
@@ -716,6 +797,9 @@ async function answerFrom(w, item, payload) {
     if (!item || ui.answering.has(item.requestId)) return;
     ui.answering.add(item.requestId);
     paintOrchPage();
+    // The button that sent it is disabled now and gone once the answer lands;
+    // the drawer's title stays, so focus waits there.
+    focusSoon('#orch-peek .op-peek-title');
     try {
         await answerAskFor(w.id, item.requestId, payload);
         ui.note = null;
@@ -769,6 +853,13 @@ function maxConvo() {
     return Math.max(CONVO_MIN, w - PAGE_MIN - SPLIT_W);
 }
 
+/**
+ * The width the conversation is drawn at: the chosen one, held to what this
+ * window allows. The choice itself is kept as it was, so a window made wider
+ * again gets it back. Pass `max` when it has already been read.
+ */
+const shownWidth = (w = convoW, max = maxConvo()) => Math.min(Math.max(w, CONVO_MIN), max);
+
 // One layout read, and before any write. `maxConvo` asks `#conv-main` how wide it
 // is, and this used to ask again for `aria-valuemax` *after* writing the width —
 // which made the browser lay out the page and the transcript there and then, on
@@ -779,7 +870,7 @@ function applyConvoWidth() {
     const split = node('orch-split');
     if (!main) return;
     const max = maxConvo();
-    const w = Math.round(Math.min(Math.max(convoW, CONVO_MIN), max));
+    const w = Math.round(shownWidth(convoW, max));
     main.style.setProperty('--orch-convo-w', `${w}px`);
     if (split) {
         split.setAttribute('aria-valuenow', String(w));
@@ -860,23 +951,34 @@ function wireSplit() {
     split.addEventListener('dblclick', () => queueConvoWidth(CONVO_DEFAULT));
     split.addEventListener('keydown', (e) => {
         const step = e.shiftKey ? 64 : 16;
-        // Step from where the last press asked to be, not from what the screen
-        // shows yet: two presses inside one frame are two steps.
-        const from = pending.w ?? convoW;
+        // From the width on screen, not the one kept: a width saved in a wider
+        // window would otherwise swallow the first few presses. And from where the
+        // last press asked to be, not what the screen shows yet: two presses
+        // inside one frame are two steps.
+        const at = shownWidth(pending.w ?? convoW);
         // The separator moves with the arrow: left widens the conversation.
-        const to = { ArrowLeft: from + step, ArrowRight: from - step, Home: CONVO_MIN,
+        const to = { ArrowLeft: at + step, ArrowRight: at - step, Home: CONVO_MIN,
             End: maxConvo(), Enter: CONVO_DEFAULT }[e.key];
         if (to == null) return;
         e.preventDefault();
         queueConvoWidth(to);
     });
-    // A window resized narrower must not leave the page under its minimum. Once a
-    // frame for the same reason as the drag: a window being dragged reports
-    // `resize` as fast as the mouse moves.
-    let resizeFrame = 0;
-    window.addEventListener('resize', () => {
-        if (resizeFrame) return;
-        resizeFrame = requestAnimationFrame(() => { resizeFrame = 0; if (orchPageUp()) applyConvoWidth(); });
-    });
+    // The column narrowing — a window resized, the rail shown, a side panel
+    // opened — must not leave the page under its minimum, and the separator's
+    // range has to follow it. A ResizeObserver already reports once a frame, after
+    // layout; a drag never wakes it, since `#conv-main`'s width does not depend on
+    // the split. Without one, `resize` stands in, held to once a frame for the
+    // same reason as the drag: a window being dragged reports it as fast as the
+    // mouse moves.
+    const main = node('conv-main');
+    if (main && typeof ResizeObserver === 'function') {
+        new ResizeObserver(() => { if (orchPageUp()) applyConvoWidth(); }).observe(main);
+    } else {
+        let resizeFrame = 0;
+        window.addEventListener('resize', () => {
+            if (resizeFrame) return;
+            resizeFrame = requestAnimationFrame(() => { resizeFrame = 0; if (orchPageUp()) applyConvoWidth(); });
+        });
+    }
 }
 wireSplit();

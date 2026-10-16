@@ -125,6 +125,20 @@ const states = (steps) => Object.fromEntries(steps.map(s => [s.key, s.state]));
     }
 
     {
+        // Approved once, then a second plan filed: the second is what it waits on,
+        // so the approval step is `now`, not `done` from the first.
+        const first = item({ kind: 'plan', requestId: 'p1', status: 'resolved', outcome: 'plan-approved' });
+        const second = item({ kind: 'plan', requestId: 'p2', status: 'read' });
+        const s = states(workerTimeline(worker({ pending: 'plan' }), newestFirst(first, second)));
+        assert.strictEqual(s.approved, 'now');
+        // Approved, then a second plan sent back: not approved, whatever the first was.
+        const back = { ...second, status: 'resolved', outcome: 'deny' };
+        const s2 = states(workerTimeline(worker({ state: 'busy' }), newestFirst(first, back)));
+        assert.strictEqual(s2.approved, 'todo');
+        ok('an earlier approval does not cover a newer plan');
+    }
+
+    {
         // A full inbox whose oldest item is younger than the worker: its plan may
         // have been trimmed, so the steps are `unknown`, not `skipped`.
         const filler = Array.from({ length: 100 }, (_, i) => item({ workerId: 'V', at: T0 + 10_000 + i }));

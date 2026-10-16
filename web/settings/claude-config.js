@@ -1,6 +1,7 @@
 // The Claude Code group: `~/.claude/settings.json` and a project's own, drawn as
-// controls where the app knows the key and as JSON where it does not. The hooks
-// editor inside it is hooks.js.
+// controls where the app knows the key and as JSON where it does not. Its Hooks
+// row is a summary and a way to the Hooks page (web/hooks/page.js), which is
+// where the editor went.
 //
 // Preact, drawn into the Settings tree by renderSettings like the groups built
 // from rows (see index.js). It used to be built with el() and hung in the tree as
@@ -33,7 +34,7 @@ import { shortPath } from '../format.js';
 import { cvSettingsNoteV } from '../quota.js';
 import { state } from '../state.js';
 import { grow } from '../composer/send.js';
-import { claudeHooksRow, hkClearDraft } from './hooks.js';
+import { openHooksAt } from '../hooks/page.js';
 import { foldLabelV, isOpen, LONG } from './fold.js';
 import { renderSettings, settingsProject } from './index.js';
 
@@ -161,10 +162,6 @@ export async function loadClaudeConfig({ flash = false } = {}) {
     try {
         const dir = claudeDir();
         s.data = await get(`/api/claude-config${dir ? `?cwd=${encodeURIComponent(dir)}` : ''}`);
-        // A clean hooks draft reseeds from what was just read; a dirty one is
-        // kept, and draws its own banner if the file moved under it. The same
-        // rule loadCmdConfig() spells out, for the same bug.
-        if (!s.hooksDirty) hkClearDraft(s);
         // A scope the current directory does not offer — Project with no
         // project — would leave every control disabled with no way back, so
         // fall to the one row that always exists.
@@ -342,10 +339,7 @@ function claudeScopeTabs() {
                 if (f.scope === s.scope || !claudeMayLeave()) return;
                 s.scope = f.scope;
                 s.stale = null;
-                // A clean draft too: it was seeded from the other file, and
-                // drawing it here would show that file's hooks under this tab.
                 s.draft = null;
-                hkClearDraft(s);
                 renderSettings();
             }}>${CLAUDE_SCOPES[f.scope]}${
                 !f.exists ? html`<span class="cfg-tab-tag">none</span>` : null}${
@@ -439,6 +433,51 @@ function claudeStaleBanner() {
             : null}
         <button class="linkish" type="button"
             onClick=${() => { s.stale = null; renderSettings(); }}>Dismiss</button>
+    </div>`;
+}
+
+/**
+ * The Hooks row: what this file holds, what the others add, and the way to the
+ * Hooks page.
+ *
+ * The editor used to be here, and it outgrew a row: thirty-odd events, a review
+ * step, the scripts hooks run, plugins' hooks. It moved to a page of its own
+ * (web/hooks/page.js) and this row became the door to it — opened on the
+ * project and scope this group is showing, so the link lands on the same file.
+ * One draft, there; none here, so the two can never disagree about it.
+ */
+function claudeHooksRow(row) {
+    const s = claudeState();
+    const file = s.data.files.find(f => f.scope === s.scope);
+    const block = file && file.values ? file.values.hooks : undefined;
+    const isObj = !!block && typeof block === 'object' && !Array.isArray(block);
+    const events = isObj ? Object.keys(block) : [];
+    const here = (s.data.hooks || []).filter(h => h.scope === s.scope);
+    const other = (s.data.hooks || []).filter(h => h.scope !== s.scope);
+    const missing = here.filter(h => h.script && !h.script.exists).length;
+    const off = s.data.effective.disableAllHooks;
+    const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+    const summary = file && file.exists && !file.parsed ? 'This file does not parse.'
+        : block !== undefined && !isObj ? 'hooks here is not an object — Claude Code ignores it.'
+            : here.length
+                ? `${plural(here.length, 'hook', 'hooks')} on ${events.join(', ')}.`
+                : 'No hooks in this file.';
+    return html`<div class=${`settings-row is-wide${claudeFlashClass(row.path)}`} data-path=${row.path}>
+        <div class="settings-row-head">
+            <div class="settings-row-text">
+                <div class="settings-row-label">${row.label}<code class="cfg-path">${row.path}</code></div>
+                <div class="settings-row-note">${summary}${
+                    other.length ? ` ${plural(other.length, 'more runs', 'more run')} from other files.` : ''}${
+                    missing ? html` <span class="cfg-script bad">${plural(missing, 'script', 'scripts')} missing</span>` : null}${
+                    off && off.value === true ? ' Every hook is off (disableAllHooks).' : ''}</div>
+            </div>
+            <div class="settings-row-side">
+                <button class="btn small" type="button"
+                    onClick=${() => openHooksAt({ dir: claudeDir(), scope: s.scope })}>Open the Hooks page</button>
+            </div>
+        </div>
+        <div class="settings-row-wide"><p class="cmd-field-note">${'Edit, review and save hooks there — along '
+            + 'with the scripts they run, ready-made recipes, and the hooks plugins, skills and agents add.'}</p></div>
     </div>`;
 }
 
@@ -854,15 +893,12 @@ function KvAdd({ disabled, add }) {
 /** Nothing typed on this group, or the user said to drop it. */
 export function claudeMayLeave() {
     const s = claudeState();
-    if (!s.dirty && !s.hooksDirty) return true;
-    const what = s.hooksDirty && s.dirty ? 'the JSON and the hooks you have edited'
-        : (s.hooksDirty ? 'the hooks you have edited' : 'the JSON you have edited');
+    if (!s.dirty) return true;
     // eslint-disable-next-line no-alert
-    if (!window.confirm(`Discard ${what}?`)) return false;
+    if (!window.confirm('Discard the JSON you have edited?')) return false;
     s.draft = null;
     s.dirty = false;
     s.jsonError = null;
-    hkClearDraft(s);
     return true;
 }
 
