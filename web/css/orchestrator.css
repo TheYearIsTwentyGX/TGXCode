@@ -148,7 +148,20 @@
 .orch-link:hover { text-decoration: underline; }
 
 .orch-settings { display: grid; gap: var(--sp-4); }
-.orch-settings label { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
+.orch-settings { line-height: var(--lh-base); }
+/* A setting is a sentence with fields in it, laid out as text: it wraps between
+   phrases, never between a field and the words that lead up to it. */
+.orch-line { display: block; }
+.orch-nw { white-space: nowrap; }
+/* A checkbox in a column of its own, its sentence beside it: wrapped lines hang
+   under the text, not under the box. */
+.orch-check {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: baseline;
+    column-gap: var(--sp-4);
+}
+.orch-check > input[type="checkbox"] { margin: 0; }
 /* A step up from the dock rather than a hairline round a sunk field: the
    app's controls are tonal everywhere else. */
 .orch-settings input[type="number"],

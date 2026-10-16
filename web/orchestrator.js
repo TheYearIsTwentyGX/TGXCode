@@ -252,30 +252,31 @@ export function settings(p) {
     const save = (patch) => saveSettings(p, patch);
     const off = !s.usageStop.enabled;
     const all = s.usageStop.window === 'all';
+    // Text and fields share one run of inline flow, so a narrow popover wraps
+    // them as phrases — a field stays with the words before it (.orch-nw) — and
+    // a checkbox keeps its label beside it, wrapped lines hanging under the text
+    // rather than the box. The spaces are written on the same line as the
+    // words: htm drops whitespace that holds a newline.
     return html`<div class="orch-settings">
-        <label>At most
-            <input type="number" name="maxRunning" min="1" max="10" defaultValue=${s.maxRunning}
-                key=${`max:${s.maxRunning}`}
-                onChange=${(e) => save({ maxRunning: Number(e.target.value) })} />
-            workers running at once</label>
-        <label><input type="checkbox" checked=${s.worktree}
-            onChange=${(e) => save({ worktree: e.target.checked })} />
-            Start each worker in its own worktree</label>
-        <label><input type="checkbox" checked=${s.usageStop.enabled}
-            onChange=${(e) => save({ usageStop: { enabled: e.target.checked } })} />
-            Stop everything ${all ? 'past any of these limits' : html`at
-            <input type="number" name="percent" min="1" max="100" defaultValue=${s.usageStop.percent}
-                key=${`pct:${s.usageStop.percent}`} disabled=${off}
-                onChange=${(e) => save({ usageStop: { percent: Number(e.target.value) } })} />
-            % of`}
-            <select value=${s.usageStop.window} disabled=${off}
+        <label class="orch-line"><span class="orch-nw">At most <input type="number" name="maxRunning"
+            min="1" max="10" defaultValue=${s.maxRunning} key=${`max:${s.maxRunning}`}
+            onChange=${(e) => save({ maxRunning: Number(e.target.value) })} /></span> workers running <span class="orch-nw">at once</span></label>
+        <label class="orch-check"><input type="checkbox" checked=${s.worktree}
+            onChange=${(e) => save({ worktree: e.target.checked })} /><span>Start each worker in its own worktree</span></label>
+        <label class="orch-check"><input type="checkbox" checked=${s.usageStop.enabled}
+            onChange=${(e) => save({ usageStop: { enabled: e.target.checked } })} /><span>${all
+            ? 'Stop everything past any of these limits '
+            : html`<span class="orch-nw">Stop everything at <input type="number" name="percent"
+                min="1" max="100" defaultValue=${s.usageStop.percent} key=${`pct:${s.usageStop.percent}`} disabled=${off}
+                onChange=${(e) => save({ usageStop: { percent: Number(e.target.value) } })} /></span> % of `}<select
+                value=${s.usageStop.window} disabled=${off}
                 onChange=${(e) => save({ usageStop: { window: e.target.value } })}>
                 <option value="five_hour">the five-hour window</option>
                 <option value="seven_day">the weekly window</option>
                 <option value="seven_day_opus">the weekly Opus window</option>
                 <option value="seven_day_sonnet">the weekly Sonnet window</option>
                 <option value="all">all limits</option>
-            </select></label>
+            </select></span></label>
         ${all ? html`<div class="orch-limits">${LIMITS.map(([w, label]) => html`
             <label key=${w}>${label}
                 <input type="number" name=${`limit-${w}`} min="1" max="100" placeholder="off"
@@ -287,9 +288,8 @@ export function settings(p) {
                     }} />%</label>`)}
             <div class="orch-note">Leave one empty to ignore that window.</div>
         </div>` : null}
-        <label><input type="checkbox" checked=${!!s.usageStop.autoResume} disabled=${off}
-            onChange=${(e) => save({ usageStop: { autoResume: e.target.checked } })} />
-            Carry on by itself when the window resets</label>
+        <label class="orch-check"><input type="checkbox" checked=${!!s.usageStop.autoResume} disabled=${off}
+            onChange=${(e) => save({ usageStop: { autoResume: e.target.checked } })} /><span>Carry on by itself when the window resets</span></label>
         <div class="orch-note">The defaults for new orchestrators, and text added to every
             orchestrator's instructions, are in Settings › Orchestrators.</div>
     </div>`;
