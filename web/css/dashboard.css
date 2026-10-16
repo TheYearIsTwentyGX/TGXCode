@@ -668,6 +668,43 @@ span.lw-title { cursor: default; color: var(--text-3); }
 }
 .lw-more:hover { color: var(--blue); }
 
+/* The idle-and-finished fold: a line under the active rows, and opened, the
+   same rows a size quieter — no ask, no Stop, nothing breathing. */
+.lw-fold {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    width: 100%;
+    padding: var(--sp-2) var(--sp-7) var(--sp-2) calc(var(--sp-7) - var(--edge-w));
+    border: 0;
+    background: none;
+    text-align: left;
+    font: 500 var(--fs-xs)/var(--lh-snug) var(--sans);
+    color: var(--text-3);
+    cursor: pointer;
+}
+.lw-fold:hover { color: var(--blue); }
+.lw-caret { width: 1em; color: var(--text-4); }
+.lw-qrow { padding-top: var(--sp-2); padding-bottom: var(--sp-2); }
+.lw-qrow[data-reason="finished"] .lw-dot { background: transparent; box-shadow: inset 0 0 0 1px var(--text-4); }
+.lw-qrow .lw-title { color: var(--text-3); }
+/* The state word is two short words wide; the standing line gives way to it. */
+.lw-qrow .lw-say .lstate { flex: none; }
+.lw-standing {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--fs-xs);
+    color: var(--text-4);
+}
+.lw-ago { flex: none; font-size: var(--fs-xs); color: var(--text-4); }
+.lw-older {
+    padding: var(--sp-2) var(--sp-7) var(--sp-2) calc(var(--sp-7) - var(--edge-w) + 6px + var(--sp-4));
+    font-size: var(--fs-xs);
+    color: var(--text-4);
+}
+
 .lcard-log {
     margin: 0;
     min-width: 0;

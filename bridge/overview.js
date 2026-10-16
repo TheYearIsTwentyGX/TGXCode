@@ -90,27 +90,44 @@ function build(index, pool, registry, { includeTest = false, now = Date.now() } 
     const orchs = index.orchestrators ? [...index.orchestrators.byId.values()] : [];
     const crew = hostWorkers({ summaries, reasons, orchs, statuses, now });
 
-    const cards = [];
-    // Everything the board has no reason for — the pool the recent group is
-    // drawn from. Collected here rather than filtered again afterwards, which
-    // also makes the two groups disjoint by construction: a session with a
-    // reason never reaches this list, so nothing can appear twice. An
-    // orchestrator its workers put on the board has a reason, and so is not here.
+    // Everything the board has a reason for, and everything it has none for —
+    // the pool the recent group is drawn from. Split here rather than filtered
+    // again afterwards, which also makes the two groups disjoint by
+    // construction: a session with a reason never reaches the pool, so nothing
+    // can appear twice. An orchestrator its workers put on the board has a
+    // reason, and so is not in the pool.
+    const since = recentSince();
+    const placed = [];
     const idle = [];
     for (const s of summaries) {
-        const runner = statuses[s.sessionId] || null;
         const host = crew.hosts.get(s.sessionId);
         const reason = host ? host.reason : reasons.get(s.sessionId);
-        if (!reason) { idle.push(s); continue; }
-        cards.push(card(index, s, runner, reason, crew));
+        if (reason) placed.push([s, reason]);
+        else if (!s.archived && activityAt(s) >= since) idle.push(s);
     }
+
+    // A quiet worker — idle, or closed — is drawn inside its orchestrator's
+    // card whenever that orchestrator is on the board at all, in either group,
+    // and nowhere else. Decided before either group is capped, so that the cap
+    // cutting an orchestrator hides its crew with it (one unit in
+    // `recentHidden`) rather than dropping them back out as cards of their own.
+    // An orchestrator that is not on the board leaves its workers as ordinary
+    // cards, so nothing disappears.
+    const present = new Set([...placed.map(([s]) => s.sessionId), ...idle.map(s => s.sessionId)]);
+    const nested = new Set();
+    for (const [orchId, q] of crew.quiet) {
+        if (!present.has(orchId)) continue;
+        for (const id of q.all) nested.add(id);
+    }
+
+    const cards = placed.filter(([s]) => !nested.has(s.sessionId))
+        .map(([s, reason]) => card(index, s, statuses[s.sessionId] || null, reason, crew, present));
     foldWorkerSigs(cards);
 
     cards.sort(order);
     const shown = capUnits(cards, MAX_CARDS);
 
-    const since = recentSince();
-    const warm = idle.filter(s => !s.archived && activityAt(s) >= since)
+    const warm = idle.filter(s => !nested.has(s.sessionId))
         .sort((a, b) => activityAt(b) - activityAt(a));
     // With the runner this bridge holds, not null. A session whose turn has just
     // ended is idle but still has its `claude` process, so the registry reports
@@ -118,7 +135,7 @@ function build(index, pool, registry, { includeTest = false, now = Date.now() } 
     // every client reads as "running somewhere that is not us", and the board
     // told the user their own session was in another TGXCode window.
     const recent = warm.slice(0, MAX_RECENT)
-        .map(s => card(index, s, statuses[s.sessionId] || null, 'recent'));
+        .map(s => card(index, s, statuses[s.sessionId] || null, 'recent', crew, present));
 
     // Only the sessions actually on screen keep their caches alive — both
     // groups of them. Left at `shown` alone, every recent card's task progress
@@ -159,7 +176,9 @@ function build(index, pool, registry, { includeTest = false, now = Date.now() } 
  * sitting idle until somebody reports. So an orchestrator **hosts** when any
  * open worker of its own has a reason to be on the board (busy, asking, failed,
  * running elsewhere) or a spawn is queued behind the cap, and a host gets a card
- * whatever its own state. Idle and closed workers are counted, not listed.
+ * whatever its own state. Idle and closed workers are its `quiet` ones
+ * (`quietWorkers`): listed on its card behind a fold, and kept out of both
+ * groups whenever it is on the board at all.
  *
  * Its `reason` is the stronger of its own and the one its workers lend it. The
  * lent one is `ask` only for an ask that is the user's (below), `error` for a
@@ -188,20 +207,23 @@ function hostWorkers({ summaries, reasons, orchs, statuses, now = Date.now() }) 
     const workerOf = new Map();
     const askFor = new Map();
 
+    const quiet = new Map();
+    const orchById = new Map(orchs.map(o => [o.id, o]));
+
     for (const o of orchs) {
         const self = byId.get(o.id);
         if (!self || self.archived) continue;
+        const q = quietWorkers(o, byId, reasons);
+        if (q.all.length) quiet.set(o.id, q);
         const orchRunner = statuses[o.id] || null;
         const working = !!orchRunner && (orchRunner.state === 'busy' || orchRunner.state === 'starting')
             && !orchRunner.pendingPermission;
 
         const active = [];
-        let idle = 0;
-        let finished = 0;
         for (const w of o.workers || []) {
-            if (w.closedAt) { finished++; continue; }
+            if (w.closedAt) continue;
             const r = reasons.get(w.id) || null;
-            if (!ACTIVE.has(r)) { idle++; continue; }
+            if (!ACTIVE.has(r)) continue;
             active.push({ w, r, ask: (statuses[w.id] && statuses[w.id].pendingPermission) || null });
         }
         const queued = (o.pendingSpawns || [])
@@ -237,14 +259,84 @@ function hostWorkers({ summaries, reasons, orchs, statuses, now = Date.now() }) 
             workers: {
                 ids: active.map(a => a.w.id),
                 queued,
-                idle,
-                finished,
+                idle: q.idle,
+                finished: q.finished,
                 own: !!mine,
                 paused: !!o.paused,
             },
         });
     }
-    return { hosts, workerOf, askFor };
+    return { hosts, workerOf, askFor, quiet, orchs: orchById };
+}
+
+// How many quiet workers an orchestrator's card lists. The counts beside the
+// list stay totals, so a client can say "+N older" for the rest.
+const MAX_QUIET = 20;
+
+/**
+ * An orchestrator's quiet workers: open ones with nothing to show, and closed
+ * ones, which between them are the "6 idle" its card used to count while the
+ * same sessions sat in the recent group as cards of their own.
+ *
+ * A *pinned* worker is not one of them. The user chose to keep that session in
+ * view, so it keeps its card in Pinned, and is neither listed here nor counted
+ * in `idle`/`finished` — otherwise the fold would promise a row it does not
+ * draw. Neither is a worker whose session is missing (deleted, or a test
+ * session on the everyday bridge); there is nothing to open. An *archived* one
+ * is kept: `close_worker` archives the session by default, so leaving those
+ * out would leave out nearly every finished worker, and an archived session is
+ * on the board nowhere else.
+ *
+ * `all` is every id, uncapped, which is what `build` keeps out of the groups;
+ * `rows` is what the card lists — idle first, then finished, newest first in
+ * each, at most MAX_QUIET.
+ */
+function quietWorkers(o, byId, reasons) {
+    const idle = [];
+    const finished = [];
+    for (const w of o.workers || []) {
+        const r = reasons.get(w.id) || null;
+        if (!w.closedAt && ACTIVE.has(r)) continue;
+        if (r === 'pinned') continue;
+        const s = byId.get(w.id);
+        if (!s) continue;
+        const row = {
+            id: w.id,
+            title: s.title || w.title || null,
+            state: w.closedAt ? 'finished' : 'idle',
+            at: activityAt(s) || null,
+            standing: (s.standing && s.standing.text) || null,
+        };
+        (w.closedAt ? finished : idle).push(row);
+    }
+    const newest = (a, b) => (b.at || 0) - (a.at || 0);
+    idle.sort(newest);
+    finished.sort(newest);
+    const all = [...idle, ...finished];
+    return {
+        all: all.map(r => r.id),
+        rows: all.slice(0, MAX_QUIET),
+        idle: idle.length,
+        finished: finished.length,
+    };
+}
+
+/**
+ * What a card says about its workers: the host's record with its quiet list,
+ * or, for an orchestrator on the board for itself with only quiet workers, the
+ * same shape with nothing active. Null for everything else.
+ */
+function crewOf(crew, id, present) {
+    if (!crew) return null;
+    const host = crew.hosts.get(id);
+    const q = present && present.has(id) ? crew.quiet.get(id) : null;
+    if (host) return { ...host.workers, quiet: q ? q.rows : [] };
+    if (!q) return null;
+    const o = crew.orchs && crew.orchs.get(id);
+    return {
+        ids: [], queued: [], idle: q.idle, finished: q.finished,
+        own: true, paused: !!(o && o.paused), quiet: q.rows,
+    };
 }
 
 /**
@@ -363,7 +455,7 @@ function order(a, b) {
     return (b.lastTs ? Date.parse(b.lastTs) : 0) - (a.lastTs ? Date.parse(a.lastTs) : 0);
 }
 
-function card(index, s, runner, reason, crew = null) {
+function card(index, s, runner, reason, crew = null, present = null) {
     const rec = index.get(s.sessionId);
     const file = rec ? rec.file : null;
 
@@ -425,7 +517,7 @@ function card(index, s, runner, reason, crew = null) {
         // is on the board as its host; null otherwise.
         orchestratorId: (crew && crew.workerOf.get(s.sessionId)) || null,
         // On a host: the workers it carries. See `hostWorkers`.
-        workers: (crew && crew.hosts.has(s.sessionId)) ? crew.hosts.get(s.sessionId).workers : null,
+        workers: crewOf(crew, s.sessionId, present),
 
         // Content, and therefore from the transcript — never from the runner's
         // stream. See the constraint in ROADMAP.md.
@@ -595,5 +687,5 @@ const breathe = () => new Promise(resolve => setImmediate(resolve));
 
 module.exports = {
     build, refreshDevServers, recentSince, activityAt, hostWorkers, capUnits, foldWorkerSigs, why,
-    DEVSERVER_TTL_MS, STUCK_MS, MAX_CARDS,
+    DEVSERVER_TTL_MS, STUCK_MS, MAX_CARDS, MAX_RECENT, MAX_QUIET,
 };

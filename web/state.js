@@ -376,6 +376,9 @@ export const state = {
         // takes. Kept whichever order is set, so switching to it shows a true
         // order at once rather than starting from whatever was on screen.
         arrival: new Map(), nextArrival: 0,
+        // Orchestrator cards whose idle-and-finished fold is open, by session
+        // id. Folded unless it is in here; see `QuietFold` in boards/live.js.
+        quietOpen: new Set(),
         // Which way the board and the conversation divide the window:
         // 'bottom' stacks them, 'side' puts them next to each other. A property
         // of the window rather than of a session, like the terminal pane, so it
