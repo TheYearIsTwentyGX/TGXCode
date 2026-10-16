@@ -5568,7 +5568,9 @@ laid out for a page**: `{state: string|null (null: no process), pending:
 "tool"|"plan"|"question"|null, turns: number, todo: null | {done, total, now:
 string|null}, tools: [{name, n}] (most used first), files: [string] (paths edited),
 diffStat: string|null (the output of git diff --stat HEAD), lastMessage: string|null
-(at most 3000 chars)}`. `tail` is `{text, turns}`, `full` is `{text, offset, next:
+(at most 3000 chars)}`. **A worker with no transcript yet** (just spawned, still
+starting) reads as `{text, headline: null, fields: null}` in `digest` mode, and as
+`{text}` alone in `tail` and `full` — `text` says to try again in a few seconds. `tail` is `{text, turns}`, `full` is `{text, offset, next:
 number|null, total}`, and **`ask` is not a read**: it sends the worker a message
 asking it to summarise itself, and the answer arrives later as a `turn` item. Every
 mode but `ask` only reads.
