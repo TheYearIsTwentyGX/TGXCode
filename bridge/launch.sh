@@ -42,6 +42,26 @@ if ! find_node; then
     exit 127
 fi
 
+# TGXCODE_ORIGINS is the hostname a tunnel reaches us by, and it lives in
+# ~/.profile because the Windows shell's `bash -lc` reads that file. Everything
+# else that starts a bridge does not: scripts/restart-bridge.sh hands us the
+# environment of whoever called it — a cron entry, `npm run land` from an agent's
+# session, a shell that never read ~/.profile — and a bridge started without the
+# variable answers every tunnel request `403 unexpected host`, which is the phone
+# going dark until somebody restarts from a login shell. So when neither name is
+# set, ask ~/.profile for it. In a subshell, and only that one value comes back:
+# nothing else the profile does reaches the bridge's environment. Set to empty
+# on purpose still wins, because only an unset variable is filled in.
+if [ -z "${TGXCODE_ORIGINS+x}" ] && [ -z "${CLAUDE_SESSIONS_ORIGINS+x}" ] \
+    && [ -r "$HOME/.profile" ]; then
+    origins=$(timeout 10 bash -c \
+        '. "$HOME/.profile" >/dev/null 2>&1 </dev/null; printf %s "${TGXCODE_ORIGINS:-${CLAUDE_SESSIONS_ORIGINS:-}}"' \
+        2>/dev/null </dev/null)
+    if [ -n "$origins" ]; then
+        export TGXCODE_ORIGINS="$origins"
+    fi
+fi
+
 if [ "${1:-}" = "--check" ]; then
     printf '%s %s\n' "$(command -v node)" "$(node --version)"
     exit 0

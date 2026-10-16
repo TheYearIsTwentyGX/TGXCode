@@ -10,7 +10,7 @@ Two halves, and they are independent:
 - **The transport** — how a phone reaches the bridge at all — is a deployment
   choice, and this document is the runbook for it.
 
-The phone itself is the native Android app in `~/Other/tgxcode-mobile`, a client of
+The phone itself is the native Android app in `~/Other/tgxcode-mobile` (`~/Projects/tgxcode-mobile` on the current machine), a client of
 the API in [`docs/api.md`](api.md). There was a phone-shaped web page at `/m` for a
 while and it has been removed; everything below is about getting the bridge within
 reach, which is the same problem either way.
@@ -29,14 +29,347 @@ variable, and this document does not recommend it.
 
 Everything below keeps the bridge bound to `127.0.0.1`.
 
-## Recommended: `tailscale serve`
+
+## What runs here: a named Cloudflare Tunnel
+
+The phone gets an ordinary HTTPS URL, `https://tgxcode.com`, and needs nothing
+installed. That matters most for a native Android client, which would otherwise
+inherit a VPN dependency.
+
+Free, and nothing to host — `cloudflared` runs on the machine with the bridge and
+dials *out*, so there is no port to forward and no server to pay for. The tunnel
+lives in the Cloudflare account, not on a machine, which is what makes moving it
+cheap: see *Moving to a new machine* below.
+
+### Use a domain whose DNS you do not mind moving
+
+Cloudflare Tunnel needs the hostname to live in a Cloudflare zone, and on the free
+plan that means the **whole zone's** DNS moves to Cloudflare. Keeping your existing
+DNS and delegating only a subdomain is not a free path: partial (CNAME) setup is
+Business plan, subdomain zones are Enterprise.
+
+So do not move a domain that carries mail you cannot afford to lose. `twentygx.com`
+is the example to avoid: its MX is `149900537.pamx1.hotmail.com`, the legacy
+Windows Live custom-domain service, which is no longer provisioned — if that record
+is ever lost there is no documented way to get a new one, only a move to paid
+Microsoft 365. A second domain registered at Cloudflare costs a few dollars a year
+and takes the question off the table entirely. That is what `tgxcode.com` is.
+
+### Measured: a named tunnel streams, a quick tunnel does not
+
+This is worth being precise about, because the distinction is the difference
+between the phone feeling live and the phone looking broken — and the open
+`cloudflared` issues only ever tested the half that fails.
+
+| `/api/events` | Loopback | Quick tunnel | Named tunnel |
+|---|---|---|---|
+| `hello` | 0.04s | **never** | **0.29s** |
+| Pings at 25s / 50s | on time | never | on time |
+| Chunks in ~75s | 9 | **0** | **36** |
+| `X-Accel-Buffering: no` echoed | yes | stripped | stripped |
+
+A **quick** tunnel (`cloudflared tunnel --url …`, `*.trycloudflare.com`) buffers
+completely: HTTP 200, `text/event-stream`, and zero bytes for 75 seconds while the
+immediate `hello` and three pings are all held. That reproduces
+[cloudflared#1449](https://github.com/cloudflare/cloudflared/issues/1449) and
+[#199](https://github.com/cloudflare/cloudflared/issues/199).
+
+A **named** tunnel on a real hostname streams properly — 36 chunks spread across
+75 seconds, pings landing at 25.28s and 50.28s. Both strip the
+`X-Accel-Buffering` header, so that header is not what makes the difference and
+there is no config knob to reach for; the buffering lives in the quick-tunnel path
+specifically.
+
+**So the named tunnel is the supported setup, and SSE works on it.** Do not judge
+this transport by a quick tunnel — that is a test of a different code path.
+
+Those numbers were taken without Cloudflare Access in front. Whether SSE still
+streams once Access is switched on has **not been measured**, because Access does
+not exist on this hostname yet — see *Verify it* under Access below.
+
+**A client should keep the fallback anyway**, and the Android app does: watch for
+`hello` and switch to polling if it does not arrive within six seconds. It costs
+nothing when the stream works (it never engages) and it is what makes a quick tunnel,
+a corporate proxy, or some hotel network degrade into "a couple of seconds behind"
+instead of "silently frozen". Polling was measured through the same tunnel at 62ms
+for the board and 42 bytes for an empty transcript delta, so the degraded mode is
+barely degraded. `docs/api.md` has the cadence.
+
+### What exists, and where
+
+In the Cloudflare account, shared by every machine that has ever run it:
+
+- **Tunnel** `claude-sessions`, id `8fc8f334-b1fa-483f-8110-1fe6d2a4458e`. The
+  name predates the rename and is only a label; nothing reads it but `cloudflared`.
+- **Hostname** `tgxcode.com` — the apex, on a domain bought for this and nothing
+  else. A CNAME to the tunnel, created once by `tunnel route dns`.
+
+On the machine running the bridge (`<user>` below is that machine's Linux user):
+
+- **Credentials** `~/.cloudflared/<tunnel-id>.json` and the login certificate
+  `~/.cloudflared/cert.pem`.
+- **Config** `~/.cloudflared/config.yml`, pointing at `http://127.0.0.1:45888`.
+  `service install` copies it to `/etc/cloudflared/config.yml`, and **that copy is
+  the one the service reads** — edit the home one and the service will not notice.
+- **Binary** `/usr/local/bin/cloudflared`, mode 755.
+- **Service** `cloudflared.service` under systemd, running
+  `/usr/local/bin/cloudflared --no-autoupdate --config /etc/cloudflared/config.yml tunnel run`.
+- **`TGXCODE_ORIGINS=https://tgxcode.com`** exported from `~/.profile`.
+
+The machine this was first set up on (`dylan_hays`, Tailscale name `tg-dylanh`)
+ran `cloudflared` straight out of `~/.local/bin` with no service. The current one
+(`twentygx@TwentyGX`, WSL2 with systemd) runs it as above. The tunnel, the hostname
+and the DNS record carried over untouched.
+
+### Moving to a new machine
+
+**A new machine needs no new tunnel.** The tunnel and its DNS route are in the
+account; the machine only needs credentials for it and something running it. The
+symptom of a machine move with nothing running is `https://tgxcode.com` answering
+**Cloudflare error 1033** — "Argo Tunnel error", meaning Cloudflare has the route
+but no `cloudflared` is connected to the tunnel behind it.
+
+1. **Get `cloudflared`** into `~/.local/bin/cloudflared` (the `.deb` or the static
+   binary from Cloudflare's releases — whichever; only the file matters here).
+
+2. **Authorise the machine.** Opens a browser; pick the `tgxcode.com` zone. Writes
+   `~/.cloudflared/cert.pem`.
+
+   ```bash
+   cloudflared tunnel login
+   ```
+
+3. **Fetch the existing tunnel's credentials** rather than creating a tunnel:
+
+   ```bash
+   cloudflared tunnel token --cred-file ~/.cloudflared/8fc8f334-b1fa-483f-8110-1fe6d2a4458e.json claude-sessions
+   ```
+
+4. **Write `~/.cloudflared/config.yml`.** A single service needs no `hostname`
+   match — whatever is routed to the tunnel reaches the bridge, and the DNS route
+   is the only thing that decides what that is:
+
+   ```yaml
+   tunnel: 8fc8f334-b1fa-483f-8110-1fe6d2a4458e
+   credentials-file: /home/<user>/.cloudflared/8fc8f334-b1fa-483f-8110-1fe6d2a4458e.json
+   edge-ip-version: "4"
+   ingress:
+     - service: http://127.0.0.1:45888
+   ```
+
+   `credentials-file` must be an absolute path: the service runs as root, for whom
+   `~` is somewhere else.
+
+   `edge-ip-version: "4"` was load-bearing on the first machine, which had no working
+   IPv6 route — `cloudflared tunnel list` failed dialling Cloudflare over v6 while
+   the same call succeeded over v4, and without the pin every reconnect burned a
+   timeout first. It is harmless where v6 works. It must be a **string** — an int
+   is rejected by the config parser.
+
+   **`--url` on the command line does not override `ingress`.** It is echoed in the
+   startup `Settings:` line, which makes it look like it took effect, but the config
+   file's ingress rules are what route. To test against a different port, edit the
+   config; do not trust the flag.
+
+5. **Install it as a system service.** WSL needs systemd for this (`/etc/wsl.conf`
+   with `[boot] systemd=true`). The obvious command fails:
+
+   ```console
+   $ sudo cloudflared service install
+   sudo: cloudflared: command not found
+   ```
+
+   because sudo's `secure_path` does not include `~/.local/bin` — and a system
+   service should not be running a binary out of a home directory that is mode
+   `0700` anyway. Install the binary system-wide, and name the config explicitly so
+   the service is built from yours:
+
+   ```bash
+   sudo install -m 755 ~/.local/bin/cloudflared /usr/local/bin/cloudflared
+   sudo cloudflared --config /home/<user>/.cloudflared/config.yml service install
+   systemctl status cloudflared
+   ```
+
+   The unit runs with **`--no-autoupdate`**, so updates are manual: repeat the
+   `install` line with a newer binary and `sudo systemctl restart cloudflared`.
+
+6. **Tell the bridge the hostname**, or every request comes back
+   `403 {"error":"unexpected host"}` — the DNS-rebinding guard, which has no way to
+   know about your domain until you say so. In **`~/.profile`**:
+
+   ```bash
+   export TGXCODE_ORIGINS=https://tgxcode.com
+   ```
+
+   That file rather than the app, because the Windows shell starts the bridge with
+   `wsl.exe bash -lc`, and a login shell reads `~/.profile` (unless a
+   `~/.bash_profile` or `~/.bash_login` exists — then that one, and this line belongs
+   there instead). Setting it in `app/main.js` would work too and would need a
+   rebuild, which is worse. **A running bridge does not pick this up**; it applies
+   at next start.
+
+   **Not every start is a login shell**, and this is the one that bites.
+   `scripts/restart-bridge.sh` starts `bridge/launch.sh` with the *caller's*
+   environment — an agent's session, `npm run land`, cron, a terminal that never
+   read `~/.profile`. A bridge started from one of those without the variable
+   answers every tunnel request `403 unexpected host`, and the phone goes dark until
+   somebody restarts from a login shell:
+
+   ```bash
+   bash -lc 'cd ~/Projects/TGXCode && bash scripts/restart-bridge.sh'
+   ```
+
+   `bridge/launch.sh` now closes that: when neither `TGXCODE_ORIGINS` nor its old
+   name is set, it reads the value out of `~/.profile` in a subshell and exports
+   only that. A variable set to empty on purpose is left alone. So the profile line
+   is still the place to put it, and every start path honours it.
+
+7. **Check it end to end:**
+
+   ```bash
+   curl -s https://tgxcode.com/api/health     # "ok": true, "remote": true
+   ```
+
+8. **Pair the phone** — *Settings → Connect a phone*, with `https://tgxcode.com` in
+   *Reachable at*. The link is pasted into the Android app; see step 5 of the
+   Tailscale setup below for what the link carries — it is the same link.
+
+### Put Cloudflare Access in front of it
+
+This is the real cost of not using Tailscale, and it is not the money. A tailnet
+means only your own devices can reach the bridge at all. A public hostname means
+anyone who finds it reaches the door, and the only thing behind that door is one
+bearer token that never expires. Access puts a second, independent credential at
+Cloudflare's edge, so a request without it never reaches this machine.
+
+**Do not switch Access on until the Android app sends the service-token headers,
+and the phone has that build.** The moment the policy is saved, every request
+without them is turned away at the edge, and a phone that does not send them is
+locked out with nothing on this machine to tell you why. Build and install the app
+first, enter the client id and secret in it, *then* create the application.
+
+Free for up to 50 users. Menu names below are the Zero Trust dashboard's as of
+2026-10; Cloudflare renames things, so trust the shape over the words.
+
+#### 1. Create a service token for the phone
+
+*Zero Trust → Access controls → Service credentials → Service Tokens → Create
+Service Token.* Name it for the device (`pixel`, say), pick the longest **Service
+Token Duration** offered, and **Generate token**.
+
+You get a **Client ID** (ends `.access`) and a **Client Secret**. The secret is
+shown **once** — copy both into the app's settings, or a password manager, before
+leaving the page.
+
+While you are there: *Notifications → Add → Expiring Access Service Token* mails
+you a week before it lapses. A token that expires is the phone locked out again,
+so turn it on.
+
+#### 2. (Optional) Enable one-time PIN for a browser
+
+Only if you also want to open `https://tgxcode.com` in a phone browser.
+*Zero Trust → Integrations → Identity providers → Add new identity provider →
+One-time PIN.* Access then mails a code to any address a policy allows.
+
+#### 3. Create the application
+
+*Zero Trust → Access controls → Applications → Create new application →
+Self-hosted and private → Add public hostname*, and pick `tgxcode.com` from
+**Domain**, leaving the subdomain and path empty so it covers everything —
+`/api/*`, `/api/events`, `/pair` and the page itself.
+
+**Session Duration:** the longest the dropdown offers. It governs the
+`CF_Authorization` cookie a browser login gets (the default is 24 hours). The
+phone app's service token does not depend on it — it sends its headers on every
+request — but a browser does, and **a session that expires mid-use is a redirect
+to the Access login page**: a navigation lands on the login form, and a `fetch` or
+the `/api/events` stream gets a cross-origin redirect it cannot follow, so the page
+looks frozen or 401-ish until it is reloaded.
+
+#### 4. Policies on that application
+
+Under **Access policies**, add:
+
+- **Phone app** — Action **Service Auth**, Include **Service Token** → the token
+  from step 1. *Service Auth*, not *Allow*: with *Allow*, Access ignores the
+  headers and asks for a login the app cannot complete.
+- **(Optional) Me, in a browser** — Action **Allow**, Include **Emails** → your
+  address. Pairs with the one-time PIN from step 2.
+
+Leave **Block** and **Bypass** out. Applications are deny-by-default, so anything
+matching neither policy is refused.
+
+**Strict service token authentication** (*Access controls → Access settings →
+Manage service tokens*) is worth knowing about. With it on, a failed request gets
+`401`/`403` instead of a redirect, no `CF_Authorization` cookie is handed back, and
+**Allow policies are ignored** — so it rules out the browser policy above.
+Cloudflare turns it on, irrevocably, for organisations created on or after
+2026-10-05. The account `tgxcode.com` lives in is older, so it should be off; check
+before relying on the browser policy.
+
+#### 5. Verify it
+
+From any machine, after saving:
+
+```bash
+# Without the token: Access answers, not the bridge — a 302 to
+# <team>.cloudflareaccess.com (or a 401/403 with strict mode on). Never JSON.
+curl -si https://tgxcode.com/api/health | head -5
+
+# With it: the bridge's own JSON.
+curl -s https://tgxcode.com/api/health \
+  -H "CF-Access-Client-Id: <client id>" \
+  -H "CF-Access-Client-Secret: <client secret>"
+# {"ok": true, "remote": true, …}
+
+# And the live channel — `event: hello` should arrive within a second, then a
+# ping every 25s. Ctrl-C after the second ping.
+curl -sN https://tgxcode.com/api/events \
+  -H "CF-Access-Client-Id: <client id>" \
+  -H "CF-Access-Client-Secret: <client secret>" \
+  -H "Authorization: Bearer $(cat ~/.local/share/tgxcode/token)"
+```
+
+The last one is the measurement that has not been made: the SSE table above is
+without Access. If `hello` never arrives through Access but does without it, the
+app's polling fallback will keep it working, and this document should get a new
+row.
+
+#### What Access changes for a client, and what it does not
+
+- **Two more headers on every request**: `CF-Access-Client-Id` and
+  `CF-Access-Client-Secret`, on `/api/*`, on the `/api/events` stream and on
+  `/pair` alike. Access authenticates each request; there is no "first request".
+  `docs/api.md` §*Cloudflare Access* is the client contract.
+- **The bridge token is still required.** Access is in front of the bridge, not
+  instead of it. The bridge does not know Access exists, does not validate the
+  `Cf-Access-Jwt-Assertion` header Access adds, and still answers `401` to a
+  request without its own token.
+- **Local/remote classification does not change.** `bridge/auth.js` decides from
+  the socket, the `x-forwarded-*` headers `cloudflared` sets, and the `Host` it was
+  addressed to. Access adds `Cf-Access-*` headers, which nothing reads, and
+  rewrites none of the three — so a request through the tunnel is `remote` with or
+  without Access, as it should be.
+- **Pairing needs nothing.** *Settings → Connect a phone* builds the link from
+  *Reachable at* and the token; neither involves Access. The Android app parses the
+  token out of the link and never fetches `/pair`. A phone *browser* opening the
+  link meets the Access login first (the Allow policy), then the bridge's own
+  handshake.
+
+The refusals in the bridge still apply behind all of this — no pty, no
+`bypassPermissions`, no shutdown — but they are a third line now, not the first.
+
+## The alternative: `tailscale serve`
+
+**Not set up on the current machine** — its Windows side has no Tailscale. This
+is the alternative to the tunnel above, and what ran on the first machine; it is
+kept because it is the stronger privacy story (only your own devices can reach the
+bridge at all) at the price of a VPN app on the phone.
 
 Free, no server to pay for, no port forwarding, and outbound-only — it makes an
 outbound connection and relays through Tailscale's DERP servers when direct NAT
 traversal fails, which is the shape you want when neither end has a reachable
 address.
-
-It also happens to be already installed on the Windows host.
 
 **Why the bridge never has to leave loopback.** WSL runs with
 `networkingMode=mirrored`, so Windows reaches the bridge on `127.0.0.1` — this is
@@ -53,8 +386,8 @@ bridge is on, proxying to the same loopback socket. Everything below that says
 
 ### Setup
 
-1. **Check Tailscale is up.** This machine is `tg-dylanh` on tailnet
-   `taild5c420.ts.net`, so the bridge's public name will be
+1. **Check Tailscale is up.** The bridge's public name is
+   `<machine>.<tailnet>.ts.net` — on the first machine that was
    `tg-dylanh.taild5c420.ts.net`.
 
    ```powershell
@@ -62,8 +395,8 @@ bridge is on, proxying to the same loopback socket. Everything below that says
    ```
 
 2. **Enable HTTPS certificates for the tailnet**, once, in the admin console
-   (*DNS → HTTPS Certificates*). **This is not yet done** — `tailscale status
-   --json` reports `CertDomains: null` — and `--https=443` will not work until it
+   (*DNS → HTTPS Certificates*). If `tailscale status --json` reports
+   `CertDomains: null`, it is not done, and `--https=443` will not work until it
    is.
 
    It matters for more than comfort: it is the difference between a token that only
@@ -85,7 +418,7 @@ bridge is on, proxying to the same loopback socket. Everything below that says
    tailscale serve --http=8099 off                           # and away again
    ```
 
-   **This path is confirmed working.** A request to
+   **This path was confirmed working** on the first machine. A request to
    `http://tg-dylanh.taild5c420.ts.net:8099/api/health` from the Windows host
    reaches the WSL bridge and comes back with `"remote": true`, with `root` and
    `home` withheld — so Tailscale's `x-forwarded-*` headers are arriving and the
@@ -141,157 +474,6 @@ streaming — is refused remotely anyway.
 `serve` publishes to your tailnet. `funnel` publishes to the internet. The bridge
 can start processes on this machine; it should not be on the public internet behind
 a single bearer token.
-
-## Cloudflare Tunnel — no VPN on the phone
-
-The reason to prefer this over Tailscale: the phone gets an ordinary HTTPS URL and
-needs nothing installed. That matters most for a native Android client, which would
-otherwise inherit a VPN dependency.
-
-Free, and nothing to host — `cloudflared` runs here and dials *out*, so there is no
-port to forward and no server to pay for.
-
-### Use a domain whose DNS you do not mind moving
-
-Cloudflare Tunnel needs the hostname to live in a Cloudflare zone, and on the free
-plan that means the **whole zone's** DNS moves to Cloudflare. Keeping your existing
-DNS and delegating only a subdomain is not a free path: partial (CNAME) setup is
-Business plan, subdomain zones are Enterprise.
-
-So do not move a domain that carries mail you cannot afford to lose. `twentygx.com`
-is the example to avoid: its MX is `149900537.pamx1.hotmail.com`, the legacy
-Windows Live custom-domain service, which is no longer provisioned — if that record
-is ever lost there is no documented way to get a new one, only a move to paid
-Microsoft 365. A second domain registered at Cloudflare costs a few dollars a year
-and takes the question off the table entirely.
-
-### Measured: a named tunnel streams, a quick tunnel does not
-
-This is worth being precise about, because the distinction is the difference
-between the phone feeling live and the phone looking broken — and the open
-`cloudflared` issues only ever tested the half that fails.
-
-| `/api/events` | Loopback | Quick tunnel | Named tunnel |
-|---|---|---|---|
-| `hello` | 0.04s | **never** | **0.29s** |
-| Pings at 25s / 50s | on time | never | on time |
-| Chunks in ~75s | 9 | **0** | **36** |
-| `X-Accel-Buffering: no` echoed | yes | stripped | stripped |
-
-A **quick** tunnel (`cloudflared tunnel --url …`, `*.trycloudflare.com`) buffers
-completely: HTTP 200, `text/event-stream`, and zero bytes for 75 seconds while the
-immediate `hello` and three pings are all held. That reproduces
-[cloudflared#1449](https://github.com/cloudflare/cloudflared/issues/1449) and
-[#199](https://github.com/cloudflare/cloudflared/issues/199).
-
-A **named** tunnel on a real hostname streams properly — 36 chunks spread across
-75 seconds, pings landing at 25.28s and 50.28s. Both strip the
-`X-Accel-Buffering` header, so that header is not what makes the difference and
-there is no config knob to reach for; the buffering lives in the quick-tunnel path
-specifically.
-
-**So the named tunnel is the supported setup, and SSE works on it.** Do not judge
-this transport by a quick tunnel — that is a test of a different code path.
-
-**A client should keep the fallback anyway**, and the Android app does: watch for
-`hello` and switch to polling if it does not arrive within six seconds. It costs
-nothing when the stream works (it never engages) and it is what makes a quick tunnel,
-a corporate proxy, or some hotel network degrade into "a couple of seconds behind"
-instead of "silently frozen". Polling was measured through the same tunnel at 62ms
-for the board and 42 bytes for an empty transcript delta, so the degraded mode is
-barely degraded. `docs/api.md` has the cadence.
-
-### Setup — and what is already done on this machine
-
-The tunnel below exists and is configured. This records it so it can be rebuilt,
-and so the next person knows which parts are decisions rather than defaults.
-
-- **`cloudflared`** lives at `~/.local/bin/cloudflared`, not installed system-wide.
-  `~/.bashrc` puts that directory on PATH, so `cloudflared` resolves in an
-  interactive shell with no sudo anywhere.
-- **Tunnel** `claude-sessions`, id `8fc8f334-b1fa-483f-8110-1fe6d2a4458e`.
-- **Hostname** `tgxcode.com` — the apex, on a domain bought for this and nothing
-  else. A CNAME to the tunnel was created by `tunnel route dns`.
-- **Config** `~/.cloudflared/config.yml`, pointing at `http://127.0.0.1:45888`.
-
-To rebuild from nothing:
-
-1. **Authorise the machine.** Opens a browser; pick the zone.
-
-   ```bash
-   cloudflared tunnel login
-   ```
-
-2. **Create the tunnel and route the hostname to it.**
-
-   ```bash
-   cloudflared tunnel create claude-sessions
-   cloudflared tunnel route dns claude-sessions tgxcode.com
-   ```
-
-3. **Point it at the bridge** in `~/.cloudflared/config.yml`. A single service
-   needs no `hostname` match — whatever is routed to the tunnel reaches the bridge,
-   and `tunnel route dns` is the only thing that decides what that is:
-
-   ```yaml
-   tunnel: 8fc8f334-b1fa-483f-8110-1fe6d2a4458e
-   credentials-file: /home/dylan_hays/.cloudflared/8fc8f334-….json
-   edge-ip-version: "4"
-   ingress:
-     - service: http://127.0.0.1:45888
-   ```
-
-   `edge-ip-version: "4"` is load-bearing here: this machine has no working IPv6
-   route, and `cloudflared tunnel list` fails dialling Cloudflare over v6 while the
-   same call succeeds over v4. Without the pin, every reconnect burns a timeout
-   first. It must be a **string** — an int is rejected by the config parser.
-
-   **`--url` on the command line does not override `ingress`.** It is echoed in the
-   startup `Settings:` line, which makes it look like it took effect, but the config
-   file's ingress rules are what route. To test against a different port, edit the
-   config; do not trust the flag.
-
-4. **Tell the bridge the hostname**, or every request comes back
-   `403 {"error":"unexpected host"}` — the DNS-rebinding guard, which has no way to
-   know about your domain until you say so.
-
-   On this machine that lives in **`~/.profile`**:
-
-   ```bash
-   export TGXCODE_ORIGINS=https://tgxcode.com
-   ```
-
-   That file rather than the app, because the Windows shell starts the bridge with
-   `wsl.exe bash -lc`, and a login shell reads `~/.profile` — which is also the only
-   one of the three login files present here, so it is definitely the one read.
-   Setting it in `app/main.js` would work too and would need a rebuild, which is
-   worse. **A running bridge does not pick this up**; it applies at next start.
-
-5. **Run it as a service**, so it survives a reboot. WSL has systemd enabled
-   (`/etc/wsl.conf` sets `systemd=true`):
-
-   ```bash
-   sudo cloudflared service install
-   systemctl status cloudflared
-   ```
-
-6. **Pair the phone** exactly as with Tailscale — *Settings → Connect a phone*,
-   with `https://tgxcode.com` in *Reachable at*.
-
-### Put something in front of it
-
-This is the real cost of dropping Tailscale, and it is not the money. A tailnet
-means only your own devices can reach the bridge at all. A public hostname means
-anyone who finds it reaches the door, and the only thing behind that door is one
-bearer token that never expires.
-
-**Cloudflare Access** is free for up to 50 users: email or SSO for the browser, and
-**service tokens** for a native client, which is exactly the Android story. One
-thing to design around: an Access session expiring mid-request is a redirect to a
-login page, so give the session a long duration.
-
-The refusals in the bridge still apply — no pty, no `bypassPermissions`, no
-shutdown — but they are a second line, not the first.
 
 ## Last resort: binding the LAN
 
@@ -396,7 +578,7 @@ curl -s http://127.0.0.1:45899/api/sessions \
 | `TGXCODE_HOST` | `127.0.0.1` | Interface to bind. Never defaults to anything else. |
 | `TGXCODE_ALLOW_REMOTE_BIND` | unset | Required in addition to `HOST` to bind a non-loopback interface. |
 | `TGXCODE_ROOTS` | `$HOME` | Colon-separated roots a session may start in, and the limit of `/api/fs`. |
-| `TGXCODE_ORIGINS` | empty | Extra allowed browser origins, for a proxy on a hostname this code cannot guess. Loopback and `*.ts.net` need no entry. |
+| `TGXCODE_ORIGINS` | empty | Extra allowed hostnames and browser origins, for a proxy on a hostname this code cannot guess — `https://tgxcode.com` here. Loopback and `*.ts.net` need no entry. Kept in `~/.profile`; when it is unset, `bridge/launch.sh` reads it from there, so a restart from a non-login shell keeps it. |
 
 ## If something is wrong
 
@@ -406,6 +588,19 @@ to be cleared first.
 
 **403 "unexpected host".** The bridge only answers to loopback, `*.ts.net`, a bare
 IP, or a hostname in `TGXCODE_ORIGINS`. This is the DNS-rebinding guard.
+If it was working through the tunnel and stopped after a restart, the bridge came
+up without `TGXCODE_ORIGINS`: check `tr '\0' '\n' </proc/<pid>/environ | grep
+ORIGINS` for the bridge's pid (`/api/health` has it) and restart from a login
+shell — see step 6 of *Moving to a new machine*.
+
+**`https://tgxcode.com` shows Cloudflare error 1033.** No `cloudflared` is
+connected to the tunnel. `systemctl status cloudflared` on the machine that should
+be running it; after a machine move, see *Moving to a new machine*.
+
+**The app gets HTML, a 302 to `cloudflareaccess.com`, or a non-JSON 401/403.**
+That is Cloudflare Access refusing the request before it reaches the bridge — the
+service-token headers are missing, wrong, or the token has expired. The bridge
+never answers `/api/` with HTML.
 
 **403 "forbidden origin".** A browser sent an `Origin` the bridge does not
 recognise. Same fix.

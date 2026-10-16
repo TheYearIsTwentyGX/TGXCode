@@ -112,6 +112,77 @@ DNS-rebinding case this closes. A client reaching the bridge through a proxy on 
 new hostname needs that hostname in `TGXCODE_ORIGINS` — the symptom is a 403 that no
 amount of correct token fixes.
 
+### Cloudflare Access, when it is in front
+
+`https://tgxcode.com` reaches the bridge through a Cloudflare Tunnel, and Cloudflare
+Access can be put in front of that hostname (`docs/remote.md` §*Put Cloudflare
+Access in front of it*). When it is, a request has to get past Access at
+Cloudflare's edge before the bridge ever sees it, and the contract for a client is:
+
+**Send both of these on every request to that origin**, alongside everything above:
+
+| Header | Value |
+|---|---|
+| `CF-Access-Client-Id` | the service token's Client ID — a string ending `.access` |
+| `CF-Access-Client-Secret` | the service token's Client Secret |
+
+*Every* request means every one: all of `/api/*`, the `/api/events` stream, polling,
+`GET /api/health` (open as far as the bridge is concerned, but Access does not know
+that), and `/pair` if a client ever fetches it. Access authenticates each request on
+its own; there is no first request that unlocks the rest, and a client should not
+rely on the `CF_Authorization` cookie Access may hand back — with strict service
+token authentication on it hands back none. The simplest correct implementation is
+one interceptor on the HTTP client that both the request path and the SSE
+connection go through.
+
+The values are per bridge origin, entered by the user next to the origin and token,
+and optional: a bridge reached over loopback, `adb reverse` or Tailscale has no
+Access in front, and sending the headers there is harmless — the bridge ignores
+them. A client should send them when they are configured and omit them when not.
+
+**The bridge's own token is still required.** Access is in front of the bridge, not
+instead of it: `Authorization: Bearer <token>` and `X-TGXCode-Client: 1` are needed
+exactly as without Access, and a request that passes Access without the bridge
+token is the bridge's ordinary `401 {"error": "unauthorized"}`. Access does not
+change local/remote either — a tunnel request is `remote` with or without it.
+
+**What a blocked request looks like.** Access answers it, not the bridge, so the
+response is **never the bridge's JSON**:
+
+- with no headers, or (on most accounts) wrong ones: a `302` whose `Location` is on
+  `<team>.cloudflareaccess.com`, typically `…/cdn-cgi/access/login/tgxcode.com?…`.
+  An HTTP client that follows redirects ends on that login page instead — a `200`
+  with `Content-Type: text/html` from a different host.
+- with *strict service token authentication* on (the default for Cloudflare
+  accounts created from 2026-10-05): a `401` or `403` with an HTML or empty body.
+
+So the rule a client implements: **an `/api/` response that is a redirect to another
+host, a `text/html` page, or a `401`/`403` whose body is not JSON came from Access,
+not from the bridge.** Show that as its own error — "Cloudflare Access blocked this
+request: check the service token" — rather than "not paired", which would send the
+user to re-paste a token that is fine. The bridge's own `401` and `403` are always
+`application/json` with an `error` field, so the two never overlap. Turning off
+automatic redirects (OkHttp `followRedirects(false)`) makes the first case the
+easiest to see.
+
+The same rule catches the tunnel being down: Cloudflare answers `530` with an HTML
+"error 1033" page when no `cloudflared` is connected. That one is not Access and not
+the token — the bridge machine is unreachable.
+
+On `/api/events`, a block arrives as one of those responses in place of `200
+text/event-stream`. A client whose fallback switches to polling when `hello` does
+not arrive should check for it first: polling through the same Access is blocked
+the same way, and the error, not the fallback, is what the user needs to see.
+
+**Access must not be switched on until the user has an app build that sends these
+headers**, with the values entered. Turning it on first locks the phone out, with a
+response the bridge never sees and so never logs. That ordering is written into the
+runbook in `docs/remote.md` as well.
+
+Whether `/api/events` still streams promptly through Access has not been measured —
+the SSE numbers in `docs/remote.md` are for the named tunnel without it. Keep the
+polling fallback either way.
+
 ### Pairing a device
 
 ```
@@ -6309,6 +6380,11 @@ These are cheap now and expensive later, so they are settled:
 **The write surface 403s without `X-TGXCode-Client: 1`.** Reads work, writes
 do not, and the message says `missing client header` rather than anything about auth.
 See §*Authentication*.
+
+**Behind Cloudflare Access, a missing header is HTML, not a 401.** `CF-Access-Client-Id`
+and `CF-Access-Client-Secret` go on every request to an origin with Access in front,
+the event stream included, and a request without them gets Access's redirect or login
+page rather than anything from the bridge. See §*Cloudflare Access, when it is in front*.
 
 **A newly created session 404s for about two seconds.** `POST /api/sessions` hands back
 an id before `claude` has written a transcript to read. See §`POST /api/sessions`.
