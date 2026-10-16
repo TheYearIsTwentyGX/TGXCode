@@ -1,4 +1,4 @@
-# 22 — Running Codex sessions beside Claude ones
+# 23 — Running Codex sessions beside Claude ones
 
 **Effort:** XL, in six phases · **Depends on:** 01, 05, 08, 20 ·
 **Touches:** `bridge/runner.js`, `bridge/transcript.js`, `bridge/sessions.js`,
