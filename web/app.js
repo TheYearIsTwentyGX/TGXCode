@@ -128,7 +128,7 @@ import { showNewMenu, wireNewMenu } from './new-session/recent.js';
 import { openPublish, wirePublish } from './github/publish.js';
 import { openWorktrees, wireWorktrees } from './worktrees.js';
 import {
-    drSave, drToSchedule, paintGateFields, schedSave, startNew, whenBuild,
+    drSave, drToOrchestrator, drToSchedule, paintGateFields, schedSave, startNew, whenBuild,
 } from './new-session/trigger.js';
 import { setTermOpen, setTermTab, showTerm, termPane, wireTerm } from './term-pane.js';
 import { enter, isUp, present } from './motion.js';
@@ -3655,6 +3655,7 @@ wireTerm();
 dom.newGo.addEventListener('click', startNew);
 dom.newSave.addEventListener('click', drSave);
 dom.newSched.addEventListener('click', drToSchedule);
+dom.newOrchSend.addEventListener('click', drToOrchestrator);
 wireTemplates();
 dom.dbStatus.addEventListener('click', refreshDevBrowser);
 dom.btnBack.addEventListener('click', closeAgent);

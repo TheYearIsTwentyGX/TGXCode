@@ -56,6 +56,8 @@ import { paint } from './boards/parts.js';
 import { renderLive } from './boards/live.js';
 import { tbCardClickOpens } from './boards/taskboard.js';
 import { openNew } from './new-session/dialog.js';
+import { sendToOrchestrator } from './orch-picker.js';
+import { registerSource } from './palette/registry.js';
 import { termPane } from './term-pane.js';
 import { openSessionSoon } from './transcript/conversation.js';
 import { firstLine } from './transcript/suggestions.js';
@@ -312,6 +314,9 @@ function DraftCard({ d }) {
                 <button class="tb-btn primary" type="button" title="Start this session now"
                     disabled=${starting} onClick=${start}>${starting ? 'Starting' : 'Start'}</button>
                 <button class="tb-btn" type="button" onClick=${() => drEdit(d)}>Edit</button>
+                <button class="tb-btn quiet" type="button"
+                    title="Hand this to an orchestrator as a task — it decides how to start it"
+                    onClick=${() => drSend(d)}>Send to orchestrator…</button>
                 <button class="tb-btn quiet" type="button" title="Delete this draft"
                     onClick=${() => drDelete(d)}>Delete</button>
             </div>
@@ -344,6 +349,31 @@ async function drStart(d, setStarting) {
     // a button that came back to life on a card about to vanish invites a second
     // press that would start the session twice.
 }
+
+/**
+ * Hand it to an orchestrator as a task.
+ *
+ * The draft as stored, by id — the bridge files the task and then removes the
+ * draft, in one call, as `/start` does. The push takes the card away; Take back
+ * on the orchestrator's page brings it back.
+ */
+function drSend(d) {
+    return sendToOrchestrator({ draftId: d.id, subject: d.title || firstLine(d.prompt) });
+}
+
+// Ctrl+K: one quiet row per draft, found by typing — "send", "orch", or a word
+// of the draft's title. Only while the session list has an orchestrator in it,
+// since the picker would otherwise open onto nothing.
+registerSource('drafts.send', () => {
+    if (!state.drafts.rows.length || !state.sessions.some(s => s.orchestrator)) return [];
+    return state.drafts.rows.map(d => ({
+        id: `drafts.send.${d.id}`, group: 'Actions', quiet: true,
+        title: `Send draft \u201c${d.title || firstLine(d.prompt)}\u201d to orchestrator\u2026`,
+        meta: d.projectName || null,
+        keywords: 'send draft orchestrator task hand over',
+        run: () => drSend(d),
+    }));
+});
 
 /**
  * Open it in the dialog it was written in.

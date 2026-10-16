@@ -28,7 +28,7 @@ import { needsYou, progress } from './orchestrator-model.js';
 
 const KIND_LABEL = {
     plan: 'Plan', permission: 'Permission', ask: 'Question for it', question: 'Question',
-    update: 'Update', done: 'Done', turn: 'Turn report', note: 'Note',
+    update: 'Update', done: 'Done', turn: 'Turn report', note: 'Note', task: 'Task from you',
 };
 
 export function goTo(id) {
@@ -153,11 +153,21 @@ export function holdOrchestrator(s) {
     grow(d, true);
 }
 
+/**
+ * "from your draft “…”" — where a worker began. Here rather than imported from
+ * the page module, which imports this one.
+ */
+function originText(o) {
+    return o.from === 'draft' ? `from your draft${o.title ? ` \u201c${o.title}\u201d` : ''}`
+        : `from the Start dialog${o.title ? ` (\u201c${o.title}\u201d)` : ''}`;
+}
+
 function workerLine(s, p) {
     const self = p.workers.find(w => w.id === s.sessionId);
     return html`<div class="orch-worker-line">
         <span class="tag-orch">worker</span>
-        <span>${'Started by an orchestrator'}${self && self.closedAt ? ' · closed' : ''}</span>
+        <span>${'Started by an orchestrator'}${self && self.origin ? ` ${originText(self.origin)}` : ''}${
+            self && self.closedAt ? ' · closed' : ''}</span>
         <button class="orch-link" type="button" onClick=${() => goTo(p.orchestratorId)}>
             Open the orchestrator</button>
     </div>`;
@@ -211,7 +221,7 @@ export function inboxList(p) {
                     ${clip(workerTitle(p, i.workerId) || 'worker', 40)}</button>` : null}
                 <span class="orch-when">${ago(i.at)}</span>
                 <span class="orch-status">${statusWord(i)}</span>
-                ${(i.status === 'new' || i.status === 'read') ? html`
+                ${(i.status === 'new' || i.status === 'read') && i.kind !== 'task' ? html`
                     <button class="orch-x" type="button" title="Dismiss" onClick=${() => dismiss(p, i)}>×</button>`
                     : null}
             </div>

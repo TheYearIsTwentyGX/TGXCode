@@ -203,7 +203,9 @@ of `/api/terminals/*`; all of `/api/runs/*`; `POST /api/commands/run`; all of
 the orchestrator tools — `POST /api/sessions/:id/orchestrator/{spawn,next,send,answer,read,stop,close,summary}`
 and a worker's `POST /api/sessions/:id/report` (reading an orchestrator, changing its
 settings, dismissing an item, recording the answer to a decision —
-`POST …/orchestrator/decisions/:decisionId/answered` — and Resume stay open);
+`POST …/orchestrator/decisions/:decisionId/answered` — Resume, `GET /api/orchestrators`
+and handing one a task — `POST …/orchestrator/tasks` and `…/tasks/:itemId/withdraw` —
+stay open, with a task's mode and worktree refused as starting a session refuses them);
 `POST /api/fs/open`;
 `POST /api/wispr/press`;
 `PUT /api/prefs`;
@@ -621,7 +623,7 @@ strings by a client that then rendered `[object Object]`:
 | `suggestion` | `prompt` string · `why`, `title` strings or null · `cwd` string — follow-up work an agent offered rather than did |
 | `peer-message` | `from` (socket address), `fromName` (the peer's name, which is its address), `text` |
 | `handoff` | `text` string — work another session handed this one, which is what woke it · `from` (the sending session's id), `fromTitle`, `fromProject`, `title`, all strings or null |
-| `orchestrator-inbox` | `count` number · **`counts` object or null** — `{<kind>: n}` over the inbox item kinds (`plan`, `permission`, `ask`, `question`, `update`, `done`, `turn`, `note`); `null` on a nudge written before the bridge recorded it · `summary` string or null — the prose the model was sent, e.g. `"1 plan to approve, 2 turn reports"`, the fallback when `counts` is null. The bridge waking an idle orchestrator; nobody typed it |
+| `orchestrator-inbox` | `count` number · **`counts` object or null** — `{<kind>: n}` over the inbox item kinds (`plan`, `permission`, `ask`, `question`, `update`, `done`, `turn`, `note`, `task`); `null` on a nudge written before the bridge recorded it · `summary` string or null — the prose the model was sent, e.g. `"1 plan to approve, 2 turn reports"`, the fallback when `counts` is null. The bridge waking an idle orchestrator; nobody typed it |
 | `orchestrator-message` | `text` string — an instruction from the orchestrator this session is a worker for · `from` (the orchestrator's session id), `fromTitle`, strings or null |
 | `compact` | `text` string |
 
@@ -3565,7 +3567,7 @@ A `: ping` comment arrives every 25s. `X-Accel-Buffering: no` is set.
 | `task-list` | `{sessionId, source, items[], done, total, current, idle, ts, truncated}` — the **whole** `GET /api/sessions/:id/tasks` payload, so there is nothing to refetch. **Not a `POST /api/subscribe` flag of its own**: it rides the transcript follow, because a task list only moves while a turn is running and that is exactly when a client is following one. Sent **once as soon as a session is followed** — an open panel does not wait for the first change — and after that only when the list has actually moved, so a session with a static list is silent. Carries `sessionId`, so a payload for a conversation the client has left is safe to drop |
 | `overview` | the board; sent only when it has actually changed |
 | `taskboard` | the task board; every ~3s while watched, and only when it has actually changed. Never carries `?idle=all` |
-| `drafts-changed` | `{at, drafts[], counts}` — the whole `GET /api/drafts` payload, so there is nothing to refetch. **Not gated by a `POST /api/subscribe` flag**, unlike `overview` and `taskboard`: a draft only changes because somebody changed it, so there is no tick to switch on and every window gets every change. Fires on create, edit, delete, and on anything that consumes one — `POST /api/drafts/:id/start`, and a `fromDraft` on `POST /api/sessions` or `POST /api/schedules` |
+| `drafts-changed` | `{at, drafts[], counts}` — the whole `GET /api/drafts` payload, so there is nothing to refetch. **Not gated by a `POST /api/subscribe` flag**, unlike `overview` and `taskboard`: a draft only changes because somebody changed it, so there is no tick to switch on and every window gets every change. Fires on create, edit, delete, and on anything that consumes one — `POST /api/drafts/:id/start`, a `fromDraft` on `POST /api/sessions` or `POST /api/schedules`, and a `draftId` on `POST /api/sessions/:id/orchestrator/tasks` — or makes one again: taking a task back, or an orchestrator going away with tasks it never started (§*Orchestrators*) |
 | `templates-changed` | `{at, templates[], counts}` — the whole unfiltered `GET /api/templates` payload. Ungated, exactly as `drafts-changed` is, and it only fires when somebody creates, edits or deletes a template. A client that fetched with `?cwd=` must filter this itself |
 | `later-changed` | `{at, messages[], counts}` — the whole `GET /api/later` payload, so there is nothing to refetch. Ungated, exactly as `drafts-changed` is. Like `schedules-changed` and unlike `drafts-changed` it also fires **without anybody having done anything**: a delivery, a message going past its window, and a failed wake all move it. That is how a chip starts saying "sent 02:00" while nobody is looking at it, and it is the only signal a client gets that a scheduled message has left — the session list is not pushed for it |
 | `snippets-changed` | `{at, snippets[], groups[], counts}` — the whole `GET /api/snippets` payload, so there is nothing to refetch. Ungated, exactly as `drafts-changed` is, and like it, it never fires without somebody having done something: a snippet or group created, edited or deleted, and a reorder **that actually moved a row** — a drag that lands where it started pushes nothing. Both arrays every time, because deleting a group re-homes its snippets and sending half the answer would leave a client drawing a card that no longer exists. **Always unfiltered by `cwd`**, so a client that fetched with `?cwd=` must apply the filter itself here or watch its list silently widen |
@@ -4004,6 +4006,11 @@ that loaded a draft into its own form and then started or scheduled the edited v
 rather than saving it. Use this route when nothing was edited: it needs no body, and the
 arguments it spawns with are the ones on the file rather than ones the caller has to
 send back.
+
+**Nor is starting it the only thing to do with one.** `POST
+/api/sessions/:orchestratorId/orchestrator/tasks` with `{draftId}` hands it to an
+orchestrator as a task instead, and removes it from the list — see *Tasks from the user*
+under §*Orchestrators*.
 
 ### `POST /api/templates`
 
@@ -5396,14 +5403,25 @@ event:
               state: "idle"|"busy"|"starting"|"stopped"|"error",
               pending: null | "tool"|"plan"|"question",
               pr: null | { number: number, url: string|null, repo: string|null,
-                           title: string|null, status: string, label: string|null } }],
-  pendingSpawns: [{ id, title: string|null, at: number }],
+                           title: string|null, status: string, label: string|null },
+              origin: null | origin }],
+  pendingSpawns: [{ id, title: string|null, at: number, origin: null | origin }],
+  openTasks: [{ id, at: number, status: "new"|"read", text: string,
+                cwd: string, title: string|null, model: string|null, effort: string|null,
+                permissionMode: string, test: boolean,
+                worktree: null | {name: string, base: string|null}, origin: null | origin }],
   unread: number,
   inbox: [item, …]   // newest first, at most 100 }
 ```
 
 or `{orchestratorId, enabled: false}` for a session that is not one. Times are epoch
-ms.
+ms. **`origin`** is `{from: "draft"|"dialog", draftId: string|null, title: string|null}`:
+where a worker or queued spawn began, when it was a task the user handed over rather than
+the orchestrator's own idea (`null` otherwise). **`openTasks`** is every task not yet
+started, taken back or gone, oldest first — kept apart from `inbox` because that is only
+the newest 100, and a task left alone for a day must not fall off a client's page. Its
+rows are the task's settings without the full prompt; `text` is the first 8000
+characters of it. See *Tasks from the user* below.
 
 A worker's **`pr`** is the newest pull request its transcript links (the last of
 the session summary's `prs`), or null. `status` and `label` are what the bridge's
@@ -5446,7 +5464,11 @@ unknown, not as never having happened. An **inbox item** is:
   status: "new"|"read"|"resolved"|"stale",
   requestId: string|null, ask: null | {kind, tool, displayName, input},
   outcome: string|null, by: null | "orchestrator"|"user",
-  settledAt: number|null }
+  settledAt: number|null,
+  task: null | { prompt: string, cwd: string, title: string|null, model: string|null,
+                 effort: string|null, permissionMode: string, test: boolean,
+                 worktree: null | {name: string, base: string|null},
+                 origin: null | origin } }
 ```
 
 `settledAt` is when it became `resolved` or `stale` — answered, dismissed or gone —
@@ -5456,8 +5478,9 @@ so a client cannot treat null as "still open"; `status` says that.
 `kind` is `question`, `update` or `done` (a worker's own report), `turn` (the final
 message of a turn a worker finished — filed automatically, unless the worker said
 `done` in that turn), `plan`, `permission` or `ask` (a worker's ExitPlanMode, tool
-permission prompt or AskUserQuestion), or `note` (the bridge telling the
-orchestrator something, such as that the user answered an ask first). `new` is
+permission prompt or AskUserQuestion), `note` (the bridge telling the
+orchestrator something, such as that the user answered an ask first), or `task` (work
+the user handed over — the only kind with a non-null `task`; see below). `new` is
 unread; `read` means the orchestrator pulled it. The three ask kinds carry
 `requestId`, and **are still pending on the worker exactly as any ask is**: a window
 answers one through `POST /api/sessions/:workerId/permission` as usual, and the item
@@ -5499,6 +5522,80 @@ turning auto-resume on or off while paused starts or stops the clock. Either way
 lifting starts queued spawns and files a `note` in the orchestrator's inbox saying it
 was resumed and listing the workers in `interrupted`, so it can tell them to carry
 on.
+
+**Tasks from the user.** A draft — or the Start-a-session dialog as it stands — can be
+handed to an orchestrator instead of being started. It arrives as a `task` inbox item
+and wakes the orchestrator the way any item does (once idle, never mid-turn); **nothing
+is started by handing it over.** The orchestrator decides how it fits its plan and
+starts it with the `spawn` tool route's `task`, at which point the bridge fills in the
+task's `cwd`, `model`, `effort`, `permissionMode` and `test` itself — **the user's
+choices win where they made one**; the orchestrator may only fill a gap (a model left
+on inherit) and choose the prompt (to add context), the title and the worktree. The
+worker's `origin` then says where it came from, and so does its brief. A test task
+makes a test worker, as a test orchestrator does.
+
+A task is never silently lost. An open one — `new`, or `read` but not started — is never
+trimmed from the inbox. Taking it back (below) makes it a draft again, and so does
+the orchestrator going away: `PUT …/orchestrator {enabled: false}` and deleting the
+session both put every open task back in Drafts (with a `notice` of `kind:
+"tasks_lost"` naming any the full drafts store could not take). At most **20** open
+tasks per orchestrator; past that, filing is a `409`. A paused orchestrator still takes
+one; it is held, like every other item, until the pause lifts.
+
+A task that has been started is `resolved` with `outcome` `"spawned"` (or
+`"sent-to-worker"` when the orchestrator folded it into a running worker), `by:
+"orchestrator"`; one taken back is `stale`, `outcome: "withdrawn"`, `by: "user"`. A spawn
+that fails after claiming it gives it back as `read`.
+
+#### `POST /api/sessions/:id/orchestrator/tasks`
+
+`{draftId?: string, fields?: {cwd, prompt, title?, model?, effort?, permissionMode?,
+test?, worktree?: {name: string, base?: string}}}` → `{ok: true, item, paused: boolean,
+draftRemoved: boolean}`.
+
+- **`draftId` alone** uses the stored draft. **`fields` alone** is a create call from a
+  client's own form (the desktop's Start dialog). **Both**: `fields` is what is filed and
+  the draft is consumed — a draft opened for editing and sent without saving. With both
+  and no `test` in `fields`, the draft's flag is kept.
+- Validated as saving a draft is (`POST /api/drafts`): the directory must exist and be
+  inside the roots, a prompt is required, and a remote caller is refused
+  `bypassPermissions` and `dontAsk` (`403 {error, remote: true}`). A stored draft is
+  re-checked the same way.
+- **`worktree`** is a hint the eventual spawn honours, name and base both; without it
+  the orchestrator's own `worktree` setting decides. Refused to a remote caller (`403`),
+  as `POST /api/sessions` refuses it. `orchestrator: true` is a `400` — a worker cannot be
+  an orchestrator. A draft's fields and a worktree are all a task carries: there is no
+  attachment field.
+- The draft is removed **after** the task is filed, so a refusal keeps it. `paused` is
+  true when the orchestrator is paused — including when this call paused it, since the
+  usage cutoff is checked before filing so that the nudge cannot start a turn past it.
+- `404` when the session is not an orchestrator or the draft does not exist; `409` at
+  the 20-task cap. Fires `orchestrator`, and `drafts-changed` when a draft went.
+- The body is checked before the orchestrator is looked up, so a refused mode is a `403`
+  whatever the id.
+
+#### `POST /api/sessions/:id/orchestrator/tasks/:itemId/withdraw`
+
+`{}` → `{ok: true, draft}` — the draft it became, in `GET /api/drafts`'s shape. Its
+title is the task's, or failing that the draft's it came from; a worktree hint is not
+kept, having no field in a draft. An orchestrator that had already read the task gets a
+`note` saying it was taken back; one that had not is told nothing. `404` for no such
+task; `409` once it has been started or is otherwise settled, or when the drafts store
+is full; `403` to a remote caller for a mode it could not save as a draft. Fires
+`orchestrator` and `drafts-changed`.
+
+#### `GET /api/orchestrators`
+
+`{orchestrators: [{orchestratorId, title: string|null, cwd: string|null,
+projectName: string|null, live: boolean, state: string, paused: null | {reason,
+resumeAt: number|null}, running: number, maxRunning: number, queued: number,
+openTasks: number, workers: number, unread: number, lastActivity: number, test:
+boolean}]}` — every orchestrator a task can be sent to, for a picker. **Live ones
+first** — `live` means this bridge has a process for it that is not stopped or in error;
+`state` is that process's state, or `"stopped"` — then newest `lastActivity` (epoch ms)
+first. `running` counts workers mid-turn and starts in progress, against `maxRunning`;
+`queued` is pending spawns; `openTasks` tasks not yet started. Archived orchestrators are
+left out, and test ones on any bridge but a development one, as `GET /api/sessions` does.
 
 #### `GET /api/sessions/:id/orchestrator`
 
@@ -5571,9 +5668,13 @@ cutoff: settings.usageStop|null, paused}`.
 
 All `POST`, all refused remotely, all with the orchestrator's id in the path:
 `spawn` `{prompt, title?, cwd?, worktree?: boolean|string, permissionMode?, model?,
-effort?}` → `{queued: false, sessionId, title, cwd, worktree}` or `{queued: true, id,
-position, running, maxRunning}`; `next` `{max?}` → `{items, left}` (marks them
-read); `send` `{worker, text}` → `{ok, queued, state}`; `answer` `{itemId, decision:
+effort?, task?}` → `{queued: false, sessionId, title, cwd, worktree}` or `{queued: true, id,
+position, running, maxRunning}` — with `task` (a task item's id) `prompt` is optional and
+the task's settings apply as described under *Tasks from the user*; `404` for no such
+task, `409` once it is started or taken back; `next` `{max?}` → `{items, left}` (marks them
+read); `send` `{worker, text?, task?}` → `{ok, queued, state}` — `text` is required
+unless `task` is given, whose prompt is then what is sent, and the task is settled
+`sent-to-worker`; `answer` `{itemId, decision:
 "allow"|"allow-always"|"deny", feedback?, answers?, mode?}` → `{ok}`; `read` `{worker,
 mode: "digest"|"tail"|"full"|"ask", turns?, offset?}`; `stop` `{worker, hard?}` →
 `{ok, how}`; `close` `{worker, archive?}` → `{ok, worktree}`; `summary` `{text,

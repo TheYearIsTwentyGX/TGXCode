@@ -19,6 +19,8 @@ import { draftsVisible, showDrafts } from '../drafts.js';
 import { showSched } from '../schedules.js';
 import { commitAttachments } from '../composer/attachments.js';
 import { openSessionSoon } from '../transcript/conversation.js';
+import { firstLine } from '../transcript/suggestions.js';
+import { sendToOrchestrator } from '../orch-picker.js';
 import { closeNew, newC, newDialogName, newDialogOrchestrator, newDialogValues, newDialogWorktree, openNew } from './dialog.js';
 
 // ── the trigger picker ──────────────────────────────────────────────────────
@@ -298,6 +300,24 @@ export function paintNewAttach() {
     dom.newSched.title = held
         ? 'A schedule cannot carry attachments. Start the session, or remove the files.'
         : '';
+    paintNewSend();
+}
+
+/**
+ * Send to orchestrator's two refusals, said on the button rather than after the
+ * press. A task carries no files (it is a draft's fields, and a draft carries
+ * none), and a worker cannot be an orchestrator — the bridge refuses both, so
+ * offering the press would be offering a toast.
+ */
+export function paintNewSend() {
+    const held = newC.attach.length > 0;
+    const orch = newDialogOrchestrator();
+    dom.newOrchSend.disabled = held || orch;
+    dom.newOrchSend.title = held
+        ? 'A task cannot carry attachments. Start the session, or remove the files.'
+        : orch
+            ? 'A worker cannot be an orchestrator. Untick "Start as an orchestrator" to hand this over.'
+            : 'Hand this to an orchestrator as a task — it decides how to start it';
 }
 
 /**
@@ -492,6 +512,35 @@ export function drToSchedule() {
             fromDraft: state.drafts.editing,
         },
     });
+}
+
+/**
+ * Hand what is in the dialog to an orchestrator, as a task.
+ *
+ * What the boxes hold rather than the stored draft, as drToSchedule reads them,
+ * so edits you have not saved go too — and when the dialog was opened on a
+ * draft, its id goes with them and the bridge consumes it, in the one call that
+ * files the task (`POST /api/sessions/:id/orchestrator/tasks`). The worktree
+ * row, which only Start offers, rides along as a hint the orchestrator's spawn
+ * honours; the name box is the task's title, as it would be a draft's.
+ *
+ * The dialog stays open until the bridge has said yes, so a closed picker or a
+ * refusal costs nothing you wrote.
+ */
+export async function drToOrchestrator() {
+    if (newC.attach.length || newDialogOrchestrator()) return; // the button says why
+    const fields = newDialogValues();
+    if (!fields) return;
+    const worktree = newDialogWorktree();
+    if (worktree === false) return;
+    if (worktree) fields.worktree = worktree;
+    fields.title = newDialogName();
+    const draftId = state.drafts.editing;
+    const r = await sendToOrchestrator({
+        draftId, fields, subject: fields.title || firstLine(fields.prompt),
+    });
+    if (!r) return;
+    closeNew();
 }
 
 /**

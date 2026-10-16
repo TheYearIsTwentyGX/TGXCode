@@ -1881,6 +1881,12 @@
              it changes what the dialog is for and commits nothing, so it should
              not weigh what Save as draft and Start weigh. -->
         <button id="new-sched" class="btn quiet" type="button">Schedule</button>
+        <!-- The fourth: hand it to an orchestrator as a task, which decides how
+             to start it — web/orch-picker.js. Quiet for Schedule's reason: it
+             commits nothing here, and Start stays the one filled button. Hidden
+             in schedule mode, disabled while files are held or the orchestrator
+             box is ticked — see paintNewSend() in new-session/trigger.js. -->
+        <button id="new-orch-send" class="btn quiet" type="button">Send to orchestrator…</button>
         <button id="new-go" class="btn primary" type="button">Start</button>
         <!-- Schedule mode replaces Start rather than joining it: "save this" and
              "run this now" are the same button's job here, since a schedule you
@@ -2241,6 +2247,23 @@
 <!-- The worktree janitor: one project's worktrees, and Remove on the safe ones.
      Body and foot are drawn by web/worktrees.js; the foot changes to a
      confirming step for "Remove all safe". -->
+<!-- Send to an orchestrator: web/orch-picker.js draws the list. After the
+     Start dialog's scrim on purpose — it opens over that dialog, and a later
+     sibling at the same z-index is the one on top. -->
+<div id="orch-pick-scrim" class="scrim" hidden>
+  <div class="modal orch-pick" role="dialog" aria-modal="true" aria-labelledby="orch-pick-title">
+    <div class="modal-head">
+      <span id="orch-pick-title">Send to an orchestrator</span>
+      <button class="modal-close" data-close-orch-pick type="button" aria-label="Close">✕</button>
+    </div>
+    <div id="orch-pick-body" class="modal-body"></div>
+    <div class="modal-foot">
+      <span class="spacer"></span>
+      <button class="btn quiet" data-close-orch-pick type="button">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <div id="wt-scrim" class="scrim" hidden>
   <div class="modal wt" role="dialog" aria-modal="true" aria-labelledby="wt-title">
     <div class="modal-head">
