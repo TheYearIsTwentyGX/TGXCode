@@ -217,19 +217,13 @@
 
 .orch-seg[hidden], .orch-page[hidden], .orch-split[hidden], .orch-peek[hidden] { display: none; }
 
-/* Registered so that it does not inherit, and for no other reason. The
-   splitter writes it on #conv-main once a frame while it is dragged, and an
-   unregistered custom property inherits — so each of those writes restyled
-   every element under #conv-main, page and transcript alike: 3,100 of them on
-   a long orchestrator, and four times the cost of the layout the new width
-   actually needs. Only the grid below reads it, so not inheriting costs nothing.
-   The initial value is the default width, standing in for the fallback the
-   `var()` below still carries. */
-@property --orch-convo-w {
-    syntax: '<length>';
-    inherits: false;
-    initial-value: 420px;
-}
+/* `--orch-convo-w` is left unregistered on purpose. Registering it with
+   `@property { inherits: false }` looks like it should help: an inherited
+   custom property written on #conv-main once a frame restyles everything under
+   it. In Chromium 126, the Electron shell, it made a drag on a long orchestrator
+   slower instead. Measured on a 2,400-element transcript, the worst frame of a
+   600px drag at 4x CPU went from 167-183ms to 267-283ms (widening) and from
+   267-300ms to 333-517ms (narrowing). */
 
 .conv-main[data-orch-page] {
     --orch-split-w: 12px;
